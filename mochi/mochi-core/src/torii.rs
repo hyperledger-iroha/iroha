@@ -39,7 +39,8 @@ use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_telemetry::metrics::Status as TelemetryStatus;
 pub use iroha_telemetry::metrics::{GovernanceStatus, Uptime};
 use iroha_torii_shared::{
-    NORITO_V1_WEBSOCKET_SUBPROTOCOL, route_catalog as torii_routes, uri as torii_uri,
+    NORITO_V1_WEBSOCKET_SUBPROTOCOL, mcp as torii_mcp, route_catalog as torii_routes,
+    uri as torii_uri,
 };
 use iroha_version::codec::EncodeVersioned;
 use norito::json;
@@ -798,7 +799,7 @@ pub struct ReadinessSmokeOutcome {
 /// Summary of a local Torii MCP probe.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalMcpProbeResult {
-    /// MCP protocol version advertised by `initialize`.
+    /// Native MCP protocol version confirmed by `server/discover`.
     pub protocol_version: String,
     /// Optional server toolset version hash returned by `tools/list`.
     pub toolset_version: Option<String>,
@@ -808,19 +809,50 @@ pub struct LocalMcpProbeResult {
     pub tool_names: Vec<String>,
 }
 impl LocalMcpProbeResult {
-    fn from_documents(initialize: &json::Value, tools_list: &json::Value) -> ToriiResult<Self> {
-        let init_result = initialize
+    fn from_documents(discovery: &json::Value, tools_list: &json::Value) -> ToriiResult<Self> {
+        let discovery_result = discovery
             .as_object()
             .and_then(|doc| doc.get("result"))
             .and_then(json::Value::as_object)
-            .ok_or_else(|| decode_error("mcp initialize", "missing result object"))?;
-        let protocol_version =
-            parse_required_string(init_result, "protocolVersion", "mcp initialize result")?;
+            .ok_or_else(|| decode_error("mcp server/discover", "missing result object"))?;
+        if discovery_result
+            .get("resultType")
+            .and_then(json::Value::as_str)
+            != Some("complete")
+        {
+            return Err(decode_error(
+                "mcp server/discover result",
+                "resultType must be complete",
+            ));
+        }
+        let supports_native_protocol = discovery_result
+            .get("supportedVersions")
+            .and_then(json::Value::as_array)
+            .is_some_and(|versions| {
+                versions
+                    .iter()
+                    .any(|version| version.as_str() == Some(torii_mcp::MODERN_PROTOCOL_VERSION))
+            });
+        if !supports_native_protocol {
+            return Err(decode_error(
+                "mcp server/discover result",
+                format!(
+                    "missing supported native protocol version {}",
+                    torii_mcp::MODERN_PROTOCOL_VERSION
+                ),
+            ));
+        }
         let tools_result = tools_list
             .as_object()
             .and_then(|doc| doc.get("result"))
             .and_then(json::Value::as_object)
             .ok_or_else(|| decode_error("mcp tools/list", "missing result object"))?;
+        if tools_result.get("resultType").and_then(json::Value::as_str) != Some("complete") {
+            return Err(decode_error(
+                "mcp tools/list result",
+                "resultType must be complete",
+            ));
+        }
         let tools = tools_result
             .get("tools")
             .and_then(json::Value::as_array)
@@ -852,7 +884,7 @@ impl LocalMcpProbeResult {
             ));
         }
         Ok(Self {
-            protocol_version,
+            protocol_version: torii_mcp::MODERN_PROTOCOL_VERSION.to_owned(),
             toolset_version: tools_result
                 .get("_meta")
                 .and_then(json::Value::as_object)
@@ -866,7 +898,6 @@ impl LocalMcpProbeResult {
         })
     }
 }
-const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const SMOKE_TTL: Duration = Duration::from_secs(30);
 const SMOKE_SUBMISSION_MARGIN: Duration = Duration::from_secs(5);
 const SMOKE_EXACT_RESUBMIT_DELAY: Duration = Duration::from_millis(250);
@@ -2838,10 +2869,9 @@ impl ToriiClient {
     }
     /// Run the local Mochi MCP smoke sequence against `/v1/mcp`.
     pub async fn validate_local_mcp(&self) -> ToriiResult<LocalMcpProbeResult> {
-        let initialize = self.mcp_initialize().await?;
-        self.mcp_initialized().await?;
+        let discovery = self.mcp_discover().await?;
         let tools = self.mcp_tools_list().await?;
-        LocalMcpProbeResult::from_documents(&initialize, &tools)
+        LocalMcpProbeResult::from_documents(&discovery, &tools)
     }
     /// Fetch and validate the exact current Nexus lane catalog commitment.
     pub async fn fetch_lane_lifecycle_status(&self) -> ToriiResult<LaneLifecycleStatusV1> {
@@ -3122,77 +3152,74 @@ impl ToriiClient {
         }
         read_bounded_json_response(response, "JSON API").await
     }
-    async fn post_mcp_json(&self, url: Url, payload: &json::Value) -> ToriiResult<json::Value> {
+    async fn post_mcp_json(
+        &self,
+        url: Url,
+        method: &'static str,
+        name: Option<&str>,
+        payload: &json::Value,
+    ) -> ToriiResult<json::Value> {
         let body = json::to_vec(payload).map_err(|err| ToriiError::Decode(err.to_string()))?;
-        let response = self
+        let mut request = self
             .http
             .post(url)
             .header("Content-Type", "application/json")
-            .header("MCP-Protocol-Version", MCP_PROTOCOL_VERSION)
-            .body(body)
-            .send()
-            .await?;
+            .header("Accept", "application/json, text/event-stream")
+            .header(
+                torii_mcp::HEADER_PROTOCOL_VERSION,
+                torii_mcp::MODERN_PROTOCOL_VERSION,
+            )
+            .header(torii_mcp::HEADER_METHOD, method);
+        if let Some(name) = name {
+            request = request.header(
+                torii_mcp::HEADER_NAME,
+                torii_mcp::encode_mirrored_header_value(name),
+            );
+        }
+        let response = request.body(body).send().await?;
         if !response.status().is_success() {
             return Err(response_status_error(&response));
         }
         read_bounded_json_response(response, "JSON API").await
     }
-    async fn post_notification(&self, url: Url, payload: &json::Value) -> ToriiResult<()> {
-        let body = json::to_vec(payload).map_err(|err| ToriiError::Decode(err.to_string()))?;
-        let response = self
-            .http
-            .post(url)
-            .header("Content-Type", "application/json")
-            .header("MCP-Protocol-Version", MCP_PROTOCOL_VERSION)
-            .body(body)
-            .send()
-            .await?;
-        if response.status() != StatusCode::ACCEPTED {
-            return Err(response_status_error(&response));
-        }
-        let bytes = read_bounded_response(response, 1, "MCP notification").await?;
-        if !bytes.is_empty() {
-            return Err(decode_error(
-                "mcp notifications/initialized",
-                "expected an empty response body",
-            ));
-        }
-        Ok(())
-    }
-    async fn mcp_initialize(&self) -> ToriiResult<json::Value> {
+    async fn mcp_discover(&self) -> ToriiResult<json::Value> {
         let url = self.mcp_endpoint()?;
         let payload = json!({
             "jsonrpc": "2.0",
             "id": 1,
-            "method": "initialize",
+            "method": "server/discover",
             "params": {
-                "protocolVersion": MCP_PROTOCOL_VERSION,
-                "capabilities": {},
-                "clientInfo": {
-                    "name": "mochi-local-sandbox",
-                    "version": "1"
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": (torii_mcp::MODERN_PROTOCOL_VERSION),
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                    "io.modelcontextprotocol/clientInfo": {
+                        "name": "mochi-local-sandbox",
+                        "version": "1"
+                    }
                 }
             }
         });
-        self.post_mcp_json(url, &payload).await
-    }
-    async fn mcp_initialized(&self) -> ToriiResult<()> {
-        let url = self.mcp_endpoint()?;
-        let payload = json!({
-            "jsonrpc": "2.0",
-            "method": "notifications/initialized"
-        });
-        self.post_notification(url, &payload).await
+        self.post_mcp_json(url, "server/discover", None, &payload)
+            .await
     }
     async fn mcp_tools_list(&self) -> ToriiResult<json::Value> {
         let url = self.mcp_endpoint()?;
         let payload = json!({
             "jsonrpc": "2.0",
-            "id": 1,
+            "id": 2,
             "method": "tools/list",
-            "params": {}
+            "params": {
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": (torii_mcp::MODERN_PROTOCOL_VERSION),
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                    "io.modelcontextprotocol/clientInfo": {
+                        "name": "mochi-local-sandbox",
+                        "version": "1"
+                    }
+                }
+            }
         });
-        self.post_mcp_json(url, &payload).await
+        self.post_mcp_json(url, "tools/list", None, &payload).await
     }
     async fn connect_ws(&self, url: Url) -> ToriiResult<ToriiWebSocket> {
         let mut request = url

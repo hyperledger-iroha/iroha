@@ -104,14 +104,15 @@ print(
     "offline UI capability",
     capability.ready,
     capability.cash_handoff_capability,
-    capability.required_bridge_abi_version,
-    capability.max_hops,
+    capability.wire_version,
+    capability.device_lifecycle_version,
 )
 ```
 
 The closed response contains exactly
-`cash_handoff_capability="cash_handoff_v1"`, bridge ABI `23`, maximum hop count
-`8`, and `ready=True`. Wallet/device peer handoff must not depend on network
+`cash_handoff_capability="cash_handoff_v1"`, wire version `1`, secure-device
+lifecycle version `1`, and `ready=True`. It deliberately contains no hop or
+history bound. Wallet/device peer handoff must not depend on network
 discovery. Missing proof material for a particular online top-up or redemption
 rejects that command only; it cannot make a node, asset, or dataspace “not
 offline ready.”

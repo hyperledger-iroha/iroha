@@ -62,8 +62,8 @@ def _execution_commitment(seed: int = 0x51) -> dict[str, object]:
         "parent_state_root": _canonical_hash(seed),
         "post_state_root": _canonical_hash(seed + 1),
         "ordinary_writes_root": _canonical_hash(seed + 2),
-        "topup_anchor_root": None,
-        "topup_anchor_count": 0,
+        "offline_cash_top_up_root": None,
+        "offline_cash_top_up_count": 0,
         "native_amx_application_manifest_version": 1,
         "native_amx_application_manifest_root": (
             _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
@@ -416,8 +416,8 @@ def test_qc_reference_preserves_execution_commitment() -> None:
     payload = _prepare_qc()
     execution_commitment = payload["execution_commitment"]
     assert isinstance(execution_commitment, dict)
-    execution_commitment["topup_anchor_root"] = _canonical_hash(0x55)
-    execution_commitment["topup_anchor_count"] = 2
+    execution_commitment["offline_cash_top_up_root"] = _canonical_hash(0x55)
+    execution_commitment["offline_cash_top_up_count"] = 1_000
 
     qc = client_module.SumeragiV2QuorumCertificateRef.from_payload(
         payload, "test_qc"
@@ -427,8 +427,8 @@ def test_qc_reference_preserves_execution_commitment() -> None:
         parent_state_root=_canonical_hash(0x51),
         post_state_root=_canonical_hash(0x52),
         ordinary_writes_root=_canonical_hash(0x53),
-        topup_anchor_root=_canonical_hash(0x55),
-        topup_anchor_count=2,
+        offline_cash_top_up_root=_canonical_hash(0x55),
+        offline_cash_top_up_count=1_000,
         native_amx_application_manifest_version=1,
         native_amx_application_manifest_root=(
             _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
@@ -439,6 +439,20 @@ def test_qc_reference_preserves_execution_commitment() -> None:
         executed_block_wire_len=512,
         executed_block_wire_hash=_canonical_hash(0x54),
     )
+
+
+def test_qc_reference_rejects_retired_top_up_anchor_fields() -> None:
+    payload = _prepare_qc()
+    execution_commitment = payload["execution_commitment"]
+    assert isinstance(execution_commitment, dict)
+    execution_commitment["topup_anchor_root"] = _canonical_hash(0x55)
+    execution_commitment["topup_anchor_count"] = 1
+
+    with pytest.raises(ValueError, match="unknown field `topup_anchor_count`"):
+        client_module.SumeragiV2QuorumCertificateRef.from_payload(
+            payload,
+            "test_qc",
+        )
 
 
 def test_qc_response_uses_only_authoritative_v2_prepare_references() -> None:

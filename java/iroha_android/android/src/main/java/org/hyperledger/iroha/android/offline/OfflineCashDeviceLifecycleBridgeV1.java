@@ -11,8 +11,8 @@ import java.util.Objects;
  *
  * <p>The canonical implementation lives in the default Kotlin Android SDK. This facade preserves
  * the Java migration surface without adding a second codec or backend. Missing native secure
- * journal/outbox support is a normal {@link Availability#ONLINE_ONLY} result; no KeyMint-only or
- * software implementation is accepted as a fallback.
+ * multi-credit-inbox/journal/outbox support is a normal {@link Availability#ONLINE_ONLY} result;
+ * no KeyMint-only or software implementation is accepted as a fallback.
  */
 public final class OfflineCashDeviceLifecycleBridgeV1 {
   /** Whether the complete secure-device contract is present. */
@@ -21,22 +21,68 @@ public final class OfflineCashDeviceLifecycleBridgeV1 {
     AVAILABLE,
   }
 
-  /** Exact operations shared with the sealed Core journal/outbox boundary. */
+  /**
+   * Exact operations shared with Core's sealed reservation, transition, and recovery flow.
+   *
+   * <p>The service reserves bytes before accepting authority, commits a verified candidate exactly
+   * once, and recovers every terminal certificate and installed envelope byte-identically.
+   */
   public enum Operation {
-    RESERVE_RECEIVE_INTENT_AND_SIGN,
-    RECOVER_RECEIVE_INTENT_AND_SIGNATURE,
-    BIND_RECEIVE_REQUEST_DIGEST,
-    PUBLISH_SEND_PAYMENT,
-    RECOVER_ACTIVE_INTENT,
-    CANCEL_EXPIRED_RECEIVE,
-    COMMIT_INTENT_EXACT_NEXT,
-    RECOVER_TERMINAL,
-    RECOVER_RECEIVE_TERMINAL,
+    READ_ACTIVE_HARDWARE_CREDENTIAL,
+    PREPARE_ACCEPTANCE_INTENT_AUTHORIZATION,
+    RECOVER_ACCEPTANCE_INTENT_AUTHORIZATION,
+    VERIFY_AUTHORIZATION_RESERVE_INBOX_AND_ISSUE_ACCEPTANCE_TICKET,
+    RECOVER_ACCEPTANCE_TICKET,
+    STAGE_INBOUND_PAYMENT,
+    RECOVER_STAGED_INBOUND_PAYMENT,
+    RECOVER_INBOUND_INBOX_PAGE,
+    PREPARE_EXACT_NEXT_TRANSITION,
+    RECOVER_PREPARED_TRANSITION,
+    ABANDON_UNCOMMITTED_PREPARED_TRANSITION,
+    COMMIT_VERIFIED_CANDIDATE,
+    RECOVER_TERMINAL_COMMIT_CERTIFICATE,
+    INSTALL_FINAL_COMMIT_WRAPPER,
+    RECOVER_INSTALLED_ENVELOPE_OR_STATE_PROOF,
     SIGN_RECEIVE_ACKNOWLEDGEMENT,
-    STAGE_PAYMENT,
-    RECOVER_STAGED_PAYMENT_DIGEST,
-    PUBLISH_STAGED_PAYMENT,
-    RECOVER_PUBLISHED_PAYMENT,
+    RELEASE_OUTBOX_ENTRY,
+    READ_TRUSTED_TIME_OR_LEASE,
+    PREPARE_MINT_AUTHORIZATION,
+    RECOVER_MINT_AUTHORIZATION,
+    VERIFY_AUTHORIZATION_AND_STAGE_MINT_CREDIT,
+    FOLD_RECEIVE,
+    READ_PENDING_CREDIT_WATERMARK,
+    ROTATE_HARDWARE_EPOCH,
+  }
+
+  /** Exact secure-backend capabilities shared with the Kotlin bridge. */
+  public enum Capability {
+    EXACT_NEXT_PREDECESSOR_CONSUMPTION(1 << 0),
+    ONE_USE_SUCCESSOR_AUTHORIZATION(1 << 1),
+    ROLLBACK_RESISTANT_COUNTER_AND_JOURNAL(1 << 2),
+    SEALED_TRANSITION_RECOVERY(1 << 3),
+    ONE_USE_ACCEPTANCE_TICKETS(1 << 4),
+    DURABLE_INBOX_RESERVATION(1 << 5),
+    AUTHENTICATED_INBOUND_STAGING(1 << 6),
+    AUTHORITATIVE_REPLAY_ROOT_RECOVERY(1 << 7),
+    SENDER_OUTBOX_RESERVATION(1 << 8),
+    AUTHENTICATED_DURABLE_RETRY_OUTBOX(1 << 9),
+    ATOMIC_VERIFIED_CANDIDATE_COMMIT(1 << 10),
+    RECOVERABLE_TERMINAL_COMMIT_CERTIFICATE(1 << 11),
+    TRUSTED_TIME_OR_LEASE(1 << 12),
+    OFFLINE_HARDWARE_EPOCH_ROTATION(1 << 13),
+    ROLLBACK_SAFE_COUNTER_ROLLOVER(1 << 14),
+    NO_SOFTWARE_FALLBACK(1 << 15);
+
+    private final int mask;
+
+    Capability(final int mask) {
+      this.mask = mask;
+    }
+
+    /** Return the canonical bit in the native capability frame. */
+    public int mask() {
+      return mask;
+    }
   }
 
   /** Stable result status. */
@@ -44,13 +90,14 @@ public final class OfflineCashDeviceLifecycleBridgeV1 {
     SUCCESS,
     UNAVAILABLE,
     STALE_OR_CONCURRENT,
-    INTENT_MISMATCH,
+    BINDING_MISMATCH,
     TRUSTED_TIME_REJECTED,
     REJECTED,
     MISSING,
     CONFLICT,
     CORRUPT,
     MALFORMED_REQUEST,
+    RECOVERY_REQUIRED,
   }
 
   /** Defensively copied native secure-backend identity. */

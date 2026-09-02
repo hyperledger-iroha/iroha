@@ -258,7 +258,8 @@ use crate::{
             CanonicalHost, ClientFingerprint, GatewayComplianceController,
             GatewayComplianceDecision, GatewayComplianceDecisionSource,
             GatewayComplianceDisposition, GatewayComplianceError, GatewayComplianceSubjectKindV1,
-            PolicyViolation, RateLimitError, RegionCode, RequestContext, SORA_TLS_STATE_HEADER,
+            PolicyDecision, PolicyViolation, RateLimitError, RegionCode, RequestContext,
+            SORA_TLS_STATE_HEADER,
         },
         registry::{
             CapacitySnapshot, GovernanceSummary, ManifestLineageSummary, PinRegistryError,
@@ -310,7 +311,7 @@ const HEADER_SORA_POTR_RECEIPT: &str = "sora-potr-receipt";
 const HEADER_SORA_POTR_STATUS: &str = "sora-potr-status";
 const MODERATION_QUARANTINE_OBJECT_PAYLOAD_VARY: &str =
     "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness";
-const APP_STATIC_SITE_CONFIG_NAME: &str = "soracloud/app_static_site";
+const APP_STATIC_SITE_CONFIG_NAME: &str = super::site::APP_STATIC_SITE_CONFIG_NAME;
 const APP_STATIC_SITE_BINDING_SCHEMA_VERSION_V1: u16 = 1;
 const MIME_CAR: &str = "application/vnd.ipld.car";
 const MIME_OCTET_STREAM: &str = "application/octet-stream";
@@ -11253,20 +11254,23 @@ pub(crate) async fn handle_get_sorafs_reputation_events_ws(
         let shutdown = state.shutdown_signal.clone();
         let mut response = ws
             .on_upgrade(move |socket| async move {
-                let _preauth_guard = preauth_guard;
-                let stream = reputation_event_websocket_stream(
-                    socket,
-                    initial_backlog.frames,
-                    committed_reader,
-                    initial_backlog.cursor,
-                );
-                let result = tokio::select! {
-                    () = shutdown.receive() => return,
-                    result = stream => result,
-                };
-                if let Err(err) = result {
-                    debug!(%err, "SoraFS reputation WebSocket stream closed with error");
-                }
+                let _ = crate::panic_recovery::catch_async_recoverable(async move {
+                    let _preauth_guard = preauth_guard;
+                    let stream = reputation_event_websocket_stream(
+                        socket,
+                        initial_backlog.frames,
+                        committed_reader,
+                        initial_backlog.cursor,
+                    );
+                    let result = tokio::select! {
+                        () = shutdown.receive() => return,
+                        result = stream => result,
+                    };
+                    if let Err(err) = result {
+                        debug!(%err, "SoraFS reputation WebSocket stream closed with error");
+                    }
+                })
+                .await;
             })
             .into_response();
         insert_reputation_stream_cache_headers(&mut response);
@@ -14012,21 +14016,24 @@ pub(crate) async fn handle_get_sorafs_orderbook_events_ws(
         let preauth_guard = crate::take_preauth_upgrade_guard(preauth_guard);
         let shutdown = state.shutdown_signal.clone();
         ws.on_upgrade(move |socket| async move {
-            let _preauth_guard = preauth_guard;
-            let stream = orderbook_finalized_event_websocket_stream(
-                socket,
-                stream_state,
-                initial_page.events,
-                after,
-                limit,
-            );
-            let result = tokio::select! {
-                () = shutdown.receive() => return,
-                result = stream => result,
-            };
-            if let Err(err) = result {
-                debug!(%err, "SoraFS orderbook WebSocket stream closed with error");
-            }
+            let _ = crate::panic_recovery::catch_async_recoverable(async move {
+                let _preauth_guard = preauth_guard;
+                let stream = orderbook_finalized_event_websocket_stream(
+                    socket,
+                    stream_state,
+                    initial_page.events,
+                    after,
+                    limit,
+                );
+                let result = tokio::select! {
+                    () = shutdown.receive() => return,
+                    result = stream => result,
+                };
+                if let Err(err) = result {
+                    debug!(%err, "SoraFS orderbook WebSocket stream closed with error");
+                }
+            })
+            .await;
         })
         .into_response()
     })();
@@ -24811,6 +24818,48 @@ fn normalized_site_request_host(headers: &HeaderMap) -> Result<String, Response>
     normalize_host_header(host)
         .ok_or_else(|| json_error(StatusCode::BAD_REQUEST, "invalid Host header"))
 }
+/// Return whether the canonical request host selects a configured public SoraFS site.
+pub(crate) fn request_host_selects_sorafs_site(
+    state: &SharedAppState,
+    headers: &HeaderMap,
+) -> bool {
+    let Ok(host) = normalized_site_request_host(headers) else {
+        return false;
+    };
+    let cid_host = state.sorafs_gateway_config.untrusted_hosting.enabled
+        && [
+            state
+                .sorafs_gateway_config
+                .untrusted_hosting
+                .cid_host_suffixes
+                .live
+                .as_str(),
+            state
+                .sorafs_gateway_config
+                .untrusted_hosting
+                .cid_host_suffixes
+                .taira
+                .as_str(),
+        ]
+        .into_iter()
+        .filter(|suffix| !suffix.trim().is_empty())
+        .any(|suffix| {
+            let suffix = suffix.trim().trim_end_matches('.').to_ascii_lowercase();
+            host.strip_suffix(&format!(".{suffix}"))
+                .is_some_and(|label| !label.is_empty() && !label.contains('.'))
+        });
+    if cid_host
+        || state
+            .sorafs_site_bindings
+            .as_deref()
+            .and_then(|bindings| find_site_binding(bindings, &host))
+            .is_some()
+    {
+        return true;
+    }
+    let state_view = state.state.view();
+    super::site::has_authoritative_public_site_host(state_view.world(), &host)
+}
 fn decode_canonical_content_cid(cid: &str) -> Option<Vec<u8>> {
     let decoded = decode_content_cid(cid)?;
     (encode_content_cid(&decoded) == cid).then_some(decoded)
@@ -24847,114 +24896,33 @@ fn extract_cid_from_untrusted_host(
     }
     Ok(None)
 }
-#[derive(Clone, Debug, JsonDeserialize)]
-struct AuthoritativeAppStaticSiteBindingV1 {
-    schema_version: u16,
-    hostname: String,
-    mount_path: String,
-    index_document: String,
-    spa_fallback: bool,
-    manifest_digest_hex: String,
-}
 fn resolve_site_host_from_authoritative_app(
     state: &SharedAppState,
     host: &str,
 ) -> Result<Option<ResolvedSiteHost>, Response> {
-    let state_view = state.state.view();
-    let world = state_view.world();
-    let mut best_candidate = None;
-    for (service_id, deployment) in world.soracloud_service_deployments().iter() {
-        let service_name = service_id.to_string();
-        let Some(bundle) = world.soracloud_service_revisions().get(&(
-            service_name.clone(),
-            deployment.current_service_version.clone(),
-        )) else {
-            continue;
-        };
-        let Some(route) = bundle.service.route.as_ref() else {
-            continue;
-        };
-        if route.visibility != SoraRouteVisibilityV1::Public {
-            continue;
-        }
-        if !route.host.eq_ignore_ascii_case(host) {
-            continue;
-        }
-        let Some(config_entry) = deployment.service_configs.get(APP_STATIC_SITE_CONFIG_NAME) else {
-            continue;
-        };
-        let replace = best_candidate.as_ref().is_none_or(
-            |(best_sequence, best_service_name, _best_config): &(
-                u64,
-                String,
-                iroha_data_model::soracloud::SoraServiceConfigEntryV1,
-            )| {
-                config_entry.last_update_sequence > *best_sequence
-                    || (config_entry.last_update_sequence == *best_sequence
-                        && service_name < *best_service_name)
-            },
-        );
-        if replace {
-            best_candidate = Some((
-                config_entry.last_update_sequence,
-                service_name,
-                config_entry.clone(),
-            ));
-        }
+    let binding = {
+        let state_view = state.state.view();
+        super::site::authoritative_app_site_binding(state_view.world(), host)
     }
-    let Some((_sequence, service_name, config_entry)) = best_candidate else {
-        return Ok(None);
-    };
-    let binding = config_entry
-        .value_json
-        .try_into_any_norito::<AuthoritativeAppStaticSiteBindingV1>()
-        .map_err(|err| {
-            json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!(
-                    "authoritative static site binding for service `{service_name}` could not be decoded: {err}"
-                ),
-            )
-        })?;
-    if binding.schema_version != APP_STATIC_SITE_BINDING_SCHEMA_VERSION_V1 {
-        return Err(json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!(
-                "authoritative static site binding for service `{service_name}` has unsupported schema_version `{}`",
-                binding.schema_version
-            ),
-        ));
-    }
-    if !binding.hostname.eq_ignore_ascii_case(host) {
-        return Err(json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!(
-                "authoritative static site binding for service `{service_name}` points at host `{}` but request host was `{host}`",
-                binding.hostname
-            ),
-        ));
-    }
-    if binding.mount_path != "/" {
-        return Err(json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!(
-                "authoritative static site binding for service `{service_name}` uses unsupported mount_path `{}`",
-                binding.mount_path
-            ),
-        ));
-    }
-    let manifest_digest = parse_hex_fixed::<32>(
-        &binding.manifest_digest_hex,
-        "manifest_digest_hex",
-    )
-    .map_err(|err| {
+    .map_err(|error| {
+        error!(%error, %host, "invalid ledger-authoritative SoraCloud static-site binding");
         json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!(
-                "authoritative static site binding for service `{service_name}` is invalid: {err}"
-            ),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the ledger-authoritative SoraCloud site binding is invalid",
         )
     })?;
+    let Some(binding) = binding else {
+        return Ok(None);
+    };
+    let manifest_digest =
+        parse_hex_fixed::<32>(&binding.manifest_digest_hex, "manifest_digest_hex").map_err(
+            |_| {
+                json_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "the ledger-authoritative SoraCloud site manifest digest is invalid",
+                )
+            },
+        )?;
     let stored = state
         .sorafs_node
         .manifest_metadata_by_digest(&manifest_digest)
@@ -25260,7 +25228,7 @@ async fn authoritative_inrou_public_discovery_response(
     );
     Some(response)
 }
-async fn authoritative_inrou_public_discovery_cid_host_response(
+async fn canonical_inrou_public_discovery_cid_host_response(
     state: &SharedAppState,
     headers: &HeaderMap,
     raw_path: &str,
@@ -25280,11 +25248,30 @@ async fn authoritative_inrou_public_discovery_cid_host_response(
         Ok(None) => return None,
         Err(response) => return Some(response),
     };
-    match authoritative_inrou_public_discovery_response(state, &content_cid).await {
-        Some(response) => Some(response),
-        None if state.sorafs_node.is_enabled() => None,
-        None => Some(storage_disabled_response()),
+    let response = match authoritative_inrou_public_discovery_response(state, &content_cid).await {
+        Some(response) => response,
+        None if state.sorafs_node.is_enabled() => return None,
+        None => return Some(storage_disabled_response()),
+    };
+    if !response.status().is_success() {
+        return Some(response);
     }
+    let Some(cid_bytes) = decode_canonical_content_cid(&content_cid) else {
+        return Some(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "authoritative public discovery content CID is not canonical",
+        ));
+    };
+    let remote = match gateway_request_remote(headers) {
+        Ok(remote) => remote,
+        Err(response) => return Some(response),
+    };
+    if let Err(response) =
+        enforce_authoritative_public_discovery_pre_read(state, headers, &cid_bytes, remote)
+    {
+        return Some(response);
+    }
+    Some(response)
 }
 fn should_use_spa_fallback_enabled(raw_path: &str, enabled: bool) -> bool {
     if !enabled {
@@ -25724,7 +25711,7 @@ pub(crate) async fn handle_get_sorafs_site_path(
     Path(raw_path): Path<String>,
 ) -> Response {
     if let Some(response) =
-        authoritative_inrou_public_discovery_cid_host_response(&state, &headers, &raw_path).await
+        canonical_inrou_public_discovery_cid_host_response(&state, &headers, &raw_path).await
     {
         return response;
     }
@@ -26555,6 +26542,53 @@ fn gateway_client_fingerprint(
     let effective_ip = crate::limits::effective_remote_ip(headers, Some(remote.ip()))
         .unwrap_or_else(|| remote.ip());
     ClientFingerprint::from_identifier(&effective_ip.to_string())
+}
+#[allow(clippy::result_large_err)]
+fn enforce_authoritative_public_discovery_pre_read(
+    state: &SharedAppState,
+    headers: &HeaderMap,
+    cid_bytes: &[u8],
+    remote: SocketAddr,
+) -> Result<(), Response> {
+    let fingerprint = gateway_client_fingerprint(remote, headers, &state.trusted_proxy_nets);
+    let mut context = RequestContext::new(&fingerprint, SystemTime::now(), Instant::now())
+        .with_content_cid(cid_bytes)
+        .with_remote_addr(remote);
+    if let Some(host) = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .and_then(CanonicalHost::parse_authority)
+    {
+        context = context.with_canonical_host(host);
+    }
+    if let Some(region) = parse_trusted_gateway_region(headers, remote, &state.trusted_proxy_nets) {
+        context = context.with_region(region);
+    }
+    if let Some(ttl) = parse_cache_ttl(headers) {
+        context = context.with_cache_ttl_secs(ttl);
+    }
+    if let Some(policy) = &state.sorafs_gateway_policy {
+        match policy.evaluate_rate_only(&context) {
+            PolicyDecision::Allow => {}
+            PolicyDecision::Deny(violation) => {
+                #[cfg(feature = "telemetry")]
+                {
+                    let (reason, detail) = violation.telemetry_labels();
+                    state.telemetry.with_metrics(|metrics| {
+                        metrics.record_sorafs_gar_violation(reason, detail);
+                    });
+                }
+                state.publish_gar_violation_event(&context, &violation);
+                let (policy_reason, policy_detail) = violation.telemetry_labels();
+                warn!(
+                    policy_reason,
+                    policy_detail, "gateway policy denied authoritative public discovery request"
+                );
+                return Err(gateway_policy_violation_response(violation));
+            }
+        }
+    }
+    enforce_governed_gateway_compliance_for_cid(state, cid_bytes)
 }
 #[allow(clippy::result_large_err)]
 fn enforce_gateway_policy_for_request(
@@ -40043,6 +40077,22 @@ mod advert_tests {
             api_test_response_json_with_status(cid_root, StatusCode::PRECONDITION_FAILED).await;
         assert_json_fields!(cid_root_value; json_at ["error"] => Some(&Value::String("provider_not_admitted".into())));
 
+        let mut cid_host_headers = HeaderMap::new();
+        cid_host_headers.insert(
+            header::HOST,
+            HeaderValue::from_str(&format!("{content_cid}.sorafs.taira.sora.org"))
+                .expect("CID-host header"),
+        );
+        let cid_host = handle_get_sorafs_site_path(
+            State(context.app.clone()),
+            cid_host_headers,
+            Path("index.json".to_owned()),
+        )
+        .await;
+        let cid_host_value =
+            api_test_response_json_with_status(cid_host, StatusCode::PRECONDITION_FAILED).await;
+        assert_json_fields!(cid_host_value; json_at ["error"] => Some(&Value::String("provider_not_admitted".into())));
+
         cid_headers.insert(header::RANGE, HeaderValue::from_static("bytes=0-0"));
         let cid_range = crate::sorafs::public_gateway::handle_get_sorafs_cid_path(
             State(context.app),
@@ -40235,6 +40285,58 @@ mod advert_tests {
         );
     }
 
+    #[test]
+    fn authoritative_public_discovery_uses_rate_only_gateway_policy() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        inner.sorafs_admission = Some(Arc::new(AdmissionRegistry::empty()));
+        let mut gateway_config = inner.sorafs_gateway_config.clone();
+        gateway_config.enforce_admission = true;
+        gateway_config.require_manifest_envelope = true;
+        gateway_config.rate_limit.max_requests =
+            Some(NonZeroU32::new(1).expect("non-zero request limit"));
+        gateway_config.rate_limit.window = Duration::from_mins(1);
+        gateway_config.rate_limit.ban = None;
+        install_api_test_gateway_security(&mut inner, gateway_config);
+        let state = Arc::new(inner);
+        let cid_bytes = sorafs_manifest::canonical_manifest_root_cid([0xAB; 32]);
+        let remote = SocketAddr::from(([127, 0, 0, 1], 8420));
+
+        enforce_authoritative_public_discovery_pre_read(
+            &state,
+            &HeaderMap::new(),
+            &cid_bytes,
+            remote,
+        )
+        .expect("committed-state discovery bypasses provider and manifest-envelope policy");
+        let denied = enforce_authoritative_public_discovery_pre_read(
+            &state,
+            &HeaderMap::new(),
+            &cid_bytes,
+            remote,
+        )
+        .expect_err("repeated committed-state discovery request must be rate limited");
+        assert_eq!(denied.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[test]
+    fn authoritative_public_discovery_fails_closed_without_compliance_controller() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        inner.sorafs_gateway_compliance_controller = None;
+        let state = Arc::new(inner);
+        let cid_bytes = sorafs_manifest::canonical_manifest_root_cid([0xAC; 32]);
+
+        let denied = enforce_authoritative_public_discovery_pre_read(
+            &state,
+            &HeaderMap::new(),
+            &cid_bytes,
+            SocketAddr::from(([127, 0, 0, 1], 8421)),
+        )
+        .expect_err("committed-state discovery requires governed CID compliance");
+        assert_eq!(denied.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
     #[tokio::test]
     async fn storage_enabled_public_discovery_routes_fail_closed_on_invalid_authoritative_registry()
     {
@@ -40397,6 +40499,39 @@ mod advert_tests {
             &document_bytes[..]
         );
     }
+
+    #[tokio::test]
+    async fn storage_disabled_unbound_cid_host_preserves_local_source_semantics() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        inner.sorafs_gateway_config.untrusted_hosting.enabled = true;
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .cid_host_suffixes
+            .taira = "sorafs.taira.sora.org".to_owned();
+        let content_cid =
+            encode_content_cid(&sorafs_manifest::canonical_manifest_root_cid([0xAA; 32]));
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::HOST,
+            HeaderValue::from_str(&format!("{content_cid}.sorafs.taira.sora.org"))
+                .expect("CID-host header"),
+        );
+        let response = handle_get_sorafs_site_path(
+            State(Arc::new(inner)),
+            headers,
+            Path("index.json".to_owned()),
+        )
+        .await;
+        let value = api_test_response_json_with_status(response, StatusCode::NOT_FOUND).await;
+        assert!(
+            value
+                .json_str(&["message"])
+                .is_some_and(|message| message.contains("storage API is not enabled"))
+        );
+    }
+
     #[tokio::test]
     async fn cid_host_serves_manifest_and_spa_fallback() {
         let app = mk_app_state_for_tests();

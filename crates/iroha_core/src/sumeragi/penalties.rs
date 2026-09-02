@@ -81,6 +81,16 @@ impl<'a> PenaltyApplier<'a> {
         view: &StateView<'_>,
         evidence: super::evidence::V2CommittedEvidenceSnapshot,
     ) -> Result<ParentPenaltySnapshot> {
+        if evidence.record_capacity_exceeded {
+            return Err(eyre!(
+                "committed Sumeragi v2 evidence exceeds the record capacity"
+            ));
+        }
+        if evidence.byte_capacity_exceeded {
+            return Err(eyre!(
+                "committed Sumeragi v2 evidence exceeds the proof-byte capacity"
+            ));
+        }
         let world = view.world();
         let slashing_delay = crate::sumeragi::resolve_npos_slashing_delay_blocks_from_world(world)
             .ok_or_else(|| eyre!("NPoS penalty derivation requires signed NPoS parameters"))?;
@@ -182,12 +192,12 @@ impl<'a> PenaltyApplier<'a> {
             }
             let view = self.state.view();
             let evidence = super::evidence::v2_committed_evidence_snapshot(view.world());
-            let result = Self::parent_snapshot(&view, evidence.clone()).and_then(|snapshot| {
+            let result = Self::parent_snapshot(&view, evidence).and_then(|snapshot| {
                 let admissions = if include_admissions {
                     super::evidence::pending_v2_evidence_admissions_from_snapshot(
                         self.state,
                         block_header.height().get(),
-                        &evidence,
+                        &snapshot.evidence,
                     )
                 } else {
                     Vec::new()
@@ -520,6 +530,43 @@ fn apply_npos_consensus_effects_to_transaction_inner(
     {
         return Err(eyre!(
             "bounded Sumeragi v2 evidence table has no reclaimable capacity"
+        ));
+    }
+    let mut retained_evidence_bytes = 0_usize;
+    for (_, record) in tx.world.consensus_evidence.iter() {
+        let encoded_len = super::evidence::v2_evidence_encoded_len(&record.evidence.equivocation);
+        if encoded_len > super::evidence::MAX_V2_EVIDENCE_ADMISSION_BYTES {
+            return Err(eyre!(
+                "committed Sumeragi v2 evidence contains an oversized individual proof"
+            ));
+        }
+        retained_evidence_bytes = super::evidence::checked_v2_evidence_byte_sum(
+            retained_evidence_bytes,
+            [encoded_len],
+            super::evidence::MAX_V2_COMMITTED_EVIDENCE_BYTES,
+        )
+        .ok_or_else(|| {
+            eyre!("bounded Sumeragi v2 evidence table exceeds its proof-byte capacity")
+        })?;
+    }
+    let incoming_evidence_bytes = super::evidence::checked_v2_evidence_byte_sum(
+        0,
+        effects
+            .v2_evidence_admissions
+            .iter()
+            .map(super::evidence::v2_evidence_encoded_len),
+        super::evidence::MAX_V2_EVIDENCE_ADMISSION_BYTES,
+    )
+    .ok_or_else(|| eyre!("Sumeragi v2 evidence admission batch exceeds its byte capacity"))?;
+    if super::evidence::checked_v2_evidence_byte_sum(
+        retained_evidence_bytes,
+        [incoming_evidence_bytes],
+        super::evidence::MAX_V2_COMMITTED_EVIDENCE_BYTES,
+    )
+    .is_none()
+    {
+        return Err(eyre!(
+            "bounded Sumeragi v2 evidence table has no reclaimable proof-byte capacity"
         ));
     }
     for admission in &effects.v2_evidence_admissions {
@@ -951,13 +998,14 @@ mod tests {
             height: context.height,
             view,
         };
-        let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"penalty evidence parent state"),
-            Hash::new(b"penalty evidence post state"),
-            Hash::new(b"penalty evidence ordinary writes"),
-            1,
-            Hash::new(b"penalty evidence executed block"),
-        );
+        let execution_commitment =
+            ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                Hash::new(b"penalty evidence parent state"),
+                Hash::new(b"penalty evidence post state"),
+                Hash::new(b"penalty evidence ordinary writes"),
+                1,
+                Hash::new(b"penalty evidence executed block"),
+            );
         let keys = roster_keys();
         let vote = |seed: u8| {
             let mut vote = iroha_data_model::block::consensus_v2::Vote {
@@ -1010,6 +1058,10 @@ mod tests {
                 power: 1,
             })
             .collect::<Vec<_>>();
+        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+                network_id, 0, &roster,
+            );
         HeightContext {
             network_id,
             protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
@@ -1022,6 +1074,8 @@ mod tests {
             snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("valid fixture quorum"),
             roster,
+            offline_cash_mint_finality_epoch_id,
+            offline_cash_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"penalties v2 test context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
@@ -1078,16 +1132,17 @@ mod tests {
                 .canonical_proposal_wire_hash()
                 .expect("canonical proposal wire"),
         };
-        let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"penalties fixture parent state"),
-            Hash::new(b"penalties fixture post state"),
-            Hash::new(b"penalties fixture ordinary writes"),
-            u64::try_from(block.encode_wire().expect("penalties block wire").len())
-                .expect("penalties block wire length fits u64"),
-            block
-                .executed_block_wire_hash()
-                .expect("canonical executed block wire"),
-        );
+        let execution_commitment =
+            ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                Hash::new(b"penalties fixture parent state"),
+                Hash::new(b"penalties fixture post state"),
+                Hash::new(b"penalties fixture ordinary writes"),
+                u64::try_from(block.encode_wire().expect("penalties block wire").len())
+                    .expect("penalties block wire length fits u64"),
+                block
+                    .executed_block_wire_hash()
+                    .expect("canonical executed block wire"),
+            );
         let round = ConsensusRound {
             context_id: context.id(),
             height: 1,

@@ -1,5 +1,6 @@
 import type { Buffer } from "buffer";
 import type { BrowserFeePayment } from "./transaction-codec.js";
+import type { OfflineCashV1 } from "./offline-cash-v1.js";
 import { OperatorSigningContext } from "./operator-request.js";
 import type { RepoAgreementLifecycleFields } from "./repo-agreement.js";
 import type { ToriiBlockMerkleCommitment, ToriiBlockMerkleProof, ToriiBlockProofs, ToriiBlockProofTrustedAnchor, ToriiBlockProofVerification } from "./dist/blockProofTypes.js";
@@ -50,9 +51,9 @@ export interface TairaTestnetProfile {
   readonly toriiBaseUrl: "https://taira.sora.org";
   readonly chainId: "fc56984b-2be7-431d-840e-21514d1883f0";
   readonly i105Discriminant: 369;
-  readonly kagemushaAssetDefinitionId: "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
-  readonly kagemushaAssetAlias: "ds#boi.is";
-  readonly kagemushaAssetScale: 2;
+  readonly offlineCashAssetDefinitionId: "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
+  readonly offlineCashAssetAlias: "ds#boi.is";
+  readonly offlineCashAssetScale: 2;
   readonly xorAssetDefinitionId: "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
   readonly xorAssetAlias: "xor#universal";
   readonly xorAssetScale: 9;
@@ -79,182 +80,38 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-export const KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION: 23;
-export const KAGEMUSHA_REQUIRED_NATIVE_CONTRACT_REVISION: 1;
-export const KAGEMUSHA_MANIFEST_VERSION: 4;
-export const KAGEMUSHA_MAX_HOPS: 8;
-export const KAGEMUSHA_CASH_HANDOFF_CAPABILITY: "cash_handoff_v1";
-export const KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES: 524288;
-export const KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES: 50331648;
-
-export interface KagemushaNoritoRequestV4 {
-  readonly version: 4;
-  readonly norito: Uint8Array;
-}
-
-export interface NormalizedKagemushaNoritoRequestV4 extends KagemushaNoritoRequestV4 {
-  readonly identity: KagemushaOperationIdentity;
-}
-
-export interface OfflineStatus {
+export interface OfflineCashReadinessV1 {
   readonly cash_handoff_capability: "cash_handoff_v1";
-  readonly required_bridge_abi_version: 23;
-  readonly max_hops: 8;
-  readonly ready: true;
+  readonly wire_version: 1;
+  readonly device_lifecycle_version: 1;
+  readonly ready: boolean;
 }
 
-export type KagemushaOperationKind = Readonly<{
-  kind: "top_up" | "redeem";
-  value: null;
-}>;
-
-export interface KagemushaOperationIdentity {
-  readonly operation_id: string;
-  readonly request_authority_digest: string;
-  readonly canonical_request_digest: string;
-  readonly kind: KagemushaOperationKind;
-  readonly issued_at_ms: number | bigint;
-  readonly expires_at_ms: number | bigint;
+export type OfflineCashOperationKindV1 = "top_up" | "redemption";
+export type OfflineCashOperationStateV1 = "pending" | "applied" | "rejected";
+export interface OfflineCashOperationRejectionV1 {
+  readonly code:
+    | "invalid_request"
+    | "unauthorized"
+    | "insufficient_online_balance"
+    | "invalid_proof"
+    | "hardware_policy_rejected"
+    | "identity_conflict"
+    | "reserve_underflow"
+    | "arithmetic_overflow"
+    | "internal_failure";
+  readonly detailDigest: Uint8Array;
 }
-
-export interface KagemushaOperationReference {
-  readonly identity: KagemushaOperationIdentity;
-  readonly state: Readonly<{ state: "pending"; value: null }>;
-  readonly transaction_hash: string;
-  readonly status_uri: string;
+export interface UnverifiedOfflineCashOperationStatusV1 {
+  readonly operationId: Uint8Array;
+  readonly kind: OfflineCashOperationKindV1;
+  readonly state: OfflineCashOperationStateV1;
+  readonly rejection: OfflineCashOperationRejectionV1 | null;
+  verifyAgainst<T>(
+    trustAnchor: unknown,
+    verifier: (status: JsonValue, trustAnchor: unknown) => T | Promise<T>,
+  ): Promise<T>;
 }
-
-export interface KagemushaTopUpAnchorRef {
-  readonly topup_operation_id: number[];
-  readonly anchor_digest: number[];
-}
-
-export interface KagemushaTopUpAnchorMerkleProof {
-  readonly leaf_index: number;
-  readonly leaf_count: number;
-  readonly siblings: number[][];
-}
-
-export type KagemushaTopUpExecutionCommitment = Readonly<
-  Record<string, JsonValue>
-> & Readonly<{
-  post_state_root: string;
-  ordinary_writes_root: string;
-  topup_anchor_root: string;
-  topup_anchor_count: number;
-}>;
-
-/**
- * Top-up proof returned by the Node transport only after the native ABI-23
- * structural validator accepts the exact response bytes. Commit-QC signature
- * and validator-roster trust remain separate from this structural boundary.
- */
-export interface KagemushaTopUpFinalityProof {
-  readonly version: 1;
-  readonly anchor: KagemushaTopUpAnchorRef;
-  readonly anchor_path: KagemushaTopUpAnchorMerkleProof;
-  readonly commit_qc: Readonly<{
-    height_context: Readonly<Record<string, JsonValue | bigint>> & Readonly<{
-      height: number | bigint;
-      network_id: string;
-    }>;
-    certificate: Readonly<Record<string, JsonValue>> & Readonly<{
-      execution_commitment: KagemushaTopUpExecutionCommitment;
-    }>;
-  }>;
-}
-
-export type KagemushaTopUpAnchor = Readonly<
-  Record<string, JsonValue | bigint>
-> & Readonly<{
-  version: 4;
-  network_id: string;
-  topup_operation_id: number[];
-  anchor_digest: number[];
-  finalized_height: number | bigint;
-  finalized_tx_hash: number[];
-  artifact_binding: Readonly<Record<string, JsonValue>> & Readonly<{ version: 4 }>;
-}>;
-
-export interface KagemushaTopUpResult {
-  readonly transaction_hash: string;
-  readonly finalized_block_height: number | bigint;
-  readonly anchor: KagemushaTopUpAnchor;
-  readonly finality_proof: KagemushaTopUpFinalityProof;
-}
-
-export interface KagemushaRedeemResult {
-  readonly transaction_hash: string;
-  readonly finalized_block_height: number | bigint;
-}
-
-export type KagemushaOperationResult =
-  | Readonly<{ kind: "top_up"; result: Readonly<KagemushaTopUpResult> }>
-  | Readonly<{ kind: "redeem"; result: Readonly<KagemushaRedeemResult> }>;
-
-export type KagemushaOperationStatus =
-  | Readonly<{
-      state: "pending";
-      value: Readonly<{
-        identity: KagemushaOperationIdentity;
-        transaction_hash: string;
-      }>;
-    }>
-  | Readonly<{
-      state: "applied";
-      value: Readonly<{
-        identity: KagemushaOperationIdentity;
-        result: KagemushaOperationResult;
-      }>;
-    }>
-  | Readonly<{
-      state: "rejected";
-      value: Readonly<{
-        identity: KagemushaOperationIdentity;
-        transaction_hash: string;
-        error: Readonly<{
-          code: string;
-          message: string;
-          details?: Readonly<Record<string, JsonValue>>;
-        }>;
-      }>;
-    }>;
-
-/** Status variants available without the Node-only native structural validator. */
-export type KagemushaPortableOperationStatus =
-  | Exclude<KagemushaOperationStatus, Readonly<{ state: "applied" }>>
-  | Readonly<{
-      state: "applied";
-      value: Readonly<{
-        identity: KagemushaOperationIdentity;
-        result: Extract<KagemushaOperationResult, Readonly<{ kind: "redeem" }>>;
-      }>;
-    }>;
-
-export function normalizeKagemushaOperationId(value: string, context?: string): string;
-export function normalizeKagemushaTopUpRequestV4(
-  value: KagemushaNoritoRequestV4,
-  context?: string,
-): NormalizedKagemushaNoritoRequestV4;
-export function normalizeKagemushaRedeemRequestV4(
-  value: KagemushaNoritoRequestV4,
-  context?: string,
-): NormalizedKagemushaNoritoRequestV4;
-export function normalizeOfflineStatus(
-  payload: Record<string, unknown>,
-): OfflineStatus;
-export function normalizeKagemushaOperationReference(
-  payload: Record<string, unknown>,
-  expected?: {
-    expectedIdentity: KagemushaOperationIdentity;
-    location: string | null;
-    retryAfter: string | null;
-  },
-): KagemushaOperationReference;
-export function normalizeKagemushaOperationStatus(
-  payload: Record<string, unknown>,
-  acceptedReference: KagemushaOperationReference,
-): KagemushaPortableOperationStatus;
 
 export const CRYPTO_ALGORITHMS: Readonly<{
   ED25519: "ed25519";
@@ -2508,7 +2365,7 @@ export type ToriiVerifierBackendLabelV1 =
   | "halo2/pasta/kaigi-roster-v1"
   | "halo2/pasta/kaigi-usage-v1"
   | "halo2/pasta/ivm-execution-v1"
-  | "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3"
+  | "halo2/pasta/offline-cash-v1-mint-fold-merkle16-axiom-poseidon-v1"
   | "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"
   | "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3"
   | "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4"
@@ -6569,8 +6426,8 @@ export interface ToriiSumeragiV2ExecutionCommitment {
   parent_state_root: string;
   post_state_root: string;
   ordinary_writes_root: string;
-  topup_anchor_root: string | null;
-  topup_anchor_count: number;
+  offline_cash_top_up_root: string | null;
+  offline_cash_top_up_count: number;
   native_amx_application_manifest_version: number;
   native_amx_application_manifest_root: string;
   native_amx_application_manifest_count: number;
@@ -7126,13 +6983,7 @@ export interface ToriiSumeragiParamsSnapshot {
   chain_height: number;
 }
 
-export type SumeragiEvidenceKind =
-  | "DoublePrepare"
-  | "DoubleCommit"
-  | "InvalidQc"
-  | "InvalidProposal"
-  | "Censorship"
-  | "SumeragiV2Equivocation";
+export type SumeragiEvidenceKind = "SumeragiV2Equivocation";
 
 export interface SumeragiEvidenceListOptions {
   limit?: NumericLike;
@@ -7141,85 +6992,52 @@ export interface SumeragiEvidenceListOptions {
   signal?: AbortSignal;
 }
 
-export interface SumeragiEvidenceRecordBase {
-  kind: SumeragiEvidenceKind;
-  recorded_height: number;
-  recorded_view: number;
-  recorded_ms: number;
-  consensus_admitted_height: number | null;
+export interface SumeragiEvidencePendingPenaltyStatus {
+  status: "pending";
+  details: null;
 }
 
-export interface SumeragiDoubleVoteEvidenceRecord
-  extends SumeragiEvidenceRecordBase {
-  kind: "DoublePrepare" | "DoubleCommit";
-  phase: "Prepare" | "Commit" | "NewView";
-  height: number;
-  view: number;
-  epoch: number;
-  signer: number;
-  block_hash_1: string;
-  block_hash_2: string;
+export interface SumeragiEvidenceAppliedPenaltyStatus {
+  status: "applied";
+  details: { height: ToriiU64 };
 }
 
-export interface SumeragiInvalidQcEvidenceRecord
-  extends SumeragiEvidenceRecordBase {
-  kind: "InvalidQc";
-  height: number;
-  view: number;
-  epoch: number;
-  subject_block_hash: string;
-  phase: "Prepare" | "Commit" | "NewView";
-  reason: string;
+export interface SumeragiEvidenceCancelledPenaltyStatus {
+  status: "cancelled";
+  details: { height: ToriiU64 };
 }
 
-export interface SumeragiInvalidProposalEvidenceRecord
-  extends SumeragiEvidenceRecordBase {
-  kind: "InvalidProposal";
-  height: number;
-  view: number;
-  epoch: number;
-  subject_block_hash: string;
-  payload_hash: string;
-  reason: string;
-}
+export type SumeragiEvidencePenaltyStatus =
+  | SumeragiEvidencePendingPenaltyStatus
+  | SumeragiEvidenceAppliedPenaltyStatus
+  | SumeragiEvidenceCancelledPenaltyStatus;
 
-export interface SumeragiCensorshipEvidenceRecord
-  extends SumeragiEvidenceRecordBase {
-  kind: "Censorship";
-  tx_hash: string;
-  receipt_count: number;
-  signers: ReadonlyArray<string>;
-  submitted_at_height_min?: number;
-  submitted_at_height_max?: number;
-}
-
-export interface SumeragiV2EquivocationEvidenceRecord
-  extends SumeragiEvidenceRecordBase {
+export interface SumeragiV2EquivocationEvidenceRecord {
   kind: "SumeragiV2Equivocation";
   class: "proposal" | "phase_vote" | "timeout_vote";
-  height: number;
-  view: number;
-  epoch: number;
+  height: ToriiU64;
+  view: ToriiU64;
+  epoch: ToriiU64;
   signer: number;
   context_id: string;
   artifact_hash_1: string;
   artifact_hash_2: string;
+  recorded_height: ToriiU64;
+  recorded_view: ToriiU64;
+  recorded_ms: ToriiU64;
+  consensus_admitted_height: ToriiU64;
+  penalty_status: SumeragiEvidencePenaltyStatus;
 }
 
-export type SumeragiEvidenceRecord =
-  | SumeragiDoubleVoteEvidenceRecord
-  | SumeragiInvalidQcEvidenceRecord
-  | SumeragiInvalidProposalEvidenceRecord
-  | SumeragiCensorshipEvidenceRecord
-  | SumeragiV2EquivocationEvidenceRecord;
+export type SumeragiEvidenceRecord = SumeragiV2EquivocationEvidenceRecord;
 
 export interface SumeragiEvidenceListResponse {
-  total: number;
+  total: ToriiU64;
   items: ReadonlyArray<SumeragiEvidenceRecord>;
 }
 
 export interface SumeragiEvidenceCountResponse {
-  count: number;
+  count: ToriiU64;
 }
 
 export type KaigiRelayHealthStatus = "healthy" | "degraded" | "unavailable";
@@ -8429,7 +8247,7 @@ export interface FinalizeElectionInstructionInput {
   tallyProof: ProofAttachmentInput;
 }
 
-export type IsoBridgeStatus = "Pending" | "Accepted" | "Rejected";
+export type IsoBridgeStatus = "Pending" | "Accepted" | "Rejected" | "Committed";
 export type Pacs002StatusCode =
   | "ACTC"
   | "ACSP"
@@ -8451,7 +8269,7 @@ export interface IsoMessageSubmissionResponseBase {
   payload_hash: string | null;
   reference_snapshot_id: string | null;
   embedded_signature_detected: boolean;
-  /** Immutable schema-V2 participant provenance captured at durable admission. */
+  /** Immutable schema-V3 participant provenance captured at durable admission. */
   originator_participant_id: string | null;
   counterparty_participant_id: string | null;
   admitting_participant_id: string | null;
@@ -8470,6 +8288,26 @@ export interface IsoMessageSubmissionResponseBase {
   target_account_address: string | null;
   asset_definition_id: string | null;
   asset_id: string | null;
+  settlement_amount: string | null;
+  settlement_currency: string | null;
+  settlement_date: string | null;
+  settlement_quantity: string | null;
+  settlement_movement_type: string | null;
+  settlement_payment_type: string | null;
+  security_instrument_id: string | null;
+  collateral_obligation_id: string | null;
+  collateral_original_amount: string | null;
+  collateral_original_currency: string | null;
+  collateral_original_instrument_id: string | null;
+  collateral_substitute_amount: string | null;
+  collateral_substitute_currency: string | null;
+  collateral_substitute_instrument_id: string | null;
+  collateral_effective_date: string | null;
+  collateral_substitution_type: string | null;
+  collateral_haircut: string | null;
+  collateral_reason_code: string | null;
+  plan_execution_order: string | null;
+  plan_atomicity: string | null;
 }
 
 export interface IsoPacs008SubmissionResponse
@@ -10836,19 +10674,19 @@ export declare class ToriiBrowserClient {
   ): Promise<unknown>;
   getOfflineCapability(
     options?: { signal?: AbortSignal },
-  ): Promise<OfflineStatus>;
-  submitKagemushaTopUpV4(
-    request: KagemushaNoritoRequestV4,
+  ): Promise<OfflineCashReadinessV1>;
+  submitOfflineCashTopUp(
+    request: OfflineCashV1.TopUpRequest,
     options?: { signal?: AbortSignal },
-  ): Promise<KagemushaOperationReference>;
-  submitKagemushaRedeemV4(
-    request: KagemushaNoritoRequestV4,
+  ): Promise<UnverifiedOfflineCashOperationStatusV1>;
+  submitOfflineCashRedemption(
+    request: OfflineCashV1.RedemptionRequest,
     options?: { signal?: AbortSignal },
-  ): Promise<KagemushaOperationReference>;
-  getKagemushaOperationStatus(
-    operationReference: KagemushaOperationReference,
+  ): Promise<UnverifiedOfflineCashOperationStatusV1>;
+  getOfflineCashOperation(
+    operationId: string | ArrayBuffer | ArrayBufferView,
     options?: { signal?: AbortSignal },
-  ): Promise<KagemushaPortableOperationStatus>;
+  ): Promise<UnverifiedOfflineCashOperationStatusV1>;
   listExplorerAccounts<T = unknown>(
     options?: ToriiBrowserExplorerAccountsOptions,
   ): Promise<ToriiBrowserExplorerCursorPage<T>>;
@@ -11176,19 +11014,19 @@ export declare class ToriiClient {
   constructor(baseUrl: string, options?: ToriiClientOptions);
   getOfflineCapability(
     options?: { signal?: AbortSignal },
-  ): Promise<OfflineStatus>;
-  submitKagemushaTopUpV4(
-    request: KagemushaNoritoRequestV4,
+  ): Promise<OfflineCashReadinessV1>;
+  submitOfflineCashTopUp(
+    request: OfflineCashV1.TopUpRequest,
     options?: { signal?: AbortSignal },
-  ): Promise<KagemushaOperationReference>;
-  submitKagemushaRedeemV4(
-    request: KagemushaNoritoRequestV4,
+  ): Promise<UnverifiedOfflineCashOperationStatusV1>;
+  submitOfflineCashRedemption(
+    request: OfflineCashV1.RedemptionRequest,
     options?: { signal?: AbortSignal },
-  ): Promise<KagemushaOperationReference>;
-  getKagemushaOperationStatus(
-    operationReference: KagemushaOperationReference,
+  ): Promise<UnverifiedOfflineCashOperationStatusV1>;
+  getOfflineCashOperation(
+    operationId: string | ArrayBuffer | ArrayBufferView,
     options?: { signal?: AbortSignal },
-  ): Promise<KagemushaOperationStatus>;
+  ): Promise<UnverifiedOfflineCashOperationStatusV1>;
   listAccounts<T = ToriiAccountListItem>(
     options?: IterableListOptions,
   ): Promise<ToriiIterableListResponse<T>>;
@@ -14624,3 +14462,4 @@ export const NumericV1: {
 export * from "./nexus-app.js";
 export * from "./transaction-codec.js";
 export * from "./smart-contract-deployment.js";
+export { OfflineCashV1 } from "./offline-cash-v1.js";

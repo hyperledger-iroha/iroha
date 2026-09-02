@@ -1,7 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Telemetry-enabled tests for the sumeragi evidence list endpoint.
 #![cfg(feature = "telemetry")]
-use axum::extract::State;
+use axum::{extract::State, http::header};
 use http_body_util::BodyExt as _;
 use iroha_core::{
     kura::Kura,
@@ -65,7 +65,7 @@ fn make_phase_vote_evidence(height: u64, seed: u8) -> Evidence {
         height,
         view: 0,
     };
-    let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
+    let execution_commitment = ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
         Hash::new(b"evidence list parent state"),
         Hash::new(b"evidence list post state"),
         Hash::new(b"evidence list ordinary writes"),
@@ -142,10 +142,20 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
         offset: Some(0),
         kind: None,
     };
-    let response =
-        handle_v1_sumeragi_evidence_list(State(state.clone()), NoritoQuery(query_all), None)
-            .await
-            .expect("handler returns OK");
+    let response = handle_v1_sumeragi_evidence_list(
+        State(state.clone()),
+        NoritoQuery(query_all),
+        Some(axum::http::HeaderValue::from_static("application/json")),
+    )
+    .await
+    .expect("handler returns OK");
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("application/json")
+    );
     let body = response
         .into_body()
         .collect()
@@ -153,6 +163,14 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
         .expect("read body")
         .to_bytes();
     let json: norito::json::Value = norito::json::from_slice(&body).expect("parse json");
+    let response_object = json.as_object().expect("evidence list response object");
+    assert_eq!(response_object.len(), 2);
+    for key in ["total", "items"] {
+        assert!(
+            response_object.contains_key(key),
+            "evidence list response must contain `{key}`"
+        );
+    }
     assert_eq!(
         json.get("total").and_then(norito::json::Value::as_u64),
         Some(3)
@@ -193,6 +211,26 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
             Some(expected_admission_height)
         );
         let item = item.as_object().expect("evidence audit object");
+        let expected_keys = [
+            "kind",
+            "class",
+            "height",
+            "view",
+            "epoch",
+            "signer",
+            "context_id",
+            "artifact_hash_1",
+            "artifact_hash_2",
+            "recorded_height",
+            "recorded_view",
+            "recorded_ms",
+            "consensus_admitted_height",
+            "penalty_status",
+        ];
+        assert_eq!(item.len(), expected_keys.len());
+        for key in expected_keys {
+            assert!(item.contains_key(key), "evidence item must contain `{key}`");
+        }
         for retired in [
             "penalty_applied",
             "penalty_cancelled",
@@ -211,10 +249,20 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
         offset: Some(1),
         kind: Some("SumeragiV2Equivocation".to_string()),
     };
-    let response_filtered =
-        handle_v1_sumeragi_evidence_list(State(state.clone()), NoritoQuery(query_filtered), None)
-            .await
-            .expect("handler returns OK");
+    let response_filtered = handle_v1_sumeragi_evidence_list(
+        State(state.clone()),
+        NoritoQuery(query_filtered),
+        Some(axum::http::HeaderValue::from_static("application/json")),
+    )
+    .await
+    .expect("handler returns OK");
+    assert_eq!(
+        response_filtered
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("application/json")
+    );
     let body_filtered = response_filtered
         .into_body()
         .collect()

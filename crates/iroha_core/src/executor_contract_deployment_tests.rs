@@ -730,11 +730,7 @@ fn initial_executor_denies_post_genesis_governed_offline_self_grants() {
     );
     let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
     let mut state_transaction = block.transaction();
-    for name in [
-        "CanManageOfflineEscrow",
-        "CanActivateKagemushaRecursiveReleaseV4",
-        "CanManageOfflineDeviceAttestationPolicy",
-    ] {
+    for name in ["CanManageOfflineReserve"] {
         let permission = Permission::new(name.to_owned(), Json::new(()));
         let instruction = Grant::account_permission(permission.clone(), authority.clone()).into();
         let error = super::Executor::Initial

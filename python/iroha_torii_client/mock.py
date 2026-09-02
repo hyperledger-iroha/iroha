@@ -1452,7 +1452,8 @@ class _MockState:
                         "parent_state_root": _canonical_hash(0x51),
                         "post_state_root": _canonical_hash(0x52),
                         "ordinary_writes_root": _canonical_hash(0x52),
-                        "topup_anchor_count": 0,
+                        "offline_cash_top_up_root": None,
+                        "offline_cash_top_up_count": 0,
                         "native_amx_application_manifest_version": 1,
                         "native_amx_application_manifest_root": (
                             _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT

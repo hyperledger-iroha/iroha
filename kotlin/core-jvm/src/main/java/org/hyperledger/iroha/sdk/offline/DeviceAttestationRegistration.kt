@@ -13,7 +13,7 @@ import org.hyperledger.iroha.sdk.crypto.IrohaHash
  * Strict first-release model for one finalized platform device attestation.
  *
  * This mirrors `OfflineDeviceAttestationRegistration` exactly and exposes only the canonical
- * Kagemusha model. Native attestation acquisition uses bridge ABI 23;
+ * Offline Cash V1 model. Native attestation acquisition uses bridge ABI 23;
  * the on-chain registration format marker remains version 1.
  */
 class DeviceAttestationRegistration(
@@ -28,7 +28,7 @@ class DeviceAttestationRegistration(
     val iosEnvironment: String?,
     val androidPackageName: String?,
     androidSigningCertificateSha256: ByteArray?,
-    val publicKey: KagemushaDevicePublicKeyV2,
+    val publicKey: OfflineCashDevicePublicKeyV1,
     val assertionScheme: String,
     val assertionKeyAlgorithm: String,
     assertionPublicKey: ByteArray,
@@ -136,7 +136,7 @@ class DeviceAttestationRegistration(
     }
 
     private fun requirePlatformProfile() {
-        KagemushaP256Codec.requireUncompressedPublicKey(_assertionPublicKey)
+        OfflineCashP256Codec.requireUncompressedPublicKey(_assertionPublicKey)
         when (platform) {
             ANDROID_KEYMINT_PLATFORM -> {
                 require(
@@ -268,7 +268,7 @@ class DeviceAttestationRegistration(
         const val IOS_APP_ATTEST_ASSERTION_SCHEME: String = "apple-appattest-counter-v1"
         const val IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM: String = "app-attest-p256"
         const val DEVICE_ATTESTATION_CHALLENGE_DOMAIN: String =
-            "iroha:kagemusha:device-attestation-challenge:v1"
+            "iroha:offline-cash:v1:device-attestation-challenge"
         const val DEVICE_ATTESTATION_EVIDENCE_PREFIX: String =
             "offline-device-attestation-evidence-v1"
 
@@ -297,7 +297,7 @@ class DeviceAttestationRegistration(
             assetDefinitionId: String?,
             androidPackageName: String,
             androidSigningCertificateSha256: ByteArray,
-            publicKey: KagemushaDevicePublicKeyV2,
+            publicKey: OfflineCashDevicePublicKeyV1,
             recentBlockHeight: Long,
             recentBlockHash: ByteArray,
             expiresAtMs: Long,

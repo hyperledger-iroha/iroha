@@ -1062,7 +1062,10 @@ from configured spool roots; the software intentionally does not delete them.
 ### Torii CLI helpers
 
 - `iroha app sorafs handshake show` fetches `/v1/config` and prints the live descriptor commit, capability vectors, negotiated suite identifiers, resume hash, and PoW admission window. Operators can diff this output against the directory bundle before rotating relays.
-- `iroha app sorafs handshake update --descriptor-commit <hex> --client-capabilities <hex> --relay-capabilities <hex> --resume-hash <hex> --pow-difficulty <u8> ...` submits a partial update via `/v1/config`. The command can rotate descriptors, capabilities, resume hashes, PoW timing/cost parameters, and SM matching; it exposes no admission, puzzle, or SM relaxation toggle. Argon2 updates are accepted only within the fixed first-release corridor (`memory_kib` 4096–131072, `time_cost` 1–8, `lanes` 1–16, difficulty 1–32). `--clear-resume-hash` removes the advertisement entirely. The command reuses the existing logger settings so the update remains idempotent with other config knobs. These settings remain local to the node: Iroha does not accept or gossip runtime handshake-policy updates over P2P.
+- Handshake policy has no runtime mutation command. Operators change the
+  validated startup configuration and restart the node; Torii exposes only the
+  read-only configuration snapshot. This prevents a local operator request from
+  changing peer-admission rules midway through a process lifetime.
 
 ## Open Design Items
 

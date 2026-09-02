@@ -54,11 +54,6 @@ EXPECTED_PERMISSION_PROVIDERS = (
     ("offline", "CanManageOfflineEscrow", "OnlyGenesis::from"),
     (
         "offline",
-        "CanActivateKagemushaRecursiveReleaseV4",
-        "OnlyGenesis::from",
-    ),
-    (
-        "offline",
         "CanManageOfflineDeviceAttestationPolicy",
         "OnlyGenesis::from",
     ),

@@ -252,7 +252,7 @@ func TestFinalityArtifactBoundCoversEveryClosedWireShape(t *testing.T) {
 				&candidate.Execution,
 				&candidate.ParentExecution,
 			} {
-				execution.HasTopupAnchorRoot = 1
+				execution.HasOfflineCashTopUpRoot = 1
 				execution.HasLaneFinalityManifest = 1
 				execution.HasMergeCarrier = 1
 			}

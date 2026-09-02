@@ -86,36 +86,78 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
     "c-jni": (
         "connect_norito_bridge_abi_version",
         "connect_norito_free",
+        "connect_norito_offline_cash_v1_payment_request_validate",
+        "connect_norito_offline_cash_v1_acceptance_intent_authorization_validate",
+        "connect_norito_offline_cash_v1_acceptance_ticket_validate",
+        "connect_norito_offline_cash_v1_no_commit_closure_validate",
+        "connect_norito_offline_cash_v1_payment_validate",
+        "connect_norito_offline_cash_v1_acknowledgement_validate",
+        "connect_norito_offline_cash_v1_complete_exchange_validate",
+        "connect_norito_offline_cash_v1_mint_authorization_validate",
+        "connect_norito_offline_cash_v1_mint_credit_validate",
+        "connect_norito_offline_cash_v1_mint_credit_against_authorization_validate",
+        "connect_norito_offline_cash_v1_redemption_voucher_validate",
+        "connect_norito_offline_cash_v1_payment_request_text_validate",
+        "connect_norito_offline_cash_v1_acceptance_intent_authorization_text_validate",
+        "connect_norito_offline_cash_v1_acceptance_ticket_text_validate",
+        "connect_norito_offline_cash_v1_no_commit_closure_text_validate",
+        "connect_norito_offline_cash_v1_payment_text_validate",
+        "connect_norito_offline_cash_v1_acknowledgement_text_validate",
+        "connect_norito_offline_cash_v1_complete_exchange_text_validate",
+        "connect_norito_offline_cash_v1_mint_authorization_text_validate",
+        "connect_norito_offline_cash_v1_mint_credit_text_validate",
+        "connect_norito_offline_cash_v1_mint_credit_against_authorization_text_validate",
+        "connect_norito_offline_cash_v1_redemption_voucher_text_validate",
+        "connect_norito_offline_cash_device_capabilities_v1",
+        "connect_norito_offline_cash_device_execute_v1",
         "connect_norito_validation_fee_hijiri_quote_request_v1",
         "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
         "connect_norito_private_settlement_committee_proof_response_verify_v1",
-        "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
         "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
         "connect_norito_private_settlement_audit_approval_response_verify_v1",
         "Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeBridgeAbiVersion",
         "Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyCommitteeProofResponseV1",
-        "Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseV1",
         "Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseWithRequestV1",
         "Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditApprovalResponseV1",
         "Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeBridgeAbiVersion",
         "Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyCommitteeProofResponseV1",
-        "Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseV1",
         "Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseWithRequestV1",
         "Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditApprovalResponseV1",
         "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
     ),
     "csharp": (
         "connect_norito_bridge_abi_version",
-        "connect_norito_kagemusha_native_contract_revision",
         "connect_norito_free",
+        "connect_norito_offline_cash_v1_payment_request_validate",
+        "connect_norito_offline_cash_v1_acceptance_intent_authorization_validate",
+        "connect_norito_offline_cash_v1_acceptance_ticket_validate",
+        "connect_norito_offline_cash_v1_no_commit_closure_validate",
+        "connect_norito_offline_cash_v1_payment_validate",
+        "connect_norito_offline_cash_v1_acknowledgement_validate",
+        "connect_norito_offline_cash_v1_complete_exchange_validate",
+        "connect_norito_offline_cash_v1_mint_authorization_validate",
+        "connect_norito_offline_cash_v1_mint_credit_validate",
+        "connect_norito_offline_cash_v1_mint_credit_against_authorization_validate",
+        "connect_norito_offline_cash_v1_redemption_voucher_validate",
+        "connect_norito_offline_cash_v1_payment_request_text_validate",
+        "connect_norito_offline_cash_v1_acceptance_intent_authorization_text_validate",
+        "connect_norito_offline_cash_v1_acceptance_ticket_text_validate",
+        "connect_norito_offline_cash_v1_no_commit_closure_text_validate",
+        "connect_norito_offline_cash_v1_payment_text_validate",
+        "connect_norito_offline_cash_v1_acknowledgement_text_validate",
+        "connect_norito_offline_cash_v1_complete_exchange_text_validate",
+        "connect_norito_offline_cash_v1_mint_authorization_text_validate",
+        "connect_norito_offline_cash_v1_mint_credit_text_validate",
+        "connect_norito_offline_cash_v1_mint_credit_against_authorization_text_validate",
+        "connect_norito_offline_cash_v1_redemption_voucher_text_validate",
+        "connect_norito_offline_cash_device_capabilities_v1",
+        "connect_norito_offline_cash_device_execute_v1",
         "connect_norito_validation_fee_hijiri_quote_request_v1",
         "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
         "connect_norito_private_settlement_committee_proof_response_verify_v1",
-        "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
         "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
         "connect_norito_private_settlement_audit_approval_response_verify_v1",
         "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
-        "connect_norito_kagemusha_offline_operation_status_json_validate_v2",
         "iroha_privacy_compiled_profile_catalog_v1",
         "iroha_privacy_validate_compiled_profile_catalog_v1",
         "iroha_privacy_exact12_fixture_bundle_v1",
@@ -124,11 +166,8 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
     ),
     "node": (
         "connectNoritoBridgeAbiVersion",
-        "kagemushaNativeContractRevision",
-        "kagemushaOfflineOperationStatusJsonValidateV2",
         "inspectSorafsOrderbookSubmissionForDiscriminantV1",
         "privateSettlementVerifyAuditApprovalResponseV1",
-        "privateSettlementVerifyAuditorCapsuleResponseV1",
         "privateSettlementVerifyAuditorCapsuleResponseWithRequestV1",
         "privateSettlementVerifyCommitteeProofResponseV1",
         "sorafsValidateAppealFinanceCancelAssetLockJson",
@@ -140,7 +179,6 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         "connect_norito_bridge_abi_version",
         "inspect_sorafs_orderbook_submission_for_discriminant_v1",
         "private_settlement_verify_audit_approval_response_v1",
-        "private_settlement_verify_auditor_capsule_response_v1",
         "private_settlement_verify_auditor_capsule_response_with_request_v1",
         "private_settlement_verify_committee_proof_response_v1",
         "sorafs_validate_appeal_finance_cancel_asset_lock_json",
@@ -148,6 +186,19 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         "validation_fee_verify_hijiri_quote_response_v1",
         "verify_sorafs_orderbook_submission_receipt_v1",
     ),
+}
+
+RETIRED_PROTOCOL_SYMBOLS: Mapping[str, tuple[str, ...]] = {
+    "c-jni": (
+        "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
+        "Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseV1",
+        "Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseV1",
+    ),
+    "csharp": (
+        "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
+    ),
+    "node": ("privateSettlementVerifyAuditorCapsuleResponseV1",),
+    "python": ("private_settlement_verify_auditor_capsule_response_v1",),
 }
 
 
@@ -540,7 +591,27 @@ def validate_privacy_c_exports(
     return tuple(symbol for symbol in APPROVED_PRIVACY_C_EXPORTS if symbol in observed)
 
 
-def probe_c_abi(path: Path, required_symbols: Sequence[str]) -> int:
+def validate_retired_protocol_symbols(symbols: Sequence[str], *, sdk: str) -> None:
+    """Reject first-release artifacts that expose retired protocol entrypoints."""
+
+    explicitly_retired = set(RETIRED_PROTOCOL_SYMBOLS[sdk])
+    retired = sorted(
+        {
+            symbol
+            for symbol in symbols
+            if symbol in explicitly_retired or "kagemusha" in symbol.lower()
+        }
+    )
+    if retired:
+        fail("native artifact exports retired protocol symbols: " + ", ".join(retired))
+
+
+def probe_c_abi(
+    path: Path,
+    required_symbols: Sequence[str],
+    *,
+    forbidden_symbols: Sequence[str] = (),
+) -> int:
     """Load one C ABI library and require its exact exported inventory."""
 
     try:
@@ -550,21 +621,12 @@ def probe_c_abi(path: Path, required_symbols: Sequence[str]) -> int:
     missing = [symbol for symbol in required_symbols if not hasattr(library, symbol)]
     if missing:
         fail("native C ABI artifact is missing required symbols: " + ", ".join(missing))
+    retired = [symbol for symbol in forbidden_symbols if hasattr(library, symbol)]
+    if retired:
+        fail("native C ABI artifact exports retired symbols: " + ", ".join(retired))
     probe = getattr(library, "connect_norito_bridge_abi_version")
     probe.argtypes = []
     probe.restype = ctypes.c_uint32
-    if "connect_norito_kagemusha_native_contract_revision" in required_symbols:
-        revision_probe = getattr(
-            library, "connect_norito_kagemusha_native_contract_revision"
-        )
-        revision_probe.argtypes = []
-        revision_probe.restype = ctypes.c_uint32
-        revision = int(revision_probe())
-        if revision != 1:
-            fail(
-                "native C ABI artifact Kagemusha contract revision mismatch: "
-                f"expected 1, found {revision}"
-            )
     return int(probe())
 
 
@@ -593,6 +655,7 @@ def probe_node_abi(
     path: Path,
     required_symbols: Sequence[str],
     *,
+    forbidden_symbols: Sequence[str] = (),
     node: str = "node",
 ) -> int:
     """Load one Node addon and call its exact ABI-23 probe."""
@@ -600,6 +663,7 @@ def probe_node_abi(
     source = r"""
 const artifact = process.argv[1];
 const required = JSON.parse(process.argv[2]);
+const forbidden = JSON.parse(process.argv[3]);
 let binding;
 if (/\.(?:cjs|js)$/iu.test(artifact)) {
   binding = require(artifact);
@@ -613,23 +677,29 @@ if (missing.length !== 0) {
   process.stderr.write("missing required exports: " + missing.join(", "));
   process.exit(2);
 }
+const retired = Object.getOwnPropertyNames(binding).filter(
+  (name) => forbidden.includes(name) || /kagemusha/iu.test(name),
+);
+if (retired.length !== 0) {
+  process.stderr.write("retired exports: " + retired.join(", "));
+  process.exit(3);
+}
 const version = binding.connectNoritoBridgeAbiVersion();
 if (!Number.isSafeInteger(version) || version < 0) {
   process.stderr.write("ABI probe returned a non-integer");
-  process.exit(3);
-}
-const kagemushaRevision = binding.kagemushaNativeContractRevision();
-if (!Number.isSafeInteger(kagemushaRevision) || kagemushaRevision !== 1) {
-  process.stderr.write(
-    "Kagemusha native contract revision mismatch: expected 1, found " +
-      String(kagemushaRevision),
-  );
   process.exit(4);
 }
 process.stdout.write(String(version));
 """
     return _probe_subprocess(
-        (node, "--eval", source, str(path), json.dumps(list(required_symbols))),
+        (
+            node,
+            "--eval",
+            source,
+            str(path),
+            json.dumps(list(required_symbols)),
+            json.dumps(list(forbidden_symbols)),
+        ),
         label="native Node ABI probe",
     )
 
@@ -638,6 +708,7 @@ def probe_python_abi(
     path: Path,
     required_symbols: Sequence[str],
     *,
+    forbidden_symbols: Sequence[str] = (),
     python: str = sys.executable,
 ) -> int:
     """Load one Python extension directly and call its exact ABI-23 probe."""
@@ -651,6 +722,7 @@ import sys
 
 path = pathlib.Path(sys.argv[1])
 required = json.loads(sys.argv[2])
+forbidden = json.loads(sys.argv[3])
 if path.suffix == ".py":
     name = "_iroha_native_abi23_fixture"
     loader = importlib.machinery.SourceFileLoader(name, str(path))
@@ -665,13 +737,28 @@ loader.exec_module(module)
 missing = [name for name in required if not callable(getattr(module, name, None))]
 if missing:
     raise SystemExit("missing required exports: " + ", ".join(missing))
+retired = [
+    name
+    for name in dir(module)
+    if name in forbidden or "kagemusha" in name.lower()
+]
+if retired:
+    raise SystemExit("retired exports: " + ", ".join(retired))
 version = module.connect_norito_bridge_abi_version()
 if type(version) is not int or version < 0:
     raise SystemExit("ABI probe returned a non-integer")
 print(version, end="")
 """
     return _probe_subprocess(
-        (python, "-I", "-c", source, str(path), json.dumps(list(required_symbols))),
+        (
+            python,
+            "-I",
+            "-c",
+            source,
+            str(path),
+            json.dumps(list(required_symbols)),
+            json.dumps(list(forbidden_symbols)),
+        ),
         label="native Python ABI probe",
     )
 
@@ -686,11 +773,22 @@ def probe_artifact(
     """Probe the exact host artifact selected for one SDK lane."""
 
     required = REQUIRED_SYMBOLS[sdk]
+    forbidden = RETIRED_PROTOCOL_SYMBOLS[sdk]
     if sdk == "node":
-        return probe_node_abi(path, required, node=node)
+        return probe_node_abi(
+            path,
+            required,
+            forbidden_symbols=forbidden,
+            node=node,
+        )
     if sdk == "python":
-        return probe_python_abi(path, required, python=python)
-    return probe_c_abi(path, required)
+        return probe_python_abi(
+            path,
+            required,
+            forbidden_symbols=forbidden,
+            python=python,
+        )
+    return probe_c_abi(path, required, forbidden_symbols=forbidden)
 
 
 def _require_exact_abi(version: int) -> None:
@@ -732,6 +830,8 @@ def build_manifest(
     else:
         symbols = symbol_inventory(artifact_path)
     privacy_exports_inspected = symbols is not None
+    if symbols is not None:
+        validate_retired_protocol_symbols(symbols, sdk=sdk)
     privacy_exports = validate_privacy_c_exports(
         () if symbols is None else symbols,
         require_exact=exact_privacy_exports,
@@ -900,6 +1000,8 @@ def verify_manifest(
         symbols = inspect_exported_symbols(artifact_path, required=must_inspect)
     else:
         symbols = symbol_inventory(artifact_path)
+    if symbols is not None:
+        validate_retired_protocol_symbols(symbols, sdk=sdk)
     privacy_exports = validate_privacy_c_exports(
         () if symbols is None else symbols,
         require_exact=sdk in EXACT_PRIVACY_C_EXPORT_SDKS,

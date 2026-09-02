@@ -39,7 +39,6 @@ pub const ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1: &[&str] = &[
     "halo2/pasta/kaigi-roster-v1",
     "halo2/pasta/kaigi-usage-v1",
     "halo2/pasta/ivm-execution-v1",
-    "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
@@ -137,7 +136,6 @@ pub fn verifier_backend_registry_tag_v1(label: &str) -> Option<BackendTag> {
         | "halo2/pasta/kaigi-roster-v1"
         | "halo2/pasta/kaigi-usage-v1"
         | "halo2/pasta/ivm-execution-v1"
-        | "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3"
         | "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"
         | "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3"
         | "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4" => {
@@ -931,7 +929,7 @@ mod tests {
     }
     #[test]
     fn verifier_backend_registry_is_closed_exact_and_engine_typed() {
-        assert_eq!(ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1.len(), 9);
+        assert_eq!(ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1.len(), 8);
         let mut unique = std::collections::BTreeSet::new();
         for &label in ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1 {
             assert!(unique.insert(label), "duplicate registry label: {label}");
@@ -961,8 +959,6 @@ mod tests {
             "halo2/pasta/ivm-execution-v1\0",
             "halo2/pasta/ipa-pasta-cycle-v1",
             "halo2/pasta/ivm-overlay-bind",
-            "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
-            "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
             "halo2/pasta/tiny-add",
             "stark",
             "stark/fri",

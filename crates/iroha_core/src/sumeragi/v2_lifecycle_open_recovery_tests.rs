@@ -27,10 +27,14 @@ mod recovery_tests {
                 power: 1,
             })
             .collect::<Vec<_>>();
+        let network_id =
+            crate::sumeragi::synthetic_network_id("storage-only-lifecycle-recovery-assembler-test");
+        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+                network_id, 0, &roster,
+            );
         let context = wire::HeightContext {
-            network_id: crate::sumeragi::synthetic_network_id(
-                "storage-only-lifecycle-recovery-assembler-test",
-            ),
+            network_id,
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -41,9 +45,11 @@ mod recovery_tests {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
+            offline_cash_mint_finality_epoch_id,
+            offline_cash_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"storage-only recovery AMX context"),
             execution_policy_hash: Hash::new(b"storage-only recovery execution policy"),
-            da_layout: wire::SumeragiV2GenesisContextParameters::recommended().da_layout,
+            da_layout: wire::recommended_data_availability_layout(),
             leader_seed: [0xC5; 32],
         };
         let proofs = keys

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from typing import Any, Callable
 
 import pytest
@@ -10,7 +11,18 @@ import requests
 from iroha_torii_client.client import canonical_request_message
 from requests.adapters import HTTPAdapter
 
-from iroha_python import NetworkId, OperatorSigningContext, ToriiClient, ToriiPipelinePreflight
+from iroha_python import (
+    NetworkId,
+    OperatorSigningContext,
+    SumeragiEvidenceAppliedPenaltyStatus,
+    SumeragiEvidenceCancelledPenaltyStatus,
+    SumeragiEvidenceCount,
+    SumeragiEvidenceListPage,
+    SumeragiEvidencePendingPenaltyStatus,
+    SumeragiEvidenceRecord,
+    ToriiClient,
+    ToriiPipelinePreflight,
+)
 from iroha_python.crypto import Ed25519KeyPair
 
 NETWORK_BYTES = bytes([0xA5]) * 32
@@ -100,23 +112,250 @@ def test_pipeline_preflight_rejects_alias_shaped_fee_accounts(
         ToriiPipelinePreflight.from_payload(payload)
 
 
-class RecordingSession(requests.Session):
-    """Record exactly one request and return a fixed unavailable response."""
+def evidence_record_payload(*, penalty_status: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Return one exact first-release evidence projection."""
 
-    def __init__(self) -> None:
+    return {
+        "kind": "SumeragiV2Equivocation",
+        "class": "phase_vote",
+        "height": 31,
+        "view": 4,
+        "epoch": 2,
+        "signer": 3,
+        "context_id": "11" * 32,
+        "artifact_hash_1": "22" * 32,
+        "artifact_hash_2": "33" * 32,
+        "recorded_height": 40,
+        "recorded_view": 2,
+        "recorded_ms": 1_700_000_000_000,
+        "consensus_admitted_height": 41,
+        "penalty_status": penalty_status
+        if penalty_status is not None
+        else {"status": "pending", "details": None},
+    }
+
+
+def test_sumeragi_evidence_models_parse_the_closed_contract() -> None:
+    page = SumeragiEvidenceListPage.from_payload(
+        {
+            "total": 3,
+            "items": [
+                evidence_record_payload(),
+                evidence_record_payload(
+                    penalty_status={
+                        "status": "applied",
+                        "details": {"height": 42},
+                    }
+                ),
+                evidence_record_payload(
+                    penalty_status={
+                        "status": "cancelled",
+                        "details": {"height": 43},
+                    }
+                ),
+            ],
+        }
+    )
+
+    assert isinstance(page.items[0].penalty_status, SumeragiEvidencePendingPenaltyStatus)
+    assert isinstance(page.items[1].penalty_status, SumeragiEvidenceAppliedPenaltyStatus)
+    assert page.items[1].penalty_status.details.height == 42
+    assert isinstance(page.items[2].penalty_status, SumeragiEvidenceCancelledPenaltyStatus)
+    assert page.items[2].penalty_status.details.height == 43
+    assert SumeragiEvidenceCount.from_payload({"count": 3}).count == 3
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"items": []},
+        {"total": 0},
+        {"total": 0, "items": [], "cursor": None},
+        {"total": "0", "items": []},
+    ],
+)
+def test_sumeragi_evidence_page_rejects_noncanonical_envelopes(
+    payload: dict[str, Any],
+) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        SumeragiEvidenceListPage.from_payload(payload)
+
+
+def test_sumeragi_evidence_page_rejects_impossible_or_oversized_results() -> None:
+    record = evidence_record_payload()
+    with pytest.raises(ValueError, match="at most 50"):
+        SumeragiEvidenceListPage.from_payload({"total": 51, "items": [record] * 51})
+    with pytest.raises(ValueError, match="cover offset"):
+        SumeragiEvidenceListPage.from_payload(
+            {"total": 1, "items": [record]},
+            offset=1,
+        )
+
+
+def test_sumeragi_evidence_page_accepts_empty_page_beyond_total() -> None:
+    page = SumeragiEvidenceListPage.from_payload(
+        {"total": 1, "items": []},
+        offset=10,
+    )
+
+    assert page.total == 1
+    assert page.items == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"count": "1"},
+        {},
+        {"count": 1, "total": 1},
+    ],
+)
+def test_sumeragi_evidence_count_rejects_noncanonical_envelopes(
+    payload: dict[str, Any],
+) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        SumeragiEvidenceCount.from_payload(payload)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected"),
+    [
+        (lambda value: value.update(kind="DoublePrepare"), "kind"),
+        (lambda value: value.update(consensus_admitted_height=None), "consensus_admitted_height"),
+        (lambda value: value.update(penalty_applied=False), "penalty_applied"),
+        (
+            lambda value: value.update(penalty_status={"status": "pending", "details": {}}),
+            "details",
+        ),
+        (
+            lambda value: value.update(penalty_status={"status": "retired", "details": None}),
+            "status",
+        ),
+    ],
+)
+def test_sumeragi_evidence_record_rejects_retired_or_malformed_shapes(
+    mutate: Callable[[dict[str, Any]], None],
+    expected: str,
+) -> None:
+    payload = evidence_record_payload()
+    mutate(payload)
+
+    with pytest.raises((TypeError, ValueError), match=expected):
+        SumeragiEvidenceRecord.from_payload(payload)
+
+
+class RecordingSession(requests.Session):
+    """Record requests and return a supplied response or an unavailable default."""
+
+    def __init__(self, response: requests.Response | None = None) -> None:
         super().__init__()
         self.calls: list[dict[str, Any]] = []
+        self.response = response
 
     def request(self, method: str | bytes, url: str | bytes, **kwargs: Any) -> requests.Response:
         self.calls.append({"method": method, "url": url, **kwargs})
+        if self.response is not None:
+            return self.response
         response = requests.Response()
         response.status_code = 503
         response._content = b""
+        response._content_consumed = True
         return response
 
 
 def signing_context(network_id: NetworkId = NETWORK_ID) -> OperatorSigningContext:
     return OperatorSigningContext(network_id, KEY_PAIR)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        ({"limit": 0}, "limit"),
+        ({"limit": 1_001}, "limit"),
+        ({"offset": -1}, "offset"),
+        ({"offset": 10_001}, "offset"),
+        ({"kind": "DoublePrepare"}, "kind"),
+    ],
+)
+def test_sumeragi_evidence_query_rejects_noncanonical_values_before_dispatch(
+    kwargs: dict[str, Any],
+    expected: str,
+) -> None:
+    session = RecordingSession()
+    client = ToriiClient(
+        "https://torii.example",
+        session=session,
+        operator_signing_context=signing_context(),
+    )
+
+    with pytest.raises((TypeError, ValueError), match=expected):
+        client.list_sumeragi_evidence(**kwargs)
+
+    assert session.calls == []
+
+
+def _evidence_response(body: bytes, headers: dict[str, str]) -> requests.Response:
+    response = requests.Response()
+    response.status_code = 200
+    response._content = body
+    response._content_consumed = True
+    response.headers.update(headers)
+    return response
+
+
+@pytest.mark.parametrize("route", ["list", "count"])
+@pytest.mark.parametrize(
+    ("failure", "error_type", "message"),
+    [
+        ("content_type", TypeError, "application/json content type"),
+        ("content_length", ValueError, ""),
+        ("actual_body", ValueError, ""),
+        ("duplicate", ValueError, "duplicate field"),
+    ],
+)
+def test_sumeragi_evidence_reads_enforce_strict_bounded_json(
+    route: str,
+    failure: str,
+    error_type: type[Exception],
+    message: str,
+) -> None:
+    maximum_body_bytes = 1024 * 1024 if route == "list" else 1024
+    if route == "list":
+        canonical_body = json.dumps({"total": 0, "items": []}).encode()
+        duplicate_body = b'{"total":0,"total":1,"items":[]}'
+    else:
+        canonical_body = json.dumps({"count": 0}).encode()
+        duplicate_body = b'{"count":0,"count":1}'
+
+    headers = {"Content-Type": "application/json"}
+    body = canonical_body
+    if failure == "content_type":
+        headers["Content-Type"] = "text/plain"
+    elif failure == "content_length":
+        headers["Content-Length"] = str(maximum_body_bytes + 1)
+        message = f"{maximum_body_bytes}-byte size bound"
+    elif failure == "actual_body":
+        body = b" " * (maximum_body_bytes + 1)
+        message = f"{maximum_body_bytes}-byte size bound"
+    else:
+        body = duplicate_body
+
+    response = _evidence_response(body, headers)
+    session = RecordingSession(response)
+    client = ToriiClient(
+        "https://torii.example",
+        session=session,
+        operator_signing_context=signing_context(),
+    )
+
+    with pytest.raises(error_type, match=message):
+        if route == "list":
+            client.list_sumeragi_evidence()
+        else:
+            client.get_sumeragi_evidence_count()
+
+    assert session.calls[0]["stream"] is True
+    assert session.calls[0]["headers"]["Accept"] == "application/json"
 
 
 OPERATOR_READS: tuple[tuple[str, Callable[[ToriiClient], object]], ...] = (
@@ -137,11 +376,11 @@ OPERATOR_READS: tuple[tuple[str, Callable[[ToriiClient], object]], ...] = (
         lambda client: client.get_sumeragi_evidence_count(),
     ),
     (
-        "/v1/sumeragi/evidence?kind=Equivocation&limit=2&offset=1",
+        "/v1/sumeragi/evidence?kind=SumeragiV2Equivocation&limit=2&offset=1",
         lambda client: client.list_sumeragi_evidence(
             limit=2,
             offset=1,
-            kind="Equivocation",
+            kind="SumeragiV2Equivocation",
         ),
     ),
     ("/v1/sumeragi/params", lambda client: client.get_sumeragi_params()),

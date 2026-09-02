@@ -15,10 +15,16 @@
 
 The Target of Evaluation (TOE) comprises the Android SDK library code (`java/iroha_android/src/main/java`), its configuration surface (`ClientConfig` + Norito ingestion), and the operational tooling referenced in `roadmap.md` for milestones AND2/AND6/AND7.
 
+The baseline TOE supports software-backed signing and custody for ordinary
+production, governance, build, test, deployment, and release workflows.
+StrongBox, TEE, physical-device, and hardware-attestation coverage is an
+optional qualification profile that applies only when a deployment explicitly
+selects it; absence of that profile never fails the baseline evaluation.
+
 Primary components:
 
 1. **Configuration ingestion** — `ClientConfig` threads Torii endpoints, TLS policies, retries, and telemetry hooks from the generated `iroha_config` manifest and enforces immutability post-initialisation (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`).
-2. **Key management / StrongBox** — Hardware-backed signing is implemented via `SystemAndroidKeystoreBackend` and `AttestationVerifier`, with policies documented in `specs/sdk/android/key_management.md`. Attestation capture/validation uses `scripts/android_keystore_attestation.sh` and the CI helper `scripts/android_strongbox_attestation_ci.sh`.
+2. **Key management / optional StrongBox** — Deterministic software-backed signing is the supported baseline. Applications may explicitly select hardware-backed signing through `SystemAndroidKeystoreBackend` and `AttestationVerifier`, with policies documented in `specs/sdk/android/key_management.md`. Conditional attestation capture/validation uses `scripts/android_keystore_attestation.sh` and the CI helper `scripts/android_strongbox_attestation_ci.sh`.
 3. **Telemetry & redaction** — Instrumentation funnels through the shared schema described in `specs/sdk/android/telemetry_redaction.md`, exporting hashed authorities, bucketed device profiles, and override auditing hooks enforced by the Support Playbook.
 4. **Operations runbooks** — `specs/android_runbook.md` (operator response) and `specs/android_support_playbook.md` (SLA + escalation) harden the TOE’s operational footprint with deterministic overrides, chaos drills, and evidence capture.
 5. **Release provenance** — Gradle-based builds use the CycloneDX plugin plus reproducible build flags as captured in `specs/sdk/android/developer_experience_plan.md` and the AND6 compliance checklist. Release artefacts are signed and cross-referenced in `specs/release/provenance/android/`.
@@ -28,13 +34,13 @@ Primary components:
 | Asset | Description | Security Objective |
 |-------|-------------|--------------------|
 | Configuration manifests | Norito-derived `ClientConfig` snapshots distributed with apps. | Authenticity, integrity, and confidentiality at rest. |
-| Signing keys | Keys generated or imported through StrongBox/TEE providers. | StrongBox preference, attestation logging, no key export. |
+| Signing keys | Keys generated or imported through the software provider or, when explicitly selected, StrongBox/TEE providers. | Rotation and deterministic custody for the software baseline; attestation logging and no key export for the optional hardware profile. |
 | Telemetry streams | OTLP traces/logs/metrics exported from SDK instrumentation. | Pseudonymisation (hashed authorities), minimised PII, override auditing. |
 | Ledger interactions | Norito payloads, admission metadata, Torii network traffic. | Mutual authentication, replay-resistant requests, deterministic retries. |
 
 Assumptions:
 
-- Mobile OS provides standard sandboxing + SELinux; StrongBox devices implement Google’s keymaster interface.
+- Mobile OS provides standard sandboxing + SELinux; devices selected for the optional StrongBox profile implement Google’s keymaster interface.
 - Operators provision Torii endpoints with TLS certificates signed by council-trusted CAs.
 - Build infrastructure honours reproducible-build requirements before publishing to Maven.
 
@@ -53,7 +59,7 @@ Assumptions:
 
 1. **Design review** — Compliance + SRE verify that configuration, key management, telemetry, and release controls map to ETSI security objectives.
 2. **Implementation checks** — Automated tests:
-   - `scripts/android_strongbox_attestation_ci.sh` verifies captured bundles for every StrongBox device listed in the matrix.
+   - For an explicitly selected hardware profile, `scripts/android_strongbox_attestation_ci.sh` verifies captured bundles for every StrongBox device listed in the matrix. Without that profile this check is not applicable and does not fail the baseline.
    - `scripts/check_android_samples.sh` and Managed Device CI ensure sample apps honour `ClientConfig`/telemetry contracts.
 3. **Operational validation** — Quarterly chaos drills per `specs/sdk/android/telemetry_chaos_checklist.md` (redaction + override exercises).
 4. **Evidence retention** — Artefacts stored under `specs/compliance/android/` (this folder) and referenced from `status.md`.
@@ -65,8 +71,8 @@ Assumptions:
 | 7.1 Security policy | Documented in this security target + Support Playbook. |
 | 7.2 Organisational security | RACI + on-call ownership in Support Playbook §2. |
 | 7.3 Asset management | Configuration, key, and telemetry asset objectives defined in §2 above. |
-| 7.4 Access control | StrongBox policies + override workflow requiring signed Norito artefacts. |
-| 7.5 Cryptographic controls | Key generation, storage, and attestation requirements from AND2 (key management guide). |
+| 7.4 Access control | Provider-neutral signing plus caller-selected StrongBox policies and an override workflow requiring signed Norito artefacts. |
+| 7.5 Cryptographic controls | Software key generation and storage form the baseline; AND2 attestation requirements apply only to an explicitly selected hardware profile. |
 | 7.6 Operations security | Telemetry hashing, chaos rehearsals, incident response, and release evidence gating. |
 | 7.7 Communications security | `/v1/pipeline` TLS policy + hashed authorities (telemetry redaction doc). |
 | 7.8 System acquisition / development | Reproducible Gradle builds, SBOMs, and provenance gates in AND5/AND6 plans. |

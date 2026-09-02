@@ -203,7 +203,6 @@ use futures_util::StreamExt;
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
 use iroha_config::{
     base::{WithOrigin, util::Bytes as ConfigBytes},
-    client_api::ConfigUpdateDTO,
     parameters::{
         actual::{
             NoritoRpcStage, NoritoRpcTransport, TelemetryProfile, Torii as Config,
@@ -235,12 +234,6 @@ use iroha_core::{
         WorldReadOnly,
     },
     torii_proxy::{
-        KAGEMUSHA_LIFECYCLE_ADMISSION_ATTESTATION_VERSION_V1,
-        KAGEMUSHA_LIFECYCLE_ADMISSION_CERTIFICATE_VERSION_V1,
-        OrdinaryKagemushaLifecycleAdmissionAttestationV1,
-        OrdinaryKagemushaLifecycleAdmissionBindingV1,
-        OrdinaryKagemushaLifecycleAdmissionCertificateStrengthV1,
-        OrdinaryKagemushaLifecycleAdmissionCertificateV1,
         QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1, QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
         QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1, QueuePlanAdmissionAttestationV1,
         QueuePlanAdmissionBindingV1, QueuePlanAdmissionCertificateStrengthV1,
@@ -252,12 +245,8 @@ use iroha_core::{
         ToriiProxyRequestV1, ToriiProxyResponseFormatV1, ToriiProxyResponseV1,
         ToriiProxyTransactionAdmissionV1, ToriiReadEndpointV1, ToriiReadFanoutMergeV1,
         ToriiReadFanoutProxyRequestV1, ToriiReadProxyRequestV1, ToriiRouteHintV1,
-        ToriiRoutingPlanHintV1,
-        ordinary_kagemusha_lifecycle_admission_attestation_signing_bytes_v1,
-        ordinary_kagemusha_lifecycle_request_id, queue_plan_admission_attestation_signing_bytes_v1,
+        ToriiRoutingPlanHintV1, queue_plan_admission_attestation_signing_bytes_v1,
         queue_plan_admission_network_id_digest,
-        validate_ordinary_kagemusha_lifecycle_admission_certificate_v1,
-        validate_ordinary_kagemusha_lifecycle_entrypoint,
         validate_queue_plan_admission_certificate_for_network_digest_v1,
     },
     tx::external_entrypoint_hash_from_signed_hash as entrypoint_hash,
@@ -298,10 +287,7 @@ use iroha_data_model::{
     block::proofs::BlockProofs,
     domain::DomainId,
     events::trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
-    isi::{
-        offline::RegisterOfflineDeviceAttestation,
-        settlement::{FxCorridorPolicy, FxCorridorPolicyRegistry},
-    },
+    isi::settlement::{FxCorridorPolicy, FxCorridorPolicyRegistry},
     name::Name,
     nexus::{DataSpaceId, FeeRejectionCode, FeeSponsorProgram, FeeSponsorProgramId, LaneId},
     nft::NftId,
@@ -1105,7 +1091,7 @@ where
 #[path = "tests/lib_tcp_listener_bind.rs"]
 mod tcp_listener_bind_tests;
 use crate::iso20022_bridge::{
-    Iso20022BridgeRuntime, IsoMessageState, IsoMessageStatus, Pacs002Status,
+    Iso20022BridgeRuntime, IsoLifecycleApplyError, IsoMessageState, IsoMessageStatus, Pacs002Status,
 };
 use crate::{
     router::builder::{
@@ -3872,88 +3858,20 @@ enum ConnScheme {
 }
 impl ConnScheme {
     fn from_request<B>(req: &axum::http::Request<B>) -> Self {
-        let websocket_route = req
-            .extensions()
-            .get::<MatchedRouteMetadata>()
-            .is_some_and(|route| {
-                route.transport()
-                    == Some(iroha_torii_shared::route_catalog::RouteTransport::WebSocket)
-            });
-        let websocket_upgrade = {
-            let mut values = req.headers().get_all(axum::http::header::UPGRADE).iter();
-            values
-                .next()
-                .and_then(|value| value.to_str().ok())
-                .is_some_and(|value| value.trim().eq_ignore_ascii_case("websocket"))
-                && values.next().is_none()
-        };
-        let websocket_connection = req
-            .headers()
-            .get_all(axum::http::header::CONNECTION)
-            .iter()
-            .try_fold(false, |found, value| {
-                value.to_str().ok().map(|value| {
-                    found
-                        || value
-                            .split(',')
-                            .any(|token| token.trim().eq_ignore_ascii_case("upgrade"))
-                })
-            })
-            .unwrap_or(false);
-        let websocket_version = {
-            let mut values = req
-                .headers()
-                .get_all(axum::http::header::SEC_WEBSOCKET_VERSION)
-                .iter();
-            values
-                .next()
-                .and_then(|value| value.to_str().ok())
-                .is_some_and(|value| value.trim() == "13")
-                && values.next().is_none()
-        };
-        let websocket_key = {
-            let mut values = req
-                .headers()
-                .get_all(axum::http::header::SEC_WEBSOCKET_KEY)
-                .iter();
-            let valid = values
-                .next()
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| {
-                    base64::engine::general_purpose::STANDARD
-                        .decode(value.trim())
-                        .ok()
-                })
-                .is_some_and(|decoded| decoded.len() == 16);
-            valid && values.next().is_none()
-        };
-        if req.method() == axum::http::Method::GET
-            && websocket_route
-            && websocket_upgrade
-            && websocket_connection
-            && websocket_version
-            && websocket_key
-        {
-            Self::Ws
-        } else if matches!(
-            req.uri().path(),
-            iroha_torii_shared::uri::TRANSACTION | iroha_torii_shared::uri::QUERY
-        ) || {
-            let mut values = req
-                .headers()
-                .get_all(axum::http::header::CONTENT_TYPE)
-                .iter();
-            values
-                .next()
-                .and_then(|value| value.to_str().ok())
-                .and_then(crate::utils::strict_typed_content_format)
-                .is_some_and(|format| format == crate::utils::TypedRequestContentFormat::Norito)
-                && values.next().is_none()
-        } {
-            Self::NoritoRpc
-        } else {
-            Self::Http
+        let route = req.extensions().get::<MatchedRouteMetadata>();
+        if route.is_some_and(|route| {
+            route.transport() == Some(iroha_torii_shared::route_catalog::RouteTransport::WebSocket)
+        }) {
+            return Self::Ws;
         }
+        if route.is_some_and(|route| {
+            let route_id = route.stable_route_id();
+            route_id == route_catalog::pipeline::TRANSACTION.stable_route_id()
+                || route_id == route_catalog::pipeline::QUERY.stable_route_id()
+        }) {
+            return Self::NoritoRpc;
+        }
+        Self::Http
     }
     fn label(self) -> &'static str {
         match self {
@@ -3962,6 +3880,68 @@ impl ConnScheme {
             Self::NoritoRpc => "norito_rpc",
         }
     }
+}
+fn request_has_canonical_websocket_handshake<B>(req: &axum::http::Request<B>) -> bool {
+    let websocket_route = req
+        .extensions()
+        .get::<MatchedRouteMetadata>()
+        .is_some_and(|route| {
+            route.transport() == Some(iroha_torii_shared::route_catalog::RouteTransport::WebSocket)
+        });
+    let websocket_upgrade = {
+        let mut values = req.headers().get_all(axum::http::header::UPGRADE).iter();
+        values
+            .next()
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("websocket"))
+            && values.next().is_none()
+    };
+    let websocket_connection = req
+        .headers()
+        .get_all(axum::http::header::CONNECTION)
+        .iter()
+        .try_fold(false, |found, value| {
+            value.to_str().ok().map(|value| {
+                found
+                    || value
+                        .split(',')
+                        .any(|token| token.trim().eq_ignore_ascii_case("upgrade"))
+            })
+        })
+        .unwrap_or(false);
+    let websocket_version = {
+        let mut values = req
+            .headers()
+            .get_all(axum::http::header::SEC_WEBSOCKET_VERSION)
+            .iter();
+        values
+            .next()
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.trim() == "13")
+            && values.next().is_none()
+    };
+    let websocket_key = {
+        let mut values = req
+            .headers()
+            .get_all(axum::http::header::SEC_WEBSOCKET_KEY)
+            .iter();
+        let valid = values
+            .next()
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| {
+                base64::engine::general_purpose::STANDARD
+                    .decode(value.trim())
+                    .ok()
+            })
+            .is_some_and(|decoded| decoded.len() == 16);
+        valid && values.next().is_none()
+    };
+    req.method() == axum::http::Method::GET
+        && websocket_route
+        && websocket_upgrade
+        && websocket_connection
+        && websocket_version
+        && websocket_key
 }
 /// Held admission permit and telemetry accounting for one active request or upgraded connection.
 pub(crate) struct PreAuthRequestGuard {
@@ -4466,6 +4446,20 @@ async fn enforce_preauth(
     let scheme = ConnScheme::from_request(&req);
     match app.acquire_preauth(remote_ip, scheme).await {
         Ok(guard) => {
+            if matches!(scheme, ConnScheme::Ws) && !request_has_canonical_websocket_handshake(&req)
+            {
+                drop(guard);
+                let mut response = utils::respond_with_status_and_format(
+                    StatusCode::BAD_REQUEST,
+                    ErrorEnvelope::new(
+                        "websocket_handshake_invalid",
+                        "WebSocket routes require one canonical RFC 6455 version 13 upgrade handshake",
+                    ),
+                    early_rejection_response_format(req.headers()),
+                );
+                append_vary_accept(response.headers_mut());
+                return Ok(response);
+            }
             if matches!(scheme, ConnScheme::NoritoRpc) {
                 if let Err(resp) = app.check_norito_rpc_allowed(req.headers(), remote_ip) {
                     drop(guard);
@@ -4982,6 +4976,81 @@ mod preauth_connection_lifetime_tests {
                 ));
         }
         request
+    }
+    #[test]
+    fn connection_scheme_uses_only_the_matched_route_contract() {
+        let mut ordinary = Request::builder()
+            .method(axum::http::Method::POST)
+            .uri(route_catalog::application_api::ACCOUNTS_ONBOARD_PLAN_POST.path())
+            .header(header::CONTENT_TYPE, crate::utils::NORITO_MIME_TYPE)
+            .body(Body::empty())
+            .expect("ordinary request");
+        ordinary
+            .extensions_mut()
+            .insert(MatchedRouteMetadata::from_descriptor(
+                route_catalog::application_api::ACCOUNTS_ONBOARD_PLAN_POST,
+            ));
+        assert_eq!(ConnScheme::from_request(&ordinary), ConnScheme::Http);
+
+        let mut transaction = Request::builder()
+            .method(axum::http::Method::POST)
+            .uri(route_catalog::pipeline::TRANSACTION.path())
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::empty())
+            .expect("transaction request");
+        transaction
+            .extensions_mut()
+            .insert(MatchedRouteMetadata::from_descriptor(
+                route_catalog::pipeline::TRANSACTION,
+            ));
+        assert_eq!(
+            ConnScheme::from_request(&transaction),
+            ConnScheme::NoritoRpc
+        );
+
+        let mut malformed_websocket = request("/ws", false);
+        malformed_websocket
+            .extensions_mut()
+            .insert(MatchedRouteMetadata::from_descriptor(
+                route_catalog::streaming::SUBSCRIPTION_WS,
+            ));
+        assert_eq!(
+            ConnScheme::from_request(&malformed_websocket),
+            ConnScheme::Ws,
+            "malformed upgrades must still consume WebSocket capacity"
+        );
+    }
+    #[tokio::test]
+    async fn preauth_rejects_malformed_websocket_before_the_handler() {
+        let app = app_with_scheme_cap("ws");
+        let router = Router::new()
+            .route("/ws", get(|| async { StatusCode::OK }))
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&app),
+                enforce_preauth,
+            ));
+        let mut malformed = request("/ws", false);
+        malformed
+            .extensions_mut()
+            .insert(MatchedRouteMetadata::from_descriptor(
+                route_catalog::streaming::SUBSCRIPTION_WS,
+            ));
+        let response = router
+            .clone()
+            .oneshot(malformed)
+            .await
+            .expect("malformed handshake response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            typed_error_code(response).await,
+            "websocket_handshake_invalid"
+        );
+
+        let valid = router
+            .oneshot(request("/ws", true))
+            .await
+            .expect("valid handshake response");
+        assert_eq!(valid.status(), StatusCode::OK);
     }
     #[tokio::test]
     async fn partially_consumed_sse_body_holds_http_capacity_until_drop() {
@@ -5946,17 +6015,20 @@ fn is_public_sorafs_gateway_route(request: &axum::http::Request<Body>) -> bool {
     request
         .extensions()
         .get::<MatchedRouteMetadata>()
-        .is_some_and(|route| {
-            let stable_route_id = route.stable_route_id();
-            [
-                route_catalog::sorafs::CID_LOOKUP,
-                route_catalog::sorafs::SITE_MANIFEST,
-                route_catalog::sorafs::CID_ROOT,
-                route_catalog::sorafs::CID_PATH,
-            ]
-            .iter()
-            .any(|descriptor| descriptor.stable_route_id() == stable_route_id)
-        })
+        .is_some_and(is_public_sorafs_gateway_metadata)
+}
+
+fn is_public_sorafs_gateway_metadata(route: &MatchedRouteMetadata) -> bool {
+    let stable_route_id = route.stable_route_id();
+    [
+        route_catalog::sorafs::CID_LOOKUP.stable_route_id(),
+        route_catalog::sorafs::SITE_MANIFEST.stable_route_id(),
+        route_catalog::sorafs::CID_ROOT.stable_route_id(),
+        route_catalog::sorafs::CID_PATH.stable_route_id(),
+        SORAFS_HOST_SITE_ROOT_ROUTE.stable_route_id(),
+        SORAFS_HOST_SITE_PATH_ROUTE.stable_route_id(),
+    ]
+    .contains(&stable_route_id)
 }
 
 fn is_public_sorafs_gateway_path(request: &axum::http::Request<Body>) -> bool {
@@ -6022,8 +6094,13 @@ async fn enforce_required_api_token_private_no_store(
     req: axum::http::Request<Body>,
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
-    let public_sorafs_gateway = is_public_sorafs_gateway_path(&req);
+    let public_sorafs_gateway_path = is_public_sorafs_gateway_path(&req);
     let mut response = next.run(req).await;
+    let public_sorafs_gateway = public_sorafs_gateway_path
+        || response
+            .extensions()
+            .get::<MatchedRouteMetadata>()
+            .is_some_and(is_public_sorafs_gateway_metadata);
     if app.require_api_token && !public_sorafs_gateway {
         response.headers_mut().insert(
             axum::http::header::CACHE_CONTROL,
@@ -6776,9 +6853,6 @@ mod emergency_fast_surface_tests {
             ));
         }
         assert!(!emergency_fast_route_is_available(
-            &MatchedRouteMetadata::from_descriptor(route_catalog::core::CONFIGURATION_POST)
-        ));
-        assert!(!emergency_fast_route_is_available(
             &MatchedRouteMetadata::from_descriptor(route_catalog::pipeline::QUERY)
         ));
         for descriptor in [
@@ -6971,7 +7045,6 @@ async fn enforce_offline_cache_policy(
 ) -> Result<axum::response::Response, Infallible> {
     const OPERATION_PREFIX: &str = "/v1/offline/operations/";
     const READINESS_PATH: &str = "/v1/offline/readiness";
-    const RECIPIENT_LINEAGE_PATH: &str = "/v1/offline/receiver-lineage";
     const TOP_UP_PATH: &str = "/v1/offline/top-up";
     const REDEEM_PATH: &str = "/v1/offline/redeem";
     let route = req.extensions().get::<MatchedRouteMetadata>();
@@ -6987,11 +7060,8 @@ async fn enforce_offline_cache_policy(
         id == route_catalog::offline::TOP_UP.stable_route_id()
             || id == route_catalog::offline::REDEEM.stable_route_id()
     }) || matches!(req.uri().path(), TOP_UP_PATH | REDEEM_PATH);
-    let recipient_lineage = route.is_some_and(|route| {
-        route.stable_route_id() == route_catalog::offline::RECIPIENT_LINEAGE.stable_route_id()
-    }) || req.uri().path() == RECIPIENT_LINEAGE_PATH;
     let mut response = next.run(req).await;
-    let policy = if operation_status || command || recipient_lineage {
+    let policy = if operation_status || command {
         Some("no-store")
     } else if readiness {
         if matches!(response.status(), StatusCode::OK | StatusCode::NOT_MODIFIED) {
@@ -7451,8 +7521,16 @@ pub(crate) enum ReviewedMcpJsonRpcError {
     ParseError,
     /// The parsed JSON was not one supported MCP request object.
     InvalidRequest,
+    /// Required stateless MCP request metadata was missing or malformed.
+    InvalidParams,
+    /// Mirrored MCP HTTP routing metadata did not match the JSON-RPC body.
+    HeaderMismatch,
+    /// The request requires an optional capability the client did not declare.
+    MissingRequiredClientCapability,
     /// The MCP protocol version header was missing, duplicated, or unsupported.
     UnsupportedProtocolVersion,
+    /// The modern MCP request named a method Torii does not implement.
+    MethodNotFound,
     /// The HTTP body stream failed before a complete request was available.
     RequestBodyReadFailed,
     /// A browser origin did not exactly match the configured allowlist.
@@ -7471,8 +7549,12 @@ impl ReviewedMcpJsonRpcError {
         match self {
             Self::ParseError
             | Self::InvalidRequest
+            | Self::InvalidParams
+            | Self::HeaderMismatch
+            | Self::MissingRequiredClientCapability
             | Self::UnsupportedProtocolVersion
             | Self::RequestBodyReadFailed => StatusCode::BAD_REQUEST,
+            Self::MethodNotFound => StatusCode::NOT_FOUND,
             Self::OriginForbidden => StatusCode::FORBIDDEN,
             Self::RequestTimeout => StatusCode::REQUEST_TIMEOUT,
             Self::RequestPayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
@@ -7484,7 +7566,11 @@ impl ReviewedMcpJsonRpcError {
         match self {
             Self::ParseError => "parse_error",
             Self::InvalidRequest => "invalid_request",
+            Self::InvalidParams => "invalid_params",
+            Self::HeaderMismatch => "header_mismatch",
+            Self::MissingRequiredClientCapability => "missing_required_client_capability",
             Self::UnsupportedProtocolVersion => "unsupported_protocol_version",
+            Self::MethodNotFound => "method_not_found",
             Self::RequestBodyReadFailed => "request_body_read_failed",
             Self::OriginForbidden => "origin_forbidden",
             Self::RequestTimeout => "request_timeout",
@@ -7687,6 +7773,104 @@ async fn handler_route_not_found() -> Response {
         utils::current_response_format(),
     )
 }
+
+// These operations are selected by the normalized Host header rather than an
+// Axum path template. Keep fixed descriptors so admission, cache policy,
+// metrics, and traces observe the same bounded identity as path-selected
+// routes. They are intentionally absent from the path catalog: mounting either
+// `/` or `/{*path}` there would shadow the ordinary Torii API.
+const SORAFS_HOST_SITE_ROOT_ROUTE: route_catalog::RouteDescriptor =
+    route_catalog::RouteDescriptor::new(
+        "protocol.sorafs.host_site_root",
+        route_catalog::HttpMethod::Get,
+        "/",
+        route_catalog::ApiSurface::Public,
+        route_catalog::Listener::Torii,
+        route_catalog::RouteEffect::ReadOnly,
+        route_catalog::AdmissionPolicy::Public,
+    )
+    .with_authentication(route_catalog::AuthenticationPolicy::Unauthenticated);
+const SORAFS_HOST_SITE_PATH_ROUTE: route_catalog::RouteDescriptor =
+    route_catalog::RouteDescriptor::new(
+        "protocol.sorafs.host_site_path",
+        route_catalog::HttpMethod::Get,
+        "/{*path}",
+        route_catalog::ApiSurface::Public,
+        route_catalog::Listener::Torii,
+        route_catalog::RouteEffect::ReadOnly,
+        route_catalog::AdmissionPolicy::Public,
+    )
+    .with_authentication(route_catalog::AuthenticationPolicy::Unauthenticated);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HostSelectedSorafsRoute {
+    Root,
+    Path,
+}
+
+impl HostSelectedSorafsRoute {
+    const fn descriptor(self) -> route_catalog::RouteDescriptor {
+        match self {
+            Self::Root => SORAFS_HOST_SITE_ROOT_ROUTE,
+            Self::Path => SORAFS_HOST_SITE_PATH_ROUTE,
+        }
+    }
+}
+
+/// Mark a canonical configured site host before catalog metadata is attached.
+/// The catalog layer only consumes this marker when Axum selected no ordinary
+/// path route, so a crafted Host header cannot change an API route's security
+/// classification.
+async fn mark_host_selected_sorafs_route(
+    State(app): State<SharedAppState>,
+    mut req: axum::http::Request<Body>,
+    next: Next,
+) -> Result<axum::response::Response, Infallible> {
+    if req
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .is_none()
+        && sorafs::public_gateway::request_host_selects_site(&app, req.headers())
+    {
+        let route = if req.uri().path() == "/" {
+            HostSelectedSorafsRoute::Root
+        } else {
+            HostSelectedSorafsRoute::Path
+        };
+        req.extensions_mut().insert(route);
+    }
+    Ok(next.run(req).await)
+}
+
+async fn handler_route_not_found_or_sorafs_site(
+    State(app): State<SharedAppState>,
+    host_route: Option<Extension<HostSelectedSorafsRoute>>,
+    method: axum::http::Method,
+    headers: HeaderMap,
+    uri: axum::http::Uri,
+) -> Response {
+    if host_route.is_none() {
+        return handler_route_not_found().await;
+    }
+    if method != axum::http::Method::GET {
+        return handler_method_not_allowed().await;
+    }
+    let raw_path = uri
+        .path()
+        .strip_prefix('/')
+        .unwrap_or(uri.path())
+        .to_owned();
+    if raw_path.is_empty() {
+        sorafs::public_gateway::handle_get_sorafs_site_root(State(app), headers).await
+    } else {
+        sorafs::public_gateway::handle_get_sorafs_site_path(
+            State(app),
+            headers,
+            axum::extract::Path(raw_path),
+        )
+        .await
+    }
+}
 async fn handler_method_not_allowed() -> Response {
     utils::respond_with_status_and_format(
         StatusCode::METHOD_NOT_ALLOWED,
@@ -7783,7 +7967,17 @@ async fn attach_matched_route_metadata(
         .extensions()
         .get::<axum::extract::MatchedPath>()
         .map(|path| path.as_str().to_owned());
-    let metadata = index.resolve(req.method(), matched_path.as_deref());
+    let mut metadata = index.resolve(req.method(), matched_path.as_deref());
+    if metadata.stable_route_id() == "http.route_not_found"
+        && let Some(host_route) = req.extensions().get::<HostSelectedSorafsRoute>().copied()
+    {
+        let descriptor = host_route.descriptor();
+        metadata = if req.method() == axum::http::Method::GET {
+            MatchedRouteMetadata::from_descriptor(descriptor)
+        } else {
+            MatchedRouteMetadata::method_not_allowed_for(descriptor)
+        };
+    }
     req.extensions_mut().insert(metadata.clone());
     let mut response = next.run(req).await;
     response.extensions_mut().insert(metadata);
@@ -8141,6 +8335,206 @@ mod matched_route_metadata_tests {
         assert_eq!(metadata.path_template(), "/v1/tests/items/{item_id}");
         assert!(!metadata.path_template().contains("customer-secret"));
         assert!(!metadata.path_template().contains("cursor"));
+    }
+    #[tokio::test]
+    async fn host_selected_site_metadata_is_bounded_and_cannot_shadow_catalog_routes() {
+        let mut builder =
+            RouterBuilder::new((), RouteCatalog::new(&[ITEM]), EnabledFeatures::none())
+                .expect("valid test catalog");
+        builder.route(&ITEM, catalog_get(metadata_handler));
+        let (router, manifest) = builder.finish().expect("complete test router");
+        let router = router
+            .fallback(|| async { StatusCode::NO_CONTENT })
+            .layer(axum::middleware::from_fn_with_state(
+                manifest.route_index(),
+                attach_matched_route_metadata,
+            ))
+            .with_state(());
+
+        let mut site_request = Request::builder()
+            .uri("/assets/customer-secret.js")
+            .body(Body::empty())
+            .expect("host-selected request");
+        site_request
+            .extensions_mut()
+            .insert(HostSelectedSorafsRoute::Path);
+        let response = router
+            .clone()
+            .oneshot(site_request)
+            .await
+            .expect("host-selected response");
+        let metadata = response
+            .extensions()
+            .get::<MatchedRouteMetadata>()
+            .expect("response route metadata");
+        assert_eq!(
+            metadata.stable_route_id(),
+            SORAFS_HOST_SITE_PATH_ROUTE.stable_route_id()
+        );
+        assert_eq!(metadata.path_template(), "/{*path}");
+        assert_eq!(metadata.surface(), Some(ApiSurface::Public));
+        assert!(!metadata.path_template().contains("customer-secret"));
+
+        let mut catalog_request = Request::builder()
+            .uri("/v1/tests/items/customer-secret")
+            .body(Body::empty())
+            .expect("catalog request");
+        catalog_request
+            .extensions_mut()
+            .insert(HostSelectedSorafsRoute::Path);
+        let response = router
+            .oneshot(catalog_request)
+            .await
+            .expect("catalog response");
+        let metadata = response
+            .extensions()
+            .get::<MatchedRouteMetadata>()
+            .expect("response route metadata");
+        assert_eq!(metadata.stable_route_id(), ITEM.stable_route_id());
+        assert_eq!(metadata.path_template(), ITEM.path());
+    }
+    #[tokio::test]
+    async fn host_selected_site_rejected_method_is_not_labeled_as_a_get() {
+        let builder = RouterBuilder::new((), RouteCatalog::new(&[]), EnabledFeatures::none())
+            .expect("valid empty test catalog");
+        let (router, manifest) = builder.finish().expect("complete test router");
+        let router = router
+            .fallback(|| async { StatusCode::METHOD_NOT_ALLOWED })
+            .layer(axum::middleware::from_fn_with_state(
+                manifest.route_index(),
+                attach_matched_route_metadata,
+            ))
+            .with_state(());
+        let mut request = Request::builder()
+            .method(axum::http::Method::POST)
+            .uri("/")
+            .body(Body::empty())
+            .expect("host-selected request");
+        request
+            .extensions_mut()
+            .insert(HostSelectedSorafsRoute::Root);
+        let response = router
+            .oneshot(request)
+            .await
+            .expect("method-not-allowed response");
+        let metadata = response
+            .extensions()
+            .get::<MatchedRouteMetadata>()
+            .expect("response route metadata");
+        assert_eq!(metadata.stable_route_id(), "http.method_not_allowed");
+        assert_eq!(metadata.path_template(), "/");
+        assert_eq!(metadata.transport(), None);
+        assert_eq!(metadata.surface(), Some(ApiSurface::Public));
+    }
+    #[tokio::test]
+    async fn host_selected_site_bypasses_listener_token_only_when_fallback_wins() {
+        let mut app = crate::mk_app_state_for_tests();
+        let state = Arc::get_mut(&mut app).expect("unique test app state");
+        state.require_api_token = true;
+        state.api_token_digests = Arc::new(limits::ApiTokenDigestSet::from_tokens(["valid-token"]));
+        state.sorafs_site_bindings = Some(Arc::new(sorafs::site::SiteBindingsDocument {
+            version: 1,
+            sites: vec![sorafs::site::SiteBinding {
+                hostname: "site.example".to_owned(),
+                manifest_digest_hex: "00".repeat(32),
+                index_document: None,
+                spa_fallback: None,
+            }],
+        }));
+        let mut builder = RouterBuilder::new(
+            app.clone(),
+            RouteCatalog::new(&[ITEM]),
+            EnabledFeatures::none(),
+        )
+        .expect("valid test catalog");
+        builder.route(&ITEM, catalog_get(|| async { StatusCode::NO_CONTENT }));
+        let (router, manifest) = builder.finish().expect("complete test router");
+        let router = router
+            .fallback(handler_route_not_found_or_sorafs_site)
+            .layer(axum::middleware::from_fn_with_state(
+                app.clone(),
+                enforce_api_token,
+            ))
+            .layer(axum::middleware::from_fn_with_state(
+                manifest.route_index(),
+                attach_matched_route_metadata,
+            ))
+            .layer(axum::middleware::from_fn_with_state(
+                app.clone(),
+                mark_host_selected_sorafs_route,
+            ))
+            .layer(axum::middleware::from_fn_with_state(
+                app.clone(),
+                enforce_required_api_token_private_no_store,
+            ))
+            .with_state(app);
+
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/assets/app.js")
+                    .header(header::HOST, "site.example")
+                    .body(Body::empty())
+                    .expect("site request"),
+            )
+            .await
+            .expect("site response");
+        assert_ne!(response.status(), StatusCode::UNAUTHORIZED);
+        let metadata = response
+            .extensions()
+            .get::<MatchedRouteMetadata>()
+            .expect("site route metadata");
+        assert_eq!(
+            metadata.stable_route_id(),
+            SORAFS_HOST_SITE_PATH_ROUTE.stable_route_id()
+        );
+        assert_ne!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("private, no-store"))
+        );
+
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .header(header::HOST, "site.example")
+                    .body(Body::empty())
+                    .expect("site root request"),
+            )
+            .await
+            .expect("site root response");
+        assert_ne!(response.status(), StatusCode::UNAUTHORIZED);
+        let metadata = response
+            .extensions()
+            .get::<MatchedRouteMetadata>()
+            .expect("site root route metadata");
+        assert_eq!(
+            metadata.stable_route_id(),
+            SORAFS_HOST_SITE_ROOT_ROUTE.stable_route_id()
+        );
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/tests/items/customer-secret")
+                    .header(header::HOST, "site.example")
+                    .body(Body::empty())
+                    .expect("catalog request"),
+            )
+            .await
+            .expect("catalog response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let metadata = response
+            .extensions()
+            .get::<MatchedRouteMetadata>()
+            .expect("catalog route metadata");
+        assert_eq!(metadata.stable_route_id(), ITEM.stable_route_id());
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("private, no-store"))
+        );
     }
     #[tokio::test]
     async fn credential_exchange_overwrites_conflicting_inner_cache_policy() {
@@ -11399,6 +11793,11 @@ struct CanonicalAccountBodyAuthState {
     missing_auth_code: &'static str,
     missing_auth_message: &'static str,
 }
+#[derive(Clone)]
+struct OptionalCanonicalAccountBodyAuthState {
+    app: SharedAppState,
+    max_body_bytes: usize,
+}
 #[cfg(feature = "app_api")]
 fn admitted_app_routed_read_body_for_auth(parts: &axum::http::request::Parts) -> Option<Bytes> {
     if !app_routed_read_http_admission_is_active() {
@@ -11475,6 +11874,54 @@ async fn enforce_canonical_account_body_authentication(
         Err(error) => return error.into_response(),
     };
     parts.extensions.insert(verified);
+    let mut response = next
+        .run(axum::http::Request::from_parts(parts, Body::from(body)))
+        .await;
+    install_canonical_account_private_cache_headers(&mut response);
+    response
+}
+async fn enforce_optional_canonical_account_body_authentication(
+    State(state): State<OptionalCanonicalAccountBodyAuthState>,
+    request: axum::http::Request<Body>,
+    next: Next,
+) -> Response {
+    let (mut parts, body) = request.into_parts();
+    let body = if let Some(admitted) = admitted_app_routed_read_body_for_auth(&parts) {
+        if admitted.len() > state.max_body_bytes {
+            return canonical_account_body_limit_response();
+        }
+        drop(body);
+        admitted
+    } else {
+        match axum::body::to_bytes(body, state.max_body_bytes).await {
+            Ok(body) => body,
+            Err(error) => {
+                iroha_logger::warn!(%error, "optional canonical account request body exceeded its route limit");
+                return canonical_account_body_limit_response();
+            }
+        }
+    };
+    let network_id = state.app.signed_query_admission.network_id();
+    let visibility = match crate::app_auth::verify_canonical_network_request(
+        &state.app.state,
+        &network_id,
+        &parts.headers,
+        &parts.method,
+        &parts.uri,
+        body.as_ref(),
+        None,
+    ) {
+        Ok(Some(verified)) => ToriiAccountReadVisibility::Signed(verified.account),
+        Ok(None) => ToriiAccountReadVisibility::None,
+        Err(error) => {
+            return Error::AppUnauthorized {
+                code: "canonical_authentication_invalid",
+                message: error.to_string(),
+            }
+            .into_response();
+        }
+    };
+    parts.extensions.insert(visibility);
     let mut response = next
         .run(axum::http::Request::from_parts(parts, Body::from(body)))
         .await;
@@ -12400,7 +12847,6 @@ async fn handler_account_get(
         app.as_ref(),
         &parsed_account_id,
         visibility.caller(),
-        trusted_internal_read_source(app.as_ref(), &headers, remote_ip),
     );
     let route_scope = torii_account_read_route_scope(
         &parsed_account_id,
@@ -12428,12 +12874,11 @@ async fn handler_account_get(
 #[cfg(feature = "app_api")]
 async fn handler_account_transactions_query(
     State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
+    Extension(caller): Extension<ToriiAccountReadVisibility>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_id): AxPath<String>,
-    crate::utils::extractors::NoritoJsonWithBytes { value: env, raw }: crate::utils::extractors::NoritoJsonWithBytes<
+    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
         crate::filter::QueryEnvelope,
     >,
 ) -> Result<Response, Error> {
@@ -12472,20 +12917,8 @@ async fn handler_account_transactions_query(
             "failed to encode routed account transactions query: {error}"
         )))
     })?;
-    let caller = torii_visibility_account_from_headers(
-        &app,
-        &headers,
-        &method,
-        &uri,
-        raw.as_ref(),
-        routing::ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
-    )?;
-    let use_target_account_routes = torii_should_use_target_account_routes(
-        app.as_ref(),
-        &parsed_account_id,
-        caller.caller(),
-        trusted_internal_read_source(app.as_ref(), &headers, remote_ip),
-    );
+    let use_target_account_routes =
+        torii_should_use_target_account_routes(app.as_ref(), &parsed_account_id, caller.caller());
     let route_scope = torii_account_read_route_scope(
         &parsed_account_id,
         caller.caller(),
@@ -12517,6 +12950,7 @@ async fn handler_account_transactions_query(
 #[cfg(feature = "app_api")]
 async fn handler_transactions_query(
     State(app): State<SharedAppState>,
+    Extension(visibility): Extension<ToriiAccountReadVisibility>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
@@ -12551,8 +12985,9 @@ async fn handler_transactions_query(
             "failed to encode routed transactions query: {error}"
         )))
     })?;
-    Ok(execute_torii_fanout_list_read(
+    Ok(execute_torii_visible_fanout_list_read(
         &app,
+        visibility.caller(),
         ToriiReadEndpointV1::TransactionsQuery,
         Vec::new(),
         None,
@@ -12666,12 +13101,8 @@ async fn handler_account_assets(
         &[],
         routing::ENDPOINT_ACCOUNTS_ASSETS,
     )?;
-    let use_target_account_routes = torii_should_use_target_account_routes(
-        app.as_ref(),
-        &parsed_account_id,
-        caller.caller(),
-        trusted_internal_read_source(app.as_ref(), &headers, remote_ip),
-    );
+    let use_target_account_routes =
+        torii_should_use_target_account_routes(app.as_ref(), &parsed_account_id, caller.caller());
     let route_scope = torii_account_read_route_scope(
         &parsed_account_id,
         caller.caller(),
@@ -12739,12 +13170,8 @@ async fn handler_account_permissions(
         &[],
         "/v1/accounts/{account_id}/permissions",
     )?;
-    let use_target_account_routes = torii_should_use_target_account_routes(
-        app.as_ref(),
-        &parsed_account_id,
-        caller.caller(),
-        trusted_internal_read_source(app.as_ref(), &headers, remote_ip),
-    );
+    let use_target_account_routes =
+        torii_should_use_target_account_routes(app.as_ref(), &parsed_account_id, caller.caller());
     let route_scope = torii_account_permissions_route_scope(
         &parsed_account_id,
         caller.caller(),
@@ -12782,12 +13209,11 @@ async fn handler_account_permissions(
 #[cfg(feature = "app_api")]
 async fn handler_account_assets_query(
     State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
+    Extension(caller): Extension<ToriiAccountReadVisibility>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_id): AxPath<String>,
-    crate::utils::extractors::NoritoJsonWithBytes { value: env, raw }: crate::utils::extractors::NoritoJsonWithBytes<
+    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
         crate::filter::QueryEnvelope,
     >,
 ) -> Result<impl IntoResponse, Error> {
@@ -12817,20 +13243,8 @@ async fn handler_account_assets_query(
             Ok(parsed) => parsed,
             Err(error) => return Ok(error_response_with_format(error, ResponseFormat::Json)),
         };
-    let caller = torii_visibility_account_from_headers(
-        &app,
-        &headers,
-        &method,
-        &uri,
-        raw.as_ref(),
-        routing::ENDPOINT_ACCOUNTS_ASSETS_QUERY,
-    )?;
-    let use_target_account_routes = torii_should_use_target_account_routes(
-        app.as_ref(),
-        &parsed_account_id,
-        caller.caller(),
-        trusted_internal_read_source(app.as_ref(), &headers, remote_ip),
-    );
+    let use_target_account_routes =
+        torii_should_use_target_account_routes(app.as_ref(), &parsed_account_id, caller.caller());
     let route_scope = torii_account_read_route_scope(
         &parsed_account_id,
         caller.caller(),
@@ -12909,12 +13323,8 @@ async fn handler_account_transactions_get(
         &[],
         routing::ENDPOINT_ACCOUNTS_TRANSACTIONS,
     )?;
-    let use_target_account_routes = torii_should_use_target_account_routes(
-        app.as_ref(),
-        &parsed_account_id,
-        caller.caller(),
-        trusted_internal_read_source(app.as_ref(), &headers, remote_ip),
-    );
+    let use_target_account_routes =
+        torii_should_use_target_account_routes(app.as_ref(), &parsed_account_id, caller.caller());
     let route_scope = torii_account_read_route_scope(
         &parsed_account_id,
         caller.caller(),
@@ -12990,12 +13400,8 @@ async fn handler_account_history_get(
         &[],
         routing::ENDPOINT_ACCOUNTS_HISTORY,
     )?;
-    let use_target_account_routes = torii_should_use_target_account_routes(
-        app.as_ref(),
-        &parsed_account_id,
-        caller.caller(),
-        trusted_internal_read_source(app.as_ref(), &headers, remote_ip),
-    );
+    let use_target_account_routes =
+        torii_should_use_target_account_routes(app.as_ref(), &parsed_account_id, caller.caller());
     let route_scope = torii_account_read_route_scope(
         &parsed_account_id,
         caller.caller(),
@@ -13052,6 +13458,14 @@ async fn handler_transactions_history_get(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
+    let additional_dataspace = viewer
+        .is_mandatory_alias
+        .then_some(viewer.dataspace_id.as_str());
+    let dataspace_visibility = torii_dataspace_read_visibility_for_accounts(
+        app.as_ref(),
+        &viewer.account_ids,
+        additional_dataspace,
+    );
     let visibility = crate::routing::TxHistoryVisibilityScope {
         viewer_account_ids: viewer.account_ids,
         viewer_dataspace_id: viewer.dataspace_id,
@@ -13063,6 +13477,7 @@ async fn handler_transactions_history_get(
         crate::NoritoQuery(params),
         tel,
         visibility,
+        dataspace_visibility,
         allowed_asset_definition_id,
     )
     .await
@@ -13550,19 +13965,24 @@ pub async fn handle_v1_zk_verify_batch_with_limits(
 #[axum::debug_handler]
 async fn handler_accounts_list(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(p): AxQuery<crate::routing::ListFilterParams>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
+    let visibility =
+        torii_visibility_account_from_headers(&app, &headers, &method, &uri, &[], "v1/accounts")?;
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(&app, &headers, Some(remote_ip), "v1/accounts", enforce).await?;
     }
     let query_string = encode_torii_proxy_query(&p)?;
-    Ok(execute_torii_fanout_list_read(
+    Ok(execute_torii_visible_fanout_list_read(
         &app,
+        visibility.caller(),
         ToriiReadEndpointV1::AccountsList,
         Vec::new(),
         query_string,
@@ -13574,6 +13994,7 @@ async fn handler_accounts_list(
 #[axum::debug_handler]
 async fn handler_accounts_query(
     State(app): State<SharedAppState>,
+    Extension(visibility): Extension<ToriiAccountReadVisibility>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
@@ -13589,8 +14010,9 @@ async fn handler_accounts_query(
             "failed to encode routed accounts query: {error}"
         )))
     })?;
-    Ok(execute_torii_fanout_list_read(
+    Ok(execute_torii_visible_fanout_list_read(
         &app,
+        visibility.caller(),
         ToriiReadEndpointV1::AccountsQuery,
         Vec::new(),
         None,
@@ -13811,12 +14233,22 @@ struct AccountsPortfolioQuery {
 #[axum::debug_handler]
 async fn handler_accounts_portfolio(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(uaid_literal): AxPath<String>,
     AxQuery(query): AxQuery<AccountsPortfolioQuery>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
+    let visibility = torii_visibility_account_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        &[],
+        "v1/accounts/{uaid}/portfolio",
+    )?;
     let _ = query
         .asset_id
         .as_deref()
@@ -13841,7 +14273,13 @@ async fn handler_accounts_portfolio(
     }
     let uaid_literal = routing::canonical_routed_uaid_literal(&uaid_literal)?;
     let query_string = encode_torii_proxy_query(&query)?;
-    Ok(execute_torii_fanout_portfolio_read(&app, uaid_literal, query_string).await)
+    Ok(execute_torii_visible_fanout_portfolio_read(
+        &app,
+        visibility.caller(),
+        uaid_literal,
+        query_string,
+    )
+    .await)
 }
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
@@ -13866,7 +14304,7 @@ async fn handler_nexus_public_lane_validators(
         )
         .await?;
     }
-    let route = torii_route_for_lane_id(app.as_ref(), lane_id)?;
+    let route = torii_route_for_public_lane_id(app.as_ref(), lane_id)?;
     let query_string = encode_torii_proxy_query(&params)?;
     Ok(execute_torii_single_route_read(
         &app,
@@ -13901,7 +14339,7 @@ async fn handler_nexus_public_lane_stake(
         )
         .await?;
     }
-    let route = torii_route_for_lane_id(app.as_ref(), lane_id)?;
+    let route = torii_route_for_public_lane_id(app.as_ref(), lane_id)?;
     let query_string = encode_torii_proxy_query(&params)?;
     Ok(execute_torii_single_route_read(
         &app,
@@ -13936,7 +14374,7 @@ async fn handler_nexus_public_lane_rewards(
         )
         .await?;
     }
-    let route = torii_route_for_lane_id(app.as_ref(), lane_id)?;
+    let route = torii_route_for_public_lane_id(app.as_ref(), lane_id)?;
     let query_string = encode_torii_proxy_query(&params)?;
     Ok(execute_torii_single_route_read(
         &app,
@@ -13952,6 +14390,8 @@ async fn handler_nexus_public_lane_rewards(
 #[axum::debug_handler]
 async fn handler_nexus_dataspaces_account_summary(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(literal): AxPath<String>,
@@ -13960,6 +14400,14 @@ async fn handler_nexus_dataspaces_account_summary(
     >,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
+    let visibility = torii_visibility_account_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        &[],
+        routing::ENDPOINT_NEXUS_DATASPACES_ACCOUNT_SUMMARY,
+    )?;
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -13973,18 +14421,34 @@ async fn handler_nexus_dataspaces_account_summary(
         .await?;
     }
     let query_string = encode_torii_proxy_query(&params)?;
-    Ok(execute_torii_fanout_dataspace_summary_read(&app, literal, query_string).await)
+    Ok(execute_torii_visible_fanout_dataspace_summary_read(
+        &app,
+        visibility.caller(),
+        literal,
+        query_string,
+    )
+    .await)
 }
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_space_directory_bindings(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(uaid_literal): AxPath<String>,
     AxQuery(query): AxQuery<crate::routing::SpaceDirectoryBindingsQuery>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
+    let visibility = torii_visibility_account_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        &[],
+        routing::ENDPOINT_SPACE_DIRECTORY_BINDINGS,
+    )?;
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -13999,7 +14463,13 @@ async fn handler_space_directory_bindings(
     }
     let uaid_literal = routing::canonical_routed_uaid_literal(&uaid_literal)?;
     let query_string = encode_torii_proxy_query(&query)?;
-    Ok(execute_torii_fanout_space_directory_bindings_read(&app, uaid_literal, query_string).await)
+    Ok(execute_torii_visible_fanout_space_directory_bindings_read(
+        &app,
+        visibility.caller(),
+        uaid_literal,
+        query_string,
+    )
+    .await)
 }
 #[cfg(feature = "app_api")]
 fn space_directory_manifest_fanout_query(
@@ -14020,12 +14490,22 @@ fn space_directory_manifest_fanout_query(
 #[axum::debug_handler]
 async fn handler_space_directory_manifests(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(uaid_literal): AxPath<String>,
     AxQuery(query): AxQuery<crate::routing::SpaceDirectoryManifestQuery>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
+    let visibility = torii_visibility_account_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        &[],
+        routing::ENDPOINT_SPACE_DIRECTORY_MANIFESTS,
+    )?;
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -14043,38 +14523,13 @@ async fn handler_space_directory_manifests(
     let (client_offset, client_page_limit) =
         routing::space_directory_manifest_pagination(query.limit, query.offset.unwrap_or(0))?;
     let client_limit = Some(client_page_limit);
-    if let Some(dataspace_id) = query.dataspace.map(DataSpaceId::new) {
-        let route = match resolve_torii_route_for_dataspace_id(app.as_ref(), dataspace_id) {
-            Ok(route) => route,
-            Err(error) => {
-                return Err(Error::PushIntoQueue {
-                    source: Box::new(queue::Error::UnresolvedRoute {
-                        reason: error.to_string(),
-                    }),
-                    backpressure: current_torii_backpressure(app.as_ref()),
-                });
-            }
-        };
-        let shard_query = space_directory_manifest_fanout_query(&query, 1);
-        let query_string = encode_torii_proxy_query(&shard_query)?;
-        return Ok(
-            execute_torii_space_directory_manifests_read_for_resolved_routes(
-                &app,
-                vec![route],
-                uaid_literal,
-                query_string,
-                client_offset,
-                client_limit,
-            )
-            .await,
-        );
-    }
     let fetch_limit =
         routing::space_directory_manifest_fanout_window(client_offset, client_page_limit)?;
     let fanout_query = space_directory_manifest_fanout_query(&query, fetch_limit);
     let query_string = encode_torii_proxy_query(&fanout_query)?;
-    Ok(execute_torii_fanout_space_directory_manifests_read(
+    Ok(execute_torii_visible_fanout_space_directory_manifests_read(
         &app,
+        visibility.caller(),
         uaid_literal,
         query_string,
         client_offset,
@@ -14222,21 +14677,21 @@ async fn handler_repo_agreements_query(
 #[cfg(feature = "app_api")]
 const fn offline_top_up_body_limit(transaction_max_content_len: usize) -> usize {
     if transaction_max_content_len
-        < iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUEST_MAX_BYTES_V4
+        < iroha_torii_shared::offline_api::OFFLINE_CASH_TOP_UP_REQUEST_MAX_BYTES_V1
     {
         transaction_max_content_len
     } else {
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUEST_MAX_BYTES_V4
+        iroha_torii_shared::offline_api::OFFLINE_CASH_TOP_UP_REQUEST_MAX_BYTES_V1
     }
 }
 #[cfg(feature = "app_api")]
 const fn offline_redeem_body_limit(transaction_max_content_len: usize) -> usize {
     if transaction_max_content_len
-        < iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4
+        < iroha_torii_shared::offline_api::OFFLINE_CASH_REDEMPTION_REQUEST_MAX_BYTES_V1
     {
         transaction_max_content_len
     } else {
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4
+        iroha_torii_shared::offline_api::OFFLINE_CASH_REDEMPTION_REQUEST_MAX_BYTES_V1
     }
 }
 #[cfg(feature = "app_api")]
@@ -14244,8 +14699,6 @@ const fn offline_redeem_body_limit(transaction_max_content_len: usize) -> usize 
 struct OfflineCommandBodyPolicy {
     route_hint: &'static str,
     max_body_bytes: usize,
-    decode_allocation_multiplier: usize,
-    fixed_decode_allocation_bytes: usize,
 }
 #[cfg(feature = "app_api")]
 impl OfflineCommandBodyPolicy {
@@ -14253,10 +14706,6 @@ impl OfflineCommandBodyPolicy {
         Self {
             route_hint: "v1/offline/top-up",
             max_body_bytes: offline_top_up_body_limit(transaction_max_content_len),
-            decode_allocation_multiplier:
-                iroha_data_model::offline::KAGEMUSHA_CANONICAL_DECODE_BASE_ALLOCATION_MULTIPLIER_V4,
-            fixed_decode_allocation_bytes:
-                iroha_data_model::offline::KAGEMUSHA_TOPUP_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4,
         }
     }
 
@@ -14264,13 +14713,6 @@ impl OfflineCommandBodyPolicy {
         Self {
             route_hint: "v1/offline/redeem",
             max_body_bytes: offline_redeem_body_limit(transaction_max_content_len),
-            decode_allocation_multiplier:
-                iroha_data_model::offline::KAGEMUSHA_CANONICAL_DECODE_BASE_ALLOCATION_MULTIPLIER_V4
-                    .saturating_add(
-                        iroha_data_model::offline::KAGEMUSHA_REDEEM_CANONICAL_DECODE_EXTRA_ALLOCATION_MULTIPLIER_V4,
-                    ),
-            fixed_decode_allocation_bytes:
-                iroha_data_model::offline::KAGEMUSHA_REDEEM_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4,
         }
     }
 
@@ -14278,9 +14720,8 @@ impl OfflineCommandBodyPolicy {
         if encoded_len > self.max_body_bytes {
             return None;
         }
-        let decode_allocation_bytes = encoded_len
-            .checked_mul(self.decode_allocation_multiplier)?
-            .checked_add(self.fixed_decode_allocation_bytes)?;
+        let decode_allocation_bytes =
+            norito::canonical_decode_limits(encoded_len).max_total_allocated_bytes();
         Some([
             u64::try_from(encoded_len).ok()?,
             u64::try_from(decode_allocation_bytes).ok()?,
@@ -14307,7 +14748,7 @@ fn offline_command_memory_pool_bytes(transaction_max_content_len: usize) -> Opti
 }
 #[cfg(feature = "app_api")]
 fn encode_offline_capability_representation(
-    payload: &iroha_torii_shared::offline_api::OfflineStatus,
+    payload: &iroha_torii_shared::offline_api::OfflineCashReadinessV1,
     format: crate::utils::ResponseFormat,
 ) -> Result<(&'static str, Vec<u8>), Error> {
     match format {
@@ -14392,214 +14833,6 @@ async fn handler_offline_readiness(
     append_vary_accept(response.headers_mut());
     Ok(response)
 }
-#[cfg(feature = "app_api")]
-fn offline_receiver_lineage_inconsistent(message: impl Into<String>) -> Error {
-    Error::AppServiceUnavailable {
-        code: "offline_receiver_lineage_inconsistent",
-        message: message.into(),
-    }
-}
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_recipient_lineage(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    crate::utils::extractors::OfflineNorito(request): crate::utils::extractors::OfflineNorito<
-        iroha_torii_shared::offline_api::OfflineRecipientLineageRequest,
-    >,
-) -> Result<NoritoBody<iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage>, Error>
-{
-    check_access(
-        &app,
-        &headers,
-        Some(remote.ip()),
-        "v1/offline/receiver-lineage",
-    )
-    .await?;
-    let state_view = app.state.view();
-    let evaluated_height = u64::try_from(state_view.height()).map_err(|_| {
-        offline_receiver_lineage_inconsistent(
-            "The evaluated block height does not fit the public lineage contract.",
-        )
-    })?;
-    let evaluated_block = state_view
-        .latest_block()
-        .ok_or_else(|| Error::AppNotFound {
-            code: "offline_receiver_lineage_unavailable",
-            message: "No committed block is available for receiver-lineage evaluation.".to_owned(),
-        })?;
-    let evaluated_header = evaluated_block.header();
-    let evaluated_at_ms =
-        u64::try_from(evaluated_header.creation_time().as_millis()).unwrap_or(u64::MAX);
-    if request.version != iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_VERSION
-        || request.trusted_checkpoint_height == 0
-    {
-        return Err(Error::AppQueryValidation {
-            code: "offline_receiver_lineage_request_invalid",
-            message: "The receiver-lineage query version or checkpoint height is invalid."
-                .to_owned(),
-        });
-    }
-    let selector = &request.selector;
-    if selector.network_id != *app.state.network_id_ref() {
-        return Err(Error::AppQueryValidation {
-            code: "offline_receiver_lineage_network_mismatch",
-            message: "The receiver-lineage selector targets a different network.".to_owned(),
-        });
-    }
-    if selector.receiver_device_id.is_empty()
-        || selector.receiver_device_id.len() > 128
-        || selector.receiver_device_id.trim() != selector.receiver_device_id
-        || selector.receiver_device_id.chars().any(char::is_control)
-    {
-        return Err(Error::AppQueryValidation {
-            code: "offline_receiver_lineage_request_invalid",
-            message: "The receiver device identifier is invalid.".to_owned(),
-        });
-    }
-    let snapshot =
-        iroha_core::smartcontracts::isi::offline::isi::derive_kagemusha_active_receiver_snapshot_v1(
-            state_view.world(),
-            evaluated_height,
-            evaluated_at_ms,
-        )
-        .map_err(offline_receiver_lineage_inconsistent)?;
-    let receiver_key = iroha_data_model::offline::KagemushaActiveReceiverKeyV1 {
-        account_id: selector.recipient.clone(),
-        device_id: selector.receiver_device_id.clone(),
-        asset_definition_id: selector.asset.clone(),
-    };
-    let (active_receiver_entry, active_receiver_membership) = snapshot
-        .active_membership(&receiver_key)
-        .map_err(|message| {
-            if message.contains("not active") {
-                Error::AppNotFound {
-                    code: "offline_receiver_not_registered",
-                    message,
-                }
-            } else if message.contains("multiple") {
-                Error::AppConflict {
-                    code: "offline_receiver_registration_ambiguous",
-                    message,
-                }
-            } else {
-                offline_receiver_lineage_inconsistent(message)
-            }
-        })?;
-    let iroha_data_model::offline::KagemushaActiveReceiverEntryV1::Active(active) =
-        &active_receiver_entry
-    else {
-        return Err(Error::AppConflict {
-            code: "offline_receiver_registration_ambiguous",
-            message: "The receiver tuple has multiple active registrations.".to_owned(),
-        });
-    };
-    let resolution = iroha_core::smartcontracts::isi::offline::isi::resolve_kagemusha_active_receiver_registration_v1(
-        state_view.world(),
-        active,
-        evaluated_height,
-        evaluated_at_ms,
-    )
-    .map_err(offline_receiver_lineage_inconsistent)?;
-    if *active.value.registration_hash.as_ref() != resolution.registration_hash
-        || *active.value.admission_policy_hash.as_ref() != resolution.admission_policy_hash
-        || active.value.admission_height != resolution.admission_height
-        || active.value.admission_transaction_hash.as_ref()
-            != resolution.admission_transaction_hash.as_ref()
-        || active.value.public_key != resolution.registration.public_key
-    {
-        return Err(offline_receiver_lineage_inconsistent(
-            "The active-receiver snapshot disagrees with protected registration state.",
-        ));
-    }
-    let evaluated_block_hash = evaluated_block.hash();
-    drop(evaluated_block);
-    drop(state_view);
-    let active_receiver_witness = app
-        .kura
-        .kagemusha_active_receiver_witness_proof_v1(evaluated_height)
-        .map_err(|error| {
-            offline_receiver_lineage_inconsistent(format!(
-                "The evaluated active-receiver witness proof is invalid: {error}"
-            ))
-        })?
-        .ok_or_else(|| {
-            offline_receiver_lineage_inconsistent(
-                "The evaluated block has no retained active-receiver witness proof.",
-            )
-        })?;
-    if active_receiver_witness
-        .commitment()
-        .map_err(offline_receiver_lineage_inconsistent)?
-        != snapshot.commitment
-    {
-        return Err(offline_receiver_lineage_inconsistent(
-            "The retained receiver witness commitment differs from the evaluated state snapshot.",
-        ));
-    }
-    let proof_count = evaluated_height
-        .checked_sub(request.trusted_checkpoint_height)
-        .and_then(|gap| gap.checked_add(1))
-        .and_then(|count| usize::try_from(count).ok())
-        .ok_or_else(|| Error::AppQueryValidation {
-            code: "offline_receiver_lineage_checkpoint_invalid",
-            message: "The trusted checkpoint is newer than the evaluated block.".to_owned(),
-        })?;
-    if proof_count > iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_MAX_FINALITY_PROOFS
-    {
-        return Err(Error::AppConflict {
-            code: "offline_receiver_lineage_checkpoint_too_old",
-            message: "The trusted checkpoint is outside the bounded 63-block advancement window."
-                .to_owned(),
-        });
-    }
-    let mut finality_chain = Vec::with_capacity(proof_count);
-    for height in request.trusted_checkpoint_height..=evaluated_height {
-        finality_chain.push(
-            iroha_core::bridge::build_finality_proof(app.state.as_ref(), height).map_err(
-                |error| {
-                    offline_receiver_lineage_inconsistent(format!(
-                        "The finality proof at height {height} is unavailable: {error}"
-                    ))
-                },
-            )?,
-        );
-    }
-    let finality_chain_bytes =
-        norito::core::encoded_frame_len(&finality_chain).map_err(|error| {
-            offline_receiver_lineage_inconsistent(format!(
-                "The finality proof chain cannot be encoded: {error}"
-            ))
-        })?;
-    if finality_chain_bytes
-        > iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_MAX_FINALITY_CHAIN_BYTES
-    {
-        return Err(Error::AppConflict {
-            code: "offline_receiver_lineage_checkpoint_too_old",
-            message: "The finality proof chain exceeds the bounded mobile response budget."
-                .to_owned(),
-        });
-    }
-    let evaluated_context_id = finality_chain
-        .last()
-        .ok_or_else(|| offline_receiver_lineage_inconsistent("The finality chain is empty."))?
-        .finality_artifact
-        .context_id();
-    Ok(NoritoBody(
-        iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage {
-            version: iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_VERSION,
-            selector: request.selector,
-            active_receiver_entry,
-            active_receiver_membership,
-            active_receiver_witness,
-            finality_chain,
-            evaluated_context_id,
-            evaluated_block_height: evaluated_height,
-            evaluated_block_hash: hex::encode(evaluated_block_hash.as_ref()),
-        },
-    ))
-}
 #[cfg(all(test, feature = "app_api"))]
 mod universal_offline_capability_tests {
     use super::*;
@@ -14616,7 +14849,7 @@ mod universal_offline_capability_tests {
             iroha_crypto::KeyPair::try_from_seed(vec![0x4f; 32], iroha_crypto::Algorithm::Ed25519)
                 .expect("derive offline command admission fixture key");
         Arc::new(offline_commands::OfflineCommandRuntime::from_config(
-            iroha_config::parameters::actual::ToriiKagemushaCommands {
+            iroha_config::parameters::actual::ToriiOfflineCashV1Commands {
                 authority: iroha_data_model::account::AccountId::new(
                     key_pair.public_key().clone(),
                 ),
@@ -14626,7 +14859,7 @@ mod universal_offline_capability_tests {
                 operation_registry_max_entries: std::num::NonZeroUsize::new(1)
                     .expect("positive offline command registry entry limit"),
                 operation_registry_max_bytes: std::num::NonZeroUsize::new(
-                    iroha_config::parameters::defaults::torii::kagemusha_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY,
+                    iroha_config::parameters::defaults::torii::offline_cash_v1_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY,
                 )
                 .expect("positive offline command registry byte limit"),
             },
@@ -14637,8 +14870,8 @@ mod universal_offline_capability_tests {
     fn universal_capability_is_ready_and_asset_neutral() {
         let capability = universal_offline_capability_status();
         assert_eq!(capability.cash_handoff_capability, "cash_handoff_v1");
-        assert_eq!(capability.required_bridge_abi_version, 23);
-        assert_eq!(capability.max_hops, 8);
+        assert_eq!(capability.wire_version, 1);
+        assert_eq!(capability.device_lifecycle_version, 1);
         assert!(capability.ready);
         let (json_content_type, json) = encode_offline_capability_representation(
             &capability,
@@ -14646,7 +14879,7 @@ mod universal_offline_capability_tests {
         )
         .expect("encode universal offline capability as JSON");
         assert_eq!(json_content_type, "application/json");
-        let decoded: iroha_torii_shared::offline_api::OfflineStatus =
+        let decoded: iroha_torii_shared::offline_api::OfflineCashReadinessV1 =
             norito::json::from_slice(&json).expect("decode universal capability JSON");
         assert_eq!(decoded, capability);
         let (norito_content_type, norito) = encode_offline_capability_representation(
@@ -14681,9 +14914,9 @@ mod universal_offline_capability_tests {
     #[test]
     fn command_body_limits_remain_protocol_specific() {
         let top_up_protocol_max =
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUEST_MAX_BYTES_V4;
+            iroha_torii_shared::offline_api::OFFLINE_CASH_TOP_UP_REQUEST_MAX_BYTES_V1;
         let redeem_protocol_max =
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4;
+            iroha_torii_shared::offline_api::OFFLINE_CASH_REDEMPTION_REQUEST_MAX_BYTES_V1;
         assert_eq!(offline_top_up_body_limit(usize::MAX), top_up_protocol_max);
         assert_eq!(offline_redeem_body_limit(usize::MAX), redeem_protocol_max);
         assert_eq!(offline_top_up_body_limit(1024), 1024);
@@ -14910,7 +15143,7 @@ async fn handler_offline_redeem(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     crate::utils::extractors::OfflineNorito(request): crate::utils::extractors::OfflineNorito<
-        iroha_torii_shared::offline_api::OfflineRedeemRequest,
+        iroha_torii_shared::offline_api::OfflineCashRedemptionRequestV1,
     >,
 ) -> Result<AxResponse, Error> {
     offline_commands::handle_redeem(app, &headers, request).await
@@ -14921,7 +15154,7 @@ async fn handler_offline_top_up(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     crate::utils::extractors::OfflineNorito(request): crate::utils::extractors::OfflineNorito<
-        iroha_torii_shared::offline_api::OfflineTopUpRequest,
+        iroha_torii_shared::offline_api::OfflineCashTopUpRequestV1,
     >,
 ) -> Result<AxResponse, Error> {
     offline_commands::handle_top_up(app, &headers, request).await
@@ -15758,12 +15991,14 @@ async fn handler_explorer_accounts_list(
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/accounts").await?;
     }
-    routing::handle_v1_explorer_accounts(
+    let admission = acquire_query_admission(app.as_ref(), true).await?;
+    routing::handle_v1_explorer_accounts_admitted(
         app.state.clone(),
         visibility.current_visibility(),
         pagination,
         domain,
         asset_filter,
+        admission,
     )
     .await
 }
@@ -15797,11 +16032,13 @@ async fn handler_explorer_domains_list(
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/domains").await?;
     }
-    routing::handle_v1_explorer_domains(
+    let admission = acquire_query_admission(app.as_ref(), true).await?;
+    routing::handle_v1_explorer_domains_admitted(
         app.state.clone(),
         visibility.current_visibility(),
         pagination,
         owned_by,
+        admission,
     )
     .await
 }
@@ -15851,12 +16088,14 @@ async fn handler_explorer_asset_definitions_list(
         )
         .await?;
     }
-    routing::handle_v1_explorer_asset_definitions(
+    let admission = acquire_query_admission(app.as_ref(), true).await?;
+    routing::handle_v1_explorer_asset_definitions_admitted(
         app.state.clone(),
         visibility.current_visibility(),
         pagination,
         owning_domain,
         owned_by,
+        admission,
     )
     .await
 }
@@ -15900,13 +16139,15 @@ async fn handler_explorer_assets_list(
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/assets").await?;
     }
-    routing::handle_v1_explorer_assets(
+    let admission = acquire_query_admission(app.as_ref(), true).await?;
+    routing::handle_v1_explorer_assets_admitted(
         app.state.clone(),
         visibility.current_visibility(),
         pagination,
         owned_by,
         definition,
         asset_id,
+        admission,
     )
     .await
 }
@@ -15945,12 +16186,14 @@ async fn handler_explorer_nfts_list(
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/nfts").await?;
     }
-    routing::handle_v1_explorer_nfts(
+    let admission = acquire_query_admission(app.as_ref(), true).await?;
+    routing::handle_v1_explorer_nfts_admitted(
         app.state.clone(),
         visibility.current_visibility(),
         pagination,
         owned_by,
         domain,
+        admission,
     )
     .await
 }
@@ -15989,12 +16232,14 @@ async fn handler_explorer_rwas_list(
     if !allowed {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/rwas").await?;
     }
-    routing::handle_v1_explorer_rwas(
+    let admission = acquire_query_admission(app.as_ref(), true).await?;
+    routing::handle_v1_explorer_rwas_admitted(
         app.state.clone(),
         visibility.current_visibility(),
         pagination,
         owned_by,
         domain,
+        admission,
     )
     .await
 }
@@ -16589,7 +16834,6 @@ async fn handler_explorer_account_detail(
         app.as_ref(),
         &parsed_account_id,
         visibility.caller(),
-        trusted_internal_read_source(app.as_ref(), &headers, remote_ip),
     );
     let route_scope = torii_account_read_route_scope(
         &parsed_account_id,
@@ -16722,10 +16966,13 @@ async fn handler_explorer_asset_definition_detail(
     {
         return Err(routing::explorer_not_found());
     }
-    Ok(execute_torii_asset_definition_singleton_read(
+    Ok(execute_torii_visible_fanout_singleton_read(
         &app,
+        visibility.caller(),
         ToriiReadEndpointV1::ExplorerAssetDefinitionDetail,
-        &definition_id,
+        vec![definition_id.to_string()],
+        None,
+        Vec::new(),
     )
     .await
     .into_response())
@@ -16766,10 +17013,13 @@ async fn handler_explorer_asset_definition_econometrics(
     {
         return Err(routing::explorer_not_found());
     }
-    Ok(execute_torii_asset_definition_singleton_read(
+    Ok(execute_torii_visible_fanout_singleton_read(
         &app,
+        visibility.caller(),
         ToriiReadEndpointV1::ExplorerAssetDefinitionEconometrics,
-        &definition_id,
+        vec![definition_id.to_string()],
+        None,
+        Vec::new(),
     )
     .await
     .into_response())
@@ -16810,10 +17060,13 @@ async fn handler_explorer_asset_definition_snapshot(
     {
         return Err(routing::explorer_not_found());
     }
-    Ok(execute_torii_asset_definition_singleton_read(
+    Ok(execute_torii_visible_fanout_singleton_read(
         &app,
+        visibility.caller(),
         ToriiReadEndpointV1::ExplorerAssetDefinitionSnapshot,
-        &definition_id,
+        vec![definition_id.to_string()],
+        None,
+        Vec::new(),
     )
     .await
     .into_response())
@@ -17092,11 +17345,21 @@ fn explorer_json_error_response(error: Error) -> AxResponse {
 #[cfg(feature = "app_api")]
 async fn handler_assets_definitions_list(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(p): AxQuery<crate::routing::ListFilterParams>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
+    let visibility = torii_visibility_account_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        &[],
+        "v1/assets/definitions",
+    )?;
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -17110,8 +17373,9 @@ async fn handler_assets_definitions_list(
         .await?;
     }
     let query_string = encode_torii_proxy_query(&p)?;
-    Ok(execute_torii_fanout_list_read(
+    Ok(execute_torii_visible_fanout_list_read(
         &app,
+        visibility.caller(),
         ToriiReadEndpointV1::AssetDefinitionsList,
         Vec::new(),
         query_string,
@@ -17122,6 +17386,7 @@ async fn handler_assets_definitions_list(
 #[cfg(feature = "app_api")]
 async fn handler_assets_definitions_query(
     State(app): State<SharedAppState>,
+    Extension(visibility): Extension<ToriiAccountReadVisibility>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
@@ -17144,8 +17409,9 @@ async fn handler_assets_definitions_query(
             "failed to encode routed asset definitions query: {error}"
         )))
     })?;
-    Ok(execute_torii_fanout_list_read(
+    Ok(execute_torii_visible_fanout_list_read(
         &app,
+        visibility.caller(),
         ToriiReadEndpointV1::AssetDefinitionsQuery,
         Vec::new(),
         None,
@@ -17156,11 +17422,21 @@ async fn handler_assets_definitions_query(
 #[cfg(feature = "app_api")]
 async fn handler_asset_definition_get(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(asset): AxPath<String>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
+    let visibility = torii_visibility_account_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        &[],
+        "v1/assets/definitions/{asset}",
+    )?;
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -17173,8 +17449,9 @@ async fn handler_asset_definition_get(
         )
         .await?;
     }
-    Ok(execute_torii_fanout_singleton_read(
+    Ok(execute_torii_visible_fanout_singleton_read(
         &app,
+        visibility.caller(),
         ToriiReadEndpointV1::AssetDefinitionGet,
         vec![asset],
         None,
@@ -17228,7 +17505,7 @@ async fn handler_asset_holders(
 #[cfg(feature = "app_api")]
 async fn handler_asset_holders_query(
     State(app): State<SharedAppState>,
-    Extension(verified): Extension<crate::app_auth::VerifiedCanonicalRequest>,
+    Extension(visibility): Extension<ToriiAccountReadVisibility>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(def_id): AxPath<String>,
@@ -17255,7 +17532,7 @@ async fn handler_asset_holders_query(
     })?;
     Ok(execute_torii_visible_fanout_list_read(
         &app,
-        Some(&verified.account),
+        visibility.caller(),
         ToriiReadEndpointV1::AssetHoldersQuery,
         vec![def_id],
         None,
@@ -17284,19 +17561,24 @@ async fn handler_confidential_asset_transitions(
 #[cfg(feature = "app_api")]
 async fn handler_domains_list(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(p): AxQuery<crate::filter::Pagination>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
+    let visibility =
+        torii_visibility_account_from_headers(&app, &headers, &method, &uri, &[], "v1/domains")?;
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(&app, &headers, Some(remote_ip), "v1/domains", enforce).await?;
     }
     let query_string = encode_torii_proxy_query(&p)?;
-    Ok(execute_torii_fanout_list_read(
+    Ok(execute_torii_visible_fanout_list_read(
         &app,
+        visibility.caller(),
         ToriiReadEndpointV1::DomainsList,
         Vec::new(),
         query_string,
@@ -17307,6 +17589,7 @@ async fn handler_domains_list(
 #[cfg(feature = "app_api")]
 async fn handler_domains_query(
     State(app): State<SharedAppState>,
+    Extension(visibility): Extension<ToriiAccountReadVisibility>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
@@ -17322,8 +17605,9 @@ async fn handler_domains_query(
             "failed to encode routed domains query: {error}"
         )))
     })?;
-    Ok(execute_torii_fanout_list_read(
+    Ok(execute_torii_visible_fanout_list_read(
         &app,
+        visibility.caller(),
         ToriiReadEndpointV1::DomainsQuery,
         Vec::new(),
         None,
@@ -17334,19 +17618,24 @@ async fn handler_domains_query(
 #[cfg(feature = "app_api")]
 async fn handler_nfts_list(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(p): AxQuery<crate::routing::ListFilterParams>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
+    let visibility =
+        torii_visibility_account_from_headers(&app, &headers, &method, &uri, &[], "v1/nfts")?;
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(&app, &headers, Some(remote_ip), "v1/nfts", enforce).await?;
     }
     let query_string = encode_torii_proxy_query(&p)?;
-    Ok(execute_torii_fanout_list_read(
+    Ok(execute_torii_visible_fanout_list_read(
         &app,
+        visibility.caller(),
         ToriiReadEndpointV1::NftsList,
         Vec::new(),
         query_string,
@@ -17358,6 +17647,7 @@ async fn handler_nfts_list(
 #[axum::debug_handler]
 async fn handler_nfts_query(
     State(app): State<SharedAppState>,
+    Extension(visibility): Extension<ToriiAccountReadVisibility>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
@@ -17373,33 +17663,37 @@ async fn handler_nfts_query(
             "failed to encode routed nfts query: {error}"
         )))
     })?;
-    Ok(
-        execute_torii_fanout_list_read(
-            &app,
-            ToriiReadEndpointV1::NftsQuery,
-            Vec::new(),
-            None,
-            body,
-        )
-        .await,
+    Ok(execute_torii_visible_fanout_list_read(
+        &app,
+        visibility.caller(),
+        ToriiReadEndpointV1::NftsQuery,
+        Vec::new(),
+        None,
+        body,
     )
+    .await)
 }
 #[cfg(feature = "app_api")]
 async fn handler_rwas_list(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(p): AxQuery<crate::routing::ListFilterParams>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
+    let visibility =
+        torii_visibility_account_from_headers(&app, &headers, &method, &uri, &[], "v1/rwas")?;
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(&app, &headers, Some(remote_ip), "v1/rwas", enforce).await?;
     }
     let query_string = encode_torii_proxy_query(&p)?;
-    Ok(execute_torii_fanout_list_read(
+    Ok(execute_torii_visible_fanout_list_read(
         &app,
+        visibility.caller(),
         ToriiReadEndpointV1::RwasList,
         Vec::new(),
         query_string,
@@ -17411,6 +17705,7 @@ async fn handler_rwas_list(
 #[axum::debug_handler]
 async fn handler_rwas_query(
     State(app): State<SharedAppState>,
+    Extension(visibility): Extension<ToriiAccountReadVisibility>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
@@ -17426,16 +17721,15 @@ async fn handler_rwas_query(
             "failed to encode routed rwas query: {error}"
         )))
     })?;
-    Ok(
-        execute_torii_fanout_list_read(
-            &app,
-            ToriiReadEndpointV1::RwasQuery,
-            Vec::new(),
-            None,
-            body,
-        )
-        .await,
+    Ok(execute_torii_visible_fanout_list_read(
+        &app,
+        visibility.caller(),
+        ToriiReadEndpointV1::RwasQuery,
+        Vec::new(),
+        None,
+        body,
     )
+    .await)
 }
 #[cfg(feature = "app_api")]
 include!("subscription_auth.rs");
@@ -17978,16 +18272,6 @@ async fn handler_submit_vpn_receipt(
     check_access(&app, &headers, Some(remote.ip()), "v1/vpn/receipts").await?;
     vpn::handle_submit_vpn_receipt(app, &method, &uri, &headers, body.as_ref()).await
 }
-/// POST /v1/configuration — wrapper that enforces Torii access policy, then delegates.
-async fn handler_post_configuration(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    crate::utils::extractors::JsonOnly(dto): crate::utils::extractors::JsonOnly<ConfigUpdateDTO>,
-) -> Result<impl IntoResponse, Error> {
-    check_access(&app, &headers, Some(remote.ip()), "v1/configuration").await?;
-    routing::handle_post_configuration(app.kiso.clone(), dto).await
-}
 /// GET /v1/nexus/lifecycle — return the exact current catalog and lifecycle commitment.
 async fn handler_get_nexus_lane_lifecycle(
     State(app): State<SharedAppState>,
@@ -18019,13 +18303,14 @@ async fn handler_peers(
     Ok(routing::handle_peers(&app.online_peers, format))
 }
 #[cfg(feature = "app_api")]
-fn universal_offline_capability_status() -> iroha_torii_shared::offline_api::OfflineStatus {
-    iroha_torii_shared::offline_api::OfflineStatus {
-        cash_handoff_capability: iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1
+fn universal_offline_capability_status() -> iroha_torii_shared::offline_api::OfflineCashReadinessV1
+{
+    iroha_torii_shared::offline_api::OfflineCashReadinessV1 {
+        cash_handoff_capability: iroha_data_model::offline::OFFLINE_CASH_HANDOFF_CAPABILITY_V1
             .to_owned(),
-        required_bridge_abi_version:
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
-        max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
+        wire_version: iroha_data_model::offline::OFFLINE_CASH_WIRE_VERSION_V1,
+        device_lifecycle_version:
+            iroha_data_model::offline::OFFLINE_CASH_DEVICE_LIFECYCLE_VERSION_V1,
         ready: true,
     }
 }
@@ -20899,21 +21184,6 @@ async fn handler_zk_vote_tally(
 }
 // -------------- Telemetry (AppState-based) --------------
 #[cfg(feature = "telemetry")]
-fn status_offline_snapshot(
-    app: &AppState,
-) -> Option<iroha_torii_shared::offline_api::OfflineStatus> {
-    #[cfg(feature = "app_api")]
-    {
-        let _ = app;
-        return Some(universal_offline_capability_status());
-    }
-    #[cfg(not(feature = "app_api"))]
-    {
-        let _ = app;
-        None
-    }
-}
-#[cfg(feature = "telemetry")]
 async fn check_status_access(
     app: &AppState,
     headers: &axum::http::HeaderMap,
@@ -20990,7 +21260,6 @@ async fn handler_status_root(
     .await?;
     let nexus = app.state.nexus_snapshot();
     let nexus_routing_policy = nexus.routing_policy.clone();
-    let offline = status_offline_snapshot(&app);
     let authoritative_block_height = u64::try_from(app.state.committed_height())
         .expect("committed height must fit the canonical u64 wire field");
     routing::handle_status(
@@ -20998,7 +21267,6 @@ async fn handler_status_root(
         accept.map(|e| e.0),
         nexus_routing_policy,
         authoritative_block_height,
-        offline,
     )
     .await
 }
@@ -21792,98 +22060,6 @@ fn queue_plan_synced_admission_response(
     insert_routing_headers(&mut response, routing_decision, "proxy");
     response
 }
-#[cfg(feature = "connect")]
-fn ordinary_kagemusha_lifecycle_admission_response(
-    app: &AppState,
-    transaction: &TransactionEntrypoint,
-    routing_decision: RoutingDecision,
-    expected_binding: OrdinaryKagemushaLifecycleAdmissionBindingV1,
-    durable_admission: queue::QueuePlanDurableAdmissionV1,
-) -> Response {
-    if let Err(error) = expected_binding.validate_durable_admission(
-        app.state.network_id_ref(),
-        transaction,
-        &durable_admission,
-    ) {
-        return queue_plan_outcome_unknown_response(
-            expected_binding.entrypoint_hash.clone(),
-            Some(expected_binding.signed_transaction_hash.clone()),
-            format!("ordinary lifecycle durable admission is not exact: {error}"),
-        );
-    }
-    let receipt_signer = PeerId::new(app.torii_proxy_bridge_signer.public_key().clone());
-    let coordinator = expected_binding
-        .admission_context
-        .route_incarnations
-        .first()
-        .expect("validated ordinary lifecycle binding has a coordinator");
-    let Some(validator_index) = coordinator
-        .validator_set
-        .iter()
-        .position(|validator| validator == &receipt_signer)
-        .and_then(|index| u16::try_from(index).ok())
-    else {
-        return torii_proxy_error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "kagemusha_lifecycle_admission_signer_mismatch",
-            format!(
-                "ordinary lifecycle receipt signer `{receipt_signer}` is not in the exact coordinator roster"
-            ),
-        );
-    };
-    if app.local_peer_id.as_ref() != Some(&receipt_signer) {
-        return torii_proxy_error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "kagemusha_lifecycle_admission_signer_mismatch",
-            "configured local peer does not match the ordinary lifecycle receipt signer",
-        );
-    }
-    let signing_bytes = match ordinary_kagemusha_lifecycle_admission_attestation_signing_bytes_v1(
-        expected_binding.canonical_hash(),
-        validator_index,
-        durable_admission.enqueue_timestamp_ms,
-        durable_admission.journal_record_digest,
-    ) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            return queue_plan_outcome_unknown_response(
-                expected_binding.entrypoint_hash.clone(),
-                Some(expected_binding.signed_transaction_hash.clone()),
-                format!("failed to encode ordinary lifecycle attestation: {error}"),
-            );
-        }
-    };
-    let signature =
-        match Signature::try_new(app.torii_proxy_bridge_signer.private_key(), &signing_bytes) {
-            Ok(signature) => signature,
-            Err(error) => {
-                return queue_plan_outcome_unknown_response(
-                    expected_binding.entrypoint_hash.clone(),
-                    Some(expected_binding.signed_transaction_hash.clone()),
-                    format!("failed to sign ordinary lifecycle attestation: {error}"),
-                );
-            }
-        };
-    let certificate = OrdinaryKagemushaLifecycleAdmissionCertificateV1 {
-        version: KAGEMUSHA_LIFECYCLE_ADMISSION_CERTIFICATE_VERSION_V1,
-        binding: expected_binding.clone(),
-        attestations: vec![OrdinaryKagemushaLifecycleAdmissionAttestationV1 {
-            version: KAGEMUSHA_LIFECYCLE_ADMISSION_ATTESTATION_VERSION_V1,
-            validator_index,
-            enqueue_timestamp_ms: durable_admission.enqueue_timestamp_ms,
-            journal_record_digest: durable_admission.journal_record_digest,
-            signature,
-        }],
-    };
-    let mut response = (StatusCode::ACCEPTED, utils::NoritoBody(certificate)).into_response();
-    insert_transaction_submission_identity_headers(
-        &mut response,
-        &expected_binding.entrypoint_hash,
-        Some(&expected_binding.signed_transaction_hash),
-    );
-    insert_routing_headers(&mut response, routing_decision, "proxy");
-    response
-}
 fn routing_resolve_error_to_torii_error(
     app: &SharedAppState,
     error: queue::RoutingResolveError,
@@ -22667,25 +22843,6 @@ fn queue_plan_synced_bound_authorities(
             admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
             ..
         } => Err("QueuePlanSynced request is missing its exact admission binding"),
-        ToriiProxyRequestKindV1::SubmitTransaction {
-            admission: ToriiProxyTransactionAdmissionV1::OrdinaryKagemushaLifecycleDurable(binding),
-            admission_binding: None,
-            ..
-        } => {
-            let coordinator = binding
-                .admission_context
-                .route_incarnations
-                .first()
-                .ok_or("ordinary lifecycle binding has no coordinator route")?;
-            Ok(Some((
-                coordinator.validator_set.as_slice(),
-                binding.admission_context.proposal_height,
-            )))
-        }
-        ToriiProxyRequestKindV1::SubmitTransaction {
-            admission: ToriiProxyTransactionAdmissionV1::OrdinaryKagemushaLifecycleDurable(_),
-            ..
-        } => Err("ordinary lifecycle request must not carry a QueuePlan admission binding"),
         _ => Ok(None),
     }
 }
@@ -22957,6 +23114,26 @@ fn torii_route_for_lane_id(
     })
 }
 #[cfg(feature = "app_api")]
+fn torii_route_for_public_lane_id(
+    app: &AppState,
+    lane_id: iroha_data_model::nexus::LaneId,
+) -> Result<RoutingDecision, Error> {
+    let state_view = app.state.view();
+    let nexus = state_view.nexus();
+    let is_public = nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .find(|lane| lane.id == lane_id)
+        .is_some_and(|lane| lane.visibility == iroha_data_model::nexus::LaneVisibility::Public);
+    if !is_public {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound,
+        )));
+    }
+    torii_route_for_lane_id(app, lane_id)
+}
+#[cfg(feature = "app_api")]
 fn torii_route_for_dataspace_id(
     app: &AppState,
     dataspace_id: iroha_data_model::nexus::DataSpaceId,
@@ -22997,26 +23174,7 @@ fn torii_restricted_routes(app: &AppState) -> Vec<RoutingDecision> {
     routes
 }
 #[cfg(feature = "app_api")]
-fn torii_local_restricted_routes(app: &AppState) -> Vec<RoutingDecision> {
-    torii_restricted_routes(app)
-        .into_iter()
-        .filter(|route| is_local_authoritative_for_route(app, *route))
-        .collect()
-}
-#[cfg(feature = "app_api")]
-fn torii_preferred_private_ingress_routes(app: &AppState) -> Vec<RoutingDecision> {
-    let local_restricted_routes = torii_local_restricted_routes(app);
-    if !local_restricted_routes.is_empty() {
-        return local_restricted_routes;
-    }
-    let restricted_routes = torii_restricted_routes(app);
-    if restricted_routes.len() == 1 {
-        return restricted_routes;
-    }
-    Vec::new()
-}
-#[cfg(feature = "app_api")]
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum ToriiAccountReadVisibility {
     Signed(AccountId),
     PublicExact,
@@ -23365,6 +23523,72 @@ fn torii_dataspace_read_visibility(
         .map(|route| route.dataspace_id)
         .collect();
     routing::DataspaceReadVisibility::new(visible_dataspaces, can_read_all)
+}
+#[cfg(feature = "app_api")]
+fn torii_dataspace_read_visibility_for_accounts(
+    app: &AppState,
+    callers: &[AccountId],
+    additional_dataspace_alias: Option<&str>,
+) -> routing::DataspaceReadVisibility {
+    let permission: Permission = CanReadAllLedgerData.into();
+    let can_read_all = callers.iter().any(|caller| {
+        let state_view = app.state.view();
+        torii_account_has_permission(state_view.world(), caller, &permission)
+    });
+    let mut visible_dataspaces = torii_visible_account_read_routes(app, None)
+        .into_iter()
+        .chain(
+            callers
+                .iter()
+                .flat_map(|caller| torii_visible_account_read_routes(app, Some(caller))),
+        )
+        .map(|route| route.dataspace_id)
+        .collect::<BTreeSet<_>>();
+    if let Some(alias) = additional_dataspace_alias
+        && let Some(dataspace) = app.state.view().nexus().dataspace_catalog.by_alias(alias)
+    {
+        visible_dataspaces.insert(dataspace.id);
+    }
+    routing::DataspaceReadVisibility::new(visible_dataspaces, can_read_all)
+}
+#[cfg(feature = "app_api")]
+fn torii_dataspace_read_visibility_for_scope(
+    app: &AppState,
+    scope: &ToriiFanoutRouteScopeV1,
+) -> Result<routing::DataspaceReadVisibility, Response> {
+    match scope {
+        ToriiFanoutRouteScopeV1::AllDataspaces => Ok(routing::DataspaceReadVisibility::new(
+            torii_all_dataspace_routes(app)
+                .into_iter()
+                .map(|route| route.dataspace_id)
+                .collect(),
+            true,
+        )),
+        ToriiFanoutRouteScopeV1::TargetAccount {
+            account_id,
+            caller_account_id,
+        } => {
+            let account_id = parse_internal_fanout_account_id(account_id, "target")?;
+            if let Some(caller_account_id) = caller_account_id {
+                let caller = parse_internal_fanout_account_id(caller_account_id, "caller")?;
+                return Ok(torii_dataspace_read_visibility(app, Some(&caller)));
+            }
+            Ok(routing::DataspaceReadVisibility::new(
+                torii_target_account_routes(app, &account_id)?
+                    .into_iter()
+                    .map(|route| route.dataspace_id)
+                    .collect(),
+                false,
+            ))
+        }
+        ToriiFanoutRouteScopeV1::VisibleAccount { caller_account_id } => {
+            let caller = match caller_account_id {
+                Some(account_id) => Some(parse_internal_fanout_account_id(account_id, "caller")?),
+                None => None,
+            };
+            Ok(torii_dataspace_read_visibility(app, caller.as_ref()))
+        }
+    }
 }
 fn torii_public_dataspace_ids(app: &AppState) -> BTreeSet<DataSpaceId> {
     let state_view = app.state.view();
@@ -23744,11 +23968,8 @@ fn torii_should_use_target_account_routes(
     app: &AppState,
     target_account: &AccountId,
     caller: Option<&AccountId>,
-    trusted_internal: bool,
 ) -> bool {
-    trusted_internal
-        || caller
-            .is_some_and(|caller| torii_same_account_read_identity(app, caller, target_account))
+    caller.is_some_and(|caller| torii_same_account_read_identity(app, caller, target_account))
 }
 #[cfg(feature = "app_api")]
 fn torii_account_assets_read_routes(
@@ -23762,29 +23983,19 @@ fn torii_account_assets_read_routes(
 #[cfg(feature = "app_api")]
 fn torii_account_permissions_read_routes(
     app: &AppState,
-    _target_account: &AccountId,
+    target_account: &AccountId,
     caller: Option<&AccountId>,
     use_target_account_routes: bool,
 ) -> Result<Vec<RoutingDecision>, Response> {
-    if use_target_account_routes {
-        Ok(torii_all_dataspace_routes(app))
-    } else {
-        Ok(torii_visible_account_read_routes(app, caller))
-    }
+    torii_account_read_routes(app, target_account, caller, use_target_account_routes)
 }
 #[cfg(feature = "app_api")]
 fn torii_account_permissions_route_scope(
-    _target_account: &AccountId,
+    target_account: &AccountId,
     caller: Option<&AccountId>,
     use_target_account_routes: bool,
 ) -> ToriiFanoutRouteScopeV1 {
-    if use_target_account_routes {
-        ToriiFanoutRouteScopeV1::AllDataspaces
-    } else {
-        ToriiFanoutRouteScopeV1::VisibleAccount {
-            caller_account_id: caller.map(ToString::to_string),
-        }
-    }
+    torii_account_read_route_scope(target_account, caller, use_target_account_routes)
 }
 fn torii_nexus_route(app: &AppState) -> Result<RoutingDecision, Response> {
     resolve_torii_route_for_dataspace_id(app, DataSpaceId::UNIVERSAL).map_err(|error| {
@@ -23821,7 +24032,7 @@ fn torii_fanout_scope_routes(
 ) -> Result<Vec<RoutingDecision>, Response> {
     match scope {
         ToriiFanoutRouteScopeV1::AllDataspaces => Ok(torii_all_dataspace_routes(app)),
-        ToriiFanoutRouteScopeV1::TargetAccount { account_id } => {
+        ToriiFanoutRouteScopeV1::TargetAccount { account_id, .. } => {
             let account_id = parse_internal_fanout_account_id(account_id, "target")?;
             torii_target_account_routes(app, &account_id)
         }
@@ -23843,6 +24054,7 @@ fn torii_account_read_route_scope(
     if use_target_account_routes {
         ToriiFanoutRouteScopeV1::TargetAccount {
             account_id: target_account.to_string(),
+            caller_account_id: caller.map(ToString::to_string),
         }
     } else {
         ToriiFanoutRouteScopeV1::VisibleAccount {
@@ -24076,14 +24288,6 @@ fn queue_plan_synced_proxy_request_id(
             app,
             transaction.hash(),
         )),
-        ToriiProxyRequestKindV1::SubmitTransaction {
-            transaction,
-            admission: ToriiProxyTransactionAdmissionV1::OrdinaryKagemushaLifecycleDurable(_),
-            ..
-        } => Some(ordinary_kagemusha_lifecycle_request_id(
-            app.state.network_id_ref(),
-            transaction.hash(),
-        )),
         _ => None,
     }
 }
@@ -24196,19 +24400,6 @@ fn new_torii_proxy_request(
             StatusCode::BAD_REQUEST,
             "invalid_proxy_request",
             "QueuePlanSynced binding request ID differs from its deterministic proxy identity",
-        ));
-    }
-    if let ToriiProxyRequestKindV1::SubmitTransaction {
-        admission: ToriiProxyTransactionAdmissionV1::OrdinaryKagemushaLifecycleDurable(binding),
-        admission_binding: None,
-        ..
-    } = &request
-        && binding.request_id != request_id
-    {
-        return Err(torii_proxy_error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_proxy_request",
-            "ordinary lifecycle binding request ID differs from its deterministic proxy identity",
         ));
     }
     let now_unix_ms = torii_proxy_now_unix_ms().map_err(|error| {
@@ -26957,15 +27148,6 @@ struct QueuePlanSyncedAcceptanceExpectation {
     durability_threshold: usize,
 }
 #[cfg(feature = "connect")]
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct OrdinaryKagemushaLifecycleAcceptanceExpectation {
-    transaction: TransactionEntrypoint,
-    entrypoint_hash: HashOf<TransactionEntrypoint>,
-    signed_transaction_hash: HashOf<SignedTransaction>,
-    admission_binding: OrdinaryKagemushaLifecycleAdmissionBindingV1,
-    durability_threshold: usize,
-}
-#[cfg(feature = "connect")]
 fn queue_plan_synced_acceptance_expectation(
     request: &ToriiProxyRequestV1,
 ) -> Result<Option<QueuePlanSyncedAcceptanceExpectation>, String> {
@@ -27012,57 +27194,6 @@ fn queue_plan_synced_acceptance_expectation(
     }))
 }
 #[cfg(feature = "connect")]
-fn ordinary_kagemusha_lifecycle_acceptance_expectation(
-    request: &ToriiProxyRequestV1,
-) -> Result<Option<OrdinaryKagemushaLifecycleAcceptanceExpectation>, String> {
-    let ToriiProxyRequestKindV1::SubmitTransaction {
-        transaction,
-        expected_plan,
-        admission:
-            ToriiProxyTransactionAdmissionV1::OrdinaryKagemushaLifecycleDurable(admission_binding),
-        admission_binding: queue_plan_binding,
-    } = &request.request
-    else {
-        return Ok(None);
-    };
-    if queue_plan_binding.is_some() {
-        return Err(
-            "ordinary Kagemusha lifecycle request carries a QueuePlan admission binding".to_owned(),
-        );
-    }
-    validate_ordinary_kagemusha_lifecycle_entrypoint(transaction)?;
-    let TransactionEntrypoint::External(signed_transaction) = transaction else {
-        unreachable!("the exact lifecycle predicate requires an external transaction");
-    };
-    let network_id = signed_transaction.network_id().ok_or_else(|| {
-        "ordinary Kagemusha lifecycle transaction has no ordinary network identity".to_owned()
-    })?;
-    let routing_plan = expected_plan
-        .clone()
-        .try_into_routing_plan()
-        .map_err(|error| format!("ordinary lifecycle routing plan is malformed: {error}"))?;
-    admission_binding.validate_for_request(network_id, transaction, &routing_plan)?;
-    if admission_binding.request_id != request.request_id {
-        return Err(
-            "ordinary lifecycle binding request ID differs from its proxy envelope".to_owned(),
-        );
-    }
-    let coordinator = admission_binding
-        .admission_context
-        .route_incarnations
-        .first()
-        .ok_or_else(|| "ordinary lifecycle binding has no coordinator route".to_owned())?;
-    let signed_transaction_hash = signed_transaction_hash_for_entrypoint(transaction)
-        .ok_or_else(|| "ordinary lifecycle request has no signed transaction".to_owned())?;
-    Ok(Some(OrdinaryKagemushaLifecycleAcceptanceExpectation {
-        transaction: transaction.clone(),
-        entrypoint_hash: transaction.hash(),
-        signed_transaction_hash,
-        admission_binding: admission_binding.clone(),
-        durability_threshold: usize::from(coordinator.durability_threshold),
-    }))
-}
-#[cfg(feature = "connect")]
 fn queue_plan_synced_entrypoint_hash(
     request: &ToriiProxyRequestKindV1,
 ) -> Option<HashOf<TransactionEntrypoint>> {
@@ -27070,11 +27201,6 @@ fn queue_plan_synced_entrypoint_hash(
         ToriiProxyRequestKindV1::SubmitTransaction {
             transaction,
             admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
-            ..
-        }
-        | ToriiProxyRequestKindV1::SubmitTransaction {
-            transaction,
-            admission: ToriiProxyTransactionAdmissionV1::OrdinaryKagemushaLifecycleDurable(_),
             ..
         } => Some(transaction.hash()),
         _ => None,
@@ -27240,25 +27366,6 @@ fn canonical_queue_plan_synced_certificate_headers(
     headers
 }
 #[cfg(feature = "connect")]
-fn canonical_ordinary_kagemusha_lifecycle_certificate_headers(
-    expected: &OrdinaryKagemushaLifecycleAcceptanceExpectation,
-) -> Vec<iroha_core::torii_proxy::ToriiProxyHeaderV1> {
-    vec![
-        iroha_core::torii_proxy::ToriiProxyHeaderV1 {
-            name: "content-type".to_owned(),
-            value: utils::NORITO_MIME_TYPE.as_bytes().to_vec(),
-        },
-        iroha_core::torii_proxy::ToriiProxyHeaderV1 {
-            name: "x-iroha-entrypoint-hash".to_owned(),
-            value: expected.entrypoint_hash.to_string().into_bytes(),
-        },
-        iroha_core::torii_proxy::ToriiProxyHeaderV1 {
-            name: "x-iroha-signed-transaction-hash".to_owned(),
-            value: expected.signed_transaction_hash.to_string().into_bytes(),
-        },
-    ]
-}
-#[cfg(feature = "connect")]
 fn decode_queue_plan_synced_certificate(
     bytes: &[u8],
 ) -> Result<QueuePlanAdmissionCertificateV1, String> {
@@ -27274,24 +27381,6 @@ fn decode_queue_plan_synced_certificate(
         .map_err(|error| format!("QueuePlanSynced certificate cannot be encoded: {error}"))?;
     if canonical != bytes {
         return Err("QueuePlanSynced certificate is not canonical Norito".to_owned());
-    }
-    Ok(certificate)
-}
-#[cfg(feature = "connect")]
-fn decode_ordinary_kagemusha_lifecycle_certificate(
-    bytes: &[u8],
-) -> Result<OrdinaryKagemushaLifecycleAdmissionCertificateV1, String> {
-    if bytes.is_empty() || bytes.len() > QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1 {
-        return Err("ordinary lifecycle certificate body is empty or oversized".to_owned());
-    }
-    let certificate = norito::decode_from_bytes_with_limits::<
-        OrdinaryKagemushaLifecycleAdmissionCertificateV1,
-    >(bytes, QUEUE_PLAN_SYNCED_CERTIFICATE_DECODE_LIMITS_V1)
-    .map_err(|error| format!("body is not a bounded ordinary lifecycle certificate: {error}"))?;
-    let canonical = norito::to_bytes(&certificate)
-        .map_err(|error| format!("ordinary lifecycle certificate cannot be encoded: {error}"))?;
-    if canonical != bytes {
-        return Err("ordinary lifecycle certificate is not canonical Norito".to_owned());
     }
     Ok(certificate)
 }
@@ -27345,62 +27434,6 @@ fn validate_queue_plan_synced_acceptance(
     Ok(validated.certificate.attestations)
 }
 #[cfg(feature = "connect")]
-fn validate_ordinary_kagemusha_lifecycle_acceptance(
-    snapshot: &ToriiProxyHttpResponseV1,
-    expected: &OrdinaryKagemushaLifecycleAcceptanceExpectation,
-) -> Result<Vec<OrdinaryKagemushaLifecycleAdmissionAttestationV1>, String> {
-    validate_queue_plan_synced_snapshot_bounds(snapshot)?;
-    if snapshot.status_code != StatusCode::ACCEPTED.as_u16() {
-        return Err("status is not 202 Accepted".to_owned());
-    }
-    validate_queue_plan_synced_response_header(
-        snapshot,
-        "content-type",
-        Some(utils::NORITO_MIME_TYPE),
-    )?;
-    let entrypoint_hash_literal = expected.entrypoint_hash.to_string();
-    validate_queue_plan_synced_response_header(
-        snapshot,
-        "x-iroha-entrypoint-hash",
-        Some(entrypoint_hash_literal.as_str()),
-    )?;
-    let signed_transaction_hash_literal = expected.signed_transaction_hash.to_string();
-    validate_queue_plan_synced_response_header(
-        snapshot,
-        "x-iroha-signed-transaction-hash",
-        Some(signed_transaction_hash_literal.as_str()),
-    )?;
-    if snapshot
-        .headers
-        .iter()
-        .any(|header| header.name.eq_ignore_ascii_case("x-iroha-reject-code"))
-    {
-        return Err(
-            "durable lifecycle acceptance contains contradictory rejection evidence".to_owned(),
-        );
-    }
-    let certificate = decode_ordinary_kagemusha_lifecycle_certificate(&snapshot.body)?;
-    if certificate.binding != expected.admission_binding {
-        return Err(
-            "ordinary lifecycle certificate binding differs from the exact proxy request"
-                .to_owned(),
-        );
-    }
-    let TransactionEntrypoint::External(signed_transaction) = &expected.transaction else {
-        unreachable!("ordinary lifecycle expectation is external");
-    };
-    let network_id = signed_transaction
-        .network_id()
-        .expect("ordinary lifecycle expectation has a network identity");
-    let validated = validate_ordinary_kagemusha_lifecycle_admission_certificate_v1(
-        network_id,
-        &expected.transaction,
-        certificate,
-        OrdinaryKagemushaLifecycleAdmissionCertificateStrengthV1::Partial,
-    )?;
-    Ok(validated.certificate.attestations)
-}
-#[cfg(feature = "connect")]
 fn merge_queue_plan_synced_attestations(
     durable_attestations: &mut BTreeMap<u16, QueuePlanAdmissionAttestationV1>,
     attestations: Vec<QueuePlanAdmissionAttestationV1>,
@@ -27418,24 +27451,6 @@ fn merge_queue_plan_synced_attestations(
     Ok(())
 }
 #[cfg(feature = "connect")]
-fn merge_ordinary_kagemusha_lifecycle_attestations(
-    durable_attestations: &mut BTreeMap<u16, OrdinaryKagemushaLifecycleAdmissionAttestationV1>,
-    attestations: Vec<OrdinaryKagemushaLifecycleAdmissionAttestationV1>,
-) -> Result<(), u16> {
-    for attestation in attestations {
-        let validator_index = attestation.validator_index;
-        match durable_attestations.entry(validator_index) {
-            std::collections::btree_map::Entry::Vacant(entry) => {
-                entry.insert(attestation);
-            }
-            std::collections::btree_map::Entry::Occupied(entry) if entry.get() == &attestation => {}
-            std::collections::btree_map::Entry::Occupied(_) => return Err(validator_index),
-        }
-    }
-    Ok(())
-}
-#[cfg(feature = "connect")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum QueuePlanOutcomeUnknownEvidenceValidation {
     NotClaimed,
     Valid,
@@ -27656,10 +27671,6 @@ fn torii_proxy_attempt_timeout(request: &ToriiProxyRequestKindV1) -> Duration {
     match request {
         ToriiProxyRequestKindV1::SubmitTransaction {
             admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
-            ..
-        }
-        | ToriiProxyRequestKindV1::SubmitTransaction {
-            admission: ToriiProxyTransactionAdmissionV1::OrdinaryKagemushaLifecycleDurable(_),
             ..
         } => DEFAULT_ROUTE_TIMEOUT,
         ToriiProxyRequestKindV1::SignedQuery { .. }
@@ -28485,19 +28496,7 @@ where
         }
     };
     let queue_plan_synced = queue_plan_synced_expectation.is_some();
-    let ordinary_lifecycle_expectation =
-        match ordinary_kagemusha_lifecycle_acceptance_expectation(&request) {
-            Ok(expectation) => expectation,
-            Err(error) => {
-                return torii_proxy_error_response(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_proxy_request",
-                    error,
-                );
-            }
-        };
-    let ordinary_lifecycle = ordinary_lifecycle_expectation.is_some();
-    let strict_durable = queue_plan_synced || ordinary_lifecycle;
+    let strict_durable = queue_plan_synced;
     let request = match SharedToriiProxyAttemptRequest::new(request, max_encoded_request_bytes) {
         Ok(request) => request,
         Err(error) => {
@@ -28626,8 +28625,6 @@ where
         });
     }
     let mut durable_attestations = BTreeMap::<u16, QueuePlanAdmissionAttestationV1>::new();
-    let mut ordinary_lifecycle_attestations =
-        BTreeMap::<u16, OrdinaryKagemushaLifecycleAdmissionAttestationV1>::new();
     let mut last_retryable: Option<Response> = None;
     let mut queue_plan_synced_failure: Option<(u8, usize, Response)> = None;
     let queue_plan_started = tokio::time::Instant::now();
@@ -28735,134 +28732,9 @@ where
                         Err(_) => {}
                     }
                 }
-                if let Some(expected) = ordinary_lifecycle_expectation.as_ref() {
-                    match validate_ordinary_kagemusha_lifecycle_acceptance(&snapshot, expected) {
-                        Ok(receipts) => {
-                            if let Err(validator_index) =
-                                merge_ordinary_kagemusha_lifecycle_attestations(
-                                    &mut ordinary_lifecycle_attestations,
-                                    receipts,
-                                )
-                            {
-                                let mut response = queue_plan_outcome_unknown_response(
-                                    expected.entrypoint_hash.clone(),
-                                    Some(expected.signed_transaction_hash.clone()),
-                                    format!(
-                                        "coordinator validator index `{validator_index}` produced conflicting ordinary lifecycle durable claims"
-                                    ),
-                                );
-                                insert_route_transport_header(
-                                    &mut response,
-                                    peer_id.transport_label(),
-                                );
-                                complete_request(request_id.clone()).await;
-                                return response;
-                            }
-                            if ordinary_lifecycle_attestations.len()
-                                >= expected.durability_threshold
-                            {
-                                let certificate =
-                                    OrdinaryKagemushaLifecycleAdmissionCertificateV1 {
-                                        version:
-                                            KAGEMUSHA_LIFECYCLE_ADMISSION_CERTIFICATE_VERSION_V1,
-                                        binding: expected.admission_binding.clone(),
-                                        attestations: ordinary_lifecycle_attestations
-                                            .values()
-                                            .take(expected.durability_threshold)
-                                            .cloned()
-                                            .collect(),
-                                    };
-                                let TransactionEntrypoint::External(signed_transaction) =
-                                    &expected.transaction
-                                else {
-                                    unreachable!("ordinary lifecycle expectation is external");
-                                };
-                                let network_id = signed_transaction
-                                    .network_id()
-                                    .expect("ordinary lifecycle expectation has a network");
-                                let validated =
-                                    validate_ordinary_kagemusha_lifecycle_admission_certificate_v1(
-                                        network_id,
-                                        &expected.transaction,
-                                        certificate,
-                                        OrdinaryKagemushaLifecycleAdmissionCertificateStrengthV1::Quorum,
-                                    );
-                                let certificate = match validated {
-                                    Ok(validated) => validated.certificate,
-                                    Err(error) => {
-                                        let mut response = queue_plan_outcome_unknown_response(
-                                            expected.entrypoint_hash.clone(),
-                                            Some(expected.signed_transaction_hash.clone()),
-                                            format!(
-                                                "ordinary lifecycle durability quorum is invalid: {error}"
-                                            ),
-                                        );
-                                        insert_route_transport_header(
-                                            &mut response,
-                                            peer_id.transport_label(),
-                                        );
-                                        retain_strongest_queue_plan_synced_failure(
-                                            &mut queue_plan_synced_failure,
-                                            candidate_index,
-                                            response,
-                                        );
-                                        continue;
-                                    }
-                                };
-                                let body = match norito::core::to_bytes_bounded(
-                                    &certificate,
-                                    QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1,
-                                ) {
-                                    Ok(body) => body,
-                                    Err(error) => {
-                                        let mut response = queue_plan_outcome_unknown_response(
-                                            expected.entrypoint_hash.clone(),
-                                            Some(expected.signed_transaction_hash.clone()),
-                                            format!(
-                                                "failed to encode ordinary lifecycle durability certificate: {error}"
-                                            ),
-                                        );
-                                        insert_route_transport_header(
-                                            &mut response,
-                                            peer_id.transport_label(),
-                                        );
-                                        retain_strongest_queue_plan_synced_failure(
-                                            &mut queue_plan_synced_failure,
-                                            candidate_index,
-                                            response,
-                                        );
-                                        continue;
-                                    }
-                                };
-                                snapshot.status_code = StatusCode::ACCEPTED.as_u16();
-                                snapshot.headers =
-                                    canonical_ordinary_kagemusha_lifecycle_certificate_headers(
-                                        expected,
-                                    );
-                                snapshot.body = body;
-                                let mut response = torii_proxy_snapshot_to_response(snapshot);
-                                insert_route_transport_header(
-                                    &mut response,
-                                    peer_id.transport_label(),
-                                );
-                                complete_request(request_id.clone()).await;
-                                return response;
-                            }
-                            continue;
-                        }
-                        Err(_) => {}
-                    }
-                }
                 let mut response = match queue_plan_synced_expectation.as_ref() {
                     Some(expected) => queue_plan_synced_snapshot_to_response(snapshot, expected),
-                    None => match ordinary_lifecycle_expectation.as_ref() {
-                        Some(expected) => queue_plan_outcome_unknown_response(
-                            expected.entrypoint_hash.clone(),
-                            Some(expected.signed_transaction_hash.clone()),
-                            "authenticated authority returned no exact ordinary lifecycle durable-acceptance evidence",
-                        ),
-                        None => torii_proxy_snapshot_to_response(snapshot),
-                    },
+                    None => torii_proxy_snapshot_to_response(snapshot),
                 };
                 let status = response.status();
                 insert_route_transport_header(&mut response, peer_id.transport_label());
@@ -28890,22 +28762,12 @@ where
                 );
                 if error.may_have_reached_authority()
                     && let Some((entrypoint_hash, signed_transaction_hash)) =
-                        queue_plan_synced_expectation
-                            .as_ref()
-                            .map(|expected| {
-                                (
-                                    &expected.entrypoint_hash,
-                                    expected.signed_transaction_hash.as_ref(),
-                                )
-                            })
-                            .or_else(|| {
-                                ordinary_lifecycle_expectation.as_ref().map(|expected| {
-                                    (
-                                        &expected.entrypoint_hash,
-                                        Some(&expected.signed_transaction_hash),
-                                    )
-                                })
-                            })
+                        queue_plan_synced_expectation.as_ref().map(|expected| {
+                            (
+                                &expected.entrypoint_hash,
+                                expected.signed_transaction_hash.as_ref(),
+                            )
+                        })
                 {
                     let mut response = queue_plan_outcome_unknown_response(
                         entrypoint_hash.clone(),
@@ -28932,19 +28794,6 @@ where
             format!(
                 "recovered {} of {} required distinct durable authority attestations",
                 durable_attestations.len(),
-                expected.durability_threshold
-            ),
-        );
-    }
-    if let Some(expected) = ordinary_lifecycle_expectation.as_ref()
-        && !ordinary_lifecycle_attestations.is_empty()
-    {
-        return queue_plan_outcome_unknown_response(
-            expected.entrypoint_hash.clone(),
-            Some(expected.signed_transaction_hash.clone()),
-            format!(
-                "recovered {} of {} required distinct ordinary lifecycle durable authority attestations",
-                ordinary_lifecycle_attestations.len(),
                 expected.durability_threshold
             ),
         );
@@ -29281,91 +29130,6 @@ async fn persist_queue_plan_admission_certificate(
     torii_proxy_snapshot_to_response(snapshot)
 }
 #[cfg(feature = "connect")]
-async fn validate_ordinary_kagemusha_lifecycle_admission_quorum_response(
-    response: Response,
-    network_id: &NetworkId,
-    transaction: &TransactionEntrypoint,
-    expected_binding: &OrdinaryKagemushaLifecycleAdmissionBindingV1,
-) -> Response {
-    if response.status() != StatusCode::ACCEPTED {
-        return response;
-    }
-    let snapshot =
-        response_to_torii_proxy_snapshot(response, QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1)
-            .await;
-    let certificate = match decode_ordinary_kagemusha_lifecycle_certificate(&snapshot.body) {
-        Ok(certificate) if certificate.binding == *expected_binding => certificate,
-        Ok(_) => {
-            return queue_plan_outcome_unknown_response(
-                expected_binding.entrypoint_hash.clone(),
-                Some(expected_binding.signed_transaction_hash.clone()),
-                "aggregated ordinary lifecycle certificate differs from the exact ingress binding",
-            );
-        }
-        Err(error) => {
-            return queue_plan_outcome_unknown_response(
-                expected_binding.entrypoint_hash.clone(),
-                Some(expected_binding.signed_transaction_hash.clone()),
-                format!("aggregated ordinary lifecycle certificate is malformed: {error}"),
-            );
-        }
-    };
-    if let Err(error) = validate_ordinary_kagemusha_lifecycle_admission_certificate_v1(
-        network_id,
-        transaction,
-        certificate,
-        OrdinaryKagemushaLifecycleAdmissionCertificateStrengthV1::Quorum,
-    ) {
-        return queue_plan_outcome_unknown_response(
-            expected_binding.entrypoint_hash.clone(),
-            Some(expected_binding.signed_transaction_hash.clone()),
-            format!("aggregated ordinary lifecycle certificate is not an exact quorum: {error}"),
-        );
-    }
-    torii_proxy_snapshot_to_response(snapshot)
-}
-
-#[cfg(feature = "connect")]
-fn normalize_ordinary_kagemusha_lifecycle_submission_response(
-    app: &AppState,
-    proxy_response: Response,
-    entrypoint_hash: HashOf<TransactionEntrypoint>,
-    signed_transaction_hash: HashOf<SignedTransaction>,
-    routing_decision: RoutingDecision,
-    format: ResponseFormat,
-) -> Response {
-    if proxy_response.status() != StatusCode::ACCEPTED {
-        return proxy_response;
-    }
-    let route_transport = proxy_response
-        .headers()
-        .get("x-iroha-route-transport")
-        .cloned();
-    let mut response = transaction_submission_response(
-        app,
-        entrypoint_hash.clone(),
-        Some(signed_transaction_hash.clone()),
-        routing_decision,
-        "proxy",
-        false,
-        format,
-    );
-    if response.status() != StatusCode::ACCEPTED {
-        return queue_plan_outcome_unknown_response(
-            entrypoint_hash,
-            Some(signed_transaction_hash),
-            "ordinary lifecycle durability quorum was authenticated, but the public signed receipt could not be produced",
-        );
-    }
-    if let Some(route_transport) = route_transport {
-        response.headers_mut().insert(
-            HeaderName::from_static("x-iroha-route-transport"),
-            route_transport,
-        );
-    }
-    response
-}
-#[cfg(feature = "connect")]
 fn normalize_proxied_transaction_submission_response(
     app: &AppState,
     proxy_response: Response,
@@ -29603,96 +29367,6 @@ async fn execute_torii_transaction_via_proxy(
     )
 }
 #[cfg(feature = "connect")]
-async fn execute_torii_ordinary_kagemusha_lifecycle_via_proxy(
-    app: &SharedAppState,
-    transaction: TransactionEntrypoint,
-    routing_plan: RoutingPlan,
-    format: ResponseFormat,
-) -> Response {
-    let routing_decision = routing_plan.coordinator_route();
-    if let Err(error) = validate_ordinary_kagemusha_lifecycle_entrypoint(&transaction) {
-        return torii_proxy_error_response(
-            StatusCode::CONFLICT,
-            "kagemusha_lifecycle_admission_scope_mismatch",
-            error,
-        );
-    }
-    let entrypoint_hash = transaction.hash();
-    let Some(signed_transaction_hash) = signed_transaction_hash_for_entrypoint(&transaction) else {
-        return torii_proxy_error_response(
-            StatusCode::CONFLICT,
-            "kagemusha_lifecycle_admission_scope_mismatch",
-            "ordinary lifecycle admission requires an external signed transaction",
-        );
-    };
-    let context = match app
-        .queue
-        .plan_admission_context_with_state(app.state.as_ref(), &routing_plan)
-    {
-        Ok(context) => context,
-        Err(error) => {
-            return torii_proxy_error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "route_unavailable",
-                format!(
-                    "failed to capture ordinary lifecycle durability context for lane {} dataspace {}: {error}",
-                    routing_decision.lane_id.as_u32(),
-                    routing_decision.dataspace_id.as_u64()
-                ),
-            );
-        }
-    };
-    let binding = match OrdinaryKagemushaLifecycleAdmissionBindingV1::new(
-        app.state.network_id_ref(),
-        &transaction,
-        &routing_plan,
-        context,
-    ) {
-        Ok(binding) => binding,
-        Err(error) => {
-            return torii_proxy_error_response(
-                StatusCode::CONFLICT,
-                "kagemusha_lifecycle_admission_binding_mismatch",
-                error,
-            );
-        }
-    };
-    if let Err(error) = routing::reject_ingress_if_queue_capacity_saturated(
-        app.queue.as_ref(),
-        app.state.as_ref(),
-        1,
-    ) {
-        return error.into_response();
-    }
-    let expected_binding = binding.clone();
-    let response = execute_torii_proxy_request_with_fallback(
-        app,
-        routing_decision,
-        ToriiProxyRequestKindV1::SubmitTransaction {
-            transaction: transaction.clone(),
-            expected_plan: ToriiRoutingPlanHintV1::from(routing_plan),
-            admission: ToriiProxyTransactionAdmissionV1::OrdinaryKagemushaLifecycleDurable(binding),
-            admission_binding: None,
-        },
-    )
-    .await;
-    let response = validate_ordinary_kagemusha_lifecycle_admission_quorum_response(
-        response,
-        app.state.network_id_ref(),
-        &transaction,
-        &expected_binding,
-    )
-    .await;
-    normalize_ordinary_kagemusha_lifecycle_submission_response(
-        app.as_ref(),
-        response,
-        entrypoint_hash,
-        signed_transaction_hash,
-        routing_decision,
-        format,
-    )
-}
-#[cfg(feature = "connect")]
 async fn execute_torii_query_via_proxy(
     app: &SharedAppState,
     query_bytes: Vec<u8>,
@@ -29713,6 +29387,7 @@ async fn execute_torii_query_via_proxy(
 #[cfg(feature = "app_api")]
 fn torii_read_request(
     endpoint: ToriiReadEndpointV1,
+    route_scope: ToriiFanoutRouteScopeV1,
     routing_decision: RoutingDecision,
     path_args: Vec<String>,
     query_string: Option<String>,
@@ -29720,6 +29395,7 @@ fn torii_read_request(
 ) -> ToriiReadProxyRequestV1 {
     ToriiReadProxyRequestV1 {
         endpoint,
+        route_scope,
         expected_route: ToriiRouteHintV1::from(routing_decision),
         path_args,
         query_string,
@@ -30129,16 +29805,30 @@ async fn execute_torii_read_request_locally(
         Ok(plan) => plan,
         Err(response) => return response,
     };
+    let visibility =
+        match torii_dataspace_read_visibility_for_scope(app.as_ref(), &request.route_scope) {
+            Ok(visibility) => visibility,
+            Err(response) => return response,
+        };
     match request.endpoint {
         ToriiReadEndpointV1::AccountGet => {
             let Ok(account_id) = torii_proxy_path_arg(&request, 0, "account_id") else {
                 return torii_proxy_path_arg(&request, 0, "account_id").unwrap_err();
             };
-            let mut response = execute_torii_account_local_source_read(
-                app,
-                &account_id,
-                response_format_from_torii_proxy(request.response_format),
-            );
+            let format = response_format_from_torii_proxy(request.response_format);
+            let mut response = match parse_exact_account_id_literal(&account_id) {
+                Ok((account_id, _))
+                    if visibility.allows_account(&app.state.world_view(), &account_id) =>
+                {
+                    execute_torii_account_local_source_read(app, &account_id.to_string(), format)
+                }
+                _ => trusted_internal_read_error_response(
+                    StatusCode::NOT_FOUND,
+                    "not_found",
+                    "account was not found",
+                    format,
+                ),
+            };
             insert_routing_headers(&mut response, routing_decision, routed_by);
             response
         }
@@ -30215,10 +29905,7 @@ async fn execute_torii_read_request_locally(
             finish_torii_read_result(
                 routing::handle_v1_explorer_account_detail(
                     app.state.clone(),
-                    routing::DataspaceReadVisibility::new(
-                        BTreeSet::from([routing_decision.dataspace_id]),
-                        false,
-                    ),
+                    visibility.clone(),
                     account_id,
                 )
                 .await,
@@ -30238,11 +29925,12 @@ async fn execute_torii_read_request_locally(
                 Err(response) => return response,
             };
             finish_torii_read_result(
-                routing::handle_v1_account_assets_with_policy(
+                routing::handle_v1_account_assets_with_visibility(
                     app.state.clone(),
                     AxPath(account_id),
                     AxQuery(params),
                     app.telemetry_handle(),
+                    visibility.clone(),
                 )
                 .await,
                 routing_decision,
@@ -30262,11 +29950,12 @@ async fn execute_torii_read_request_locally(
                 Err(response) => return response,
             };
             finish_torii_read_result(
-                routing::handle_v1_account_assets_query_with_policy(
+                routing::handle_v1_account_assets_query_with_visibility(
                     app.state.clone(),
                     AxPath(account_id),
                     crate::utils::extractors::NoritoJson(env),
                     app.telemetry_handle(),
+                    visibility.clone(),
                 )
                 .await,
                 routing_decision,
@@ -30285,11 +29974,12 @@ async fn execute_torii_read_request_locally(
                 Err(response) => return response,
             };
             finish_torii_read_result(
-                routing::handle_v1_account_permissions_with_policy(
+                routing::handle_v1_account_permissions_with_visibility(
                     app.state.clone(),
                     AxPath(account_id),
                     crate::NoritoQuery(params),
                     app.telemetry_handle(),
+                    visibility.clone(),
                 )
                 .await,
                 routing_decision,
@@ -30313,12 +30003,13 @@ async fn execute_torii_read_request_locally(
                     Err(error) => return error.into_response(),
                 };
             finish_torii_read_result(
-                routing::handle_v1_account_transactions_get_with_policy(
+                routing::handle_v1_account_transactions_get_with_visibility_policy(
                     app.state.clone(),
                     AxPath(account_id),
                     crate::NoritoQuery(params),
                     app.telemetry.clone(),
                     allowed_asset_definition_id,
+                    visibility.clone(),
                 )
                 .await,
                 routing_decision,
@@ -30342,12 +30033,13 @@ async fn execute_torii_read_request_locally(
                     Err(error) => return error.into_response(),
                 };
             finish_torii_read_result(
-                routing::handle_v1_account_history_get_with_policy(
+                routing::handle_v1_account_history_get_with_visibility_policy(
                     app.state.clone(),
                     AxPath(account_id),
                     crate::NoritoQuery(params),
                     app.telemetry.clone(),
                     allowed_asset_definition_id,
+                    visibility.clone(),
                 )
                 .await,
                 routing_decision,
@@ -30372,12 +30064,13 @@ async fn execute_torii_read_request_locally(
                     Err(error) => return error.into_response(),
                 };
             finish_torii_read_result(
-                routing::handle_v1_account_transactions_with_policy(
+                routing::handle_v1_account_transactions_with_visibility_policy(
                     app.state.clone(),
                     AxPath(account_id),
                     crate::utils::extractors::NoritoJson(env),
                     app.telemetry.clone(),
                     allowed_asset_definition_id,
+                    visibility.clone(),
                 )
                 .await,
                 routing_decision,
@@ -30399,11 +30092,12 @@ async fn execute_torii_read_request_locally(
                     Err(error) => return error.into_response(),
                 };
             finish_torii_read_result(
-                routing::handle_v1_transactions_query_with_policy(
+                routing::handle_v1_transactions_query_with_visibility_policy(
                     app.state.clone(),
                     crate::utils::extractors::NoritoJson(env),
                     app.telemetry.clone(),
                     allowed_asset_definition_id,
+                    visibility.clone(),
                 )
                 .await,
                 routing_decision,
@@ -30454,10 +30148,11 @@ async fn execute_torii_read_request_locally(
                 Err(response) => return response,
             };
             finish_torii_read_result_with_format(
-                routing::handle_v1_accounts(
+                routing::handle_v1_accounts_with_visibility(
                     app.state.clone(),
                     crate::NoritoQuery(params),
                     app.telemetry.clone(),
+                    visibility.clone(),
                 )
                 .await,
                 routing_decision,
@@ -30475,10 +30170,11 @@ async fn execute_torii_read_request_locally(
                 Err(response) => return response,
             };
             finish_torii_read_result_with_format(
-                routing::handle_v1_accounts_query(
+                routing::handle_v1_accounts_query_with_visibility(
                     app.state.clone(),
                     crate::utils::extractors::NoritoJson(env),
                     app.telemetry.clone(),
+                    visibility.clone(),
                 )
                 .await,
                 routing_decision,
@@ -30514,11 +30210,12 @@ async fn execute_torii_read_request_locally(
                 }
             };
             finish_torii_read_result(
-                routing::handle_v1_accounts_portfolio(
+                routing::handle_v1_accounts_portfolio_with_visibility(
                     app.state.clone(),
                     AxPath(uaid_literal),
                     asset_id,
                     app.telemetry.clone(),
+                    visibility.clone(),
                 )
                 .await,
                 routing_decision,
@@ -30529,7 +30226,8 @@ async fn execute_torii_read_request_locally(
             let Ok(asset) = torii_proxy_path_arg(&request, 0, "asset") else {
                 return torii_proxy_path_arg(&request, 0, "asset").unwrap_err();
             };
-            let mut response = execute_torii_asset_definition_local_source_read(app, &asset);
+            let mut response =
+                execute_torii_asset_definition_local_source_read(app, &asset, &visibility);
             insert_routing_headers(&mut response, routing_decision, routed_by);
             response
         }
@@ -30542,7 +30240,12 @@ async fn execute_torii_read_request_locally(
                 Err(response) => return response,
             };
             finish_torii_read_result(
-                routing::handle_v1_assets_definitions(app.state.clone(), AxQuery(params)).await,
+                routing::handle_v1_assets_definitions_with_visibility(
+                    app.state.clone(),
+                    AxQuery(params),
+                    visibility.clone(),
+                )
+                .await,
                 routing_decision,
                 routed_by,
             )
@@ -30557,9 +30260,10 @@ async fn execute_torii_read_request_locally(
                 Err(response) => return response,
             };
             finish_torii_read_result(
-                routing::handle_v1_assets_definitions_query(
+                routing::handle_v1_assets_definitions_query_with_visibility(
                     app.state.clone(),
                     crate::utils::extractors::NoritoJson(env),
+                    visibility.clone(),
                 )
                 .await,
                 routing_decision,
@@ -30578,11 +30282,12 @@ async fn execute_torii_read_request_locally(
                 Err(response) => return response,
             };
             finish_torii_read_result(
-                routing::handle_v1_asset_holders(
+                routing::handle_v1_asset_holders_with_visibility(
                     app.state.clone(),
                     AxPath(definition_id),
                     AxQuery(params),
                     app.telemetry.clone(),
+                    visibility.clone(),
                 )
                 .await,
                 routing_decision,
@@ -30602,12 +30307,13 @@ async fn execute_torii_read_request_locally(
                 Err(response) => return response,
             };
             finish_torii_read_result(
-                routing::handle_v1_asset_holders_query_with_app(
+                routing::handle_v1_asset_holders_query_with_app_visibility(
                     Some(app.clone()),
                     app.state.clone(),
                     AxPath(definition_id),
                     crate::utils::extractors::NoritoJson(env),
                     app.telemetry.clone(),
+                    visibility.clone(),
                 )
                 .await,
                 routing_decision,
@@ -30625,10 +30331,7 @@ async fn execute_torii_read_request_locally(
             let mut response = execute_torii_explorer_asset_definition_local_source_read(
                 app,
                 &definition_id,
-                &routing::DataspaceReadVisibility::new(
-                    BTreeSet::from([routing_decision.dataspace_id]),
-                    false,
-                ),
+                &visibility,
             );
             insert_routing_headers(&mut response, routing_decision, routed_by);
             response
@@ -30644,10 +30347,7 @@ async fn execute_torii_read_request_locally(
             finish_torii_read_result(
                 routing::handle_v1_explorer_asset_definition_econometrics(
                     app.state.clone(),
-                    routing::DataspaceReadVisibility::new(
-                        BTreeSet::from([routing_decision.dataspace_id]),
-                        false,
-                    ),
+                    visibility.clone(),
                     definition_id,
                 )
                 .await,
@@ -30666,10 +30366,7 @@ async fn execute_torii_read_request_locally(
             finish_torii_read_result(
                 routing::handle_v1_explorer_asset_definition_snapshot(
                     app.state.clone(),
-                    routing::DataspaceReadVisibility::new(
-                        BTreeSet::from([routing_decision.dataspace_id]),
-                        false,
-                    ),
+                    visibility.clone(),
                     definition_id,
                 )
                 .await,
@@ -30686,7 +30383,12 @@ async fn execute_torii_read_request_locally(
                 Err(response) => return response,
             };
             finish_torii_read_result(
-                routing::handle_v1_domains(app.state.clone(), AxQuery(params)).await,
+                routing::handle_v1_domains_with_visibility(
+                    app.state.clone(),
+                    AxQuery(params),
+                    visibility.clone(),
+                )
+                .await,
                 routing_decision,
                 routed_by,
             )
@@ -30701,9 +30403,10 @@ async fn execute_torii_read_request_locally(
                 Err(response) => return response,
             };
             finish_torii_read_result(
-                routing::handle_v1_domains_query(
+                routing::handle_v1_domains_query_with_visibility(
                     app.state.clone(),
                     crate::utils::extractors::NoritoJson(env),
+                    visibility.clone(),
                 )
                 .await,
                 routing_decision,
@@ -30719,7 +30422,12 @@ async fn execute_torii_read_request_locally(
                 Err(response) => return response,
             };
             finish_torii_read_result(
-                routing::handle_v1_nfts(app.state.clone(), AxQuery(params)).await,
+                routing::handle_v1_nfts_with_visibility(
+                    app.state.clone(),
+                    AxQuery(params),
+                    visibility.clone(),
+                )
+                .await,
                 routing_decision,
                 routed_by,
             )
@@ -30734,9 +30442,10 @@ async fn execute_torii_read_request_locally(
                 Err(response) => return response,
             };
             finish_torii_read_result(
-                routing::handle_v1_nfts_query(
+                routing::handle_v1_nfts_query_with_visibility(
                     app.state.clone(),
                     crate::utils::extractors::NoritoJson(env),
+                    visibility.clone(),
                 )
                 .await,
                 routing_decision,
@@ -30836,11 +30545,12 @@ async fn execute_torii_read_request_locally(
                 Err(response) => return response,
             };
             finish_torii_read_result(
-                routing::handle_v1_nexus_dataspaces_account_summary(
+                routing::handle_v1_nexus_dataspaces_account_summary_with_visibility(
                     app.state.clone(),
                     AxPath(account_literal),
                     crate::NoritoQuery(params),
                     app.telemetry.clone(),
+                    visibility.clone(),
                 )
                 .await,
                 routing_decision,
@@ -30851,8 +30561,11 @@ async fn execute_torii_read_request_locally(
             let Ok(uaid_literal) = torii_proxy_path_arg(&request, 0, "uaid") else {
                 return torii_proxy_path_arg(&request, 0, "uaid").unwrap_err();
             };
-            let mut response =
-                execute_torii_space_directory_bindings_local_source_read(app, &uaid_literal);
+            let mut response = execute_torii_space_directory_bindings_local_source_read(
+                app,
+                &uaid_literal,
+                &visibility,
+            );
             insert_routing_headers(&mut response, routing_decision, routed_by);
             response
         }
@@ -30868,11 +30581,12 @@ async fn execute_torii_read_request_locally(
                 Err(response) => return response,
             };
             finish_torii_read_result(
-                routing::handle_v1_space_directory_manifests(
+                routing::handle_v1_space_directory_manifests_with_visibility(
                     app.state.clone(),
                     AxPath(uaid_literal),
                     crate::NoritoQuery(params),
                     app.telemetry.clone(),
+                    visibility.clone(),
                 )
                 .await,
                 routing_decision,
@@ -30888,7 +30602,12 @@ async fn execute_torii_read_request_locally(
                 Err(response) => return response,
             };
             finish_torii_read_result(
-                routing::handle_v1_rwas(app.state.clone(), AxQuery(params)).await,
+                routing::handle_v1_rwas_with_visibility(
+                    app.state.clone(),
+                    AxQuery(params),
+                    visibility.clone(),
+                )
+                .await,
                 routing_decision,
                 routed_by,
             )
@@ -30903,9 +30622,10 @@ async fn execute_torii_read_request_locally(
                 Err(response) => return response,
             };
             finish_torii_read_result(
-                routing::handle_v1_rwas_query(
+                routing::handle_v1_rwas_query_with_visibility(
                     app.state.clone(),
                     crate::utils::extractors::NoritoJson(env),
+                    visibility.clone(),
                 )
                 .await,
                 routing_decision,
@@ -31229,7 +30949,16 @@ async fn execute_torii_single_route_read_in_fanout(
     request_body: &[u8],
     body: Vec<u8>,
 ) -> Response {
-    let request = torii_read_request(endpoint, route, path_args, query_string, body);
+    let request = torii_read_request(
+        endpoint,
+        ToriiFanoutRouteScopeV1::VisibleAccount {
+            caller_account_id: None,
+        },
+        route,
+        path_args,
+        query_string,
+        body,
+    );
     let response = execute_torii_read_for_route(app, route, request, None).await;
     sanitize_exact_alias_route_response(app, route, endpoint, request_body, response).await
 }
@@ -31283,7 +31012,16 @@ async fn execute_torii_single_route_read_with_format(
     } else {
         Vec::new()
     };
-    let mut request = torii_read_request(endpoint, route, path_args, query_string, body);
+    let mut request = torii_read_request(
+        endpoint,
+        ToriiFanoutRouteScopeV1::VisibleAccount {
+            caller_account_id: None,
+        },
+        route,
+        path_args,
+        query_string,
+        body,
+    );
     request.response_format = response_format;
     let response = execute_torii_read_for_route(app, route, request, None).await;
     let response =
@@ -32067,179 +31805,6 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
                             "routing_plan_mismatch",
                             format!(
                                 "routing plan mismatch: ingress digest {}, receiver digest {}",
-                                error.ingress_digest, error.receiver_digest
-                            ),
-                        ),
-                    },
-                    Err(error) => routing_resolve_error_to_torii_error(app, error).into_response(),
-                },
-                Err(error) => error.into_response(),
-            }
-        }
-        ToriiProxyRequestKindV1::SubmitTransaction {
-            transaction,
-            expected_plan,
-            admission:
-                ToriiProxyTransactionAdmissionV1::OrdinaryKagemushaLifecycleDurable(admission_binding),
-            admission_binding: queue_plan_binding,
-        } => {
-            if queue_plan_binding.is_some() {
-                return torii_proxy_error_response(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_proxy_request",
-                    "ordinary lifecycle proxy admission must not carry a QueuePlan binding",
-                );
-            }
-            if let Err(error) = validate_ordinary_kagemusha_lifecycle_entrypoint(&transaction) {
-                return torii_proxy_error_response(
-                    StatusCode::CONFLICT,
-                    "kagemusha_lifecycle_admission_scope_mismatch",
-                    error,
-                );
-            }
-            let ingress_plan = match validate_proxy_routing_plan_hint(expected_plan) {
-                Ok(plan) => plan,
-                Err(error) => {
-                    return torii_proxy_error_response(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_proxy_request",
-                        format!("invalid ordinary lifecycle routing plan hint: {error}"),
-                    );
-                }
-            };
-            match routing::accept_transaction_for_ingress(
-                app.state.clone(),
-                transaction,
-                &app.telemetry,
-            ) {
-                Ok(accepted_tx) => match app
-                    .queue
-                    .route_plan_with_state(&accepted_tx, app.state.as_ref())
-                {
-                    Ok(routing_plan) => match validate_proxy_routing_plan(
-                        "ordinary_kagemusha_lifecycle",
-                        routing_plan,
-                        ingress_plan,
-                    ) {
-                        Ok(routing_plan) => {
-                            let routing_decision = routing_plan.coordinator_route();
-                            if admission_binding.request_id != request_head.request_id
-                                || admission_binding.request_id
-                                    != ordinary_kagemusha_lifecycle_request_id(
-                                        app.state.network_id_ref(),
-                                        accepted_tx.entrypoint().hash(),
-                                    )
-                            {
-                                return torii_proxy_error_response(
-                                    StatusCode::BAD_REQUEST,
-                                    "invalid_proxy_request",
-                                    "ordinary lifecycle binding request ID is not the deterministic network/entrypoint identity",
-                                );
-                            }
-                            if let Err(error) = admission_binding.validate_for_request(
-                                app.state.network_id_ref(),
-                                accepted_tx.entrypoint(),
-                                &routing_plan,
-                            ) {
-                                return torii_proxy_error_response(
-                                    StatusCode::BAD_REQUEST,
-                                    "invalid_proxy_request",
-                                    error,
-                                );
-                            }
-                            let context_is_current_or_owned = match app
-                                .queue
-                                .plan_admission_context_with_state(
-                                    app.state.as_ref(),
-                                    &routing_plan,
-                                ) {
-                                Ok(current_context)
-                                    if current_context == admission_binding.admission_context =>
-                                {
-                                    true
-                                }
-                                Ok(_) | Err(_)
-                                    if app
-                                        .queue
-                                        .has_revalidatable_durable_plan_claim_with_state(
-                                            &accepted_tx,
-                                            app.state.as_ref(),
-                                            &routing_plan,
-                                            &admission_binding.admission_context,
-                                        ) =>
-                                {
-                                    true
-                                }
-                                Ok(_) => {
-                                    return torii_proxy_error_response(
-                                        StatusCode::CONFLICT,
-                                        "kagemusha_lifecycle_admission_context_mismatch",
-                                        "ordinary lifecycle admission context no longer matches the active lane/authority generation and has no revalidatable local durable claim",
-                                    );
-                                }
-                                Err(error) => {
-                                    return torii_proxy_error_response(
-                                        StatusCode::SERVICE_UNAVAILABLE,
-                                        "route_unavailable",
-                                        format!(
-                                            "failed to revalidate ordinary lifecycle admission context: {error}"
-                                        ),
-                                    );
-                                }
-                            };
-                            debug_assert!(context_is_current_or_owned);
-                            let coordinator = admission_binding
-                                .admission_context
-                                .route_incarnations
-                                .first()
-                                .expect("validated ordinary lifecycle binding has a coordinator");
-                            let execute_locally =
-                                app.local_peer_id.as_ref().is_some_and(|local_peer_id| {
-                                    coordinator.validator_set.contains(local_peer_id)
-                                });
-                            if !execute_locally {
-                                let request = request_head.with_request(
-                                    ToriiProxyRequestKindV1::SubmitTransaction {
-                                        transaction: accepted_tx.into_entrypoint(),
-                                        expected_plan: routing_plan.clone().into(),
-                                        admission: ToriiProxyTransactionAdmissionV1::OrdinaryKagemushaLifecycleDurable(
-                                            admission_binding,
-                                        ),
-                                        admission_binding: None,
-                                    },
-                                );
-                                forward_incoming_torii_proxy_request_from_sender(
-                                    app,
-                                    immediate_sender_peer_id.as_ref(),
-                                    routing_decision,
-                                    request,
-                                )
-                                .await
-                            } else {
-                                let exact_transaction = accepted_tx.entrypoint().clone();
-                                match routing::push_accepted_ordinary_kagemusha_lifecycle_for_ingress_strict_durable_claim(
-                                    app.queue.clone(),
-                                    app.state.clone(),
-                                    accepted_tx,
-                                    routing_plan,
-                                    &admission_binding,
-                                ) {
-                                    Ok(durable_claim) => ordinary_kagemusha_lifecycle_admission_response(
-                                        app.as_ref(),
-                                        &exact_transaction,
-                                        routing_decision,
-                                        admission_binding,
-                                        durable_claim,
-                                    ),
-                                    Err(error) => error.into_response(),
-                                }
-                            }
-                        }
-                        Err(error) => torii_proxy_error_response(
-                            StatusCode::CONFLICT,
-                            "routing_plan_mismatch",
-                            format!(
-                                "ordinary lifecycle routing plan mismatch: ingress digest {}, receiver digest {}",
                                 error.ingress_digest, error.receiver_digest
                             ),
                         ),
@@ -33593,11 +33158,7 @@ fn resolve_exact_hosted_http_runtime_target(
         })
         .unwrap_or(false);
     if !placement_is_current_lease
-        || !hosted_http_placement_has_active_peer_binding(
-            &state_view,
-            &placement,
-            current_height,
-        )
+        || !hosted_http_placement_has_active_peer_binding(&state_view, &placement, current_height)
     {
         return Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
@@ -35892,24 +35453,27 @@ async fn handler_subscription_ws(
     let preauth_guard = take_preauth_upgrade_guard(preauth_guard);
     let shutdown = app.shutdown_signal.clone();
     Ok(core::future::ready(ws.on_upgrade(move |ws| async move {
-        let _preauth_guard = preauth_guard;
-        let stream = routing::event::handle_events_stream_with_receiver_visible(
-            events_rx,
-            ws,
-            app.ws_message_timeout,
-            visibility,
-        );
-        let result = tokio::select! {
-            () = shutdown.receive() => return,
-            result = stream => result,
-        };
-        if let Err(error) = result {
-            if is_expected_ws_disconnect(&error) {
-                iroha_logger::debug!(%error, "Event streaming closed by client");
-            } else {
-                iroha_logger::error!(%error, "Failure during event streaming");
+        let _ = crate::panic_recovery::catch_async_recoverable(async move {
+            let _preauth_guard = preauth_guard;
+            let stream = routing::event::handle_events_stream_with_receiver_visible(
+                events_rx,
+                ws,
+                app.ws_message_timeout,
+                visibility,
+            );
+            let result = tokio::select! {
+                () = shutdown.receive() => return,
+                result = stream => result,
+            };
+            if let Err(error) = result {
+                if is_expected_ws_disconnect(&error) {
+                    iroha_logger::debug!(%error, "Event streaming closed by client");
+                } else {
+                    iroha_logger::error!(%error, "Failure during event streaming");
+                }
             }
-        }
+        })
+        .await;
     }))
     .await)
 }
@@ -35934,18 +35498,21 @@ async fn handler_blocks_stream_ws(
     let preauth_guard = take_preauth_upgrade_guard(preauth_guard);
     let shutdown = app.shutdown_signal.clone();
     Ok(core::future::ready(ws.on_upgrade(move |ws| async move {
-        let _preauth_guard = preauth_guard;
-        let stream =
-            routing::block::handle_blocks_stream(kura, ws, app.ws_message_timeout, move || {
-                visibility.authorization_is_current()
-            });
-        let result = tokio::select! {
-            () = shutdown.receive() => return,
-            result = stream => result,
-        };
-        if let Err(error) = result {
-            iroha_logger::error!(%error, "Failure during block streaming");
-        }
+        let _ = crate::panic_recovery::catch_async_recoverable(async move {
+            let _preauth_guard = preauth_guard;
+            let stream =
+                routing::block::handle_blocks_stream(kura, ws, app.ws_message_timeout, move || {
+                    visibility.authorization_is_current()
+                });
+            let result = tokio::select! {
+                () = shutdown.receive() => return,
+                result = stream => result,
+            };
+            if let Err(error) = result {
+                iroha_logger::error!(%error, "Failure during block streaming");
+            }
+        })
+        .await;
     }))
     .await)
 }
@@ -36726,12 +36293,6 @@ async fn handler_sumeragi_evidence(
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
-    }
-    if !app.telemetry.allows_developer_outputs() {
-        return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/evidence",
-            &app.telemetry,
-        ));
     }
     routing::handle_v1_sumeragi_evidence_list(
         State(app.state.clone()),
@@ -39149,7 +38710,7 @@ async fn handler_iso_lifecycle_submit(
     let parsed =
         parse_xml_message(message_type, &body).map_err(|err| Error::Query(map_iso_error(err)))?;
     let profile = iso_profile_from_request(&runtime, &headers, &query)?;
-    let parties = runtime
+    let lifecycle_authorization = runtime
         .authorize_lifecycle_submission(&authenticated_operator.0, profile, message_type, &parsed)
         .map_err(map_iso_admission_error)?;
     let metadata = runtime
@@ -39158,28 +38719,26 @@ async fn handler_iso_lifecycle_submit(
     let msg_id = Iso20022BridgeRuntime::lifecycle_message_id(message_type, &parsed)
         .map_err(|err| Error::Query(map_iso_error(err)))?;
     runtime
-        .admit_authenticated_inbound(&msg_id, metadata, parties)
+        .admit_authenticated_inbound(&msg_id, metadata, lifecycle_authorization.parties().clone())
         .map_err(map_iso_admission_error)?;
-    let settlement_committed = if message_type == "pacs.002" {
-        runtime
-            .pacs002_settlement_transaction_hash(message_type, &parsed)
-            .map_err(|err| Error::Query(map_iso_error(err)))?
-            .and_then(|hash| hash.parse::<HashOf<SignedTransaction>>().ok())
-            .is_some_and(|hash| app.state.has_committed_entrypoint(entrypoint_hash(hash)))
-    } else {
-        true
-    };
+    let committed_transaction_hash = lifecycle_authorization
+        .settlement_transaction_hash(message_type, &parsed)
+        .map_err(|err| Error::Query(map_iso_error(err)))?
+        .filter(|hash| {
+            hash.parse::<HashOf<SignedTransaction>>()
+                .ok()
+                .is_some_and(|hash| app.state.has_committed_entrypoint(entrypoint_hash(hash)))
+        })
+        .map(ToOwned::to_owned);
     let (outcome, status_snapshot) = match runtime.apply_inbound_lifecycle_message_with_evidence(
         &msg_id,
         message_type,
         &parsed,
-        settlement_committed,
+        &lifecycle_authorization,
+        committed_transaction_hash.as_deref(),
     ) {
         Ok(result) => result,
-        Err(err) => {
-            runtime.mark_rejected(&msg_id, Some(err.to_string()), None);
-            return Err(Error::Query(map_iso_error(err)));
-        }
+        Err(error) => return Err(map_iso_lifecycle_apply_error(&runtime, &msg_id, error)),
     };
     let mut payload = norito::json::native::Map::new();
     payload.insert(
@@ -39227,6 +38786,22 @@ async fn handler_iso_lifecycle_submit(
         StatusCode::ACCEPTED,
         JsonBody(norito::json::native::Value::Object(payload)),
     ))
+}
+fn map_iso_lifecycle_apply_error(
+    runtime: &Iso20022BridgeRuntime,
+    message_id: &str,
+    error: IsoLifecycleApplyError,
+) -> Error {
+    match error {
+        IsoLifecycleApplyError::Validation(error) => {
+            runtime.mark_rejected(message_id, Some(error.to_string()), None);
+            Error::Query(map_iso_error(error))
+        }
+        IsoLifecycleApplyError::PersistenceUnavailable => Error::AppServiceUnavailable {
+            code: "iso_lifecycle_persistence_unavailable",
+            message: "ISO lifecycle persistence is temporarily unavailable; retry later".to_owned(),
+        },
+    }
 }
 macro_rules! iso_lifecycle_submission_handlers {
     ($(($handler:ident, $message_type:literal, $access_context:literal)),+ $(,)?) => {
@@ -39309,18 +38884,13 @@ async fn handler_iso_status(
             ));
         }
     };
-    if !runtime.can_read_message(&authenticated_operator.0, &msg_id) {
-        return Err(Error::Query(
-            iroha_data_model::ValidationFail::NotPermitted(
+    let status = runtime
+        .authorized_message_status(&authenticated_operator.0, &msg_id)
+        .ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::NotPermitted(
                 "unknown ISO 20022 message identifier".into(),
-            ),
-        ));
-    }
-    let status = runtime.message_status(&msg_id).ok_or_else(|| {
-        Error::Query(iroha_data_model::ValidationFail::NotPermitted(
-            "unknown ISO 20022 message identifier".into(),
-        ))
-    })?;
+            ))
+        })?;
     let updated_ms = status
         .updated_at()
         .duration_since(std::time::UNIX_EPOCH)
@@ -39638,18 +39208,13 @@ async fn iso_status_for_outbox(
             ));
         }
     };
-    if !runtime.can_read_message(authenticated_operator, msg_id) {
-        return Err(Error::Query(
-            iroha_data_model::ValidationFail::NotPermitted(
+    let status = runtime
+        .authorized_message_status(authenticated_operator, msg_id)
+        .ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::NotPermitted(
                 "unknown ISO 20022 message identifier".into(),
-            ),
-        ));
-    }
-    let status = runtime.message_status(msg_id).ok_or_else(|| {
-        Error::Query(iroha_data_model::ValidationFail::NotPermitted(
-            "unknown ISO 20022 message identifier".into(),
-        ))
-    })?;
+            ))
+        })?;
     Ok((runtime, status))
 }
 fn signed_iso_xml_response(
@@ -40451,139 +40016,39 @@ async fn admit_verified_transaction_authorities(
     limiter: &limits::RateLimiter,
     authorities: &[AccountId],
 ) -> Result<(), Error> {
-    let mut index = 0;
-    while index < authorities.len() {
-        let authority = &authorities[index];
-        let start = index;
-        index += 1;
-        while index < authorities.len() && &authorities[index] == authority {
-            index += 1;
-        }
-        let key = transaction_verified_authority_key(authority);
-        if !limiter.allow_repeated(&key, index - start).await {
-            return Err(transaction_rate_limit_error());
-        }
-    }
+    let reservation = limiter
+        .reserve_many_repeated(
+            authorities
+                .iter()
+                .map(|authority| (transaction_verified_authority_key(authority), 1)),
+        )
+        .await
+        .ok_or_else(transaction_rate_limit_error)?;
+    reservation.commit();
     Ok(())
 }
 
-async fn admit_verified_transaction_authority(
+async fn reserve_verified_transaction_authorities(
+    limiter: &limits::RateLimiter,
+    authorities: &[AccountId],
+) -> Result<limits::RateLimitReservation, Error> {
+    limiter
+        .reserve_many_repeated(
+            authorities
+                .iter()
+                .map(|authority| (transaction_verified_authority_key(authority), 1)),
+        )
+        .await
+        .ok_or_else(transaction_rate_limit_error)
+}
+
+#[cfg(feature = "connect")]
+async fn reserve_verified_transaction_authority(
     limiter: &limits::RateLimiter,
     authority: Option<&AccountId>,
-) -> Result<(), Error> {
-    match authority {
-        Some(authority) => {
-            admit_verified_transaction_authorities(limiter, std::slice::from_ref(authority)).await
-        }
-        None => Ok(()),
-    }
-}
-#[cfg(feature = "app_api")]
-async fn handler_post_kagemusha_lifecycle_transaction(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    accept: Option<crate::utils::extractors::ExtractAccept>,
-    crate::utils::extractors::JsonOrNoritoVersioned(transaction): crate::utils::extractors::JsonOrNoritoVersioned<
-        SignedTransaction,
-    >,
-) -> Result<Response, Error> {
-    if transaction_submission_prefers_minimal_response(&headers) {
-        return Err(Error::AppQueryValidation {
-            code: "kagemusha_lifecycle_receipt_required",
-            message: "ordinary Kagemusha lifecycle submission does not permit `Prefer: return=minimal`; an exact signed receipt is mandatory".to_owned(),
-        });
-    }
-    let format =
-        match crate::utils::negotiate_response_format(accept.as_ref().map(|value| &value.0)) {
-            Ok(format) => format,
-            Err(response) => return Ok(response),
-        };
-    let token = validate_api_token(app.as_ref(), &headers)?.authenticated_principal();
-    admit_transaction_api_token_preauth(&app.tx_preauth_rate_limiter, token, 1).await?;
-    routing::reject_ingress_if_queue_capacity_saturated(app.queue.as_ref(), app.state.as_ref(), 1)?;
-    let compute_permit =
-        try_acquire_transaction_ingress_compute(&app.transaction_ingress_compute_inflight)?;
-    let state = app.state.clone();
-    let telemetry = app.telemetry.clone();
-    let (accepted_tx, compute_permit) = run_transaction_ingress_compute_job(
-        compute_permit,
-        "kagemusha_lifecycle_transaction_admission_worker_failed",
-        move || {
-            let submitted_signed_transaction_hash = transaction.hash();
-            validate_ordinary_kagemusha_lifecycle_entrypoint(&TransactionEntrypoint::External(
-                transaction.clone(),
-            ))
-            .map_err(|message| Error::AppQueryValidation {
-                code: "kagemusha_lifecycle_admission_scope_mismatch",
-                message,
-            })?;
-            let transaction_bytes =
-                <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(
-                    &transaction,
-                );
-            let transaction = DecodedVersionedSignedTransaction::decode_versioned(
-                &transaction_bytes,
-            )
-            .map_err(|error| Error::AppQueryValidation {
-                code: "invalid_transaction_payload",
-                message: format!("ordinary lifecycle transaction could not be decoded: {error}"),
-            })?;
-            if transaction.hash() != submitted_signed_transaction_hash {
-                return Err(Error::AppServiceUnavailable {
-                    code: "transaction_identity_changed",
-                    message: "canonical lifecycle transaction decoding changed the signed transaction hash"
-                        .to_owned(),
-                });
-            }
-            let accepted_tx = routing::accept_decoded_signed_transaction_for_ingress(
-                state,
-                transaction,
-                &telemetry,
-            )?;
-            validate_ordinary_kagemusha_lifecycle_entrypoint(accepted_tx.entrypoint()).map_err(
-                |message| Error::AppQueryValidation {
-                    code: "kagemusha_lifecycle_admission_scope_mismatch",
-                    message,
-                },
-            )?;
-            if accepted_tx.external().map(SignedTransaction::hash)
-                != Some(submitted_signed_transaction_hash)
-            {
-                return Err(Error::AppServiceUnavailable {
-                    code: "transaction_identity_changed",
-                    message:
-                        "ordinary lifecycle admission changed the caller-signed transaction identity"
-                            .to_owned(),
-                });
-            }
-            Ok(accepted_tx)
-        },
-    )
-    .await?;
-    drop(compute_permit);
-    admit_verified_transaction_authority(&app.tx_rate_limiter, accepted_tx.authority_opt()).await?;
-    let routing_plan = app
-        .queue
-        .route_plan_with_state(&accepted_tx, app.state.as_ref())
-        .map_err(|error| routing_resolve_error_to_torii_error(&app, error))?;
-    #[cfg(feature = "connect")]
-    {
-        return Ok(execute_torii_ordinary_kagemusha_lifecycle_via_proxy(
-            &app,
-            accepted_tx.entrypoint().clone(),
-            routing_plan,
-            format,
-        )
-        .await);
-    }
-    #[cfg(not(feature = "connect"))]
-    {
-        let _ = routing_plan;
-        Err(Error::AppServiceUnavailable {
-            code: "kagemusha_lifecycle_transport_unavailable",
-            message: "quorum-certified ordinary Kagemusha lifecycle admission requires an authenticated peer transport".to_owned(),
-        })
-    }
+) -> Result<limits::RateLimitReservation, Error> {
+    let authorities = authority.map_or(&[][..], std::slice::from_ref);
+    reserve_verified_transaction_authorities(limiter, authorities).await
 }
 fn try_acquire_transaction_ingress_compute(
     limiter: &Arc<tokio::sync::Semaphore>,
@@ -40711,7 +40176,6 @@ async fn submit_signed_transaction_for_ingress_queue_plan_certified(
     )
     .await?;
     drop(compute_permit);
-    admit_verified_transaction_authority(&app.tx_rate_limiter, accepted_tx.authority_opt()).await?;
     #[allow(unused_variables)]
     let durable_retry_claim = app
         .queue
@@ -40727,7 +40191,25 @@ async fn submit_signed_transaction_for_ingress_queue_plan_certified(
     };
     #[cfg(feature = "connect")]
     {
-        return Ok(execute_torii_transaction_via_proxy(
+        let already_durably_admitted = durable_retry_claim
+            .as_ref()
+            .is_some_and(|claim| claim.global_admission_identity.is_some())
+            || app
+                .state
+                .queue_plan_admission_registry_entrypoint_present(accepted_tx.entrypoint().hash())
+                .unwrap_or(false);
+        let rate_limit_reservation = if already_durably_admitted {
+            None
+        } else {
+            Some(
+                reserve_verified_transaction_authority(
+                    &app.tx_rate_limiter,
+                    accepted_tx.authority_opt(),
+                )
+                .await?,
+            )
+        };
+        let response = execute_torii_transaction_via_proxy(
             &app,
             accepted_tx,
             routing_plan,
@@ -40735,7 +40217,13 @@ async fn submit_signed_transaction_for_ingress_queue_plan_certified(
             transaction_submission_prefers_minimal_response(&headers),
             format,
         )
-        .await);
+        .await;
+        if response.status() == StatusCode::ACCEPTED
+            && let Some(reservation) = rate_limit_reservation
+        {
+            reservation.commit();
+        }
+        return Ok(response);
     }
     #[cfg(not(feature = "connect"))]
     {
@@ -40774,7 +40262,6 @@ async fn handler_post_transaction_entrypoint(
     )
     .await?;
     drop(compute_permit);
-    admit_verified_transaction_authority(&app.tx_rate_limiter, accepted_tx.authority_opt()).await?;
     #[allow(unused_variables)]
     let durable_retry_claim = app
         .queue
@@ -40790,7 +40277,25 @@ async fn handler_post_transaction_entrypoint(
     };
     #[cfg(feature = "connect")]
     {
-        return Ok(execute_torii_transaction_via_proxy(
+        let already_durably_admitted = durable_retry_claim
+            .as_ref()
+            .is_some_and(|claim| claim.global_admission_identity.is_some())
+            || app
+                .state
+                .queue_plan_admission_registry_entrypoint_present(accepted_tx.entrypoint().hash())
+                .unwrap_or(false);
+        let rate_limit_reservation = if already_durably_admitted {
+            None
+        } else {
+            Some(
+                reserve_verified_transaction_authority(
+                    &app.tx_rate_limiter,
+                    accepted_tx.authority_opt(),
+                )
+                .await?,
+            )
+        };
+        let response = execute_torii_transaction_via_proxy(
             &app,
             accepted_tx,
             routing_plan,
@@ -40798,7 +40303,13 @@ async fn handler_post_transaction_entrypoint(
             transaction_submission_prefers_minimal_response(&headers),
             format,
         )
-        .await);
+        .await;
+        if response.status() == StatusCode::ACCEPTED
+            && let Some(reservation) = rate_limit_reservation
+        {
+            reservation.commit();
+        }
+        return Ok(response);
     }
     #[cfg(not(feature = "connect"))]
     {
@@ -41349,7 +40860,7 @@ mod transaction_ingress_decode_tests {
         assert!(prechecks[0].precheck_rejection.is_none());
     }
     #[tokio::test]
-    async fn transaction_batch_rate_limit_collapses_same_authority_run() {
+    async fn transaction_batch_rate_limit_rejects_same_authority_atomically() {
         let keypair =
             checked_transaction_batch_test_keypair(0xa4, iroha_crypto::Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
@@ -41383,12 +40894,20 @@ mod transaction_ingress_decode_tests {
         let authority_key = transaction_verified_authority_key(&authority);
         assert!(!allow_transaction_batch_rate_limit(&limiter, &verified_authorities).await);
         assert!(
+            limiter.allow(&authority_key).await,
+            "a rejected aggregate must leave the authority's first token available"
+        );
+        assert!(
+            limiter.allow(&authority_key).await,
+            "a rejected aggregate must leave the authority's second token available"
+        );
+        assert!(
             !limiter.allow(&authority_key).await,
-            "failed same-authority run should consume the accepted prefix"
+            "the unchanged two-token burst must still reject a third charge"
         );
     }
     #[tokio::test]
-    async fn transaction_batch_rate_limit_preserves_authority_ordering() {
+    async fn transaction_batch_rate_limit_rolls_back_nonadjacent_authorities() {
         let keypair_a =
             checked_transaction_batch_test_keypair(0xa5, iroha_crypto::Algorithm::Ed25519);
         let keypair_b =
@@ -41430,16 +40949,36 @@ mod transaction_ingress_decode_tests {
             .collect::<Vec<_>>();
         assert!(!allow_transaction_batch_rate_limit(&limiter, &verified_authorities).await);
         assert!(
-            !limiter
+            limiter
                 .allow(&transaction_verified_authority_key(&authority_a))
                 .await,
-            "authority A should fail after its first transaction consumed the only token"
+            "authority A must remain uncharged when its aggregate rejects the batch"
         );
         assert!(
-            !limiter
+            limiter
                 .allow(&transaction_verified_authority_key(&authority_b))
                 .await,
-            "authority B should have been consumed before the later authority A rejection"
+            "authority B must remain uncharged when another authority rejects the batch"
+        );
+    }
+    #[tokio::test]
+    async fn transaction_batch_rate_limit_refunds_uncommitted_queue_reservation() {
+        let keypair =
+            checked_transaction_batch_test_keypair(0xa7, iroha_crypto::Algorithm::Ed25519);
+        let authority = AccountId::new(keypair.public_key().clone());
+        let limiter = crate::limits::RateLimiter::new(Some(1), Some(1));
+        let reservation =
+            reserve_verified_transaction_authorities(&limiter, std::slice::from_ref(&authority))
+                .await
+                .expect("first queue attempt reserves its authority token");
+
+        drop(reservation);
+
+        assert!(
+            limiter
+                .allow(&transaction_verified_authority_key(&authority))
+                .await,
+            "a failed queue attempt must refund its provisional authority charge"
         );
     }
 }
@@ -41808,15 +41347,18 @@ async fn handle_connect_ws_logic(
     let preauth_guard = take_preauth_upgrade_guard(preauth_guard);
     let shutdown = app.shutdown_signal.clone();
     ws.on_upgrade(move |ws| async move {
-        let _preauth_guard = preauth_guard;
-        let result = tokio::select! {
-            () = shutdown.receive() => Ok(()),
-            result = connect::handle_ws(bus, reservation, ws, send_timeout) => result,
-        };
-        permit.release().await;
-        if let Err(e) = result {
-            iroha_logger::warn!(%e, "connect ws session ended with error");
-        }
+        let _ = crate::panic_recovery::catch_async_recoverable(async move {
+            let _preauth_guard = preauth_guard;
+            let result = tokio::select! {
+                () = shutdown.receive() => Ok(()),
+                result = connect::handle_ws(bus, reservation, ws, send_timeout) => result,
+            };
+            permit.release().await;
+            if let Err(e) = result {
+                iroha_logger::warn!(%e, "connect ws session ended with error");
+            }
+        })
+        .await;
     })
 }
 #[cfg(feature = "connect")]
@@ -47858,14 +47400,16 @@ mod test_api_router_runtime_tests {
         let (release_tx, release_rx) = std::sync::mpsc::channel();
         let worker = tokio::spawn(async move {
             worker_shutdown.receive().await;
-            tokio::task::spawn_blocking(move || {
-                started_tx
-                    .send(())
-                    .expect("teardown still waits for worker");
-                release_rx
-                    .recv()
-                    .expect("test releases retained physical completion");
-            })
+            crate::panic_recovery::join_recoverable(
+                crate::panic_recovery::spawn_blocking_recoverable(move || {
+                    started_tx
+                        .send(())
+                        .expect("teardown still waits for worker");
+                    release_rx
+                        .recv()
+                        .expect("test releases retained physical completion");
+                }),
+            )
             .await
             .expect("retained physical completion joins");
             ToriiCriticalWorkerExit::StoppedByShutdown
@@ -49213,7 +48757,10 @@ mod sorafs_native_transaction_signer_startup_tests {
     }
     #[test]
     fn native_signer_startup_qualifies_exact_configured_provider() {
-        let provider = Arc::new(ProofSigner::new("provider://sorafs/proof-outcome/primary", 0x21));
+        let provider = Arc::new(ProofSigner::new(
+            "provider://sorafs/proof-outcome/primary",
+            0x21,
+        ));
         let configured = provider.configured_binding();
         let provider: Arc<dyn SoraFsProofOutcomeTransactionSigner> = provider;
         let qualified = qualify_configured_sorafs_native_transaction_signer_for_startup(
@@ -50510,7 +50057,6 @@ impl Torii {
         mount_catalog_route_rows!(
             builder, core;
             CONFIGURATION_GET => operator_get(handler_get_configuration, app_state);
-            CONFIGURATION_POST => operator_post(handler_post_configuration, app_state);
         );
         #[cfg(feature = "connect")]
         builder.route(
@@ -51140,15 +50686,11 @@ impl Torii {
             offline_top_up_body_limit(transaction_max_content_len);
         let offline_redeem_body_limit_bytes =
             offline_redeem_body_limit(transaction_max_content_len);
-        let offline_recipient_lineage_body_limit_bytes =
-            <iroha_torii_shared::offline_api::OfflineRecipientLineageRequest as crate::utils::extractors::OfflineCanonicalNoritoSchema>::MAX_BODY_BYTES;
         mount_catalog_route_rows!(
             builder, offline;
             READINESS => public_get(handler_offline_readiness);
-            RECIPIENT_LINEAGE => limited_canonical_account_post(handler_offline_recipient_lineage, app_state, offline_recipient_lineage_body_limit_bytes, offline_recipient_lineage_body_limit_bytes);
             TOP_UP => limited_canonical_signed_post(handler_offline_top_up, offline_top_up_body_limit_bytes);
             REDEEM => limited_canonical_signed_post(handler_offline_redeem, offline_redeem_body_limit_bytes);
-            KAGEMUSHA_LIFECYCLE_TRANSACTION => limited_canonical_signed_post(handler_post_kagemusha_lifecycle_transaction, transaction_max_content_len);
             OPERATION => public_get(handler_offline_operation_status);
         );
         mount_catalog_route_rows!(
@@ -51197,12 +50739,12 @@ impl Torii {
         mount_catalog_route_rows!(
             builder, application_api;
             ZK_PROOF_TAGS_BY_BACKEND_BY_HASH_GET => public_get(handler_proof_tags);
-            DOMAINS_GET => public_get(handler_domains_list);
+            DOMAINS_GET => optional_canonical_signature_get(handler_domains_list);
         );
         mount_domains_query(builder, app_state.clone(), transaction_max_content_len);
         mount_catalog_route_rows!(
             builder, application_api;
-            ACCOUNTS_GET => public_get(handler_accounts_list);
+            ACCOUNTS_GET => optional_canonical_signature_get(handler_accounts_list);
         );
         mount_accounts_query(builder, app_state.clone(), transaction_max_content_len);
         mount_transactions_query(builder, app_state.clone(), transaction_max_content_len);
@@ -51217,14 +50759,14 @@ impl Torii {
             ACCOUNTS_FAUCET_PUZZLE_GET => public_get(handler_accounts_faucet_puzzle);
             ACCOUNTS_FAUCET_PREPARE_POST => protocol_handshake_post(handler_accounts_faucet_prepare);
             ACCOUNTS_FAUCET_POST => protocol_handshake_post(handler_accounts_faucet);
-            ACCOUNTS_BY_ACCOUNT_ID_ALIASES_GET => public_get(handler_account_aliases);
-            ACCOUNTS_BY_UAID_PORTFOLIO_GET => public_get(handler_accounts_portfolio);
+            ACCOUNTS_BY_ACCOUNT_ID_ALIASES_GET => canonical_signature_get(handler_account_aliases);
+            ACCOUNTS_BY_UAID_PORTFOLIO_GET => optional_canonical_signature_get(handler_accounts_portfolio);
             NEXUS_PUBLIC_LANES_BY_LANE_ID_VALIDATORS_GET => public_get(handler_nexus_public_lane_validators);
             NEXUS_PUBLIC_LANES_BY_LANE_ID_STAKE_GET => public_get(handler_nexus_public_lane_stake);
             NEXUS_PUBLIC_LANES_BY_LANE_ID_REWARDS_PENDING_GET => public_get(handler_nexus_public_lane_rewards);
-            NEXUS_DATASPACES_ACCOUNTS_BY_LITERAL_SUMMARY_GET => public_get(handler_nexus_dataspaces_account_summary);
-            SPACE_DIRECTORY_UAIDS_BY_UAID_GET => public_get(handler_space_directory_bindings);
-            SPACE_DIRECTORY_UAIDS_BY_UAID_MANIFESTS_GET => public_get(handler_space_directory_manifests);
+            NEXUS_DATASPACES_ACCOUNTS_BY_LITERAL_SUMMARY_GET => optional_canonical_signature_get(handler_nexus_dataspaces_account_summary);
+            SPACE_DIRECTORY_UAIDS_BY_UAID_GET => optional_canonical_signature_get(handler_space_directory_bindings);
+            SPACE_DIRECTORY_UAIDS_BY_UAID_MANIFESTS_GET => optional_canonical_signature_get(handler_space_directory_manifests);
         );
         add_authenticated_application_compute_routes(
             builder,
@@ -51397,19 +50939,19 @@ impl Torii {
         );
         mount_catalog_route_rows!(
             builder, application_api;
-            ASSETS_DEFINITIONS_GET => public_get(handler_assets_definitions_list);
-            ASSETS_DEFINITIONS_BY_ASSET_GET => public_get(handler_asset_definition_get);
+            ASSETS_DEFINITIONS_GET => optional_canonical_signature_get(handler_assets_definitions_list);
+            ASSETS_DEFINITIONS_BY_ASSET_GET => optional_canonical_signature_get(handler_asset_definition_get);
         );
         mount_asset_definitions_query(builder, app_state.clone(), transaction_max_content_len);
         mount_catalog_route_rows!(
             builder, application_api;
             CONFIDENTIAL_ASSETS_BY_DEFINITION_ID_TRANSITIONS_GET => public_get(handler_confidential_asset_transitions);
-            NFTS_GET => public_get(handler_nfts_list);
+            NFTS_GET => optional_canonical_signature_get(handler_nfts_list);
         );
         mount_nfts_query(builder, app_state.clone(), transaction_max_content_len);
         mount_catalog_route_rows!(
             builder, application_api;
-            RWAS_GET => public_get(handler_rwas_list);
+            RWAS_GET => optional_canonical_signature_get(handler_rwas_list);
         );
         mount_rwas_query(builder, app_state.clone(), transaction_max_content_len);
         mount_catalog_route_rows!(
@@ -52045,7 +51587,7 @@ impl Torii {
                 iroha_config::parameters::actual::SorafsAppealFinanceSettlement::default();
             config.account_onboarding = None;
             config.faucet = None;
-            config.kagemusha_commands = None;
+            config.offline_cash_v1_commands = None;
             config.ram_lfe = None;
             config.tx_history = None;
             config.peer_telemetry_urls.clear();
@@ -53357,7 +52899,7 @@ impl Torii {
         .transpose()?;
         #[cfg(feature = "app_api")]
         let offline_commands = config
-            .kagemusha_commands
+            .offline_cash_v1_commands
             .clone()
             .map(offline_commands::OfflineCommandRuntime::from_config)
             .map(Arc::new);
@@ -54862,7 +54404,7 @@ impl Torii {
         })?;
         let route_index = mounted_manifest.route_index();
         let mut router = router
-            .fallback(handler_route_not_found)
+            .fallback(handler_route_not_found_or_sorafs_site)
             .method_not_allowed_fallback(handler_method_not_allowed)
             .layer(axum::middleware::from_fn(enforce_route_timeout));
         #[cfg(feature = "app_api")]
@@ -54983,6 +54525,14 @@ impl Torii {
         let router = router.layer(axum::middleware::from_fn_with_state(
             route_index,
             attach_matched_route_metadata,
+        ));
+        // Host-selected SoraFS sites are virtual routes rather than broad
+        // path-catalog wildcards. Install their bounded marker outside route
+        // metadata attachment so authentication and observability see the
+        // selected public operation before the fallback handler runs.
+        let router = router.layer(axum::middleware::from_fn_with_state(
+            app_state.clone(),
+            mark_host_selected_sorafs_route,
         ));
         // Catalog-derived cache enforcement wraps matched-route attachment so it can overwrite
         // every inner response, including early middleware failures and every catalog-marked
@@ -55649,6 +55199,32 @@ async fn handler_openapi(
     }
     Ok(routing::handler_openapi_spec(axum::extract::State(app)).await)
 }
+fn is_explicit_legacy_mcp_jsonrpc_response(
+    headers: &HeaderMap,
+    payload: &norito::json::Value,
+) -> bool {
+    if !mcp::is_jsonrpc_response(payload)
+        || payload
+            .as_object()
+            .and_then(|payload| payload.get("params"))
+            .and_then(norito::json::Value::as_object)
+            .and_then(|params| params.get("_meta"))
+            .and_then(norito::json::Value::as_object)
+            .and_then(|meta| meta.get(iroha_torii_shared::mcp::META_PROTOCOL_VERSION))
+            .and_then(norito::json::Value::as_str)
+            .is_some()
+    {
+        return false;
+    }
+    let mut versions = headers
+        .get_all(iroha_torii_shared::mcp::HEADER_PROTOCOL_VERSION)
+        .iter();
+    let Some(version) = versions.next() else {
+        return false;
+    };
+    versions.next().is_none()
+        && version.to_str().ok() == Some(iroha_torii_shared::mcp::LEGACY_PROTOCOL_VERSION)
+}
 /// POST /v1/mcp — dispatch bounded MCP JSON-RPC calls through exact cataloged routes.
 async fn handler_mcp_jsonrpc(
     State(app): State<SharedAppState>,
@@ -55657,7 +55233,8 @@ async fn handler_mcp_jsonrpc(
     request: axum::http::Request<Body>,
 ) -> Response {
     if !mcp::origin_is_allowed(&headers, &app.mcp_allowed_origins) {
-        return mcp::jsonrpc_transport_error_response(
+        return mcp::jsonrpc_transport_error_response_for_headers(
+            &headers,
             ReviewedMcpJsonRpcError::OriginForbidden,
             mcp::jsonrpc_origin_forbidden(),
         );
@@ -55673,9 +55250,10 @@ async fn handler_mcp_jsonrpc(
     let principal = app.authenticated_api_token_principal(&headers);
     let rate_key = limits::key_from_headers(&headers, Some(remote_ip), Some("mcp"), principal);
     if !app.mcp_rate_limiter.allow(&rate_key).await {
-        return mcp::jsonrpc_transport_error_response(
+        return mcp::jsonrpc_transport_error_response_for_headers(
+            &headers,
             ReviewedMcpJsonRpcError::RateLimited,
-            mcp::jsonrpc_rate_limited(),
+            mcp::jsonrpc_rate_limited_for_headers(&headers),
         );
     }
     if let Err(response) = utils::canonical_json_request_content_type(&headers) {
@@ -55690,68 +55268,110 @@ async fn handler_mcp_jsonrpc(
         Ok(Ok(bytes)) => bytes,
         Ok(Err(error)) if mcp::body_error_is_length_limit(&error) => {
             let (_, payload) = mcp::oversized_payload_response(app.mcp.max_request_bytes);
-            return mcp::jsonrpc_transport_error_response(
+            return mcp::jsonrpc_transport_error_response_for_headers(
+                &headers,
                 ReviewedMcpJsonRpcError::RequestPayloadTooLarge,
                 payload,
             );
         }
         Ok(Err(_)) => {
-            return mcp::jsonrpc_transport_error_response(
+            return mcp::jsonrpc_transport_error_response_for_headers(
+                &headers,
                 ReviewedMcpJsonRpcError::RequestBodyReadFailed,
                 mcp::jsonrpc_request_body_read_failed(),
             );
         }
         Err(_) => {
-            return mcp::jsonrpc_transport_error_response(
+            return mcp::jsonrpc_transport_error_response_for_headers(
+                &headers,
                 ReviewedMcpJsonRpcError::RequestTimeout,
-                mcp::jsonrpc_request_timeout(),
+                mcp::jsonrpc_request_timeout_for_headers(&headers),
             );
         }
     };
     let payload = match norito::json::from_slice::<norito::json::Value>(&request_bytes) {
         Ok(payload) => payload,
         Err(err) => {
-            return mcp::jsonrpc_transport_error_response(
+            return mcp::jsonrpc_transport_error_response_for_headers(
+                &headers,
                 ReviewedMcpJsonRpcError::ParseError,
                 mcp::invalid_json_payload(&err),
             );
         }
     };
     if payload.is_array() {
-        return mcp::jsonrpc_transport_error_response(
+        return mcp::jsonrpc_transport_error_response_for_headers(
+            &headers,
             ReviewedMcpJsonRpcError::InvalidRequest,
             mcp::jsonrpc_invalid_request(
                 "MCP Streamable HTTP accepts exactly one JSON-RPC message per POST",
             ),
         );
     }
-    if !mcp::protocol_version_is_supported(&headers, mcp::is_initialize_request(&payload)) {
-        return mcp::jsonrpc_transport_error_response(
-            ReviewedMcpJsonRpcError::UnsupportedProtocolVersion,
-            mcp::jsonrpc_unsupported_protocol_version(),
-        );
+    if is_explicit_legacy_mcp_jsonrpc_response(&headers, &payload) {
+        return mcp::private_no_store_response(StatusCode::ACCEPTED);
     }
+    let validated_protocol = match mcp::validate_protocol_request(&headers, &payload) {
+        Ok(validated) => validated,
+        Err(error) => {
+            let kind = match error.kind {
+                mcp::ValidationErrorKind::InvalidRequest => ReviewedMcpJsonRpcError::InvalidRequest,
+                mcp::ValidationErrorKind::InvalidParams => ReviewedMcpJsonRpcError::InvalidParams,
+                mcp::ValidationErrorKind::HeaderMismatch => ReviewedMcpJsonRpcError::HeaderMismatch,
+                mcp::ValidationErrorKind::MissingRequiredClientCapability => {
+                    ReviewedMcpJsonRpcError::MissingRequiredClientCapability
+                }
+                mcp::ValidationErrorKind::UnsupportedProtocolVersion => {
+                    ReviewedMcpJsonRpcError::UnsupportedProtocolVersion
+                }
+            };
+            return mcp::jsonrpc_transport_error_response_for_headers(
+                &headers,
+                kind,
+                error.payload,
+            );
+        }
+    };
     let additional_dispatch_cost = mcp::jsonrpc_dispatch_cost(&payload).saturating_sub(1);
     if !app
         .mcp_rate_limiter
         .allow_repeated(&rate_key, additional_dispatch_cost)
         .await
     {
-        return mcp::jsonrpc_transport_error_response(
+        return mcp::jsonrpc_transport_error_response_for_headers(
+            &headers,
             ReviewedMcpJsonRpcError::RateLimited,
-            mcp::jsonrpc_rate_limited(),
+            mcp::jsonrpc_rate_limited_for_headers(&headers),
         );
     }
     if mcp::is_cancelled_notification(&payload) {
         mcp::handle_cancelled_notification(&app, &headers, &payload);
         return mcp::private_no_store_response(StatusCode::ACCEPTED);
     }
-    if mcp::is_jsonrpc_notification(&payload) || mcp::is_jsonrpc_response(&payload) {
+    if mcp::is_jsonrpc_notification(&payload) {
         return mcp::private_no_store_response(StatusCode::ACCEPTED);
     }
-    match mcp::handle_jsonrpc_request(app.clone(), &headers, payload).await {
+    match mcp::handle_validated_jsonrpc_request(app.clone(), &headers, payload, &validated_protocol)
+        .await
+    {
         mcp::JsonRpcRequestOutcome::Response(response_payload) => {
-            mcp::bounded_jsonrpc_http_response(response_payload, app.mcp.max_request_bytes)
+            if validated_protocol.era.is_modern()
+                && mcp::jsonrpc_response_error_code(&response_payload)
+                    == Some(mcp::JSONRPC_METHOD_NOT_FOUND)
+            {
+                mcp::jsonrpc_transport_error_response_for_headers(
+                    &headers,
+                    ReviewedMcpJsonRpcError::MethodNotFound,
+                    response_payload,
+                )
+            } else if validated_protocol.era.is_modern() {
+                mcp::bounded_modern_jsonrpc_http_response(
+                    response_payload,
+                    app.mcp.max_request_bytes,
+                )
+            } else {
+                mcp::bounded_jsonrpc_http_response(response_payload, app.mcp.max_request_bytes)
+            }
         }
         mcp::JsonRpcRequestOutcome::Cancelled => {
             mcp::private_no_store_response(StatusCode::NO_CONTENT)
@@ -57069,9 +56689,9 @@ pub enum Error {
     FailedExit,
 }
 fn offline_reject_code_from_message(message: &str) -> Option<&str> {
-    use iroha_data_model::offline::OFFLINE_REJECTION_REASON_PREFIX;
-    let start = message.find(OFFLINE_REJECTION_REASON_PREFIX)?;
-    let rest = &message[start + OFFLINE_REJECTION_REASON_PREFIX.len()..];
+    use iroha_data_model::offline::OFFLINE_CASH_V1_REJECTION_REASON_PREFIX;
+    let start = message.find(OFFLINE_CASH_V1_REJECTION_REASON_PREFIX)?;
+    let rest = &message[start + OFFLINE_CASH_V1_REJECTION_REASON_PREFIX.len()..];
     let (label, _) = rest.split_once(':')?;
     if label.is_empty() { None } else { Some(label) }
 }

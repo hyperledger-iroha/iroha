@@ -103,6 +103,8 @@ pub(in crate::sumeragi) struct ProductionLifecycleLaunchInputsV1 {
     effect_queue: EffectQueueConfig,
     local_peer: PeerId,
     local_validator: Option<wire::ValidatorIndex>,
+    offline_cash_mint_finality_authority:
+        Option<Arc<crate::zk::offline_cash_v1_recursion::OfflineCashMintFinalityLocalAuthorityV1>>,
     key_pair: KeyPair,
     network: IrohaNetwork,
     state: Arc<State>,
@@ -146,6 +148,7 @@ impl ProductionLifecycleLaunchInputsV1 {
             effect_queue,
             local_peer,
             local_validator,
+            offline_cash_mint_finality_authority: None,
             key_pair,
             network,
             state,
@@ -159,6 +162,18 @@ impl ProductionLifecycleLaunchInputsV1 {
             kura_replica_advert_refresh,
             exact_output_handoff_owner,
         }
+    }
+    /// Attach the separately provisioned Pasta epoch authority used only for
+    /// top-up-bearing Offline Cash V1 Commit votes.
+    #[must_use]
+    pub(in crate::sumeragi) fn with_offline_cash_mint_finality_authority(
+        mut self,
+        authority: Option<
+            Arc<crate::zk::offline_cash_v1_recursion::OfflineCashMintFinalityLocalAuthorityV1>,
+        >,
+    ) -> Self {
+        self.offline_cash_mint_finality_authority = authority;
+        self
     }
 }
 /// RAII owner of the exact durable leader-wire ingress gate for this launch.
@@ -2916,6 +2931,7 @@ impl ProductionLifecycleOwnerV1 {
             validator_set_pops,
             inputs.local_peer,
             inputs.local_validator,
+            inputs.offline_cash_mint_finality_authority,
             inputs.key_pair,
             inputs.network,
             body_store,

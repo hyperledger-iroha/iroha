@@ -1397,6 +1397,29 @@ impl PreparedTxOverlay {
     }
 }
 impl TxOverlay {
+    fn validate_authorization_snapshot(
+        world: &impl WorldReadOnly,
+        authorization: &ContractEntrypointAuthorizationSnapshot,
+        execution_height: Option<u64>,
+    ) -> Result<(), ValidationFail> {
+        if let Some(execution_height) = execution_height {
+            authorization.validate_at_height(world, execution_height)
+        } else {
+            authorization.validate(world)
+        }
+    }
+    fn validate_authorization_snapshot_for_authority(
+        world: &impl WorldReadOnly,
+        authorization: &ContractEntrypointAuthorizationSnapshot,
+        authority: &AccountId,
+        execution_height: Option<u64>,
+    ) -> Result<(), ValidationFail> {
+        if let Some(execution_height) = execution_height {
+            authorization.validate_for_authority_at_height(world, authority, execution_height)
+        } else {
+            authorization.validate_for_authority(world, authority)
+        }
+    }
     /// Create an overlay from a list of instructions.
     pub fn from_instructions(instrs: Vec<InstructionBox>) -> Self {
         Self {
@@ -1661,6 +1684,7 @@ impl TxOverlay {
     fn validate_execution_context(
         world: &impl WorldReadOnly,
         execution_context: &OverlayInstructionExecutionContext,
+        execution_height: Option<u64>,
     ) -> Result<(), ValidationFail> {
         match (
             execution_context.contract_runtime_context.as_ref(),
@@ -1678,7 +1702,7 @@ impl TxOverlay {
                             .to_owned(),
                     ));
                 }
-                authorization.validate(world)
+                Self::validate_authorization_snapshot(world, authorization, execution_height)
             }
             (Some(_), None) => Err(ValidationFail::NotPermitted(
                 "prepared contract effect is missing its entrypoint authorization snapshot"
@@ -1702,6 +1726,7 @@ impl TxOverlay {
     fn validate_durable_authorizations(
         &self,
         world: &impl WorldReadOnly,
+        execution_height: Option<u64>,
     ) -> Result<(), ValidationFail> {
         if self.durable_state_overlay.len() != self.durable_state_authorizations.len()
             || !self
@@ -1728,7 +1753,7 @@ impl TxOverlay {
                         "durable state path `{path}` does not belong to its contract authorization snapshot"
                     )));
                 }
-                authorization.validate(world)?;
+                Self::validate_authorization_snapshot(world, authorization, execution_height)?;
             }
         }
         Ok(())
@@ -1755,6 +1780,11 @@ impl TxOverlay {
             state_tx.sccp_ivm_proved_execution_binding.clone();
         state_tx.sccp_ivm_proved_execution_binding = self.sccp_ivm_proved_execution_binding.clone();
         let result = (|| -> Result<(), ValidationFail> {
+            let execution_height = matches!(
+                self.source,
+                TxOverlaySource::ContractCall | TxOverlaySource::Ivm
+            )
+            .then_some(state_tx.block_height());
             if self.source == TxOverlaySource::IvmProved {
                 crate::validation_fee::enforce_ivm_proved_completed_axt_admission(
                     self.completed_axt.len(),
@@ -1791,7 +1821,12 @@ impl TxOverlay {
                             .to_owned(),
                     ));
                 }
-                authorization.validate_for_authority(&state_tx.world, authority)?;
+                Self::validate_authorization_snapshot_for_authority(
+                    &state_tx.world,
+                    authorization,
+                    authority,
+                    execution_height,
+                )?;
                 let retains_root = self
                     .execution_contexts
                     .iter()
@@ -1818,23 +1853,36 @@ impl TxOverlay {
                     ));
                 }
                 for execution_context in execution_contexts {
-                    Self::validate_execution_context(&state_tx.world, execution_context)?;
+                    Self::validate_execution_context(
+                        &state_tx.world,
+                        execution_context,
+                        execution_height,
+                    )?;
                 }
             }
-            self.validate_durable_authorizations(&state_tx.world)?;
+            self.validate_durable_authorizations(&state_tx.world, execution_height)?;
             let executor = state_tx.world.executor.clone();
             let mut instruction_index = 0usize;
             for chunk_instrs in self.instructions.chunks(chunk) {
                 for instr in chunk_instrs {
                     if let Some(authorization) = self.entrypoint_authorization.as_ref() {
-                        authorization.validate_for_authority(&state_tx.world, authority)?;
+                        Self::validate_authorization_snapshot_for_authority(
+                            &state_tx.world,
+                            authorization,
+                            authority,
+                            execution_height,
+                        )?;
                     }
                     let execution_context = self
                         .execution_contexts
                         .as_ref()
                         .map(|contexts| &contexts[instruction_index]);
                     if let Some(execution_context) = execution_context {
-                        Self::validate_execution_context(&state_tx.world, execution_context)?;
+                        Self::validate_execution_context(
+                            &state_tx.world,
+                            execution_context,
+                            execution_height,
+                        )?;
                     }
                     let effect_authority =
                         execution_context.map_or(authority, |context| &context.authority);
@@ -1898,10 +1946,19 @@ impl TxOverlay {
                     // binding. Revalidate both the selected root and this exact leaf immediately,
                     // including after the final queued effect.
                     if let Some(authorization) = self.entrypoint_authorization.as_ref() {
-                        authorization.validate_for_authority(&state_tx.world, authority)?;
+                        Self::validate_authorization_snapshot_for_authority(
+                            &state_tx.world,
+                            authorization,
+                            authority,
+                            execution_height,
+                        )?;
                     }
                     if let Some(execution_context) = execution_context {
-                        Self::validate_execution_context(&state_tx.world, execution_context)?;
+                        Self::validate_execution_context(
+                            &state_tx.world,
+                            execution_context,
+                            execution_height,
+                        )?;
                     }
                     instruction_index = instruction_index.saturating_add(1);
                 }
@@ -1920,9 +1977,14 @@ impl TxOverlay {
             // binding. Recheck after they finish so a stale authorization cannot guard durable
             // writes merely because it was valid at the start of overlay application.
             if let Some(authorization) = self.entrypoint_authorization.as_ref() {
-                authorization.validate_for_authority(&state_tx.world, authority)?;
+                Self::validate_authorization_snapshot_for_authority(
+                    &state_tx.world,
+                    authorization,
+                    authority,
+                    execution_height,
+                )?;
             }
-            self.validate_durable_authorizations(&state_tx.world)?;
+            self.validate_durable_authorizations(&state_tx.world, execution_height)?;
             crate::smartcontracts::ivm::host::HostExecutionArtifacts::record_completed_axt_states(
                 state_tx,
                 self.completed_axt.clone(),
@@ -1933,7 +1995,11 @@ impl TxOverlay {
                     .get(path)
                     .and_then(Option::as_ref)
                 {
-                    authorization.validate(&state_tx.world)?;
+                    Self::validate_authorization_snapshot(
+                        &state_tx.world,
+                        authorization,
+                        execution_height,
+                    )?;
                 }
                 if let Some(stored) = value {
                     state_tx
@@ -2426,6 +2492,17 @@ where
                 tx.metadata(),
             )
             .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
+            code::ensure_contract_execution_allowed(
+                state_ro.world(),
+                &identity.contract_address,
+                state_ro.block_height_hint().ok_or_else(|| {
+                    OverlayBuildError::ContractCall(
+                        "ordinary raw-IVM overlay preparation requires an execution block height"
+                            .to_owned(),
+                    )
+                })?,
+            )
+            .map_err(OverlayBuildError::ContractCall)?;
             let entrypoint_authorization =
                 crate::executor::authorize_prepared_raw_contract_selector(
                     state_ro.world(),
@@ -2985,6 +3062,12 @@ where
                 tx.metadata(),
             )
             .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
+            code::ensure_contract_execution_allowed(
+                state_ro.world(),
+                &identity.contract_address,
+                header.height().get(),
+            )
+            .map_err(OverlayBuildError::ContractCall)?;
             let entrypoint_authorization =
                 crate::executor::authorize_prepared_raw_contract_selector(
                     state_ro.world(),
@@ -3437,6 +3520,19 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                 tx.metadata(),
             )
             .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
+            code::ensure_contract_execution_allowed(
+                state_ro.world(),
+                &identity.contract_address,
+                state_ro
+                    .block_height_hint()
+                    .ok_or_else(|| {
+                        OverlayBuildError::ContractCall(
+                            "ordinary raw-IVM quarantine preparation requires an execution block height"
+                                .to_owned(),
+                        )
+                    })?,
+            )
+            .map_err(OverlayBuildError::ContractCall)?;
             let entrypoint_authorization =
                 crate::executor::authorize_prepared_raw_contract_selector(
                     state_ro.world(),
@@ -3908,6 +4004,14 @@ mod tests_overlay_manifest {
             seed.world
                 .contract_instances
                 .insert(contract_address.clone(), code_hash);
+            seed.world
+                .contract_subject_addresses
+                .insert(contract_address.subject_id(), contract_address.clone());
+            seed.world.contract_subject_bindings.insert(
+                contract_address.clone(),
+                code::ContractSubjectBinding::new_direct(&contract_address, authority.clone())
+                    .with_active_code_hash(code_hash),
+            );
             code::set_pending_contract_lifecycle(&mut seed, &contract_address, Some(pending));
             seed.apply();
         }
@@ -4629,6 +4733,14 @@ seiyaku QuarantineArguments {
         world
             .contract_instances
             .insert(contract_address.clone(), verified.code_hash);
+        world
+            .contract_subject_addresses
+            .insert(contract_address.subject_id(), contract_address.clone());
+        world.contract_subject_bindings.insert(
+            contract_address.clone(),
+            code::ContractSubjectBinding::new_direct(&contract_address, authority.clone())
+                .with_active_code_hash(verified.code_hash),
+        );
         let mut permissions = iroha_data_model::permission::Permissions::new();
         assert!(
             permissions.insert(iroha_data_model::permission::Permission::new(
@@ -4735,6 +4847,110 @@ seiyaku QuarantineArguments {
     fn quarantined_raw_ivm_rebuild_decodes_arguments_exactly_once() {
         let (state, _, raw_ivm) = parameterized_quarantine_fixture();
         assert_quarantine_rebuild_decodes_arguments_once(&state, &raw_ivm);
+    }
+    #[test]
+    fn ordinary_raw_ivm_overlay_build_and_apply_reject_active_hold_before_argument_decode() {
+        let (state, contract_call, raw_ivm) = parameterized_quarantine_fixture();
+        let contract_address = match contract_call.instructions() {
+            Executable::ContractCall(call) => call.contract_address.clone(),
+            _ => unreachable!("fixture contract call executable"),
+        };
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let accounts = block.accounts_snapshot();
+        let upper_bound = nonzero!(1_000_000_u64);
+        let mut cache = IvmCache::new();
+        let stale = build_prepared_overlay_for_transaction_with_accounts_zk(
+            &raw_ivm,
+            Arc::clone(&accounts),
+            &block,
+            false,
+            &header,
+            StreamingOverlayMetadata::default(),
+            &mut cache,
+            false,
+            None,
+        )
+        .expect("prepare an ordinary raw-IVM overlay before the hold");
+        {
+            let mut seed = block.transaction();
+            let binding = seed
+                .world
+                .contract_subject_bindings
+                .get_mut(&contract_address)
+                .expect("fixture contract lifecycle binding");
+            binding.lifecycle.emergency_hold =
+                Some(iroha_data_model::smart_contract::ContractEmergencyHoldV1 {
+                    incident_digest: [0xB1; 32],
+                    proposal_content_id: [0xB2; 32],
+                    governance_attempt_id: [0xB3; 32],
+                    reason: "contain ordinary raw-IVM overlay execution".to_owned(),
+                    imposed_at_height: 1,
+                    expires_at_height: 2,
+                });
+            binding.lifecycle.revision = binding
+                .lifecycle
+                .revision
+                .checked_add(1)
+                .expect("test lifecycle revision advances");
+            seed.apply();
+        }
+        let assert_held = |error: OverlayBuildError| {
+            assert!(
+                matches!(error, OverlayBuildError::ContractCall(ref message)
+                    if message.contains("held by Parliament")),
+                "unexpected raw-IVM overlay hold error: {error:?}"
+            );
+            assert_eq!(
+                ivm::argument_record_decode_count(),
+                0,
+                "ordinary raw-IVM overlay hold checks must precede argument decoding"
+            );
+        };
+        ivm::reset_argument_record_decode_count();
+        assert_held(
+            build_overlay_for_transaction_with_cache(&raw_ivm, &block, &mut cache)
+                .expect_err("the simple raw-IVM overlay builder must reject the active hold"),
+        );
+        ivm::reset_argument_record_decode_count();
+        assert_held(
+            build_prepared_overlay_for_transaction_with_accounts_zk(
+                &raw_ivm,
+                Arc::clone(&accounts),
+                &block,
+                false,
+                &header,
+                StreamingOverlayMetadata::default(),
+                &mut cache,
+                false,
+                None,
+            )
+            .expect_err("the production raw-IVM overlay builder must reject the active hold"),
+        );
+        ivm::reset_argument_record_decode_count();
+        assert_held(
+            build_overlay_for_transaction_quarantine(
+                &raw_ivm,
+                accounts,
+                &block,
+                0,
+                upper_bound,
+                StreamingOverlayMetadata::default(),
+                &mut cache,
+                None,
+            )
+            .expect_err("the quarantine raw-IVM overlay builder must reject the active hold"),
+        );
+        let mut apply_tx = block.transaction();
+        let error = stale
+            .overlay
+            .apply(&mut apply_tx, raw_ivm.authority())
+            .expect_err("a hold imposed after preparation must invalidate the ordinary overlay");
+        assert!(
+            matches!(error, ValidationFail::NotPermitted(ref message)
+                if message.contains("held by Parliament")),
+            "unexpected stale ordinary raw-IVM overlay error: {error}"
+        );
     }
     #[test]
     fn state_free_raw_builder_rejects_protected_entrypoint_before_argument_decode() {

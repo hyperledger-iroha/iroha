@@ -1048,7 +1048,6 @@ def test_native_governance_sdk_contract_rejects_unconditional_skip(
         ),
         (
             ".github/workflows/sorafs-orchestrator-sdk.yml",
-            "bash ci/check_kagemusha_jvm_native_bridge.sh",
         ),
         (
             ".github/workflows/sorafs-orchestrator-sdk.yml",

@@ -1286,6 +1286,10 @@ mod tests {
         AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal,
         MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1,
     };
+    use iroha_data_model::isi::governance::{
+        PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1,
+        PARLIAMENT_TIMED_OVN_BALLOT_RECORD_BYTES_V1,
+    };
     use iroha_data_model::smart_contract::ContractAddress;
     use norito::json;
 

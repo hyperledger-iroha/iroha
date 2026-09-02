@@ -155,7 +155,7 @@ where
 /// Redacted failure returned by a deployment-owned auditor credential provider.
 ///
 /// Providers deliberately expose no backend diagnostics through this boundary:
-/// an HSM, KMS, threshold signer, or remote decryption service may retain its
+/// a deployment-owned signer or remote decryption service may retain its
 /// detailed diagnostics privately while the settlement path remains
 /// indistinguishable and fail closed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
@@ -165,7 +165,7 @@ pub struct PrivateSettlementAuditorCredentialErrorV1;
 /// Deployment-owned credential boundary for one governed online auditor.
 ///
 /// Implementations may keep the hybrid decryption secret and purpose-specific
-/// approval key inside an HSM, KMS, enclave, or threshold service. The runtime
+/// approval key behind a deployment-owned credential boundary. The runtime
 /// constructs every approval body and independently verifies every returned
 /// signature. Decryption providers return only a zeroizing canonical plaintext
 /// buffer, which is validated in full before the policy evaluator can observe
@@ -219,10 +219,9 @@ pub trait PrivateSettlementAuditorCredentialProviderV1: Send + Sync {
 
 /// Runtime-only software adapter for an auditor's two purpose-separated keys.
 ///
-/// Production deployments can replace this adapter with an implementation of
-/// [`PrivateSettlementAuditorCredentialProviderV1`] backed by an HSM, KMS,
-/// enclave, or threshold service. This adapter borrows key material and never
-/// serializes it.
+/// Production deployments can replace this adapter with a deployment-owned
+/// implementation of [`PrivateSettlementAuditorCredentialProviderV1`]. This
+/// adapter borrows key material and never serializes it.
 #[derive(Clone, Copy)]
 pub struct SoftwarePrivateSettlementAuditorCredentialsV1<'a> {
     decryption_secret: &'a HybridSecretKey,

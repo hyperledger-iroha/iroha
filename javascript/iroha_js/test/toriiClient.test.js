@@ -776,7 +776,8 @@ function createSumeragiV2StatusPayload(overrides = {}) {
     parent_state_root: fakeSumeragiHash(0x34),
     post_state_root: fakeSumeragiHash(0x35),
     ordinary_writes_root: fakeSumeragiHash(0x36),
-    topup_anchor_count: 0,
+    offline_cash_top_up_root: null,
+    offline_cash_top_up_count: 0,
     native_amx_application_manifest_version: 1,
     native_amx_application_manifest_root:
       NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT,
@@ -1789,6 +1790,26 @@ function createIsoSubmissionPayload(overrides = {}) {
     target_account_address: null,
     asset_definition_id: null,
     asset_id: null,
+    settlement_amount: null,
+    settlement_currency: null,
+    settlement_date: null,
+    settlement_quantity: null,
+    settlement_movement_type: null,
+    settlement_payment_type: null,
+    security_instrument_id: null,
+    collateral_obligation_id: null,
+    collateral_original_amount: null,
+    collateral_original_currency: null,
+    collateral_original_instrument_id: null,
+    collateral_substitute_amount: null,
+    collateral_substitute_currency: null,
+    collateral_substitute_instrument_id: null,
+    collateral_effective_date: null,
+    collateral_substitution_type: null,
+    collateral_haircut: null,
+    collateral_reason_code: null,
+    plan_execution_order: null,
+    plan_atomicity: null,
     ...overrides,
   };
 }
@@ -7870,6 +7891,42 @@ test("getIsoMessageStatus fetches status payload", async () => {
   assert.deepEqual(status, payload);
 });
 
+test("getIsoMessageStatus preserves schema-V3 settlement and plan provenance", async () => {
+  const payload = createIsoStatusPayload({
+    message_id: "msg-v3",
+    status: "Committed",
+    settlement_amount: "1250.00",
+    settlement_currency: "USD",
+    settlement_date: "2026-09-02",
+    settlement_quantity: "25",
+    settlement_movement_type: "DELIVERY",
+    settlement_payment_type: "AGAINST_PAYMENT",
+    security_instrument_id: "US0378331005",
+    collateral_obligation_id: "COLL-42",
+    collateral_original_amount: "1000",
+    collateral_original_currency: "USD",
+    collateral_original_instrument_id: "US0000000001",
+    collateral_substitute_amount: "990",
+    collateral_substitute_currency: "EUR",
+    collateral_substitute_instrument_id: "EU0000000002",
+    collateral_effective_date: "2026-09-03",
+    collateral_substitution_type: "FULL",
+    collateral_haircut: "0.01",
+    collateral_reason_code: "SUBS",
+    plan_execution_order: "1",
+    plan_atomicity: "atomic",
+  });
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({
+      status: 200,
+      jsonData: payload,
+      headers: { "content-type": "application/json" },
+    }),
+  });
+
+  assert.deepEqual(await client.getIsoMessageStatus("msg-v3"), payload);
+});
+
 test("getIsoMessageStatus forwards retryProfile to _request", async () => {
   let capturedRetryProfile;
   const client = new ToriiClient(BASE_URL, {
@@ -12052,6 +12109,36 @@ test("getSumeragiStatusTyped requires exact lane-finality and merge projections"
   }
 });
 
+test("getSumeragiStatusTyped accepts aggregate top-up commitments beyond the retired cap", async () => {
+  const payload = createSumeragiV2StatusPayload();
+  const commitment = payload.last_commit_qc.certificate.execution_commitment;
+  commitment.offline_cash_top_up_root = fakeSumeragiHash(0x38);
+  commitment.offline_cash_top_up_count = 1_000;
+
+  const parsed = await sumeragiClientForPayload(payload).getSumeragiStatusTyped();
+  assert.equal(
+    parsed.last_commit_qc.certificate.execution_commitment.offline_cash_top_up_count,
+    1_000,
+  );
+
+  const missingRoot = createSumeragiV2StatusPayload();
+  delete missingRoot.last_commit_qc.certificate.execution_commitment
+    .offline_cash_top_up_root;
+  await assert.rejects(
+    () => sumeragiClientForPayload(missingRoot).getSumeragiStatusTyped(),
+    /offline_cash_top_up_root is required/u,
+  );
+
+  const legacy = createSumeragiV2StatusPayload();
+  const legacyCommitment = legacy.last_commit_qc.certificate.execution_commitment;
+  legacyCommitment.topup_anchor_root = fakeSumeragiHash(0x38);
+  legacyCommitment.topup_anchor_count = 1;
+  await assert.rejects(
+    () => sumeragiClientForPayload(legacy).getSumeragiStatusTyped(),
+    /unknown field topup_anchor_root/u,
+  );
+});
+
 test("package distribution requires a nullable exact V1 merge carrier projection", async () => {
   const ordinary = createSumeragiV2StatusPayload();
   let commitment = ordinary.last_commit_qc.certificate.execution_commitment;
@@ -14376,12 +14463,32 @@ registerToriiClientGovernanceTests({
   toriiFixtures,
 });
 
-test("listSumeragiEvidence encodes query parameters", async () => {
+function canonicalSumeragiEvidenceRecord(overrides = {}) {
+  return {
+    kind: "SumeragiV2Equivocation",
+    class: "phase_vote",
+    height: 31,
+    view: 4,
+    epoch: 2,
+    signer: 3,
+    context_id: "11".repeat(32),
+    artifact_hash_1: "22".repeat(32),
+    artifact_hash_2: "33".repeat(32),
+    recorded_height: 40,
+    recorded_view: 2,
+    recorded_ms: 1_700_000_000_000,
+    consensus_admitted_height: 41,
+    penalty_status: { status: "pending", details: null },
+    ...overrides,
+  };
+}
+
+test("listSumeragiEvidence encodes the bounded canonical query", async () => {
   let observedSignal;
   const fetchImpl = async (url, init) => {
     assert.equal(
       url,
-      `${BASE_URL}/v1/sumeragi/evidence?limit=25&offset=5&kind=DoublePrepare`,
+      `${BASE_URL}/v1/sumeragi/evidence?limit=25&offset=5&kind=SumeragiV2Equivocation`,
     );
     assert.equal(init.headers.Accept, "application/json");
     observedSignal = init.signal;
@@ -14389,23 +14496,8 @@ test("listSumeragiEvidence encodes query parameters", async () => {
     return createResponse({
       status: 200,
       jsonData: {
-        total: 1,
-        items: [
-          {
-            kind: "DoublePrepare",
-            phase: "Prepare",
-            height: 10,
-            view: 2,
-            epoch: 1,
-            signer: 0,
-            block_hash_1: "aa".repeat(32),
-            block_hash_2: "bb".repeat(32),
-            recorded_height: 10,
-            recorded_view: 2,
-            recorded_ms: 123,
-            consensus_admitted_height: null,
-          },
-        ],
+        total: 6,
+        items: [canonicalSumeragiEvidenceRecord()],
       },
       headers: { "content-type": "application/json" },
     });
@@ -14415,12 +14507,12 @@ test("listSumeragiEvidence encodes query parameters", async () => {
   const payload = await client.listSumeragiEvidence({
     limit: 25,
     offset: 5,
-    kind: "DoublePrepare",
+    kind: "SumeragiV2Equivocation",
     signal: controller.signal,
   });
-  assert.equal(payload.total, 1);
+  assert.equal(payload.total, 6);
   assert.equal(payload.items.length, 1);
-  assert.equal(payload.items[0].kind, "DoublePrepare");
+  assert.deepEqual(payload.items[0], canonicalSumeragiEvidenceRecord());
   controller.abort();
   assert.equal(observedSignal?.aborted, false, "completed requests detach caller abort listeners");
 });
@@ -14428,9 +14520,22 @@ test("listSumeragiEvidence encodes query parameters", async () => {
 test("listSumeragiEvidence rejects invalid kind", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 200 }) });
   await assert.rejects(
-    () => client.listSumeragiEvidence({ kind: "Invalid" }),
-    /kind must be one of/,
+    () => client.listSumeragiEvidence({ kind: "DoublePrepare" }),
+    /kind must be SumeragiV2Equivocation/,
   );
+});
+
+test("listSumeragiEvidence rejects out-of-range pagination before dispatch", async () => {
+  let calls = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      calls += 1;
+      return createResponse({ status: 200 });
+    },
+  });
+  await assert.rejects(() => client.listSumeragiEvidence({ limit: 1001 }), /limit must be <= 1000/);
+  await assert.rejects(() => client.listSumeragiEvidence({ offset: 10001 }), /offset must be <= 10000/);
+  assert.equal(calls, 0);
 });
 
 test("listSumeragiEvidence accepts the exact v2 equivocation kind filter", async () => {
@@ -14459,7 +14564,7 @@ test("listSumeragiEvidence rejects unsupported options", async () => {
   await assert.rejects(
     () =>
       client.listSumeragiEvidence({
-        kind: "DoublePrepare",
+        kind: "SumeragiV2Equivocation",
         limit: 1,
         note: "extra",
       }),
@@ -14467,179 +14572,33 @@ test("listSumeragiEvidence rejects unsupported options", async () => {
   );
 });
 
-test("listSumeragiEvidence normalizes evidence payloads", async () => {
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: {
-        total: 5,
-        items: [
-          {
-            kind: "DoublePrepare",
-            phase: "Prepare",
-            height: 42,
-            view: 7,
-            epoch: 3,
-            signer: 1,
-            block_hash_1: "aa".repeat(32),
-            block_hash_2: "bb".repeat(32),
-            recorded_height: 80,
-            recorded_view: 1,
-            recorded_ms: 1234,
-            consensus_admitted_height: 79,
-          },
-          {
-            kind: "Censorship",
-            tx_hash: "44".repeat(32),
-            receipt_count: 2,
-            submitted_at_height_min: 10,
-            submitted_at_height_max: 12,
-            signers: ["alice@test", "bob@test"],
-            recorded_height: 81,
-            recorded_view: 3,
-            recorded_ms: 1500,
-            consensus_admitted_height: null,
-          },
-          {
-            kind: "InvalidQc",
-            height: 2,
-            view: 3,
-            epoch: 4,
-            subject_block_hash: "11".repeat(32),
-            phase: "Commit",
-            reason: "bad qc",
-            recorded_height: 82,
-            recorded_view: 4,
-            recorded_ms: 1600,
-            consensus_admitted_height: null,
-          },
-          {
-            kind: "InvalidProposal",
-            height: 6,
-            view: 7,
-            epoch: 8,
-            subject_block_hash: "22".repeat(32),
-            payload_hash: "33".repeat(32),
-            reason: "bad payload",
-            recorded_height: 83,
-            recorded_view: 5,
-            recorded_ms: 1700,
-            consensus_admitted_height: null,
-          },
-          {
-            kind: "SumeragiV2Equivocation",
-            class: "phase_vote",
-            height: 9,
-            view: 10,
-            epoch: 11,
-            signer: 2,
-            context_id: "55".repeat(32),
-            artifact_hash_1: "66".repeat(32),
-            artifact_hash_2: "77".repeat(32),
-            recorded_height: 84,
-            recorded_view: 6,
-            recorded_ms: 1800,
-            consensus_admitted_height: 84,
-          },
-        ],
-      },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.listSumeragiEvidence();
-  assert.equal(payload.total, 5);
-  assert.deepEqual(payload.items, [
-    {
-      kind: "DoublePrepare",
-      recorded_height: 80,
-      recorded_view: 1,
-      recorded_ms: 1234,
-      consensus_admitted_height: 79,
-      phase: "Prepare",
-      height: 42,
-      view: 7,
-      epoch: 3,
-      signer: 1,
-      block_hash_1: "aa".repeat(32),
-      block_hash_2: "bb".repeat(32),
-    },
-    {
-      kind: "Censorship",
-      recorded_height: 81,
-      recorded_view: 3,
-      recorded_ms: 1500,
-      consensus_admitted_height: null,
-      tx_hash: "44".repeat(32),
-      receipt_count: 2,
-      signers: ["alice@test", "bob@test"],
-      submitted_at_height_min: 10,
-      submitted_at_height_max: 12,
-    },
-    {
-      kind: "InvalidQc",
-      recorded_height: 82,
-      recorded_view: 4,
-      recorded_ms: 1600,
-      consensus_admitted_height: null,
-      height: 2,
-      view: 3,
-      epoch: 4,
-      subject_block_hash: "11".repeat(32),
-      phase: "Commit",
-      reason: "bad qc",
-    },
-    {
-      kind: "InvalidProposal",
-      recorded_height: 83,
-      recorded_view: 5,
-      recorded_ms: 1700,
-      consensus_admitted_height: null,
-      height: 6,
-      view: 7,
-      epoch: 8,
-      subject_block_hash: "22".repeat(32),
-      payload_hash: "33".repeat(32),
-      reason: "bad payload",
-    },
-    {
-      kind: "SumeragiV2Equivocation",
-      recorded_height: 84,
-      recorded_view: 6,
-      recorded_ms: 1800,
-      consensus_admitted_height: 84,
-      class: "phase_vote",
-      height: 9,
-      view: 10,
-      epoch: 11,
-      signer: 2,
-      context_id: "55".repeat(32),
-      artifact_hash_1: "66".repeat(32),
-      artifact_hash_2: "77".repeat(32),
-    },
-  ]);
-});
-
-test("listSumeragiEvidence rejects malformed payloads", async () => {
+test("listSumeragiEvidence normalizes the closed evidence payload", async () => {
+  const canonical = canonicalSumeragiEvidenceRecord({
+    penalty_status: { status: "applied", details: { height: 84 } },
+  });
   const fetchImpl = async () =>
     createResponse({
       status: 200,
       jsonData: {
         total: 1,
-        items: [
-          {
-            kind: "DoublePrepare",
-            phase: "Prepare",
-            height: 1,
-            view: 0,
-            epoch: 0,
-            signer: 0,
-            block_hash_1: "aa".repeat(32),
-            block_hash_2: "bb".repeat(32),
-            recorded_view: 0,
-            recorded_ms: 0,
-            consensus_admitted_height: null,
-          },
-        ],
+        items: [canonical],
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const payload = await client.listSumeragiEvidence();
+  assert.deepEqual(payload, { total: 1, items: [canonical] });
+});
+
+test("listSumeragiEvidence rejects malformed payloads", async () => {
+  const item = canonicalSumeragiEvidenceRecord();
+  delete item.recorded_height;
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        total: 1,
+        items: [item],
       },
       headers: { "content-type": "application/json" },
     });
@@ -14647,106 +14606,161 @@ test("listSumeragiEvidence rejects malformed payloads", async () => {
   await assert.rejects(() => client.listSumeragiEvidence(), /recorded_height/);
 });
 
-test("listSumeragiEvidence rejects retired censorship height aliases", async () => {
-  const canonical = {
-    kind: "Censorship",
-    tx_hash: "44".repeat(32),
-    receipt_count: 1,
-    signers: ["alice@test"],
-    submitted_at_height_min: 10,
-    submitted_at_height_max: 10,
-    recorded_height: 11,
-    recorded_view: 0,
-    recorded_ms: 12,
-    consensus_admitted_height: null,
-  };
+test("listSumeragiEvidence requires the exact page envelope", async () => {
   await Promise.all(
     [
-      "min_height",
-      "max_height",
-      "minHeight",
-      "maxHeight",
-      "submittedAtHeightMin",
-      "submittedAtHeightMax",
-    ].map(async (alias) => {
+      [{ items: [] }, /missing total/],
+      [{ total: 0 }, /missing items/],
+      [{ total: 0, items: [], cursor: null }, /unexpected cursor/],
+      [{ total: "0", items: [] }, /total must be an unsigned JSON integer/],
+    ].map(async ([payload, expected]) => {
       const client = new ToriiClient(BASE_URL, {
         fetchImpl: async () =>
           createResponse({
             status: 200,
-            jsonData: { total: 1, items: [{ ...canonical, [alias]: 10 }] },
+            jsonData: payload,
             headers: { "content-type": "application/json" },
           }),
       });
-      await assert.rejects(() => client.listSumeragiEvidence(), /exact server fields/);
+      await assert.rejects(() => client.listSumeragiEvidence(), expected);
     }),
   );
 });
 
+test("listSumeragiEvidence rejects impossible or oversized pages", async () => {
+  for (const [options, payload, expected] of [
+    [
+      {},
+      { total: 51, items: Array.from({ length: 51 }, () => canonicalSumeragiEvidenceRecord()) },
+      /at most 50 records/,
+    ],
+    [
+      { offset: 1 },
+      { total: 1, items: [canonicalSumeragiEvidenceRecord()] },
+      /must cover offset plus returned items/,
+    ],
+  ]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData: payload,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(() => client.listSumeragiEvidence(options), expected);
+  }
+});
+
+test("listSumeragiEvidence accepts an empty page beyond the total", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: { total: 1, items: [] },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+
+  assert.deepEqual(await client.listSumeragiEvidence({ offset: 10 }), {
+    total: 1,
+    items: [],
+  });
+});
+
+test("Sumeragi evidence reads preserve the full unsigned 64-bit range", async () => {
+  const maximum = "18446744073709551615";
+  const marker = "__U64_MAX__";
+  const item = canonicalSumeragiEvidenceRecord({
+    height: marker,
+    view: marker,
+    epoch: marker,
+    recorded_height: marker,
+    recorded_view: marker,
+    recorded_ms: marker,
+    consensus_admitted_height: marker,
+    penalty_status: { status: "applied", details: { height: marker } },
+  });
+  const listBody = JSON.stringify({ total: marker, items: [item] }).replaceAll(
+    `"${marker}"`,
+    maximum,
+  );
+  const countBody = `{"count":${maximum}}`;
+  const responses = [listBody, countBody];
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        textBody: responses.shift(),
+        headers: { "content-type": "application/json" },
+      }),
+  });
+
+  const page = await client.listSumeragiEvidence();
+  assert.equal(page.total, 18446744073709551615n);
+  for (const field of [
+    "height",
+    "view",
+    "epoch",
+    "recorded_height",
+    "recorded_view",
+    "recorded_ms",
+    "consensus_admitted_height",
+  ]) {
+    assert.equal(page.items[0][field], 18446744073709551615n);
+  }
+  assert.equal(page.items[0].penalty_status.details.height, 18446744073709551615n);
+  assert.equal((await client.getSumeragiEvidenceCount()).count, 18446744073709551615n);
+});
+
+test("listSumeragiEvidence enforces its JSON media type and byte ceiling", async () => {
+  const canonicalBody = '{"total":0,"items":[]}';
+  for (const [textBody, headers, expected] of [
+    [canonicalBody, { "content-type": "text/plain" }, /application\/json media type/],
+    [
+      canonicalBody,
+      {
+        "content-type": "application/json",
+        "content-length": String(1024 * 1024 + 1),
+      },
+      /exceeds the 1048576-byte response limit/,
+    ],
+    [
+      canonicalBody.padEnd(1024 * 1024 + 1, " "),
+      { "content-type": "application/json" },
+      /exceeds the 1048576-byte response limit/,
+    ],
+  ]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          textBody,
+          headers,
+        }),
+    });
+    await assert.rejects(() => client.listSumeragiEvidence(), expected);
+  }
+});
+
 test("listSumeragiEvidence rejects malformed exact evidence shapes", async () => {
-  const equivocation = {
-    kind: "SumeragiV2Equivocation",
-    class: "proposal",
-    height: 10,
-    view: 2,
-    epoch: 1,
-    signer: 3,
-    context_id: "11".repeat(32),
-    artifact_hash_1: "22".repeat(32),
-    artifact_hash_2: "33".repeat(32),
-    recorded_height: 12,
-    recorded_view: 0,
-    recorded_ms: 13,
-    consensus_admitted_height: null,
-  };
+  const equivocation = canonicalSumeragiEvidenceRecord({ class: "proposal" });
   const missingContext = { ...equivocation };
   delete missingContext.context_id;
   const cases = [
     [{ ...equivocation, class: "Prepare" }, /\.class must be one of/],
-    [{ ...equivocation, signer: "3" }, /\.signer must be a non-negative JSON safe integer/],
-    [{ ...equivocation, signer: 0x100000000 }, /\.signer must be a non-negative JSON safe integer/],
+    [{ ...equivocation, signer: "3" }, /\.signer must be an unsigned JSON integer/],
+    [{ ...equivocation, signer: 0x100000000 }, /\.signer must be at most 4294967295/],
     [{ ...equivocation, context_id: "AA".repeat(32) }, /exact lowercase 32-byte hex/],
     [{ ...equivocation, artifact_hash_2: "22".repeat(32) }, /distinct artifacts/],
     [missingContext, /missing context_id/],
-    [
-      {
-        kind: "UnknownEvidence",
-        recorded_height: 11,
-        recorded_view: 0,
-        recorded_ms: 12,
-        consensus_admitted_height: null,
-      },
-      /\.kind must be one of/,
-    ],
-    [
-      {
-        kind: "Censorship",
-        tx_hash: "44".repeat(32),
-        receipt_count: 2,
-        signers: ["alice@test"],
-        submitted_at_height_min: 10,
-        submitted_at_height_max: 9,
-        recorded_height: 11,
-        recorded_view: 0,
-        recorded_ms: 12,
-        consensus_admitted_height: null,
-      },
-      /receipt_count must equal signers\.length/,
-    ],
-    [
-      {
-        kind: "Censorship",
-        tx_hash: "44".repeat(32),
-        receipt_count: 1,
-        signers: ["alice@test"],
-        submitted_at_height_min: 10,
-        submitted_at_height_max: 9,
-        recorded_height: 11,
-        recorded_view: 0,
-        recorded_ms: 12,
-        consensus_admitted_height: null,
-      },
-      /submitted_at_height_min must be <= submitted_at_height_max/,
-    ],
+    [{ ...equivocation, kind: "DoublePrepare" }, /kind must be SumeragiV2Equivocation/],
+    [{ ...equivocation, consensus_admitted_height: null }, /consensus_admitted_height/],
+    [{ ...equivocation, penalty_status: { status: "pending", details: {} } }, /details must be null/],
+    [{ ...equivocation, penalty_status: { status: "applied", details: null } }, /must be an object/],
+    [{ ...equivocation, penalty_status: { status: "cancelled", details: { height: 8, note: "x" } } }, /unexpected note/],
+    [{ ...equivocation, penalty_status: { status: "retired", details: null } }, /must be pending, applied, or cancelled/],
+    [{ ...equivocation, penalty_applied: false }, /unexpected penalty_applied/],
   ];
   await Promise.all(
     cases.map(async ([item, expected]) => {
@@ -14773,6 +14787,46 @@ test("getSumeragiEvidenceCount returns count payload", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.getSumeragiEvidenceCount();
   assert.deepEqual(result, { count: 7 });
+});
+
+test("getSumeragiEvidenceCount requires the exact count envelope", async () => {
+  for (const [payload, expected] of [
+    [{}, /missing count/],
+    [{ count: 1, total: 1 }, /unexpected total/],
+    [{ count: "1" }, /count must be an unsigned JSON integer/],
+  ]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData: payload,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(() => client.getSumeragiEvidenceCount(), expected);
+  }
+});
+
+test("getSumeragiEvidenceCount enforces the 1 KiB response ceiling", async () => {
+  const canonicalBody = '{"count":0}';
+  for (const [textBody, headers] of [
+    [
+      canonicalBody,
+      {
+        "content-type": "application/json",
+        "content-length": String(1024 + 1),
+      },
+    ],
+    [canonicalBody.padEnd(1024 + 1, " "), { "content-type": "application/json" }],
+  ]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({ status: 200, textBody, headers }),
+    });
+    await assert.rejects(
+      () => client.getSumeragiEvidenceCount(),
+      /exceeds the 1024-byte response limit/,
+    );
+  }
 });
 
 test("getMetrics returns text when requested", async () => {

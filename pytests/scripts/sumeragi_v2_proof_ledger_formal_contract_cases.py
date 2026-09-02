@@ -288,7 +288,6 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('peer_tests.rs'),
     ),
     Path('crates/irohad/src/main.rs'): (
-        Path('main/kagemusha_runtime_effective_config_projection.rs'),
         Path('main/shared_sorafs_provider_cache_tests.rs'),
         Path('main/runtime_deps.rs'),
         Path('sumeragi_lane_relay_item.rs'),
@@ -296,8 +295,6 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('main/resolved_genesis_trust_anchor_wrong_hash_test.rs'),
         Path('main_tests/governance_dag_publisher_binding_signer.rs'),
         Path('main/governance_dag_launcher_tests.rs'),
-        Path('main/kagemusha_runtime_effective_config_projection_tests.rs'),
-        Path('main/kagemusha_startup_source_tests.rs'),
         Path('main/runtime_budget_and_config_tests.rs'),
         Path('main/startup_tail_tests.rs'),
     ),
@@ -442,7 +439,6 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/v2_worker_main_02.rs'),
         Path('tests/v2_worker_main_04.rs'),
         Path('tests/v2_worker_main_05.rs'),
-        Path('tests/v2_worker_kagemusha_runtime_gate.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_worker_io_execution.rs'): (
         Path('v2_worker/exact_output_rollover_claim.rs'),

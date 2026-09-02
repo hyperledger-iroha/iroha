@@ -1181,15 +1181,10 @@ pub mod offline {
     };
     /// Fetch the node's universal offline-wallet interface capability.
     pub const READINESS_PATH: &str = "/v1/offline/readiness";
-    /// Resolve proof-bearing active registration lineage for an authenticated account.
-    pub const RECIPIENT_LINEAGE_PATH: &str = "/v1/offline/receiver-lineage";
     /// Submit a signed online-to-offline top-up operation.
     pub const TOP_UP_PATH: &str = "/v1/offline/top-up";
     /// Submit a signed offline redemption operation.
     pub const REDEEM_PATH: &str = "/v1/offline/redeem";
-    /// Submit one exact ordinary Kagemusha V4 lifecycle transaction.
-    pub const KAGEMUSHA_LIFECYCLE_TRANSACTION_PATH: &str =
-        "/v1/offline/kagemusha/lifecycle-v4/transactions";
     /// Fetch one offline operation by its canonical operation ID.
     pub const OPERATION_PATH: &str = "/v1/offline/operations/{operation_id}";
     /// Descriptor for universal offline-wallet capability discovery.
@@ -1202,20 +1197,6 @@ pub mod offline {
         RouteEffect::ReadOnly,
         AdmissionPolicy::Public,
     )
-    .with_feature_gate(FeatureGate::Feature("app_api"))
-    .with_projections(RouteProjections::ALL)
-    .with_cors_options(true);
-    /// Descriptor for proof-bearing receiver-registration lineage resolution.
-    pub const RECIPIENT_LINEAGE: RouteDescriptor = RouteDescriptor::new(
-        "offline.receiver_lineage",
-        HttpMethod::Post,
-        RECIPIENT_LINEAGE_PATH,
-        ApiSurface::Public,
-        Listener::Torii,
-        RouteEffect::ExpensiveCompute,
-        AdmissionPolicy::AuthenticatedAccount,
-    )
-    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
@@ -1247,20 +1228,6 @@ pub mod offline {
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
-    /// Descriptor for exact ordinary Kagemusha V4 lifecycle submission.
-    pub const KAGEMUSHA_LIFECYCLE_TRANSACTION: RouteDescriptor = RouteDescriptor::new(
-        "offline.kagemusha_lifecycle_transaction",
-        HttpMethod::Post,
-        KAGEMUSHA_LIFECYCLE_TRANSACTION_PATH,
-        ApiSurface::Public,
-        Listener::Torii,
-        RouteEffect::Mutation,
-        AdmissionPolicy::AuthenticatedAccount,
-    )
-    .with_authentication(AuthenticationPolicy::CanonicalSignedBody)
-    .with_feature_gate(FeatureGate::Feature("app_api"))
-    .with_projections(RouteProjections::ALL)
-    .with_cors_options(true);
     /// Descriptor for reading one offline operation.
     pub const OPERATION: RouteDescriptor = RouteDescriptor::new(
         "offline.operation",
@@ -1275,14 +1242,7 @@ pub mod offline {
     .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
     /// Canonical first-release offline API catalog.
-    pub const ROUTES: &[RouteDescriptor] = &[
-        READINESS,
-        RECIPIENT_LINEAGE,
-        TOP_UP,
-        REDEEM,
-        KAGEMUSHA_LIFECYCLE_TRANSACTION,
-        OPERATION,
-    ];
+    pub const ROUTES: &[RouteDescriptor] = &[READINESS, TOP_UP, REDEEM, OPERATION];
 }
 /// Alias lookup, private evaluation, and recipient-resolution descriptors.
 pub mod aliases {
@@ -1575,18 +1535,6 @@ pub mod core {
     )
     .with_authentication(AuthenticationPolicy::OperatorSignature)
     .with_projections(RouteProjections::OPENAPI);
-    /// Update mutable node configuration.
-    pub const CONFIGURATION_POST: RouteDescriptor = RouteDescriptor::new(
-        "operator.configuration.update",
-        HttpMethod::Post,
-        "/v1/configuration",
-        ApiSurface::Operator,
-        Listener::Torii,
-        RouteEffect::Mutation,
-        AdmissionPolicy::Operator,
-    )
-    .with_authentication(AuthenticationPolicy::OperatorSignature)
-    .with_projections(RouteProjections::OPENAPI);
     /// Read the current Nexus lane lifecycle commitment.
     pub const NEXUS_LIFECYCLE_GET: RouteDescriptor = RouteDescriptor::new(
         "nexus.lifecycle.read",
@@ -1780,7 +1728,6 @@ pub mod core {
         LIVEZ,
         READYZ,
         CONFIGURATION_GET,
-        CONFIGURATION_POST,
         NEXUS_LIFECYCLE_GET,
         LEDGER_HEADERS,
         LEDGER_STATE_ROOT,
@@ -2509,7 +2456,10 @@ pub mod telemetry {
     pub const ASSET_HOLDERS_QUERY: RouteDescriptor = app_post(
         "asset.holder.query",
         "/v1/assets/{definition_id}/holders/query",
-    );
+    )
+    .with_effect(RouteEffect::ExpensiveCompute)
+    .with_admission(AdmissionPolicy::DataspaceVisible)
+    .with_authentication(AuthenticationPolicy::OptionalCanonicalAccountSignature);
     /// Complete route family registered by `add_telemetry_routes`.
     pub const ROUTES: &[RouteDescriptor] = &[
         DEBUG_AXT_CACHE,
@@ -3719,6 +3669,12 @@ pub mod application_api {
             .with_admission(AdmissionPolicy::DataspaceVisible)
             .with_authentication(AuthenticationPolicy::OptionalCanonicalAccountSignature)
     }
+    const fn dataspace_compute_post(id: &'static str, path: &'static str) -> RouteDescriptor {
+        app_post(id, path)
+            .with_effect(RouteEffect::ExpensiveCompute)
+            .with_admission(AdmissionPolicy::DataspaceVisible)
+            .with_authentication(AuthenticationPolicy::OptionalCanonicalAccountSignature)
+    }
     const fn dataspace_sdk_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         dataspace_get(id, path).with_projections(RouteProjections::SDK)
     }
@@ -3866,7 +3822,7 @@ pub mod application_api {
         INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_GET => internal_get("application.internal_accounts_by_account_id_get", "/v1/internal/accounts/{account_id}");
         INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_BY_ENTRYPOINT_HASH_GET => internal_get("application.internal_accounts_by_account_id_transactions_by_entrypoint_hash_get", "/v1/internal/accounts/{account_id}/transactions/{entrypoint_hash}");
         INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_ASSETS_BY_ASSET_DEFINITION_ID_GET => internal_get("application.internal_accounts_by_account_id_assets_by_asset_definition_id_get", "/v1/internal/accounts/{account_id}/assets/{asset_definition_id}");
-        ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_QUERY_POST => account_compute_post("application.accounts_by_account_id_transactions_query_post", "/v1/accounts/{account_id}/transactions/query");
+        ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_QUERY_POST => dataspace_compute_post("application.accounts_by_account_id_transactions_query_post", "/v1/accounts/{account_id}/transactions/query");
         TRANSACTIONS_HISTORY_GET => app_get("application.transactions_history_get", "/v1/transactions/history");
         CONTRACTS_ACTIVITY_GET => dataspace_get("application.contracts_activity_get", "/v1/contracts/activity");
         CONTRACTS_EVENTS_GET => dataspace_get("application.contracts_events_get", "/v1/contracts/events");
@@ -3882,17 +3838,17 @@ pub mod application_api {
         CONTRACTS_ROLLUPS_RWA_LOTS_GET => dataspace_sdk_get("application.contracts_rollups_rwa_lots_get", "/v1/contracts/rollups/rwa/lots");
         CONTRACTS_ROLLUPS_DLMM_HOOKS_GET => dataspace_sdk_get("application.contracts_rollups_dlmm_hooks_get", "/v1/contracts/rollups/dlmm/hooks");
         ACCOUNTS_BY_ACCOUNT_ID_ASSETS_GET => dataspace_get("application.accounts_by_account_id_assets_get", "/v1/accounts/{account_id}/assets");
-        ACCOUNTS_BY_ACCOUNT_ID_ASSETS_QUERY_POST => account_compute_post("application.accounts_by_account_id_assets_query_post", "/v1/accounts/{account_id}/assets/query");
+        ACCOUNTS_BY_ACCOUNT_ID_ASSETS_QUERY_POST => dataspace_compute_post("application.accounts_by_account_id_assets_query_post", "/v1/accounts/{account_id}/assets/query");
         ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_GET => dataspace_get("application.accounts_by_account_id_permissions_get", "/v1/accounts/{account_id}/permissions");
         ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_GET => dataspace_get("application.accounts_by_account_id_transactions_get", "/v1/accounts/{account_id}/transactions");
         ACCOUNTS_BY_ACCOUNT_ID_HISTORY_GET => dataspace_get("application.accounts_by_account_id_history_get", "/v1/accounts/{account_id}/history");
         PROOFS_QUERY_POST => signed_compute_post("application.proofs_query_post", "/v1/proofs/query");
         ZK_PROOF_TAGS_BY_BACKEND_BY_HASH_GET => app_get("application.zk_proof_tags_by_backend_by_hash_get", "/v1/zk/proof-tags/{backend}/{hash}");
-        DOMAINS_GET => app_get("application.domains_get", "/v1/domains");
-        DOMAINS_QUERY_POST => account_compute_post("application.domains_query_post", "/v1/domains/query");
-        ACCOUNTS_GET => app_get("application.accounts_get", "/v1/accounts");
-        ACCOUNTS_QUERY_POST => account_compute_post("application.accounts_query_post", "/v1/accounts/query");
-        TRANSACTIONS_QUERY_POST => operator_expensive_post("application.transactions_query_post", "/v1/transactions/query");
+        DOMAINS_GET => dataspace_get("application.domains_get", "/v1/domains");
+        DOMAINS_QUERY_POST => dataspace_compute_post("application.domains_query_post", "/v1/domains/query");
+        ACCOUNTS_GET => dataspace_get("application.accounts_get", "/v1/accounts");
+        ACCOUNTS_QUERY_POST => dataspace_compute_post("application.accounts_query_post", "/v1/accounts/query");
+        TRANSACTIONS_QUERY_POST => dataspace_compute_post("application.transactions_query_post", "/v1/transactions/query");
         TRANSACTIONS_VISIBLE_QUERY_POST => account_compute_post("application.transactions_visible_query_post", "/v1/transactions/visible/query");
         ACCOUNTS_ONBOARD_PLAN_POST => onboarding_compute_post("application.accounts_onboard_plan_post", "/v1/accounts/onboard/plan");
         ACCOUNTS_ONBOARD_PREPARE_POST => onboarding_compute_post("application.accounts_onboard_prepare_post", "/v1/accounts/onboard/prepare");
@@ -3902,14 +3858,14 @@ pub mod application_api {
         ACCOUNTS_FAUCET_PUZZLE_GET => app_get("application.accounts_faucet_puzzle_get", "/v1/accounts/faucet/puzzle");
         ACCOUNTS_FAUCET_PREPARE_POST => faucet_protocol_compute_post("application.accounts_faucet_prepare_post", "/v1/accounts/faucet/prepare");
         ACCOUNTS_FAUCET_POST => faucet_protocol_mutation_post("application.accounts_faucet_post", "/v1/accounts/faucet");
-        ACCOUNTS_BY_ACCOUNT_ID_ALIASES_GET => app_sdk_get("application.accounts_by_account_id_aliases_get", "/v1/accounts/{account_id}/aliases");
-        ACCOUNTS_BY_UAID_PORTFOLIO_GET => app_get("application.accounts_by_uaid_portfolio_get", "/v1/accounts/{uaid}/portfolio");
+        ACCOUNTS_BY_ACCOUNT_ID_ALIASES_GET => account_read_sdk_get("application.accounts_by_account_id_aliases_get", "/v1/accounts/{account_id}/aliases");
+        ACCOUNTS_BY_UAID_PORTFOLIO_GET => dataspace_get("application.accounts_by_uaid_portfolio_get", "/v1/accounts/{uaid}/portfolio");
         NEXUS_PUBLIC_LANES_BY_LANE_ID_VALIDATORS_GET => app_get("application.nexus_public_lanes_by_lane_id_validators_get", "/v1/nexus/public-lanes/{lane_id}/validators");
         NEXUS_PUBLIC_LANES_BY_LANE_ID_STAKE_GET => app_get("application.nexus_public_lanes_by_lane_id_stake_get", "/v1/nexus/public-lanes/{lane_id}/stake");
         NEXUS_PUBLIC_LANES_BY_LANE_ID_REWARDS_PENDING_GET => app_get("application.nexus_public_lanes_by_lane_id_rewards_pending_get", "/v1/nexus/public-lanes/{lane_id}/rewards/pending");
-        NEXUS_DATASPACES_ACCOUNTS_BY_LITERAL_SUMMARY_GET => app_get("application.nexus_dataspaces_accounts_by_literal_summary_get", "/v1/nexus/dataspaces/accounts/{literal}/summary");
-        SPACE_DIRECTORY_UAIDS_BY_UAID_GET => app_get("application.space_directory_uaids_by_uaid_get", "/v1/space-directory/uaids/{uaid}");
-        SPACE_DIRECTORY_UAIDS_BY_UAID_MANIFESTS_GET => app_get("application.space_directory_uaids_by_uaid_manifests_get", "/v1/space-directory/uaids/{uaid}/manifests");
+        NEXUS_DATASPACES_ACCOUNTS_BY_LITERAL_SUMMARY_GET => dataspace_get("application.nexus_dataspaces_accounts_by_literal_summary_get", "/v1/nexus/dataspaces/accounts/{literal}/summary");
+        SPACE_DIRECTORY_UAIDS_BY_UAID_GET => dataspace_get("application.space_directory_uaids_by_uaid_get", "/v1/space-directory/uaids/{uaid}");
+        SPACE_DIRECTORY_UAIDS_BY_UAID_MANIFESTS_GET => dataspace_get("application.space_directory_uaids_by_uaid_manifests_get", "/v1/space-directory/uaids/{uaid}/manifests");
         SPACE_DIRECTORY_MANIFESTS_POST => account_compute_post("application.space_directory_manifests_post", "/v1/space-directory/manifests");
         SPACE_DIRECTORY_MANIFESTS_REVOKE_POST => account_compute_post("application.space_directory_manifests_revoke_post", "/v1/space-directory/manifests/revoke");
         RAM_LFE_PROGRAM_POLICIES_GET => app_get("application.ram_lfe_program_policies_get", "/v1/ram-lfe/program-policies");
@@ -3976,14 +3932,14 @@ pub mod application_api {
         SORACLOUD_AGENT_MAILBOX_STATUS_GET => account_read_sdk_get("application.soracloud_agent_mailbox_status_get", "/v1/soracloud/agent/mailbox/status");
         SORACLOUD_AGENT_AUTONOMY_ALLOW_POST => soracloud_mutation_post("application.soracloud_agent_autonomy_allow_post", "/v1/soracloud/agent/autonomy/allow");
         SORACLOUD_AGENT_AUTONOMY_STATUS_GET => account_read_sdk_get("application.soracloud_agent_autonomy_status_get", "/v1/soracloud/agent/autonomy/status");
-        ASSETS_DEFINITIONS_GET => app_get("application.assets_definitions_get", "/v1/assets/definitions");
-        ASSETS_DEFINITIONS_BY_ASSET_GET => app_get("application.assets_definitions_by_asset_get", "/v1/assets/definitions/{asset}");
-        ASSETS_DEFINITIONS_QUERY_POST => account_compute_post("application.assets_definitions_query_post", "/v1/assets/definitions/query");
+        ASSETS_DEFINITIONS_GET => dataspace_get("application.assets_definitions_get", "/v1/assets/definitions");
+        ASSETS_DEFINITIONS_BY_ASSET_GET => dataspace_get("application.assets_definitions_by_asset_get", "/v1/assets/definitions/{asset}");
+        ASSETS_DEFINITIONS_QUERY_POST => dataspace_compute_post("application.assets_definitions_query_post", "/v1/assets/definitions/query");
         CONFIDENTIAL_ASSETS_BY_DEFINITION_ID_TRANSITIONS_GET => app_get("application.confidential_assets_by_definition_id_transitions_get", "/v1/confidential/assets/{definition_id}/transitions");
-        NFTS_GET => app_get("application.nfts_get", "/v1/nfts");
-        NFTS_QUERY_POST => account_compute_post("application.nfts_query_post", "/v1/nfts/query");
-        RWAS_GET => app_get("application.rwas_get", "/v1/rwas");
-        RWAS_QUERY_POST => account_compute_post("application.rwas_query_post", "/v1/rwas/query");
+        NFTS_GET => dataspace_get("application.nfts_get", "/v1/nfts");
+        NFTS_QUERY_POST => dataspace_compute_post("application.nfts_query_post", "/v1/nfts/query");
+        RWAS_GET => dataspace_get("application.rwas_get", "/v1/rwas");
+        RWAS_QUERY_POST => dataspace_compute_post("application.rwas_query_post", "/v1/rwas/query");
         SUBSCRIPTIONS_PLANS_GET => app_get("application.subscriptions_plans_get", "/v1/subscriptions/plans");
         SUBSCRIPTIONS_PLANS_POST => account_mutation_post("application.subscriptions_plans_post", "/v1/subscriptions/plans");
         SUBSCRIPTIONS_GET => app_get("application.subscriptions_get", "/v1/subscriptions");

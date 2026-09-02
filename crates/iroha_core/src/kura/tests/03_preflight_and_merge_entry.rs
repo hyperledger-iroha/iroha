@@ -830,7 +830,7 @@ fn pending_certified_merge_work_binds_routing_legs_to_exact_active_incarnation()
             crate::queue::RouteLegRole::Participant,
         )],
     );
-    let entrypoint = offline_top_up_entrypoint_for_index([0x71; 32], [0x72; 32]);
+    let entrypoint = indexed_log_entrypoint([0x71; 32], [0x72; 32]);
     let mut retired_entry = merge_entry_with_indexed_entrypoint(entrypoint);
     let execution = retired_entry
         .execution_batch
@@ -2504,7 +2504,7 @@ fn bodyless_finalized_execution_carrier_rebuilds_merge_entrypoint_index() {
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("initialize Kura");
-    let entrypoint = offline_top_up_entrypoint_for_index([0x71; 32], [0x72; 32]);
+    let entrypoint = indexed_log_entrypoint([0x71; 32], [0x72; 32]);
     let entrypoint_hash = entrypoint.hash();
     let mut entry = merge_entry_with_indexed_entrypoint(entrypoint);
     let genesis: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())

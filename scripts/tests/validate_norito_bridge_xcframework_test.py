@@ -81,7 +81,6 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
             "native_bridge_abi_version": 23,
             "privacy_production_enabled": False,
             "cargo_features": [],
-            "kagemusha_production_authorization_sha256": None,
             "build_environment": {
                 "schema": "iroha.mobile-native-build-environment.v1",
                 "hermetic_runner_schema": "iroha.mobile-hermetic-command.v1",
@@ -125,9 +124,6 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
             "bridge_header_sha256": hashlib.sha256(header).hexdigest(),
             "required_symbols": list(validator.EXPECTED_REQUIRED_SYMBOLS),
             "forbidden_symbols": list(validator.EXPECTED_FORBIDDEN_SYMBOLS),
-            "kagemusha_mobile_artifact_roles": validator.expected_kagemusha_roles(
-                False
-            ),
             "hashes": self.hashes,
         }
         self.write_manifest()
@@ -175,6 +171,44 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
 
     def test_accepts_only_the_canonical_inventory(self) -> None:
         self.validate()
+
+    def test_repository_provenance_rejects_dirty_source_without_allowance(self) -> None:
+        self.payload["source_tree_dirty"] = True
+        self.write_manifest()
+        arguments = {
+            "root": ROOT,
+            "xcframework": self.xcframework,
+            "manifest_path": self.manifest,
+            "manifest_link": self.manifest_link,
+            "expected_link_target": (
+                "NoritoBridge.xcframework/NoritoBridge.artifacts.json"
+            ),
+            "swift_loader": self.loader,
+            "verify_repository_provenance": True,
+        }
+        with (
+            mock.patch.object(validator, "_validate_repository_provenance"),
+            self.assertRaisesRegex(validator.ValidationError, "clean source tree"),
+        ):
+            validator.validate(**arguments)
+        with mock.patch.object(validator, "_validate_repository_provenance"):
+            validator.validate(**arguments, allow_dirty_source=True)
+
+    def test_dirty_allowance_requires_provenance_verification(self) -> None:
+        with self.assertRaisesRegex(
+            validator.ValidationError, "requires repository provenance"
+        ):
+            validator.validate(
+                root=ROOT,
+                xcframework=self.xcframework,
+                manifest_path=self.manifest,
+                manifest_link=self.manifest_link,
+                expected_link_target=(
+                    "NoritoBridge.xcframework/NoritoBridge.artifacts.json"
+                ),
+                swift_loader=self.loader,
+                allow_dirty_source=True,
+            )
 
     def test_rejects_unknown_manifest_fields_and_stale_pins(self) -> None:
         self.payload["legacy_hash"] = "4" * 64
@@ -242,14 +276,6 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
             self.validate()
 
         self.payload["required_symbols"] = list(validator.EXPECTED_REQUIRED_SYMBOLS)
-        self.payload["kagemusha_mobile_artifact_roles"] = [{"role": "native_bridge"}]
-        self.write_manifest()
-        with self.assertRaisesRegex(validator.ValidationError, "role registry"):
-            self.validate()
-
-        self.payload["kagemusha_mobile_artifact_roles"] = (
-            validator.expected_kagemusha_roles(False)
-        )
         self.payload["cargo_lock_sha256"] = "3" * 64
         self.write_manifest()
         with self.assertRaisesRegex(validator.ValidationError, "Cargo.lock digest"):
@@ -461,9 +487,6 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
     def test_production_marker_is_an_empty_regular_file(self) -> None:
         self.payload["privacy_production_enabled"] = True
         self.payload["cargo_features"] = ["privacy-production-enabled"]
-        self.payload["kagemusha_mobile_artifact_roles"] = (
-            validator.expected_kagemusha_roles(True)
-        )
         self.write_manifest()
         marker = self.xcframework / ".privacy-production-enabled"
         marker.mkdir()
@@ -474,24 +497,6 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         marker.write_bytes(b"enabled\n")
         with self.assertRaisesRegex(validator.ValidationError, "must be empty"):
             self.validate()
-
-    def test_authorization_digest_is_nullable_only_for_production(self) -> None:
-        self.payload["kagemusha_production_authorization_sha256"] = "c" * 64
-        self.write_manifest()
-        with self.assertRaisesRegex(
-            validator.ValidationError, "production authorization is invalid"
-        ):
-            self.validate()
-
-        self.payload["privacy_production_enabled"] = True
-        self.payload["cargo_features"] = ["privacy-production-enabled"]
-        self.payload["kagemusha_mobile_artifact_roles"] = (
-            validator.expected_kagemusha_roles(True)
-        )
-        self.write_manifest()
-        (self.xcframework / ".privacy-production-enabled").write_bytes(b"")
-        self.validate()
-
 
 if __name__ == "__main__":
     unittest.main()

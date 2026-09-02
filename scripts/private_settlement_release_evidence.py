@@ -29,6 +29,8 @@ from typing import Any
 MANIFEST_VERSION = 1
 PROTOCOL = "AtomicPrivateSettlementV1"
 REQUIRED_PARTICIPANTS = (2, 3, 4, 8, 16)
+PUBLIC_PARTICIPANT_VISIBILITY = "public"
+RESTRICTED_PARTICIPANT_VISIBILITY = "restricted"
 REQUIRED_SEEDS_PER_PARTICIPANT = 10
 REQUIRED_LOSS_PERCENTAGES = (5, 10, 20)
 REQUIRED_LOSS_PHASES = ("restricted_da", "prepare", "commit")
@@ -1145,6 +1147,18 @@ def _exact_integer(value: Any, expected: int, label: str) -> None:
 def _exact_list(value: Any, expected: Sequence[Any], label: str) -> None:
     if not isinstance(value, list) or value != list(expected):
         raise EvidenceError(f"{label} must be exactly {list(expected)}")
+
+
+def _canonical_participant_visibilities(participants: int) -> list[str]:
+    if (
+        isinstance(participants, bool)
+        or not isinstance(participants, int)
+        or participants not in REQUIRED_PARTICIPANTS
+    ):
+        raise EvidenceError("unsupported participant count in visibility profile")
+    return [PUBLIC_PARTICIPANT_VISIBILITY] + [
+        RESTRICTED_PARTICIPANT_VISIBILITY
+    ] * (participants - 1)
 
 
 def _parse_artifact(value: Any, index: int) -> Artifact:
@@ -2543,6 +2557,7 @@ def _validate_hardware_description(path: Path, *, commit: str) -> str:
 def _validate_configuration_manifest(
     path: Path,
     *,
+    root: Path,
     commit: str,
     artifacts_by_path: dict[PurePosixPath, Artifact],
 ) -> dict[int, str]:
@@ -2606,6 +2621,70 @@ def _validate_configuration_manifest(
             label=f"configuration_manifest.configurations[{index}]",
             expected_kind="configuration",
             artifacts_by_path=artifacts_by_path,
+        )
+        artifact = artifacts_by_path[artifact_path]
+        configuration = _read_bound_json_artifact(
+            root.joinpath(*artifact_path.parts),
+            maximum_bytes=_MAX_SOURCE_MANIFEST_BYTES,
+            expected_sha256=artifact.sha256,
+            expected_bytes=artifact.bytes,
+            label=f"configuration_manifest.configurations[{index}].configuration",
+        )
+        if not isinstance(configuration, dict):
+            raise EvidenceError(
+                f"configuration_manifest.configurations[{index}] must bind a JSON object"
+            )
+        label = f"configuration_manifest.configurations[{index}].configuration"
+        _exact_integer(configuration.get("version"), MANIFEST_VERSION, f"{label}.version")
+        if configuration.get("protocol") != PROTOCOL:
+            raise EvidenceError(f"{label}.protocol must be {PROTOCOL!r}")
+        _exact_integer(configuration.get("participants"), participants, f"{label}.participants")
+        _exact_list(
+            configuration.get("participant_visibilities"),
+            _canonical_participant_visibilities(participants),
+            f"{label}.participant_visibilities",
+        )
+        if configuration.get("primary_paper_configuration") is not (participants == 3):
+            raise EvidenceError(f"{label}.primary_paper_configuration is inconsistent")
+        topology = configuration.get("topology")
+        if not isinstance(topology, dict):
+            raise EvidenceError(f"{label}.topology must be an object")
+        _exact_integer(topology.get("global_validators"), 4, f"{label}.topology.global_validators")
+        _exact_list(
+            topology.get("participant_dataspaces"),
+            range(participants),
+            f"{label}.topology.participant_dataspaces",
+        )
+        _exact_integer(
+            topology.get("validators_per_dataspace"),
+            4,
+            f"{label}.topology.validators_per_dataspace",
+        )
+        _exact_integer(
+            topology.get("total_validator_processes"),
+            (participants + 1) * 4,
+            f"{label}.topology.total_validator_processes",
+        )
+        if topology.get("quorum") != "3-of-4":
+            raise EvidenceError(f"{label}.topology.quorum must be '3-of-4'")
+        consensus = configuration.get("consensus")
+        if not isinstance(consensus, dict):
+            raise EvidenceError(f"{label}.consensus must be an object")
+        if (
+            consensus.get("mandatory_signed_rs16_da_rbc") is not True
+            or consensus.get("authenticated_message_control") is not True
+            or consensus.get("legacy_rbc_bypass_permitted") is not False
+        ):
+            raise EvidenceError(f"{label}.consensus weakens the release profile")
+        _exact_integer(
+            consensus.get("minimum_signed_rs16_da_observations_per_run"),
+            (participants + 1) * 4,
+            f"{label}.consensus.minimum_signed_rs16_da_observations_per_run",
+        )
+        _exact_integer(
+            consensus.get("maximum_simultaneously_unavailable_per_committee"),
+            1,
+            f"{label}.consensus.maximum_simultaneously_unavailable_per_committee",
         )
         participants_seen.append(participants)
         paths.append(artifact_path)
@@ -4059,6 +4138,7 @@ def verify_bundle(manifest_path: Path) -> dict[str, Any]:
         )
     configuration_digests = _validate_configuration_manifest(
         root.joinpath(*configuration_manifests[0].path.parts),
+        root=root,
         commit=manifest["commit"],
         artifacts_by_path=artifacts_by_path,
     )

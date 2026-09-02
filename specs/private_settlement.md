@@ -163,9 +163,9 @@ view data, note openings, and output-encryption openings required for audit. It
 does not contain spending authorities. Decryption returns a zeroizing buffer.
 The auditor recomputes every public binding, validates policy and height, then
 signs through `crates/iroha_core/src/private_settlement/auditor.rs`. A
-deployment-owned credential-provider boundary permits encryption and signing
-keys to remain in an HSM, KMS, enclave, or threshold service; Iroha independently
-checks the provider's governed public keys and returned approval signature.
+deployment-owned credential-provider boundary keeps encryption and signing keys
+outside Iroha; Iroha independently checks the provider's governed public keys and
+returned approval signature.
 Capsule access is a read-only authenticated `POST`, not a bearer read keyed only
 by the payload digest. Its strict `PrivateSettlementAuditorCapsuleRequestV1`
 body contains the complete access policy, and the canonical Norito JSON body is
@@ -635,7 +635,14 @@ protocol limits are configuration errors.
 ### Real-network fault matrix
 
 Run exact four-validator processes for every dataspace at N=2,3,4,8,16, using
-N=3 as the paper's primary configuration. Stop/restart one validator in every
+N=3 as the paper's primary configuration. The canonical participant profile is
+one non-universal public dataspace followed by N-1 restricted dataspaces; the
+global coordination dataspace remains public and is not a settlement leg. The
+primary N=3 capture therefore contains eight public P2P validator ports (four
+global plus four public-participant validators) and eight restricted P2P
+validator ports. Both the frozen configuration and each harness request bind
+this ordered visibility vector, and any omission, reordering, substitution, or
+all-restricted profile fails closed. Stop/restart one validator in every
 committee plus coordinator/global nodes. Use only the authenticated consensus
 message controller, acknowledge each hold/drop, and exercise 5%, 10%, and 20%
 loss, phase-cut partitions, delayed delivery, healing, and crashes after

@@ -14,9 +14,9 @@ def test_taira_profile_exposes_exact_public_metadata() -> None:
     assert TAIRA_TESTNET_PROFILE.torii_base_url == "https://taira.sora.org"
     assert TAIRA_TESTNET_PROFILE.chain_id == "fc56984b-2be7-431d-840e-21514d1883f0"
     assert TAIRA_TESTNET_PROFILE.i105_discriminant == 369
-    assert TAIRA_TESTNET_PROFILE.kagemusha_asset_definition_id == "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
-    assert TAIRA_TESTNET_PROFILE.kagemusha_asset_alias == "ds#boi.is"
-    assert TAIRA_TESTNET_PROFILE.kagemusha_asset_scale == 2
+    assert TAIRA_TESTNET_PROFILE.offline_cash_asset_definition_id == "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
+    assert TAIRA_TESTNET_PROFILE.offline_cash_asset_alias == "ds#boi.is"
+    assert TAIRA_TESTNET_PROFILE.offline_cash_asset_scale == 2
     assert TAIRA_TESTNET_PROFILE.xor_asset_definition_id == "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
     assert TAIRA_TESTNET_PROFILE.xor_asset_alias == "xor#universal"
     assert TAIRA_TESTNET_PROFILE.xor_asset_scale == 9

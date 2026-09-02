@@ -1359,8 +1359,6 @@ mod model {
         ),
         /// Fetch the current frozen citizen-bond membership snapshot.
         FindSorafsCitizenBondSnapshot(sorafs::prelude::FindSorafsCitizenBondSnapshot),
-        /// Fetch one identity-free anonymous service-note escrow.
-        FindSorafsAnonymousServiceEscrowById(sorafs::prelude::FindSorafsAnonymousServiceEscrowById),
         /// Fetch one chain-authoritative repair task by canonical ticket identifier.
         FindSorafsRepairTask(sorafs::prelude::FindSorafsRepairTask),
         /// Fetch a cursor-bounded page of chain-authoritative repair tasks.
@@ -1389,8 +1387,6 @@ mod model {
         FindSorafsModerationAppeal(sorafs::prelude::FindSorafsModerationAppeal),
         /// Fetch one payload-free, PoP-verified juror eligibility record.
         FindSorafsModerationJurorEligibility(sorafs::prelude::FindSorafsModerationJurorEligibility),
-        /// Fetch one payload-free anonymous juror candidacy record.
-        FindSorafsAnonymousJurorCandidacy(sorafs::prelude::FindSorafsAnonymousJurorCandidacy),
         /// Fetch one authoritative `SoraFS` moderation case.
         FindSorafsModerationCase(sorafs::prelude::FindSorafsModerationCase),
         /// Fetch one authoritative juror commitment.
@@ -1572,8 +1568,6 @@ mod model {
         SorafsCitizenBond(crate::sorafs::anonymity::SorafsCitizenBondV1),
         /// Current frozen citizen-bond membership snapshot.
         SorafsCitizenBondSnapshot(crate::sorafs::anonymity::SorafsCitizenBondSnapshotV1),
-        /// Identity-free anonymous service-note escrow.
-        SorafsAnonymousServiceEscrow(crate::sorafs::anonymity::SorafsAnonymousServiceEscrowV1),
         /// Finalized chain-authoritative repair task, lease, outcome, slash, and appeal.
         SorafsRepairTask(crate::sorafs::moderation_ledger::RepairFinalizedTaskV1),
         /// Cursor-bounded chain-authoritative repair-task page.
@@ -1603,10 +1597,6 @@ mod model {
         /// Payload-free, PoP-verified juror eligibility record.
         SorafsModerationJurorEligibility(
             crate::sorafs::moderation_ledger::ModerationJurorEligibilityRecordV1,
-        ),
-        /// Payload-free anonymous juror candidacy record.
-        SorafsAnonymousJurorCandidacy(
-            crate::sorafs::anonymity::SorafsAnonymousJurorCandidacyRecordV1,
         ),
         /// Authoritative `SoraFS` moderation case payload.
         SorafsModerationCase(crate::sorafs::moderation_ledger::ModerationCaseRecordV1),

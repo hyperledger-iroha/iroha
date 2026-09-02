@@ -186,7 +186,6 @@ mod tests {
             Some(axum::http::HeaderValue::from_static("application/json")),
             ActualLaneRoutingPolicy::default(),
             4_274,
-            None,
         )
         .await
         .expect_err("an unavailable telemetry actor must fail status retriably");
@@ -221,7 +220,6 @@ mod tests {
             Some(axum::http::HeaderValue::from_static("application/json")),
             policy,
             0,
-            None,
         )
         .await
         .expect("status succeeds");
@@ -292,48 +290,6 @@ mod tests {
             let value: u64 = norito::json::from_slice(&body).expect("decode status scalar");
             assert_eq!(value, expected);
         }
-    }
-    #[tokio::test]
-    async fn status_root_includes_universal_offline_capability() {
-        use http_body_util::BodyExt;
-        use iroha_torii_shared::offline_api::OfflineStatus;
-        let telemetry = MaybeTelemetry::for_tests();
-        let offline = OfflineStatus {
-            cash_handoff_capability: "cash_handoff_v1".to_owned(),
-            required_bridge_abi_version: 23,
-            max_hops: 8,
-            ready: true,
-        };
-        let response = super::handle_status(
-            &telemetry,
-            Some(axum::http::HeaderValue::from_static("application/json")),
-            ActualLaneRoutingPolicy::default(),
-            0,
-            Some(offline),
-        )
-        .await
-        .expect("status succeeds");
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .expect("collect status body")
-            .to_bytes();
-        let payload: norito::json::Value =
-            norito::json::from_slice(&body).expect("decode status payload");
-        let projected = payload.get("offline").expect("offline projection");
-        assert_eq!(
-            projected
-                .get("cash_handoff_capability")
-                .and_then(norito::json::Value::as_str),
-            Some("cash_handoff_v1")
-        );
-        assert_eq!(
-            projected
-                .get("required_bridge_abi_version")
-                .and_then(norito::json::Value::as_u64),
-            Some(23)
-        );
     }
     #[cfg(feature = "telemetry")]
     #[tokio::test]
@@ -640,7 +596,6 @@ mod tests {
             )),
             ActualLaneRoutingPolicy::default(),
             0,
-            None,
         )
         .await
         .expect("status handler");

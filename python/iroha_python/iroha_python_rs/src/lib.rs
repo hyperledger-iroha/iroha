@@ -14942,19 +14942,6 @@ fn private_settlement_verify_committee_proof_response_v1_py(
 }
 
 #[pyfunction]
-#[pyo3(name = "private_settlement_verify_auditor_capsule_response_v1")]
-fn private_settlement_verify_auditor_capsule_response_v1_py(
-    _response_json: &[u8],
-    _expected_network_id: &[u8],
-    _requested_payload_digest: &[u8],
-    _auditor_signing_key: &str,
-) -> PyResult<()> {
-    Err(PyValueError::new_err(
-        "atomic private settlement response is invalid",
-    ))
-}
-
-#[pyfunction]
 #[pyo3(name = "private_settlement_verify_auditor_capsule_response_with_request_v1")]
 fn private_settlement_verify_auditor_capsule_response_with_request_v1_py(
     response_json: &[u8],
@@ -15493,10 +15480,6 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(
         private_settlement_verify_committee_proof_response_v1_py,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(
-        private_settlement_verify_auditor_capsule_response_v1_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(

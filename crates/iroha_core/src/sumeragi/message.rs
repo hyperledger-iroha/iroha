@@ -789,13 +789,14 @@ mod tests {
                     finality_artifact_hash: HashOf::from_untyped_unchecked(Hash::new(
                         b"first-release historical executed finality tag",
                     )),
-                    execution_commitment: ExecutionCommitment::without_topups_or_merge_carrier(
-                        Hash::new(b"first-release historical parent state"),
-                        Hash::new(b"first-release historical post state"),
-                        Hash::new(b"first-release historical writes"),
-                        1,
-                        Hash::new(b"first-release historical executed wire"),
-                    ),
+                    execution_commitment:
+                        ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                            Hash::new(b"first-release historical parent state"),
+                            Hash::new(b"first-release historical post state"),
+                            Hash::new(b"first-release historical writes"),
+                            1,
+                            Hash::new(b"first-release historical executed wire"),
+                        ),
                     executed_block_wire_len: 1,
                     executed_block_wire_hash: Hash::new(
                         b"first-release historical executed wire tag",

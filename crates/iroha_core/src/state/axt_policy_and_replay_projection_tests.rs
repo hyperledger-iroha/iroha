@@ -487,7 +487,7 @@ state_test! { sync axt_slot_uses_authenticated_time_for_hash_only_snapshot_paren
 
     let mut anchored = hash_only_state();
     anchored.nexus.get_mut().axt.slot_length_ms = nonzero!(10_u64);
-    let parameters = iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended();
+    let parameters = crate::offline_cash_v1_test_fixtures::genesis_context_parameters();
     let snapshot_block_hash = anchored
         .latest_block_hash_fast()
         .expect("hash-only fixture has a committed tip");
@@ -515,6 +515,13 @@ state_test! { sync axt_slot_uses_authenticated_time_for_hash_only_snapshot_paren
                 min_signers: 0,
                 total_power: 0,
             },
+            offline_cash_mint_finality_epoch_id: parameters
+                .offline_cash_mint_finality_epoch_roster
+                .finality_epoch_id()
+                .expect("canonical test mint-finality roster"),
+            offline_cash_mint_finality_epoch_roster: parameters
+                .offline_cash_mint_finality_epoch_roster
+                .clone(),
             nexus_amx_context_hash: Hash::prehashed(parameters.nexus_amx_context_hash),
             execution_policy_hash: Hash::prehashed(parameters.execution_policy_hash),
             da_layout: parameters.da_layout,

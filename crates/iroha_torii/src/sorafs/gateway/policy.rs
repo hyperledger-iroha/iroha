@@ -303,6 +303,11 @@ impl GatewayPolicy {
                 }
             }
         }
+        self.evaluate_rate_only(ctx)
+    }
+    /// Evaluate only the client rate limit for a source that has no provider or manifest envelope.
+    #[must_use]
+    pub fn evaluate_rate_only(&self, ctx: &RequestContext<'_>) -> PolicyDecision {
         if let Err(err) = self.rate_limiter.check(ctx.client(), ctx.monotonic_now()) {
             return PolicyDecision::Deny(PolicyViolation::RateLimited(err));
         }
@@ -485,6 +490,38 @@ mod tests {
         );
         assert!(matches!(
             denied,
+            PolicyDecision::Deny(PolicyViolation::RateLimited(_))
+        ));
+    }
+    #[test]
+    fn rate_only_policy_skips_manifest_and_provider_requirements() {
+        let rate_limit = GatewayRateLimitConfig {
+            max_requests: Some(1),
+            window: Duration::from_mins(1),
+            ..GatewayRateLimitConfig::default()
+        };
+        let config = GatewayPolicyConfig {
+            enforce_admission: true,
+            require_manifest_envelope: true,
+            rate_limit,
+        };
+        let policy = GatewayPolicy::new(
+            config,
+            Some(Arc::new(AdmissionRegistry::empty())),
+            GatewayRateLimiter::new(config.rate_limit),
+        );
+        let client = ClientFingerprint::from_identifier("authoritative-wsv-client");
+        let base = Instant::now();
+        let first = RequestContext::new(&client, SystemTime::now(), base);
+        assert!(matches!(
+            policy.evaluate_rate_only(&first),
+            PolicyDecision::Allow
+        ));
+
+        let second =
+            RequestContext::new(&client, SystemTime::now(), base + Duration::from_millis(5));
+        assert!(matches!(
+            policy.evaluate_rate_only(&second),
             PolicyDecision::Deny(PolicyViolation::RateLimited(_))
         ));
     }

@@ -122,9 +122,32 @@ enum NoritoBridgeLoader {
         "connect_norito_validation_fee_hijiri_quote_request_v1",
         "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
         "connect_norito_private_settlement_committee_proof_response_verify_v1",
-        "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
         "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
-        "connect_norito_private_settlement_audit_approval_response_verify_v1"
+        "connect_norito_private_settlement_audit_approval_response_verify_v1",
+        "connect_norito_offline_cash_v1_payment_request_validate",
+        "connect_norito_offline_cash_v1_acceptance_intent_authorization_validate",
+        "connect_norito_offline_cash_v1_acceptance_ticket_validate",
+        "connect_norito_offline_cash_v1_no_commit_closure_validate",
+        "connect_norito_offline_cash_v1_payment_validate",
+        "connect_norito_offline_cash_v1_acknowledgement_validate",
+        "connect_norito_offline_cash_v1_complete_exchange_validate",
+        "connect_norito_offline_cash_v1_mint_authorization_validate",
+        "connect_norito_offline_cash_v1_mint_credit_validate",
+        "connect_norito_offline_cash_v1_mint_credit_against_authorization_validate",
+        "connect_norito_offline_cash_v1_redemption_voucher_validate",
+        "connect_norito_offline_cash_v1_payment_request_text_validate",
+        "connect_norito_offline_cash_v1_acceptance_intent_authorization_text_validate",
+        "connect_norito_offline_cash_v1_acceptance_ticket_text_validate",
+        "connect_norito_offline_cash_v1_no_commit_closure_text_validate",
+        "connect_norito_offline_cash_v1_payment_text_validate",
+        "connect_norito_offline_cash_v1_acknowledgement_text_validate",
+        "connect_norito_offline_cash_v1_complete_exchange_text_validate",
+        "connect_norito_offline_cash_v1_mint_authorization_text_validate",
+        "connect_norito_offline_cash_v1_mint_credit_text_validate",
+        "connect_norito_offline_cash_v1_mint_credit_against_authorization_text_validate",
+        "connect_norito_offline_cash_v1_redemption_voucher_text_validate",
+        "connect_norito_offline_cash_device_capabilities_v1",
+        "connect_norito_offline_cash_device_execute_v1"
     ] + parliamentTimedOvnWalletRequiredSymbols
 
     private typealias BridgeAbiVersionFn = @convention(c) () -> UInt32
@@ -749,11 +772,7 @@ enum NativeBridgeError: Error, Equatable {
     case offlineSerialize
     case offlineCommitment
     case offlineBlinding
-    case kagemushaProve
-    case kagemushaRecursiveSpendV4Unavailable
-    case kagemushaRecursiveSpendV4Artifact
-    case kagemushaBusy
-    case invalidKagemushaVerifierOutput
+    case offlineCashV1
     case unsupportedAlgorithm
     case metadataTarget
     case metadataKey
@@ -818,10 +837,7 @@ enum NativeBridgeError: Error, Equatable {
         case -304: return .offlineSerialize
         case -305: return .offlineCommitment
         case -306: return .offlineBlinding
-        case -311: return .kagemushaProve
-        case -316: return .kagemushaRecursiveSpendV4Unavailable
-        case -317: return .kagemushaRecursiveSpendV4Artifact
-        case -318: return .kagemushaBusy
+        case -311: return .offlineCashV1
         case -402: return .multisigSpec
         case -406: return .identifierReceipt
         case -408: return .accountOnboardingBody
@@ -867,7 +883,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         processHandle ?? currentHandle
     }
 
-    func resolveKagemushaV2Symbol<T>(_ symbol: String, as type: T.Type) -> T? {
+    func resolveNativeSymbol<T>(_ symbol: String, as type: T.Type) -> T? {
         #if canImport(Darwin)
         guard let bridgeHandle, let address = dlsym(bridgeHandle, symbol) else { return nil }
         return unsafeBitCast(address, to: type)
@@ -878,24 +894,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
-    static func copyKagemushaNativeArchiveOutput(
-        pointer: UnsafeMutablePointer<UInt8>?,
-        length: CUnsignedLong,
-        free: (UnsafeMutablePointer<UInt8>?) -> Void
-    ) throws -> Data {
-        guard let pointer else {
-            throw NativeBridgeError.nullPointer
-        }
-        defer {
-            free(pointer)
-        }
-        guard length <= CUnsignedLong(
-            KagemushaRecursiveSpend.artifactMaximumInMemoryArchiveBytes
-        ) else {
-            throw NativeBridgeError.kagemushaProve
-        }
-        return Data(bytes: pointer, count: Int(length))
-    }
     #endif
 
     static let privacyCompiledProfileCatalogArchiveMaxBytes = 256 * 1024
@@ -3748,20 +3746,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             && sorafsReferenceBuildOrderbookSettlementReceiptFn != nil
             && sorafsReferenceDeriveOrderbookOrderIdFn != nil
             && freeFn != nil
-        #else
-        return false
-        #endif
-    }
-
-    /// Whether ABI 23 exposes the complete selector-free V4 Kagemusha surface.
-    public var isKagemushaRecursiveSpendBridgeAvailable: Bool {
-        #if canImport(Darwin)
-        guard bridgeEnabledForRuntime else { return false }
-        return loadedBridgeAbiVersion == KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion
-            && kagemushaNativeContractRevision() == KagemushaRecursiveSpend.nativeContractRevision
-            && hasKagemushaRecursiveSpendV4Symbols(
-                KagemushaRecursiveSpend.requiredNativeSymbols + ["connect_norito_free"]
-            )
         #else
         return false
         #endif

@@ -693,6 +693,19 @@ fn deploy_contract_proposal() -> ProposalKind {
     })
 }
 
+fn contract_emergency_hold_proposal() -> ProposalKind {
+    ProposalKind::ContractEmergencyHold(ContractEmergencyHoldProposalV1 {
+        contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
+            .parse()
+            .expect("canonical contract address"),
+        expected_revision: 7,
+        expected_code_hash: ContractCodeHash::new(root(41)),
+        incident_digest: root(42),
+        reason: "bounded incident containment".to_owned(),
+        duration_blocks: 3_600,
+    })
+}
+
 fn validation_fee_asset(name: &str) -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("fees", "paynet").expect("validation-fee test domain"),
@@ -811,6 +824,27 @@ fn validation_fee_proposals_require_mpc_immediately_before_fma() {
             "the canonical stage order must reject FMA before MPC"
         );
     }
+}
+
+#[test]
+fn contract_emergency_hold_uses_full_lifecycle_pipeline() {
+    let expected = public_requirements(CONTRACT_LIFECYCLE_REQUIRED_BODIES_V1);
+    assert_eq!(
+        CONTRACT_LIFECYCLE_REQUIRED_BODIES_V1,
+        &[
+            ParliamentBody::RulesCommittee,
+            ParliamentBody::AgendaCouncil,
+            ParliamentBody::InterestPanel,
+            ParliamentBody::ReviewPanel,
+            ParliamentBody::OversightCommittee,
+            ParliamentBody::PolicyJury,
+        ]
+    );
+    let (risk_tier, requirements) =
+        parliament_attempt_policy_v1(&contract_emergency_hold_proposal());
+    assert_eq!(risk_tier, RiskTierV1::Emergency);
+    assert_eq!(requirements, expected);
+    assert!(required_pipeline_is_canonical(&requirements));
 }
 
 #[test]

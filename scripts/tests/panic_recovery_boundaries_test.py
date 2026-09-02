@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
+import os
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 
 def load_guard_module():
@@ -28,6 +32,76 @@ def test_panic_recovery_boundary_guard() -> None:
         text=True,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_pr_workflow_runs_panic_recovery_guard_and_regressions() -> None:
+    root = Path(__file__).resolve().parents[2]
+    workflow = (root / ".github/workflows/pr.yml").read_text(encoding="utf-8")
+
+    assert workflow.count("scripts/tests/panic_recovery_boundaries_test.py") == 1
+    assert (
+        workflow.count("python3 -I -S scripts/check_panic_recovery_boundaries.py")
+        == 1
+    )
+
+
+def test_stable_inventory_read_rejects_hardlinks_and_shared_writes(
+    tmp_path: Path,
+) -> None:
+    module = load_guard_module()
+    source = tmp_path / "source.rs"
+    source.write_text("fn reviewed() {}\n", encoding="utf-8")
+    hardlink = tmp_path / "outside.rs"
+    os.link(source, hardlink)
+    with pytest.raises(RuntimeError, match="exactly one hard link"):
+        module._stable_read_bytes(source)
+    hardlink.unlink()
+
+    source.chmod(0o664)
+    with pytest.raises(RuntimeError, match="group- or world-writable"):
+        module._stable_read_bytes(source)
+
+
+@pytest.mark.parametrize(
+    "relative",
+    (
+        "crates/iroha_core/src/executor.rs",
+        "crates/iroha_core/src/zk.rs",
+        "crates/iroha_core/src/zk/offline_cash_v1_recursion/accumulation.rs",
+        "crates/iroha_core/src/zk/offline_cash_v1_recursion/native_backend.rs",
+    ),
+)
+@pytest.mark.parametrize(
+    "payload",
+    (
+        "use std::panic::catch_unwind as recover;\n"
+        "fn run() { let _ = recover(|| work()); }\n",
+        "macro_rules! call { ($f:path) => { $f(|| work()) } }\n"
+        "fn run() { let _ = call!(std::panic::catch_unwind); }\n",
+    ),
+)
+def test_core_recovery_files_reject_alias_and_macro_boundary_bypasses(
+    tmp_path: Path, relative: str, payload: str
+) -> None:
+    module = load_guard_module()
+    source = tmp_path / relative
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(payload, encoding="utf-8")
+    sources, closure_failures = module.torii_rust_source_closure(tmp_path)
+    assert not closure_failures
+    failures = module.torii_boundary_alias_failures(tmp_path, sources)
+    assert failures
+    assert relative in failures[0]
+
+
+def test_core_raw_catch_inventory_allows_only_one_reviewed_test_call() -> None:
+    module = load_guard_module()
+    assert module._direct_raw_catch_unwind_lines(
+        "fn test_only() { std::panic::catch_unwind(|| work()); }\n"
+    ) == [1]
+    assert module._direct_raw_catch_unwind_lines(
+        "fn reviewed() { crate::panic_hook::catch_unwind_suppressed(work); }\n"
+    ) == []
 
 
 def test_closed_inventory_rejects_a_new_torii_module(tmp_path: Path) -> None:
@@ -136,6 +210,34 @@ def test_closed_inventory_binds_each_reviewed_call_site(tmp_path: Path) -> None:
     )
     assert not any("site count drifted" in failure for failure in failures)
     assert any("source inventory drifted" in failure for failure in failures)
+
+
+def test_source_inventory_hashes_the_exact_bytes_it_tokenizes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_guard_module()
+    source = tmp_path / "crates/iroha_torii/src/worker.rs"
+    source.parent.mkdir(parents=True)
+    reviewed = b"fn run() { tokio::spawn(work()); }\n"
+    source.write_bytes(reviewed)
+    reads = 0
+    original = module._stable_read_bytes
+
+    def mutate_after_read(path: Path) -> bytes:
+        nonlocal reads
+        payload = original(path)
+        reads += 1
+        if path == source:
+            source.write_text("fn changed() {}\n", encoding="utf-8")
+        return payload
+
+    monkeypatch.setattr(module, "_stable_read_bytes", mutate_after_read)
+
+    record, counts = module._source_inventory(source, tmp_path)
+
+    assert reads == 1
+    assert hashlib.sha256(reviewed).hexdigest() in record
+    assert counts["task_spawn"] == 1
 
 
 def test_closed_inventory_rejects_bare_joined_task_recovery(tmp_path: Path) -> None:
@@ -429,6 +531,106 @@ def test_boundary_alias_check_rejects_local_function_item_alias(tmp_path: Path) 
     ]
 
 
+def test_boundary_alias_check_rejects_compound_destructuring_aliases(
+    tmp_path: Path,
+) -> None:
+    module = load_guard_module()
+    source = tmp_path / "crates/iroha_torii/src/compound_alias.rs"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "fn run() {\n"
+        "    let (recover, _) = (std::panic::catch_unwind, marker);\n"
+        "    let [launch] = [tokio::spawn];\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    failures = module.torii_boundary_alias_failures(tmp_path)
+
+    assert any(
+        "catch_unwind boundary alias 'recover' is forbidden" in failure
+        for failure in failures
+    )
+    assert any(
+        "task_spawn boundary alias 'launch' is forbidden" in failure
+        for failure in failures
+    )
+
+
+def test_boundary_alias_check_rejects_match_for_and_closure_rebinding(
+    tmp_path: Path,
+) -> None:
+    module = load_guard_module()
+    source = tmp_path / "crates/iroha_torii/src/pattern_aliases.rs"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "fn run() {\n"
+        "    match std::panic::catch_unwind { recover => recover(|| work()), }\n"
+        "    for launch in [tokio::spawn] { launch(task()); }\n"
+        "    std::iter::once(tokio::task::spawn_blocking)\n"
+        "        .for_each(|blocking| { blocking(work); });\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    failures = module.torii_boundary_alias_failures(tmp_path)
+
+    assert sum("boundary function item" in failure for failure in failures) == 3
+    assert any(
+        "catch_unwind boundary function item 'catch_unwind'" in failure
+        for failure in failures
+    )
+    assert any(
+        "task_spawn boundary function item 'spawn'" in failure
+        for failure in failures
+    )
+    assert any(
+        "spawn_blocking boundary function item 'spawn_blocking'" in failure
+        for failure in failures
+    )
+
+
+def test_boundary_alias_check_rejects_macro_colon_rebinding(tmp_path: Path) -> None:
+    module = load_guard_module()
+    source = tmp_path / "crates/iroha_torii/src/macro_alias.rs"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "fn run() {\n"
+        "    bind!(std::panic::catch_unwind: recover);\n"
+        "    recover(|| work());\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    failures = module.torii_boundary_alias_failures(tmp_path)
+
+    assert any(
+        "catch_unwind boundary function item 'catch_unwind'" in failure
+        for failure in failures
+    )
+
+
+def test_boundary_alias_check_does_not_treat_macro_use_tokens_as_use_items(
+    tmp_path: Path,
+) -> None:
+    module = load_guard_module()
+    source = tmp_path / "crates/iroha_torii/src/macro_use.rs"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "fn run() {\n"
+        "    call!(use std::panic::catch_unwind);\n"
+        "    call!(prefix use tokio::task::spawn);\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    failures = module.torii_boundary_alias_failures(tmp_path)
+
+    assert sum("boundary function item" in failure for failure in failures) == 2
+    assert any("function item 'catch_unwind'" in failure for failure in failures)
+    assert any("function item 'spawn'" in failure for failure in failures)
+
+
 def test_bare_blocking_check_rejects_join_set_method(tmp_path: Path) -> None:
     module = load_guard_module()
     source = (
@@ -450,6 +652,47 @@ def test_bare_thread_check_rejects_direct_and_builder_spawns(tmp_path: Path) -> 
     )
 
     assert module._bare_std_thread_lines(source) == [2, 3]
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "use std::thread as th;\nfn run() { th::spawn(work); }\n",
+        "use std::thread::Builder as ThreadBuilder;\n"
+        "fn run() { ThreadBuilder::new().spawn(work); }\n",
+        "use std::thread::Builder;\nfn run() { Builder::new().spawn(work); }\n",
+        "use {std::thread as th};\nfn run() { th::spawn(work); }\n",
+        "use {foo, std::{thread as th}};\nfn run() { th::spawn(work); }\n",
+        "use {std::{self, thread::{self as th}}};\n"
+        "fn run() { th::spawn(work); }\n",
+        "type ThreadBuilder = std::thread::Builder;\n"
+        "fn run() { ThreadBuilder::new().spawn(work); }\n",
+        "fn run() {\n"
+        "    let builder = std::thread::Builder::new();\n"
+        "    builder.spawn(work);\n"
+        "}\n",
+        "fn run() {\n"
+        "    std::thread::scope(|scope| { scope.spawn(work); });\n"
+        "}\n",
+    ),
+)
+def test_bare_thread_check_rejects_std_thread_indirection(source: str) -> None:
+    module = load_guard_module()
+
+    assert module._bare_std_thread_lines(source)
+
+
+def test_bare_thread_check_allows_builder_inside_reviewed_wrapper() -> None:
+    module = load_guard_module()
+    source = (
+        "fn run() {\n"
+        "    let thread = crate::panic_recovery::spawn_thread_recoverable(\n"
+        "        std::thread::Builder::new(), work,\n"
+        "    );\n"
+        "}\n"
+    )
+
+    assert module._bare_std_thread_lines(source) == []
 
 
 def test_inventory_counts_join_set_and_std_thread_boundaries(tmp_path: Path) -> None:
@@ -557,6 +800,29 @@ def test_source_closure_rejects_symlink_indirection(tmp_path: Path) -> None:
     assert failures == [
         "crates/iroha_torii/outside.rs: symlink is forbidden in the audited source closure"
     ]
+
+
+def test_source_closure_rejects_shared_writable_parent_directory(
+    tmp_path: Path,
+) -> None:
+    module = load_guard_module()
+    torii = tmp_path / "crates/iroha_torii"
+    build_support = tmp_path / "crates/build-support"
+    torii.mkdir(parents=True)
+    build_support.mkdir(parents=True)
+    (torii / "Cargo.toml").write_text(
+        '[package]\nname = "iroha_torii"\nbuild = "../build-support/script.rs"\n',
+        encoding="utf-8",
+    )
+    (build_support / "script.rs").write_text("fn main() {}\n", encoding="utf-8")
+    build_support.chmod(0o777)
+
+    failures = module.torii_source_path_failures(tmp_path)
+
+    assert (
+        "crates/build-support: audited source parent must not be group- or "
+        "world-writable"
+    ) in failures
 
 
 def test_source_closure_rejects_unreviewed_build_script_path(tmp_path: Path) -> None:
@@ -865,6 +1131,180 @@ def test_source_closure_rejects_ignored_conventional_module(tmp_path: Path) -> N
         "crates/iroha_torii/src/hidden.rs: textual module source is outside the "
         "sealed repository-file inventory"
     ) in failures
+
+
+def test_source_closure_rejects_ignored_auto_discovered_cargo_target(
+    tmp_path: Path,
+) -> None:
+    module = load_guard_module()
+    crate_root = tmp_path / "crates/iroha_torii"
+    hidden = crate_root / "src/bin/hidden.rs"
+    hidden.parent.mkdir(parents=True)
+    (crate_root / "Cargo.toml").write_text(
+        '[package]\nname = "guard-fixture"\nversion = "0.0.0"\n'
+        'build = "../build-support/script.rs"\n',
+        encoding="utf-8",
+    )
+    build_script = tmp_path / "crates/build-support/script.rs"
+    build_script.parent.mkdir(parents=True)
+    build_script.write_text("fn main() {}\n", encoding="utf-8")
+    hidden.write_text(
+        "fn main() { tokio::task::spawn_blocking(|| provider_call()); }\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".gitignore").write_text(
+        "crates/iroha_torii/src/bin/hidden.rs\n", encoding="utf-8"
+    )
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "add",
+            ".gitignore",
+            "crates/iroha_torii/Cargo.toml",
+            "crates/build-support/script.rs",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+
+    records, _, counts = module.torii_boundary_inventory(tmp_path)
+    failures = module.torii_source_path_failures(tmp_path)
+
+    assert any(
+        record.startswith("crates/iroha_torii/src/bin/hidden.rs\t")
+        for record in records
+    )
+    assert counts["spawn_blocking"] == 1
+    assert (
+        "crates/iroha_torii/src/bin/hidden.rs: textual module source is outside "
+        "the sealed repository-file inventory"
+    ) in failures
+
+
+@pytest.mark.parametrize(
+    ("section", "auto_switch", "source_relative"),
+    (
+        ("bin", "autobins", "src/main.rs"),
+        ("example", "autoexamples", "examples/hidden.rs"),
+        ("test", "autotests", "tests/hidden.rs"),
+        ("bench", "autobenches", "benches/hidden.rs"),
+    ),
+)
+def test_source_closure_rejects_ignored_inferred_explicit_cargo_target(
+    tmp_path: Path,
+    section: str,
+    auto_switch: str,
+    source_relative: str,
+) -> None:
+    module = load_guard_module()
+    crate_root = tmp_path / "crates/iroha_torii"
+    hidden = crate_root / source_relative
+    hidden.parent.mkdir(parents=True)
+    (crate_root / "Cargo.toml").write_text(
+        '[package]\nname = "guard-fixture"\nversion = "0.0.0"\n'
+        f'{auto_switch} = false\nbuild = "../build-support/script.rs"\n\n'
+        f'[[{section}]]\nname = "hidden"\n',
+        encoding="utf-8",
+    )
+    build_script = tmp_path / "crates/build-support/script.rs"
+    build_script.parent.mkdir(parents=True)
+    build_script.write_text("fn main() {}\n", encoding="utf-8")
+    hidden.write_text(
+        "fn main() { tokio::task::spawn_blocking(|| provider_call()); }\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".gitignore").write_text(
+        f"crates/iroha_torii/{source_relative}\n", encoding="utf-8"
+    )
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "add",
+            ".gitignore",
+            "crates/iroha_torii/Cargo.toml",
+            "crates/build-support/script.rs",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+
+    records, _, counts = module.torii_boundary_inventory(tmp_path)
+    failures = module.torii_source_path_failures(tmp_path)
+    relative = f"crates/iroha_torii/{source_relative}"
+
+    assert any(record.startswith(f"{relative}\t") for record in records)
+    assert counts["spawn_blocking"] == 1
+    assert any(
+        relative in failure
+        and "outside the sealed repository-file inventory" in failure
+        for failure in failures
+    )
+
+
+@pytest.mark.parametrize(
+    ("target_declaration", "target_root_relative", "real_module_relative"),
+    (
+        ('[lib]\npath = "src/custom.rs"\n', "src/custom.rs", "src/hidden.rs"),
+        (
+            'autobins = false\n\n[[bin]]\nname = "custom"\npath = "src/custom.rs"\n',
+            "src/custom.rs",
+            "src/hidden.rs",
+        ),
+        (
+            'build = "../build-support/custom.rs"\n',
+            "../build-support/custom.rs",
+            "../build-support/hidden.rs",
+        ),
+    ),
+)
+def test_source_closure_resolves_modules_from_arbitrary_cargo_target_roots(
+    tmp_path: Path,
+    target_declaration: str,
+    target_root_relative: str,
+    real_module_relative: str,
+) -> None:
+    module = load_guard_module()
+    crate_root = tmp_path / "crates/iroha_torii"
+    manifest = crate_root / "Cargo.toml"
+    target_root = crate_root / target_root_relative
+    real_module = crate_root / real_module_relative
+    decoy = target_root.parent / target_root.stem / "hidden.rs"
+    manifest.parent.mkdir(parents=True)
+    target_root.parent.mkdir(parents=True, exist_ok=True)
+    real_module.parent.mkdir(parents=True, exist_ok=True)
+    decoy.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        '[package]\nname = "guard-fixture"\nversion = "0.0.0"\n'
+        + target_declaration,
+        encoding="utf-8",
+    )
+    target_root.write_text("mod hidden;\n", encoding="utf-8")
+    real_module.write_text(
+        "fn run() { tokio::task::spawn_blocking(|| provider_call()); }\n",
+        encoding="utf-8",
+    )
+    decoy.write_text("fn decoy() {}\n", encoding="utf-8")
+    relative_real = real_module.resolve().relative_to(tmp_path.resolve()).as_posix()
+    (tmp_path / ".gitignore").write_text(f"/{relative_real}\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "add", ".gitignore", str(manifest), str(target_root), str(decoy)],
+        cwd=tmp_path,
+        check=True,
+    )
+
+    records, _, counts = module.torii_boundary_inventory(tmp_path)
+    failures = module.torii_source_path_failures(tmp_path)
+
+    assert any(record.startswith(f"{relative_real}\t") for record in records)
+    assert counts["spawn_blocking"] == 1
+    assert any(
+        relative_real in failure
+        and "outside the sealed repository-file inventory" in failure
+        for failure in failures
+    )
 
 
 def test_source_closure_resolves_nested_inline_path_before_sealing(tmp_path: Path) -> None:

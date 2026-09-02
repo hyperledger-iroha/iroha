@@ -78,9 +78,9 @@ Examples:
   `compute.economics.price_bounds` and the baseline families recorded in
   `compute.economics.price_family_baseline`; use
   `ComputeEconomics::apply_price_update` to validate deltas before updating
-  the active family map. Torii config updates use
-  `ConfigUpdate::ComputePricing`, and kiso applies it with the same bounds to
-  keep governance edits deterministic.
+  the active family map. The Torii configuration snapshot is read-only;
+  operators deploy pricing changes through validated startup configuration and
+  restart the node. Consensus-visible governance edits use the same bounds.
 
 ## Configuration
 

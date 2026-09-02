@@ -73,3 +73,23 @@ async fn configuration_endpoint_includes_transport_summary() {
     );
     harness.shutdown().await;
 }
+
+#[tokio::test]
+async fn configuration_endpoint_rejects_runtime_mutation() {
+    let harness = NoritoRpcHarness::new(|_| {});
+    let mut req = fixtures::operator_signed_request(
+        &harness.cfg.common.key_pair,
+        Request::builder()
+            .method(http::Method::POST)
+            .uri(iroha_torii_shared::uri::CONFIGURATION)
+            .body(axum::body::Body::empty())
+            .unwrap(),
+        &[],
+    );
+    req.extensions_mut()
+        .insert(norito_rpc_harness::loopback_connect_info());
+
+    let response = harness.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    harness.shutdown().await;
+}

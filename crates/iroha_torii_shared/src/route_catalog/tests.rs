@@ -94,6 +94,22 @@ mod tests {
             application_api::ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_GET,
             application_api::ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_GET,
             application_api::ACCOUNTS_BY_ACCOUNT_ID_HISTORY_GET,
+            application_api::DOMAINS_GET,
+            application_api::DOMAINS_QUERY_POST,
+            application_api::ACCOUNTS_GET,
+            application_api::ACCOUNTS_QUERY_POST,
+            application_api::TRANSACTIONS_QUERY_POST,
+            application_api::ACCOUNTS_BY_UAID_PORTFOLIO_GET,
+            application_api::NEXUS_DATASPACES_ACCOUNTS_BY_LITERAL_SUMMARY_GET,
+            application_api::SPACE_DIRECTORY_UAIDS_BY_UAID_GET,
+            application_api::SPACE_DIRECTORY_UAIDS_BY_UAID_MANIFESTS_GET,
+            application_api::ASSETS_DEFINITIONS_GET,
+            application_api::ASSETS_DEFINITIONS_BY_ASSET_GET,
+            application_api::ASSETS_DEFINITIONS_QUERY_POST,
+            application_api::NFTS_GET,
+            application_api::NFTS_QUERY_POST,
+            application_api::RWAS_GET,
+            application_api::RWAS_QUERY_POST,
             application_api::EXPLORER_ACCOUNTS_GET,
             application_api::EXPLORER_DOMAINS_GET,
             application_api::EXPLORER_ASSET_DEFINITIONS_GET,
@@ -142,6 +158,18 @@ mod tests {
             AdmissionPolicy::AuthenticatedAccount
         );
         assert_eq!(validate_catalog(&[streaming::BLOCKS_WS]), Ok(()));
+        assert_eq!(
+            application_api::ACCOUNTS_BY_ACCOUNT_ID_ALIASES_GET.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert_eq!(
+            application_api::ACCOUNTS_BY_ACCOUNT_ID_ALIASES_GET.admission(),
+            AdmissionPolicy::AuthenticatedAccount
+        );
+        assert_eq!(
+            validate_catalog(&[application_api::ACCOUNTS_BY_ACCOUNT_ID_ALIASES_GET]),
+            Ok(())
+        );
     }
 
     #[test]
@@ -302,34 +330,6 @@ mod tests {
                 .len(),
             offline::ROUTES.len(),
             "the offline route family must be available to MCP clients"
-        );
-    }
-    #[test]
-    fn ordinary_kagemusha_lifecycle_has_one_dedicated_canonical_signed_route() {
-        let route = offline::KAGEMUSHA_LIFECYCLE_TRANSACTION;
-        assert_eq!(
-            route.path(),
-            "/v1/offline/kagemusha/lifecycle-v4/transactions"
-        );
-        assert_eq!(crate::uri::KAGEMUSHA_LIFECYCLE_TRANSACTION, route.path());
-        assert_eq!(route.method(), HttpMethod::Post);
-        assert_eq!(route.surface(), ApiSurface::Public);
-        assert_eq!(route.effect(), RouteEffect::Mutation);
-        assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
-        assert_eq!(
-            route.authentication(),
-            AuthenticationPolicy::CanonicalSignedBody
-        );
-        assert_eq!(route.feature_gate(), FeatureGate::Feature("app_api"));
-        assert_eq!(route.route_match(), RouteMatch::Exact);
-        assert_eq!(route.path_normalization(), PathNormalization::Strict);
-        assert_ne!(route.path(), pipeline::TRANSACTION.path());
-        assert_eq!(
-            offline::ROUTES
-                .iter()
-                .filter(|candidate| candidate.path() == route.path())
-                .count(),
-            1
         );
     }
     #[test]
@@ -1225,13 +1225,16 @@ mod tests {
         }
     }
     #[test]
-    fn global_transaction_query_is_operator_only_while_visible_query_is_account_scoped() {
-        let global = application_api::TRANSACTIONS_QUERY_POST;
-        assert_eq!(global.effect(), RouteEffect::ExpensiveCompute);
-        assert_eq!(global.admission(), AdmissionPolicy::Operator);
+    fn transaction_queries_distinguish_optional_visible_and_required_account_scopes() {
+        let visible_fanout = application_api::TRANSACTIONS_QUERY_POST;
+        assert_eq!(visible_fanout.effect(), RouteEffect::ExpensiveCompute);
         assert_eq!(
-            global.authentication(),
-            AuthenticationPolicy::OperatorSignature
+            visible_fanout.admission(),
+            AdmissionPolicy::DataspaceVisible
+        );
+        assert_eq!(
+            visible_fanout.authentication(),
+            AuthenticationPolicy::OptionalCanonicalAccountSignature
         );
 
         let visible = application_api::TRANSACTIONS_VISIBLE_QUERY_POST;

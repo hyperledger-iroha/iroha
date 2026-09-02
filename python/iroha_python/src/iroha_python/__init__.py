@@ -18,6 +18,7 @@ from .address import (
     AccountAddress,
     AccountAddressError,
 )
+from .offline_cash_v1 import OfflineCashV1
 from .numeric_v1 import (
     INT_MAX,
     INT_MIN,
@@ -166,6 +167,7 @@ from .client import (
     ExplorerRwaRecord,
     ExplorerRwasPage,
     IsoSubmissionRecord,
+    IsoStatusHistoryRecord,
     IsoMessageTimeoutError,
     KaigiRelaySummary,
     KaigiRelaySummaryList,
@@ -207,6 +209,11 @@ from .client import (
     SpaceDirectoryManifestLifecycle,
     SpaceDirectoryManifestRecord,
     SpaceDirectoryManifestList,
+    SumeragiEvidenceAppliedPenaltyStatus,
+    SumeragiEvidenceCancelledPenaltyStatus,
+    SumeragiEvidencePenaltyDetails,
+    SumeragiEvidencePenaltyStatus,
+    SumeragiEvidencePendingPenaltyStatus,
     SumeragiEvidenceRecord,
     SumeragiEvidenceListPage,
     SumeragiPrfStatus,
@@ -528,6 +535,7 @@ from .dataspaces import (
 _BASE_EXPORTS = [
     "AccountAddress",
     "AccountAddressError",
+    "OfflineCashV1",
     "CREATE_KAIGI_WIRE_ID_V1",
     "END_KAIGI_WIRE_ID_V1",
     "JOIN_KAIGI_WIRE_ID_V1",
@@ -687,6 +695,11 @@ _BASE_EXPORTS = [
     "SpaceDirectoryManifestLifecycle",
     "SpaceDirectoryManifestRecord",
     "SpaceDirectoryManifestList",
+    "SumeragiEvidencePenaltyDetails",
+    "SumeragiEvidencePendingPenaltyStatus",
+    "SumeragiEvidenceAppliedPenaltyStatus",
+    "SumeragiEvidenceCancelledPenaltyStatus",
+    "SumeragiEvidencePenaltyStatus",
     "SumeragiEvidenceRecord",
     "SumeragiEvidenceListPage",
     "SumeragiPrfStatus",

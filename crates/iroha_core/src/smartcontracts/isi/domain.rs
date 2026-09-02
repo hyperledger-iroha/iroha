@@ -607,24 +607,28 @@ pub mod isi {
         }
         Ok(())
     }
-    /// Derive the deterministic offline escrow account for an asset definition.
-    pub(crate) fn offline_escrow_account_id(
+    /// Derive the deterministic Offline Cash V1 reserve custody account for an asset definition.
+    pub(crate) fn offline_cash_reserve_account_id(
         network_id: &NetworkId,
         definition_id: &AssetDefinitionId,
     ) -> AccountId {
-        iroha_data_model::offline::offline_escrow_account_id(network_id, definition_id)
+        AccountId::new(iroha_crypto::derive_non_signing_ed25519_public_key(
+            b"iroha.offline-cash.v1.reserve-custody",
+            &[network_id.as_bytes(), definition_id.to_string().as_bytes()],
+        ))
     }
-    pub(crate) fn ensure_offline_escrow_account(
+    pub(crate) fn ensure_offline_reserve_account(
         asset_definition: &AssetDefinition,
         _authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let definition_id = asset_definition.id();
-        let derived = offline_escrow_account_id(state_transaction.network_id(), definition_id);
-        let escrow_account = match state_transaction
+        let derived =
+            offline_cash_reserve_account_id(state_transaction.network_id(), definition_id);
+        let reserve_account = match state_transaction
             .settlement
             .offline
-            .escrow_accounts
+            .reserve_accounts
             .entry(definition_id.clone())
         {
             Entry::Vacant(entry) => entry.insert(derived.clone()).clone(),
@@ -634,7 +638,7 @@ pub mod isi {
                         definition = %definition_id,
                         configured = %entry.get(),
                         derived = %derived,
-                        "offline escrow account overridden by deterministic derivation"
+                        "Offline Cash reserve account overridden by deterministic derivation"
                     );
                     entry.insert(derived.clone());
                 }
@@ -642,15 +646,15 @@ pub mod isi {
             }
         };
         ensure_controller_capabilities(
-            escrow_account.controller(),
+            reserve_account.controller(),
             &state_transaction.crypto.allowed_signing,
             &state_transaction.crypto.allowed_curve_ids,
         )?;
-        if state_transaction.world.account(&escrow_account).is_ok() {
+        if state_transaction.world.account(&reserve_account).is_ok() {
             return Ok(());
         }
         let account = Account {
-            id: escrow_account.clone(),
+            id: reserve_account.clone(),
             metadata: Metadata::default(),
             label: None,
             uaid: None,
@@ -736,6 +740,13 @@ pub mod isi {
         }
         if let Ok(permission) =
             iroha_executor_data_model::permission::trigger::CanRegisterTrigger::try_from(permission)
+        {
+            return account_subject_matches(&permission.authority, account_id);
+        }
+        if let Ok(permission) =
+            iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger::try_from(
+                permission,
+            )
         {
             return account_subject_matches(&permission.authority, account_id);
         }
@@ -1259,6 +1270,18 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let account_id = self.object().clone();
+            if let Some(contract) = crate::smartcontracts::code::historical_contract_for_subject(
+                &state_transaction.world,
+                &account_id,
+            ) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: it is the retained subject of contract `{contract}`"
+                    )
+                    .into(),
+                )
+                .into());
+            }
             if let Some(contract) =
                 crate::smartcontracts::code::contract_owned_or_pending_for_account(
                     &state_transaction.world,
@@ -1613,15 +1636,15 @@ pub mod isi {
                 )
                 .into());
             }
-            for (definition_id, escrow_account) in
-                &state_transaction.settlement.offline.escrow_accounts
+            for (definition_id, reserve_account) in
+                &state_transaction.settlement.offline.reserve_accounts
             {
-                if escrow_account != &account_id {
+                if reserve_account != &account_id {
                     continue;
                 }
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "cannot unregister account {account_id}: it is the lazily derived offline escrow account for asset definition {definition_id}"
+                        "cannot unregister account {account_id}: it is the lazily derived Offline Cash reserve account for asset definition {definition_id}"
                     )
                     .into(),
                 )
@@ -1633,13 +1656,13 @@ pub mod isi {
                 .assets_in_account_iter(&account_id)
                 .find_map(|asset| {
                     let definition_id = asset.id().definition();
-                    (offline_escrow_account_id(&network_id, definition_id) == account_id)
+                    (offline_cash_reserve_account_id(&network_id, definition_id) == account_id)
                         .then(|| definition_id.clone())
                 })
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "cannot unregister account {account_id}: it is the deterministic offline escrow account holding live assets for asset definition {definition_id}"
+                        "cannot unregister account {account_id}: it is the deterministic Offline Cash reserve account holding live assets for asset definition {definition_id}"
                     )
                     .into(),
                 )
@@ -2363,6 +2386,79 @@ pub mod isi {
                 &BTreeSet::from([asset_definition_id.clone()]),
                 &format!("unregister asset definition {asset_definition_id}"),
             )?;
+            for (storage_key, pool) in state_transaction.world.offline_cash_reserve_pools.iter() {
+                if pool.key.asset != asset_definition_id {
+                    continue;
+                }
+                if storage_key != &pool.key.liability_pool_id {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister asset definition {asset_definition_id}: its Offline Cash V1 reserve pool has a non-canonical storage key"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                pool.validate().map_err(|error| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister asset definition {asset_definition_id}: its Offline Cash V1 reserve pool is invalid: {error}"
+                        )
+                        .into(),
+                    )
+                })?;
+                let outstanding = pool.available().map_err(|error| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister asset definition {asset_definition_id}: its Offline Cash V1 reserve liability is invalid: {error}"
+                        )
+                        .into(),
+                    )
+                })?;
+                if outstanding != 0 {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister asset definition {asset_definition_id}: its Offline Cash V1 reserve has {outstanding} outstanding atomic units"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+            }
+            for (_, operation) in state_transaction
+                .world
+                .offline_cash_reserve_operations
+                .iter()
+            {
+                let pool = operation.pool();
+                if pool.asset == asset_definition_id
+                    && state_transaction
+                        .world
+                        .offline_cash_reserve_pools
+                        .get(&pool.liability_pool_id)
+                        .is_none()
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister asset definition {asset_definition_id}: an Offline Cash V1 operation references a missing reserve pool"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+            }
+            if let Some(reference) = crate::smartcontracts::isi::sorafs_moderation::retained_moderation_asset_definition_reference(
+                state_transaction.world(),
+                &asset_definition_id,
+            )? {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister asset definition {asset_definition_id}: it is retained by moderation {reference}"
+                    )
+                    .into(),
+                )
+                .into());
+            }
             if let Some((proposal_id, reference_kind)) =
                 crate::validation_fee::retained_enacted_validation_fee_asset_reference(
                     state_transaction,
@@ -2664,7 +2760,7 @@ pub mod isi {
             state_transaction
                 .settlement
                 .offline
-                .escrow_accounts
+                .reserve_accounts
                 .remove(&asset_definition_id);
             events.push(DataEvent::asset_definition(
                 AssetDefinitionEvent::Deleted(asset_definition_id),
@@ -6414,6 +6510,11 @@ mod tests {
                 },
             ),
             Permission::from(
+                iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
+                    authority: target.clone(),
+                },
+            ),
+            Permission::from(
                 iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
                     contract,
                     entrypoint: "main".to_owned(),
@@ -7699,6 +7800,67 @@ mod tests {
         .expect("register asset definition");
         test(authority, asset_definition_id, &mut transaction);
     }
+    fn install_offline_cash_reserve_pool(
+        transaction: &mut crate::state::StateTransaction<'_, '_>,
+        asset_definition_id: &AssetDefinitionId,
+        outstanding: bool,
+    ) -> [u8; 32] {
+        use crate::smartcontracts::isi::offline::offline_cash_v1_reserve::{
+            OFFLINE_CASH_RESERVE_VERSION_V1, OfflineCashReservePoolKeyV1, OfflineCashReservePoolV1,
+        };
+        use iroha_data_model::isi::{OfflineCashOperationKindV1, OfflineCashReserveReceiptV1};
+
+        let network_id = *transaction.network_id();
+        let asset_incarnation = *transaction
+            .world
+            .axt_asset_incarnations
+            .get(asset_definition_id)
+            .expect("registered asset definition incarnation");
+        let key = OfflineCashReservePoolKeyV1::new(
+            network_id,
+            asset_definition_id.clone(),
+            asset_incarnation,
+        )
+        .expect("canonical Offline Cash reserve key");
+        let kind = if outstanding {
+            OfflineCashOperationKindV1::TopUp
+        } else {
+            OfflineCashOperationKindV1::Redemption
+        };
+        let receipt = OfflineCashReserveReceiptV1 {
+            version: OFFLINE_CASH_RESERVE_VERSION_V1,
+            operation_id: [0x41; 32],
+            kind,
+            request_digest: [0x42; 32],
+            mint_statement_digest: if outstanding { [0x43; 32] } else { [0; 32] },
+            network_id,
+            asset: asset_definition_id.clone(),
+            asset_incarnation,
+            scale: 0,
+            liability_pool_id: key.liability_pool_id,
+            amount: 1,
+            previous_pool_receipt_digest: if outstanding { [0; 32] } else { [0x44; 32] },
+            total_topups: 1,
+            total_redemptions: if outstanding { 0 } else { 1 },
+            transaction_hash: [0x45; 32],
+            committed_at_ms: 1,
+        };
+        let pool = OfflineCashReservePoolV1 {
+            version: OFFLINE_CASH_RESERVE_VERSION_V1,
+            key,
+            scale: 0,
+            total_topups: 1,
+            total_redemptions: if outstanding { 0 } else { 1 },
+            latest_receipt: Some(receipt),
+        };
+        pool.validate().expect("valid Offline Cash reserve pool");
+        let pool_id = pool.key.liability_pool_id;
+        transaction
+            .world
+            .offline_cash_reserve_pools
+            .insert(pool_id, pool);
+        pool_id
+    }
     #[test]
     fn unregister_account_rejects_when_account_owns_asset_definition() {
         with_registered_account_unregistration_candidate(|authority, domain_id, account_id, tx| {
@@ -7736,6 +7898,50 @@ mod tests {
                 "account should remain after rejected unregister"
             );
         });
+    }
+    #[test]
+    fn unregister_account_rejects_active_and_inactive_retained_contract_subjects() {
+        for (nonce, active) in [(31_u64, false), (32_u64, true)] {
+            let state = test_state();
+            let authority = (*ALICE_ID).clone();
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut tx = block.transaction();
+            let contract =
+                ContractAddress::derive(tx.network_id(), &authority, nonce, DataSpaceId::UNIVERSAL)
+                    .expect("contract address");
+            tx.world.bind_inactive_contract_subject_for_testing(
+                contract.clone(),
+                contract.subject_id(),
+            );
+            let subject = contract.subject_id();
+            if active {
+                let code_hash = Hash::new(b"retained-contract-subject-unregister");
+                tx.world
+                    .contract_instances
+                    .insert(contract.clone(), code_hash);
+                tx.world
+                    .contract_subject_bindings
+                    .get_mut(&contract)
+                    .expect("retained contract binding")
+                    .lifecycle
+                    .active_code_hash = Some(code_hash);
+            }
+
+            let error = Unregister::account(subject.clone())
+                .execute(&authority, &mut tx)
+                .expect_err("retained contract subject must never be unregistered");
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("retained subject of contract `{contract}`")),
+                "error must identify the exact retained contract: {error}"
+            );
+            assert!(
+                tx.world.accounts.get(&subject).is_some(),
+                "rejected {active:?} contract-subject removal must preserve the account"
+            );
+        }
     }
     #[test]
     fn unregister_account_rejects_contract_owner_and_pending_recipient_until_cleared() {
@@ -8052,7 +8258,7 @@ mod tests {
         );
     }
     #[test]
-    fn unregister_account_rejects_when_account_is_offline_escrow_account() {
+    fn unregister_account_rejects_when_account_is_offline_reserve_account() {
         with_registered_account_unregistration_candidate(|authority, domain_id, account_id, tx| {
             let asset_definition_id = AssetDefinitionId::derive_from_components(
                 domain_id.clone(),
@@ -8071,15 +8277,15 @@ mod tests {
             .expect("register asset definition");
             tx.settlement
                 .offline
-                .escrow_accounts
+                .reserve_accounts
                 .insert(asset_definition_id, account_id.clone());
             let err = Unregister::account(account_id.clone())
                 .execute(&authority, tx)
-                .expect_err("offline escrow account must not be unregistered");
+                .expect_err("Offline Cash reserve account must not be unregistered");
             let err_string = err.to_string();
             assert!(
-                err_string.contains("offline escrow account"),
-                "error should explain offline escrow conflict: {err_string}"
+                err_string.contains("Offline Cash reserve account"),
+                "error should explain Offline Cash reserve conflict: {err_string}"
             );
             assert!(
                 tx.world.accounts.get(&account_id).is_some(),
@@ -8088,7 +8294,7 @@ mod tests {
         });
     }
     #[test]
-    fn unregister_account_rejects_live_offline_escrow_after_transaction_boundary() {
+    fn unregister_account_rejects_live_offline_reserve_after_transaction_boundary() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
@@ -8099,8 +8305,8 @@ mod tests {
         );
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-        let escrow_account_id;
-        let escrow_asset_id;
+        let reserve_account_id;
+        let reserve_asset_id;
         {
             let mut first_tx = block.transaction();
             Register::asset_definition({
@@ -8118,38 +8324,45 @@ mod tests {
                 .world
                 .asset_definition(&asset_definition_id)
                 .expect("registered asset definition");
-            super::isi::ensure_offline_escrow_account(&asset_definition, &authority, &mut first_tx)
-                .expect("materialize deterministic offline escrow account");
-            escrow_account_id =
-                super::isi::offline_escrow_account_id(first_tx.network_id(), &asset_definition_id);
-            escrow_asset_id = AssetId::new(asset_definition_id.clone(), escrow_account_id.clone());
-            Mint::asset_quantity(5_u32, escrow_asset_id.clone())
+            super::isi::ensure_offline_reserve_account(
+                &asset_definition,
+                &authority,
+                &mut first_tx,
+            )
+            .expect("materialize deterministic Offline Cash reserve account");
+            reserve_account_id = super::isi::offline_cash_reserve_account_id(
+                first_tx.network_id(),
+                &asset_definition_id,
+            );
+            reserve_asset_id =
+                AssetId::new(asset_definition_id.clone(), reserve_account_id.clone());
+            Mint::asset_quantity(5_u32, reserve_asset_id.clone())
                 .execute(&authority, &mut first_tx)
-                .expect("mint live offline escrow backing");
+                .expect("mint live Offline Cash reserve backing");
             first_tx.apply();
         }
         let mut second_tx = block.transaction();
         assert!(
-            second_tx.settlement.offline.escrow_accounts.is_empty(),
-            "transaction-local escrow bindings must not be required for protection"
+            second_tx.settlement.offline.reserve_accounts.is_empty(),
+            "transaction-local reserve bindings must not be required for protection"
         );
-        let err = Unregister::account(escrow_account_id.clone())
+        let err = Unregister::account(reserve_account_id.clone())
             .execute(&authority, &mut second_tx)
-            .expect_err("live offline escrow backing must survive account unregistration");
+            .expect_err("live Offline Cash reserve backing must survive account unregistration");
         let err_string = err.to_string();
         assert!(
-            err_string.contains("offline escrow account"),
-            "error should explain the live offline escrow conflict: {err_string}"
+            err_string.contains("Offline Cash reserve account"),
+            "error should explain the live Offline Cash reserve conflict: {err_string}"
         );
         assert!(
-            second_tx.world.accounts.get(&escrow_account_id).is_some(),
-            "offline escrow account should remain after rejected unregister"
+            second_tx.world.accounts.get(&reserve_account_id).is_some(),
+            "Offline Cash reserve account should remain after rejected unregister"
         );
         assert_eq!(
             second_tx
                 .world
-                .asset(&escrow_asset_id)
-                .expect("offline escrow backing should remain")
+                .asset(&reserve_asset_id)
+                .expect("Offline Cash reserve backing should remain")
                 .value()
                 .as_ref()
                 .clone(),
@@ -8157,12 +8370,12 @@ mod tests {
         );
     }
     #[test]
-    fn ordinary_metadata_does_not_reserve_an_offline_escrow_account() {
-        let chain_id = ChainId::from("offline-escrow-testnet");
+    fn ordinary_metadata_does_not_reserve_an_offline_reserve_account() {
+        let chain_id = ChainId::from("offline-reserve-testnet");
         let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
             iroha_data_model::block::BlockHeader,
         >::from_untyped_unchecked(
-            iroha_crypto::Hash::new(b"offline-escrow-test-network"),
+            iroha_crypto::Hash::new(b"offline-reserve-test-network"),
         ));
         let domain_id: DomainId = DomainId::try_new("offline", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
@@ -8170,8 +8383,8 @@ mod tests {
             domain_id.clone(),
             "usd".parse().expect("asset definition name"),
         );
-        let escrow_account_id =
-            iroha_data_model::offline::offline_escrow_account_id(&network_id, &asset_definition_id);
+        let reserve_account_id =
+            super::isi::offline_cash_reserve_account_id(&network_id, &asset_definition_id);
         let mut metadata = Metadata::default();
         metadata.insert(
             "offline.enabled".parse().expect("legacy metadata key"),
@@ -8187,7 +8400,7 @@ mod tests {
         asset_definition.metadata = metadata;
         let world = World::with_assets(
             [Domain::new(domain_id).build(&authority)],
-            [Account::new(escrow_account_id.clone()).build(&authority)],
+            [Account::new(reserve_account_id.clone()).build(&authority)],
             [asset_definition],
             [],
             [],
@@ -8201,14 +8414,14 @@ mod tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
         assert!(
-            tx.settlement.offline.escrow_accounts.is_empty(),
-            "ordinary asset metadata must not create an escrow binding"
+            tx.settlement.offline.reserve_accounts.is_empty(),
+            "ordinary asset metadata must not create a reserve binding"
         );
-        Unregister::account(escrow_account_id.clone())
+        Unregister::account(reserve_account_id.clone())
             .execute(&authority, &mut tx)
             .expect("legacy-looking metadata must have no offline semantics");
         assert!(
-            tx.world.accounts.get(&escrow_account_id).is_none(),
+            tx.world.accounts.get(&reserve_account_id).is_none(),
             "ordinary unbound account should be removable"
         );
     }
@@ -9003,7 +9216,7 @@ mod tests {
         assert!(
             tx.settlement
                 .offline
-                .escrow_accounts
+                .reserve_accounts
                 .get(&definition_id)
                 .is_none(),
             "ordinary registration must not materialize offline state"
@@ -9039,7 +9252,7 @@ mod tests {
         assert!(
             tx.settlement
                 .offline
-                .escrow_accounts
+                .reserve_accounts
                 .get(&definition_id)
                 .is_none(),
             "escrow mapping should not be created"
@@ -10450,7 +10663,7 @@ mod tests {
         assert!(
             tx.settlement
                 .offline
-                .escrow_accounts
+                .reserve_accounts
                 .get(&definition_id)
                 .is_none(),
             "escrow mapping should not be created before metadata update"
@@ -10465,7 +10678,7 @@ mod tests {
         assert!(
             tx.settlement
                 .offline
-                .escrow_accounts
+                .reserve_accounts
                 .get(&definition_id)
                 .is_none(),
             "metadata must not create offline runtime state"
@@ -10516,7 +10729,7 @@ mod tests {
             Some(&Json::new(false))
         );
         assert!(
-            tx.settlement.offline.escrow_accounts.is_empty(),
+            tx.settlement.offline.reserve_accounts.is_empty(),
             "legacy-looking metadata must not materialize offline state"
         );
     }
@@ -10565,7 +10778,7 @@ mod tests {
             "metadata must be removed"
         );
         assert!(
-            tx.settlement.offline.escrow_accounts.is_empty(),
+            tx.settlement.offline.reserve_accounts.is_empty(),
             "metadata removal must not materialize offline state"
         );
     }
@@ -10612,7 +10825,7 @@ mod tests {
             "metadata should be stored unchanged"
         );
         assert!(
-            tx.settlement.offline.escrow_accounts.is_empty(),
+            tx.settlement.offline.reserve_accounts.is_empty(),
             "legacy-looking metadata must not materialize offline state"
         );
     }
@@ -10775,6 +10988,51 @@ mod tests {
                 .get(&asset_definition_id)
                 .is_some(),
             "custody asset definition must remain after rejected unregister"
+        );
+    }
+    #[test]
+    fn unregister_asset_definition_rejects_retained_moderation_policy_after_config_change() {
+        with_registered_asset_definition_unregistration_candidate(
+            |authority, asset_definition_id, tx| {
+                assert_ne!(
+                    tx.gov.voting_asset_id, asset_definition_id,
+                    "the candidate must not rely on the current governance config guard"
+                );
+                crate::smartcontracts::isi::sorafs_moderation::seed_moderation_policy_asset_reference_for_test(
+                    &mut tx.world,
+                    asset_definition_id.clone(),
+                    authority.clone(),
+                    authority.clone(),
+                )
+                .expect("seed a valid retained moderation policy");
+                let policy_key: iroha_data_model::state_path::StatePath =
+                    "sorafs_moderation_policy_v1"
+                        .parse()
+                        .expect("moderation policy state path");
+                let policy_before = tx.world.smart_contract_state.get(&policy_key).cloned();
+
+                let error = Unregister::asset_definition(asset_definition_id.clone())
+                    .execute(&authority, tx)
+                    .expect_err("moderation-retained asset definition must remain registered");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("retained by moderation active policy challenge voting asset"),
+                    "unexpected moderation retention error: {error}"
+                );
+                assert!(
+                    tx.world
+                        .asset_definitions
+                        .get(&asset_definition_id)
+                        .is_some(),
+                    "moderation-retained definition must remain after rejected unregister"
+                );
+                assert_eq!(
+                    tx.world.smart_contract_state.get(&policy_key),
+                    policy_before.as_ref(),
+                    "rejected unregister must not mutate moderation state"
+                );
+            },
         );
     }
     #[test]
@@ -11123,17 +11381,17 @@ mod tests {
         );
     }
     #[test]
-    fn unregister_asset_definition_removes_offline_escrow_mapping() {
+    fn unregister_asset_definition_removes_offline_reserve_mapping() {
         with_registered_asset_definition_unregistration_candidate(
             |authority, asset_definition_id, tx| {
                 tx.settlement
                     .offline
-                    .escrow_accounts
+                    .reserve_accounts
                     .insert(asset_definition_id.clone(), ALICE_ID.clone());
                 assert!(
                     tx.settlement
                         .offline
-                        .escrow_accounts
+                        .reserve_accounts
                         .get(&asset_definition_id)
                         .is_some(),
                     "escrow mapping should exist before unregister"
@@ -11144,10 +11402,60 @@ mod tests {
                 assert!(
                     tx.settlement
                         .offline
-                        .escrow_accounts
+                        .reserve_accounts
                         .get(&asset_definition_id)
                         .is_none(),
                     "escrow mapping should be removed with asset definition"
+                );
+            },
+        );
+    }
+    #[test]
+    fn unregister_asset_definition_rejects_outstanding_offline_cash_liability() {
+        with_registered_asset_definition_unregistration_candidate(
+            |authority, asset_definition_id, tx| {
+                let pool_id = install_offline_cash_reserve_pool(tx, &asset_definition_id, true);
+                let error = Unregister::asset_definition(asset_definition_id.clone())
+                    .execute(&authority, tx)
+                    .expect_err("outstanding Offline Cash liability must block unregistration");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("Offline Cash V1 reserve has 1 outstanding atomic units"),
+                    "unexpected reserve-liability rejection: {error}"
+                );
+                assert!(
+                    tx.world
+                        .asset_definitions
+                        .get(&asset_definition_id)
+                        .is_some(),
+                    "asset definition must remain while offline cash is redeemable"
+                );
+                assert!(
+                    tx.world.offline_cash_reserve_pools.get(&pool_id).is_some(),
+                    "rejected unregistration must preserve the reserve pool"
+                );
+            },
+        );
+    }
+    #[test]
+    fn unregister_asset_definition_archives_fully_redeemed_offline_cash_pool() {
+        with_registered_asset_definition_unregistration_candidate(
+            |authority, asset_definition_id, tx| {
+                let pool_id = install_offline_cash_reserve_pool(tx, &asset_definition_id, false);
+                Unregister::asset_definition(asset_definition_id.clone())
+                    .execute(&authority, tx)
+                    .expect("a fully redeemed Offline Cash incarnation may be retired");
+                assert!(
+                    tx.world
+                        .asset_definitions
+                        .get(&asset_definition_id)
+                        .is_none(),
+                    "fully redeemed asset definition should be removed"
+                );
+                assert!(
+                    tx.world.offline_cash_reserve_pools.get(&pool_id).is_some(),
+                    "zeroed old-incarnation reserve state must remain archived"
                 );
             },
         );

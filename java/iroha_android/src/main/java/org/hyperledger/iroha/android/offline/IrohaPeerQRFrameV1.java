@@ -10,7 +10,7 @@ public final class IrohaPeerQRFrameV1 {
   public static final int PAYLOAD_OFFSET = 32;
   public static final int FIXED_OVERHEAD = 36;
   private static final int MAXIMUM_DATA_SHARDS =
-      (IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES + 255) / 256;
+      (IrohaPeerWireMessageV1.MAXIMUM_OFFLINE_CASH_ENCODED_BYTES + 255) / 256;
   private static final byte[] MAGIC = "IRQR".getBytes(StandardCharsets.US_ASCII);
 
   public enum FrameKind {
@@ -61,7 +61,7 @@ public final class IrohaPeerQRFrameV1 {
       case COMPLETE -> require(index == 0 && total == 1
               && this.payload.length > IrohaPeerWireMessageV1.HEADER_LENGTH
               && this.payload.length <= IrohaPeerWireMessageV1.HEADER_LENGTH
-                  + IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES,
+                  + IrohaPeerWireMessageV1.MAXIMUM_OFFLINE_CASH_ENCODED_BYTES,
           "Malformed complete IRQR frame");
       case HEADER -> require(index == 0
               && this.payload.length == IrohaPeerWireMessageV1.HEADER_LENGTH,

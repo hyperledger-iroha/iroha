@@ -1362,7 +1362,7 @@ fn decision_commitment_mismatch_fails_closed_before_apply() {
         )
         .expect("start exact local proposal");
     complete_local_proposal_fixture(&mut executor, &mut services);
-    let conflicting_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    let conflicting_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
         Hash::new(b"Decision conflict parent state"),
         Hash::new(b"Decision conflict post state"),
         Hash::new(b"Decision conflict ordinary writes"),
@@ -1408,7 +1408,7 @@ fn reconciled_decision_rejects_same_round_subject_commitment_drift() {
     assert_eq!(executor.protected_decision, Some(first));
     let retired_outbound = services.retired_all_outbound;
     let retired_candidate = services.retired_candidate_work;
-    let drifted_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    let drifted_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
         Hash::new(b"drifted Decision parent state"),
         Hash::new(b"drifted Decision post state"),
         Hash::new(b"drifted Decision ordinary writes"),
@@ -2389,7 +2389,7 @@ fn missing_replay_validate_rejects_mismatched_durable_prepare_commitment() {
     let (key, _) = install_exact_recovered_body_without_lifecycle_replay(&mut executor, &fixture);
     let (prepare, effect, ownership) = protected_prepare_validate_fixture(&fixture, 9_103);
     let mut mismatched = prepare;
-    mismatched.execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    mismatched.execution_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
         Hash::new(b"foreign protected-lock parent state"),
         Hash::new(b"foreign protected-lock post state"),
         Hash::new(b"foreign protected-lock ordinary writes"),
@@ -3119,7 +3119,7 @@ fn recovered_validate_retry_frontier_is_monotonic_and_keeps_its_physical_owner()
     assert_eq!(executor.durable_validate_retry_seals[&key], accepted);
 
     let mut conflicting = prepare;
-    conflicting.execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    conflicting.execution_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
         Hash::new(b"foreign recovered retry parent state"),
         Hash::new(b"foreign recovered retry post state"),
         Hash::new(b"foreign recovered retry writes"),
@@ -3147,7 +3147,7 @@ fn recovered_validate_retry_frontier_is_monotonic_and_keeps_its_physical_owner()
 fn recovered_validate_retry_later_marker_and_decision_joins_are_atomic() {
     let fixture = Fixture::new();
     let commitment = fixture.qc(wire::GlobalPhase::Commit).execution_commitment;
-    let conflicting_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    let conflicting_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
         Hash::new(b"late cold fact parent state"),
         Hash::new(b"late cold fact post state"),
         Hash::new(b"late cold fact writes"),
@@ -3973,7 +3973,7 @@ fn admitted_validate_retry_seal_coalesces_exact_authority_upgrade_without_replay
     let accepted_seal = executor.durable_validate_retry_seals[&key].clone();
 
     let mut conflicting = prepare;
-    conflicting.execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    conflicting.execution_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
         Hash::new(b"conflicting sealed Validate parent state"),
         Hash::new(b"conflicting sealed Validate post state"),
         Hash::new(b"conflicting sealed Validate ordinary writes"),
@@ -5711,7 +5711,7 @@ fn decision_body_stage_adoption_rejects_commitment_drift() {
     };
     let incumbent = bound_test_effect_ownership(&store, tag(0), 9_020);
     let mut conflicting = commit.clone();
-    conflicting.execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    conflicting.execution_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
         Hash::new(b"conflicting Decision parent state"),
         Hash::new(b"conflicting Decision post state"),
         Hash::new(b"conflicting Decision ordinary writes"),

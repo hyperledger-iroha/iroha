@@ -7899,12 +7899,24 @@ mod tests {
     #[test]
     fn cancel_consensus_evidence_penalty_marks_record() {
         let state = setup_state();
-        let roster = vec![ValidatorPower {
-            validator: checked_peer_id(),
-            power: 1,
-        }];
+        let mut roster = (0xE0_u8..=0xE3)
+            .map(|seed| {
+                let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                    .expect("derive deterministic staking evidence validator");
+                ValidatorPower {
+                    validator: PeerId::new(keypair.public_key().clone()),
+                    power: 1,
+                }
+            })
+            .collect::<Vec<_>>();
+        roster.sort_by(|left, right| left.validator.cmp(&right.validator));
+        let network_id = *state.network_id_ref();
+        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+                network_id, 0, &roster,
+            );
         let context = HeightContext {
-            network_id: *state.network_id_ref(),
+            network_id,
             protocol_version: PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -7915,6 +7927,8 @@ mod tests {
             snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
+            offline_cash_mint_finality_epoch_id,
+            offline_cash_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"staking cancellation nexus context"),
             execution_policy_hash: Hash::new(b"staking cancellation execution policy"),
             da_layout: DataAvailabilityLayout {
@@ -7932,13 +7946,14 @@ mod tests {
             height: context.height,
             view: 0,
         };
-        let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"staking cancellation parent state"),
-            Hash::new(b"staking cancellation post state"),
-            Hash::new(b"staking cancellation ordinary writes"),
-            1,
-            Hash::new(b"staking cancellation block"),
-        );
+        let execution_commitment =
+            ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                Hash::new(b"staking cancellation parent state"),
+                Hash::new(b"staking cancellation post state"),
+                Hash::new(b"staking cancellation ordinary writes"),
+                1,
+                Hash::new(b"staking cancellation block"),
+            );
         let vote = |seed: u8| Vote {
             round,
             proposal_round: round,
@@ -7955,7 +7970,7 @@ mod tests {
         let evidence = Evidence {
             equivocation: SumeragiV2EquivocationEvidence {
                 context,
-                proofs_of_possession: vec![vec![0xD0; 96]],
+                proofs_of_possession: vec![vec![0xD0; 96]; 4],
                 conflict: SumeragiV2Equivocation::PhaseVote {
                     first: vote(0xAA),
                     second: vote(0xBB),

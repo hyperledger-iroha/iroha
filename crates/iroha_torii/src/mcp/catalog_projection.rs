@@ -54,14 +54,17 @@ fn tool_requires_catalog_mcp_projection(name: &str) -> bool {
 
 fn retain_catalog_mcp_tools(tools: &mut Vec<ToolSpec>, groups: &[CatalogProjectionGroup]) {
     tools.retain(|tool| {
+        let ToolBacking::Route {
+            method,
+            path_template,
+            ..
+        } = tool.backing()
+        else {
+            return true;
+        };
         if tool_requires_catalog_mcp_projection(&tool.name) {
-            return catalog_mcp_projection_decision(
-                groups,
-                &tool.method,
-                tool.path_template.as_str(),
-            ) == Some(true);
+            return catalog_mcp_projection_decision(groups, method, path_template) == Some(true);
         }
-        catalog_route_mounted_decision(groups, &tool.method, tool.path_template.as_str())
-            .unwrap_or(true)
+        catalog_route_mounted_decision(groups, method, path_template).unwrap_or(true)
     });
 }

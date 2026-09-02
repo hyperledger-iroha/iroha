@@ -11,6 +11,20 @@ import org.hyperledger.iroha.sdk.crypto.keystore.attestation.AttestationResult
 import org.hyperledger.iroha.sdk.crypto.keystore.attestation.AttestationVerificationException
 import org.hyperledger.iroha.sdk.crypto.keystore.attestation.AttestationVerifier
 
+private const val ANDROID_STRONGBOX_UNAVAILABLE_EXCEPTION =
+    "android.security.keystore.StrongBoxUnavailableException"
+
+internal class StrongBoxUnavailableFailure(
+    message: String,
+    cause: Throwable? = null,
+) : Exception(message, cause)
+
+private fun Throwable.isStrongBoxUnavailableFailure(): Boolean =
+    generateSequence(this) { it.cause }.any {
+        it is StrongBoxUnavailableFailure ||
+            it.javaClass.name == ANDROID_STRONGBOX_UNAVAILABLE_EXCEPTION
+    }
+
 /**
  * `KeyProvider` backed by an Android Keystore backend.
  *
@@ -40,7 +54,7 @@ class KeystoreKeyProvider @JvmOverloads constructor(
         if (parameters.requireStrongBox && !backend.metadata().strongBoxBacked) {
             throw KeyManagementException("StrongBox required but backend is not StrongBox-capable")
         }
-        val result = backend.generate(alias, parameters)
+        val result = generateWithPreferredStrongBoxFallback(alias, parameters)
         val outcome = outcomeFor(alias, result.keyPair)
         if (parameters.requireStrongBox && outcome.route != KeyGenerationOutcome.Route.STRONGBOX) {
             throw KeyManagementException(
@@ -65,11 +79,36 @@ class KeystoreKeyProvider @JvmOverloads constructor(
         if (effective.requireStrongBox && !backend.metadata().strongBoxBacked) {
             throw KeyManagementException("StrongBox required but backend is not StrongBox-capable")
         }
-        val result = backend.generate(alias, effective)
+        val result = generateWithPreferredStrongBoxFallback(alias, effective)
         val outcome = outcomeFor(alias, result.keyPair)
         enforcePreference(preference, outcome)
         return outcome
     }
+
+    private fun generateWithPreferredStrongBoxFallback(
+        alias: String,
+        effective: KeyGenParameters,
+    ): KeyGenerationResult =
+        try {
+            backend.generate(alias, effective)
+        } catch (strongBoxFailure: KeyManagementException) {
+            if (!effective.preferStrongBox ||
+                effective.requireStrongBox ||
+                !strongBoxFailure.isStrongBoxUnavailableFailure()
+            ) {
+                throw strongBoxFailure
+            }
+            val fallback = effective.toBuilder()
+                .setRequireStrongBox(false)
+                .setPreferStrongBox(false)
+                .build()
+            try {
+                backend.generate(alias, fallback)
+            } catch (fallbackFailure: KeyManagementException) {
+                fallbackFailure.addSuppressed(strongBoxFailure)
+                throw fallbackFailure
+            }
+        }
 
     /** Returns the measured security route for an existing or newly generated key. */
     @Throws(KeyManagementException::class)

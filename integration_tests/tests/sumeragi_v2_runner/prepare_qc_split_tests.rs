@@ -39,7 +39,7 @@ fn snapshot(view: u64, subject_seed: u8, execution_seed: u8) -> PrepareQcSnapsho
                 block_hash: hash_of::<BlockHeader>(subject_seed),
                 payload_hash: hash(subject_seed.wrapping_add(1)),
             },
-            execution_commitment: ExecutionCommitment::without_topups_or_merge_carrier(
+            execution_commitment: ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
                 hash(0x30),
                 hash(0x31),
                 hash(0x32),

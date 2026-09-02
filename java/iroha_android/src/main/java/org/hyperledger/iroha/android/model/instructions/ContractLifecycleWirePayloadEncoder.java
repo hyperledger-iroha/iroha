@@ -4,7 +4,9 @@ import java.math.BigInteger;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
+import java.util.Optional;
 import org.hyperledger.iroha.android.model.ContractAddressValidator;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.norito.NoritoAdapters;
@@ -22,6 +24,10 @@ import org.hyperledger.iroha.norito.TypeAdapter;
  * silently change the native enum variant.
  */
 public final class ContractLifecycleWirePayloadEncoder {
+  public static final String DEACTIVATE_INSTANCE_WIRE_NAME =
+      "iroha.instruction.v1::smart_contract_code::DeactivateContractInstance";
+  public static final String ACTIVATE_INSTANCE_WIRE_NAME =
+      "iroha.instruction.v1::smart_contract_code::ActivateContractInstance";
   public static final String SET_PARLIAMENT_DELEGATION_WIRE_NAME =
       "iroha.instruction.v1::smart_contract_code::SetContractParliamentDelegation";
   public static final String OFFER_OWNERSHIP_WIRE_NAME =
@@ -35,11 +41,17 @@ public final class ContractLifecycleWirePayloadEncoder {
   public static final List<String> WIRE_NAMES =
       Collections.unmodifiableList(
           Arrays.asList(
+              DEACTIVATE_INSTANCE_WIRE_NAME,
+              ACTIVATE_INSTANCE_WIRE_NAME,
               SET_PARLIAMENT_DELEGATION_WIRE_NAME,
               OFFER_OWNERSHIP_WIRE_NAME,
               ACCEPT_OWNERSHIP_WIRE_NAME,
               CANCEL_OWNERSHIP_OFFER_WIRE_NAME));
 
+  private static final String DEACTIVATE_INSTANCE_SCHEMA =
+      "iroha_data_model::isi::smart_contract_code::DeactivateContractInstance";
+  private static final String ACTIVATE_INSTANCE_SCHEMA =
+      "iroha_data_model::isi::smart_contract_code::ActivateContractInstance";
   private static final String SET_PARLIAMENT_DELEGATION_SCHEMA =
       "iroha_data_model::isi::smart_contract_code::SetContractParliamentDelegation";
   private static final String OFFER_OWNERSHIP_SCHEMA =
@@ -53,8 +65,46 @@ public final class ContractLifecycleWirePayloadEncoder {
   private static final TypeAdapter<String> STRING = NoritoAdapters.stringAdapter();
   private static final TypeAdapter<Boolean> BOOL = NoritoAdapters.boolAdapter();
   private static final TypeAdapter<Long> UINT32 = NoritoAdapters.uint(32);
+  private static final TypeAdapter<Optional<String>> OPTIONAL_STRING =
+      NoritoAdapters.option(STRING);
 
   private ContractLifecycleWirePayloadEncoder() {}
+
+  /** Encode {@code DeactivateContractInstance} with an exact revision guard and audit reason. */
+  public static InstructionBox encodeDeactivateContractInstance(
+      final String contractAddress,
+      final BigInteger expectedRevision,
+      final String reason) {
+    final DeactivationPayload payload =
+        new DeactivationPayload(
+            canonicalAddress(contractAddress),
+            positiveU64(expectedRevision),
+            Optional.ofNullable(reason));
+    return wire(
+        DEACTIVATE_INSTANCE_WIRE_NAME,
+        NoritoCodec.encode(
+            payload,
+            DEACTIVATE_INSTANCE_SCHEMA,
+            DeactivationAdapter.INSTANCE));
+  }
+
+  /** Encode {@code ActivateContractInstance} with an exact revision guard and artifact hash. */
+  public static InstructionBox encodeActivateContractInstance(
+      final String contractAddress,
+      final BigInteger expectedRevision,
+      final String codeHashHex) {
+    final ActivationPayload payload =
+        new ActivationPayload(
+            canonicalAddress(contractAddress),
+            positiveU64(expectedRevision),
+            canonicalHash(codeHashHex));
+    return wire(
+        ACTIVATE_INSTANCE_WIRE_NAME,
+        NoritoCodec.encode(
+            payload,
+            ACTIVATE_INSTANCE_SCHEMA,
+            ActivationAdapter.INSTANCE));
+  }
 
   /** Encode {@code SetContractParliamentDelegation} with an exact revision guard. */
   public static InstructionBox encodeSetContractParliamentDelegation(
@@ -137,6 +187,30 @@ public final class ContractLifecycleWirePayloadEncoder {
     return new DecodedDelegation(decoded.address, decoded.revision, decoded.delegated);
   }
 
+  static DecodedDeactivation decodeDeactivateContractInstance(final byte[] payload) {
+    final DeactivationPayload decoded =
+        NoritoCodec.decode(
+            Objects.requireNonNull(payload, "payload"),
+            DeactivationAdapter.INSTANCE,
+            DEACTIVATE_INSTANCE_SCHEMA);
+    return new DecodedDeactivation(
+        decoded.address,
+        decoded.revision,
+        decoded.reason.orElse(null));
+  }
+
+  static DecodedActivation decodeActivateContractInstance(final byte[] payload) {
+    final ActivationPayload decoded =
+        NoritoCodec.decode(
+            Objects.requireNonNull(payload, "payload"),
+            ActivationAdapter.INSTANCE,
+            ACTIVATE_INSTANCE_SCHEMA);
+    return new DecodedActivation(
+        decoded.address,
+        decoded.revision,
+        encodeHashHex(decoded.codeHash));
+  }
+
   static DecodedOwnershipOffer decodeOfferContractOwnership(
       final byte[] payload, final int chainDiscriminant) {
     final OfferPayload decoded =
@@ -180,6 +254,60 @@ public final class ContractLifecycleWirePayloadEncoder {
 
     boolean delegated() {
       return delegated;
+    }
+  }
+
+  static final class DecodedDeactivation {
+    private final String contractAddress;
+    private final BigInteger expectedRevision;
+    private final String reason;
+
+    DecodedDeactivation(
+        final String contractAddress,
+        final BigInteger expectedRevision,
+        final String reason) {
+      this.contractAddress = contractAddress;
+      this.expectedRevision = expectedRevision;
+      this.reason = reason;
+    }
+
+    String contractAddress() {
+      return contractAddress;
+    }
+
+    BigInteger expectedRevision() {
+      return expectedRevision;
+    }
+
+    String reason() {
+      return reason;
+    }
+  }
+
+  static final class DecodedActivation {
+    private final String contractAddress;
+    private final BigInteger expectedRevision;
+    private final String codeHashHex;
+
+    DecodedActivation(
+        final String contractAddress,
+        final BigInteger expectedRevision,
+        final String codeHashHex) {
+      this.contractAddress = contractAddress;
+      this.expectedRevision = expectedRevision;
+      this.codeHashHex = codeHashHex;
+    }
+
+    String contractAddress() {
+      return contractAddress;
+    }
+
+    BigInteger expectedRevision() {
+      return expectedRevision;
+    }
+
+    String codeHashHex() {
+      return codeHashHex;
     }
   }
 
@@ -237,6 +365,36 @@ public final class ContractLifecycleWirePayloadEncoder {
     private RevisionGuardPayload(final String address, final BigInteger revision) {
       this.address = address;
       this.revision = revision;
+    }
+  }
+
+  private static final class DeactivationPayload {
+    private final String address;
+    private final BigInteger revision;
+    private final Optional<String> reason;
+
+    private DeactivationPayload(
+        final String address,
+        final BigInteger revision,
+        final Optional<String> reason) {
+      this.address = address;
+      this.revision = revision;
+      this.reason = reason;
+    }
+  }
+
+  private static final class ActivationPayload {
+    private final String address;
+    private final BigInteger revision;
+    private final byte[] codeHash;
+
+    private ActivationPayload(
+        final String address,
+        final BigInteger revision,
+        final byte[] codeHash) {
+      this.address = address;
+      this.revision = revision;
+      this.codeHash = codeHash.clone();
     }
   }
 
@@ -316,6 +474,65 @@ public final class ContractLifecycleWirePayloadEncoder {
           canonicalAddress(decodeField(decoder, STRING, "contract_address")),
           positiveU64(
               decodeField(decoder, U64Adapter.INSTANCE, "expected_revision")));
+    }
+  }
+
+  private static final class HashAdapter implements TypeAdapter<byte[]> {
+    private static final HashAdapter INSTANCE = new HashAdapter();
+
+    @Override
+    public void encode(final NoritoEncoder encoder, final byte[] value) {
+      requireCanonicalHashBytes(value);
+      encoder.writeBytes(value);
+    }
+
+    @Override
+    public byte[] decode(final NoritoDecoder decoder) {
+      final byte[] value = decoder.readBytes(32);
+      requireCanonicalHashBytes(value);
+      return value;
+    }
+  }
+
+  private static final class DeactivationAdapter
+      implements TypeAdapter<DeactivationPayload> {
+    private static final DeactivationAdapter INSTANCE = new DeactivationAdapter();
+
+    @Override
+    public void encode(final NoritoEncoder encoder, final DeactivationPayload value) {
+      encodeField(encoder, STRING, value.address);
+      encodeField(encoder, U64Adapter.INSTANCE, value.revision);
+      encodeField(encoder, OPTIONAL_STRING, value.reason);
+    }
+
+    @Override
+    public DeactivationPayload decode(final NoritoDecoder decoder) {
+      return new DeactivationPayload(
+          canonicalAddress(decodeField(decoder, STRING, "contract_address")),
+          positiveU64(
+              decodeField(decoder, U64Adapter.INSTANCE, "expected_revision")),
+          decodeField(decoder, OPTIONAL_STRING, "reason"));
+    }
+  }
+
+  private static final class ActivationAdapter
+      implements TypeAdapter<ActivationPayload> {
+    private static final ActivationAdapter INSTANCE = new ActivationAdapter();
+
+    @Override
+    public void encode(final NoritoEncoder encoder, final ActivationPayload value) {
+      encodeField(encoder, STRING, value.address);
+      encodeField(encoder, U64Adapter.INSTANCE, value.revision);
+      encodeField(encoder, HashAdapter.INSTANCE, value.codeHash);
+    }
+
+    @Override
+    public ActivationPayload decode(final NoritoDecoder decoder) {
+      return new ActivationPayload(
+          canonicalAddress(decodeField(decoder, STRING, "contract_address")),
+          positiveU64(
+              decodeField(decoder, U64Adapter.INSTANCE, "expected_revision")),
+          decodeField(decoder, HashAdapter.INSTANCE, "code_hash"));
     }
   }
 
@@ -433,6 +650,46 @@ public final class ContractLifecycleWirePayloadEncoder {
 
   private static String canonicalAddress(final String value) {
     return ContractAddressValidator.requireCanonicalV1(value);
+  }
+
+  private static byte[] canonicalHash(final String value) {
+    if (value == null || value.isEmpty() || !value.equals(value.trim())) {
+      throw new IllegalArgumentException("codeHashHex must be an exact non-empty string");
+    }
+    final String normalized = value.toLowerCase(Locale.ROOT);
+    if (!normalized.matches("[0-9a-f]{64}")) {
+      throw new IllegalArgumentException(
+          "codeHashHex must contain exactly 64 hexadecimal characters");
+    }
+    final byte[] bytes = new byte[32];
+    for (int index = 0; index < bytes.length; index++) {
+      bytes[index] =
+          (byte) Integer.parseInt(normalized.substring(index * 2, index * 2 + 2), 16);
+    }
+    requireCanonicalHashBytes(bytes);
+    return bytes;
+  }
+
+  private static String encodeHashHex(final byte[] value) {
+    requireCanonicalHashBytes(value);
+    final char[] digits = "0123456789abcdef".toCharArray();
+    final char[] encoded = new char[value.length * 2];
+    for (int index = 0; index < value.length; index++) {
+      final int unsigned = value[index] & 0xff;
+      encoded[index * 2] = digits[unsigned >>> 4];
+      encoded[index * 2 + 1] = digits[unsigned & 0x0f];
+    }
+    return new String(encoded);
+  }
+
+  private static void requireCanonicalHashBytes(final byte[] value) {
+    if (value.length != 32) {
+      throw new IllegalArgumentException("code_hash must contain exactly 32 bytes");
+    }
+    if ((value[value.length - 1] & 1) == 0) {
+      throw new IllegalArgumentException(
+          "code_hash must carry the canonical iroha_crypto::Hash marker bit");
+    }
   }
 
   private static BigInteger requireU64(final BigInteger value) {

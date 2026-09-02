@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import difflib
 import hashlib
+import os
 import re
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -115,11 +117,10 @@ REQUIRED_SNIPPETS = {
     "crates/iroha_core/src/zk.rs": (
         "let pk = crate::panic_hook::catch_unwind_suppressed",
     ),
-    "crates/iroha_core/src/zk/kagemusha_accumulation.rs": (
+    "crates/iroha_core/src/zk/offline_cash_v1_recursion/accumulation.rs": (
         "crate::panic_hook::catch_unwind_suppressed",
-        "recoverable_native_verifier_panic_suppresses_shutdown_hook_scope",
     ),
-    "crates/iroha_core/src/zk/kagemusha_recursion_adapter.rs": (
+    "crates/iroha_core/src/zk/offline_cash_v1_recursion/native_backend.rs": (
         "crate::panic_hook::catch_unwind_suppressed",
     ),
 }
@@ -128,10 +129,10 @@ FORBIDDEN_RECOVERY_SNIPPETS = {
     "crates/iroha_core/src/executor.rs": (
         "std::panic::catch_unwind",
     ),
-    "crates/iroha_core/src/zk/kagemusha_accumulation.rs": (
+    "crates/iroha_core/src/zk/offline_cash_v1_recursion/accumulation.rs": (
         "std::panic::catch_unwind",
     ),
-    "crates/iroha_core/src/zk/kagemusha_recursion_adapter.rs": (
+    "crates/iroha_core/src/zk/offline_cash_v1_recursion/native_backend.rs": (
         "std::panic::catch_unwind",
     ),
     "crates/iroha_torii/src/privacy_issuance_api.rs": (
@@ -145,11 +146,30 @@ FORBIDDEN_RECOVERY_SNIPPETS = {
 REVIEWED_TORII_BOUNDARY_INVENTORY = Path(
     "scripts/panic_recovery_boundaries.inventory"
 )
+CORE_RECOVERY_SOURCE_PATHS = (
+    Path("crates/iroha_core/src/executor.rs"),
+    Path("crates/iroha_core/src/zk.rs"),
+    Path("crates/iroha_core/src/zk/offline_cash_v1_recursion/accumulation.rs"),
+    Path("crates/iroha_core/src/zk/offline_cash_v1_recursion/native_backend.rs"),
+)
+CORE_RECOVERY_SUPPORT_PATHS = tuple(
+    Path("crates/iroha_core/src") / name
+    for name in (
+        "executor_account_lineage_tests.rs",
+        "executor_contract_deployment_tests.rs",
+        "executor_fee_quote_tests.rs",
+        "executor_initial_batch_authorization_tests.rs",
+        "executor_contract_dispatch_tests.rs",
+    )
+)
 AUDITED_SOURCE_PATHS = (
     Path("crates/iroha_torii"),
     Path("crates/build-support"),
     Path("crates/irohad"),
     Path("crates/iroha_core/src/panic_hook.rs"),
+    Path("crates/iroha_core/src/zk"),
+    *CORE_RECOVERY_SOURCE_PATHS,
+    *CORE_RECOVERY_SUPPORT_PATHS,
 )
 REQUIRED_AUDITED_SOURCE_PATHS = AUDITED_SOURCE_PATHS[:2]
 TORII_BUILD_SCRIPT = Path("crates/build-support/script.rs")
@@ -294,13 +314,7 @@ def _boundary_aliases(tokens: list[RustToken]) -> dict[str, str]:
 
         # Reject import aliases, including aliases exported for use by another
         # module where the original boundary spelling would otherwise vanish.
-        statement_start = index
-        while statement_start > 0 and tokens[statement_start - 1].text != ";":
-            statement_start -= 1
-        if any(
-            candidate.text == "use"
-            for candidate in tokens[statement_start:index]
-        ):
+        if _genuine_use_item_before(tokens, index):
             cursor = index + 1
             while cursor < len(tokens) and tokens[cursor].text not in {";", "{", "}", ","}:
                 if tokens[cursor].text == "as" and cursor + 1 < len(tokens):
@@ -311,46 +325,109 @@ def _boundary_aliases(tokens: list[RustToken]) -> dict[str, str]:
                 cursor += 1
 
         # A local function-item binding hides the call spelling just as
-        # effectively as an import alias, for example
-        # `let recover = std::panic::catch_unwind;`.
-        statement_start = index
-        while statement_start > 0 and tokens[statement_start - 1].text not in {";", "{", "}"}:
-            statement_start -= 1
-        statement_end = index + 1
-        while statement_end < len(tokens) and tokens[statement_end].text != ";":
-            statement_end += 1
-        statement = tokens[statement_start:statement_end]
-        equals = next(
-            (
-                offset
-                for offset, candidate in enumerate(statement)
-                if candidate.text == "="
-            ),
-            None,
-        )
-        binding_kind = next(
-            (
-                offset
-                for offset, candidate in enumerate(statement)
-                if candidate.text in {"let", "const", "static"}
-            ),
-            None,
-        )
-        if equals is None or binding_kind is None or statement_start + equals >= index:
+        # effectively as an import alias. Collect every binding in compound
+        # patterns too: `(recover, _)`, `[recover]`, and struct patterns must
+        # not make a boundary invisible to the cross-module inventory.
+        binding_kind = _local_binding_start(tokens, index)
+        if binding_kind is None:
             continue
         following = tokens[index + 1].text if index + 1 < len(tokens) else ";"
         if following == "(":
             continue
-        binding_cursor = binding_kind + 1
-        while binding_cursor < equals and statement[binding_cursor].text in {"mut", "ref"}:
-            binding_cursor += 1
-        if binding_cursor >= equals:
+        equals = next(
+            (
+                cursor
+                for cursor in range(binding_kind + 1, index)
+                if tokens[cursor].text == "="
+            ),
+            None,
+        )
+        if equals is None:
             continue
-        alias = statement[binding_cursor].text
-        if alias == "_" or not (alias[0].isalpha() or alias[0] == "_"):
-            continue
-        aliases[alias] = kind
+        for alias in _binding_pattern_identifiers(
+            tokens[binding_kind + 1 : equals]
+        ):
+            aliases[alias] = kind
     return aliases
+
+
+def _genuine_use_item_before(tokens: list[RustToken], identifier_index: int) -> bool:
+    """Return whether an identifier belongs to a Rust use item, not macro input."""
+
+    statement_start = identifier_index
+    while statement_start > 0 and tokens[statement_start - 1].text != ";":
+        statement_start -= 1
+    prefix = tokens[statement_start:identifier_index]
+    use_positions = [
+        index for index, candidate in enumerate(prefix) if candidate.text == "use"
+    ]
+    return any(
+        not any(candidate.text == "!" for candidate in prefix[:use_at])
+        for use_at in use_positions
+    )
+
+
+def _local_binding_start(tokens: list[RustToken], identifier_index: int) -> int | None:
+    """Find the enclosing local-binding keyword before one function item."""
+
+    nesting = 0
+    closing = {")": "(", "]": "[", "}": "{"}
+    openings = set(closing.values())
+    for cursor in range(identifier_index - 1, -1, -1):
+        text = tokens[cursor].text
+        if text in closing:
+            nesting += 1
+            continue
+        if text in openings:
+            if nesting:
+                nesting -= 1
+                continue
+            if text == "{":
+                return None
+        if nesting == 0:
+            if text == ";":
+                return None
+            if text in {"let", "const", "static"}:
+                return cursor
+    return None
+
+
+def _binding_pattern_identifiers(tokens: list[RustToken]) -> list[str]:
+    """Return identifiers bound by a Rust ``let``/``const``/``static`` pattern."""
+
+    # Discard a top-level type annotation while retaining colons inside struct
+    # patterns such as `Pair { recovery: alias }`.
+    depth = 0
+    pattern_end = len(tokens)
+    for index, token in enumerate(tokens):
+        if token.text in {"(", "[", "{"}:
+            depth += 1
+        elif token.text in {")", "]", "}"}:
+            depth = max(0, depth - 1)
+        elif token.text == ":" and depth == 0:
+            pattern_end = index
+            break
+    pattern = tokens[:pattern_end]
+    excluded = {"let", "const", "static", "mut", "ref", "self", "Self"}
+    identifiers: list[str] = []
+    for index, token in enumerate(pattern):
+        name = token.text
+        if (
+            name in excluded
+            or name == "_"
+            or not name
+            or not (name[0].isalpha() or name[0] == "_")
+        ):
+            continue
+        previous = pattern[index - 1].text if index else ""
+        following = pattern[index + 1].text if index + 1 < len(pattern) else ""
+        # Paths and tuple/struct constructors name the pattern shape, not a
+        # newly bound local. A struct field label before `:` is likewise not a
+        # binding; its value pattern is considered separately.
+        if previous == "::" or following in {"::", "(", "{", ":"}:
+            continue
+        identifiers.append(name)
+    return identifiers
 
 
 def _is_rust_call(tokens: list[RustToken], identifier_index: int) -> bool:
@@ -365,6 +442,107 @@ def _is_rust_call(tokens: list[RustToken], identifier_index: int) -> bool:
             depth -= tokens[cursor].text == ">"
             cursor += 1
     return cursor < len(tokens) and tokens[cursor].text == "("
+
+
+def _direct_raw_catch_unwind_lines(source: str) -> list[int]:
+    """Return every direct raw ``catch_unwind`` call in one Rust source."""
+
+    tokens = _rust_tokens(source)
+    return [
+        source.count("\n", 0, token.start) + 1
+        for index, token in enumerate(tokens)
+        if token.text == "catch_unwind" and _is_rust_call(tokens, index)
+    ]
+
+
+def _boundary_function_item_references(
+    tokens: list[RustToken],
+) -> list[tuple[int, str, str]]:
+    """Return unaliased function-item uses which can hide a later boundary call."""
+
+    identifier_kind = {
+        identifier: kind
+        for kind, identifiers in BOUNDARY_IDENTIFIERS.items()
+        for identifier in identifiers
+    }
+    references: list[tuple[int, str, str]] = []
+    for index, token in enumerate(tokens):
+        kind = identifier_kind.get(token.text)
+        if kind is None or _is_rust_call(tokens, index):
+            continue
+        if _genuine_use_item_before(tokens, index):
+            continue
+        # A function parameter that happens to use a boundary spelling is not
+        # a reference to the function item. Do not exempt every `name:` token:
+        # macro input can bind a function item with syntax such as
+        # `bind!(std::panic::catch_unwind: recover)`.
+        if _is_function_parameter_declaration(tokens, index):
+            continue
+        # Ordinary named local bindings already receive the more actionable
+        # alias diagnostic. Keep anonymous bindings and macro-wrapped RHS
+        # references in this conservative set (for example
+        # `let _ = call!(catch_unwind)`).
+        binding_start = _local_binding_start(tokens, index)
+        if binding_start is not None:
+            equals = next(
+                (
+                    cursor
+                    for cursor in range(binding_start + 1, index)
+                    if tokens[cursor].text == "="
+                ),
+                None,
+            )
+            if equals is not None and _binding_pattern_identifiers(
+                tokens[binding_start + 1 : equals]
+            ):
+                continue
+        references.append((index, kind, token.text))
+    return references
+
+
+def _is_function_parameter_declaration(
+    tokens: list[RustToken], identifier_index: int
+) -> bool:
+    """Return whether one ``name:`` token is inside a Rust ``fn`` parameter list."""
+
+    if (
+        identifier_index + 1 >= len(tokens)
+        or tokens[identifier_index + 1].text != ":"
+    ):
+        return False
+    nesting = 0
+    opening = None
+    for cursor in range(identifier_index - 1, -1, -1):
+        text = tokens[cursor].text
+        if text == ")":
+            nesting += 1
+        elif text == "(":
+            if nesting:
+                nesting -= 1
+            else:
+                opening = cursor
+                break
+        elif nesting == 0 and text in {"{", "}", ";", "=>", "="}:
+            return False
+    if opening is None:
+        return False
+
+    # The opening parenthesis belongs to a function declaration only when a
+    # `fn` keyword occurs in the same header. Braces/semicolons prevent a macro
+    # invocation in a function body from borrowing the enclosing `fn` token.
+    angle_depth = 0
+    for cursor in range(opening - 1, -1, -1):
+        text = tokens[cursor].text
+        if text == ">":
+            angle_depth += 1
+        elif text == "<" and angle_depth:
+            angle_depth -= 1
+        elif angle_depth == 0:
+            if text == "fn":
+                return True
+            if text in {"{", "}", ";", "=>", "=", "!"}:
+                return False
+    return False
 
 
 def _bare_blocking_lines(source: str) -> list[int]:
@@ -385,7 +563,7 @@ def _bare_std_thread_lines(source: str) -> list[int]:
     tokens = _rust_tokens(source)
     failures: list[int] = []
     for index, token in enumerate(tokens):
-        if token.text not in {"spawn", "spawn_scoped"} or not _is_rust_call(tokens, index):
+        if token.text not in {"scope", "spawn", "spawn_scoped", "spawn_unchecked"} or not _is_rust_call(tokens, index):
             continue
         statement_start = index
         while statement_start > 0 and tokens[statement_start - 1].text not in {";", "{", "}"}:
@@ -399,13 +577,85 @@ def _bare_std_thread_lines(source: str) -> list[int]:
             or "thread :: Builder" in rendered
         ):
             failures.append(source.count("\n", 0, token.start) + 1)
-    return failures
+
+    def inside_recoverable_spawn(builder_index: int) -> bool:
+        for cursor in range(builder_index - 1, 3, -1):
+            if tokens[cursor].text != "spawn_thread_recoverable":
+                continue
+            if [candidate.text for candidate in tokens[cursor - 4 : cursor]] != [
+                "crate",
+                "::",
+                "panic_recovery",
+                "::",
+            ]:
+                continue
+            if cursor + 1 >= len(tokens) or tokens[cursor + 1].text != "(":
+                continue
+            depth = 0
+            for end in range(cursor + 1, len(tokens)):
+                depth += tokens[end].text == "("
+                depth -= tokens[end].text == ")"
+                if depth == 0:
+                    return builder_index < end
+        return False
+
+    # A Builder stored for a later `.spawn(...)` loses the `std::thread`
+    # prefix at the call site. Only the reviewed wrapper may consume a raw
+    # Builder in these modules.
+    for index, token in enumerate(tokens):
+        if token.text != "Builder" or index < 4:
+            continue
+        if [candidate.text for candidate in tokens[index - 4 : index]] != [
+            "std",
+            "::",
+            "thread",
+            "::",
+        ]:
+            continue
+        if not inside_recoverable_spawn(index):
+            failures.append(source.count("\n", 0, token.start) + 1)
+
+    # Aliasing the module, Builder, or spawn function makes the call prefix
+    # indistinguishable from an unrelated method. Forbid those indirections in
+    # recoverable daemon modules instead of trying to infer expanded names.
+    statement_start = 0
+    for index, token in enumerate(tokens):
+        if token.text != ";":
+            continue
+        statement = tokens[statement_start : index + 1]
+        statement_start = index + 1
+        texts = [candidate.text for candidate in statement]
+        if "use" in texts:
+            use_at = texts.index("use")
+            imported = texts[use_at + 1 :]
+            # Rust use-trees may put `std` and its `thread` descendant behind
+            # arbitrary braces (`use {std::{thread as th}}`). In these few
+            # recoverable modules, reject every std/thread use-tree and every
+            # alias of std itself rather than under-resolving that grammar.
+            if ("std" in imported and "thread" in imported) or (
+                "std" in imported and "as" in imported
+            ):
+                failures.append(
+                    source.count("\n", 0, statement[use_at].start) + 1
+                )
+        if texts[:3] == ["extern", "crate", "std"] and "as" in texts:
+            failures.append(source.count("\n", 0, statement[0].start) + 1)
+        if "type" in texts and "=" in texts:
+            equals = texts.index("=")
+            rhs = texts[equals + 1 :]
+            rendered_rhs = " ".join(rhs)
+            if "std :: thread" in rendered_rhs or "thread :: Builder" in rendered_rhs:
+                failures.append(
+                    source.count("\n", 0, statement[texts.index("type")].start) + 1
+                )
+    return sorted(set(failures))
 
 
 def _source_inventory(path: Path, root: Path) -> tuple[str, dict[str, int]]:
     """Fingerprint one complete source file and summarize boundary spellings."""
 
-    source = path.read_text(encoding="utf-8")
+    payload = _stable_read_bytes(path)
+    source = payload.decode("utf-8")
     tokens = _rust_tokens(source)
     identifier_kind = {
         identifier: kind
@@ -426,8 +676,57 @@ def _source_inventory(path: Path, root: Path) -> tuple[str, dict[str, int]]:
         f"{kind}:{identifier}={count}"
         for (kind, identifier), count in sorted(spelling_counts.items())
     ) or "none"
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    digest = hashlib.sha256(payload).hexdigest()
     return f"{relative}\t{digest}\t{rendered_sites}", counts
+
+
+def _stable_read_bytes(path: Path) -> bytes:
+    """Read one unchanged, non-linked regular file for inventory hashing."""
+
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    before_path = path.lstat()
+    if not stat.S_ISREG(before_path.st_mode):
+        raise RuntimeError(f"audited source is not a regular file: {path}")
+    fd = os.open(path, flags)
+    try:
+        before = os.fstat(fd)
+        stable_fields = (
+            "st_dev",
+            "st_ino",
+            "st_size",
+            "st_mtime_ns",
+            "st_ctime_ns",
+            "st_mode",
+            "st_nlink",
+        )
+        if any(
+            getattr(before, field) != getattr(before_path, field)
+            for field in stable_fields
+        ):
+            raise RuntimeError(f"audited source changed before it was pinned: {path}")
+        if before.st_nlink != 1:
+            raise RuntimeError(f"audited source must have exactly one hard link: {path}")
+        if before.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise RuntimeError(
+                f"audited source must not be group- or world-writable: {path}"
+            )
+        payload = bytearray()
+        while True:
+            chunk = os.read(fd, 1024 * 1024)
+            if not chunk:
+                break
+            payload.extend(chunk)
+        after = os.fstat(fd)
+        after_path = path.lstat()
+        if len(payload) != before.st_size or any(
+            getattr(before, field) != getattr(after, field)
+            or getattr(before, field) != getattr(after_path, field)
+            for field in stable_fields
+        ):
+            raise RuntimeError(f"audited source changed while it was read: {path}")
+        return bytes(payload)
+    finally:
+        os.close(fd)
 
 
 def _git_audited_entries(root: Path) -> list[tuple[str, Path]] | None:
@@ -538,15 +837,178 @@ def _attribute_end(tokens: list[RustToken], start: int) -> int | None:
     return None
 
 
-def _rust_module_directory(path: Path) -> Path:
-    """Return the default child-module directory for one Rust source file."""
+def _rust_module_directories(
+    path: Path, *, cargo_target_root: bool = False
+) -> tuple[Path, ...]:
+    """Return every plausible child-module base for one Rust source file.
 
-    if (
-        path.name in {"lib.rs", "main.rs", "mod.rs", "build.rs", "script.rs"}
+    A source can simultaneously be a Cargo crate root and a module reached by
+    ``mod``/``#[path]`` from another crate root. Those two contexts resolve a
+    nested ``mod child;`` differently, so the closed guard probes and seals the
+    union rather than collapsing the file to one canonical-path visit.
+    """
+
+    ordinary = path.parent if path.name == "mod.rs" else path.parent / path.stem
+    crate_root = (
+        cargo_target_root
+        or path.name in {"lib.rs", "main.rs", "build.rs", "script.rs"}
         or path.parent.name in {"tests", "examples", "benches", "bin"}
-    ):
-        return path.parent
-    return path.parent / path.stem
+    )
+    if not crate_root or ordinary == path.parent:
+        return (ordinary,)
+    return (path.parent, ordinary)
+
+
+def _cargo_target_source_declarations(
+    manifest: Path, data: dict[str, object], root: Path
+) -> tuple[list[tuple[str, object]], list[str]]:
+    """Return explicit and existing auto-discovered Cargo source targets."""
+
+    relative_manifest = manifest.relative_to(root).as_posix()
+    declarations: list[tuple[str, object]] = []
+    failures: list[str] = []
+    package = data.get("package", {})
+    if not isinstance(package, dict):
+        package = {}
+
+    if "build" in package:
+        build = package["build"]
+        if isinstance(build, str):
+            declarations.append(("package build script", build))
+        elif build is not False:
+            failures.append(
+                f"{relative_manifest}: package build must be false or one static path"
+            )
+    elif (manifest.parent / "build.rs").is_file():
+        declarations.append(("auto-discovered package build script", "build.rs"))
+
+    library = data.get("lib")
+    if isinstance(library, dict) and "path" in library:
+        declarations.append(("lib target", library["path"]))
+    elif (manifest.parent / "src/lib.rs").is_file():
+        declarations.append(("auto-discovered lib target", "src/lib.rs"))
+
+    for section in ("bin", "example", "test", "bench"):
+        entries = data.get(section, [])
+        if not isinstance(entries, list):
+            continue
+        for index, entry in enumerate(entries):
+            if not isinstance(entry, dict):
+                continue
+            if "path" in entry:
+                declarations.append(
+                    (f"{section} target #{index + 1}", entry["path"])
+                )
+                continue
+            package_name = package.get("name")
+            target_name = entry.get("name", package_name)
+            if (
+                not isinstance(target_name, str)
+                or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", target_name)
+                is None
+            ):
+                failures.append(
+                    f"{relative_manifest}: {section} target #{index + 1} "
+                    "without path must have one bounded static name"
+                )
+                continue
+            if section == "bin":
+                inferred = (
+                    "src/main.rs",
+                    f"src/bin/{target_name}.rs",
+                    f"src/bin/{target_name}/main.rs",
+                )
+            else:
+                directory = {
+                    "example": "examples",
+                    "test": "tests",
+                    "bench": "benches",
+                }[section]
+                inferred = (
+                    f"{directory}/{target_name}.rs",
+                    f"{directory}/{target_name}/main.rs",
+                )
+            existing = [
+                path for path in inferred if (manifest.parent / path).is_file()
+            ]
+            # Seal every plausible conventional source. If no candidate exists,
+            # retain the primary Cargo convention so validation fails closed.
+            for path in existing or inferred[:1]:
+                declarations.append(
+                    (f"inferred {section} target #{index + 1}", path)
+                )
+
+    automatic: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+        (
+            "bin",
+            "autobins",
+            ("src/main.rs", "src/bin/*.rs", "src/bin/*/main.rs"),
+        ),
+        (
+            "example",
+            "autoexamples",
+            ("examples/*.rs", "examples/*/main.rs"),
+        ),
+        (
+            "test",
+            "autotests",
+            ("tests/*.rs", "tests/*/main.rs"),
+        ),
+        (
+            "bench",
+            "autobenches",
+            ("benches/*.rs", "benches/*/main.rs"),
+        ),
+    )
+    for section, switch, patterns in automatic:
+        if package.get(switch, True) is False:
+            continue
+        for pattern in patterns:
+            for candidate in sorted(manifest.parent.glob(pattern)):
+                if candidate.is_file():
+                    declarations.append(
+                        (
+                            f"auto-discovered {section} target",
+                            candidate.relative_to(manifest.parent).as_posix(),
+                        )
+                    )
+    return declarations, failures
+
+
+def _cargo_target_source_paths(
+    root: Path, audited_files: list[Path] | None = None
+) -> tuple[list[Path], list[str]]:
+    """Resolve Cargo targets even when Git ignore rules hide their sources."""
+
+    audited_roots = tuple((root / relative).resolve() for relative in AUDITED_SOURCE_PATHS)
+    sources: list[Path] = []
+    failures: list[str] = []
+    if audited_files is None:
+        audited_files = torii_audited_files(root)
+    manifests = [path for path in audited_files if path.name == "Cargo.toml"]
+    for manifest in manifests:
+        relative_manifest = manifest.relative_to(root).as_posix()
+        try:
+            data = tomllib.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+            failures.append(f"{relative_manifest}: cannot validate Cargo targets: {error}")
+            continue
+        declarations, declaration_failures = _cargo_target_source_declarations(
+            manifest, data, root
+        )
+        failures.extend(declaration_failures)
+        for _label, raw_path in declarations:
+            if not isinstance(raw_path, str) or not raw_path or "\0" in raw_path:
+                continue
+            candidate = manifest.parent / raw_path
+            target = candidate.resolve()
+            if (
+                any(target.is_relative_to(source_root) for source_root in audited_roots)
+                and candidate.is_file()
+                and not candidate.is_symlink()
+            ):
+                sources.append(target)
+    return sorted(set(sources)), failures
 
 
 def _inline_module_contexts(tokens: list[RustToken]) -> list[tuple[str, ...]]:
@@ -577,10 +1039,18 @@ def _inline_module_contexts(tokens: list[RustToken]) -> list[tuple[str, ...]]:
 
 
 def _rust_textual_source_references(
-    path: Path, root: Path
+    path: Path,
+    root: Path,
+    *,
+    cargo_target_roots: set[Path] | None = None,
 ) -> tuple[list[Path], list[str]]:
     """Resolve literal includes plus explicit and conventional Rust modules."""
 
+    if cargo_target_roots is None:
+        cargo_target_roots = set()
+    module_directories = _rust_module_directories(
+        path, cargo_target_root=path.resolve() in cargo_target_roots
+    )
     source = path.read_text(encoding="utf-8")
     tokens = _rust_tokens(source)
     contexts = _inline_module_contexts(tokens)
@@ -644,8 +1114,19 @@ def _rust_textual_source_references(
             path_overrides.add(cursor)
         # Explicit #[path] values are relative to the containing source file;
         # each enclosing inline module contributes one directory component.
-        module_base = path.parent.joinpath(*contexts[index])
-        references.append(("#[path]", path_token, literal, module_base))
+        # Unlike an ordinary `mod child;`, an out-of-line module's own stem is
+        # not inserted into this base.
+        module_bases = [path.parent.joinpath(*contexts[index])]
+        if literal:
+            existing_bases = [
+                base
+                for base in module_bases
+                if (base / literal).exists() or (base / literal).is_symlink()
+            ]
+        else:
+            existing_bases = []
+        for module_base in existing_bases or module_bases[:1]:
+            references.append(("#[path]", path_token, literal, module_base))
 
     for index, token in enumerate(tokens):
         if token.text != "mod" or index in path_overrides or index + 2 >= len(tokens):
@@ -653,20 +1134,34 @@ def _rust_textual_source_references(
         name = tokens[index + 1].text
         if not (name[0].isalpha() or name[0] == "_") or tokens[index + 2].text != ";":
             continue
-        module_base = _rust_module_directory(path).joinpath(*contexts[index])
-        candidates = (module_base / f"{name}.rs", module_base / name / "mod.rs")
-        existing = [candidate for candidate in candidates if candidate.is_file()]
-        if len(existing) == 1:
-            references.append(("mod", token, existing[0].name, existing[0].parent))
-        elif not existing:
-            references.append(("mod", token, None, module_base))
-        else:
-            relative_source = path.relative_to(root).as_posix()
-            line = source.count("\n", 0, token.start) + 1
-            rendered = ", ".join(candidate.relative_to(root).as_posix() for candidate in existing)
-            return [], [
-                f"{relative_source}:{line}: mod {name} has ambiguous source files: {rendered}"
+        existing: list[Path] = []
+        for module_directory in module_directories:
+            module_base = module_directory.joinpath(*contexts[index])
+            candidates = (
+                module_base / f"{name}.rs",
+                module_base / name / "mod.rs",
+            )
+            context_existing = [
+                candidate for candidate in candidates if candidate.is_file()
             ]
+            if len(context_existing) > 1:
+                relative_source = path.relative_to(root).as_posix()
+                line = source.count("\n", 0, token.start) + 1
+                rendered = ", ".join(
+                    candidate.relative_to(root).as_posix()
+                    for candidate in context_existing
+                )
+                return [], [
+                    f"{relative_source}:{line}: mod {name} has ambiguous source files: {rendered}"
+                ]
+            existing.extend(context_existing)
+        existing = sorted(set(existing))
+        if existing:
+            for candidate in existing:
+                references.append(("mod", token, candidate.name, candidate.parent))
+        else:
+            module_base = module_directories[0].joinpath(*contexts[index])
+            references.append(("mod", token, None, module_base))
 
     audited_roots = tuple((root / relative).resolve() for relative in AUDITED_SOURCE_PATHS)
     resolved: list[Path] = []
@@ -695,13 +1190,21 @@ def _rust_textual_source_references(
     return resolved, failures
 
 
-def torii_rust_source_closure(root: Path) -> tuple[list[Path], list[str]]:
+def torii_rust_source_closure(
+    root: Path, audited_files: list[Path] | None = None
+) -> tuple[list[Path], list[str]]:
     """Return every textual Rust source reachable inside the audited roots."""
 
-    pending = [path for path in torii_audited_files(root) if path.suffix == ".rs"]
+    if audited_files is None:
+        audited_files = torii_audited_files(root)
+    pending = [path for path in audited_files if path.suffix == ".rs"]
+
+    cargo_sources, cargo_failures = _cargo_target_source_paths(root, audited_files)
+    cargo_target_roots = {path.resolve() for path in cargo_sources}
+    pending.extend(cargo_sources)
 
     sources: dict[Path, Path] = {}
-    failures: list[str] = []
+    failures: list[str] = list(cargo_failures)
     while pending:
         path = pending.pop()
         canonical = path.resolve()
@@ -709,7 +1212,9 @@ def torii_rust_source_closure(root: Path) -> tuple[list[Path], list[str]]:
             continue
         sources[canonical] = path
         try:
-            references, reference_failures = _rust_textual_source_references(path, root)
+            references, reference_failures = _rust_textual_source_references(
+                path, root, cargo_target_roots=cargo_target_roots
+            )
         except UnicodeDecodeError:
             failures.append(
                 f"{path.relative_to(root).as_posix()}: textual Rust source must be UTF-8"
@@ -720,14 +1225,21 @@ def torii_rust_source_closure(root: Path) -> tuple[list[Path], list[str]]:
     return sorted(sources.values()), sorted(set(failures))
 
 
-def torii_boundary_inventory(root: Path) -> tuple[list[str], str, dict[str, int]]:
+def torii_boundary_inventory(
+    root: Path,
+    source_paths: list[Path] | None = None,
+    audited_paths: list[Path] | None = None,
+) -> tuple[list[str], str, dict[str, int]]:
     """Return the complete Torii and shared-build repository-file closure."""
 
     records: list[str] = []
     counts = {kind: 0 for kind in BOUNDARY_IDENTIFIERS}
-    source_paths, _ = torii_rust_source_closure(root)
+    if audited_paths is None:
+        audited_paths = torii_audited_files(root)
+    if source_paths is None:
+        source_paths, _ = torii_rust_source_closure(root, audited_paths)
     source_canonicals = {path.resolve() for path in source_paths}
-    audited_files = {path.resolve(): path for path in torii_audited_files(root)}
+    audited_files = {path.resolve(): path for path in audited_paths}
     audited_files.update({path.resolve(): path for path in source_paths})
     for canonical, path in sorted(audited_files.items(), key=lambda item: item[1]):
         if canonical in source_canonicals:
@@ -737,7 +1249,7 @@ def torii_boundary_inventory(root: Path) -> tuple[list[str], str, dict[str, int]
                 counts[kind] += count
             continue
         relative = path.relative_to(root).as_posix()
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        digest = hashlib.sha256(_stable_read_bytes(path)).hexdigest()
         kind = "manifest" if path.name == "Cargo.toml" else "repository-file"
         records.append(f"{relative}\t{digest}\t{kind}")
     records.sort()
@@ -756,28 +1268,68 @@ def _reviewed_inventory(root: Path) -> list[str]:
     ]
 
 
-def torii_boundary_alias_failures(root: Path) -> list[str]:
+def torii_boundary_alias_failures(
+    root: Path, source_paths: list[Path] | None = None
+) -> list[str]:
     """Reject aliases that could hide boundary use in another Rust module."""
 
     failures: list[str] = []
-    source_paths, _ = torii_rust_source_closure(root)
+    if source_paths is None:
+        source_paths, _ = torii_rust_source_closure(root)
     for path in source_paths:
-        aliases = _boundary_aliases(_rust_tokens(path.read_text(encoding="utf-8")))
+        source = path.read_text(encoding="utf-8")
+        tokens = _rust_tokens(source)
+        aliases = _boundary_aliases(tokens)
         for alias, kind in sorted(aliases.items()):
             relative = path.relative_to(root).as_posix()
             failures.append(
                 f"{relative}: {kind} boundary alias {alias!r} is forbidden; "
                 "use the audited spelling so cross-module calls remain visible"
             )
+        for index, kind, identifier in _boundary_function_item_references(tokens):
+            relative = path.relative_to(root).as_posix()
+            line = source.count("\n", 0, tokens[index].start) + 1
+            failures.append(
+                f"{relative}:{line}: {kind} boundary function item {identifier!r} "
+                "is forbidden outside a direct audited call"
+            )
     return failures
 
 
-def torii_source_path_failures(root: Path) -> list[str]:
+def torii_source_path_failures(
+    root: Path,
+    source_closure: tuple[list[Path], list[str]] | None = None,
+    audited_paths: list[Path] | None = None,
+) -> list[str]:
     """Reject source-closure indirection, escapes, and Git submodules."""
 
     failures: list[str] = []
-    source_paths, rust_source_failures = torii_rust_source_closure(root)
+    if audited_paths is None:
+        audited_paths = torii_audited_files(root)
+    if source_closure is None:
+        source_closure = torii_rust_source_closure(root, audited_paths)
+    source_paths, rust_source_failures = source_closure
     failures.extend(rust_source_failures)
+    audited_directories = {root}
+    for relative_root in AUDITED_SOURCE_PATHS:
+        parent = (root / relative_root).parent
+        while parent != root:
+            if parent.exists():
+                audited_directories.add(parent)
+            parent = parent.parent
+    for directory in sorted(audited_directories):
+        info = directory.lstat()
+        if not stat.S_ISDIR(info.st_mode):
+            failures.append(
+                f"{directory.relative_to(root).as_posix()}: audited source parent "
+                "is not a directory"
+            )
+        elif info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            relative = directory.relative_to(root).as_posix() or "."
+            failures.append(
+                f"{relative}: audited source parent must not be group- or "
+                "world-writable"
+            )
     git_entries = _git_audited_entries(root)
     if git_entries is not None:
         for mode, relative in git_entries:
@@ -804,9 +1356,16 @@ def torii_source_path_failures(root: Path) -> list[str]:
                 failures.append(
                     f"{path.relative_to(root).as_posix()}: symlink is forbidden in the audited source closure"
                 )
+            elif path.is_dir() and path.stat().st_mode & (
+                stat.S_IWGRP | stat.S_IWOTH
+            ):
+                failures.append(
+                    f"{path.relative_to(root).as_posix()}: audited source parent "
+                    "must not be group- or world-writable"
+                )
 
     audited_roots = tuple((root / relative).resolve() for relative in AUDITED_SOURCE_PATHS)
-    audited_files = {path.resolve() for path in torii_audited_files(root)}
+    audited_files = {path.resolve() for path in audited_paths}
     if git_entries is not None:
         for source_path in source_paths:
             if source_path.resolve() not in audited_files:
@@ -814,9 +1373,7 @@ def torii_source_path_failures(root: Path) -> list[str]:
                     f"{source_path.relative_to(root).as_posix()}: textual module source is "
                     "outside the sealed repository-file inventory"
                 )
-    manifests = [
-        path for path in torii_audited_files(root) if path.name == "Cargo.toml"
-    ]
+    manifests = [path for path in audited_paths if path.name == "Cargo.toml"]
     for manifest in manifests:
         relative_manifest = manifest.relative_to(root).as_posix()
         try:
@@ -825,29 +1382,10 @@ def torii_source_path_failures(root: Path) -> list[str]:
             failures.append(f"{relative_manifest}: cannot validate Cargo targets: {error}")
             continue
 
-        target_paths: list[tuple[str, object]] = []
-        package = data.get("package", {})
-        if isinstance(package, dict) and "build" in package:
-            build = package["build"]
-            if isinstance(build, str):
-                target_paths.append(("package build script", build))
-            elif build is not False:
-                failures.append(
-                    f"{relative_manifest}: package build must be false or one static path"
-                )
-
-        library = data.get("lib")
-        if isinstance(library, dict) and "path" in library:
-            target_paths.append(("lib target", library["path"]))
-        for section in ("bin", "example", "test", "bench"):
-            entries = data.get(section, [])
-            if not isinstance(entries, list):
-                continue
-            for index, entry in enumerate(entries):
-                if isinstance(entry, dict) and "path" in entry:
-                    target_paths.append(
-                        (f"{section} target #{index + 1}", entry["path"])
-                    )
+        target_paths, declaration_failures = _cargo_target_source_declarations(
+            manifest, data, root
+        )
+        failures.extend(declaration_failures)
 
         for label, raw_path in target_paths:
             if not isinstance(raw_path, str) or not raw_path or "\0" in raw_path:
@@ -947,10 +1485,27 @@ def closed_torii_boundary_inventory_failures(
     return failures
 
 
+def _panic_semantic_source_fingerprints(root: Path) -> dict[str, str]:
+    """Fingerprint every source read by the non-inventory semantic checks."""
+
+    relatives = set(NO_BARE_BLOCKING) | set(NO_BARE_STD_THREAD)
+    relatives.update(REQUIRED_SNIPPETS)
+    relatives.update(FORBIDDEN_RECOVERY_SNIPPETS)
+    return {
+        relative: hashlib.sha256(_stable_read_bytes(root / relative)).hexdigest()
+        for relative in sorted(relatives)
+    }
+
+
 def main() -> int:
-    observed_inventory = None
+    audited_paths = torii_audited_files(ROOT)
+    source_closure = torii_rust_source_closure(ROOT, audited_paths)
+    source_paths, _ = source_closure
+    observed_inventory = torii_boundary_inventory(
+        ROOT, source_paths=source_paths, audited_paths=audited_paths
+    )
+    semantic_fingerprints = _panic_semantic_source_fingerprints(ROOT)
     if "--print-inventory" in sys.argv[1:]:
-        observed_inventory = torii_boundary_inventory(ROOT)
         records, digest, counts = observed_inventory
         for record in records:
             print(record)
@@ -960,8 +1515,12 @@ def main() -> int:
     failures = closed_torii_boundary_inventory_failures(
         ROOT, observed_inventory=observed_inventory
     )
-    failures.extend(torii_source_path_failures(ROOT))
-    failures.extend(torii_boundary_alias_failures(ROOT))
+    failures.extend(
+        torii_source_path_failures(
+            ROOT, source_closure=source_closure, audited_paths=audited_paths
+        )
+    )
+    failures.extend(torii_boundary_alias_failures(ROOT, source_paths))
     for relative in NO_BARE_BLOCKING:
         source = (ROOT / relative).read_text(encoding="utf-8")
         lines = _bare_blocking_lines(source)
@@ -986,6 +1545,50 @@ def main() -> int:
         for snippet in snippets:
             if snippet in source:
                 failures.append(f"{relative}: unreviewed bare recovery boundary {snippet!r}")
+
+    reviewed_raw_catch_counts = {
+        "crates/iroha_core/src/executor.rs": 0,
+        "crates/iroha_core/src/zk.rs": 1,
+        "crates/iroha_core/src/zk/offline_cash_v1_recursion/accumulation.rs": 0,
+        "crates/iroha_core/src/zk/offline_cash_v1_recursion/native_backend.rs": 0,
+    }
+    for relative, expected_count in reviewed_raw_catch_counts.items():
+        source = (ROOT / relative).read_text(encoding="utf-8")
+        lines = _direct_raw_catch_unwind_lines(source)
+        if len(lines) != expected_count:
+            rendered = ", ".join(str(line) for line in lines) or "none"
+            failures.append(
+                f"{relative}: raw catch_unwind call count drifted "
+                f"(expected {expected_count}, found {len(lines)} at {rendered})"
+            )
+    zk_source = (ROOT / "crates/iroha_core/src/zk.rs").read_text(encoding="utf-8")
+    reviewed_test_call = (
+        "#[cfg(all(test, any(feature = \"zk-halo2\", feature = \"zk-halo2-ipa\")))]\n"
+        "mod halo2_ipa_parameter_source_tests"
+    )
+    if reviewed_test_call not in zk_source:
+        failures.append(
+            "crates/iroha_core/src/zk.rs: reviewed raw catch_unwind is no longer "
+            "inside the cfg(test) Halo2 parameter-source test module"
+        )
+
+    final_audited_paths = torii_audited_files(ROOT)
+    final_source_closure = torii_rust_source_closure(ROOT, final_audited_paths)
+    final_inventory = torii_boundary_inventory(
+        ROOT,
+        source_paths=final_source_closure[0],
+        audited_paths=final_audited_paths,
+    )
+    if final_inventory != observed_inventory:
+        failures.append(
+            "panic recovery source inventory changed during guard validation; rerun "
+            "against a stable source tree"
+        )
+    if _panic_semantic_source_fingerprints(ROOT) != semantic_fingerprints:
+        failures.append(
+            "panic recovery semantic sources changed during guard validation; rerun "
+            "against a stable source tree"
+        )
 
     if failures:
         print("panic recovery boundary guard failed:", file=sys.stderr)

@@ -27,12 +27,8 @@ mod tests {
             .collect()
     }
     #[test]
-    fn topup_and_unshield_named_binding_orders_match_pinned_schemas() {
+    fn unshield_named_binding_orders_match_pinned_schemas() {
         for (schema, assigned_order) in [
-            (
-                super::KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1,
-                super::KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUT_ORDER_V1,
-            ),
             (
                 super::CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1,
                 super::CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUT_ORDER_V1,
@@ -416,40 +412,11 @@ mod tests {
     }
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
-    fn recursive_step_inactive_relation_padding_is_fully_valid() {
-        let padding = super::KagemushaStepSecureWitnessV3::deterministic_padding()
-            .expect("fixed Step padding");
-        super::secure_relation_v3::validate_topup_witness::<{ super::CONFIDENTIAL_TREE_DEPTH_V2 }>(
-            &padding.topup,
-        )
-        .expect("top-up padding");
-        super::secure_relation_v3::validate_transfer_witness::<
-            { super::CONFIDENTIAL_TREE_DEPTH_V2 },
-        >(&padding.transfer)
-        .expect("transfer padding");
-        super::secure_relation_v3::validate_unshield_v3_witness::<
-            { super::CONFIDENTIAL_TREE_DEPTH_V2 },
-        >(&padding.unshield_change)
-        .expect("unshield padding");
-        assert_eq!(
-            padding.transfer.input_0_path.root,
-            padding.transfer.input_1_path.root
-        );
-        assert_eq!(
-            padding.unshield_change.input_0_path.root,
-            padding.unshield_change.input_1_path.root
-        );
-    }
-    #[test]
     fn production_circuit_selectors_reject_noncanonical_aliases() {
-        let selectors: [(&str, fn(&str) -> bool); 4] = [
+        let selectors: [(&str, fn(&str) -> bool); 3] = [
             (
                 super::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
                 super::is_confidential_transfer_v2_circuit_id,
-            ),
-            (
-                super::KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID,
-                super::is_kagemusha_topup_shield_v2_circuit_id,
             ),
             (
                 super::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID,
@@ -559,8 +526,6 @@ mod tests {
                 (super::CONFIDENTIAL_POSEIDON_MERKLE_NODE_DOMAIN_V3, &[3, 5]),
                 (super::CONFIDENTIAL_POSEIDON_ASSET_DOMAIN_V3, &[3]),
                 (super::CONFIDENTIAL_POSEIDON_NETWORK_DOMAIN_V3, &[3]),
-                (super::CONFIDENTIAL_POSEIDON_PAYER_DOMAIN_V3, &[3]),
-                (super::CONFIDENTIAL_POSEIDON_OPERATION_DOMAIN_V3, &[3]),
             ];
             for (domain, input_words) in uses {
                 let inputs = input_words.iter().copied().map(F::from).collect::<Vec<_>>();
@@ -603,8 +568,6 @@ mod tests {
                 (super::CONFIDENTIAL_POSEIDON_MERKLE_NODE_DOMAIN_V3, &[3, 5]),
                 (super::CONFIDENTIAL_POSEIDON_ASSET_DOMAIN_V3, &[3]),
                 (super::CONFIDENTIAL_POSEIDON_NETWORK_DOMAIN_V3, &[3]),
-                (super::CONFIDENTIAL_POSEIDON_PAYER_DOMAIN_V3, &[3]),
-                (super::CONFIDENTIAL_POSEIDON_OPERATION_DOMAIN_V3, &[3]),
             ];
             let expected = uses
                 .iter()
@@ -787,18 +750,6 @@ mod tests {
                 "971c0d57fd63afa24ea0d1c6206a4873d7be0b283848eba6fc9fd929d2747d04",
                 "569c33f348ee0dd7714f5b10a50f797ada3f0b49f373de606445c0ddb338f737",
             ),
-            (
-                super::CONFIDENTIAL_POSEIDON_PAYER_DOMAIN_V3,
-                &[3],
-                "9cbed996e9fa7df2defec498c6a0b03c230ac514bb36b02cdf6c0566dee6f120",
-                "d4b100e87bdadbe867edd65ad713c0021856edfd117637be7b520392bb654a3a",
-            ),
-            (
-                super::CONFIDENTIAL_POSEIDON_OPERATION_DOMAIN_V3,
-                &[3],
-                "de6686c1d1e59eecf8b522355c36624ea6d2ceeec8cd8607dadbbcc13ac08812",
-                "b1697fa1593829176a2b72416bebdec305cf036b621480bc2d5ba74d1d339a03",
-            ),
         ] {
             assert_eq!(repr_inputs::<Fp>(domain, inputs), hex32(fp));
             assert_eq!(repr_inputs::<Fq>(domain, inputs), hex32(fq));
@@ -813,12 +764,9 @@ mod tests {
         let exact_network = network_id(b"confidential-v3-domain-separation-network");
         let network = super::derive_confidential_network_tag_v3(&exact_network)
             .expect("V3 exact-network tag");
-        let payer = super::derive_kagemusha_topup_payer_tag_v3("alice").expect("V3 payer tag");
-        let operation =
-            super::derive_kagemusha_topup_operation_tag_v3(&[7; 32]).expect("V3 operation tag");
         assert_eq!(
-            BTreeSet::from([asset, network, payer, operation]).len(),
-            4,
+            BTreeSet::from([asset, network]).len(),
+            2,
             "distinct use domains must not alias the same preimage"
         );
         let spend_key = [11; 32];
@@ -847,8 +795,6 @@ mod tests {
             super::derive_confidential_network_tag_v3(&other_network)
                 .expect("different exact-network tag")
         );
-        assert!(super::derive_kagemusha_topup_payer_tag_v3("alice ").is_err());
-        assert!(super::derive_kagemusha_topup_operation_tag_v3(&[0; 32]).is_err());
         assert!(super::derive_confidential_note_v3(asset, 0, rho, owner).is_err());
         assert!(
             super::derive_confidential_nullifier_v3(&spend_key, [0; 32], asset, network).is_err()
@@ -1081,40 +1027,20 @@ mod tests {
     }
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
-    fn canonical_kagemusha_vk_digests_match_reviewed_goldens() {
-        let topup = super::kagemusha_topup_shield_v2_vk_box().expect("canonical top-up vk");
+    fn canonical_unshield_vk_digests_match_reviewed_goldens() {
         let full = super::confidential_unshield_v2_vk_box().expect("canonical full-unshield vk");
         let change =
             super::confidential_unshield_v3_vk_box().expect("canonical change-unshield vk");
         assert_eq!(
             [
-                hex::encode(crate::zk::hash_vk(&topup)),
                 hex::encode(crate::zk::hash_vk(&full)),
                 hex::encode(crate::zk::hash_vk(&change)),
             ],
             [
-                hex::encode(super::KAGEMUSHA_TOPUP_SHIELD_V2_VK_DIGEST_V1),
                 hex::encode(super::CONFIDENTIAL_UNSHIELD_V2_VK_DIGEST_V1),
                 hex::encode(super::CONFIDENTIAL_UNSHIELD_V3_VK_DIGEST_V1),
             ],
             "canonical verifier-key layout changed; review the circuit/schema version before updating these goldens",
-        );
-    }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-    #[test]
-    fn kagemusha_topup_canonical_vk_guard_rejects_one_byte_substitution() {
-        let canonical =
-            super::kagemusha_topup_shield_v2_vk_box().expect("canonical top-up verifier key");
-        super::ensure_kagemusha_topup_shield_v2_canonical_vk_box(&canonical)
-            .expect("reviewed top-up verifier key");
-        let mut mutated = canonical;
-        *mutated
-            .bytes
-            .last_mut()
-            .expect("non-empty canonical top-up verifier key") ^= 1;
-        assert!(
-            super::ensure_kagemusha_topup_shield_v2_canonical_vk_box(&mutated).is_err(),
-            "one-byte same-circuit verifier substitution must fail closed",
         );
     }
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -1169,7 +1095,6 @@ mod tests {
         let opaque =
             VerifyingKeyBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(), vec![0xA5; 32]);
         for result in [
-            super::ensure_kagemusha_topup_shield_v2_canonical_vk_box(&opaque),
             super::ensure_confidential_transfer_v2_canonical_vk_box(&opaque),
             super::ensure_confidential_unshield_v2_canonical_vk_box(&opaque),
             super::ensure_confidential_unshield_v3_canonical_vk_box(&opaque),
@@ -1610,226 +1535,6 @@ mod tests {
             crate::zk::verify_backend(crate::zk::ZK_BACKEND_HALO2_IPA, &proof.proof, Some(&vk_box)),
             "generated one-input confidential transfer v2 proof should verify against the generated VK"
         );
-    }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-    #[test]
-    fn kagemusha_topup_shield_v2_binds_every_public_field_and_rejects_substitution() {
-        let network_id = network_id(b"kagemusha-topup-shield-test-network");
-        let asset_definition_id = "pkr#sbp";
-        let payer = "ed0120AABBCC@sbp";
-        let operation_id = [0x41_u8; 32];
-        let spend_key = [0x42_u8; 32];
-        let rho = [0x43_u8; 32];
-        let diversifier = super::derive_confidential_diversifier_v2(b"topup-owner");
-        let atomic_amount = 10_750_000_000_u128;
-        let asset_scale = 9;
-        let tree_commitments = vec![
-            super::scalar_to_repr_bytes(super::scalar_from_u128(0x51)),
-            super::scalar_to_repr_bytes(super::scalar_from_u128(0x52)),
-        ];
-        let leaf_index = u32::try_from(tree_commitments.len()).expect("fixture index");
-        let zero_path =
-            super::compute_confidential_merkle_path_v2(&tree_commitments, leaf_index as usize)
-                .expect("next-zero path");
-        let vk_box = super::kagemusha_topup_shield_v2_vk_box().expect("canonical shield vk");
-        let result = super::build_kagemusha_topup_shield_proof_v2(
-            &network_id,
-            asset_definition_id,
-            payer,
-            operation_id,
-            atomic_amount,
-            asset_scale,
-            &spend_key,
-            rho,
-            diversifier,
-            leaf_index,
-            &zero_path,
-            super::KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID,
-            &vk_box,
-        )
-        .expect("build Kagemusha top-up shield proof");
-        assert!(crate::zk::verify_backend(
-            crate::zk::ZK_BACKEND_HALO2_IPA,
-            &result.proof,
-            Some(&vk_box)
-        ));
-        #[cfg(feature = "zk-halo2-ipa")]
-        {
-            const EXACT_BACKEND: &str =
-                "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3";
-            let (exact_proof, exact_vk) = crate::zk::relabel_halo2_ipa_open_verify_fixture(
-                &result.proof,
-                &vk_box,
-                EXACT_BACKEND,
-            );
-            assert!(
-                crate::zk::verify_backend(EXACT_BACKEND, &exact_proof, Some(&exact_vk)),
-                "exact Kagemusha top-up registry label should reach the top-up verifier"
-            );
-        }
-        let public = super::parse_kagemusha_topup_shield_public_inputs_v2(&result.proof.bytes)
-            .expect("parse shield public inputs");
-        assert_eq!(public.output_commitment, result.output_commitment);
-        assert_eq!(public.spend_nullifier, result.spend_nullifier);
-        assert_eq!(public.initial_root, result.initial_root);
-        assert_eq!(public.finalized_root, result.finalized_root);
-        assert_eq!(
-            public.atomic_amount,
-            super::encode_confidential_amount_v2(atomic_amount)
-        );
-        assert_eq!(
-            public.asset_scale,
-            super::encode_kagemusha_topup_u32_v2(asset_scale)
-        );
-        assert_eq!(
-            public.leaf_index,
-            super::encode_kagemusha_topup_u32_v2(leaf_index)
-        );
-        assert_eq!(
-            public.asset_tag,
-            super::derive_confidential_asset_tag_v2(asset_definition_id)
-        );
-        assert_eq!(
-            public.network_tag,
-            super::derive_confidential_network_tag_v2(&network_id)
-        );
-        assert_eq!(
-            public.payer_tag,
-            super::derive_kagemusha_topup_payer_tag_v2(payer)
-        );
-        assert_eq!(
-            public.operation_tag,
-            super::derive_kagemusha_topup_operation_tag_v2(&operation_id)
-        );
-        let envelope: iroha_data_model::zk::OpenVerifyEnvelope =
-            norito::decode_from_bytes(&result.proof.bytes).expect("outer proof envelope");
-        let (transcript, columns) =
-            crate::zk::zkparse::strict_proof_and_instances(&envelope.proof_bytes)
-                .expect("inner proof and instances");
-        assert_eq!(columns.len(), 11);
-        let spend_scalar =
-            super::hash_to_scalar(b"iroha.confidential.v3.spend_scalar", &[&spend_key]);
-        let output_nodes =
-            super::kagemusha_topup_output_path_nodes_v2(result.output_commitment, &zero_path)
-                .expect("output path nodes");
-        let circuit = super::secure_relation_v3::KagemushaTopUpShieldCircuitV3::<
-            { super::CONFIDENTIAL_TREE_DEPTH_V2 },
-        > {
-            witness: Some(super::KagemushaTopUpShieldWitnessV2 {
-                amount: atomic_amount,
-                asset_scale,
-                leaf_index,
-                rho,
-                spend_scalar: super::scalar_to_repr_bytes(spend_scalar),
-                diversifier,
-                asset_tag: super::derive_confidential_asset_tag_v2(asset_definition_id),
-                network_tag: super::derive_confidential_network_tag_v2(&network_id),
-                payer_tag: super::derive_kagemusha_topup_payer_tag_v2(payer),
-                operation_tag: super::derive_kagemusha_topup_operation_tag_v2(&operation_id),
-                zero_path: zero_path.clone(),
-                output_nodes,
-            }),
-        };
-        halo2_proofs::dev::MockProver::run(
-            super::KAGEMUSHA_TOPUP_SHIELD_V2_IPA_K,
-            &circuit,
-            columns.clone(),
-        )
-        .expect("canonical Kagemusha top-up shield mock prover")
-        .assert_satisfied();
-        for substituted_column in 0..columns.len() {
-            let mut substituted = columns.clone();
-            substituted[substituted_column][0] += super::Scalar::from(1_u64);
-            let substituted_mock = halo2_proofs::dev::MockProver::run(
-                super::KAGEMUSHA_TOPUP_SHIELD_V2_IPA_K,
-                &circuit,
-                substituted.clone(),
-            )
-            .expect("substituted Kagemusha top-up shield mock prover");
-            assert!(
-                substituted_mock.verify().is_err(),
-                "fixed witness must reject substituted public input column {substituted_column}"
-            );
-            let mut inner = crate::zk::zk1::wrap_start();
-            crate::zk::zk1::wrap_append_proof(&mut inner, &transcript);
-            let refs: Vec<&[super::Scalar]> = substituted.iter().map(Vec::as_slice).collect();
-            crate::zk::zk1::wrap_append_instances_pasta_fp_cols(&refs, &mut inner);
-            let mut substituted_envelope = envelope.clone();
-            substituted_envelope.proof_bytes = inner;
-            let substituted_proof = iroha_data_model::proof::ProofBox::new(
-                crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(),
-                norito::to_bytes(&substituted_envelope).expect("encode substituted envelope"),
-            );
-            assert!(
-                !crate::zk::verify_backend(
-                    crate::zk::ZK_BACKEND_HALO2_IPA,
-                    &substituted_proof,
-                    Some(&vk_box),
-                ),
-                "substituting public input column {substituted_column} must invalidate the proof"
-            );
-        }
-    }
-    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-    #[test]
-    fn kagemusha_topup_shield_v2_statement_rejects_zero_and_colliding_fields() {
-        let commitment = super::scalar_to_repr_bytes(super::scalar_from_u128(1));
-        let nullifier = super::scalar_to_repr_bytes(super::scalar_from_u128(2));
-        let initial_root = super::scalar_to_repr_bytes(super::scalar_from_u128(3));
-        let finalized_root = super::scalar_to_repr_bytes(super::scalar_from_u128(4));
-        for (output, nullifier, initial, finalized, expected) in [
-            (
-                [0; 32],
-                nullifier,
-                initial_root,
-                finalized_root,
-                "output commitment must be non-zero",
-            ),
-            (
-                commitment,
-                [0; 32],
-                initial_root,
-                finalized_root,
-                "spend nullifier must be non-zero",
-            ),
-            (
-                commitment,
-                commitment,
-                initial_root,
-                finalized_root,
-                "must be distinct",
-            ),
-            (
-                commitment,
-                nullifier,
-                [0; 32],
-                finalized_root,
-                "initial root must be non-zero",
-            ),
-            (
-                commitment,
-                nullifier,
-                initial_root,
-                [0; 32],
-                "finalized root must be non-zero",
-            ),
-            (
-                commitment,
-                nullifier,
-                initial_root,
-                initial_root,
-                "must change the confidential root",
-            ),
-        ] {
-            let error = super::validate_kagemusha_topup_shield_statement_v2(
-                output, nullifier, initial, finalized,
-            )
-            .expect_err("invalid Kagemusha top-up statement must reject");
-            assert!(
-                error.contains(expected),
-                "unexpected statement validation error `{error}`; expected `{expected}`"
-            );
-        }
     }
     include!("confidential_v2_builder_tests.rs");
 }

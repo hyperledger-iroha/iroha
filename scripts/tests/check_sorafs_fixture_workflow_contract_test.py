@@ -173,7 +173,6 @@ MATERIAL_CLOSURE_PATHS_BY_WORKFLOW = {
         "IrohaSwift/Package.swift",
         "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/NativeBridgeLoaderTests.swift",
-        "ci/check_kagemusha_jvm_native_bridge.sh",
         "javascript/iroha_js/scripts/run-test-profile.mjs",
         "javascript/iroha_js/test/sorafsFixtureBundleValidation.test.js",
         "javascript/iroha_js/test/sorafsPdpValidation.test.js",
@@ -703,7 +702,6 @@ def test_native_release_jobs_build_and_require_the_bridge() -> None:
     assert 'NORITO_MOBILE_ANDROID_HOME="$ANDROID_HOME"' in parity
     assert 'sdkmanager_status="${PIPESTATUS[1]}"' in parity
     assert 'exit "$sdkmanager_status"' in parity
-    assert "bash ci/check_kagemusha_jvm_native_bridge.sh" in parity
     assert (
         'cargo build --locked --release -p connect_norito_bridge --target "$target"'
         in parity

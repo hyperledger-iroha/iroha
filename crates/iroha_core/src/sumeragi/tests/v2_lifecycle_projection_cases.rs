@@ -72,10 +72,14 @@ impl Fixture {
                 power: 1,
             })
             .collect::<Vec<_>>();
+        let network_id =
+            crate::sumeragi::synthetic_network_id("sumeragi-v2-lifecycle-projection-test");
+        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+                network_id, 1, &roster,
+            );
         let context = wire::HeightContext {
-            network_id: crate::sumeragi::synthetic_network_id(
-                "sumeragi-v2-lifecycle-projection-test",
-            ),
+            network_id,
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 1,
@@ -86,6 +90,8 @@ impl Fixture {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
+            offline_cash_mint_finality_epoch_id,
+            offline_cash_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"lifecycle projection nexus context"),
             execution_policy_hash: Hash::new(b"lifecycle projection execution policy"),
             da_layout: wire::DataAvailabilityLayout {
@@ -375,7 +381,7 @@ fn block_subject_for_body(body: &[u8], marker: u8) -> wire::BlockSubject {
     }
 }
 fn execution_commitment_for(marker: u8) -> wire::ExecutionCommitment {
-    wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
         Hash::new([marker, 1]),
         Hash::new([marker, 2]),
         Hash::new([marker, 3]),

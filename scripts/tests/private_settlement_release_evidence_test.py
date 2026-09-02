@@ -269,15 +269,40 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
         configuration_paths = {
             participants: Path("evidence")
             / "configurations"
-            / f"private-settlement-n{participants}.toml"
+            / f"private-settlement-n{participants}.json"
             for participants in MODULE.REQUIRED_PARTICIPANTS
         }
         configuration_payloads = {
             participants: (
-                f"# AtomicPrivateSettlementV1 N={participants}\n"
-                "validators_per_dataspace = 4\n"
-                'quorum = "3-of-4"\n'
-                "mandatory_signed_rs16_da_rbc = true\n"
+                json.dumps(
+                    {
+                        "version": 1,
+                        "protocol": MODULE.PROTOCOL,
+                        "participants": participants,
+                        "participant_visibilities": ["public"]
+                        + ["restricted"] * (participants - 1),
+                        "primary_paper_configuration": participants == 3,
+                        "topology": {
+                            "global_validators": 4,
+                            "participant_dataspaces": list(range(participants)),
+                            "validators_per_dataspace": 4,
+                            "total_validator_processes": (participants + 1) * 4,
+                            "quorum": "3-of-4",
+                        },
+                        "consensus": {
+                            "mandatory_signed_rs16_da_rbc": True,
+                            "minimum_signed_rs16_da_observations_per_run": (
+                                participants + 1
+                            )
+                            * 4,
+                            "authenticated_message_control": True,
+                            "maximum_simultaneously_unavailable_per_committee": 1,
+                            "legacy_rbc_bypass_permitted": False,
+                        },
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
             ).encode()
             for participants in MODULE.REQUIRED_PARTICIPANTS
         }
@@ -1380,6 +1405,63 @@ class PrivateSettlementReleaseEvidenceTests(unittest.TestCase):
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaisesRegex(
                 MODULE.EvidenceError, "invalid network profile"
+            ):
+                MODULE.verify_bundle(manifest_path)
+
+    def test_configuration_manifest_rejects_all_restricted_participant_profile(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest_path = self.make_bundle(root)
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            configuration_artifact = next(
+                item
+                for item in manifest["artifacts"]
+                if item["kind"] == "configuration" and "n3" in item["path"]
+            )
+            configuration_path = root / configuration_artifact["path"]
+            configuration = json.loads(configuration_path.read_text(encoding="utf-8"))
+            configuration["participant_visibilities"] = ["restricted"] * 3
+            configuration_payload = (
+                json.dumps(configuration, sort_keys=True) + "\n"
+            ).encode()
+            configuration_path.write_bytes(configuration_payload)
+            configuration_artifact["bytes"] = len(configuration_payload)
+            configuration_artifact["sha256"] = hashlib.sha256(
+                configuration_payload
+            ).hexdigest()
+
+            configuration_manifest_artifact = next(
+                item
+                for item in manifest["artifacts"]
+                if item["kind"] == "configuration_manifest"
+            )
+            configuration_manifest_path = root / configuration_manifest_artifact["path"]
+            configuration_manifest = json.loads(
+                configuration_manifest_path.read_text(encoding="utf-8")
+            )
+            row = next(
+                item
+                for item in configuration_manifest["configurations"]
+                if item["participants"] == 3
+            )
+            row["bytes"] = len(configuration_payload)
+            row["sha256"] = configuration_artifact["sha256"]
+            configuration_manifest_payload = (
+                json.dumps(configuration_manifest, sort_keys=True) + "\n"
+            ).encode()
+            configuration_manifest_path.write_bytes(configuration_manifest_payload)
+            configuration_manifest_artifact["bytes"] = len(
+                configuration_manifest_payload
+            )
+            configuration_manifest_artifact["sha256"] = hashlib.sha256(
+                configuration_manifest_payload
+            ).hexdigest()
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                MODULE.EvidenceError, "participant_visibilities"
             ):
                 MODULE.verify_bundle(manifest_path)
 

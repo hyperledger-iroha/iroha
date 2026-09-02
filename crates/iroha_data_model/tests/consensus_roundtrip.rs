@@ -18,6 +18,11 @@ use iroha_data_model::{
             SumeragiV2StatusPhase, TimeoutVote, ValidationError, ValidatorPower,
         },
     },
+    isi::offline_cash_v1::{
+        OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterTemplateV1,
+        OfflineCashMintFinalityEpochRosterV1, OfflineCashMintFinalityGenesisParametersV1,
+        OfflineCashMintFinalityValidatorKeysV1,
+    },
     nexus::{DataSpaceId, LaneId},
     peer::PeerId,
 };
@@ -45,16 +50,45 @@ fn sample_block_hash(seed: u8) -> HashOf<BlockHeader> {
     HashOf::from_untyped_unchecked(sample_hash(seed))
 }
 
+fn mint_finality_roster(
+    network_id: NetworkId,
+    epoch: u64,
+    roster: &[ValidatorPower],
+) -> OfflineCashMintFinalityEpochRosterV1 {
+    OfflineCashMintFinalityEpochRosterV1 {
+        version: OFFLINE_CASH_CHAIN_VERSION_V1,
+        network_id,
+        epoch,
+        validators: roster
+            .iter()
+            .enumerate()
+            .map(
+                |(index, validator)| OfflineCashMintFinalityValidatorKeysV1 {
+                    validator: validator.validator.clone(),
+                    eq_proof_public_key: [u8::try_from(index + 1).expect("small fixture roster");
+                        32],
+                    ep_proof_public_key: [u8::try_from(index + 17).expect("small fixture roster");
+                        32],
+                },
+            )
+            .collect(),
+    }
+}
+
+fn recommended_genesis_context() -> SumeragiV2GenesisContextParameters {
+    SumeragiV2GenesisContextParameters::recommended()
+}
+
 #[test]
 fn genesis_context_parameters_reject_noncanonical_hash_markers() {
-    let mut context = SumeragiV2GenesisContextParameters::recommended();
+    let mut context = recommended_genesis_context();
     context.nexus_amx_context_hash[Hash::LENGTH - 1] &= !1;
     assert_eq!(
         context.validate(),
         Err(ValidationError::InvalidNexusAmxContextHash),
     );
 
-    let mut context = SumeragiV2GenesisContextParameters::recommended();
+    let mut context = recommended_genesis_context();
     context.execution_policy_hash[Hash::LENGTH - 1] &= !1;
     assert_eq!(
         context.validate(),
@@ -160,8 +194,7 @@ fn rng_consensus_genesis_params(rng: &mut DeterministicRng) -> ConsensusGenesisP
         block_max_transactions: NonZeroU64::new(rng.next_u64()).unwrap_or(NonZeroU64::MIN),
         mode,
         protocol_version: rng.next_u32(),
-        v2_context:
-            iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
+        v2_context: recommended_genesis_context(),
     }
 }
 fn rng_npos_genesis_params(rng: &mut DeterministicRng) -> NposGenesisParams {
@@ -229,11 +262,19 @@ fn rng_evidence(rng: &mut DeterministicRng) -> Evidence {
         .collect::<Vec<_>>();
     roster.sort();
     let height = rng.next_u64().max(1);
+    let network_id = NetworkId::from_genesis_hash(rng_block_hash(rng));
+    let epoch = rng.next_u64();
+    let mint_finality_roster = mint_finality_roster(network_id, epoch, &roster);
+    let mint_finality_epoch_id = mint_finality_roster
+        .finality_epoch_id()
+        .expect("valid fixture mint-finality roster");
     let context = HeightContext {
-        network_id: NetworkId::from_genesis_hash(rng_block_hash(rng)),
+        network_id,
         protocol_version: V2_PROTOCOL_VERSION,
         height,
-        epoch: rng.next_u64(),
+        epoch,
+        offline_cash_mint_finality_epoch_id: mint_finality_epoch_id,
+        offline_cash_mint_finality_epoch_roster: mint_finality_roster,
         epoch_end_height: height,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Permissioned,
@@ -341,13 +382,14 @@ fn rng_sumeragi_v2_qc_response(rng: &mut DeterministicRng) -> SumeragiV2QcRespon
                 block_hash: rng_block_hash(rng),
                 payload_hash: rng_hash(rng),
             },
-            execution_commitment: ExecutionCommitment::without_topups_or_merge_carrier(
-                rng_hash(rng),
-                rng_hash(rng),
-                rng_hash(rng),
-                rng.next_u64().max(1),
-                rng_hash(rng),
-            ),
+            execution_commitment:
+                ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                    rng_hash(rng),
+                    rng_hash(rng),
+                    rng_hash(rng),
+                    rng.next_u64().max(1),
+                    rng_hash(rng),
+                ),
         }
     }
     SumeragiV2QcResponse {
@@ -376,8 +418,7 @@ fn consensus_genesis_norito_roundtrip() {
         block_max_transactions: NonZeroU64::new(512).unwrap(),
         mode: ConsensusGenesisModeParams::Npos(npos.clone()),
         protocol_version: u32::from(V2_PROTOCOL_VERSION),
-        v2_context:
-            iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
+        v2_context: recommended_genesis_context(),
     };
     let without_npos = ConsensusGenesisParams {
         mode: ConsensusGenesisModeParams::Permissioned,
@@ -386,6 +427,40 @@ fn consensus_genesis_norito_roundtrip() {
     assert_roundtrip(&npos);
     assert_roundtrip(&with_npos);
     assert_roundtrip(&without_npos);
+}
+#[test]
+fn offline_cash_mint_finality_genesis_parameters_norito_roundtrip() {
+    let network_id = NetworkId::from_genesis_hash(sample_block_hash(0xD0));
+    let mut roster = [0xD1, 0xD2, 0xD3, 0xD4]
+        .into_iter()
+        .map(|seed| ValidatorPower {
+            validator: checked_bls_peer_id_from_seed(seed),
+            power: 1,
+        })
+        .collect::<Vec<_>>();
+    roster.sort();
+    let template = |epoch| {
+        let roster = mint_finality_roster(network_id, epoch, &roster);
+        OfflineCashMintFinalityEpochRosterTemplateV1 {
+            version: roster.version,
+            epoch: roster.epoch,
+            validators: roster.validators,
+        }
+    };
+    let parameters = OfflineCashMintFinalityGenesisParametersV1 {
+        epoch_roster: template(0),
+        next_epoch_roster: Some(template(1)),
+    };
+    parameters.validate().expect("valid genesis authority");
+    assert_roundtrip(&parameters);
+    assert_eq!(
+        parameters
+            .epoch_roster
+            .bind_network_id(network_id)
+            .expect("bind final network identity")
+            .network_id,
+        network_id
+    );
 }
 #[test]
 fn consensus_persistence_norito_roundtrip() {

@@ -42,6 +42,12 @@ pub(crate) const MAX_V2_LOCAL_EVIDENCE_BYTES: usize = 2 * MAX_V2_EVIDENCE_ADMISS
 /// Four complete validator rosters leave ample audit history while keeping
 /// state growth independent of node uptime and hostile gossip volume.
 pub(crate) const MAX_V2_COMMITTED_EVIDENCE_RECORDS: usize = 4 * wire_v2::MAX_VALIDATORS_PER_HEIGHT;
+/// Maximum aggregate Norito bytes of exact v2 proofs retained in WSV.
+///
+/// Four maximum-sized admission batches preserve the same first-release
+/// retention scale as the four-roster count bound without letting unusually
+/// large, valid height contexts multiply state and response memory.
+pub(crate) const MAX_V2_COMMITTED_EVIDENCE_BYTES: usize = 4 * MAX_V2_EVIDENCE_ADMISSION_BYTES;
 const V2_EVIDENCE_KEY_DOMAIN: &[u8] = b"iroha:sumeragi:v2:evidence:v1";
 const V2_EVIDENCE_ROSTER_KEY_DOMAIN: &[u8] = b"iroha:sumeragi:v2:evidence-roster:v1";
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -56,6 +62,29 @@ pub(crate) struct LocalV2EvidenceRecord {
     evidence: SumeragiV2EquivocationEvidence,
     offender_roster: V2EvidenceOffenderRosterKey,
     encoded_len: usize,
+}
+/// Return the exact bare-Norito byte length charged for one v2 proof.
+///
+/// This is deliberately the proof payload rather than mutable record metadata,
+/// so block admission and committed-state retention use one canonical measure.
+pub(crate) fn v2_evidence_encoded_len(evidence: &SumeragiV2EquivocationEvidence) -> usize {
+    use norito::codec::Encode as _;
+
+    evidence.encoded_len()
+}
+/// Add exact evidence lengths without overflow and without crossing `limit`.
+pub(crate) fn checked_v2_evidence_byte_sum(
+    initial: usize,
+    encoded_lengths: impl IntoIterator<Item = usize>,
+    limit: usize,
+) -> Option<usize> {
+    if initial > limit {
+        return None;
+    }
+    encoded_lengths.into_iter().try_fold(initial, |total, len| {
+        let next = total.checked_add(len)?;
+        (next <= limit).then_some(next)
+    })
 }
 /// Context required to cryptographically validate consensus evidence.
 #[derive(Debug, Clone, Copy)]
@@ -243,29 +272,67 @@ pub(crate) fn v2_committed_evidence_record_is_prunable(
         })
 }
 /// Generation-coherent committed evidence inputs used by proposal and validation.
-#[derive(Clone)]
 pub(crate) struct V2CommittedEvidenceSnapshot {
     pub(crate) horizon: Option<u64>,
     pub(crate) records: Vec<(Hash, EvidenceRecord)>,
+    pub(crate) record_capacity_exceeded: bool,
+    pub(crate) byte_capacity_exceeded: bool,
 }
 /// Copy the complete bounded evidence table and its governing horizon from one world view.
 pub(crate) fn v2_committed_evidence_snapshot(
     world: &(impl WorldReadOnly + ?Sized),
 ) -> V2CommittedEvidenceSnapshot {
+    let mut records = Vec::with_capacity(MAX_V2_COMMITTED_EVIDENCE_RECORDS);
+    let mut total_bytes = 0_usize;
+    let mut record_capacity_exceeded = false;
+    let mut byte_capacity_exceeded = false;
+    for (key, record) in world.consensus_evidence().iter() {
+        if records.len() == MAX_V2_COMMITTED_EVIDENCE_RECORDS {
+            record_capacity_exceeded = true;
+            break;
+        }
+        let encoded_len = v2_evidence_encoded_len(&record.evidence.equivocation);
+        if encoded_len > MAX_V2_EVIDENCE_ADMISSION_BYTES {
+            byte_capacity_exceeded = true;
+            break;
+        }
+        let Some(next_total) = checked_v2_evidence_byte_sum(
+            total_bytes,
+            [encoded_len],
+            MAX_V2_COMMITTED_EVIDENCE_BYTES,
+        ) else {
+            byte_capacity_exceeded = true;
+            break;
+        };
+        records.push((*key, record.clone()));
+        total_bytes = next_total;
+    }
     V2CommittedEvidenceSnapshot {
         horizon: configured_v2_evidence_horizon(world),
-        records: world
-            .consensus_evidence()
-            .iter()
-            .map(|(key, record)| (*key, record.clone()))
-            .collect(),
+        records,
+        record_capacity_exceeded,
+        byte_capacity_exceeded,
     }
+}
+fn retained_v2_evidence_bytes(
+    records: &[(Hash, EvidenceRecord)],
+    pruned: &BTreeSet<Hash>,
+) -> Option<usize> {
+    checked_v2_evidence_byte_sum(
+        0,
+        records
+            .iter()
+            .filter(|(key, _)| !pruned.contains(key))
+            .map(|(_, record)| v2_evidence_encoded_len(&record.evidence.equivocation)),
+        MAX_V2_COMMITTED_EVIDENCE_BYTES,
+    )
 }
 /// Validate the complete canonical evidence table restored from durable state.
 ///
 /// The table is consensus-owned WSV. Restart must reject missing integrity,
 /// non-canonical proofs, invalid signatures, foreign networks, impossible
-/// lifecycle heights, or state beyond the fixed first-release capacity.
+/// lifecycle heights, or state beyond the fixed first-release count and byte
+/// capacities.
 pub(crate) fn validate_persisted_v2_evidence_records(
     world: &(impl WorldReadOnly + ?Sized),
     kura: &crate::kura::Kura,
@@ -273,12 +340,32 @@ pub(crate) fn validate_persisted_v2_evidence_records(
     committed_height: u64,
 ) -> Result<(), String> {
     let records = world.consensus_evidence();
-    if records.iter().count() > MAX_V2_COMMITTED_EVIDENCE_RECORDS {
+    let record_count = records.iter().count();
+    if record_count > MAX_V2_COMMITTED_EVIDENCE_RECORDS {
         return Err(format!(
             "committed evidence table exceeds the first-release capacity of {MAX_V2_COMMITTED_EVIDENCE_RECORDS} records"
         ));
     }
-    if records.iter().next().is_none() {
+    let mut total_bytes = 0_usize;
+    for (_, record) in records.iter() {
+        let encoded_len = v2_evidence_encoded_len(&record.evidence.equivocation);
+        if encoded_len > MAX_V2_EVIDENCE_ADMISSION_BYTES {
+            return Err(format!(
+                "committed evidence proof exceeds the first-release individual capacity of {MAX_V2_EVIDENCE_ADMISSION_BYTES} bytes"
+            ));
+        }
+        total_bytes = checked_v2_evidence_byte_sum(
+            total_bytes,
+            [encoded_len],
+            MAX_V2_COMMITTED_EVIDENCE_BYTES,
+        )
+        .ok_or_else(|| {
+            format!(
+                "committed evidence table exceeds the first-release capacity of {MAX_V2_COMMITTED_EVIDENCE_BYTES} proof bytes"
+            )
+        })?;
+    }
+    if record_count == 0 {
         return Ok(());
     }
     let npos_parameters = world.sumeragi_npos_parameters().ok_or_else(|| {
@@ -416,6 +503,9 @@ pub(crate) fn v2_committed_evidence_prune_keys_from_state(
 ) -> Vec<Hash> {
     let view = state.view();
     let snapshot = v2_committed_evidence_snapshot(view.world());
+    if snapshot.record_capacity_exceeded || snapshot.byte_capacity_exceeded {
+        return Vec::new();
+    }
     v2_committed_evidence_prune_keys(
         &snapshot.records,
         current_height,
@@ -439,18 +529,23 @@ pub(crate) fn validate_v2_evidence_admissions(
     block_height: u64,
     admissions: &[SumeragiV2EquivocationEvidence],
 ) -> Result<Vec<Hash>, EvidenceValidationError> {
-    use norito::codec::Encode as _;
     if admissions.len() > MAX_V2_EVIDENCE_ADMISSIONS_PER_BLOCK {
         return Err(EvidenceValidationError::V2AdmissionTooMany);
     }
-    let total_bytes = admissions.iter().try_fold(0_usize, |total, evidence| {
-        total.checked_add(evidence.encode().len())
-    });
-    if total_bytes.is_none_or(|size| size > MAX_V2_EVIDENCE_ADMISSION_BYTES) {
-        return Err(EvidenceValidationError::V2AdmissionTooLarge);
-    }
+    let total_bytes = checked_v2_evidence_byte_sum(
+        0,
+        admissions.iter().map(v2_evidence_encoded_len),
+        MAX_V2_EVIDENCE_ADMISSION_BYTES,
+    )
+    .ok_or(EvidenceValidationError::V2AdmissionTooLarge)?;
     let view = state.view();
     let snapshot = v2_committed_evidence_snapshot(view.world());
+    if snapshot.record_capacity_exceeded {
+        return Err(EvidenceValidationError::V2AdmissionTableFull);
+    }
+    if snapshot.byte_capacity_exceeded {
+        return Err(EvidenceValidationError::V2AdmissionTableBytesFull);
+    }
     let horizon = snapshot.horizon;
     let records = snapshot.records;
     let pruned =
@@ -462,6 +557,17 @@ pub(crate) fn validate_v2_evidence_admissions(
         && retained_count.saturating_add(admissions.len()) > MAX_V2_COMMITTED_EVIDENCE_RECORDS
     {
         return Err(EvidenceValidationError::V2AdmissionTableFull);
+    }
+    let retained_bytes = retained_v2_evidence_bytes(&records, &pruned)
+        .ok_or(EvidenceValidationError::V2AdmissionTableBytesFull)?;
+    if checked_v2_evidence_byte_sum(
+        retained_bytes,
+        [total_bytes],
+        MAX_V2_COMMITTED_EVIDENCE_BYTES,
+    )
+    .is_none()
+    {
+        return Err(EvidenceValidationError::V2AdmissionTableBytesFull);
     }
     let committed_keys = records.iter().map(|(key, _)| *key).collect::<BTreeSet<_>>();
     let mut retained_offender_rosters = records
@@ -551,6 +657,9 @@ pub(crate) fn pending_v2_evidence_admissions_from_snapshot(
     proposal_height: u64,
     snapshot: &V2CommittedEvidenceSnapshot,
 ) -> Vec<SumeragiV2EquivocationEvidence> {
+    if snapshot.record_capacity_exceeded || snapshot.byte_capacity_exceeded {
+        return Vec::new();
+    }
     let horizon = snapshot.horizon;
     let records = &snapshot.records;
     let committed_keys = records.iter().map(|(key, _)| *key).collect::<BTreeSet<_>>();
@@ -572,6 +681,9 @@ pub(crate) fn pending_v2_evidence_admissions_from_snapshot(
     if available_slots == 0 {
         return Vec::new();
     }
+    let Some(retained_bytes) = retained_v2_evidence_bytes(records, &pruned) else {
+        return Vec::new();
+    };
 
     let mut pending = state.sumeragi_v2_pending_evidence.lock();
     let mut persisted_contexts = BTreeMap::new();
@@ -602,6 +714,7 @@ pub(crate) fn pending_v2_evidence_admissions_from_snapshot(
 
     let mut selected = Vec::new();
     let mut selected_bytes = 0_usize;
+    let mut selected_committed_bytes = retained_bytes;
     for record in pending.values() {
         if selected.len() == MAX_V2_EVIDENCE_ADMISSIONS_PER_BLOCK
             || selected.len() == available_slots
@@ -614,8 +727,16 @@ pub(crate) fn pending_v2_evidence_admissions_from_snapshot(
         if next_bytes > MAX_V2_EVIDENCE_ADMISSION_BYTES {
             continue;
         }
+        let Some(next_committed_bytes) = checked_v2_evidence_byte_sum(
+            selected_committed_bytes,
+            [record.encoded_len],
+            MAX_V2_COMMITTED_EVIDENCE_BYTES,
+        ) else {
+            continue;
+        };
         selected.push(record.evidence.clone());
         selected_bytes = next_bytes;
+        selected_committed_bytes = next_committed_bytes;
     }
     selected
 }
@@ -636,6 +757,9 @@ pub(crate) fn retain_sumeragi_v2_equivocation(
         proofs_of_possession: proofs_of_possession.to_vec(),
         conflict,
     };
+    if v2_evidence_encoded_len(&payload) > MAX_V2_EVIDENCE_ADMISSION_BYTES {
+        return Err(EvidenceValidationError::V2AdmissionTooLarge);
+    }
     validate_v2_equivocation(&payload)?;
     if &payload.context.network_id != state.network_id_ref() {
         return Err(EvidenceValidationError::V2AdmissionWrongNetwork);
@@ -647,15 +771,16 @@ fn retain_validated_local_evidence(
     state: &State,
     canonical: SumeragiV2EquivocationEvidence,
 ) -> bool {
-    use norito::codec::Encode as _;
-
     let view = state.view();
     let Ok(current_height) = u64::try_from(view.height()) else {
         return false;
     };
     let snapshot = v2_committed_evidence_snapshot(view.world());
+    if snapshot.record_capacity_exceeded || snapshot.byte_capacity_exceeded {
+        return false;
+    }
     let horizon = snapshot.horizon;
-    let encoded_len = canonical.encode().len();
+    let encoded_len = v2_evidence_encoded_len(&canonical);
     if encoded_len > MAX_V2_EVIDENCE_ADMISSION_BYTES {
         return false;
     }
@@ -693,7 +818,11 @@ fn retain_validated_local_evidence(
     let mut pending = state.sumeragi_v2_pending_evidence.lock();
     pending.retain(|_, record| {
         let height = v2_conflict_round(&record.evidence.conflict).height;
-        evidence_within_configured_horizon(current_height, horizon, Some(height))
+        let Some(after_height) = height.checked_add(1) else {
+            return false;
+        };
+        let earliest_height = next_height.max(after_height);
+        evidence_within_configured_horizon(earliest_height, horizon, Some(height))
     });
     if pending.contains_key(&key)
         || pending
@@ -798,6 +927,8 @@ pub enum EvidenceValidationError {
     V2AdmissionOffenderRetained,
     /// The bounded committed evidence table has no reclaimable capacity.
     V2AdmissionTableFull,
+    /// The bounded committed evidence table has no reclaimable proof-byte capacity.
+    V2AdmissionTableBytesFull,
     /// A candidate tries to admit and penalize exact v2 evidence atomically.
     V2AdmissionSameBlockPenalty,
 }
@@ -850,6 +981,9 @@ impl std::fmt::Display for EvidenceValidationError {
             }
             V2AdmissionTableFull => {
                 "bounded Sumeragi v2 evidence table has no reclaimable capacity"
+            }
+            V2AdmissionTableBytesFull => {
+                "bounded Sumeragi v2 evidence table has no reclaimable proof-byte capacity"
             }
             V2AdmissionSameBlockPenalty => {
                 "Sumeragi v2 evidence cannot be admitted and penalized in the same block"
@@ -1095,7 +1229,9 @@ fn verify_v2_quorum_certificate(
         context,
         proofs_of_possession,
         &certificate.signers,
-        &certificate.aggregate_signature,
+        certificate
+            .bls_aggregate_signature()
+            .map_err(|_| EvidenceValidationError::V2ArtifactInvalid)?,
         &preimage,
     )
 }
@@ -1266,8 +1402,13 @@ mod tests {
                     power: 1,
                 })
                 .collect::<Vec<_>>();
+            let network_id = test_network_id(b"sumeragi-v2-evidence-genesis");
+            let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+                crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+                    network_id, 7, &roster,
+                );
             let context = wire_v2::HeightContext {
-                network_id: test_network_id(b"sumeragi-v2-evidence-genesis"),
+                network_id,
                 protocol_version: wire_v2::PROTOCOL_VERSION,
                 height: 1,
                 epoch: 7,
@@ -1278,6 +1419,8 @@ mod tests {
                 parent_commit_qc: None,
                 quorum: wire_v2::DualQuorum::from_roster(&roster).expect("equal-vote quorum"),
                 roster,
+                offline_cash_mint_finality_epoch_id,
+                offline_cash_mint_finality_epoch_roster,
                 nexus_amx_context_hash: Hash::new(b"v2-evidence-context"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire_v2::DataAvailabilityLayout {
@@ -1357,7 +1500,7 @@ mod tests {
             .to_vec()
         }
         fn execution_commitment(&self) -> wire_v2::ExecutionCommitment {
-            wire_v2::ExecutionCommitment::without_topups_or_merge_carrier(
+            wire_v2::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
                 Hash::new(b"v2 evidence parent state"),
                 Hash::new(b"v2 evidence post state"),
                 Hash::new(b"v2 evidence ordinary writes"),
@@ -1491,16 +1634,17 @@ mod tests {
                 .canonical_proposal_wire_hash()
                 .expect("canonical proposal wire"),
         };
-        let execution_commitment = wire_v2::ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"v2 evidence finality parent state"),
-            Hash::new(b"v2 evidence finality post state"),
-            Hash::new(b"v2 evidence finality ordinary writes"),
-            u64::try_from(block.encode_wire().expect("v2 evidence block wire").len())
-                .expect("v2 evidence block wire length fits u64"),
-            block
-                .executed_block_wire_hash()
-                .expect("canonical executed block wire"),
-        );
+        let execution_commitment =
+            wire_v2::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                Hash::new(b"v2 evidence finality parent state"),
+                Hash::new(b"v2 evidence finality post state"),
+                Hash::new(b"v2 evidence finality ordinary writes"),
+                u64::try_from(block.encode_wire().expect("v2 evidence block wire").len())
+                    .expect("v2 evidence block wire length fits u64"),
+                block
+                    .executed_block_wire_hash()
+                    .expect("canonical executed block wire"),
+            );
         let round = wire_v2::ConsensusRound {
             context_id: fixture.context.id(),
             height: fixture.context.height,
@@ -2014,6 +2158,51 @@ mod tests {
         assert_eq!(state.sumeragi_v2_pending_evidence.lock().len(), 1);
     }
     #[test]
+    fn stale_pending_records_do_not_consume_local_capacity() {
+        let old_fixture = V2EvidenceFixture::new();
+        let fresh_fixture = V2EvidenceFixture::for_height(3);
+        let mut state = test_state_for_v2_fixture_with_horizon(&old_fixture, 2);
+        for seed in 1_u8..=3 {
+            state.push_block_hash_for_testing(HashOf::from_untyped_unchecked(Hash::new([seed])));
+        }
+
+        let old = canonical_v2_phase_vote_evidence(&old_fixture, 0x79, 0x7A);
+        let base_roster = v2_evidence_offender_roster_key(&old)
+            .expect("valid fixture signer belongs to its frozen roster");
+        let mut pending = state.sumeragi_v2_pending_evidence.lock();
+        for index in 0..MAX_V2_COMMITTED_EVIDENCE_RECORDS {
+            let discriminator = u64::try_from(index).expect("bounded evidence index fits u64");
+            pending.insert(
+                Hash::new(discriminator.to_be_bytes()),
+                LocalV2EvidenceRecord {
+                    evidence: old.clone(),
+                    offender_roster: V2EvidenceOffenderRosterKey {
+                        roster_hash: Hash::new_from_chunks(&[
+                            b"stale pending evidence row",
+                            &discriminator.to_be_bytes(),
+                        ]),
+                        ..base_roster.clone()
+                    },
+                    encoded_len: 1,
+                },
+            );
+        }
+        drop(pending);
+
+        let fresh = canonical_v2_phase_vote_evidence(&fresh_fixture, 0x7B, 0x7C);
+        assert_eq!(
+            retain_sumeragi_v2_equivocation(
+                &state,
+                &fresh.context,
+                &fresh.proofs_of_possession,
+                fresh.conflict,
+            ),
+            Ok(true),
+            "rows stale at the fresh proof's earliest admission height must be reclaimed first"
+        );
+        assert_eq!(state.sumeragi_v2_pending_evidence.lock().len(), 1);
+    }
+    #[test]
     fn committed_admission_rejects_second_proof_for_offender_and_frozen_roster() {
         let fixture = V2EvidenceFixture::new();
         let state = test_state_for_v2_fixture(&fixture);
@@ -2152,6 +2341,94 @@ mod tests {
         assert!(
             error.contains("multiple retained proofs for one offender and frozen roster"),
             "unexpected persisted evidence validation error: {error}"
+        );
+    }
+    #[test]
+    fn committed_evidence_byte_sum_is_checked_and_boundary_inclusive() {
+        assert_eq!(
+            checked_v2_evidence_byte_sum(
+                MAX_V2_COMMITTED_EVIDENCE_BYTES - 1,
+                [1],
+                MAX_V2_COMMITTED_EVIDENCE_BYTES,
+            ),
+            Some(MAX_V2_COMMITTED_EVIDENCE_BYTES)
+        );
+        assert_eq!(
+            checked_v2_evidence_byte_sum(
+                MAX_V2_COMMITTED_EVIDENCE_BYTES - 1,
+                [2],
+                MAX_V2_COMMITTED_EVIDENCE_BYTES,
+            ),
+            None
+        );
+        assert_eq!(
+            checked_v2_evidence_byte_sum(usize::MAX, [1], usize::MAX),
+            None,
+            "machine-word overflow must fail even when the nominal limit is usize::MAX"
+        );
+    }
+    #[test]
+    fn committed_evidence_byte_sum_accounts_for_retained_and_incoming_proofs() {
+        let retained = MAX_V2_COMMITTED_EVIDENCE_BYTES - MAX_V2_EVIDENCE_ADMISSION_BYTES;
+        assert_eq!(
+            checked_v2_evidence_byte_sum(
+                retained,
+                [MAX_V2_EVIDENCE_ADMISSION_BYTES],
+                MAX_V2_COMMITTED_EVIDENCE_BYTES,
+            ),
+            Some(MAX_V2_COMMITTED_EVIDENCE_BYTES)
+        );
+        assert_eq!(
+            checked_v2_evidence_byte_sum(
+                retained + 1,
+                [MAX_V2_EVIDENCE_ADMISSION_BYTES],
+                MAX_V2_COMMITTED_EVIDENCE_BYTES,
+            ),
+            None
+        );
+    }
+    #[test]
+    fn stale_terminal_prune_reclaims_committed_evidence_bytes() {
+        let fixture = V2EvidenceFixture::new();
+        let evidence =
+            canonical_v2_evidence(&canonical_v2_phase_vote_evidence(&fixture, 0x79, 0x7A));
+        let proof_bytes = v2_evidence_encoded_len(&evidence.equivocation);
+        let stale_terminal_key = Hash::prehashed([0x01; Hash::LENGTH]);
+        let stale_pending_key = Hash::prehashed([0x02; Hash::LENGTH]);
+        let records = vec![
+            (
+                stale_terminal_key,
+                EvidenceRecord {
+                    evidence: evidence.clone(),
+                    recorded_at_height: 1,
+                    recorded_at_view: 0,
+                    recorded_at_ms: 0,
+                    penalty_status: EvidencePenaltyStatus::Applied { height: 2 },
+                },
+            ),
+            (
+                stale_pending_key,
+                EvidenceRecord {
+                    evidence,
+                    recorded_at_height: 1,
+                    recorded_at_view: 0,
+                    recorded_at_ms: 0,
+                    penalty_status: EvidencePenaltyStatus::Pending,
+                },
+            ),
+        ];
+        let pruned = v2_committed_evidence_prune_keys(&records, 3, Some(1), 1)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(pruned, BTreeSet::from([stale_terminal_key]));
+        assert_eq!(
+            retained_v2_evidence_bytes(&records, &pruned),
+            Some(proof_bytes)
+        );
+        assert_eq!(
+            retained_v2_evidence_bytes(&records, &BTreeSet::new()),
+            proof_bytes.checked_mul(2)
         );
     }
     #[test]
@@ -2304,7 +2581,7 @@ mod tests {
         );
         let mut effects_transaction = state_block.consensus_effects_transaction();
         let application_error =
-            super::super::penalties::apply_npos_consensus_effects_to_transaction(
+            match super::super::penalties::apply_npos_consensus_effects_to_transaction(
                 &mut effects_transaction,
                 &effects,
                 &evidence_prune_keys,
@@ -2313,8 +2590,10 @@ mod tests {
                 BLOCK_HEIGHT,
                 0,
                 30,
-            )
-            .expect_err("commit application must reject the same revived prune target");
+            ) {
+                Ok(_) => panic!("commit application must reject the same revived prune target"),
+                Err(error) => error,
+            };
         assert!(
             application_error
                 .to_string()

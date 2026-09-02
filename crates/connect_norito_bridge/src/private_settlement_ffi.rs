@@ -145,37 +145,6 @@ pub unsafe extern "C" fn connect_norito_private_settlement_committee_proof_respo
     )
 }
 
-/// Verify one exact auditor capsule response and governed key separation.
-///
-/// The auditor key is a canonical public-key literal.  Plaintext capsule
-/// contents and spending witnesses never cross this boundary.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_private_settlement_auditor_capsule_response_verify_v1(
-    response_json_ptr: *const c_uchar,
-    response_json_len: c_ulong,
-    expected_network_id_ptr: *const c_uchar,
-    expected_network_id_len: c_ulong,
-    requested_payload_digest_ptr: *const c_uchar,
-    requested_payload_digest_len: c_ulong,
-    auditor_signing_key_ptr: *const c_char,
-    auditor_signing_key_len: c_ulong,
-) -> c_int {
-    // This legacy ABI cannot authenticate the policy-bearing POST request and
-    // therefore deliberately fails closed. Route clients must use the
-    // request-aware symbol below.
-    let _ = (
-        response_json_ptr,
-        response_json_len,
-        expected_network_id_ptr,
-        expected_network_id_len,
-        requested_payload_digest_ptr,
-        requested_payload_digest_len,
-        auditor_signing_key_ptr,
-        auditor_signing_key_len,
-    );
-    BridgeError::PrivateSettlementResponse.code()
-}
-
 /// Verify one exact auditor capsule request/response pair and governed identity.
 ///
 /// The request bytes are the exact bounded JSON bytes signed and sent in the
@@ -328,26 +297,6 @@ mod tests {
             connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1(
                 json.as_ptr(),
                 json.len() as c_ulong,
-                json.as_ptr(),
-                json.len() as c_ulong,
-                digest.as_ptr(),
-                digest.len() as c_ulong,
-                digest.as_ptr(),
-                digest.len() as c_ulong,
-                key.as_ptr().cast(),
-                key.len() as c_ulong,
-            )
-        };
-        assert_eq!(code, EXPECTED_ERROR);
-    }
-
-    #[test]
-    fn legacy_auditor_capsule_bridge_fails_closed_without_request() {
-        let json = b"{}";
-        let digest = [8_u8; 32];
-        let key = b"not-a-key";
-        let code = unsafe {
-            connect_norito_private_settlement_auditor_capsule_response_verify_v1(
                 json.as_ptr(),
                 json.len() as c_ulong,
                 digest.as_ptr(),

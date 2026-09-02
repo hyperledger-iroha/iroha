@@ -31,12 +31,11 @@ SPDX-License-Identifier: Apache-2.0
 Confidential memo envelopes now ship with a canonical fixture at `fixtures/confidential/encrypted_payload_v1.json`. The dataset captures a positive v1 envelope plus negative malformed samples so SDKs can assert parsing parity. The Rust data-model tests (`crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs`) and Swift suite (`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift`) both load the fixture directly, guaranteeing that Norito encoding, error surfaces, and regression coverage stay aligned as the codec evolves.
 
 The generic proofless `zk::Shield` instruction is not part of the first-release
-wire surface. Wallets move public value into the confidential tree only with
-`TopUpKagemushaRecursiveV4`, whose payer/device authorization, exact amount,
-note commitment, initial/final roots, leaf index, active verifier, and proof are
-validated together before escrow reservation or tree mutation. The encrypted
-memo-envelope fixture remains a local wallet codec fixture and is not an
-authorization to append a commitment.
+wire surface. Offline Cash V1 is a separate aggregate-balance protocol: its
+top-up operation atomically debits the payer, credits the per-asset reserve, and
+emits a hardware-bound mint credit after circuit-verifiable block finality. It
+does not append a caller-supplied confidential note. The encrypted memo-envelope
+fixture remains a local wallet codec fixture and grants no monetary authority.
 
 ## Consensus Commitments & Capability Gating
 - Block headers expose `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }`; the digest participates in the consensus hash and must equal the local registry view for block acceptance.
@@ -48,13 +47,12 @@ authorization to append a commitment.
 ## Asset Policies
 - Each registered asset definition carries runtime `AssetConfidentialPolicy` state. Public asset registration always creates `TransparentOnly`; only verifier-backed `RegisterZkAsset` execution and validated policy-transition instructions may change it:
   - `TransparentOnly`: default mode; only transparent instructions (`MintAsset`, `TransferAsset`, etc.) are permitted and shielded operations are rejected.
-  - `ShieldedOnly`: confidential movement remains available, but the
-    proof-bound Kagemusha public redemption path is forbidden so balances do
-    not surface publicly.
+  - `ShieldedOnly`: confidential movement remains available, but public
+    redemption is forbidden so balances do not surface publicly.
   - `Convertible`: holders may move value between transparent and shielded representations using the on/off-ramp instructions below.
 - Policies follow a constrained FSM to prevent stranding funds:
   - `TransparentOnly → Convertible` occurs only when `RegisterZkAsset`
-    installs at least one canonical Kagemusha verifier binding.
+    installs an active canonical unshield verifier binding.
   - `Convertible → ShieldedOnly` (enforced minimum delay).
   - `ShieldedOnly → Convertible` re-enables proof-bound public redemption.
   - `Convertible` or `ShieldedOnly` can never return to `TransparentOnly` in
@@ -73,16 +71,13 @@ authorization to append a commitment.
 - `pending_transition.transition_id` doubles as an audit handle; governance must quote it when finalising or cancelling transitions so operators can correlate on/off-ramp reports.
 - `policy_transition_window_blocks` defaults to 200 blocks, and `policy_transition_max_per_height` defaults to 256. Nodes reject governance requests that attempt shorter notice or exceed the exact-height capacity.
 - Genesis manifests and CLI flows surface current and pending policies. Admission logic reads the policy at execution time to confirm each confidential instruction is authorised.
-- The optional `vk_shield` binding enables first-release Kagemusha top-up only
-  and must resolve to the canonical top-up circuit and public-input schema.
-  It may be configured only when `vk_unshield` is also configured, so every
-  note that can enter has a proof-bound redemption path. After the first
-  commitment is appended, registration cannot clear or change the unshield
-  verifier commitment. Governance may rotate its identifier only to an active
-  canonical registry record with the same commitment. Asset registration has
-  no transfer-verifier role; Kagemusha selects its global transfer-v2 verifier
-  independently. No generic commitment-ingress, confidential-transfer, or
-  public-withdrawal instruction exists.
+- `vk_shield` is not part of the first-release confidential-asset model and is
+  rejected. An optional `vk_unshield` binding may activate the confidential
+  policy and, after the first commitment exists, cannot be cleared or changed
+  to a different verifier commitment. Offline Cash V1 does not use either
+  asset-bound role; its paired artifact set is authenticated by its release
+  manifest. No generic commitment-ingress or confidential-transfer instruction
+  exists.
 - Migration checklist — see “Migration sequencing” below for the staged upgrade plan that Milestone M0 tracks.
 
 #### Monitoring transitions via Torii
@@ -132,7 +127,7 @@ scheduled the `pending_transition` field is `null`.
 |---|---|---|---|---|
 | `TransparentOnly` | `Convertible` | Call `RegisterZkAsset` with at least one active canonical `vk_shield` or `vk_unshield` binding. | Activation is immediate; this is not a scheduled transition. | Confidential activation is irreversible in ABI V1. |
 | `Convertible` | `ShieldedOnly` | Schedule with the required lead time and conversion window. Transparent supply must be zero at cut-over. | On success the policy becomes `ShieldedOnly`. If transparent supply remains, the pending transition is cleared and the current `Convertible` mode is retained. | Disables public redemption without invalidating confidential notes. |
-| `ShieldedOnly` | `Convertible` | Schedule with the required lead time. | State flips at `effective_height`; proof-bound Kagemusha redemption becomes available again. | Existing notes and verifier bindings remain valid. |
+| `ShieldedOnly` | `Convertible` | Schedule with the required lead time. | State flips at `effective_height`; proof-bound public redemption becomes available again. | Existing notes and verifier bindings remain valid. |
 | Either confidential mode | Same as current | Cancel the exact pending `transition_id`. | The pending entry is removed immediately. | Cancellation never restores `TransparentOnly`. |
 
 All other mode changes are rejected. In particular, scheduling cannot activate a
@@ -141,7 +136,7 @@ disable confidentiality after activation.
 
 ### Migration sequencing
 
-1. **Activate verifier roles:** Register the active canonical Kagemusha verifier bindings. The first non-empty binding set moves a `TransparentOnly` asset to `Convertible` immediately.
+1. **Activate verifier roles:** Register an active canonical unshield verifier. The first valid binding moves a `TransparentOnly` asset to `Convertible` immediately.
 2. **Stage a confidential-mode transition:** Submit `ScheduleConfidentialPolicyTransition` with an `effective_height` that respects `policy_transition_delay_blocks`. When moving toward `ShieldedOnly`, specify a conversion window (`window ≥ policy_transition_window_blocks`).
 3. **Publish operator guidance:** Record the returned `transition_id` and circulate an on/off-ramp runbook. Wallets and auditors subscribe to `/v1/confidential/assets/{id}/transitions` to learn the window open height.
 4. **Window enforcement:** The asset remains `Convertible` throughout the notice window so holders can complete public redemption before cut-over.
@@ -179,7 +174,11 @@ deterministic and wallets have time to adjust.
   - `WITHDRAW { vk_id, withdraw_height }` for emergency shutdown; affected assets freeze confidential spending after the withdraw height until new entries activate.
 - Genesis manifests auto-emit a `confidential_registry_root` custom parameter whose `vk_set_hash` matches the active entries; validation cross-checks this digest against local registry state before a node can join consensus.
 - Registering or updating a verifier requires a `gas_schedule_id`; verification enforces that the registry entry is `Active`, present in the `(circuit_id, version)` index, and that Halo2 proofs provide an `OpenVerifyEnvelope` whose `circuit_id`, `vk_hash`, and `public_inputs_schema_hash` match the registry record. Registry, proof-attachment admission, checked verifier guardrails, and IVM host verifier snapshots reject explicit trusted-setup labels such as Groth16, Halo2/BN254, Halo2/BLS12, and Halo2/KZG; the admitted production verifier families are transparent Halo2 IPA over Pasta and STARK/FRI.
-- Kagemusha transfer-v2 and redemption proof admission requires canonical Halo2 IPA `OpenVerifyEnvelope` metadata before public inputs are parsed: backend tag, circuit id, public-input schema bytes, verifier-key hash, empty auxiliary bytes, and active `(circuit_id, version)` registry mapping must match the protocol-global transfer role or the asset-bound redemption role as appropriate. The shared Halo2 IPA backend verifier also rejects non-empty auxiliary bytes, zero or mismatched `vk_hash` values, and mismatched `ProofBox.backend` labels before proof verification. The lightweight preverify/dedup path applies the same envelope-metadata guard for recognized proof envelopes before cache insertion and leaves Groth16, Halo2/BN254, and Halo2/KZG labels unsupported, so malformed failed preverify attempts cannot occupy the key for a later valid proof; checked verifier guardrails reject those labels before backend dispatch as well.
+- Offline Cash V1 proof admission is not selected through a caller-controlled
+  registry role. It authenticates the complete paired-Pasta release manifest,
+  verifies the exact state, history, mint-finality, platform-credential, and
+  GuardBundle roles, and terminally decides both recursive accumulators. The
+  generic proof preverification path grants no Offline Cash authority.
 - Production Halo2/IPA metadata has one strict `ZK1\0` TLV layout: verifier keys encode `IPAK` → `CID1` → `H2VK`, while proofs encode `PROF` followed by optional `I10P`. The retired binary inner envelope and its standalone parser were removed; production dispatch never guesses or accepts that legacy shape.
 
 ### Proving Keys
@@ -193,10 +192,10 @@ deterministic and wallets have time to adjust.
 - Each registered asset persists `ConfidentialTreeProfile::PoseidonPastaV1` in
   `ZkAssetState`. This fixed-depth Pasta Poseidon profile is the only
   first-release tree construction. `RegisterZkAsset` validates every configured
-  Kagemusha top-up and unshield verifier against it; key rotation may retain
+  unshield verifier against it; key rotation may retain
   the profile, but no populated asset can switch profiles.
-- All Kagemusha top-up, transfer, and unshield-change append paths use the same
-  profile-aware batch operation. `ZkAssetState` persists a fixed 16-slot
+- All confidential append paths use the same profile-aware batch operation.
+  `ZkAssetState` persists a fixed 16-slot
   incremental frontier and the current root. A hot append validates that
   constant-size metadata and the retained-history tail, validates every new
   scalar, simulates the complete batch on a copied frontier, reserves storage,
@@ -216,9 +215,9 @@ deterministic and wallets have time to adjust.
 
 ### V1 public-amount proof scalars
 
-The generic `Shield`, `ZkTransfer`, and `Unshield` wires are retired.
-Public-to-confidential and confidential-to-public amounts are carried inside
-the scale-bound, proof-authenticated Kagemusha V4 top-up and redeem requests.
+The generic `Shield`, `ZkTransfer`, and `Unshield` wires are retired. Offline
+Cash V1 public-to-offline and offline-to-public amounts are carried inside its
+scale-bound top-up request and proof-authenticated redemption voucher.
 The direct `SubmitZkAceAuthorizedTransfer` instruction is retired. ZK-ACE callers instead
 select an active governed `PrivacyZkAcePolicyRecordV1`; the canonical native
 builder binds an atomic `u128` amount into
@@ -235,12 +234,12 @@ plan.
 
 ### Protocol-private transfer and redemption proofs
 
-The confidential transfer and redemption circuits remain reusable cryptographic
-components, but their proof envelopes are not executable instructions.
-Transfer-v2 is selected only as a protocol-global component of the typed
-Kagemusha recursive proof. Kagemusha redemption owns the asset-bound redemption
-verifier and couples every successful proof to anchor drawdown and an equal
-debit from deterministic offline escrow before public credit.
+Offline Cash V1 uses one hidden aggregate balance per device lane and asset.
+Its fixed-shape paired-Pasta recursion proves `Bootstrap`, `MintFold`,
+`SendSplit`, `ReceiveFold`, `RedeemSplit`, and `Rotate`; proof envelopes are not
+standalone executable instructions. Redemption couples a hardware-bound terminal
+voucher to a unique nullifier and an equal debit from the pooled reserve before
+public credit.
 
 This separation is a consensus invariant. A proof that is sound for the note
 tree does not by itself authorize settlement against a particular backing
@@ -248,21 +247,17 @@ pool, so no generic dispatch, InstructionBox discriminant, IVM bridge, relay,
 CLI command, or SDK transaction builder may expose either circuit directly.
 
 ## Ledger Flow
-1. **TopUpKagemushaRecursiveV4 { request }**
-   - Requires `Convertible` policy and an asset-bound canonical `vk_shield`.
-     Runtime validates the payer and device authorization, active release,
-     exact scale and amount, fresh note, authoritative roots and leaf index,
-     verifier binding, and top-up proof.
-   - Public funds move into operation-bound escrow and the proof-bound note is
-     appended atomically. Any failed check leaves both balances and the tree unchanged.
-2. **RedeemKagemushaRecursiveV4 { request }**
-   - Requires the authenticated Kagemusha device/release path and
-     an asset-bound canonical `vk_unshield`. The proof binds the note spend and
-     public amount; Core atomically consumes nullifiers, draws down the
-     originating anchors, debits offline escrow, and credits the designated
-     public account.
-   - A proof failure, stale/replayed request, insufficient backing, or anchor
-     mismatch leaves the nullifier set, tree, escrow, and public balance unchanged.
+1. **`TopUpOfflineCashV1 { request }`**
+   - Runtime validates the payer, recipient hardware lane, active release,
+     exact scale and amount, idempotency identifiers, and reserve binding.
+   - It atomically debits online funds and credits the sole reserve for the
+     asset. Finality later attaches the exact circuit-verifiable mint credit;
+     recovery cannot mint a different output.
+2. **`RedeemOfflineCashV1 { request }`**
+   - Runtime verifies the recursive balance proof, hardware-bound voucher, and
+     unique terminal nullifier.
+   - It atomically debits the reserve and credits the requested account. Proof
+     failure, replay, or reserve underflow leaves all monetary state unchanged.
 ## Data Model Additions
 - `ConfidentialConfig` (new config section) with enablement flag, `assume_valid`, gas/limit knobs, anchor window, verifier backend.
 - `ConfidentialNote`, `ConfidentialTransfer`, and `ConfidentialMint` Norito schemas with explicit version byte (`CONFIDENTIAL_ASSET_V1 = 0x01`).
@@ -275,9 +270,10 @@ CLI command, or SDK transaction builder may expose either circuit directly.
   always builds `TransparentOnly` state with no pending transition;
   `RegisterZkAsset` is the only confidential activation path.
 - `ZkAssetState` persists the sole first-release tree profile, an exact
-  fixed-size incremental frontier, its current root, and the `(backend, name,
-  commitment)` bindings for Kagemusha top-up/redemption. The global Kagemusha
-  transfer-v2 verifier is not stored as an asset binding.
+  fixed-size incremental frontier, its current root, and any generic
+  confidential verifier bindings. Offline Cash V1 release artifacts and pooled
+  reserves are stored in their dedicated state and are not asset-bound verifier
+  roles.
   The frontier and root are required first-release snapshot fields; there is no
   legacy reconstruction fallback. Execution rejects proofs whose referenced
   verifying key fails to match the registered commitment, whose proof envelope
@@ -316,9 +312,9 @@ replay governance-driven audits. The default policy, enforced by
   Operators may extend the window via `confidential.retention.nullifier_days`.
   Nullifiers younger than the retention window MUST remain queryable via Torii so
   auditors can prove double-spend absence.
-- **Public redemption:** only Kagemusha V4 redemption may move confidential
-  value back to the public ledger. It consumes the authenticated nullifier,
-  applies exact anchor drawdown, and transfers from the protocol escrow. The
+- **Public redemption:** Offline Cash V1 redemption consumes an authenticated
+  terminal nullifier and transfers the exact amount from the per-asset reserve.
+  Generic confidential redemption follows its own verifier policy. The
   commitment log remains append-only; there is no generic reveal instruction
   or generic confidential lifecycle event compatibility wire.
 - **Frontier checkpoints:** commitment frontiers maintain rolling checkpoints
@@ -495,8 +491,8 @@ Each phase updates roadmap milestones and associated tests to maintain determini
 ### SDK & Fixture Coverage (Phase M1)
 
 Encrypted payload v1 ships with canonical fixtures so every SDK produces the
-same Norito memo envelope. Transaction parity is exercised by the dedicated
-Kagemusha suite; there is deliberately no generic confidential wallet-flow
+same Norito memo envelope. Offline Cash transaction parity is exercised by its
+dedicated V1 suite; there is deliberately no generic confidential wallet-flow
 fixture or encoder:
 
 ```bash
@@ -508,23 +504,23 @@ cd IrohaSwift && swift test --filter ConfidentialEncryptedPayloadTests
 ```
 
 The release-surface guards reject the retired generic and anonymous-escrow type
-names and wire fingerprints while retaining the specialized Kagemusha
+names and wire fingerprints while retaining only the Offline Cash V1
 instructions. Updating the encrypted-payload fixture without bumping its format
 version fails parity suites, keeping the SDKs and Rust codec in lock-step.
 
 #### Wallet and SDK builders
 
-SDKs expose authenticated Kagemusha V4 top-up/redemption. They do not expose
+SDKs expose authenticated Offline Cash V1 top-up/redemption. They do not expose
 generic `Shield`, `ZkTransfer`, `Unshield`, or native anonymous-escrow requests
 or encoders. SDK manifests and generated
 instruction catalogs must omit all three retired data-model types and their
 wire fingerprints.
 
-`vk_shield` and `vk_unshield` are optional asset-registration bindings whose
-presence enables only their narrow protocol roles described above. There is no
-asset-bound transfer verifier. Wallet implementations must build and sign
-the complete specialized request; a proof envelope, amount, nullifier list, or
-opaque commitment is never sufficient authority on its own.
+`vk_shield` is rejected in the first release; `vk_unshield` is an optional
+generic confidential-asset binding. Neither grants Offline Cash authority.
+Wallet implementations must build and sign the complete Offline Cash V1 object;
+a proof envelope, amount, nullifier list, or opaque commitment is never
+sufficient authority on its own.
 
 ### Telemetry & Monitoring (Phase M2)
 

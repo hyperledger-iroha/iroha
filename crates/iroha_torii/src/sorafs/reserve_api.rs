@@ -1121,22 +1121,25 @@ pub(crate) async fn handle_get_sorafs_reserve_events_ws(
         let preauth_guard = crate::take_preauth_upgrade_guard(preauth_guard);
         let shutdown = state.shutdown_signal.clone();
         ws.on_upgrade(move |socket| async move {
-            let _preauth_guard = preauth_guard;
-            let stream = reserve_event_websocket(
-                socket,
-                state,
-                caller,
-                initial,
-                query.after(),
-                query.limit(),
-            );
-            let result = tokio::select! {
-                () = shutdown.receive() => return,
-                result = stream => result,
-            };
-            if let Err(error) = result {
-                debug!(%error, "SoraFS reserve finalized-event WebSocket closed");
-            }
+            let _ = crate::panic_recovery::catch_async_recoverable(async move {
+                let _preauth_guard = preauth_guard;
+                let stream = reserve_event_websocket(
+                    socket,
+                    state,
+                    caller,
+                    initial,
+                    query.after(),
+                    query.limit(),
+                );
+                let result = tokio::select! {
+                    () = shutdown.receive() => return,
+                    result = stream => result,
+                };
+                if let Err(error) = result {
+                    debug!(%error, "SoraFS reserve finalized-event WebSocket closed");
+                }
+            })
+            .await;
         })
         .into_response()
     })

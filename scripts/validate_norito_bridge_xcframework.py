@@ -8,15 +8,13 @@ import hashlib
 import importlib.util
 import json
 import os
-from pathlib import Path
 import platform
 import plistlib
 import re
 import stat
 import subprocess
 import sys
-from typing import NoReturn
-
+from pathlib import Path
 
 EXPECTED_SLICES = {
     "ios-arm64": {
@@ -40,7 +38,6 @@ EXPECTED_MANIFEST_FIELDS = {
     "native_bridge_abi_version",
     "privacy_production_enabled",
     "cargo_features",
-    "kagemusha_production_authorization_sha256",
     "build_environment",
     "source_commit",
     "embedded_source_commit",
@@ -50,7 +47,6 @@ EXPECTED_MANIFEST_FIELDS = {
     "bridge_header_sha256",
     "required_symbols",
     "forbidden_symbols",
-    "kagemusha_mobile_artifact_roles",
     "hashes",
 }
 EXPECTED_BUILD_ENVIRONMENT_FIELDS = {
@@ -154,74 +150,43 @@ EXPECTED_REQUIRED_SYMBOLS = [
     "connect_norito_validation_fee_hijiri_quote_request_v1",
     "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
     "connect_norito_private_settlement_committee_proof_response_verify_v1",
-    "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
     "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
     "connect_norito_private_settlement_audit_approval_response_verify_v1",
     "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
-    "connect_norito_kagemusha_recursive_spend_capabilities_v4",
-    "connect_norito_kagemusha_native_contract_revision",
-    "connect_norito_kagemusha_offline_operation_status_validate_v2",
-    "connect_norito_kagemusha_offline_operation_status_json_validate_v2",
-    "connect_norito_kagemusha_topup_finality_verify_v4",
-    "connect_norito_kagemusha_topup_shield_build_unsigned_v4",
-    "connect_norito_kagemusha_recursive_spend_artifact_begin_v4",
-    "connect_norito_kagemusha_recursive_spend_artifact_write_v4",
-    "connect_norito_kagemusha_recursive_spend_artifact_finalize_v4",
-    "connect_norito_kagemusha_recursive_spend_artifact_cancel_v4",
-    "connect_norito_kagemusha_recursive_spend_artifact_set_install_v4",
-    "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v4",
-    "connect_norito_kagemusha_recursive_spend_installed_manifest_sha256_v4",
-    "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v4",
-    "connect_norito_kagemusha_output_membership_frontier_build_v4",
-    "connect_norito_kagemusha_output_membership_paths_derive_v4",
-    "connect_norito_kagemusha_recursive_spend_branch_validate_v4",
-    "connect_norito_kagemusha_recursive_spend_topup_provenance_build_v4",
-    "connect_norito_kagemusha_recursive_spend_topup_provenance_validate_v4",
-    "connect_norito_kagemusha_recursive_spend_init_v4",
-    "connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v4",
-    "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v4",
-    "connect_norito_kagemusha_recursive_spend_topup_v4",
-    "connect_norito_kagemusha_recursive_spend_append_v4",
-    "connect_norito_kagemusha_recursive_spend_verify_v4",
-    "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v4",
-    "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v4",
-    "connect_norito_kagemusha_recursive_spend_redeem_v4",
-    "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v5",
-    "connect_norito_kagemusha_secret_free_buffer",
-    "connect_norito_kagemusha_receiver_key_reference_v2",
-    "connect_norito_kagemusha_recipient_output_derive_v2",
-    "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
-    "connect_norito_kagemusha_recipient_payment_request_create_v2",
-    "connect_norito_kagemusha_recipient_payment_request_verify_v2",
-    "connect_norito_kagemusha_recipient_lineage_query_create_v2",
-    "connect_norito_kagemusha_recipient_registration_lineage_verify_v2",
-    "connect_norito_kagemusha_recipient_receive_offer_create_v2",
-    "connect_norito_kagemusha_recipient_receive_offer_project_v2",
-    "connect_norito_kagemusha_recipient_receive_offer_verify_v2",
-    "connect_norito_kagemusha_request_authorization_signing_bytes_v3",
-    "connect_norito_kagemusha_request_authorization_finalize_hardware_v3",
-    "connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v3",
-    "connect_norito_kagemusha_receiver_acknowledgement_payload_v2",
-    "connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2",
-    "connect_norito_kagemusha_receiver_acknowledgement_create_v2",
-    "connect_norito_kagemusha_receiver_acknowledgement_verify_v2",
-    "connect_norito_kagemusha_recursive_spend_peer_split_change_prepare_v4",
-    "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v4",
-    "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v4",
-    "connect_norito_kagemusha_recursive_spend_bundle_summary_v4",
+    "connect_norito_offline_cash_v1_payment_request_validate",
+    "connect_norito_offline_cash_v1_acceptance_intent_authorization_validate",
+    "connect_norito_offline_cash_v1_acceptance_ticket_validate",
+    "connect_norito_offline_cash_v1_no_commit_closure_validate",
+    "connect_norito_offline_cash_v1_payment_validate",
+    "connect_norito_offline_cash_v1_acknowledgement_validate",
+    "connect_norito_offline_cash_v1_complete_exchange_validate",
+    "connect_norito_offline_cash_v1_mint_authorization_validate",
+    "connect_norito_offline_cash_v1_mint_credit_validate",
+    "connect_norito_offline_cash_v1_mint_credit_against_authorization_validate",
+    "connect_norito_offline_cash_v1_redemption_voucher_validate",
+    "connect_norito_offline_cash_v1_payment_request_text_validate",
+    "connect_norito_offline_cash_v1_acceptance_intent_authorization_text_validate",
+    "connect_norito_offline_cash_v1_acceptance_ticket_text_validate",
+    "connect_norito_offline_cash_v1_no_commit_closure_text_validate",
+    "connect_norito_offline_cash_v1_payment_text_validate",
+    "connect_norito_offline_cash_v1_acknowledgement_text_validate",
+    "connect_norito_offline_cash_v1_complete_exchange_text_validate",
+    "connect_norito_offline_cash_v1_mint_authorization_text_validate",
+    "connect_norito_offline_cash_v1_mint_credit_text_validate",
+    "connect_norito_offline_cash_v1_mint_credit_against_authorization_text_validate",
+    "connect_norito_offline_cash_v1_redemption_voucher_text_validate",
+    "connect_norito_offline_cash_device_capabilities_v1",
+    "connect_norito_offline_cash_device_execute_v1",
 ]
 EXPECTED_FORBIDDEN_SYMBOLS = [
     "connect_norito_get_chain_discriminant",
     "connect_norito_set_chain_discriminant",
-    "connect_norito_kagemusha_recipient_registration_lineage_verify_v1",
-    "connect_norito_kagemusha_request_authorization_create_v2",
+    "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
     "iroha_privacy_capabilities_v1",
     "iroha_privacy_validate_capabilities_v1",
     "iroha_privacy_proof_request_v1",
     "iroha_privacy_build_proof_v1",
     "iroha_privacy_verify_proof_v1",
-    "Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2",
-    "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2",
 ]
 LIBRARY_NAME = "libNoritoBridge.a"
 MANIFEST_NAME = "NoritoBridge.artifacts.json"
@@ -247,152 +212,6 @@ XCODE_BUILD_VERSION = re.compile(r"[A-Za-z0-9.]+")
 
 class ValidationError(RuntimeError):
     """The artifact does not satisfy the first-release inventory."""
-
-
-def expected_kagemusha_roles(production: bool) -> list[dict[str, object]]:
-    """Return the exact first-release mobile artifact role registry."""
-
-    return [
-        {
-            "role": "native_bridge",
-            "purpose": "typed Norito codecs and privacy proof execution",
-            "circuit_id": None,
-            "abi": 21,
-            "artifact_type": "xcframework",
-            "delivery": "bridge_embedded",
-            "required_by": ["topup", "peer_send", "peer_receive", "redemption"],
-        },
-        {
-            "role": "transfer_proving_key",
-            "purpose": "prove exact confidential top-up and offline split transitions",
-            "circuit_id": "confidential-transfer-v2",
-            "abi": 21,
-            "artifact_type": "halo2_ipa_proving_key",
-            "delivery": "bridge_embedded",
-            "production_ready": production,
-            "required_by": ["topup", "peer_send"],
-        },
-        {
-            "role": "transfer_verifier_record",
-            "purpose": "verify top-up and offline split evidence at an active height",
-            "circuit_id": "confidential-transfer-v2",
-            "abi": 21,
-            "artifact_type": "norito_verifying_key_record",
-            "delivery": "torii_readiness_snapshot",
-            "required_by": ["topup", "peer_send", "peer_receive"],
-        },
-        {
-            "role": "unshield_proving_key",
-            "purpose": "prove full or partial offline-to-online redemption",
-            "circuit_id": "confidential-unshield-v3",
-            "abi": 21,
-            "artifact_type": "halo2_ipa_proving_key",
-            "delivery": "bridge_embedded",
-            "production_ready": production,
-            "required_by": ["redemption"],
-        },
-        {
-            "role": "unshield_verifier_record",
-            "purpose": "verify proof-bound public credit and optional offline change",
-            "circuit_id": "confidential-unshield-v3",
-            "abi": 21,
-            "artifact_type": "norito_verifying_key_record",
-            "delivery": "torii_readiness_snapshot",
-            "required_by": ["redemption"],
-        },
-        {
-            "role": "step_eq_params_ipa",
-            "purpose": "step_eq_params_ipa",
-            "file_name": "step-eq.params-ipa.krv4",
-            "circuit_id": "kagemusha-recursive-spend-step-eq-compact-layout-v5",
-            "abi": 21,
-            "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
-            "delivery": "content_addressed_external",
-            "required_by": ["topup", "peer_send", "peer_receive", "redemption"],
-        },
-        {
-            "role": "step_eq_proving_key",
-            "purpose": "step_eq_proving_key",
-            "file_name": "step-eq.proving-key.krv4",
-            "circuit_id": "kagemusha-recursive-spend-step-eq-compact-layout-v5",
-            "abi": 21,
-            "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
-            "delivery": "content_addressed_external",
-            "required_by": ["topup", "peer_send", "redemption"],
-        },
-        {
-            "role": "step_eq_verifying_key",
-            "purpose": "step_eq_verifying_key",
-            "file_name": "step-eq.verifying-key.krv4",
-            "circuit_id": "kagemusha-recursive-spend-step-eq-compact-layout-v5",
-            "abi": 21,
-            "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
-            "delivery": "content_addressed_external",
-            "required_by": ["topup", "peer_send", "peer_receive", "redemption"],
-        },
-        {
-            "role": "step_eq_bootstrap_witness",
-            "purpose": "step_eq_bootstrap_witness",
-            "file_name": "step-eq.bootstrap-witness.krv4",
-            "circuit_id": "kagemusha-recursive-spend-step-eq-compact-layout-v5",
-            "abi": 21,
-            "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
-            "delivery": "content_addressed_external",
-            "required_by": ["topup", "peer_send", "peer_receive", "redemption"],
-        },
-        {
-            "role": "step_ep_params_ipa",
-            "purpose": "step_ep_params_ipa",
-            "file_name": "step-ep.params-ipa.krv4",
-            "circuit_id": "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
-            "abi": 21,
-            "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
-            "delivery": "content_addressed_external",
-            "required_by": ["topup", "peer_send", "peer_receive", "redemption"],
-        },
-        {
-            "role": "step_ep_proving_key",
-            "purpose": "step_ep_proving_key",
-            "file_name": "step-ep.proving-key.krv4",
-            "circuit_id": "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
-            "abi": 21,
-            "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
-            "delivery": "content_addressed_external",
-            "required_by": ["topup", "peer_send", "redemption"],
-        },
-        {
-            "role": "step_ep_verifying_key",
-            "purpose": "step_ep_verifying_key",
-            "file_name": "step-ep.verifying-key.krv4",
-            "circuit_id": "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
-            "abi": 21,
-            "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
-            "delivery": "content_addressed_external",
-            "required_by": ["topup", "peer_send", "peer_receive", "redemption"],
-        },
-        {
-            "role": "step_ep_bootstrap_witness",
-            "purpose": "step_ep_bootstrap_witness",
-            "file_name": "step-ep.bootstrap-witness.krv4",
-            "circuit_id": "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
-            "abi": 21,
-            "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
-            "delivery": "content_addressed_external",
-            "required_by": ["topup", "peer_send", "peer_receive", "redemption"],
-        },
-        {
-            "role": "topup_finality_roster",
-            "purpose": "topup_finality_roster",
-            "circuit_id": "kagemusha-topup-finality-qc-merkle-v2",
-            "abi": 21,
-            "artifact_type": (
-                "iroha_data_model::offline::model::"
-                "KagemushaTopUpFinalityRosterArtifactV2"
-            ),
-            "delivery": "content_addressed_external",
-            "required_by": ["topup"],
-        },
-    ]
 
 
 def _duplicates_rejected(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -592,14 +411,6 @@ def _load_manifest(manifest_path: Path, root: Path) -> dict[str, object]:
     expected_features = ["privacy-production-enabled"] if production else []
     if payload["cargo_features"] != expected_features:
         raise ValidationError("artifact Cargo feature inventory is not exact")
-    authorization = payload["kagemusha_production_authorization_sha256"]
-    if authorization is not None and (
-        not production
-        or not isinstance(authorization, str)
-        or SHA256.fullmatch(authorization) is None
-        or authorization == "0" * 64
-    ):
-        raise ValidationError("artifact Kagemusha production authorization is invalid")
     _validate_build_environment(root, payload["build_environment"])
     if not isinstance(payload["source_commit"], str) or COMMIT.fullmatch(
         payload["source_commit"]
@@ -622,9 +433,6 @@ def _load_manifest(manifest_path: Path, root: Path) -> dict[str, object]:
         raise ValidationError("artifact required symbol inventory is not exact")
     if payload["forbidden_symbols"] != EXPECTED_FORBIDDEN_SYMBOLS:
         raise ValidationError("artifact forbidden symbol inventory is not exact")
-    roles = payload["kagemusha_mobile_artifact_roles"]
-    if roles != expected_kagemusha_roles(production):
-        raise ValidationError("artifact Kagemusha role registry is not exact")
     hashes = payload["hashes"]
     if not isinstance(hashes, dict) or set(hashes) != set(EXPECTED_SLICES):
         raise ValidationError("artifact slice hash registry is not exact")
@@ -685,8 +493,7 @@ def _tool_output(executable: Path, arguments: list[str], environment: dict[str, 
             executable=str(executable),
             env=environment,
             check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
         ).stdout
     except (OSError, subprocess.CalledProcessError) as error:
@@ -887,7 +694,12 @@ def validate(
     expected_link_target: str,
     swift_loader: Path | None = None,
     verify_repository_provenance: bool = False,
+    allow_dirty_source: bool = False,
 ) -> dict[str, object]:
+    if allow_dirty_source and not verify_repository_provenance:
+        raise ValidationError(
+            "dirty-source allowance requires repository provenance verification"
+        )
     root = root.resolve(strict=True)
     if xcframework.is_symlink() or not xcframework.is_dir():
         raise ValidationError("XCFramework root is not a non-symbolic directory")
@@ -1026,6 +838,8 @@ def validate(
         _validate_swift_pins(root, swift_loader, hashes)
     if verify_repository_provenance:
         _validate_repository_provenance(root, payload)
+        if payload["source_tree_dirty"] and not allow_dirty_source:
+            raise ValidationError("release artifact must be built from a clean source tree")
     return payload
 
 
@@ -1037,6 +851,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest-link", required=True, type=Path)
     parser.add_argument("--expected-link-target", required=True)
     parser.add_argument("--swift-loader", type=Path)
+    parser.add_argument("--verify-repository-provenance", action="store_true")
+    parser.add_argument("--allow-dirty-source", action="store_true")
     return parser
 
 
@@ -1050,6 +866,8 @@ def main() -> int:
             manifest_link=arguments.manifest_link,
             expected_link_target=arguments.expected_link_target,
             swift_loader=arguments.swift_loader,
+            verify_repository_provenance=arguments.verify_repository_provenance,
+            allow_dirty_source=arguments.allow_dirty_source,
         )
     except (OSError, UnicodeError, ValidationError) as error:
         print(f"[-] {error}", file=sys.stderr)

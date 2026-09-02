@@ -2,7 +2,7 @@
 //! Integration coverage for Torii MCP endpoints.
 use axum::{
     body::{Body, Bytes},
-    http::{Request, StatusCode, header},
+    http::{HeaderName, HeaderValue, Request, StatusCode, header},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
 use http_body_util::BodyExt as _;
@@ -19,6 +19,10 @@ use iroha_data_model::{
     nexus::DataSpaceId,
 };
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, test_utils};
+use iroha_torii_shared::mcp::{
+    LEGACY_PROTOCOL_VERSION as LEGACY_MCP_PROTOCOL_VERSION,
+    MODERN_PROTOCOL_VERSION as MODERN_MCP_PROTOCOL_VERSION,
+};
 use norito::json::Value;
 use std::{collections::BTreeSet, net::SocketAddr, num::NonZeroU32, sync::Arc, time::Duration};
 use tower::ServiceExt as _;
@@ -150,6 +154,31 @@ async fn post_mcp_with_headers(
     let body = read_json_body(response).await;
     (status, body)
 }
+async fn post_mcp_with_exact_headers(
+    app: &axum::Router,
+    payload: Value,
+    headers: &[(&str, &str)],
+) -> (StatusCode, Value) {
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/v1/mcp")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ACCEPT, "application/json, text/event-stream")
+        .body(Body::from(
+            norito::json::to_vec(&payload).expect("serialize payload"),
+        ))
+        .expect("valid request");
+    for (name, value) in headers {
+        request.headers_mut().append(
+            HeaderName::from_bytes(name.as_bytes()).expect("valid MCP header name"),
+            HeaderValue::from_bytes(value.as_bytes()).expect("valid MCP header value"),
+        );
+    }
+    let response = call_app(app, request).await;
+    let status = response.status();
+    let body = read_json_body(response).await;
+    (status, body)
+}
 fn initialize_params() -> Value {
     norito::json!({
         "protocolVersion": "2025-06-18",
@@ -167,6 +196,73 @@ fn initialize_request(id: u64) -> Value {
         "method": "initialize",
         "params": (initialize_params())
     })
+}
+fn modern_request(id: &str, method: &str, params: Value) -> Value {
+    let Value::Object(mut params) = params else {
+        panic!("modern MCP params must be an object");
+    };
+    params.insert(
+        "_meta".into(),
+        norito::json!({
+            "io.modelcontextprotocol/protocolVersion": MODERN_MCP_PROTOCOL_VERSION,
+            "io.modelcontextprotocol/clientCapabilities": {},
+            "io.modelcontextprotocol/clientInfo": {
+                "name": "iroha-torii-mcp-integration-tests",
+                "version": "1.0.0"
+            }
+        }),
+    );
+    norito::json!({
+        "jsonrpc": "2.0",
+        "id": (id),
+        "method": (method),
+        "params": (Value::Object(params))
+    })
+}
+fn assert_jsonrpc_error_code(body: &Value, expected: i64) {
+    assert_eq!(
+        body.get("error")
+            .and_then(|error| error.get("code"))
+            .and_then(Value::as_i64),
+        Some(expected),
+        "unexpected JSON-RPC response: {body:?}"
+    );
+}
+fn assert_modern_success_metadata(body: &Value, cacheable: bool) {
+    let result = body
+        .get("result")
+        .and_then(Value::as_object)
+        .expect("modern result object");
+    assert_eq!(
+        result.get("resultType").and_then(Value::as_str),
+        Some("complete")
+    );
+    let server_info = result
+        .get("_meta")
+        .and_then(|meta| meta.get("io.modelcontextprotocol/serverInfo"))
+        .and_then(Value::as_object)
+        .expect("modern serverInfo metadata");
+    assert_eq!(
+        server_info.get("name").and_then(Value::as_str),
+        Some("iroha-torii-mcp")
+    );
+    assert!(
+        server_info
+            .get("version")
+            .and_then(Value::as_str)
+            .is_some_and(|version| !version.is_empty()),
+        "serverInfo.version must be non-empty"
+    );
+    if cacheable {
+        assert_eq!(result.get("ttlMs").and_then(Value::as_u64), Some(30_000));
+        assert_eq!(
+            result.get("cacheScope").and_then(Value::as_str),
+            Some("private")
+        );
+    } else {
+        assert!(!result.contains_key("ttlMs"));
+        assert!(!result.contains_key("cacheScope"));
+    }
 }
 fn assert_single_invalid_request(body: &Value) {
     assert!(
@@ -893,6 +989,7 @@ async fn mcp_all_published_tool_schemas_are_top_level_objects() {
     }
     app.shutdown().await;
 }
+include!("mcp_endpoints/native_protocol_tests.rs");
 #[tokio::test]
 async fn mcp_jsonrpc_initialize_list_and_call_connect_ticket() {
     let _data_dir = test_utils::TestDataDirGuard::new();
@@ -1915,7 +2012,6 @@ async fn mcp_jsonrpc_includes_universal_offline_operations_for_operator_profile(
     let names = list_all_tool_names(&app).await;
     let expected = [
         "torii.get_v1_offline_readiness",
-        "torii.post_v1_offline_receiver_lineage",
         "torii.post_v1_offline_top_up",
         "torii.post_v1_offline_redeem",
         "torii.get_v1_offline_operations_operation_id",

@@ -426,7 +426,7 @@ fn autonomous_retirement_handoff_fixture(
         .kura
         .store_block(block)
         .expect("persist control-only canonical carrier");
-    let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    let execution_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
         Hash::new(b"autonomous handoff parent state"),
         Hash::new(b"autonomous handoff post state"),
         Hash::new(b"autonomous handoff ordinary writes"),

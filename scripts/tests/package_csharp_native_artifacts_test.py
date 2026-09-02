@@ -314,10 +314,7 @@ class CSharpNativePackageTests(unittest.TestCase):
             workflow.index("  build-test-pack:")
             : workflow.index("  native-package-smoke:")
         ]
-        smoke_job = workflow[
-            workflow.index("  native-package-smoke:")
-            : workflow.index("  kagemusha-native-bridge-sdk:")
-        ]
+        smoke_job = workflow[workflow.index("  native-package-smoke:") :]
         self.assertIn(
             'env:\n'
             '  # Keep checkout bytes independent of the Windows runner\'s system Git policy.\n'

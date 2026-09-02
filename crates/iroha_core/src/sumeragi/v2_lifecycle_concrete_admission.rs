@@ -1991,10 +1991,14 @@ mod tests {
                     power: 1,
                 })
                 .collect::<Vec<_>>();
+            let network_id =
+                crate::sumeragi::synthetic_network_id("sumeragi-v2-concrete-admission-test");
+            let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+                crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+                    network_id, 1, &roster,
+                );
             let context = wire::HeightContext {
-                network_id: crate::sumeragi::synthetic_network_id(
-                    "sumeragi-v2-concrete-admission-test",
-                ),
+                network_id,
                 protocol_version: wire::PROTOCOL_VERSION,
                 height: 1,
                 epoch: 1,
@@ -2005,6 +2009,8 @@ mod tests {
                 snapshot_bootstrap: None,
                 quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
                 roster,
+                offline_cash_mint_finality_epoch_id,
+                offline_cash_mint_finality_epoch_roster,
                 nexus_amx_context_hash: Hash::new(b"concrete admission nexus context"),
                 execution_policy_hash: Hash::new(b"concrete admission execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
@@ -2055,13 +2061,14 @@ mod tests {
             subject: wire::BlockSubject,
             marker: u8,
         ) -> wire::QuorumCertificate {
-            let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new([marker, 0xA1]),
-                Hash::new([marker, 0xA2]),
-                Hash::new([marker, 0xA3]),
-                1,
-                Hash::new([marker, 0xA4]),
-            );
+            let execution_commitment =
+                wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                    Hash::new([marker, 0xA1]),
+                    Hash::new([marker, 0xA2]),
+                    Hash::new([marker, 0xA3]),
+                    1,
+                    Hash::new([marker, 0xA4]),
+                );
             let unsigned_vote = wire::Vote {
                 round: self.round,
                 proposal_round: self.round,
@@ -2100,13 +2107,14 @@ mod tests {
                 block_hash: HashOf::from_untyped_unchecked(Hash::new([marker, 1])),
                 payload_hash: Hash::new([marker, 2]),
             };
-            let commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new([marker, 3]),
-                Hash::new([marker, 4]),
-                Hash::new([marker, 5]),
-                1,
-                Hash::new([marker, 6]),
-            );
+            let commitment =
+                wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                    Hash::new([marker, 3]),
+                    Hash::new([marker, 4]),
+                    Hash::new([marker, 5]),
+                    1,
+                    Hash::new([marker, 6]),
+                );
             AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
                 wire::ConsensusMessageV2Payload::Vote(wire::Vote {
                     round: self.round,
@@ -2202,13 +2210,14 @@ mod tests {
                 &chunks,
             )
             .expect("derive certified Fetch fixture manifest");
-            let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new([marker, 0xF2]),
-                Hash::new([marker, 0xF3]),
-                Hash::new([marker, 0xF4]),
-                1,
-                Hash::new([marker, 0xF5]),
-            );
+            let execution_commitment =
+                wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                    Hash::new([marker, 0xF2]),
+                    Hash::new([marker, 0xF3]),
+                    Hash::new([marker, 0xF4]),
+                    1,
+                    Hash::new([marker, 0xF5]),
+                );
             let unsigned_vote = wire::Vote {
                 round: self.round,
                 proposal_round: self.round,

@@ -11,6 +11,8 @@ import java.util.Base64;
 import java.util.Objects;
 import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
+import org.hyperledger.iroha.sdk.offline.OfflineCashDevicePublicKeyV1;
+import org.hyperledger.iroha.sdk.offline.OfflineCashP256Codec;
 
 /**
  * Strict first-release model for one finalized platform device attestation.
@@ -20,7 +22,7 @@ import org.hyperledger.iroha.android.crypto.IrohaHash;
  */
 public final class DeviceAttestationRegistration {
 
-  /** Sole native bridge ABI supported by the first-release Kagemusha client. */
+  /** Sole native bridge ABI supported by the first-release Offline Cash V1 client. */
   public static final int REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 23;
 
   /** Sole on-chain registration format marker. */
@@ -34,7 +36,7 @@ public final class DeviceAttestationRegistration {
   public static final String IOS_APP_ATTEST_ASSERTION_SCHEME = "apple-appattest-counter-v1";
   public static final String IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM = "app-attest-p256";
   public static final String DEVICE_ATTESTATION_CHALLENGE_DOMAIN =
-      "iroha:kagemusha:device-attestation-challenge:v1";
+      "iroha:offline-cash:v1:device-attestation-challenge";
   public static final String DEVICE_ATTESTATION_EVIDENCE_PREFIX =
       "offline-device-attestation-evidence-v1";
 
@@ -54,7 +56,7 @@ public final class DeviceAttestationRegistration {
   private final String iosEnvironment;
   private final String androidPackageName;
   private final byte[] androidSigningCertificateSha256;
-  private final KagemushaDevicePublicKeyV2 publicKey;
+  private final OfflineCashDevicePublicKeyV1 publicKey;
   private final String assertionScheme;
   private final String assertionKeyAlgorithm;
   private final byte[] assertionPublicKey;
@@ -88,7 +90,7 @@ public final class DeviceAttestationRegistration {
       final String iosEnvironment,
       final String androidPackageName,
       final byte[] androidSigningCertificateSha256,
-      final KagemushaDevicePublicKeyV2 publicKey,
+      final OfflineCashDevicePublicKeyV1 publicKey,
       final String assertionScheme,
       final String assertionKeyAlgorithm,
       final byte[] assertionPublicKey,
@@ -202,7 +204,7 @@ public final class DeviceAttestationRegistration {
       final String assetDefinitionId,
       final String androidPackageName,
       final byte[] androidSigningCertificateSha256,
-      final KagemushaDevicePublicKeyV2 publicKey,
+      final OfflineCashDevicePublicKeyV1 publicKey,
       final long recentBlockHeight,
       final byte[] recentBlockHash,
       final long expiresAtMs) {
@@ -245,7 +247,7 @@ public final class DeviceAttestationRegistration {
   }
 
   private void requirePlatformProfile() {
-    KagemushaP256Codec.requireUncompressedPublicKey(assertionPublicKey);
+    OfflineCashP256Codec.requireUncompressedPublicKey(assertionPublicKey);
     if (ANDROID_KEYMINT_PLATFORM.equals(platform)) {
       if (!ANDROID_KEYMINT_ASSERTION_SCHEME.equals(assertionScheme)
           || !ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM.equals(assertionKeyAlgorithm)
@@ -422,7 +424,7 @@ public final class DeviceAttestationRegistration {
     return copyNullable(androidSigningCertificateSha256);
   }
 
-  public KagemushaDevicePublicKeyV2 publicKey() {
+  public OfflineCashDevicePublicKeyV1 publicKey() {
     return publicKey;
   }
 

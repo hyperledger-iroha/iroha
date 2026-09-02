@@ -2361,7 +2361,7 @@ state_test! { sync contract_lifecycle_survives_state_snapshot_and_preserves_cano
     let expected_subject = binding.subject.clone();
 
     let mut world = World::default();
-    for account in [owner, pending_owner] {
+    for account in [owner, pending_owner, expected_subject.clone()] {
         world.accounts.insert(
             account,
             iroha_data_model::account::AccountValue::new(AccountDetails::default()),
@@ -2400,6 +2400,52 @@ state_test! { sync contract_lifecycle_survives_state_snapshot_and_preserves_cano
         expected_root,
         "contract lifecycle snapshot restore must preserve the canonical WSV root"
     );
+}
+state_test! { sync contract_lifecycle_snapshot_rejects_missing_subject_account
+    let owner = AccountId::new(checked_keypair().public_key().clone());
+    let address = iroha_data_model::smart_contract::ContractAddress::derive(
+        &*DEFAULT_TEST_NETWORK_ID,
+        &owner,
+        42,
+        DataSpaceId::UNIVERSAL,
+    )
+    .expect("contract address");
+    let subject = address.subject_id();
+    let binding = crate::smartcontracts::code::ContractSubjectBinding::new_direct(
+        &address,
+        owner.clone(),
+    );
+    let mut world = World::default();
+    for account in [owner, subject.clone()] {
+        world.accounts.insert(
+            account,
+            iroha_data_model::account::AccountValue::new(AccountDetails::default()),
+        );
+    }
+    world
+        .contract_subject_bindings
+        .insert(address.clone(), binding);
+    let state = State::new(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let mut accounts = state.world.accounts.block();
+    assert!(
+        accounts.remove(subject.clone()).is_some(),
+        "fixture must orphan the retained contract subject"
+    );
+    accounts.commit();
+
+    let snapshot = norito::json::to_value(&state).expect("serialize orphaned contract subject");
+    let error = deserialize_state_snapshot_value(snapshot)
+        .err()
+        .expect("snapshot restore must reject an orphaned contract subject");
+    let message = error.to_string();
+    assert!(message.contains("contract_subject_bindings"), "{message}");
+    assert!(message.contains(&subject.to_string()), "{message}");
+    assert!(message.contains(&address.to_string()), "{message}");
+    assert!(message.contains("does not exist"), "{message}");
 }
 fn install_axt_counter_for_test(state: &State, dataspace: DataSpaceId, next: u64, generation: u64) {
     let record = AxtHandleCounterRecord::try_from_parts(next, generation)
@@ -23641,11 +23687,17 @@ fn finalize_lane_relay_for_state_test(
     let_row! { mut validators = validator_keypairs .iter() .map(|keypair| (PeerId::new(keypair.public_key().clone()), keypair)) .collect::<Vec<_>>() };
     validators.sort_by(|left, right| left.0.cmp(&right.0));
     let_row! { roster = validators .iter() .map(|(validator, _)| wire::ValidatorPower { validator: validator.clone(), power: 1, }) .collect::<Vec<_>>() };
+    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+            *state.network_id_ref(),
+            0,
+            &roster,
+        );
     let_row! { snapshot_bootstrap = (height > 1).then(|| { let parent_height = NonZeroUsize::new(usize::try_from(height - 1).expect("relay parent height fits usize")) .expect("relay parent height is non-zero"); let parent = state .kura .get_block(parent_height) .expect("non-genesis relay finality requires a canonical parent"); wire::SnapshotBootstrapAnchor { snapshot_height: height - 1, snapshot_block_hash: parent.hash(), snapshot_block_creation_time_ms: parent.header().creation_time_ms, snapshot_state_hash: Hash::new(b"state-test-relay-snapshot-state"), } }) };
-    let_row! { context = wire::HeightContext { network_id: *state.network_id_ref(), protocol_version: wire::PROTOCOL_VERSION, height, epoch: 0, epoch_end_height: height.saturating_add(100), next_epoch_snapshot: None, mode: wire::ConsensusMode::Permissioned, parent_commit_qc: None, snapshot_bootstrap, quorum: wire::DualQuorum::from_roster(&roster).expect("valid relay finality quorum"), roster, nexus_amx_context_hash: Hash::new(b"state-test-relay-nexus-amx-context"), execution_policy_hash: Hash::new(b"state-test-relay-execution-policy"), da_layout: wire::SumeragiV2GenesisContextParameters::recommended().da_layout, leader_seed: [0x5A; 32], } };
+    let_row! { context = wire::HeightContext { network_id: *state.network_id_ref(), protocol_version: wire::PROTOCOL_VERSION, height, epoch: 0, epoch_end_height: height.saturating_add(100), next_epoch_snapshot: None, mode: wire::ConsensusMode::Permissioned, parent_commit_qc: None, snapshot_bootstrap, quorum: wire::DualQuorum::from_roster(&roster).expect("valid relay finality quorum"), roster, offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster, nexus_amx_context_hash: Hash::new(b"state-test-relay-nexus-amx-context"), execution_policy_hash: Hash::new(b"state-test-relay-execution-policy"), da_layout: wire::recommended_data_availability_layout(), leader_seed: [0x5A; 32], } };
     let_row! { subject = wire::BlockSubject { parent_block_hash: block.header().prev_block_hash(), block_hash: block.hash(), payload_hash: block .canonical_proposal_wire_hash() .expect("encode relay finality proposal"), } };
     let_row! { executed_block_wire_len = u64::try_from( block .canonical_wire() .expect("encode relay finality carrier") .as_framed() .len(), ) .expect("relay finality carrier length fits u64") };
-    let_row! { mut execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier( Hash::new([0xBC; 4]), Hash::new([0xAB; 4]), Hash::new(b"state-test-relay-ordinary-writes"), executed_block_wire_len, block .executed_block_wire_hash() .expect("encode relay finality carrier"), ) };
+    let_row! { mut execution_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier( Hash::new([0xBC; 4]), Hash::new([0xAB; 4]), Hash::new(b"state-test-relay-ordinary-writes"), executed_block_wire_len, block .executed_block_wire_hash() .expect("encode relay finality carrier"), ) };
     execution_commitment.lane_finality_manifest = Some(statement_commitment);
     execution_commitment
         .validate()
@@ -32919,7 +32971,8 @@ state_test! { sync capture_exec_witness_stashes_reads_and_writes
     let witness = state_block.take_exec_witness().expect("witness captured");
     assert_eq!(witness.writes.len(), 3);
     assert!(witness.writes.iter().any(|write| {
-        write.key.as_slice() == iroha_data_model::offline::KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_KEY_V1
+        write.key.as_slice()
+            == iroha_data_model::parliament_casting::PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1
     }));
     assert!(witness.writes.iter().any(|write| {
         write.key.as_slice()
@@ -39360,6 +39413,15 @@ state_test! { sync data_trigger_fanout_rejects_the_two_hundred_fifty_seventh_fir
             AccountId::new(key.public_key().clone())
         })
         .collect::<Vec<_>>();
+    for authority in &authorities {
+        transaction.world.add_account_permission(
+            authority,
+            iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
+                authority: authority.clone(),
+            }
+            .into(),
+        );
+    }
     for index in 0..=MAX_DATA_TRIGGER_FIRINGS_PER_TRANSACTION {
         let authority = authorities[index / 64].clone();
         let trigger = Trigger::new(
@@ -39369,13 +39431,13 @@ state_test! { sync data_trigger_fanout_rejects_the_two_hundred_fifty_seventh_fir
             Action::new(
                 Vec::<InstructionBox>::new(),
                 Repeats::Indefinitely,
-                authority,
+                authority.clone(),
                 data_pre::DataEventFilter::Any,
             )
             .expect("trigger action fixture satisfies validation invariants")
             .with_metadata(
-                crate::smartcontracts::isi::triggers::data_trigger_scope_metadata_for_testing(
-                    true,
+                crate::smartcontracts::isi::triggers::global_data_trigger_scope_metadata_for_testing(
+                    &authority,
                 ),
             ),
         )
@@ -39410,12 +39472,100 @@ state_test! { sync data_trigger_fanout_rejects_the_two_hundred_fifty_seventh_fir
         "unexpected fanout rejection: {error:?}"
     );
 }
+state_test! { sync data_trigger_firing_cap_is_shared_across_multiple_drains
+    use iroha_data_model::prelude::DataEvent;
+    let state = blank_state();
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut transaction = block.transaction();
+    transaction.world.add_account_permission(
+        &ALICE_ID,
+        iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
+            authority: ALICE_ID.clone(),
+        }
+        .into(),
+    );
+    let trigger = Trigger::new(
+        "multi_drain_firing_cap"
+            .parse()
+            .expect("valid trigger id"),
+        Action::new(
+            Vec::<InstructionBox>::new(),
+            Repeats::Indefinitely,
+            ALICE_ID.clone(),
+            data_pre::DataEventFilter::Any,
+        )
+        .expect("trigger action fixture satisfies validation invariants")
+        .with_metadata(
+            crate::smartcontracts::isi::triggers::global_data_trigger_scope_metadata_for_testing(
+                &ALICE_ID,
+            ),
+        ),
+    )
+    .try_into()
+    .expect("data trigger specializes");
+    assert!(
+        transaction
+            .world
+            .triggers
+            .add_data_trigger(trigger)
+            .expect("seed data trigger")
+    );
+
+    for drain in 0..MAX_DATA_TRIGGER_FIRINGS_PER_TRANSACTION {
+        let event = data_pre::DomainEvent::Created(
+            Domain::new(
+                DomainId::try_new(format!("multi_drain_{drain}"), "universal")
+                    .expect("valid seed domain"),
+            )
+            .build(&ALICE_ID),
+        );
+        transaction
+            .world
+            .internal_event_buf
+            .push(Arc::new(DataEvent::Domain(event)));
+        let steps = transaction
+            .execute_data_triggers_dfs(&ALICE_ID)
+            .expect("each firing through the transaction-wide cap succeeds");
+        assert_eq!(steps.len(), 1);
+    }
+
+    let overflow_event = data_pre::DomainEvent::Created(
+        Domain::new(
+            DomainId::try_new("multi_drain_overflow", "universal")
+                .expect("valid overflow domain"),
+        )
+        .build(&ALICE_ID),
+    );
+    transaction
+        .world
+        .internal_event_buf
+        .push(Arc::new(DataEvent::Domain(overflow_event)));
+    let error = transaction
+        .execute_data_triggers_dfs(&ALICE_ID)
+        .expect_err("the transaction-wide two-hundred-fifty-seventh firing must be rejected");
+    assert!(
+        matches!(
+            error,
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(ref message))
+                if message.contains("data trigger cascade exceeds 256 firings per transaction")
+        ),
+        "unexpected multi-drain rejection: {error:?}"
+    );
+}
 state_test! { sync data_trigger_matching_scans_large_event_batches_lazily
     use iroha_data_model::prelude::DataEvent;
     let state = blank_state();
     let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut transaction = block.transaction();
+    transaction.world.add_account_permission(
+        &ALICE_ID,
+        iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
+            authority: ALICE_ID.clone(),
+        }
+        .into(),
+    );
     for index in 0..64 {
         let trigger = Trigger::new(
             format!("lazy_scan_{index}").parse().expect("valid trigger id"),
@@ -39427,8 +39577,8 @@ state_test! { sync data_trigger_matching_scans_large_event_batches_lazily
             )
             .expect("trigger action fixture satisfies validation invariants")
             .with_metadata(
-                crate::smartcontracts::isi::triggers::data_trigger_scope_metadata_for_testing(
-                    true,
+                crate::smartcontracts::isi::triggers::global_data_trigger_scope_metadata_for_testing(
+                    &ALICE_ID,
                 ),
             ),
         )
@@ -39473,13 +39623,103 @@ state_test! { sync data_trigger_matching_scans_large_event_batches_lazily
     assert_eq!(scan.event_index, 1);
     assert_eq!(scan.candidate_index, 2);
 }
+state_test! { sync data_trigger_index_scan_is_charged_before_max_population_allocation
+    use iroha_data_model::prelude::DataEvent;
+    let state = blank_state();
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut transaction = block.transaction();
+    let domain_id = DomainId::try_new("metered_population", "universal")
+        .expect("valid domain id");
+    for authority_seed in 1_u8..=64 {
+        let authority = AccountId::new(
+            KeyPair::from_seed(vec![authority_seed; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        transaction.world.add_account_permission(
+            &authority,
+            iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
+                authority: authority.clone(),
+            }
+            .into(),
+        );
+        for trigger_index in 0_u8..64 {
+            let trigger = Trigger::new(
+                format!("metered_population_{authority_seed}_{trigger_index}")
+                    .parse()
+                    .expect("valid trigger id"),
+                Action::new(
+                    Vec::<InstructionBox>::new(),
+                    Repeats::Indefinitely,
+                    authority.clone(),
+                    data_pre::DomainEventFilter::new()
+                        .for_domain(domain_id.clone())
+                        .for_events(data_pre::DomainEventSet::MetadataInserted),
+                )
+                .expect("trigger action fixture satisfies validation invariants")
+                .with_metadata(
+                    crate::smartcontracts::isi::triggers::global_data_trigger_scope_metadata_for_testing(
+                        &authority,
+                    ),
+                ),
+            )
+            .try_into()
+            .expect("data trigger specializes");
+            assert!(
+                transaction
+                    .world
+                    .triggers
+                    .add_data_trigger(trigger)
+                    .expect("seed bounded data trigger")
+            );
+        }
+    }
+    transaction.gas_limit_per_block = 4_095;
+    let event = data_pre::DomainEvent::Created(
+        Domain::new(domain_id).build(&ALICE_ID),
+    );
+    transaction
+        .world
+        .internal_event_buf
+        .push(Arc::new(DataEvent::Domain(event)));
+
+    let mut scan = transaction
+        .capture_data_event_scan(1)
+        .expect("buffered event creates a constant-size scan");
+    assert!(scan.candidates.is_empty());
+    let error = transaction
+        .next_data_trigger_match(&mut scan)
+        .expect_err("candidate population must be charged before allocation");
+    assert!(
+        matches!(
+            error,
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(ref message))
+                if message.contains("data trigger index scan exceed the shared block gas budget: 4096 > 4095")
+        ),
+        "unexpected index-scan gas rejection: {error:?}"
+    );
+    assert!(
+        scan.candidates.is_empty(),
+        "the deduplicating candidate allocation must not run before admission"
+    );
+    assert_eq!(scan.event_index, 0);
+    assert_eq!(transaction.last_tx_gas_used, 0);
+}
 state_test! { sync data_trigger_filter_recheck_and_firing_share_the_block_gas_budget
     use iroha_data_model::prelude::DataEvent;
     let state = blank_state();
     let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut transaction = block.transaction();
-    transaction.gas_limit_per_block = 2;
+    transaction.gas_limit_per_block = 3;
+    transaction.world.add_account_permission(
+        &ALICE_ID,
+        iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
+            authority: ALICE_ID.clone(),
+        }
+        .into(),
+    );
     let trigger = Trigger::new(
         "gas_bounded_data_trigger"
             .parse()
@@ -39492,7 +39732,9 @@ state_test! { sync data_trigger_filter_recheck_and_firing_share_the_block_gas_bu
         )
         .expect("trigger action fixture satisfies validation invariants")
         .with_metadata(
-            crate::smartcontracts::isi::triggers::data_trigger_scope_metadata_for_testing(true),
+            crate::smartcontracts::isi::triggers::global_data_trigger_scope_metadata_for_testing(
+                &ALICE_ID,
+            ),
         ),
     )
     .try_into()
@@ -39520,13 +39762,13 @@ state_test! { sync data_trigger_filter_recheck_and_firing_share_the_block_gas_bu
         matches!(
             error,
             TransactionRejectionReason::Validation(ValidationFail::NotPermitted(ref message))
-                if message.contains("data trigger firing exceed the shared block gas budget: 3 > 2")
+                if message.contains("data trigger firing exceed the shared block gas budget: 4 > 3")
         ),
         "unexpected trigger gas rejection: {error:?}"
     );
     assert_eq!(
-        transaction.last_tx_gas_used, 2,
-        "filter matching and the canonical recheck must both debit the shared budget"
+        transaction.last_tx_gas_used, 3,
+        "indexed candidate work, filter matching, and the canonical recheck must all debit the shared budget"
     );
 }
 state_test! { sync native_trigger_instructions_are_not_an_unmetered_execution_path
@@ -39535,7 +39777,14 @@ state_test! { sync native_trigger_instructions_are_not_an_unmetered_execution_pa
     let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut transaction = block.transaction();
-    transaction.gas_limit_per_block = 3;
+    transaction.gas_limit_per_block = 4;
+    transaction.world.add_account_permission(
+        &ALICE_ID,
+        iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
+            authority: ALICE_ID.clone(),
+        }
+        .into(),
+    );
     let trigger = Trigger::new(
         "native_instruction_gas_trigger"
             .parse()
@@ -39551,7 +39800,9 @@ state_test! { sync native_trigger_instructions_are_not_an_unmetered_execution_pa
         )
         .expect("trigger action fixture satisfies validation invariants")
         .with_metadata(
-            crate::smartcontracts::isi::triggers::data_trigger_scope_metadata_for_testing(true),
+            crate::smartcontracts::isi::triggers::global_data_trigger_scope_metadata_for_testing(
+                &ALICE_ID,
+            ),
         ),
     )
     .try_into()
@@ -39581,13 +39832,13 @@ state_test! { sync native_trigger_instructions_are_not_an_unmetered_execution_pa
         matches!(
             error,
             TransactionRejectionReason::Validation(ValidationFail::NotPermitted(ref message))
-                if message.contains("native trigger instructions exceed the shared block gas budget: 4 > 3")
+                if message.contains("native trigger instructions exceed the shared block gas budget: 5 > 4")
         ),
         "unexpected native trigger gas rejection: {error:?}"
     );
     assert_eq!(
-        transaction.last_tx_gas_used, 3,
-        "filter, recheck, and firing debits must remain staged before the native instruction is rejected"
+        transaction.last_tx_gas_used, 4,
+        "index, filter, recheck, and firing debits must remain staged before the native instruction is rejected"
     );
 }
 state_test! { sync authenticated_generic_ivm_trigger_executes_without_contract_identity
@@ -39890,6 +40141,70 @@ state_test! { sync raw_ivm_trigger_enforces_entrypoint_authorization_before_argu
             "warm trigger dispatch must check out the retained runtime"
         );
         let_row! { authorized_marker = stx .world .account(&contract_subject) .expect("raw trigger contract subject account") .metadata() .get(&metadata_marker) .cloned() .expect("authorized raw trigger writes its metadata marker") };
+        {
+            let binding = stx
+                .world
+                .contract_subject_bindings
+                .get_mut(&contract_address)
+                .expect("active raw-trigger contract retains its lifecycle binding");
+            binding.lifecycle.emergency_hold =
+                Some(iroha_data_model::smart_contract::ContractEmergencyHoldV1 {
+                    incident_digest: [0xC1; 32],
+                    proposal_content_id: [0xC2; 32],
+                    governance_attempt_id: [0xC3; 32],
+                    reason: "contain raw-IVM trigger execution".to_owned(),
+                    imposed_at_height: 2,
+                    expires_at_height: 3,
+                });
+            binding.lifecycle.revision = binding
+                .lifecycle
+                .revision
+                .checked_add(1)
+                .expect("test lifecycle revision advances");
+        }
+        let held_events_before = stx.world.external_event_buf.len();
+        ivm::reset_argument_record_decode_count();
+        let_row! { held = stx .execute_called_trigger(&trigger_id, &event) .expect_err("an active Parliament hold must suspend raw-IVM trigger execution") };
+        assert!(
+            matches!(
+                &held,
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))
+                    if message.contains("held by Parliament")
+            ),
+            "unexpected raw-trigger emergency-hold error: {held:?}"
+        );
+        assert_eq!(
+            ivm::argument_record_decode_count(),
+            0,
+            "a held raw-IVM trigger must fail before decoding event arguments"
+        );
+        assert_eq!(
+            stx.world
+                .account(&contract_subject)
+                .expect("raw trigger contract subject account")
+                .metadata()
+                .get(&metadata_marker),
+            Some(&authorized_marker),
+            "a held raw-IVM trigger must apply no queued effect"
+        );
+        assert_eq!(
+            stx.world.external_event_buf.len(),
+            held_events_before,
+            "a held raw-IVM trigger must emit no completion event"
+        );
+        {
+            let binding = stx
+                .world
+                .contract_subject_bindings
+                .get_mut(&contract_address)
+                .expect("held raw-trigger contract retains its lifecycle binding");
+            binding.lifecycle.emergency_hold = None;
+            binding.lifecycle.revision = binding
+                .lifecycle
+                .revision
+                .checked_add(1)
+                .expect("test lifecycle revision advances");
+        }
         let_row! { live_manifest = stx .world .contract_manifests .remove(code_hash) .expect("remove raw-trigger manifest for adversarial check") };
         let missing_manifest_events_before = stx.world.external_event_buf.len();
         ivm::reset_argument_record_decode_count();
@@ -42540,7 +42855,6 @@ fn world_block_snapshot_schema_matches_committed_world() {
         committed.remove("external_event_buf").is_some(),
         "the committed-only event buffer must remain explicit"
     );
-
     assert_eq!(
         staged, committed,
         "staged and committed World serializers must expose the same canonical state"
@@ -42696,7 +43010,6 @@ fn global_beacon_fixture_installs_the_logical_slot_index() {
     );
 }
 
-include!("tests/kagemusha_runtime_effective_config_tests.rs");
 include!("tests/confidential_digest_and_queue_plan_helpers.rs");
 include!("autonomous_merge_and_queue_plan_tests.rs"); // Queue-plan and merge-ledger cases.
 include!("tests/queue_plan_and_merge_ledger_tests.rs");

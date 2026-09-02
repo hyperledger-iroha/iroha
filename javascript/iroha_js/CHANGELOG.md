@@ -117,7 +117,7 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   not change the public Explorer health request.
 - Removed the generic `Shield`, `ZkTransfer`, and `Unshield` transaction surface
   from ABI V1. JavaScript builders, TypeScript declarations, exports, and Norito
-  discriminants now fail closed; typed Kagemusha top-up/redemption routes and
+  discriminants now fail closed; typed OfflineCashV1 mint/redemption routes and
   their underlying proof helpers remain available.
 - Added a Node-only native authenticated `BlockProofs` verifier. It accepts
   bounded canonical bridge-finality, exact executed-`SignedBlockWire`, and
@@ -385,13 +385,9 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 - `ToriiClient.callContract` now requires a `gasLimit` in the request payload so
   callers always supply the on-chain gas cap; typings, README docs, and test
   coverage reflect the stricter contract.【javascript/iroha_js/src/toriiClient.js:15360】【javascript/iroha_js/index.d.ts:4477】【javascript/iroha_js/test/toriiClient.test.js:13919】【javascript/iroha_js/test/integrationTorii.test.js:2701】【javascript/iroha_js/README.md:1909】
-- Added the complete sharp first-release Offline JSON API: universal
-  `getOfflineCapability`, manifest-V4 `submitKagemushaTopUpV4` and
-  `submitKagemushaRedeemV4` commands with signed-operation-derived idempotency, and
-  typed polling through `getKagemushaOperationStatus`. Capability discovery has no
-  selector and returns exactly the four asset-neutral fields. Node and browser clients
-  reject malformed IDs, contradictory tagged states, mismatched `Location`
-  headers, and whole-payload wrappers before exposing results.
+- Added the sharp first-release `OfflineCashV1` namespace with typed recursive
+  aggregate messages, exact canonical Norito, strict `oc1:` transport, and the
+  universal four-field readiness projection.
 - Constrained the JS SDK to the first-release surface: Connect WebSocket URLs no longer accept token
   query parameters, Torii health snapshots now only parse JSON responses, the `X-Iroha-API-Token`
   alias is no longer emitted, V1 telemetry counter aliases are dropped, and account address

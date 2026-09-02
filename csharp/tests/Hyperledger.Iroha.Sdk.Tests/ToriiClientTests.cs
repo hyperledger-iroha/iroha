@@ -86,6 +86,7 @@ public sealed partial class ToriiClientTests
         "f4c579858f567c505b44e7c3faae08b00eef6af8a7cef5940b4152c6deb032a5";
     private static readonly string SignedTransactionSchemaHashHex = new('e', 32);
     private static readonly string ContractCodeHashHex = new('a', 64);
+    private static readonly string GovernedContractCodeHashHex = new string('a', 62) + "ab";
     private static readonly string ContractAbiHashHex = new('b', 64);
     private const string ContractManifestCodeHashLiteral =
         "hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2";
@@ -15110,269 +15111,164 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Fact]
-    public async Task GetContractInstancesAsyncAddsFiltersAndDeserializesResponse()
+    public async Task GetGovernedContractAsyncSignsCanonicalReadAndDeserializesLifecycle()
     {
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent($$"""
                 {
-                  "namespace": "universal",
-                  "instances": [
-                    {
-                      "contract_id": "router::dex.universal",
-                      "code_hash_hex": "{{ContractCodeHashHex}}"
+                  "found": true,
+                  "contract_address": "{{ContractDraftAddress}}",
+                  "contract_subject_account": "{{ContractAuthorityAccountId}}",
+                  "dataspace": "universal",
+                  "active": true,
+                  "lifecycle": {
+                    "version": 1,
+                    "origin": "direct",
+                    "origin_account": "{{CanonicalAccountId}}",
+                    "origin_proposal_content_id_hex": null,
+                    "origin_governance_attempt_id_hex": null,
+                    "owner": "{{CanonicalAccountId}}",
+                    "pending_owner": "parliament",
+                    "parliament_delegated": true,
+                    "active_code_hash_hex": "{{GovernedContractCodeHashHex}}",
+                    "revision": 7,
+                    "emergency_hold": {
+                      "incident_digest_hex": "{{new string('1', 64)}}",
+                      "proposal_content_id_hex": "{{new string('2', 64)}}",
+                      "governance_attempt_id_hex": "{{new string('3', 64)}}",
+                      "reason": "incident response",
+                      "imposed_at_height": 100,
+                      "expires_at_height": 200
                     }
-                  ],
-                  "total": 3,
-                  "offset": 2,
-                  "limit": 5
+                  },
+                  "emergency_hold_active": true,
+                  "code_hash_hex": "{{GovernedContractCodeHashHex}}",
+                  "abi_hash_hex": "{{ContractAbiHashHex}}",
+                  "public_entrypoints": ["read_balance", "transfer"]
                 }
                 """),
         });
+        using var client = CreateSignedVpnClient(handler);
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var response = await client.GetContractInstancesAsync(
-            "universal",
-            new ToriiContractInstancesQuery
+        var response = await client.GetGovernedContractAsync(
+            ContractDraftAddress,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(response.Found);
+        Assert.True(response.Active);
+        Assert.Equal(ContractDraftAddress, response.ContractAddress);
+        Assert.Equal(ContractAuthorityAccountId, response.ContractSubjectAccount);
+        Assert.Equal("direct", response.Lifecycle!.Origin);
+        Assert.Equal(CanonicalAccountId, response.Lifecycle.Owner);
+        Assert.Equal("parliament", response.Lifecycle.PendingOwner);
+        Assert.Equal((ulong)7, response.Lifecycle.Revision);
+        Assert.True(response.EmergencyHoldActive);
+        Assert.Equal(new[] { "read_balance", "transfer" }, response.PublicEntrypoints);
+        Assert.Equal(
+            $"/v1/gov/contracts/{Uri.EscapeDataString(ContractDraftAddress)}",
+            handler.LastRequest!.RequestUri!.AbsolutePath);
+        Assert.True(handler.LastRequest.Headers.Contains("X-Iroha-Account"));
+        Assert.True(handler.LastRequest.Headers.Contains("X-Iroha-Signature"));
+    }
+
+    [Fact]
+    public void GovernedContractMissingShapeRoundTripsWithoutLegacyPagination()
+    {
+        var response = Assert.IsType<ToriiGovernedContractResponse>(
+            JsonSerializer.Deserialize<ToriiGovernedContractResponse>($$"""
+                {
+                  "found": false,
+                  "contract_address": "{{ContractDraftAddress}}",
+                  "dataspace": "universal"
+                }
+                """));
+
+        Assert.False(response.Found);
+        Assert.Null(response.Lifecycle);
+        Assert.Equal(
+            $$"""{"found":false,"contract_address":"{{ContractDraftAddress}}","dataspace":"universal"}""",
+            JsonSerializer.Serialize(response));
+    }
+
+    [Theory]
+    [InlineData(0, "revision")]
+    [InlineData(1, "instances")]
+    public async Task GetGovernedContractAsyncRejectsMalformedOrLegacyResponse(
+        int mutation,
+        string expectedField)
+    {
+        var lifecycle = $$"""
             {
-                Contains = "dex",
-                HashPrefix = "aa",
-                Offset = 2,
-                Limit = 5,
-                Order = "hash_desc",
-            }, cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Equal("universal", response.Namespace);
-        Assert.Single(response.Instances);
-        Assert.Equal("router::dex.universal", response.Instances[0].ContractId);
-        Assert.Equal((ulong)3, response.Total);
-        Assert.Equal("/v1/contracts/instances/universal?contains=dex&hash_prefix=aa&offset=2&limit=5&order=hash_desc", handler.LastRequest!.RequestUri!.PathAndQuery);
-    }
-
-    public static IEnumerable<object?[]> InvalidContractInstancesResponses()
-    {
-        yield return new object?[] { "namespace", null, "must not be null" };
-        yield return new object?[] { "namespace", "", "non-empty" };
-        yield return new object?[] { "namespace", " universal", "surrounding whitespace" };
-        yield return new object?[] { "namespace", "uni versal", "whitespace" };
-        yield return new object?[] { "namespace", "universal\u0001", "control characters" };
-        yield return new object?[] { "instances[0].contract_id", null, "must not be null" };
-        yield return new object?[] { "instances[0].contract_id", "", "non-empty" };
-        yield return new object?[] { "instances[0].contract_id", " router::dex", "surrounding whitespace" };
-        yield return new object?[] { "instances[0].contract_id", "router dex", "whitespace" };
-        yield return new object?[] { "instances[0].contract_id", "router::dex\u0001", "control characters" };
-        yield return new object?[] { "instances[0].code_hash_hex", null, "must not be null" };
-        yield return new object?[] { "limit", 0, "item count must be less than or equal to limit" };
-        yield return new object?[] { "offset", 2, "offset must be less than or equal to total" };
-        yield return new object?[] { "total", 0, "offset plus item count must be less than or equal to total" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidContractInstancesResponses))]
-    public async Task GetContractInstancesAsyncRejectsMalformedResponse(
-        string field,
-        object? value,
-        string expectedMessage)
-    {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent(ContractInstancesResponseJson(field, value)),
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAsync<JsonException>(() =>
-            client.GetContractInstancesAsync("universal", cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Contains(field, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    public static IEnumerable<object[]> MissingRequiredContractInstancesResponses()
-    {
-        yield return new object[] { "namespace", RemoveTopLevelJsonField(ContractInstancesRawResponseJson("namespace", "universal"), "namespace") };
-        yield return new object[] { "instances[0].contract_id", RemoveFirstArrayItemObjectJsonField(ContractInstancesRawResponseJson("total", 1), "instances", "contract_id") };
-        yield return new object[] { "instances[0].code_hash_hex", RemoveFirstArrayItemObjectJsonField(ContractInstancesRawResponseJson("total", 1), "instances", "code_hash_hex") };
-    }
-
-    [Theory]
-    [MemberData(nameof(MissingRequiredContractInstancesResponses))]
-    public async Task GetContractInstancesAsyncRejectsMissingRequiredStringResponse(
-        string expectedField,
-        string json)
-    {
+              "version": 1,
+              "origin": "direct",
+              "origin_account": "{{CanonicalAccountId}}",
+              "origin_proposal_content_id_hex": null,
+              "origin_governance_attempt_id_hex": null,
+              "owner": "{{CanonicalAccountId}}",
+              "pending_owner": null,
+              "parliament_delegated": false,
+              "active_code_hash_hex": null,
+              "revision": {{(mutation == 0 ? 0 : 1)}},
+              "emergency_hold": null
+            }
+            """;
+        var json = mutation == 0
+            ? $$"""
+                {
+                  "found": true,
+                  "contract_address": "{{ContractDraftAddress}}",
+                  "contract_subject_account": "{{ContractAuthorityAccountId}}",
+                  "dataspace": "universal",
+                  "active": false,
+                  "lifecycle": {{lifecycle}},
+                  "emergency_hold_active": false
+                }
+                """
+            : $$"""
+                {
+                  "found": false,
+                  "contract_address": "{{ContractDraftAddress}}",
+                  "dataspace": "universal",
+                  "instances": []
+                }
+                """;
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent(json),
         });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
-            client.GetContractInstancesAsync("universal", cancellationToken: TestContext.Current.CancellationToken));
+            client.GetGovernedContractAsync(
+                ContractDraftAddress,
+                TestContext.Current.CancellationToken));
 
         Assert.Contains(expectedField, error.Message);
-        Assert.Contains("must not be null", error.Message);
-    }
-
-    public static IEnumerable<object[]> InvalidRawContractInstances()
-    {
-        yield return new object[] { "contract instance", "null", "must not be null" };
-        yield return new object[] { "contract instance", "[]", "object" };
-        yield return new object[]
-        {
-            "contract_id",
-            ContractInstanceDuplicatePropertyJson("contract_id"),
-            "must not appear more than once",
-        };
-        yield return new object[]
-        {
-            "contract instance.audit.nonce",
-            ContractInstanceUnknownExtensionDuplicateJson(),
-            "must not appear more than once",
-        };
-        yield return new object[] { "contract_id", ContractInstanceRawJson("contract_id", null), "must not be null" };
-        yield return new object[] { "contract_id", RemoveTopLevelJsonField(ContractInstanceRawJson("contract_id", "router::dex.universal"), "contract_id"), "must not be null" };
-        yield return new object[] { "contract_id", ContractInstanceRawJson("contract_id", "router dex"), "whitespace" };
-        yield return new object[] { "code_hash_hex", ContractInstanceRawJson("code_hash_hex", null), "must not be null" };
-        yield return new object[] { "code_hash_hex", RemoveTopLevelJsonField(ContractInstanceRawJson("code_hash_hex", ContractCodeHashHex), "code_hash_hex"), "must not be null" };
-        yield return new object[] { "code_hash_hex", ContractInstanceRawJson("code_hash_hex", 1), "string" };
-        yield return new object[] { "code_hash_hex", ContractInstanceRawJson("code_hash_hex", ContractCodeHashHex.ToUpperInvariant()), "lowercase" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidRawContractInstances))]
-    public void RawContractInstanceRejectsMalformedPayloads(
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        var error = Assert.Throws<JsonException>(() =>
-            JsonSerializer.Deserialize<ToriiContractInstance>(json));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    public static IEnumerable<object[]> InvalidRawContractInstancesResponses()
-    {
-        yield return new object[] { "contract instances response", "null", "must not be null" };
-        yield return new object[] { "contract instances response", "[]", "object" };
-        yield return new object[]
-        {
-            "namespace",
-            ContractInstancesDuplicatePropertyJson("namespace"),
-            "must not appear more than once",
-        };
-        yield return new object[]
-        {
-            "contract instances response.audit.nonce",
-            ContractInstancesResponseUnknownExtensionDuplicateJson(),
-            "must not appear more than once",
-        };
-        yield return new object[] { "namespace", ContractInstancesRawResponseJson("namespace", null), "must not be null" };
-        yield return new object[] { "namespace", RemoveTopLevelJsonField(ContractInstancesRawResponseJson("namespace", "universal"), "namespace"), "must not be null" };
-        yield return new object[] { "namespace", ContractInstancesRawResponseJson("namespace", " universal"), "surrounding whitespace" };
-        yield return new object[] { "instances", ContractInstancesRawResponseJson("instances", null), "required" };
-        yield return new object[] { "instances", ContractInstancesRawResponseJson("instances", 1), "array" };
-        yield return new object[] { "instances[0]", ContractInstancesRawResponseJson("instances[0]", null), "object" };
-        yield return new object[]
-        {
-            "instances[0].code_hash_hex",
-            ContractInstancesDuplicateInstancePropertyJson("code_hash_hex"),
-            "must not appear more than once",
-        };
-        yield return new object[]
-        {
-            "contract instances response.instances[0].audit.nonce",
-            ContractInstancesResponseItemUnknownExtensionDuplicateJson(),
-            "must not appear more than once",
-        };
-        yield return new object[] { "instances[0].contract_id", ContractInstancesRawResponseJson("instances[0].contract_id", null), "must not be null" };
-        yield return new object[] { "instances[0].contract_id", RemoveFirstArrayItemObjectJsonField(ContractInstancesRawResponseJson("total", 1), "instances", "contract_id"), "must not be null" };
-        yield return new object[] { "instances[0].contract_id", ContractInstancesRawResponseJson("instances[0].contract_id", 1), "string" };
-        yield return new object[] { "instances[0].code_hash_hex", ContractInstancesRawResponseJson("instances[0].code_hash_hex", null), "must not be null" };
-        yield return new object[] { "instances[0].code_hash_hex", RemoveFirstArrayItemObjectJsonField(ContractInstancesRawResponseJson("total", 1), "instances", "code_hash_hex"), "must not be null" };
-        yield return new object[] { "instances[0].code_hash_hex", ContractInstancesRawResponseJson("instances[0].code_hash_hex", "0x" + ContractCodeHashHex), "32-byte hex string" };
-        yield return new object[] { "total", RemoveTopLevelJsonField(ContractInstancesRawResponseJson("total", 3UL), "total"), "must not be null" };
-        yield return new object[] { "total", ContractInstancesRawResponseJson("total", -1), "unsigned integer" };
-        yield return new object[] { "offset", RemoveTopLevelJsonField(ContractInstancesRawResponseJson("offset", 0UL), "offset"), "must not be null" };
-        yield return new object[] { "offset", ContractInstancesRawResponseJson("offset", "2"), "unsigned integer" };
-        yield return new object[] { "limit", RemoveTopLevelJsonField(ContractInstancesRawResponseJson("limit", 20UL), "limit"), "must not be null" };
-        yield return new object[] { "limit", ContractInstancesRawResponseJson("limit", 0), "item count must be less than or equal to limit" };
-        yield return new object[] { "offset", ContractInstancesRawResponseJson("offset", 4UL), "offset must be less than or equal to total" };
-        yield return new object[] { "total", ContractInstancesRawResponseJson("total", 0), "offset plus item count must be less than or equal to total" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidRawContractInstancesResponses))]
-    public void RawContractInstancesResponseRejectsMalformedPayloads(
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        var error = Assert.Throws<JsonException>(() =>
-            JsonSerializer.Deserialize<ToriiContractInstancesResponse>(json));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    public static IEnumerable<object?[]> InvalidDirectContractInstancesMetadata()
-    {
-        yield return new object?[] { "instance", "ContractId", "router dex" };
-        yield return new object?[] { "instance", "CodeHashHex", "0x" + ContractCodeHashHex };
-        yield return new object?[] { "response", "Namespace", " universal" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidDirectContractInstancesMetadata))]
-    public void ContractInstancesDtosRejectMalformedDirectMetadata(
-        string operation,
-        string propertyName,
-        object? value)
-    {
-        var error = Assert.ThrowsAny<ArgumentException>(() =>
-            SetContractInstancesDirectMetadata(operation, propertyName, value));
-
-        Assert.Equal(propertyName, error.ParamName);
     }
 
     [Fact]
-    public void RawContractInstanceWriteRejectsMalformedHash()
+    public async Task GetGovernedContractAsyncRequiresCanonicalCredentialsBeforeDispatch()
     {
-        var response = ValidContractInstance();
-        SetPrivateField(response, "codeHashHex", ContractCodeHashHex.ToUpperInvariant());
+        using var handler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("unsigned governed-contract read reached HTTP dispatch"));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler));
 
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(response));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.GetGovernedContractAsync(
+                ContractDraftAddress,
+                TestContext.Current.CancellationToken));
 
-        Assert.Contains("code_hash_hex", error.Message);
-        Assert.Contains("lowercase", error.Message);
-    }
-
-    [Fact]
-    public void RawContractInstancesResponseWriteRejectsInconsistentLimit()
-    {
-        var response = new ToriiContractInstancesResponse
-        {
-            Namespace = "universal",
-            Instances = new[] { new ToriiContractInstance { ContractId = "router::dex.universal", CodeHashHex = ContractCodeHashHex } },
-            Total = 1,
-            Offset = 0,
-            Limit = 0,
-        };
-
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(response));
-
-        Assert.Contains("instances item count", error.Message);
-        Assert.Contains("limit", error.Message);
+        Assert.Contains(nameof(ToriiClientOptions.CanonicalRequestCredentials), error.Message);
+        Assert.Null(handler.LastRequest);
     }
 
     public static IEnumerable<object[]> InvalidContractMetadataHashResponses()
     {
         yield return new object[] { "contract-code", "manifest.code_hash", " " + ContractManifestCodeHashLiteral, "surrounding whitespace" };
         yield return new object[] { "contract-code", "manifest.abi_hash", ContractManifestAbiHashLiteral + " ", "surrounding whitespace" };
-        yield return new object[] { "contract-instances", "instances[0].code_hash_hex", ContractCodeHashHex[..32] + " " + ContractCodeHashHex[32..], "whitespace" };
         yield return new object[] { "contract-code-view", "code_hash", new string('a', 63), "32-byte hex string" };
         yield return new object[] { "contract-code-view", "declared_code_hash", new string('g', 64), "32-byte hex string" };
         yield return new object[] { "explorer-instruction-contract-view", "abi_hash", "0x" + ContractAbiHashHex, "32-byte hex string" };
@@ -15762,68 +15658,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.NotNull(handler.LastRequest);
     }
 
-    public static IEnumerable<object?[]> InvalidContractInstancesQueries()
-    {
-        yield return new object?[] { null, null, "namespaceId", "null or whitespace" };
-        yield return new object?[] { " universal", null, "namespaceId", "whitespace" };
-        yield return new object?[] { "universal\u0001", null, "namespaceId", "control characters" };
-        yield return new object?[]
-        {
-            "universal",
-            new ToriiContractInstancesQuery { Contains = " dex" },
-            "Contains",
-            "whitespace",
-        };
-        yield return new object?[]
-        {
-            "universal",
-            new ToriiContractInstancesQuery { HashPrefix = "zz" },
-            "HashPrefix",
-            "hexadecimal",
-        };
-        yield return new object?[]
-        {
-            "universal",
-            new ToriiContractInstancesQuery { HashPrefix = new string('a', 65) },
-            "HashPrefix",
-            "hexadecimal",
-        };
-        yield return new object?[]
-        {
-            "universal",
-            new ToriiContractInstancesQuery { Limit = 0 },
-            "Limit",
-            "positive",
-        };
-        yield return new object?[]
-        {
-            "universal",
-            new ToriiContractInstancesQuery { Order = "hash desc" },
-            "Order",
-            "whitespace",
-        };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidContractInstancesQueries))]
-    public async Task GetContractInstancesAsyncRejectsMalformedQueryBeforeDispatch(
-        string? namespaceId,
-        ToriiContractInstancesQuery? query,
-        string expectedParamName,
-        string expectedMessage)
-    {
-        using var handler = new RecordingHandler(_ =>
-            throw new InvalidOperationException("malformed contract instances query reached HTTP dispatch"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
-            client.GetContractInstancesAsync(namespaceId!, query, cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Equal(expectedParamName, error.ParamName);
-        Assert.Contains(expectedMessage, error.Message);
-        Assert.Null(handler.LastRequest);
-    }
-
     [Fact]
     public async Task GetContractStateAsyncAddsQueryAndDeserializesResponse()
     {
@@ -15947,28 +15781,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var roundTripPolicies = Assert.IsType<ToriiIdentifierPoliciesResponse>(
             JsonSerializer.Deserialize<ToriiIdentifierPoliciesResponse>(JsonSerializer.Serialize(policies)));
         Assert.Equal("phone#retail", Assert.Single(roundTripPolicies.Items).PolicyId);
-
-        var instance = new ToriiContractInstance
-        {
-            ContractId = "router::dex.universal",
-            CodeHashHex = ContractCodeHashHex,
-        };
-        var replacementInstance = instance with { ContractId = "router::payments.universal" };
-        var instances = new List<ToriiContractInstance> { instance };
-        var instanceResponse = new ToriiContractInstancesResponse
-        {
-            Namespace = "universal",
-            Instances = instances,
-            Total = 1,
-            Offset = 0,
-            Limit = 1,
-        };
-
-        AssertSnapshot(instances, () => instanceResponse.Instances, instance, replacementInstance);
-        var roundTripInstances = Assert.IsType<ToriiContractInstancesResponse>(
-            JsonSerializer.Deserialize<ToriiContractInstancesResponse>(
-                JsonSerializer.Serialize(instanceResponse)));
-        Assert.Equal("router::dex.universal", Assert.Single(roundTripInstances.Instances).ContractId);
 
         var entry = new ToriiContractStateEntry
         {
@@ -19739,7 +19551,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return operation switch
         {
             "contract-code" => client.GetContractCodeAsync(ContractCodeHashHex),
-            "contract-instances" => client.GetContractInstancesAsync("universal"),
             "contract-code-view" => client.GetContractCodeViewAsync(ContractCodeHashHex),
             "explorer-instruction-contract-view" => client.GetExplorerInstructionContractViewAsync("tx-detail", 2),
             "contract-call" => client.CallContractAsync(ValidContractCallRequest()),
@@ -20743,51 +20554,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             FeePayment = EmptyAuthorityFeePayment,
             TransactionPayloadBase64 = MultisigTransactionPayloadBase64,
             SigningMessageBase64 = MultisigSigningMessageBase64,
-        };
-    }
-
-    private static void SetContractInstancesDirectMetadata(string operation, string propertyName, object? value)
-    {
-        object? constructed = (operation, propertyName) switch
-        {
-            ("instance", "ContractId") => ValidContractInstance() with
-            {
-                ContractId = RequiredStringValue(value),
-            },
-            ("instance", "CodeHashHex") => ValidContractInstance() with
-            {
-                CodeHashHex = RequiredStringValue(value),
-            },
-            ("response", "Namespace") => ValidContractInstancesResponse() with
-            {
-                Namespace = RequiredStringValue(value),
-            },
-            _ => throw new ArgumentOutOfRangeException(
-                nameof(propertyName),
-                propertyName,
-                "Unknown contract instances direct metadata field."),
-        };
-        GC.KeepAlive(constructed);
-    }
-
-    private static ToriiContractInstance ValidContractInstance()
-    {
-        return new ToriiContractInstance
-        {
-            ContractId = "router::dex.universal",
-            CodeHashHex = ContractCodeHashHex,
-        };
-    }
-
-    private static ToriiContractInstancesResponse ValidContractInstancesResponse()
-    {
-        return new ToriiContractInstancesResponse
-        {
-            Namespace = "universal",
-            Instances = [ValidContractInstance()],
-            Total = 1,
-            Offset = 0,
-            Limit = 1,
         };
     }
 
@@ -27703,169 +27469,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
               }
             }
             """;
-    }
-
-    private static string ContractInstancesResponseJson(string field, object? value)
-    {
-        var response = ContractInstancesResponseJsonObject();
-        var instances = (JsonArray)response["instances"]!;
-        var instance = (JsonObject)instances[0]!;
-
-        switch (field)
-        {
-            case "namespace":
-            case "total":
-            case "offset":
-            case "limit":
-                response[field] = JsonValueForContractInstances(value);
-                break;
-            case "instances[0].contract_id":
-                instance["contract_id"] = JsonValueForContractInstances(value);
-                break;
-            case "instances[0].code_hash_hex":
-                instance["code_hash_hex"] = JsonValueForContractInstances(value);
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(field), field, "Unknown contract instances response field.");
-        }
-
-        return response.ToJsonString();
-    }
-
-    private static JsonObject ContractInstanceJsonObject()
-    {
-        return new JsonObject
-        {
-            ["contract_id"] = "router::dex.universal",
-            ["code_hash_hex"] = ContractCodeHashHex,
-        };
-    }
-
-    private static string ContractInstanceRawJson(string field, object? value)
-    {
-        var instance = ContractInstanceJsonObject();
-        instance[field] = JsonValueForContractInstances(value);
-        return instance.ToJsonString();
-    }
-
-    private static string ContractInstanceDuplicatePropertyJson(string propertyName)
-    {
-        return $$"""
-            {
-              "{{propertyName}}": "router::dex.universal",
-              "{{propertyName}}": "router::dex.universal",
-              "code_hash_hex": "{{ContractCodeHashHex}}"
-            }
-            """;
-    }
-
-    private static string ContractInstanceUnknownExtensionDuplicateJson()
-    {
-        return JsonWithIgnoredAuditDuplicate(ContractInstanceRawJson("contract_id", "router::dex.universal"));
-    }
-
-    private static JsonObject ContractInstancesResponseJsonObject()
-    {
-        return new JsonObject
-        {
-            ["namespace"] = "universal",
-            ["instances"] = new JsonArray(ContractInstanceJsonObject()),
-            ["total"] = 1,
-            ["offset"] = 0,
-            ["limit"] = 1,
-        };
-    }
-
-    private static string ContractInstancesRawResponseJson(string field, object? value)
-    {
-        var response = ContractInstancesResponseJsonObject();
-        var instances = (JsonArray)response["instances"]!;
-
-        if (field == "instances[0]")
-        {
-            instances[0] = JsonValueForContractInstances(value);
-        }
-        else if (field.StartsWith("instances[0].", StringComparison.Ordinal))
-        {
-            var instance = (JsonObject)instances[0]!;
-            instance[field["instances[0].".Length..]] = JsonValueForContractInstances(value);
-        }
-        else
-        {
-            response[field] = JsonValueForContractInstances(value);
-        }
-
-        return response.ToJsonString();
-    }
-
-    private static string ContractInstancesDuplicatePropertyJson(string propertyName)
-    {
-        return $$"""
-            {
-              "{{propertyName}}": "universal",
-              "{{propertyName}}": "universal",
-              "instances": [
-                {
-                  "contract_id": "router::dex.universal",
-                  "code_hash_hex": "{{ContractCodeHashHex}}"
-                }
-              ],
-              "total": 1,
-              "offset": 0,
-              "limit": 1
-            }
-            """;
-    }
-
-    private static string ContractInstancesDuplicateInstancePropertyJson(string propertyName)
-    {
-        return $$"""
-            {
-              "namespace": "universal",
-              "instances": [
-                {
-                  "contract_id": "router::dex.universal",
-                  "{{propertyName}}": "{{ContractCodeHashHex}}",
-                  "{{propertyName}}": "{{ContractCodeHashHex}}"
-                }
-              ],
-              "total": 1,
-              "offset": 0,
-              "limit": 1
-            }
-            """;
-    }
-
-    private static string ContractInstancesResponseUnknownExtensionDuplicateJson()
-    {
-        return JsonWithIgnoredAuditDuplicate(ContractInstancesRawResponseJson("namespace", "universal"));
-    }
-
-    private static string ContractInstancesResponseItemUnknownExtensionDuplicateJson()
-    {
-        var json = ContractInstancesRawResponseJson("namespace", "universal");
-        var marker = $"\"code_hash_hex\":\"{ContractCodeHashHex}\"";
-        var index = json.IndexOf(marker, StringComparison.Ordinal);
-        if (index < 0)
-        {
-            throw new InvalidOperationException("Contract instances fixture is missing the nested code hash.");
-        }
-
-        return json.Insert(index + marker.Length, ",\"audit\":{\"nonce\":1,\"nonce\":2}");
-    }
-
-    private static JsonNode? JsonValueForContractInstances(object? value)
-    {
-        return value switch
-        {
-            null => null,
-            string text => JsonValue.Create(text),
-            int number => JsonValue.Create(number),
-            long number => JsonValue.Create(number),
-            ulong number => JsonValue.Create(number),
-            bool boolean => JsonValue.Create(boolean),
-            _ => throw new ArgumentOutOfRangeException(nameof(value), value, "Unsupported contract instances JSON value."),
-        };
     }
 
     private static string ContractCallViewResponseJson(string operation, string field, object? value)

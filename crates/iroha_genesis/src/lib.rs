@@ -48,7 +48,8 @@ use iroha_data_model::{
     },
     da::commitment::DaProofPolicyBundle,
     isi::{
-        InstructionRegistry, Register, SetParameter, register::RegisterPeerWithPop,
+        InstructionRegistry, Register, SetParameter,
+        offline_cash_v1::OfflineCashMintFinalityGenesisParametersV1, register::RegisterPeerWithPop,
         set_instruction_registry, verifying_keys,
     },
     parameter::{
@@ -89,6 +90,46 @@ fn checked_genesis_fixture_keypair() -> KeyPair {
 fn checked_genesis_fixture_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
     KeyPair::try_random_with_algorithm(algorithm)
         .expect("genesis fixture key generation should succeed")
+}
+#[cfg(test)]
+fn deterministic_test_offline_cash_mint_finality_genesis_parameters()
+-> OfflineCashMintFinalityGenesisParametersV1 {
+    use iroha_data_model::isi::offline_cash_v1::{
+        OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterTemplateV1,
+        OfflineCashMintFinalityValidatorKeysV1,
+    };
+
+    let mut validators = (0_u8..4)
+        .map(|index| {
+            let validator_seed = 0x20_u8.wrapping_add(index);
+            let eq_key_seed = 0xA0_u8.wrapping_add(index);
+            let ep_key_seed = 0xC0_u8.wrapping_add(index);
+            let validator = iroha_data_model::peer::PeerId::new(
+                KeyPair::try_from_seed(vec![validator_seed; 32], Algorithm::BlsNormal)
+                    .expect("derive deterministic genesis fixture validator")
+                    .public_key()
+                    .clone(),
+            );
+            OfflineCashMintFinalityValidatorKeysV1 {
+                validator,
+                eq_proof_public_key: [eq_key_seed; 32],
+                ep_proof_public_key: [ep_key_seed; 32],
+            }
+        })
+        .collect::<Vec<_>>();
+    validators.sort_by(|left, right| left.validator.cmp(&right.validator));
+    let parameters = OfflineCashMintFinalityGenesisParametersV1 {
+        epoch_roster: OfflineCashMintFinalityEpochRosterTemplateV1 {
+            version: OFFLINE_CASH_CHAIN_VERSION_V1,
+            epoch: 0,
+            validators,
+        },
+        next_epoch_roster: None,
+    };
+    parameters
+        .validate()
+        .expect("valid deterministic Offline Cash genesis fixture");
+    parameters
 }
 /// Domain of the genesis account, technically required for the pre-genesis state
 pub static GENESIS_DOMAIN_ID: LazyLock<DomainId> =
@@ -255,7 +296,16 @@ pub fn validate_prepared_genesis_bundle(
         consensus_metadata,
     })
 }
-fn signed_genesis_consensus_metadata(block: &SignedBlock) -> Result<ConsensusHandshakeMetadata> {
+/// Decode and validate the unique consensus metadata signed into a genesis block.
+///
+/// # Errors
+///
+/// Returns an error when the block omits the metadata, contains it more than
+/// once, cannot decode it canonically, or carries invalid consensus or Offline
+/// Cash mint-finality genesis parameters.
+pub fn signed_genesis_consensus_metadata(
+    block: &SignedBlock,
+) -> Result<ConsensusHandshakeMetadata> {
     let mut metadata = None;
     for transaction in block.external_transactions() {
         let Executable::Instructions(instructions) = transaction.instructions() else {
@@ -282,7 +332,12 @@ fn signed_genesis_consensus_metadata(block: &SignedBlock) -> Result<ConsensusHan
             }
         }
     }
-    metadata.ok_or_else(|| eyre!("signed genesis contains no consensus metadata instruction"))
+    let metadata = metadata
+        .ok_or_else(|| eyre!("signed genesis contains no consensus metadata instruction"))?;
+    metadata
+        .validate()
+        .map_err(|error| eyre!("invalid signed genesis consensus metadata: {error}"))?;
+    Ok(metadata)
 }
 fn validate_signed_manifest_binding(
     manifest: &RawGenesisTransaction,
@@ -312,6 +367,13 @@ fn validate_signed_manifest_binding(
     if manifest.sumeragi_v2_context_parameters() != signed_metadata.sumeragi_v2 {
         return Err(eyre!(
             "genesis manifest Sumeragi v2 context differs from signed body"
+        ));
+    }
+    if manifest.offline_cash_mint_finality_genesis_parameters()
+        != &signed_metadata.offline_cash_mint_finality
+    {
+        return Err(eyre!(
+            "genesis manifest Offline Cash mint-finality parameters differ from signed body"
         ));
     }
     let expected = manifest
@@ -446,6 +508,11 @@ pub struct RawGenesisTransaction {
     /// JSON manifests must provide this explicitly. Programmatic builders put their selected
     /// profile here before signing; live nodes never infer it from local configuration.
     sumeragi_v2: SumeragiV2GenesisContextParameters,
+    /// Separately provisioned networkless Pasta rosters authenticated by signed genesis.
+    ///
+    /// Core binds these templates to the final genesis-derived [`NetworkId`]
+    /// only after the block hash exists, avoiding a hash fixed point.
+    offline_cash_mint_finality: OfflineCashMintFinalityGenesisParametersV1,
     /// Cryptography configuration snapshot advertised alongside the manifest.
     #[norito(default)]
     crypto: ManifestCrypto,
@@ -3021,6 +3088,8 @@ pub struct NormalizedGenesis {
     pub consensus_fingerprint: ConsensusFingerprint,
     /// Signed Sumeragi v2 height-context transport parameters.
     pub sumeragi_v2: SumeragiV2GenesisContextParameters,
+    /// Signed networkless Offline Cash mint-finality roster templates.
+    pub offline_cash_mint_finality: OfflineCashMintFinalityGenesisParametersV1,
     /// Cryptography snapshot advertised alongside genesis.
     pub crypto: ManifestCrypto,
     /// Final transaction batches that will be signed into the genesis block.
@@ -3071,6 +3140,11 @@ impl NormalizedGenesis {
             "sumeragi_v2".to_string(),
             norito::json::value::to_value(&self.sumeragi_v2)
                 .expect("serialize Sumeragi v2 context parameters"),
+        );
+        map.insert(
+            "offline_cash_mint_finality".to_string(),
+            norito::json::value::to_value(&self.offline_cash_mint_finality)
+                .expect("serialize Offline Cash mint-finality genesis parameters"),
         );
         map.insert(
             "crypto".to_string(),
@@ -3337,6 +3411,9 @@ impl RawGenesisTransaction {
             &mut map,
             "sumeragi_v2",
         )?;
+        let offline_cash_mint_finality = Self::take_required_field::<
+            OfflineCashMintFinalityGenesisParametersV1,
+        >(&mut map, "offline_cash_mint_finality")?;
         let crypto = map
             .remove("crypto")
             .map(|value| Self::decode_value::<ManifestCrypto>(value, "crypto"))
@@ -3355,6 +3432,7 @@ impl RawGenesisTransaction {
             wire_protocol_version,
             consensus_fingerprint,
             sumeragi_v2,
+            offline_cash_mint_finality,
             crypto,
         })
     }
@@ -3437,7 +3515,7 @@ impl RawGenesisTransaction {
             block_max_transactions,
             mode,
             protocol_version: iroha_config::parameters::defaults::sumeragi::PROTOCOL_VERSION,
-            v2_context: self.sumeragi_v2,
+            v2_context: self.sumeragi_v2.clone(),
         };
         let Ok(fp) = compute_consensus_parameters_fingerprint_v2(&dm_params) else {
             self.consensus_fingerprint = None;
@@ -3472,10 +3550,14 @@ impl RawGenesisTransaction {
                 "consensus_fingerprint missing after normalization; call with_consensus_meta first"
             )
         })?;
-        let sumeragi_v2 = manifest.sumeragi_v2;
+        let sumeragi_v2 = manifest.sumeragi_v2.clone();
         sumeragi_v2
             .validate()
             .map_err(|error| eyre!("invalid signed Sumeragi v2 context parameters: {error}"))?;
+        let offline_cash_mint_finality = manifest.offline_cash_mint_finality.clone();
+        offline_cash_mint_finality.validate().map_err(|error| {
+            eyre!("invalid signed Offline Cash mint-finality genesis parameters: {error}")
+        })?;
         let chain = manifest.chain.clone();
         let chain_discriminant = manifest.chain_discriminant;
         let executor = manifest.executor.clone();
@@ -3492,6 +3574,7 @@ impl RawGenesisTransaction {
             wire_protocol_version,
             consensus_fingerprint,
             sumeragi_v2,
+            offline_cash_mint_finality,
             crypto,
             transactions,
         })
@@ -3675,8 +3758,8 @@ impl RawGenesisTransaction {
     }
     /// Return the exact Sumeragi v2 context parameters selected by this manifest.
     #[must_use]
-    pub const fn sumeragi_v2_context_parameters(&self) -> SumeragiV2GenesisContextParameters {
-        self.sumeragi_v2
+    pub fn sumeragi_v2_context_parameters(&self) -> SumeragiV2GenesisContextParameters {
+        self.sumeragi_v2.clone()
     }
     /// Replace the Sumeragi v2 context parameters that will be fingerprinted
     /// and signed with this manifest.
@@ -3686,6 +3769,24 @@ impl RawGenesisTransaction {
         parameters: SumeragiV2GenesisContextParameters,
     ) -> Self {
         self.sumeragi_v2 = parameters;
+        self
+    }
+    /// Return the exact networkless Offline Cash mint-finality templates
+    /// selected by this manifest.
+    #[must_use]
+    pub const fn offline_cash_mint_finality_genesis_parameters(
+        &self,
+    ) -> &OfflineCashMintFinalityGenesisParametersV1 {
+        &self.offline_cash_mint_finality
+    }
+    /// Replace the networkless Offline Cash mint-finality templates which will
+    /// be authenticated by signed genesis.
+    #[must_use]
+    pub fn with_offline_cash_mint_finality_genesis_parameters(
+        mut self,
+        parameters: OfflineCashMintFinalityGenesisParametersV1,
+    ) -> Self {
+        self.offline_cash_mint_finality = parameters;
         self
     }
     /// Construct [`RawGenesisTransaction`] from a json file at `json_path`,
@@ -3741,7 +3842,8 @@ impl RawGenesisTransaction {
             consensus_mode: self.consensus_mode,
             wire_protocol_version: self.wire_protocol_version,
             consensus_fingerprint: self.consensus_fingerprint,
-            sumeragi_v2: self.sumeragi_v2,
+            sumeragi_v2: Some(self.sumeragi_v2),
+            offline_cash_mint_finality: Some(self.offline_cash_mint_finality),
         }
     }
     /// Build and sign a resultless genesis proposal.
@@ -3914,6 +4016,7 @@ impl RawGenesisTransaction {
             wire_protocol_version,
             consensus_fingerprint,
             sumeragi_v2,
+            offline_cash_mint_finality,
             crypto: _,
         } = manifest;
         for tx in &mut transactions {
@@ -3939,6 +4042,7 @@ impl RawGenesisTransaction {
             wire_protocol_version,
             consensus_fingerprint,
             sumeragi_v2,
+            offline_cash_mint_finality,
         )?;
         let mut pending_meta = if meta_vec.is_empty() {
             None
@@ -4111,6 +4215,7 @@ impl RawGenesisTransaction {
         wire_protocol_version: u32,
         consensus_fingerprint: Option<ConsensusFingerprint>,
         sumeragi_v2: SumeragiV2GenesisContextParameters,
+        offline_cash_mint_finality: OfflineCashMintFinalityGenesisParametersV1,
     ) -> Result<Vec<InstructionBox>> {
         let mut instructions = Vec::new();
         let fingerprint = consensus_fingerprint.ok_or_else(|| {
@@ -4124,6 +4229,7 @@ impl RawGenesisTransaction {
             wire_protocol_version,
             consensus_fingerprint: fingerprint,
             sumeragi_v2,
+            offline_cash_mint_finality,
         };
         metadata
             .validate()
@@ -4162,7 +4268,8 @@ pub struct GenesisBuilder {
     consensus_mode: iroha_data_model::parameter::system::SumeragiConsensusMode,
     wire_protocol_version: u32,
     consensus_fingerprint: Option<ConsensusFingerprint>,
-    sumeragi_v2: SumeragiV2GenesisContextParameters,
+    sumeragi_v2: Option<SumeragiV2GenesisContextParameters>,
+    offline_cash_mint_finality: Option<OfflineCashMintFinalityGenesisParametersV1>,
 }
 /// Domain editing mode of the [`GenesisBuilder`] to register accounts and assets under the domain.
 #[must_use]
@@ -4178,7 +4285,8 @@ pub struct GenesisDomainBuilder {
     consensus_mode: iroha_data_model::parameter::system::SumeragiConsensusMode,
     wire_protocol_version: u32,
     consensus_fingerprint: Option<ConsensusFingerprint>,
-    sumeragi_v2: SumeragiV2GenesisContextParameters,
+    sumeragi_v2: Option<SumeragiV2GenesisContextParameters>,
+    offline_cash_mint_finality: Option<OfflineCashMintFinalityGenesisParametersV1>,
 }
 #[derive(Default)]
 struct GenesisTxBuilder {
@@ -4189,6 +4297,10 @@ struct GenesisTxBuilder {
 }
 impl GenesisBuilder {
     /// Construct [`GenesisBuilder`] with an executor upgrade.
+    ///
+    /// Before building, callers must provide the Sumeragi context and the
+    /// separately provisioned Offline Cash V1 Pasta templates through their
+    /// dedicated setters.
     pub fn new(chain: ChainId, executor: impl Into<PathBuf>, ivm_dir: impl Into<PathBuf>) -> Self {
         Self {
             chain,
@@ -4201,10 +4313,15 @@ impl GenesisBuilder {
             consensus_mode: SumeragiConsensusMode::Permissioned,
             wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
             consensus_fingerprint: None,
-            sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
+            sumeragi_v2: None,
+            offline_cash_mint_finality: None,
         }
     }
     /// Construct [`GenesisBuilder`] without an executor upgrade.
+    ///
+    /// Before building, callers must provide the Sumeragi context and the
+    /// separately provisioned Offline Cash V1 Pasta templates through their
+    /// dedicated setters.
     pub fn new_without_executor(chain: ChainId, ivm_dir: impl Into<PathBuf>) -> Self {
         Self {
             chain,
@@ -4217,7 +4334,8 @@ impl GenesisBuilder {
             consensus_mode: SumeragiConsensusMode::Permissioned,
             wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
             consensus_fingerprint: None,
-            sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
+            sumeragi_v2: None,
+            offline_cash_mint_finality: None,
         }
     }
     /// Override the cryptography snapshot advertised alongside the manifest.
@@ -4237,7 +4355,17 @@ impl GenesisBuilder {
         mut self,
         parameters: SumeragiV2GenesisContextParameters,
     ) -> Self {
-        self.sumeragi_v2 = parameters;
+        self.sumeragi_v2 = Some(parameters);
+        self
+    }
+    /// Select the separately provisioned networkless Pasta roster templates
+    /// which signed genesis will authenticate.
+    #[must_use]
+    pub fn with_offline_cash_mint_finality_genesis_parameters(
+        mut self,
+        parameters: OfflineCashMintFinalityGenesisParametersV1,
+    ) -> Self {
+        self.offline_cash_mint_finality = Some(parameters);
         self
     }
     /// Select the signed immutable block cadence stored by genesis.
@@ -4278,6 +4406,7 @@ impl GenesisBuilder {
             wire_protocol_version: self.wire_protocol_version,
             consensus_fingerprint: self.consensus_fingerprint,
             sumeragi_v2: self.sumeragi_v2,
+            offline_cash_mint_finality: self.offline_cash_mint_finality,
         }
     }
     /// Append a parameter to the authoritative snapshot in the first transaction.
@@ -4363,7 +4492,7 @@ impl GenesisBuilder {
     /// Fails if internal [`RawGenesisTransaction::build_and_sign`] fails.
     pub fn build_and_sign(self, genesis_key_pair: &KeyPair) -> Result<GenesisBlock> {
         let da_proof_policies = self.da_proof_policies.clone();
-        self.build_raw()
+        self.build_raw()?
             .build_and_sign_with_da_proof_policies(genesis_key_pair, da_proof_policies)
     }
     /// Finish building, sign, and produce a resultless [`GenesisBlock`] proposal with a confidential policy hash.
@@ -4377,7 +4506,7 @@ impl GenesisBuilder {
         confidential_policy_hash: Option<[u8; 32]>,
     ) -> Result<GenesisBlock> {
         let da_proof_policies = self.da_proof_policies.clone();
-        self.build_raw()
+        self.build_raw()?
             .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
                 genesis_key_pair,
                 da_proof_policies,
@@ -4385,7 +4514,12 @@ impl GenesisBuilder {
             )
     }
     /// Finish building and produce a [`RawGenesisTransaction`].
-    pub fn build_raw(self) -> RawGenesisTransaction {
+    ///
+    /// # Errors
+    ///
+    /// Fails unless the separately provisioned Offline Cash V1 Pasta roster
+    /// has been supplied as part of the signed Sumeragi v2 context parameters.
+    pub fn build_raw(self) -> Result<RawGenesisTransaction> {
         let mut parameter_snapshot = Parameters::default();
         let mut source_transactions = self.transactions;
         for tx in &mut source_transactions {
@@ -4407,7 +4541,16 @@ impl GenesisBuilder {
             .first_mut()
             .expect("genesis builder always contains at least one transaction");
         first.parameters = Some(parameter_snapshot);
-        RawGenesisTransaction {
+        let sumeragi_v2 = self.sumeragi_v2.ok_or_else(|| {
+            eyre!("genesis builder requires explicit signed Sumeragi v2 context parameters")
+        })?;
+        let offline_cash_mint_finality = self.offline_cash_mint_finality.ok_or_else(|| {
+            eyre!(
+                "genesis builder requires explicitly provisioned Offline Cash V1 Pasta \
+                 mint-finality genesis parameters"
+            )
+        })?;
+        Ok(RawGenesisTransaction {
             chain: self.chain,
             chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: self.executor,
@@ -4416,9 +4559,10 @@ impl GenesisBuilder {
             consensus_mode: self.consensus_mode,
             wire_protocol_version: self.wire_protocol_version,
             consensus_fingerprint: self.consensus_fingerprint,
-            sumeragi_v2: self.sumeragi_v2,
+            sumeragi_v2,
+            offline_cash_mint_finality,
             crypto: self.crypto,
-        }
+        })
     }
 }
 impl GenesisDomainBuilder {
@@ -4436,6 +4580,7 @@ impl GenesisDomainBuilder {
             wire_protocol_version: self.wire_protocol_version,
             consensus_fingerprint: self.consensus_fingerprint,
             sumeragi_v2: self.sumeragi_v2,
+            offline_cash_mint_finality: self.offline_cash_mint_finality,
         }
     }
     /// Add an account to this domain.
@@ -4663,6 +4808,20 @@ mod tests {
     use iroha_test_samples::{ALICE_KEYPAIR, BOB_KEYPAIR};
     use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
     use tempfile::TempDir;
+
+    impl GenesisBuilder {
+        fn build_raw_for_test(self) -> RawGenesisTransaction {
+            self.with_sumeragi_v2_context_parameters(
+                SumeragiV2GenesisContextParameters::recommended(),
+            )
+            .with_offline_cash_mint_finality_genesis_parameters(
+                deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+            )
+            .build_raw()
+            .expect("complete deterministic test genesis builder")
+        }
+    }
+
     #[test]
     fn aggregate_genesis_ivm_bytecode_budget_accepts_exact_limit() {
         assert_eq!(
@@ -4681,7 +4840,11 @@ mod tests {
         std::fs::write(&executor_path, dummy_bytecode).unwrap();
         let chain = ChainId::from("00000000-0000-0000-0000-000000000000");
         let ivm_dir = tmp_dir.path().join("ivm/");
-        let builder = GenesisBuilder::new(chain, executor_path, ivm_dir);
+        let builder = GenesisBuilder::new(chain, executor_path, ivm_dir)
+            .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+            .with_offline_cash_mint_finality_genesis_parameters(
+                deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+            );
         (tmp_dir, builder)
     }
     #[test]
@@ -4692,12 +4855,16 @@ mod tests {
         std::fs::write(&executor_path, dummy_bytecode).unwrap();
         let sumeragi_v2 =
             norito::json::to_json(&SumeragiV2GenesisContextParameters::recommended())?;
+        let offline_cash_mint_finality = norito::json::to_json(
+            &deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+        )?;
         let genesis = format!(
-            r#"{{"chain":"00000000-0000-0000-0000-000000000000","chain_discriminant":{},"executor":"{}","consensus_mode":"Permissioned","wire_protocol_version":{},"sumeragi_v2":{},"transactions":[{{}}]}}"#,
+            r#"{{"chain":"00000000-0000-0000-0000-000000000000","chain_discriminant":{},"executor":"{}","consensus_mode":"Permissioned","wire_protocol_version":{},"sumeragi_v2":{},"offline_cash_mint_finality":{},"transactions":[{{}}]}}"#,
             iroha_data_model::account::address::chain_discriminant(),
             executor_path.file_name().unwrap().to_str().unwrap(),
             iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
             sumeragi_v2,
+            offline_cash_mint_finality,
         );
         let genesis_path = tmp_dir.path().join("genesis.json");
         std::fs::write(&genesis_path, genesis).unwrap();
@@ -4726,7 +4893,7 @@ mod tests {
             .domain(domain_id)
             .account(public_key)
             .finish_domain()
-            .build_raw()
+            .build_raw_for_test()
             .with_consensus_mode(SumeragiConsensusMode::Permissioned);
         let json = norito::json::to_json_pretty(&genesis)?;
         assert!(
@@ -4744,6 +4911,9 @@ mod tests {
         let public_key_literal = ALICE_KEYPAIR.public_key().to_string();
         let sumeragi_v2 =
             norito::json::to_json(&SumeragiV2GenesisContextParameters::recommended())?;
+        let offline_cash_mint_finality = norito::json::to_json(
+            &deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+        )?;
         let genesis = format!(
             r#"{{
                 "chain":"00000000-0000-0000-0000-000000000000",
@@ -4752,12 +4922,14 @@ mod tests {
                 "ivm_dir":".",
                 "consensus_mode":"Permissioned",
                 "sumeragi_v2":{},
+                "offline_cash_mint_finality":{},
                 "transactions":[{{
                     "instructions":[{{"Register":{{"Account":{{"id":"{public_key_literal}","metadata":{{}},"label":null,"uaid":null}}}}}}]
                 }}]
             }}"#,
             iroha_data_model::account::address::chain_discriminant(),
             sumeragi_v2,
+            offline_cash_mint_finality,
         );
         let error = norito::json::from_str::<RawGenesisTransaction>(&genesis)
             .expect_err("raw public-key account literals are not part of first-release genesis");
@@ -4769,7 +4941,7 @@ mod tests {
         init_instruction_registry();
         let chain = ChainId::from("iroha:test:refresh-consensus-fp");
         let mut manifest = GenesisBuilder::new_without_executor(chain, ".")
-            .build_raw()
+            .build_raw_for_test()
             .with_consensus_meta();
         let expected = manifest
             .clone()
@@ -5141,7 +5313,7 @@ mod tests {
                     public_key: peer.public_key().clone(),
                     pop: pop.clone(),
                 }])
-                .build_raw();
+                .build_raw_for_test();
         let tx = &manifest.transactions()[0];
         assert_eq!(tx.topology().len(), 1);
         assert_eq!(tx.topology()[0].peer, peer);
@@ -5159,7 +5331,7 @@ mod tests {
                 peer_id.clone(),
                 vec![1, 2, 3, 4],
             )])
-            .build_raw()
+            .build_raw_for_test()
             .with_consensus_meta();
         let batches = manifest.parse()?;
         let registers: Vec<_> = batches
@@ -5187,7 +5359,7 @@ mod tests {
         let (peer_pk, _) = checked_genesis_fixture_keypair().into_parts();
         let manifest = GenesisBuilder::new_without_executor(chain, ".")
             .set_topology(vec![GenesisTopologyEntry::from(PeerId::from(peer_pk))])
-            .build_raw()
+            .build_raw_for_test()
             .with_consensus_meta();
         let err = manifest.parse().expect_err("missing pop must error");
         assert!(
@@ -5201,7 +5373,7 @@ mod tests {
         init_instruction_registry();
         let chain = ChainId::from("test-consensus-meta");
         let manifest = GenesisBuilder::new_without_executor(chain, ".")
-            .build_raw()
+            .build_raw_for_test()
             .with_consensus_meta();
         let batches = manifest.parse()?;
         let mut found = false;
@@ -5242,7 +5414,7 @@ mod tests {
             .expect("construct stale handshake payload"),
         ));
         let mut manifest = GenesisBuilder::new_without_executor(chain, ".")
-            .build_raw()
+            .build_raw_for_test()
             .with_consensus_meta();
         manifest
             .transactions
@@ -5265,7 +5437,7 @@ mod tests {
         init_instruction_registry();
         let chain = ChainId::from("test-consensus-meta-replace-params");
         let expected_fingerprint = GenesisBuilder::new_without_executor(chain.clone(), ".")
-            .build_raw()
+            .build_raw_for_test()
             .with_consensus_meta()
             .consensus_fingerprint
             .expect("consensus fingerprint expected")
@@ -5291,7 +5463,7 @@ mod tests {
             .expect("construct stale handshake payload"),
         ));
         let mut manifest = GenesisBuilder::new_without_executor(chain, ".")
-            .build_raw()
+            .build_raw_for_test()
             .with_consensus_meta();
         let mut parameters = Parameters::default();
         parameters.set_parameter(stale_param);
@@ -5329,7 +5501,7 @@ mod tests {
         init_instruction_registry();
         let chain = ChainId::from("test-consensus-meta-preserve-valid");
         let mut manifest = GenesisBuilder::new_without_executor(chain, ".")
-            .build_raw()
+            .build_raw_for_test()
             .with_consensus_meta();
         manifest.consensus_mode = SumeragiConsensusMode::Permissioned;
         manifest.wire_protocol_version = 7;
@@ -5380,7 +5552,7 @@ mod tests {
         init_instruction_registry();
         let chain = ChainId::from("test-consensus-meta-preserve-external-fingerprint");
         let mut manifest = GenesisBuilder::new_without_executor(chain, ".")
-            .build_raw()
+            .build_raw_for_test()
             .with_consensus_meta();
         let external_fingerprint =
             "0x1111111111111111111111111111111111111111111111111111111111111111";
@@ -5425,7 +5597,7 @@ mod tests {
         init_instruction_registry();
         let chain = ChainId::from("test-consensus-meta-preserve-valid-params");
         let mut manifest = GenesisBuilder::new_without_executor(chain, ".")
-            .build_raw()
+            .build_raw_for_test()
             .with_consensus_meta();
         manifest.consensus_mode = SumeragiConsensusMode::Permissioned;
         manifest.wire_protocol_version = 7;
@@ -5499,7 +5671,7 @@ mod tests {
         init_instruction_registry();
         let chain = ChainId::from("test-confidential-meta");
         let manifest = GenesisBuilder::new_without_executor(chain, ".")
-            .build_raw()
+            .build_raw_for_test()
             .with_consensus_meta();
         let batches = manifest.parse()?;
         let mut found = false;
@@ -5529,7 +5701,7 @@ mod tests {
         init_instruction_registry();
         let chain = ChainId::from("test-crypto-meta");
         let manifest = GenesisBuilder::new_without_executor(chain, ".")
-            .build_raw()
+            .build_raw_for_test()
             .with_consensus_meta();
         let expected_crypto = manifest.crypto().clone();
         let batches = manifest.parse()?;
@@ -5565,7 +5737,7 @@ mod tests {
         ));
         let manifest = GenesisBuilder::new_without_executor(chain, ".")
             .append_parameter(manual_param)
-            .build_raw()
+            .build_raw_for_test()
             .with_consensus_meta();
         let err = manifest
             .parse()
@@ -5596,7 +5768,7 @@ mod tests {
         ));
         let manifest = GenesisBuilder::new_without_executor(chain, ".")
             .append_parameter(manual)
-            .build_raw()
+            .build_raw_for_test()
             .with_consensus_meta();
         let batches = manifest.parse()?;
         let count = batches

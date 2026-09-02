@@ -71,6 +71,9 @@ def request(
         "hardware_profile_sha256": HARDWARE_PROFILE,
         "configuration_sha256": configuration_sha,
         "participants": participants,
+        "participant_visibilities": (
+            MODULE.runner.canonical_participant_visibilities(participants)
+        ),
         "validators_per_dataspace": 4,
         "global_validators": 4,
         "quorum": "3-of-4",
@@ -373,6 +376,60 @@ class PrivateSettlementRealProcessHarnessTests(unittest.TestCase):
             fixture = leakage_request(variant)
             self.assertEqual(MODULE.validate_request(copy.deepcopy(fixture)), fixture)
 
+    def test_primary_visibility_profile_fails_closed_on_every_shape_change(self) -> None:
+        canonical = ["public", "restricted", "restricted"]
+        fixture = request(3)
+        self.assertEqual(fixture["participant_visibilities"], canonical)
+        self.assertEqual(
+            fixture["configuration"]["participant_visibilities"], canonical
+        )
+
+        factories = (request, fault_request, leakage_request)
+        for factory in factories:
+            missing = factory()
+            del missing["participant_visibilities"]
+            with self.assertRaisesRegex(MODULE.HarnessError, "fields mismatch"):
+                MODULE.validate_request(missing)
+
+            malformed = factory()
+            malformed["participant_visibilities"] = "public,restricted,restricted"
+            with self.assertRaisesRegex(MODULE.HarnessError, "visibility profile"):
+                MODULE.validate_request(malformed)
+
+            for substituted in (
+                ["restricted", "public", "restricted"],
+                ["public", "confidential", "restricted"],
+                ["restricted", "restricted", "restricted"],
+            ):
+                changed = factory()
+                changed["participant_visibilities"] = substituted
+                with self.assertRaisesRegex(MODULE.HarnessError, "visibility profile"):
+                    MODULE.validate_request(changed)
+
+        for malformed_participants in (True, 3.0, "3"):
+            changed = request(3)
+            changed["participants"] = malformed_participants
+            with self.assertRaisesRegex(MODULE.HarnessError, "participant count"):
+                MODULE.validate_request(changed)
+
+    def test_embedded_visibility_profile_cannot_be_removed_or_substituted(self) -> None:
+        for factory in (request, fault_request, leakage_request):
+            missing = factory()
+            del missing["configuration"]["participant_visibilities"]
+            with self.assertRaisesRegex(MODULE.HarnessError, "not the canonical"):
+                MODULE.validate_request(missing)
+
+            for substituted in (
+                "public,restricted,restricted",
+                ["restricted", "public", "restricted"],
+                ["public", "confidential", "restricted"],
+                ["restricted", "restricted", "restricted"],
+            ):
+                changed = factory()
+                changed["configuration"]["participant_visibilities"] = substituted
+                with self.assertRaisesRegex(MODULE.HarnessError, "not the canonical"):
+                    MODULE.validate_request(changed)
+
     def test_unsupported_kinds_fail_before_execution(self) -> None:
         unknown = request()
         unknown["kind"] = "unknown"
@@ -592,7 +649,7 @@ class PrivateSettlementRealProcessHarnessTests(unittest.TestCase):
         self.assertIn("wait_until_ready", harness)
         self.assertIn("process_id()", harness)
         self.assertIn("get_bridge_finality_anchor", harness)
-        self.assertIn("SumeragiV2GenesisContextParameters::recommended().da_layout", harness)
+        self.assertIn("recommended_data_availability_layout()", harness)
         self.assertIn("private_settlement_committee_proof_v1", harness)
         self.assertIn("impl Drop for ProcessResourceSampler", harness)
         self.assertIn("impl Drop for TransparentControlAtomicityObserver", harness)

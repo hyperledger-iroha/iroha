@@ -335,7 +335,7 @@ authorities and private keys are not accepted in these files.
 Register a verifying key (provide either `vk_bytes` as base64 or `commitment_hex`):
 
 The optional `namespace` field defaults to `core` when omitted or `null`. Set it
-to `offline_kagemusha` for Kagemusha verifier records. Explicit namespace values
+to `offline_cash_v1` for Offline Cash V1 verifier records. Explicit namespace values
 must be non-empty and must not contain leading or trailing whitespace.
 
 ```bash
@@ -409,10 +409,10 @@ iroha app zk attachments cleanup --content-type application/json --before-ms 172
 
 ### Confidential asset ingress
 
-The first-release CLI intentionally has no generic `zk shield` command. Public-to-confidential
-movement is admitted only by the proof-bound Kagemusha V4 top-up flow. In asset policy
-configuration, the presence of `vk_shield` enables only that authenticated top-up circuit;
-it does not enable an opaque caller-supplied commitment.
+The first-release CLI intentionally has no generic `zk shield` command. Offline Cash V1
+top-ups use the proof-bound `/v1/offline/top-up` operation and its pooled reserve; peer
+payments never mutate that reserve. The generic confidential-asset verifier settings do
+not authorize callers to inject opaque Offline Cash commitments.
 
 Encrypted memo envelopes remain available as a local wallet utility:
 
@@ -425,14 +425,13 @@ iroha app zk envelope --ephemeral-pubkey 0101... --nonce-hex 0202... \
 
 ```bash
 iroha app zk register-asset --asset <base58-asset-definition-id> \
-  --vk-unshield halo2/ipa:vk_unshield \
-  --vk-shield <canonical-kagemusha-top-up-vk>
+  --vk-unshield halo2/ipa:vk_unshield
 ```
 
 Register and inspect the referenced verifying keys with `iroha app zk vk register`,
-`iroha app zk vk update`, and `iroha app zk vk get`. The node rejects a `vk_shield`
-record that is not the canonical Kagemusha top-up circuit and schema. In the first-release
-surface, `vk_unshield` is the Kagemusha redemption verifier; no asset-bound private-transfer
+`iroha app zk vk update`, and `iroha app zk vk get`. The first-release confidential-asset
+model rejects `vk_shield`; Offline Cash V1 top-up and redemption instead use the authenticated
+release artifact set and the generic offline-cash routes. No asset-bound private-transfer
 verifier or generic transfer/withdrawal ISI exists.
 
 ### ZK verify batch

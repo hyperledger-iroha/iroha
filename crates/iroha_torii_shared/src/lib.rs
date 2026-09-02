@@ -12,6 +12,8 @@ use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSe
 pub mod da;
 /// Public Torii DTOs for certificate-only governance proposal drafts.
 pub mod governance_proposal_api;
+/// Shared MCP wire constants for Torii and repository clients.
+pub mod mcp;
 /// Public Torii DTOs for the offline cash lifecycle.
 pub mod offline_api;
 /// Public Torii DTOs for authenticated SORA Parliament draft and read routes.
@@ -28,6 +30,8 @@ pub mod route_catalog;
 pub mod sorafs_hedging_billing_api;
 /// Canonical wire types for externally signed SoraFS moderation recovery.
 pub mod sorafs_moderation_api;
+/// Canonical response envelopes for the Sumeragi evidence audit API.
+pub mod sumeragi_evidence_api;
 /// Public Torii DTOs for Parliament-governed validation-fee policy state.
 pub mod validation_fee_api;
 /// Response header binding a hosted Soracloud response to the served service name.
@@ -340,16 +344,10 @@ pub mod uri {
     pub const QUERY: &str = "/v1/query";
     /// URI used to evaluate offline-payment readiness.
     pub const OFFLINE_READINESS: &str = crate::route_catalog::offline::READINESS_PATH;
-    /// URI used to resolve proof-bearing active receiver registration lineage.
-    pub const OFFLINE_RECIPIENT_LINEAGE: &str =
-        crate::route_catalog::offline::RECIPIENT_LINEAGE_PATH;
     /// URI used to submit an online-to-offline top-up operation.
     pub const OFFLINE_TOP_UP: &str = crate::route_catalog::offline::TOP_UP_PATH;
     /// URI used to submit an offline redemption operation.
     pub const OFFLINE_REDEEM: &str = crate::route_catalog::offline::REDEEM_PATH;
-    /// URI used to submit one exact ordinary Kagemusha V4 lifecycle transaction.
-    pub const KAGEMUSHA_LIFECYCLE_TRANSACTION: &str =
-        crate::route_catalog::offline::KAGEMUSHA_LIFECYCLE_TRANSACTION_PATH;
     /// URI used to fetch a finality-bound current validation-fee registry.
     pub const VALIDATION_FEE_CURRENT_POLICY_PROOF: &str =
         crate::route_catalog::runtime_governance::VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH;

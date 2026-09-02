@@ -31,6 +31,7 @@ soak, or rollback workflow.
 from __future__ import annotations
 
 import argparse
+import base64
 import errno
 import fcntl
 import grp
@@ -437,7 +438,18 @@ LINUX_AARCH64_TARGET_RE = re.compile(
     r"aarch64-[a-z0-9_]+-linux(?:-[a-z0-9_.+]+)?"
 )
 TAIRA_QUALIFICATION_BRANCH = "optimizations"
-MCP_PROTOCOL_VERSION_V1 = "2025-06-18"
+MCP_PROTOCOL_VERSION = "2026-07-28"
+MCP_CLIENT_INFO = {"name": "taira-devnet-smoke", "version": "1"}
+MCP_META_PROTOCOL_VERSION = "io.modelcontextprotocol/protocolVersion"
+MCP_META_CLIENT_CAPABILITIES = "io.modelcontextprotocol/clientCapabilities"
+MCP_META_CLIENT_INFO = "io.modelcontextprotocol/clientInfo"
+MCP_NAME_SOURCE_FIELDS = {
+    "tools/call": "name",
+    "resources/read": "uri",
+    "prompts/get": "name",
+}
+MCP_BASE64_SENTINEL_PREFIX = "=?base64?"
+MCP_BASE64_SENTINEL_SUFFIX = "?="
 
 
 @dataclass(frozen=True)
@@ -2799,16 +2811,97 @@ def validate_configs(
     parallel_map(tuple(range(PEER_COUNT)), validate)
 
 
+def mcp_jsonrpc_request(
+    request_id: int | str,
+    method: str,
+    params: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Build one self-describing native MCP request."""
+
+    request_params = {} if params is None else dict(params)
+    if "_meta" in request_params:
+        fail("MCP request params must not override the protocol metadata")
+    request_params["_meta"] = {
+        MCP_META_PROTOCOL_VERSION: MCP_PROTOCOL_VERSION,
+        MCP_META_CLIENT_CAPABILITIES: {},
+        MCP_META_CLIENT_INFO: dict(MCP_CLIENT_INFO),
+    }
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": method,
+        "params": request_params,
+    }
+
+
+def mcp_mirrored_header_value(value: str) -> str:
+    """Encode one MCP routing value for safe HTTP header transport."""
+
+    encoded = value.encode("utf-8")
+    header_safe = (
+        bool(encoded)
+        and all(byte == 0x09 or 0x20 <= byte <= 0x7E for byte in encoded)
+        and encoded[0] not in (0x09, 0x20)
+        and encoded[-1] not in (0x09, 0x20)
+        and not (
+            value.startswith(MCP_BASE64_SENTINEL_PREFIX)
+            and value.endswith(MCP_BASE64_SENTINEL_SUFFIX)
+        )
+    )
+    if header_safe:
+        return value
+    rendered = base64.b64encode(encoded).decode("ascii")
+    return f"{MCP_BASE64_SENTINEL_PREFIX}{rendered}{MCP_BASE64_SENTINEL_SUFFIX}"
+
+
+def mcp_http_headers(payload: object) -> dict[str, str]:
+    """Return modern MCP headers after validating the mirrored body fields."""
+
+    if not isinstance(payload, dict):
+        fail("MCP POST payload must be one JSON-RPC request object")
+    method = payload.get("method")
+    params = payload.get("params")
+    if not isinstance(method, str) or not isinstance(params, dict):
+        fail("MCP request must contain string method and object params")
+    meta = params.get("_meta")
+    if (
+        not isinstance(meta, dict)
+        or meta.get(MCP_META_PROTOCOL_VERSION) != MCP_PROTOCOL_VERSION
+        or not isinstance(meta.get(MCP_META_CLIENT_CAPABILITIES), dict)
+    ):
+        fail("MCP request is missing the required native protocol metadata")
+    headers = {
+        "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
+        "Mcp-Method": method,
+    }
+    name_source = MCP_NAME_SOURCE_FIELDS.get(method)
+    if name_source is not None:
+        name = params.get(name_source)
+        if not isinstance(name, str):
+            fail(f"MCP {method} request must contain string params.{name_source}")
+        headers["Mcp-Name"] = mcp_mirrored_header_value(name)
+    return headers
+
+
 def http_request(url: str, payload: object | None = None) -> tuple[int, object | None]:
     """Send one local Torii GET/JSON POST and decode JSON when present."""
 
     body = None if payload is None else json.dumps(payload).encode("utf-8")
     plain_text_probe = url.rstrip("/").endswith(("/health", "/readyz"))
-    headers = {"Accept": "text/plain" if plain_text_probe else "application/json"}
+    is_mcp = body is not None and url.rstrip("/").endswith("/v1/mcp")
+    headers = {
+        "Accept": (
+            "text/plain"
+            if plain_text_probe
+            else "application/json, text/event-stream"
+            if is_mcp
+            else "application/json"
+        )
+    }
     if body is not None:
         headers["Content-Type"] = "application/json"
-        if url.rstrip("/").endswith("/v1/mcp"):
-            headers["MCP-Protocol-Version"] = MCP_PROTOCOL_VERSION_V1
+        if is_mcp:
+            headers.update(mcp_http_headers(payload))
     request = urllib.request.Request(url, data=body, headers=headers)
     try:
         with urllib.request.urlopen(request, timeout=3) as response:
@@ -2973,47 +3066,43 @@ def wait_for_cluster(
 
 
 def check_mcp(root: str, request: Request) -> None:
-    """Verify the enabled MCP endpoint can initialize and list current tools."""
+    """Verify native stateless MCP discovery and the curated tool list."""
 
     url = root + "v1/mcp"
-    initialize = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": MCP_PROTOCOL_VERSION_V1,
-            "capabilities": {},
-            "clientInfo": {"name": "taira-devnet-smoke", "version": "1"},
-        },
-    }
-    status, initialized = request(url, initialize)
-    initialized_result = (
-        initialized.get("result") if isinstance(initialized, dict) else None
+    status, discovery_response = request(
+        url,
+        mcp_jsonrpc_request(1, "server/discover"),
+    )
+    discovery = (
+        discovery_response.get("result")
+        if isinstance(discovery_response, dict)
+        else None
+    )
+    supported_versions = (
+        discovery.get("supportedVersions") if isinstance(discovery, dict) else None
+    )
+    capabilities = (
+        discovery.get("capabilities") if isinstance(discovery, dict) else None
     )
     if (
         status != 200
-        or not isinstance(initialized, dict)
-        or initialized.get("jsonrpc") != "2.0"
-        or initialized.get("id") != 1
-        or "error" in initialized
-        or not isinstance(initialized_result, dict)
-        or initialized_result.get("protocolVersion") != MCP_PROTOCOL_VERSION_V1
+        or not isinstance(discovery_response, dict)
+        or discovery_response.get("jsonrpc") != "2.0"
+        or discovery_response.get("id") != 1
+        or "error" in discovery_response
+        or not isinstance(discovery, dict)
+        or discovery.get("resultType") != "complete"
+        or not isinstance(supported_versions, list)
+        or MCP_PROTOCOL_VERSION not in supported_versions
+        or not isinstance(capabilities, dict)
+        or not isinstance(capabilities.get("tools"), dict)
+        or not mcp_cache_hints_are_valid(discovery)
     ):
-        fail(f"MCP initialize failed at {url} (HTTP {status})")
-    initialized_notification = {
-        "jsonrpc": "2.0",
-        "method": "notifications/initialized",
-    }
-    status, notification_response = request(url, initialized_notification)
-    if status != 202 or notification_response is not None:
-        fail(f"MCP initialized notification failed at {url} (HTTP {status})")
-    tools_request = {
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "tools/list",
-        "params": {},
-    }
-    status, tools_response = request(url, tools_request)
+        fail(f"MCP server/discover failed at {url} (HTTP {status})")
+    status, tools_response = request(
+        url,
+        mcp_jsonrpc_request(2, "tools/list"),
+    )
     result = tools_response.get("result") if isinstance(tools_response, dict) else None
     tools = result.get("tools") if isinstance(result, dict) else None
     if (
@@ -3022,6 +3111,9 @@ def check_mcp(root: str, request: Request) -> None:
         or tools_response.get("jsonrpc") != "2.0"
         or tools_response.get("id") != 2
         or "error" in tools_response
+        or not isinstance(result, dict)
+        or result.get("resultType") != "complete"
+        or not mcp_cache_hints_are_valid(result)
         or not isinstance(tools, list)
         or not tools
         or any(
@@ -3031,11 +3123,22 @@ def check_mcp(root: str, request: Request) -> None:
             for tool in tools
         )
     ):
-        fail(f"MCP tools/list returned no tools at {url} (HTTP {status})")
+        fail(f"MCP tools/list failed at {url} (HTTP {status})")
+
+
+def mcp_cache_hints_are_valid(result: dict[str, object]) -> bool:
+    """Return whether one complete MCP cacheable result has valid hints."""
+
+    ttl_ms = result.get("ttlMs")
+    return (
+        type(ttl_ms) is int
+        and ttl_ms >= 0
+        and result.get("cacheScope") in {"public", "private"}
+    )
 
 
 def check_all_mcp(roots: Sequence[str], request: Request) -> None:
-    """Verify the live MCP handshake and curated tools on every validator."""
+    """Verify native MCP discovery and curated tools on every validator."""
 
     parallel_map(roots, lambda root: check_mcp(root, request))
 

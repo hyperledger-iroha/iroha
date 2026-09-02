@@ -150,6 +150,25 @@ fn sign_consensus_task(
     task: ConsensusSignTask,
     restore_outbound_payload: bool,
 ) -> Result<V2IoCompletion, String> {
+    sign_consensus_task_with_offline_cash_authority(
+        body_store,
+        context,
+        key_pair,
+        None,
+        task,
+        restore_outbound_payload,
+    )
+}
+fn sign_consensus_task_with_offline_cash_authority(
+    body_store: &V2BodyStore,
+    context: &wire::HeightContext,
+    key_pair: &KeyPair,
+    offline_cash_authority: Option<
+        &crate::zk::offline_cash_v1_recursion::OfflineCashMintFinalityLocalAuthorityV1,
+    >,
+    task: ConsensusSignTask,
+    restore_outbound_payload: bool,
+) -> Result<V2IoCompletion, String> {
     let (preimage, outbound_payload) = match task.request() {
         super::v2::SignRequest::Proposal(proposal) => {
             let outbound_payload = restore_outbound_payload
@@ -160,18 +179,36 @@ fn sign_consensus_task(
         super::v2::SignRequest::Vote(vote) => (vote.signature_preimage(), None),
         super::v2::SignRequest::TimeoutVote(vote) => (vote.signature_preimage(), None),
     };
-    Signature::try_new(key_pair.private_key(), &preimage)
-        .map(|signature| V2IoCompletion::Signature {
-            work_id: task.id(),
-            signature: signature.payload().to_vec(),
-            outbound_payload,
-        })
-        .map_err(|error| error.to_string())
+    let signature = sign_consensus_request_with_offline_cash_authority(
+        context,
+        key_pair,
+        task.request(),
+        &preimage,
+        offline_cash_authority,
+    )?;
+    Ok(V2IoCompletion::Signature {
+        work_id: task.id(),
+        signature,
+        outbound_payload,
+    })
 }
 fn sign_recovered_lifecycle_task(
     body_store: &V2BodyStore,
     context: &wire::HeightContext,
     key_pair: &KeyPair,
+    task: RecoveredLifecycleSignTaskV1,
+) -> Result<RecoveredLifecycleSignWorkerResultV1, String> {
+    sign_recovered_lifecycle_task_with_offline_cash_authority(
+        body_store, context, key_pair, None, task,
+    )
+}
+fn sign_recovered_lifecycle_task_with_offline_cash_authority(
+    body_store: &V2BodyStore,
+    context: &wire::HeightContext,
+    key_pair: &KeyPair,
+    offline_cash_authority: Option<
+        &crate::zk::offline_cash_v1_recursion::OfflineCashMintFinalityLocalAuthorityV1,
+    >,
     task: RecoveredLifecycleSignTaskV1,
 ) -> Result<RecoveredLifecycleSignWorkerResultV1, String> {
     let (preimage, outbound_payload) = match &task.request {
@@ -184,13 +221,75 @@ fn sign_recovered_lifecycle_task(
         super::v2::SignRequest::Vote(vote) => (vote.signature_preimage(), None),
         super::v2::SignRequest::TimeoutVote(vote) => (vote.signature_preimage(), None),
     };
-    Signature::try_new(key_pair.private_key(), &preimage)
-        .map(|signature| RecoveredLifecycleSignWorkerResultV1 {
-            task,
-            signature: signature.payload().to_vec(),
-            outbound_payload,
-        })
-        .map_err(|error| error.to_string())
+    let signature = sign_consensus_request_with_offline_cash_authority(
+        context,
+        key_pair,
+        &task.request,
+        &preimage,
+        offline_cash_authority,
+    )?;
+    Ok(RecoveredLifecycleSignWorkerResultV1 {
+        task,
+        signature,
+        outbound_payload,
+    })
+}
+fn sign_consensus_request_with_offline_cash_authority(
+    context: &wire::HeightContext,
+    key_pair: &KeyPair,
+    request: &super::v2::SignRequest,
+    preimage: &[u8],
+    offline_cash_authority: Option<
+        &crate::zk::offline_cash_v1_recursion::OfflineCashMintFinalityLocalAuthorityV1,
+    >,
+) -> Result<Vec<u8>, String> {
+    let bls_signature = Signature::try_new(key_pair.private_key(), preimage)
+        .map_err(|error| error.to_string())?
+        .payload()
+        .to_vec();
+    let super::v2::SignRequest::Vote(vote) = request else {
+        return Ok(bls_signature);
+    };
+    // Prepare authenticates the same execution commitment, including its
+    // top-up root, but monetary mint authority is granted only by Commit.
+    // Keep Prepare on the ordinary BLS path and attach the paired-Pasta seal
+    // only to the irrevocable Commit vote.
+    if vote.phase != wire::GlobalPhase::Commit {
+        return Ok(bls_signature);
+    }
+    let carries_mint_or_rotation_authority = context.next_epoch_snapshot.is_some()
+        || vote.execution_commitment.offline_cash_top_up_count != 0
+        || vote.execution_commitment.offline_cash_top_up_root.is_some();
+    if !carries_mint_or_rotation_authority {
+        return Ok(bls_signature);
+    }
+    let authority = offline_cash_authority.ok_or_else(|| {
+        "Offline Cash V1 top-up or epoch-boundary Commit vote requires a provisioned Pasta epoch authority"
+            .to_owned()
+    })?;
+    let message =
+        crate::zk::offline_cash_v1_recursion::build_offline_cash_mint_finality_seal_message_v1(
+            authority.epoch(),
+            context,
+            vote,
+        )
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| {
+            "Offline Cash V1 authoritative Commit vote produced no mint-finality statement"
+                .to_owned()
+        })?;
+    let seal = crate::zk::offline_cash_v1_recursion::sign_offline_cash_mint_finality_seal_v1(
+        authority.signer(),
+        &message,
+    )
+    .map_err(|error| error.to_string())?;
+    let auxiliary = super::v2::encode_offline_cash_commit_vote_seal_share_v1(message, seal);
+    wire::encode_offline_cash_consensus_signature_envelope_v1(
+        wire::OFFLINE_CASH_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1,
+        &bls_signature,
+        &auxiliary,
+    )
+    .map_err(|error| error.to_string())
 }
 fn recover_outbound_proposal_payload(
     body_store: &V2BodyStore,

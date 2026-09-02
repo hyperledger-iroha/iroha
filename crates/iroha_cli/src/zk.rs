@@ -1121,7 +1121,7 @@ mod tests {
     }
     #[test]
     fn vk_submission_namespace_explicit_and_defaults() {
-        let encoded = norito::json::to_value(&sample_vk_submission(Some("offline_kagemusha")))
+        let encoded = norito::json::to_value(&sample_vk_submission(Some("offline_cash_v1")))
             .expect("serialize VK submission fixture");
         let explicit: VkSubmissionJson =
             norito::json::from_value(encoded.clone()).expect("deserialize explicit namespace");
@@ -1129,7 +1129,7 @@ mod tests {
             build_vk_record(&explicit, VkSubmissionOperation::Register)
                 .expect("build explicit namespace record")
                 .namespace,
-            "offline_kagemusha"
+            "offline_cash_v1"
         );
         let mut omitted = encoded.clone();
         omitted
@@ -1159,7 +1159,7 @@ mod tests {
     }
     #[test]
     fn vk_submission_namespace_rejects_blank_or_untrimmed_values() {
-        for namespace in ["", " \t ", " offline_kagemusha", "offline_kagemusha "] {
+        for namespace in ["", " \t ", " offline_cash_v1", "offline_cash_v1 "] {
             let err = build_vk_record(
                 &sample_vk_submission(Some(namespace)),
                 VkSubmissionOperation::Register,
@@ -1318,7 +1318,7 @@ pub struct ZkRegisterAssetArgs {
     /// Verifying key id for unshield proofs (format: `<backend>:<name>`)
     #[arg(long, value_name = "BACKEND:NAME")]
     vk_unshield: Option<String>,
-    /// Canonical Kagemusha top-up shield verifying key id (format: `<backend>:<name>`)
+    /// Verifying key id for shield proofs (format: `<backend>:<name>`)
     #[arg(long, value_name = "BACKEND:NAME")]
     vk_shield: Option<String>,
 }

@@ -55,8 +55,13 @@ impl ServeSchedulerFixture {
                 power: 1,
             })
             .collect::<Vec<_>>();
+        let network_id = crate::sumeragi::synthetic_network_id("certified-serve-scheduler");
+        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+                network_id, 0, &roster,
+            );
         let context = wire::HeightContext {
-            network_id: crate::sumeragi::synthetic_network_id("certified-serve-scheduler"),
+            network_id,
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -68,6 +73,8 @@ impl ServeSchedulerFixture {
             quorum: wire::DualQuorum::from_roster(&roster)
                 .expect("four-validator Certified-Serve scheduler quorum"),
             roster,
+            offline_cash_mint_finality_epoch_id,
+            offline_cash_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"Certified-Serve scheduler nexus"),
             execution_policy_hash: Hash::new(b"Certified-Serve scheduler policy"),
             da_layout: wire::DataAvailabilityLayout {
@@ -117,13 +124,14 @@ impl ServeSchedulerFixture {
             block_hash: iroha_crypto::HashOf::from_untyped_unchecked(Hash::new([marker, 0xA1])),
             payload_hash: Hash::new([marker, 0xA2]),
         };
-        let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new([marker, 0xB1]),
-            Hash::new([marker, 0xB2]),
-            Hash::new([marker, 0xB3]),
-            1,
-            Hash::new([marker, 0xB4]),
-        );
+        let execution_commitment =
+            wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                Hash::new([marker, 0xB1]),
+                Hash::new([marker, 0xB2]),
+                Hash::new([marker, 0xB3]),
+                1,
+                Hash::new([marker, 0xB4]),
+            );
         let signers = vec![0, 1, 2];
         let preimage = wire::Vote {
             round,

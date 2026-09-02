@@ -9,7 +9,6 @@ on:
       - ".github/workflows/mobile_sdk_artifacts.yml"
       - ".github/workflows/pr_csharp.yml"
       - "ci/sdk_sorafs_orchestrator.sh"
-      - "ci/check_kagemusha_jvm_native_bridge.sh"
       - "ci/check_sorafs_python_native_sdk.sh"
       - "codec/**"
       - "scripts/deploy_localnet.sh"
@@ -253,21 +252,6 @@ jobs:
           echo "ANDROID_HOME=$sdk_root" >> "$GITHUB_ENV"
       - name: Fetch the locked Rust dependency graph
         run: cargo fetch --locked
-      - name: Require fresh ABI-23 JNI bridge in complete Kotlin and Java suites
-        env:
-          KAGEMUSHA_JVM_NATIVE_EVIDENCE_DIR: ${{ runner.temp }}/iroha-kotlin-zk-asset-localnet-evidence
-        run: >-
-          NORITO_MOBILE_JAVA_HOME="$JAVA_HOME"
-          NORITO_MOBILE_ANDROID_HOME="$ANDROID_HOME"
-          bash ci/check_kagemusha_jvm_native_bridge.sh
-      - name: Upload Kotlin four-peer localnet evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: sorafs-orchestrator-mobile-parity-${{ github.run_id }}
-          path: ${{ runner.temp }}/iroha-kotlin-zk-asset-localnet-evidence/*
-          if-no-files-found: error
-          retention-days: 30
 
   csharp-parity:
     runs-on: ubuntu-24.04

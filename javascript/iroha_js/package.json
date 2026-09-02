@@ -20,6 +20,11 @@
       "import": "./dist/browser.js",
       "types": "./browser.d.ts"
     },
+    "./offline-cash-v1": {
+      "browser": "./dist/offlineCashV1.js",
+      "import": "./dist/offlineCashV1.js",
+      "types": "./offline-cash-v1.d.ts"
+    },
     "./privacy-capabilities": {
       "browser": "./dist/privacyCapabilities.js",
       "import": "./dist/privacyCapabilities.js",
@@ -128,6 +133,9 @@
       "browser": [
         "./browser.d.ts"
       ],
+      "offline-cash-v1": [
+        "./offline-cash-v1.d.ts"
+      ],
       "privacy-capabilities": [
         "./privacy-capabilities.d.ts"
       ],
@@ -215,7 +223,6 @@
     "prepublishOnly": "npm run check:changelog && npm run build:dist && npm run lint:test && npm run bundle:check && npm run test:pack-install && npm run release:provenance",
     "test:integration": "node ./scripts/run_integration.mjs",
     "test:integration:qualification": "node ./scripts/run_integration.mjs --qualification",
-    "test:taira-kagemusha-read-only": "node ./scripts/run-test-profile.mjs taira-kagemusha-read-only",
     "report:bundle-size": "node ./scripts/report-bundle-size.mjs"
   },
   "keywords": [

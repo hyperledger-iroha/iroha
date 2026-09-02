@@ -606,23 +606,13 @@ pub mod escrow {
         pub struct CanResolveEscrowDispute;
     }
 }
-/// Permission tokens covering governed offline-settlement releases.
+/// Permission tokens covering offline cash settlement.
 pub mod offline {
     use super::*;
     permission! {
-        /// Permission to manage native offline escrow issuance and settlement.
+        /// Permission to manage native Offline Cash reserve issuance and settlement.
         #[derive(Copy)]
-        pub struct CanManageOfflineEscrow;
-    }
-    permission! {
-        /// Permission to activate an authenticated Kagemusha ABI-21/V4 recursive release.
-        #[derive(Copy)]
-        pub struct CanActivateKagemushaRecursiveReleaseV4;
-    }
-    permission! {
-        /// Permission to publish or rotate the governed offline device-attestation policy.
-        #[derive(Copy)]
-        pub struct CanManageOfflineDeviceAttestationPolicy;
+        pub struct CanManageOfflineReserve;
     }
 }
 /// Permission tokens covering NFT operations.

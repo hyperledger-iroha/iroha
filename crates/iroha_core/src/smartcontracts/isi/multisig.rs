@@ -19,6 +19,7 @@ use iroha_data_model::{
     },
     metadata::Metadata,
     name::Name,
+    permission::Permission,
     prelude::{Grant, Json, Level, Log, Register, Revoke},
     query::error::{FindError, QueryExecutionFail},
     role::{Role, RoleId},
@@ -445,6 +446,28 @@ fn rekey_account_id(
     new_account: &AccountId,
     home_domain: Option<&iroha_data_model::domain::DomainId>,
 ) -> Result<(), InstructionExecutionError> {
+    if let Some(contract) = crate::smartcontracts::code::historical_contract_for_subject(
+        &state_transaction.world,
+        old_account,
+    ) {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "cannot rekey account {old_account}: it is the retained subject of contract `{contract}`"
+            )
+            .into(),
+        ));
+    }
+    if let Some(reference) =
+        crate::smartcontracts::isi::sorafs_moderation::retained_moderation_account_reference(
+            state_transaction.world(),
+            old_account,
+        )?
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!("cannot rekey account {old_account}: it is retained by moderation {reference}")
+                .into(),
+        ));
+    }
     if let Some(contract) = crate::smartcontracts::code::contract_owned_or_pending_for_account(
         &state_transaction.world,
         old_account,
@@ -647,6 +670,39 @@ fn rekey_account_id(
             ));
         }
     }
+    let old_global_trigger_permission: Permission =
+        iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
+            authority: old_account.clone(),
+        }
+        .into();
+    let global_trigger_permission_grantees = state_transaction
+        .world
+        .triggers
+        .global_data_trigger_permission_rekeys(old_account, new_account)
+        .map_err(|error| {
+            InstructionExecutionError::InvariantViolation(
+                format!("cannot preflight data-trigger account rekey: {error}").into(),
+            )
+        })?
+        .into_iter()
+        .filter_map(|(current_grantee, migrated_grantee)| {
+            state_transaction
+                .world
+                .account_permissions
+                .get(&current_grantee)
+                .is_some_and(|permissions| permissions.contains(&old_global_trigger_permission))
+                .then_some(migrated_grantee)
+        })
+        .collect::<BTreeSet<_>>();
+    state_transaction
+        .world
+        .triggers
+        .replace_account_id(old_account, new_account)
+        .map_err(|error| {
+            InstructionExecutionError::InvariantViolation(
+                format!("cannot apply preflighted data-trigger account rekey: {error}").into(),
+            )
+        })?;
     // A controller change ends the lifecycle of the old controller-derived AccountId. Remove
     // permissions whose payload targets that identifier before it becomes absent; otherwise an
     // aliasless rekey followed by re-registration of the old ID would reactivate stale direct or
@@ -825,10 +881,28 @@ fn rekey_account_id(
     replace_account_id_in_governance(state_transaction, old_account, new_account);
     replace_account_id_in_oracle(state_transaction, old_account, new_account);
     replace_account_id_in_content_bundles(state_transaction, old_account, new_account);
-    state_transaction
-        .world
-        .triggers
-        .replace_account_id(old_account, new_account);
+    if !global_trigger_permission_grantees.is_empty() {
+        let migrated_permission: Permission =
+            iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
+                authority: new_account.clone(),
+            }
+            .into();
+        for grantee in global_trigger_permission_grantees {
+            if let Some(permissions) = state_transaction
+                .world
+                .account_permissions
+                .get_mut(&grantee)
+            {
+                permissions.insert(migrated_permission.clone());
+            } else {
+                state_transaction.world.account_permissions.insert(
+                    grantee.clone(),
+                    BTreeSet::from([migrated_permission.clone()]),
+                );
+            }
+            state_transaction.invalidate_permission_cache_for_account(&grantee);
+        }
+    }
     state_transaction.invalidate_permission_cache_for_account(old_account);
     state_transaction.invalidate_permission_cache_for_account(new_account);
     Ok(())
@@ -1558,14 +1632,6 @@ fn execute_propose(
     authority: &AccountId,
     instruction: &MultisigPropose,
 ) -> Result<(), ValidationFail> {
-    if crate::kagemusha_operation::instructions_contain_kagemusha_operation_v4(
-        &instruction.instructions,
-    ) {
-        return Err(ValidationFail::NotPermitted(
-            "Kagemusha operations require one direct external signed transaction and cannot be deferred in a multisig proposal"
-                .to_owned(),
-        ));
-    }
     let proposer = authority.clone();
     let multisig_account = match resolve_signatory_account(state_transaction, &instruction.account)
     {
@@ -4129,6 +4195,211 @@ mod tests {
         );
     }
     #[test]
+    fn add_signatory_rekeys_global_data_trigger_provenance_and_live_capability() {
+        use crate::smartcontracts::triggers::set::SetReadOnly;
+        use iroha_data_model::{
+            events::data::DataEventFilter,
+            prelude::{Action, Repeats, TriggerId},
+            transaction::Executable,
+            trigger::Trigger,
+        };
+
+        tx!(
+            state,
+            block,
+            tx,
+            World::new(),
+            "multisig-global-trigger-rekey",
+            2_u64,
+            0
+        );
+        let domain_id = DomainId::try_new("trigger-rekey", "universal").unwrap();
+        let owner_key = checked_keypair();
+        let owner_id = new_account_id(&owner_key);
+        domain!(tx, owner_id, domain_id, "domain registration");
+        account!(tx, owner_id, domain_id, owner_id, "register owner");
+        let signer1 = checked_keypair();
+        let signer2 = checked_keypair();
+        let signer1_id = new_account_id(&signer1);
+        let signer2_id = new_account_id(&signer2);
+        account!(tx, owner_id, domain_id, signer1_id, "register signer1");
+        account!(tx, owner_id, domain_id, signer2_id, "register signer2");
+        let spec = spec(BTreeMap::from([(signer1_id, 1)]), 1);
+        let multisig_id = msig!(tx, owner_id, domain_id, spec, "register multisig account");
+        let old_permission: Permission =
+            iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
+                authority: multisig_id.clone(),
+            }
+            .into();
+        Grant::account_permission(old_permission.clone(), multisig_id.clone())
+            .execute(&owner_id, &mut tx)
+            .expect("grant exact global-trigger capability");
+        let trigger_id: TriggerId = "global_trigger_rekey".parse().expect("valid trigger id");
+        Register::trigger(Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                Executable::Instructions(Vec::<InstructionBox>::new().into()),
+                Repeats::Indefinitely,
+                multisig_id.clone(),
+                DataEventFilter::Any,
+            )
+            .expect("valid global data-trigger action"),
+        ))
+        .execute(&multisig_id, &mut tx)
+        .expect("register capability-backed global data trigger");
+
+        AddSignatory::new(multisig_id.clone(), signer2.public_key().clone())
+            .execute(&owner_id, &mut tx)
+            .expect("rekey multisig account");
+        let mut updated_spec = spec.clone();
+        updated_spec.signatories.insert(signer2_id, 1);
+        let updated_account =
+            AccountId::new_multisig(multisig_policy_from_spec(&updated_spec).expect("policy"));
+        let action = tx
+            .world
+            .triggers
+            .data_triggers()
+            .get(&trigger_id)
+            .cloned()
+            .expect("global trigger remains registered");
+        assert_eq!(action.authority, updated_account);
+        assert_eq!(
+            crate::smartcontracts::isi::triggers::data_trigger_global_permission_grantee(
+                &action.metadata
+            )
+            .expect("canonical global provenance"),
+            Some(updated_account.clone())
+        );
+        let migrated_permission: Permission =
+            iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
+                authority: updated_account.clone(),
+            }
+            .into();
+        assert!(
+            tx.world
+                .account_permissions
+                .get(&updated_account)
+                .is_some_and(|permissions| permissions.contains(&migrated_permission))
+        );
+        assert!(
+            tx.world
+                .account_permissions
+                .iter()
+                .all(|(_, permissions)| !permissions.contains(&old_permission)),
+            "the retired concrete account target must not retain a stale capability"
+        );
+        assert!(
+            crate::smartcontracts::isi::triggers::isi::data_trigger_scope_is_currently_authorized(
+                &tx, &action,
+            ),
+            "the migrated trigger and exact direct capability must remain coherent"
+        );
+    }
+
+    #[test]
+    fn add_signatory_does_not_resurrect_revoked_global_data_trigger_capability() {
+        use crate::smartcontracts::triggers::set::SetReadOnly;
+        use iroha_data_model::{
+            events::data::DataEventFilter,
+            prelude::{Action, Repeats, TriggerId},
+            transaction::Executable,
+            trigger::Trigger,
+        };
+
+        tx!(
+            state,
+            block,
+            tx,
+            World::new(),
+            "multisig-revoked-global-trigger-rekey",
+            2_u64,
+            0
+        );
+        let domain_id = DomainId::try_new("trigger-rekey-revoked", "universal").unwrap();
+        let owner_key = checked_keypair();
+        let owner_id = new_account_id(&owner_key);
+        domain!(tx, owner_id, domain_id, "domain registration");
+        account!(tx, owner_id, domain_id, owner_id, "register owner");
+        let signer1 = checked_keypair();
+        let signer2 = checked_keypair();
+        let signer1_id = new_account_id(&signer1);
+        let signer2_id = new_account_id(&signer2);
+        account!(tx, owner_id, domain_id, signer1_id, "register signer1");
+        account!(tx, owner_id, domain_id, signer2_id, "register signer2");
+        let spec = spec(BTreeMap::from([(signer1_id, 1)]), 1);
+        let multisig_id = msig!(tx, owner_id, domain_id, spec, "register multisig account");
+        let old_permission: Permission =
+            iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
+                authority: multisig_id.clone(),
+            }
+            .into();
+        Grant::account_permission(old_permission.clone(), multisig_id.clone())
+            .execute(&owner_id, &mut tx)
+            .expect("grant exact global-trigger capability");
+        let trigger_id: TriggerId = "revoked_global_trigger_rekey"
+            .parse()
+            .expect("valid trigger id");
+        Register::trigger(Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                Executable::Instructions(Vec::<InstructionBox>::new().into()),
+                Repeats::Indefinitely,
+                multisig_id.clone(),
+                DataEventFilter::Any,
+            )
+            .expect("valid global data-trigger action"),
+        ))
+        .execute(&multisig_id, &mut tx)
+        .expect("register capability-backed global data trigger");
+        assert!(
+            tx.world
+                .remove_account_permission(&multisig_id, &old_permission),
+            "fixture revocation must remove the live direct capability"
+        );
+
+        AddSignatory::new(multisig_id.clone(), signer2.public_key().clone())
+            .execute(&owner_id, &mut tx)
+            .expect("rekey multisig account");
+        let mut updated_spec = spec.clone();
+        updated_spec.signatories.insert(signer2_id, 1);
+        let updated_account =
+            AccountId::new_multisig(multisig_policy_from_spec(&updated_spec).expect("policy"));
+        let migrated_permission: Permission =
+            iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
+                authority: updated_account.clone(),
+            }
+            .into();
+        assert!(
+            tx.world
+                .account_permissions
+                .get(&updated_account)
+                .is_none_or(|permissions| !permissions.contains(&migrated_permission)),
+            "rekey must not resurrect a capability revoked after trigger registration"
+        );
+        let action = tx
+            .world
+            .triggers
+            .data_triggers()
+            .get(&trigger_id)
+            .cloned()
+            .expect("global trigger remains registered");
+        assert_eq!(action.authority, updated_account);
+        assert_eq!(
+            crate::smartcontracts::isi::triggers::data_trigger_global_permission_grantee(
+                &action.metadata
+            )
+            .expect("canonical global provenance"),
+            Some(updated_account)
+        );
+        assert!(
+            !crate::smartcontracts::isi::triggers::isi::data_trigger_scope_is_currently_authorized(
+                &tx, &action,
+            ),
+            "the migrated provenance must stay unauthorized without a live direct capability"
+        );
+    }
+
+    #[test]
     fn set_account_quorum_keeps_alias_record_and_pending_proposal_approvable() {
         tx!(
             state,
@@ -4276,6 +4547,57 @@ mod tests {
                 Err(FindError::Account(account)) if account == new_account
             ),
             "rejected rekey must not create the replacement account"
+        );
+    }
+    #[test]
+    fn account_rekey_rejects_historical_contract_subject_without_partial_mutation() {
+        tx!(
+            state,
+            block,
+            tx,
+            World::new(),
+            "multisig-contract-subject-rekey"
+        );
+        let deployer = new_account_id(&checked_keypair());
+        let contract = iroha_data_model::smart_contract::ContractAddress::derive(
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
+            &deployer,
+            91,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let old_account = contract.subject_id();
+        let new_account = new_account_id(&checked_keypair());
+        tx.world
+            .bind_inactive_contract_subject_for_testing(contract.clone(), old_account.clone());
+        let binding_before = tx
+            .world
+            .contract_subject_bindings
+            .get(&contract)
+            .cloned()
+            .expect("retained contract binding");
+
+        let error = rekey_account_id(&mut tx, &old_account, &new_account, None)
+            .expect_err("historical contract subject must never be rekeyed");
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("retained subject of contract `{contract}`")),
+            "error must identify the exact retained contract: {error}"
+        );
+        assert!(tx.world.account(&old_account).is_ok());
+        assert!(tx.world.account(&new_account).is_err());
+        assert_eq!(
+            tx.world.contract_subject_bindings.get(&contract),
+            Some(&binding_before),
+            "rejected rekey must preserve the retained lifecycle binding"
+        );
+        assert_eq!(
+            tx.world.contract_subject_addresses.get(&old_account),
+            Some(&contract),
+            "rejected rekey must preserve the reverse subject index"
         );
     }
     #[test]

@@ -2715,6 +2715,7 @@ async fn one_lane_without_authoritative_binding_returns_route_unavailable() {
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
     let request = ToriiProxyRequestKindV1::Read(super::torii_read_request(
         ToriiReadEndpointV1::AccountGet,
+        ToriiFanoutRouteScopeV1::AllDataspaces,
         route,
         vec![
             checked_torii_test_account_id(
@@ -3247,6 +3248,7 @@ async fn incoming_proxy_reads_and_fanout_are_terminal_when_route_ownership_is_st
     };
     let read_request = ToriiProxyRequestKindV1::Read(super::torii_read_request(
         ToriiReadEndpointV1::AccountGet,
+        ToriiFanoutRouteScopeV1::AllDataspaces,
         route,
         vec![
             checked_torii_test_account_id(
@@ -3323,6 +3325,7 @@ async fn incoming_read_proxy_response_for_route(
         visited_peer_ids: vec![ingress_peer_id],
         request: ToriiProxyRequestKindV1::Read(super::torii_read_request(
             ToriiReadEndpointV1::AccountGet,
+            ToriiFanoutRouteScopeV1::AllDataspaces,
             route,
             vec![
                 checked_torii_test_account_id(

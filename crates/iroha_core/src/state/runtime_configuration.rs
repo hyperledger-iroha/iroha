@@ -37,67 +37,6 @@ impl State {
         self.settlement_engine = SettlementEngine::from_router_config(&self.settlement.router);
     }
 
-    /// Install the fully authenticated immutable Kagemusha V4 release catalog.
-    ///
-    /// Startup calls this before Kura replay; transaction execution receives an
-    /// `Arc` snapshot and never performs release filesystem access.
-    pub fn set_kagemusha_release_catalog(
-        &mut self,
-        catalog: crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4,
-    ) {
-        self.kagemusha_release_catalog = Arc::new(catalog);
-    }
-
-    /// Install the immutable, startup-authenticated Kagemusha runtime projection identity.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for an all-zero identity or an attempt to replace a
-    /// previously or concurrently installed identity with different bytes.
-    pub fn install_kagemusha_runtime_effective_config_sha256(
-        &self,
-        digest: [u8; 32],
-    ) -> Result<(), String> {
-        if digest == [0; 32] {
-            return Err("Kagemusha runtime-effective config digest must be nonzero".to_owned());
-        }
-        match self.kagemusha_runtime_effective_config_sha256.set(digest) {
-            Ok(()) => Ok(()),
-            Err(digest)
-                if self.kagemusha_runtime_effective_config_sha256.get() == Some(&digest) =>
-            {
-                Ok(())
-            }
-            Err(_) => {
-                Err("Kagemusha runtime-effective config digest is already installed".to_owned())
-            }
-        }
-    }
-
-    /// Check one committed or prospective world against the immutable local projection.
-    pub(crate) fn require_kagemusha_runtime_effective_config_for_world(
-        &self,
-        world: &impl WorldReadOnly,
-    ) -> Result<(), String> {
-        crate::smartcontracts::isi::offline::require_local_runtime_effective_config(
-            world,
-            self.kagemusha_runtime_effective_config_sha256
-                .get()
-                .copied(),
-        )
-    }
-
-    /// Check the reconstructed committed world before opening consensus output.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for malformed or ambiguous active lifecycle state, a
-    /// missing local projection, or any projection mismatch.
-    pub fn require_committed_kagemusha_runtime_effective_config(&self) -> Result<(), String> {
-        let view = self.view();
-        self.require_kagemusha_runtime_effective_config_for_world(view.world())
-    }
-
     /// Current settlement configuration snapshot.
     #[must_use]
     pub fn settlement(&self) -> &iroha_config::parameters::actual::Settlement {

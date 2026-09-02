@@ -26,7 +26,7 @@ jobs:
         with:
           toolchain: 1.93.1
       - name: Enforce reviewed shipping feature graphs
-        run: python3 scripts/check_release_feature_graph.py
+        run: python3 -I -S scripts/check_release_feature_graph.py
 
   candidate-no-profiling:
     needs: release-feature-graph

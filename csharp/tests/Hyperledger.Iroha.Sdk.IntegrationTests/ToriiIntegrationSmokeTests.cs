@@ -23,10 +23,10 @@ public sealed class ToriiIntegrationSmokeTests
     }
 
     [Fact]
-    public async Task LiveTairaKagemushaCapabilityIsExactAndReadOnly()
+    public async Task LiveTairaOfflineCashCapabilityIsExactAndReadOnly()
     {
         if (!string.Equals(
-                Environment.GetEnvironmentVariable("IROHA_TAIRA_KAGEMUSHA_READ_ONLY"),
+                Environment.GetEnvironmentVariable("IROHA_TAIRA_OFFLINE_CASH_READ_ONLY"),
                 "1",
                 StringComparison.Ordinal))
         {
@@ -43,8 +43,8 @@ public sealed class ToriiIntegrationSmokeTests
         var capability = await client.GetOfflineCapabilityAsync(timeout.Token);
 
         Assert.Equal("cash_handoff_v1", capability.CashHandoffCapability);
-        Assert.Equal(23u, capability.RequiredBridgeAbiVersion);
-        Assert.Equal(8u, capability.MaxHops);
+        Assert.Equal(1u, capability.WireVersion);
+        Assert.Equal(1u, capability.DeviceLifecycleVersion);
         Assert.True(capability.Ready);
     }
 
@@ -73,13 +73,13 @@ public sealed class ToriiIntegrationSmokeTests
     [InlineData("https://taira.sora.org/v1")]
     [InlineData("https://taira.sora.org?query=1")]
     [InlineData("https://taira.sora.org#fragment")]
-    public void TairaKagemushaReadOnlyProbeRejectsNonOriginRoots(string raw)
+    public void TairaOfflineCashReadOnlyProbeRejectsNonOriginRoots(string raw)
     {
         Assert.Throws<InvalidOperationException>(() => RequireCredentialFreeHttpsOrigin(raw));
     }
 
     [Fact]
-    public void TairaKagemushaReadOnlyProbeAcceptsCredentialFreeHttpsOrigin()
+    public void TairaOfflineCashReadOnlyProbeAcceptsCredentialFreeHttpsOrigin()
     {
         Assert.Equal(
             new Uri("https://taira.sora.org"),
@@ -115,8 +115,8 @@ public sealed class ToriiIntegrationSmokeTests
         var offlineCapability = await client.GetOfflineCapabilityAsync(
             TestContext.Current.CancellationToken);
         Assert.Equal("cash_handoff_v1", offlineCapability.CashHandoffCapability);
-        Assert.Equal(23u, offlineCapability.RequiredBridgeAbiVersion);
-        Assert.Equal(8u, offlineCapability.MaxHops);
+        Assert.Equal(1u, offlineCapability.WireVersion);
+        Assert.Equal(1u, offlineCapability.DeviceLifecycleVersion);
         Assert.True(offlineCapability.Ready);
 
         var capabilities = await client.GetNodeCapabilitiesAsync(cancellationToken: TestContext.Current.CancellationToken);
@@ -236,28 +236,24 @@ public sealed class ToriiIntegrationSmokeTests
             Assert.Equal(accounts.Items[0].Id, resolvedAlias!.AccountId);
         }
 
-        var smokeContractNamespace = Environment.GetEnvironmentVariable("IROHA_CSHARP_SMOKE_CONTRACT_NAMESPACE");
-        var contractNamespace = string.IsNullOrWhiteSpace(smokeContractNamespace)
-            ? "universal"
-            : smokeContractNamespace.Trim();
-        var contractInstances = await TryGetOptionalReadAsync<ToriiContractInstancesResponse>(
-            () => client.GetContractInstancesAsync(
-                contractNamespace,
-                new ToriiContractInstancesQuery
-                {
-                    Limit = 1,
-                }));
-        if (contractInstances is not null)
+        var smokeContractAddress = Environment.GetEnvironmentVariable(
+            "IROHA_CSHARP_SMOKE_CONTRACT_ADDRESS")?.Trim();
+        ToriiGovernedContractResponse? governedContract = null;
+        if (!string.IsNullOrWhiteSpace(smokeContractAddress))
         {
-            Assert.True(contractInstances.Total >= (ulong)contractInstances.Instances.Count);
+            governedContract = await TryGetOptionalReadAsync<ToriiGovernedContractResponse>(
+                () => client.GetGovernedContractAsync(smokeContractAddress));
+            if (governedContract is not null)
+            {
+                Assert.Equal(smokeContractAddress, governedContract.ContractAddress);
+            }
         }
 
         var contractCodeHash = Environment.GetEnvironmentVariable("IROHA_CSHARP_SMOKE_CONTRACT_CODE_HASH")?.Trim();
         if (string.IsNullOrWhiteSpace(contractCodeHash)
-            && contractInstances is not null
-            && contractInstances.Instances.Count > 0)
+            && governedContract is { Found: true, Active: true })
         {
-            contractCodeHash = contractInstances.Instances[0].CodeHashHex;
+            contractCodeHash = governedContract.CodeHashHex;
         }
 
         if (!string.IsNullOrWhiteSpace(contractCodeHash))

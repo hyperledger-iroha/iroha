@@ -463,7 +463,6 @@ mod tests {
             .into(),
             sorafs::prelude::FindSorafsCitizenBondBySerialCommitment::new([0x21; 32]).into(),
             sorafs::prelude::FindSorafsCitizenBondSnapshot.into(),
-            sorafs::prelude::FindSorafsAnonymousServiceEscrowById::new([0x22; 32]).into(),
             sorafs::prelude::FindSorafsPinManifest::new(
                 crate::sorafs::pin_registry::ManifestDigest::new([0x24; 32]),
                 Some(pin_cursor),
@@ -539,7 +538,6 @@ mod tests {
                 "round-1".to_owned(),
             )
             .into(),
-            sorafs::prelude::FindSorafsAnonymousJurorCandidacy::new([0x6A; 32]).into(),
             sorafs::prelude::FindSorafsModerationCase::new(
                 "case-1".to_owned(),
                 "round-1".to_owned(),

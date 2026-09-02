@@ -1141,6 +1141,37 @@ mod tests {
             Hash::new(seed.as_bytes()),
         ))
     }
+    fn mint_finality_roster(
+        network_id: NetworkId,
+        epoch: u64,
+        roster: &[wire::ValidatorPower],
+    ) -> crate::isi::offline_cash_v1::OfflineCashMintFinalityEpochRosterV1 {
+        use crate::isi::offline_cash_v1::{
+            OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterV1,
+            OfflineCashMintFinalityValidatorKeysV1,
+        };
+
+        OfflineCashMintFinalityEpochRosterV1 {
+            version: OFFLINE_CASH_CHAIN_VERSION_V1,
+            network_id,
+            epoch,
+            validators: roster
+                .iter()
+                .enumerate()
+                .map(
+                    |(index, validator)| OfflineCashMintFinalityValidatorKeysV1 {
+                        validator: validator.validator.clone(),
+                        eq_proof_public_key: [u8::try_from(index + 1)
+                            .expect("small fixture roster");
+                            32],
+                        ep_proof_public_key: [u8::try_from(index + 17)
+                            .expect("small fixture roster");
+                            32],
+                    },
+                )
+                .collect(),
+        }
+    }
     fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
             panic!("{algorithm:?} bridge fixture key generation should succeed: {err}")
@@ -1271,6 +1302,11 @@ mod tests {
                     .expect("derive validator proof of possession")
             })
             .collect::<Vec<_>>();
+        let network_id = test_network_id(network_seed);
+        let current_mint_finality_roster = mint_finality_roster(network_id, 0, &roster);
+        let mint_finality_epoch_id = current_mint_finality_roster
+            .finality_epoch_id()
+            .expect("valid fixture mint-finality roster");
         let mut header = crate::block::BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero height"),
             None,
@@ -1311,10 +1347,16 @@ mod tests {
                         .expect("derive next-epoch validator proof of possession")
                 })
                 .collect();
+            let next_mint_finality_roster = mint_finality_roster(network_id, 1, &next_roster);
+            let next_mint_finality_epoch_id = next_mint_finality_roster
+                .finality_epoch_id()
+                .expect("valid next-epoch fixture mint-finality roster");
             (
                 Some(
                     crate::block::consensus_v2::finality::FinalizedNextEpochSnapshot {
                         epoch: 1,
+                        offline_cash_mint_finality_epoch_id: next_mint_finality_epoch_id,
+                        offline_cash_mint_finality_epoch_roster: next_mint_finality_roster,
                         epoch_end_height: 11,
                         mode: ConsensusMode::Npos,
                         quorum: DualQuorum::from_roster(&next_roster)
@@ -1330,10 +1372,12 @@ mod tests {
             (None, None)
         };
         let context = HeightContext {
-            network_id: test_network_id(network_seed),
+            network_id,
             protocol_version: PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
+            offline_cash_mint_finality_epoch_id: mint_finality_epoch_id,
+            offline_cash_mint_finality_epoch_roster: current_mint_finality_roster,
             epoch_end_height: if boundary { 1 } else { 10 },
             next_epoch_snapshot,
             mode: ConsensusMode::Npos,
@@ -1364,7 +1408,7 @@ mod tests {
             view: 0,
         };
         let execution_commitment =
-            crate::block::consensus_v2::ExecutionCommitment::without_topups_or_merge_carrier(
+            crate::block::consensus_v2::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
                 Hash::new(b"bridge v2 parent state"),
                 Hash::new(b"bridge v2 post state"),
                 Hash::new(b"bridge v2 ordinary writes"),
@@ -1427,35 +1471,53 @@ mod tests {
     }
     fn make_successor_v2_proof(parent: &V2Fixture) -> BridgeFinalityProof {
         let parent_artifact = &parent.proof.finality_artifact;
-        let (epoch, epoch_end_height, mode, roster, validator_set_pops, quorum, leader_seed) =
-            parent_artifact
-                .height_context
-                .next_epoch_snapshot
-                .as_ref()
-                .map_or_else(
-                    || {
-                        (
-                            parent_artifact.height_context.epoch,
-                            parent_artifact.height_context.epoch_end_height,
-                            parent_artifact.height_context.mode,
-                            parent_artifact.height_context.roster.clone(),
-                            parent_artifact.validator_set_pops.clone(),
-                            parent_artifact.height_context.quorum,
-                            parent_artifact.height_context.leader_seed,
-                        )
-                    },
-                    |snapshot| {
-                        (
-                            snapshot.epoch,
-                            snapshot.epoch_end_height,
-                            snapshot.mode,
-                            snapshot.roster.clone(),
-                            snapshot.validator_set_pops.clone(),
-                            snapshot.quorum,
-                            snapshot.leader_seed,
-                        )
-                    },
-                );
+        let (
+            epoch,
+            mint_finality_epoch_id,
+            mint_finality_roster,
+            epoch_end_height,
+            mode,
+            roster,
+            validator_set_pops,
+            quorum,
+            leader_seed,
+        ) = parent_artifact
+            .height_context
+            .next_epoch_snapshot
+            .as_ref()
+            .map_or_else(
+                || {
+                    (
+                        parent_artifact.height_context.epoch,
+                        parent_artifact
+                            .height_context
+                            .offline_cash_mint_finality_epoch_id,
+                        parent_artifact
+                            .height_context
+                            .offline_cash_mint_finality_epoch_roster
+                            .clone(),
+                        parent_artifact.height_context.epoch_end_height,
+                        parent_artifact.height_context.mode,
+                        parent_artifact.height_context.roster.clone(),
+                        parent_artifact.validator_set_pops.clone(),
+                        parent_artifact.height_context.quorum,
+                        parent_artifact.height_context.leader_seed,
+                    )
+                },
+                |snapshot| {
+                    (
+                        snapshot.epoch,
+                        snapshot.offline_cash_mint_finality_epoch_id,
+                        snapshot.offline_cash_mint_finality_epoch_roster.clone(),
+                        snapshot.epoch_end_height,
+                        snapshot.mode,
+                        snapshot.roster.clone(),
+                        snapshot.validator_set_pops.clone(),
+                        snapshot.quorum,
+                        snapshot.leader_seed,
+                    )
+                },
+            );
         let height = parent_artifact.height + 1;
         assert!(
             height < epoch_end_height,
@@ -1474,6 +1536,8 @@ mod tests {
             protocol_version: wire::PROTOCOL_VERSION,
             height,
             epoch,
+            offline_cash_mint_finality_epoch_id: mint_finality_epoch_id,
+            offline_cash_mint_finality_epoch_roster: mint_finality_roster,
             epoch_end_height,
             next_epoch_snapshot: None,
             mode,
@@ -1496,13 +1560,14 @@ mod tests {
             height,
             view: 0,
         };
-        let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"bridge v2 successor parent state"),
-            Hash::new(b"bridge v2 successor post state"),
-            Hash::new(b"bridge v2 successor ordinary writes"),
-            1,
-            Hash::new(b"bridge v2 successor executed block wire"),
-        );
+        let execution_commitment =
+            wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                Hash::new(b"bridge v2 successor parent state"),
+                Hash::new(b"bridge v2 successor post state"),
+                Hash::new(b"bridge v2 successor ordinary writes"),
+                1,
+                Hash::new(b"bridge v2 successor executed block wire"),
+            );
         let commit_qc = wire::QuorumCertificate {
             round,
             proposal_round: round,

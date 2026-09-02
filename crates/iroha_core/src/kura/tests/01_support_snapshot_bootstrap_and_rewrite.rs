@@ -43,7 +43,7 @@ use iroha_crypto::{
 use iroha_data_model::{
     ChainId, Level,
     account::Account,
-    asset::{AssetDefinitionId, AssetId},
+    asset::AssetDefinitionId,
     block::{
         BlockExecutionContextBundle, BlockHeader, BlockSignature, CertifiedMergeLedgerReference,
         ExternalExecutionContext,
@@ -59,21 +59,14 @@ use iroha_data_model::{
     },
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
     domain::{Domain, DomainId},
-    isi::{InstructionBox, Log, Upgrade, offline::TopUpKagemushaRecursiveV4},
+    isi::{InstructionBox, Log, Upgrade},
     merge::MergeQuorumCertificate,
     nexus::{
         DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneStorageProfile,
         LaneVisibility,
     },
-    offline::{
-        KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4, KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2,
-        KagemushaRecursiveSpendArtifactBindingV4, KagemushaRecursiveSpendTopUpRequestV4,
-        KagemushaRequestAuthorizationV2, KagemushaScaledAmountV2,
-        KagemushaSpendableNoteDescriptorV2, KagemushaTopUpShieldEvidenceV2,
-    },
     peer::PeerId,
     prelude::{Executor, IvmBytecode},
-    proof::{ProofAttachment, ProofBox, VerifyingKeyId},
     transaction::{
         Executable, TransactionBuilder,
         signed::{TransactionEntrypoint, TransactionResult, TransactionResultInner},
@@ -400,116 +393,26 @@ fn strict_startup_rejects_retired_rollback_intents_after_fast_defers_the_audit()
         );
     }
 }
-fn offline_top_up_entrypoint_for_index(
+fn indexed_log_entrypoint(
     request_operation_id: [u8; 32],
     authorization_operation_id: [u8; 32],
 ) -> TransactionEntrypoint {
-    offline_top_up_entrypoint_for_index_with_outer_authority(
-        request_operation_id,
-        authorization_operation_id,
-        &SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
-    )
-}
-fn offline_top_up_entrypoint_for_index_with_outer_authority(
-    request_operation_id: [u8; 32],
-    authorization_operation_id: [u8; 32],
-    outer_authority: &KeyPair,
-) -> TransactionEntrypoint {
-    offline_top_up_entrypoint_for_index_with_outer_authority_and_admission_intent(
-        request_operation_id,
-        authorization_operation_id,
-        outer_authority,
-        iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary,
-    )
-}
-fn offline_top_up_entrypoint_for_index_with_outer_authority_and_admission_intent(
-    request_operation_id: [u8; 32],
-    authorization_operation_id: [u8; 32],
-    outer_authority: &KeyPair,
-    admission_intent: iroha_data_model::transaction::TransactionAdmissionIntent,
-) -> TransactionEntrypoint {
-    let network_id = test_network_id(b"kura-offline-operation-index-network");
-    let domain_id = DomainId::try_new("offline", "index").expect("fixture domain id");
-    let definition = AssetDefinitionId::derive_from_components(
-        domain_id,
-        "cash".parse().expect("fixture asset definition name"),
-    );
-    let amount = KagemushaScaledAmountV2 {
-        atomic_units: 7,
-        scale: 0,
-    };
-    let mut request = KagemushaRecursiveSpendTopUpRequestV4 {
-        version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
-        asset: AssetId::new(definition.clone(), SAMPLE_GENESIS_ACCOUNT_ID.clone()),
-        amount,
-        current_note: KagemushaSpendableNoteDescriptorV2 {
-            network_id,
-            asset: definition.clone(),
-            note_commitment: [0x31; 32],
-            spend_nullifier: [0x32; 32],
-            amount,
-        },
-        shield_evidence: KagemushaTopUpShieldEvidenceV2 {
-            initial_root: [0x35; 32],
-            finalized_root: [0x36; 32],
-            leaf_index: 0,
-            proof: {
-                let mut attachment = ProofAttachment::new_ref(
-                    crate::zk::ZK_BACKEND_HALO2_IPA.into(),
-                    ProofBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(), vec![0x37]),
-                    VerifyingKeyId::new(
-                        crate::zk::ZK_BACKEND_HALO2_IPA,
-                        "kagemusha-topup-shield-v2",
-                    ),
-                );
-                attachment.vk_commitment = Some([0x38; 32]);
-                attachment
-            },
-        },
-        artifact_binding: KagemushaRecursiveSpendArtifactBindingV4 {
-            version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
-            generation: "kura-operation-index-fixture".to_owned(),
-            manifest_sha256: [0x39; 32],
-        },
-        operation_id: request_operation_id,
-        authorization: KagemushaRequestAuthorizationV2 {
-            authority: SAMPLE_GENESIS_ACCOUNT_ID.clone(),
-            device_id: "kura-operation-index-device".to_owned(),
-            asset_definition_id: definition,
-            operation_id: authorization_operation_id,
-            issued_at_ms: 1,
-            expires_at_ms: 1_u64.saturating_add(KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2),
-            nonce: [0x33; 32],
-            payload_digest: [0x34; 32],
-            registration_hash: Hash::new([0x35; 32]).into(),
-            hardware_assertion:
-                iroha_data_model::offline::KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(
-                    iroha_data_model::offline::KagemushaAndroidKeyMintHardwareAssertionV1 {
-                        signature:
-                            iroha_data_model::offline::KagemushaDeviceSignatureV2::from_raw_bytes(
-                                &[1_u8; 64],
-                            )
-                            .expect("fixture hardware signature"),
-                    },
-                ),
-        },
-    };
-    if let Ok(payload_digest) = request.unsigned_payload_digest() {
-        request.authorization.payload_digest = payload_digest;
-    }
-    let outer_authority_id = AccountId::new(outer_authority.public_key().clone());
+    let network_id = test_network_id(b"kura-operation-index-network");
+    let outer_authority_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
     let transaction = TransactionBuilder::new(
         network_id,
         outer_authority_id,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );
-    let operation = InstructionBox::from(TopUpKagemushaRecursiveV4::new(request));
+    let operation = InstructionBox::from(Log::new(
+        Level::INFO,
+        format!("indexed operation {request_operation_id:?}:{authorization_operation_id:?}"),
+    ));
     let transaction = transaction
         .with_executable(Executable::Batch(
             vec![iroha_data_model::transaction::ExecutableBatchItem::Instruction(operation)].into(),
         ))
-        .with_admission_intent(admission_intent)
-        .sign(outer_authority.private_key());
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
     TransactionEntrypoint::External(transaction)
 }
 fn merge_entry_with_indexed_entrypoint(entrypoint: TransactionEntrypoint) -> MergeLedgerEntry {
@@ -657,7 +560,7 @@ fn merge_entry_with_indexed_reservation(
     HashOf<TransactionEntrypoint>,
     LaneQueueReservationKeyV1,
 ) {
-    let entrypoint = offline_top_up_entrypoint_for_index([salt; 32], [salt.saturating_add(1); 32]);
+    let entrypoint = indexed_log_entrypoint([salt; 32], [salt.saturating_add(1); 32]);
     let entrypoint_hash = entrypoint.hash();
     let mut entry = merge_entry_with_indexed_entrypoint(entrypoint.clone());
     entry.epoch_id = epoch;
@@ -824,8 +727,11 @@ fn v2_finality_artifact_for_block_with_keys_and_merge_carrier(
         height,
         "fixture finality artifacts must form a contiguous chain"
     );
+    let network_id = test_network_id(b"kura-v2-finality-test");
+    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
     let context = HeightContext {
-        network_id: test_network_id(b"kura-v2-finality-test"),
+        network_id,
         protocol_version: PROTOCOL_VERSION,
         height,
         epoch: 0,
@@ -836,6 +742,8 @@ fn v2_finality_artifact_for_block_with_keys_and_merge_carrier(
         snapshot_bootstrap: None,
         quorum: DualQuorum::from_roster(&roster).expect("valid fixture quorum"),
         roster,
+        offline_cash_mint_finality_epoch_id,
+        offline_cash_mint_finality_epoch_roster,
         nexus_amx_context_hash: Hash::new(b"kura finality nexus amx context"),
         execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
         da_layout: DataAvailabilityLayout {
@@ -1100,81 +1008,16 @@ fn assert_v2_commit_receipt_matches_artifact(
     assert_eq!(receipt.certificate(), artifact.commit_qc.as_ref());
     assert_eq!(receipt.artifact_hash(), HashOf::new(artifact));
 }
-fn kagemusha_topup_witness(
-    operation_id: [u8; 32],
-    anchor_digest: [u8; 32],
-) -> (ExecWitness, ExecutionCommitment) {
-    let mut key = vec![crate::sumeragi::smt::KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG];
-    key.extend_from_slice(&operation_id);
-    let receiver_snapshot =
-        iroha_data_model::offline::KagemushaActiveReceiverSnapshotV1::unavailable(
-            1,
-            1,
-            b"Kura top-up fixture has no governed receiver policy",
-        )
-        .expect("valid unavailable receiver snapshot");
-    let validation_fee_snapshot =
-        iroha_data_model::validation_fee::ValidationFeePolicySnapshotCommitmentV1::from_registry(
-            1, None,
-        );
-    let casting_snapshot =
-        iroha_data_model::parliament_casting::ParliamentTimedOvnCastingSnapshotCommitmentV1::empty(
-            1,
-        );
-    let witness = ExecWitness {
-        reads: Vec::new(),
-        writes: vec![
-            ExecKv {
-                key,
-                value: anchor_digest.to_vec(),
-            },
-            ExecKv {
-                key: iroha_data_model::offline::KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_KEY_V1.to_vec(),
-                value: norito::to_bytes(&receiver_snapshot.commitment)
-                    .expect("encode receiver snapshot commitment"),
-            },
-            ExecKv {
-                key: iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_WITNESS_KEY_V1
-                    .to_vec(),
-                value: norito::to_bytes(&validation_fee_snapshot)
-                    .expect("encode validation-fee snapshot commitment"),
-            },
-            ExecKv {
-                key: iroha_data_model::parliament_casting::PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1.to_vec(),
-                value: norito::to_bytes(&casting_snapshot)
-                    .expect("encode Parliament timed-OVN casting snapshot commitment"),
-            },
-        ],
-        fastpq_transcripts: Vec::new(),
-        fastpq_batches: Vec::new(),
-    };
-    let manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::empty(
-        1,
-        Hash::new(b"Kura top-up fixture executed block wire placeholder"),
-    );
-    let commitment =
-        crate::sumeragi::exec::execution_commitment_from_witness_for_tests(&witness, &manifest)
-            .expect("derive top-up execution commitment");
-    (witness, commitment)
-}
-fn kagemusha_receiver_only_witness(
+fn offline_cash_finality_witness(
     height: u64,
-    evaluated_at_ms: u64,
+    _evaluated_at_ms: u64,
 ) -> (ExecWitness, ExecutionCommitment) {
-    kagemusha_receiver_only_witness_with_casting(height, evaluated_at_ms, &[])
+    offline_cash_finality_witness_with_casting(height, &[])
 }
-fn kagemusha_receiver_only_witness_with_casting(
+fn offline_cash_finality_witness_with_casting(
     height: u64,
-    evaluated_at_ms: u64,
     casting_bindings: &[iroha_data_model::parliament_casting::ParliamentTimedOvnCastingContextBindingV1],
 ) -> (ExecWitness, ExecutionCommitment) {
-    let receiver_snapshot =
-        iroha_data_model::offline::KagemushaActiveReceiverSnapshotV1::unavailable(
-            height,
-            evaluated_at_ms,
-            b"Kura fixture has no governed receiver policy",
-        )
-        .expect("valid unavailable receiver snapshot");
     let validation_fee_snapshot =
         iroha_data_model::validation_fee::ValidationFeePolicySnapshotCommitmentV1::from_registry(
             height, None,
@@ -1188,11 +1031,6 @@ fn kagemusha_receiver_only_witness_with_casting(
         reads: Vec::new(),
         writes: vec![
             ExecKv {
-                key: iroha_data_model::offline::KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_KEY_V1.to_vec(),
-                value: norito::to_bytes(&receiver_snapshot.commitment)
-                    .expect("encode receiver snapshot commitment"),
-            },
-            ExecKv {
                 key: iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_WITNESS_KEY_V1
                     .to_vec(),
                 value: norito::to_bytes(&validation_fee_snapshot)
@@ -1209,7 +1047,7 @@ fn kagemusha_receiver_only_witness_with_casting(
     };
     let manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::empty(
         1,
-        Hash::new(b"Kura receiver-only fixture executed block wire placeholder"),
+        Hash::new(b"Kura Offline Cash V1 fixture executed block wire placeholder"),
     );
     let commitment =
         crate::sumeragi::exec::execution_commitment_from_witness_for_tests(&witness, &manifest)
@@ -1295,8 +1133,7 @@ fn parliament_frozen_casting_binding(
 }
 #[test]
 fn active_receiver_sidecar_decode_budget_is_protocol_bounded() {
-    let limits =
-        kagemusha_active_receiver_decode_limits(MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES);
+    let limits = offline_cash_finality_decode_limits(MAX_OFFLINE_CASH_FINALITY_SIDECAR_BYTES);
     assert_eq!(
         limits.max_sequence_elements(),
         usize::try_from(
@@ -1306,15 +1143,15 @@ fn active_receiver_sidecar_decode_budget_is_protocol_bounded() {
     );
     assert_eq!(
         limits.max_field_bytes(),
-        MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES
+        MAX_OFFLINE_CASH_FINALITY_SIDECAR_BYTES
     );
     assert_eq!(
         limits.max_total_allocated_bytes(),
-        MAX_KAGEMUSHA_ACTIVE_RECEIVER_DECODE_ALLOCATED_BYTES
+        MAX_OFFLINE_CASH_FINALITY_DECODE_ALLOCATED_BYTES
     );
     assert_eq!(
         limits.max_nesting_depth(),
-        MAX_KAGEMUSHA_ACTIVE_RECEIVER_DECODE_DEPTH
+        MAX_OFFLINE_CASH_FINALITY_DECODE_DEPTH
     );
 }
 #[test]
@@ -1326,10 +1163,10 @@ fn maximum_frozen_casting_set_fits_the_durable_sidecar_bound() {
         .collect::<Vec<_>>();
     assert!(bindings.iter().all(|binding| binding.is_valid()));
     let (witness, execution_commitment) =
-        kagemusha_receiver_only_witness_with_casting(height, 1, &bindings);
+        offline_cash_finality_witness_with_casting(height, &bindings);
     let kura = Kura::blank_kura_for_testing();
     let block = DummyBlocks::new().next();
-    kura.stage_kagemusha_topup_finality_sidecar(
+    kura.stage_offline_cash_finality_sidecar(
         height,
         block.hash(),
         &witness,
@@ -1337,12 +1174,12 @@ fn maximum_frozen_casting_set_fits_the_durable_sidecar_bound() {
         &bindings,
     )
     .expect("maximum casting set fits the staged sidecar");
-    let encoded_len = std::fs::metadata(kura.kagemusha_active_receiver_staging_path(height))
+    let encoded_len = std::fs::metadata(kura.offline_cash_finality_staging_path(height))
         .expect("maximum casting sidecar metadata")
         .len();
     assert!(
         encoded_len
-            <= u64::try_from(MAX_KAGEMUSHA_ACTIVE_RECEIVER_SIDECAR_BYTES)
+            <= u64::try_from(MAX_OFFLINE_CASH_FINALITY_SIDECAR_BYTES)
                 .expect("sidecar byte bound fits u64")
     );
 }
@@ -1774,84 +1611,7 @@ fn late_startup_inventory_install_hydrates_attached_telemetry() {
     assert_v2_finality_telemetry(&metrics, &artifact);
 }
 #[test]
-fn kagemusha_topup_witness_stage_promotes_only_after_exact_finality_persistence() {
-    let kura = Kura::blank_kura_for_testing();
-    let block = DummyBlocks::new().next();
-    let operation_id = [0xA5; 32];
-    let anchor_digest = [0x5B; 32];
-    let (witness, mut execution_commitment) = kagemusha_topup_witness(operation_id, anchor_digest);
-    execution_commitment.executed_block_wire_len = u64::try_from(
-        block
-            .encode_wire()
-            .expect("canonical top-up fixture wire")
-            .len(),
-    )
-    .expect("canonical top-up fixture wire length fits u64");
-    execution_commitment.executed_block_wire_hash = block
-        .executed_block_wire_hash()
-        .expect("canonical top-up fixture executed wire");
-    let artifact = v2_finality_artifact_for_block_with_execution(&block, execution_commitment);
-    kura.stage_kagemusha_topup_finality_sidecar(
-        artifact.height,
-        artifact.block_hash,
-        &witness,
-        execution_commitment,
-        &[],
-    )
-    .expect("durably stage top-up witness projection");
-    assert!(
-        kura.kagemusha_topup_finality_staging_path(artifact.height)
-            .is_file()
-    );
-    assert!(
-        !kura
-            .kagemusha_topup_finality_sidecar_path(artifact.height)
-            .exists(),
-        "a witness stage must not be exposed as finalized"
-    );
-    kura.store_block(Arc::clone(&block))
-        .expect("store canonical block");
-    let receipt = kura
-        .store_v2_finality_artifact(&artifact)
-        .expect("persist exact finality artifact");
-    assert!(
-        !kura
-            .kagemusha_topup_finality_sidecar_path(artifact.height)
-            .exists(),
-        "persisting finality alone must not silently publish witness bytes"
-    );
-    assert!(matches!(
-        kura.parliament_timed_ovn_casting_snapshot_commitment_v1(artifact.height),
-        Err(Error::KagemushaActiveReceiverFinalitySidecar(_))
-    ));
-    kura.promote_kagemusha_topup_finality_sidecar(&artifact, &receipt)
-        .expect("promote exact staged sidecar");
-    assert!(
-        !kura
-            .kagemusha_topup_finality_staging_path(artifact.height)
-            .exists()
-    );
-    assert!(
-        kura.kagemusha_topup_finality_sidecar_path(artifact.height)
-            .is_file()
-    );
-    let proof = kura
-        .kagemusha_topup_finality_proof_v2(artifact.height, operation_id)
-        .expect("read compact proof")
-        .expect("operation is present");
-    assert_eq!(proof.anchor.topup_operation_id, operation_id);
-    assert_eq!(proof.anchor.anchor_digest, anchor_digest);
-    assert_eq!(proof.commit_qc.certificate, artifact.commit_qc);
-    assert_eq!(
-        proof.commit_qc.height_context.context_id,
-        artifact.context_id()
-    );
-    proof.validate_structure().expect("durable proof structure");
-    kura.promote_kagemusha_topup_finality_sidecar(&artifact, &receipt)
-        .expect("promotion is idempotent after a crash/retry");
-}
-#[test]
-fn active_receiver_witness_survives_finality_promotion_restart_and_retry() {
+fn offline_cash_receipt_survives_finality_restart_and_retry() {
     let temp_dir = TempDir::new().expect("create persistent Kura root");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
@@ -1862,51 +1622,121 @@ fn active_receiver_witness_survives_finality_promotion_restart_and_retry() {
         Hash::prehashed([0xC0; Hash::LENGTH]),
         LaneLifecycleParameterV1::catalog_hash(&LaneCatalog::default()),
     )
-    .expect("bind persistent receiver fixture to the configured primary lane");
+    .expect("bind persistent Offline Cash fixture to the configured primary lane");
     let block = DummyBlocks::new().next();
-    let (witness, mut execution_commitment) = kagemusha_topup_witness([0xC1; 32], [0xC2; 32]);
+    let operation_id = [0xC1; 32];
+    let (mut witness, _) = offline_cash_finality_witness(1, 1);
+    let network_id = test_network_id(b"kura-v2-finality-test");
+    let asset = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("wonderland", "universal").expect("fixture domain"),
+        "xor".parse().expect("fixture asset name"),
+    );
+    let asset_incarnation = iroha_data_model::nexus::AxtAssetIncarnationV1::try_from_bytes(
+        iroha_crypto::Hash::new(b"kura-v2-finality-test-incarnation").into(),
+    )
+    .expect("fixture asset incarnation");
+    let reserve_receipt = iroha_data_model::isi::offline_cash_v1::OfflineCashReserveReceiptV1 {
+        version: iroha_data_model::isi::offline_cash_v1::OFFLINE_CASH_CHAIN_VERSION_V1,
+        operation_id,
+        kind: iroha_data_model::isi::offline_cash_v1::OfflineCashOperationKindV1::TopUp,
+        request_digest: [0xC4; 32],
+        mint_statement_digest: [0xC6; 32],
+        network_id,
+        asset: asset.clone(),
+        asset_incarnation,
+        scale: 0,
+        liability_pool_id: iroha_data_model::offline::offline_cash_liability_pool_id_v1(
+            &network_id,
+            &asset,
+            asset_incarnation,
+        )
+        .expect("fixture liability pool"),
+        amount: 17,
+        previous_pool_receipt_digest: [0; 32],
+        total_topups: 17,
+        total_redemptions: 0,
+        transaction_hash: [0xC5; 32],
+        committed_at_ms: 1,
+    };
+    witness.writes.push(ExecKv {
+        key: iroha_data_model::isi::offline_cash_v1::OfflineCashReserveReceiptWitnessV1::expected_key(
+            operation_id,
+        ),
+        value: norito::encode_canonical(&reserve_receipt)
+            .expect("encode canonical reserve receipt"),
+    });
+    let manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::empty(
+        1,
+        Hash::new(b"Kura Offline Cash receipt fixture executed block wire placeholder"),
+    );
+    let mut execution_commitment =
+        crate::sumeragi::exec::execution_commitment_from_witness_for_tests(&witness, &manifest)
+            .expect("derive receiver receipt execution commitment");
     execution_commitment.executed_block_wire_len = u64::try_from(
         block
             .encode_wire()
-            .expect("canonical receiver fixture wire")
+            .expect("canonical Offline Cash fixture wire")
             .len(),
     )
-    .expect("canonical receiver fixture wire length fits u64");
+    .expect("canonical Offline Cash fixture wire length fits u64");
     execution_commitment.executed_block_wire_hash = block
         .executed_block_wire_hash()
-        .expect("canonical receiver fixture executed wire");
+        .expect("canonical Offline Cash fixture executed wire");
     let artifact = v2_finality_artifact_for_block_with_execution(&block, execution_commitment);
-    kura.stage_kagemusha_topup_finality_sidecar(
+    kura.stage_offline_cash_finality_sidecar(
         artifact.height,
         artifact.block_hash,
         &witness,
         execution_commitment,
         &[],
     )
-    .expect("stage receiver witness before finality");
+    .expect("stage Offline Cash witness before finality");
     kura.store_block(Arc::clone(&block))
         .expect("persist authoritative block");
     let receipt = kura
         .store_v2_finality_artifact(&artifact)
         .expect("persist authoritative finality artifact");
-    kura.promote_kagemusha_topup_finality_sidecar(&artifact, &receipt)
-        .expect("promote receiver witness after finality");
-    let expected = kura
-        .kagemusha_active_receiver_witness_proof_v1(artifact.height)
-        .expect("read promoted receiver witness")
-        .expect("receiver witness exists");
-    assert!(expected.verify(execution_commitment.ordinary_writes_root));
-    kura.promote_kagemusha_topup_finality_sidecar(&artifact, &receipt)
+    kura.promote_offline_cash_finality_sidecar(&artifact, &receipt)
+        .expect("promote Offline Cash witness after finality");
+    let expected_operation_finality = kura
+        .offline_cash_operation_finality_v1(artifact.height, operation_id)
+        .expect("read promoted Offline Cash receipt finality")
+        .expect("Offline Cash receipt exists");
+    assert_eq!(
+        expected_operation_finality.reserve_receipt_witness.receipt,
+        reserve_receipt
+    );
+    assert!(
+        expected_operation_finality
+            .reserve_receipt_witness
+            .verify(execution_commitment.ordinary_writes_root)
+    );
+    assert!(
+        kura.offline_cash_operation_finality_v1(artifact.height, [0xCF; 32])
+            .expect("unknown operation lookup is valid")
+            .is_none()
+    );
+    assert!(
+        kura.offline_cash_mint_outbox_entry_v1(operation_id)
+            .expect("missing mint outbox is a valid pending state")
+            .is_none()
+    );
+    kura.promote_offline_cash_finality_sidecar(&artifact, &receipt)
         .expect("exact promotion retry is idempotent");
     drop(kura);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("reopen persistent Kura");
-    let recovered = reopened
-        .kagemusha_active_receiver_witness_proof_v1(artifact.height)
-        .expect("read receiver witness after restart")
-        .expect("receiver witness survives restart");
-    assert_eq!(recovered, expected);
-    assert!(recovered.verify(execution_commitment.ordinary_writes_root));
+    let recovered_operation_finality = reopened
+        .offline_cash_operation_finality_v1(artifact.height, operation_id)
+        .expect("read Offline Cash receipt finality after restart")
+        .expect("Offline Cash receipt finality survives restart");
+    assert_eq!(recovered_operation_finality, expected_operation_finality);
+    assert!(
+        reopened
+            .offline_cash_mint_outbox_entry_v1(operation_id)
+            .expect("missing mint outbox remains pending after restart")
+            .is_none()
+    );
 }
 #[test]
 fn parliament_casting_membership_survives_restart_and_tampering_fails_closed() {
@@ -1929,7 +1759,7 @@ fn parliament_casting_membership_survives_restart_and_tampering_fails_closed() {
     ];
     let requested_ballot = bindings[1].ballot_attempt_id;
     let (witness, mut execution_commitment) =
-        kagemusha_receiver_only_witness_with_casting(height, 1, &bindings);
+        offline_cash_finality_witness_with_casting(height, &bindings);
     execution_commitment.executed_block_wire_len = u64::try_from(
         block
             .encode_wire()
@@ -1941,7 +1771,7 @@ fn parliament_casting_membership_survives_restart_and_tampering_fails_closed() {
         .executed_block_wire_hash()
         .expect("canonical casting fixture executed wire");
     let artifact = v2_finality_artifact_for_block_with_execution(&block, execution_commitment);
-    kura.stage_kagemusha_topup_finality_sidecar(
+    kura.stage_offline_cash_finality_sidecar(
         artifact.height,
         artifact.block_hash,
         &witness,
@@ -1954,7 +1784,7 @@ fn parliament_casting_membership_survives_restart_and_tampering_fails_closed() {
     let receipt = kura
         .store_v2_finality_artifact(&artifact)
         .expect("persist casting fixture finality");
-    kura.promote_kagemusha_topup_finality_sidecar(&artifact, &receipt)
+    kura.promote_offline_cash_finality_sidecar(&artifact, &receipt)
         .expect("promote casting proof material");
 
     let expected = kura
@@ -1989,24 +1819,23 @@ fn parliament_casting_membership_survives_restart_and_tampering_fails_closed() {
     assert_eq!(recovered, expected);
     assert!(recovered.verify(execution_commitment.ordinary_writes_root));
 
-    let sidecar_path = reopened.kagemusha_active_receiver_sidecar_path(height);
+    let sidecar_path = reopened.offline_cash_finality_sidecar_path(height);
     let (mut corrupted, _) = reopened
-        .decode_kagemusha_active_receiver_finality_sidecar(&sidecar_path)
+        .decode_offline_cash_finality_sidecar(&sidecar_path)
         .expect("decode durable casting sidecar")
         .expect("durable casting sidecar exists");
     corrupted.parliament_timed_ovn_casting_bindings[0].tle_key_transcript_hash[0] ^= 1;
     std::fs::write(&sidecar_path, corrupted.encode()).expect("corrupt retained casting binding");
     assert!(matches!(
         reopened.parliament_timed_ovn_finalized_casting_proof_v1(height, requested_ballot),
-        Err(Error::KagemushaActiveReceiverFinalitySidecar(_))
+        Err(Error::OfflineCashFinalitySidecar(_))
     ));
 }
 #[test]
-fn kagemusha_topup_stage_rejects_commitment_and_path_substitution() {
+fn offline_cash_finality_stage_rejects_commitment_and_path_substitution() {
     let kura = Kura::blank_kura_for_testing();
     let block = DummyBlocks::new().next();
-    let operation_id = [0xA5; 32];
-    let (witness, mut execution_commitment) = kagemusha_topup_witness(operation_id, [0x5B; 32]);
+    let (witness, mut execution_commitment) = offline_cash_finality_witness(1, 1);
     execution_commitment.executed_block_wire_len = u64::try_from(
         block
             .encode_wire()
@@ -2020,28 +1849,22 @@ fn kagemusha_topup_stage_rejects_commitment_and_path_substitution() {
     let mut mismatched = execution_commitment;
     mismatched.ordinary_writes_root = Hash::new(b"substituted ordinary root");
     assert!(matches!(
-        kura.stage_kagemusha_topup_finality_sidecar(1, block.hash(), &witness, mismatched, &[]),
-        Err(Error::KagemushaActiveReceiverFinalitySidecar(_))
+        kura.stage_offline_cash_finality_sidecar(1, block.hash(), &witness, mismatched, &[]),
+        Err(Error::OfflineCashFinalitySidecar(_))
     ));
     assert!(
-        !kura.kagemusha_topup_finality_staging_path(1).exists(),
+        !kura.offline_cash_finality_staging_path(1).exists(),
         "a commitment mismatch must not leave a stage"
     );
-    kura.stage_kagemusha_topup_finality_sidecar(
-        1,
-        block.hash(),
-        &witness,
-        execution_commitment,
-        &[],
-    )
-    .expect("stage canonical witness");
-    let stage_path = kura.kagemusha_topup_finality_staging_path(1);
+    kura.stage_offline_cash_finality_sidecar(1, block.hash(), &witness, execution_commitment, &[])
+        .expect("stage canonical witness");
+    let stage_path = kura.offline_cash_finality_staging_path(1);
     let (mut staged, _) = kura
-        .decode_staged_kagemusha_topup_finality(&stage_path)
+        .decode_staged_offline_cash_finality(&stage_path)
         .expect("read stage")
         .expect("stage exists");
-    staged.leaves[0].anchor_digest[0] ^= 1;
-    std::fs::write(&stage_path, staged.encode()).expect("substitute staged path leaf");
+    staged.validation_fee_policy_witness.value[0] ^= 1;
+    std::fs::write(&stage_path, staged.encode()).expect("substitute staged witness value");
     kura.store_block(Arc::clone(&block))
         .expect("store canonical block");
     let artifact = v2_finality_artifact_for_block_with_execution(&block, execution_commitment);
@@ -2049,11 +1872,11 @@ fn kagemusha_topup_stage_rejects_commitment_and_path_substitution() {
         .store_v2_finality_artifact(&artifact)
         .expect("persist finality artifact");
     assert!(matches!(
-        kura.promote_kagemusha_topup_finality_sidecar(&artifact, &receipt),
-        Err(Error::KagemushaTopUpFinalitySidecar(_))
+        kura.promote_offline_cash_finality_sidecar(&artifact, &receipt),
+        Err(Error::OfflineCashFinalitySidecar(_))
     ));
     assert!(
-        !kura.kagemusha_topup_finality_sidecar_path(1).exists(),
+        !kura.offline_cash_finality_sidecar_path(1).exists(),
         "mutated witness-derived path must never be promoted"
     );
 }
@@ -2079,8 +1902,8 @@ fn immutable_sidecar_publication_never_clobbers_a_racing_destination() {
 fn non_topup_finality_rejects_orphan_staged_and_final_sidecars() {
     let kura = Kura::blank_kura_for_testing();
     let block = DummyBlocks::new().next();
-    let (receiver_witness, mut execution_commitment) =
-        kagemusha_receiver_only_witness(block.header().height().get(), 1);
+    let (offline_cash_witness, mut execution_commitment) =
+        offline_cash_finality_witness(block.header().height().get(), 1);
     execution_commitment.executed_block_wire_len = u64::try_from(
         block
             .encode_wire()
@@ -2092,10 +1915,10 @@ fn non_topup_finality_rejects_orphan_staged_and_final_sidecars() {
         .executed_block_wire_hash()
         .expect("canonical receiver-only fixture executed wire");
     let artifact = v2_finality_artifact_for_block_with_execution(&block, execution_commitment);
-    kura.stage_kagemusha_topup_finality_sidecar(
+    kura.stage_offline_cash_finality_sidecar(
         artifact.height,
         artifact.block_hash,
-        &receiver_witness,
+        &offline_cash_witness,
         execution_commitment,
         &[],
     )
@@ -2105,22 +1928,22 @@ fn non_topup_finality_rejects_orphan_staged_and_final_sidecars() {
     let receipt = kura
         .store_v2_finality_artifact(&artifact)
         .expect("persist non-top-up finality");
-    let staging_dir = kura.kagemusha_topup_finality_staging_dir();
+    let staging_dir = kura.offline_cash_finality_staging_dir();
     create_dir_all_with_context(&staging_dir).expect("create staging directory");
-    let staging_path = kura.kagemusha_topup_finality_staging_path(artifact.height);
+    let staging_path = kura.offline_cash_finality_staging_path(artifact.height);
     std::fs::write(&staging_path, b"orphan-stage").expect("write orphan stage");
     assert!(matches!(
-        kura.promote_kagemusha_topup_finality_sidecar(&artifact, &receipt),
-        Err(Error::KagemushaTopUpFinalitySidecar(_))
+        kura.promote_offline_cash_finality_sidecar(&artifact, &receipt),
+        Err(Error::OfflineCashFinalitySidecar(_))
     ));
     std::fs::remove_file(&staging_path).expect("remove orphan stage");
-    let final_dir = kura.kagemusha_topup_finality_sidecar_dir();
+    let final_dir = kura.offline_cash_finality_sidecar_dir();
     create_dir_all_with_context(&final_dir).expect("create final directory");
-    let final_path = kura.kagemusha_topup_finality_sidecar_path(artifact.height);
+    let final_path = kura.offline_cash_finality_sidecar_path(artifact.height);
     std::fs::write(&final_path, b"orphan-final").expect("write orphan final sidecar");
     assert!(matches!(
-        kura.promote_kagemusha_topup_finality_sidecar(&artifact, &receipt),
-        Err(Error::KagemushaTopUpFinalitySidecar(_))
+        kura.promote_offline_cash_finality_sidecar(&artifact, &receipt),
+        Err(Error::OfflineCashFinalitySidecar(_))
     ));
 }
 #[test]
@@ -3042,7 +2865,7 @@ fn v2_finality_artifact_is_immutable_after_first_durable_write() {
     );
     let conflicting = v2_finality_artifact_for_block_with_execution(
         &block,
-        ExecutionCommitment::without_topups_or_merge_carrier(
+        ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
             Hash::new(b"conflicting Kura finality parent state"),
             Hash::new(b"conflicting Kura finality post state"),
             Hash::new(b"conflicting Kura finality ordinary writes"),

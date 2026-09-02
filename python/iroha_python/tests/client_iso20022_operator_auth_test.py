@@ -209,6 +209,78 @@ def test_iso_status_exposes_pinned_participant_provenance() -> None:
     assert record.pinned_signature_policy == "operator-request-v1"
 
 
+def test_iso_status_preserves_schema_v3_replay_settlement_and_plan_fields() -> None:
+    session = RecordingSession(
+        [
+            response(
+                200,
+                {
+                    "message_id": "schema-v3",
+                    "status": "Committed",
+                    "pacs002_code": "ACSC",
+                    "profile_id": "generic-pacs008",
+                    "message_type": "pacs.008",
+                    "business_service": "swift.cbprplus.02",
+                    "business_message_id": "BIZ-42",
+                    "uetr": "123e4567-e89b-12d3-a456-426614174000",
+                    "payload_hash": "11" * 32,
+                    "reference_snapshot_id": "snapshot-7",
+                    "embedded_signature_detected": True,
+                    "status_history": [
+                        {
+                            "status": "Accepted",
+                            "pacs002_code": "ACSP",
+                            "updated_at_ms": 42,
+                            "detail": "admitted",
+                            "reason_code": None,
+                        }
+                    ],
+                    "settlement_amount": "1250.00",
+                    "settlement_currency": "USD",
+                    "settlement_date": "2026-09-02",
+                    "settlement_quantity": "25",
+                    "settlement_movement_type": "DELIVERY",
+                    "settlement_payment_type": "AGAINST_PAYMENT",
+                    "security_instrument_id": "US0378331005",
+                    "collateral_obligation_id": "COLL-42",
+                    "collateral_original_amount": "1000",
+                    "collateral_original_currency": "USD",
+                    "collateral_original_instrument_id": "US0000000001",
+                    "collateral_substitute_amount": "990",
+                    "collateral_substitute_currency": "EUR",
+                    "collateral_substitute_instrument_id": "EU0000000002",
+                    "collateral_effective_date": "2026-09-03",
+                    "collateral_substitution_type": "FULL",
+                    "collateral_haircut": "0.01",
+                    "collateral_reason_code": "SUBS",
+                    "plan_execution_order": "1",
+                    "plan_atomicity": "atomic",
+                },
+            )
+        ]
+    )
+    client = ToriiClient(
+        "https://torii.example",
+        session=session,
+        operator_signing_context=context(),
+    )
+
+    record = client.get_iso_message_status("schema-v3")
+
+    assert record is not None
+    assert record.status == "Committed"
+    assert record.profile_id == "generic-pacs008"
+    assert record.business_message_id == "BIZ-42"
+    assert record.embedded_signature_detected is True
+    assert record.status_history[0].status == "Accepted"
+    assert record.status_history[0].pacs002_code == "ACSP"
+    assert record.settlement_amount == "1250.00"
+    assert record.security_instrument_id == "US0378331005"
+    assert record.collateral_substitute_currency == "EUR"
+    assert record.plan_execution_order == "1"
+    assert record.plan_atomicity == "atomic"
+
+
 @pytest.mark.parametrize(
     "profile",
     [" Swift-CBPR-Plus", "swift_cbpr_plus", "swift-"],

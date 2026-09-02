@@ -3149,6 +3149,8 @@ async fn shutdown_peers_for_drop(peers: Vec<NetworkPeer>) {
 #[derive(Debug, Clone)]
 struct ConsensusBootstrapProfile {
     params: ConsensusGenesisParams,
+    offline_cash_mint_finality:
+        iroha_data_model::isi::offline_cash_v1::OfflineCashMintFinalityGenesisParametersV1,
     mode_tag: &'static str,
     bls_domain: &'static str,
     chain_id: ChainId,
@@ -6358,7 +6360,8 @@ fn consensus_handshake_parameter(consensus_profile: &ConsensusBootstrapProfile) 
         block_cadence_ms: consensus_profile.params.block_cadence_ms,
         wire_protocol_version: consensus_profile.wire_protocol_version,
         consensus_fingerprint: ConsensusFingerprint::new(consensus_profile.fingerprint()),
-        sumeragi_v2: consensus_profile.params.v2_context,
+        sumeragi_v2: consensus_profile.params.v2_context.clone(),
+        offline_cash_mint_finality: consensus_profile.offline_cash_mint_finality.clone(),
     };
     metadata
         .validate()
@@ -7707,18 +7710,28 @@ impl NetworkBuilder {
             consensus_mode_tag = NPOS_TAG;
             consensus_bls_domain = NPOS_BLS_DOMAIN;
         }
-        let provisional_v2_context =
-            iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(
+        let provisional_metadata = parameter_state
+            .custom()
+            .get(&consensus_metadata::handshake_meta_id())
+            .and_then(|parameter| {
+                norito::json::from_str::<ConsensusHandshakeMetadata>(parameter.payload().get()).ok()
+            })
+            .expect(
+                "test-network genesis must carry explicitly provisioned signed Sumeragi v2 context parameters",
             );
+        let provisional_v2_context = provisional_metadata.sumeragi_v2;
+        let provisional_offline_cash_mint_finality =
+            provisional_metadata.offline_cash_mint_finality;
         let provisional_params =
             iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
                 consensus_mode,
                 &parameter_state,
-                provisional_v2_context,
+                provisional_v2_context.clone(),
             )
             .expect("test-network genesis parameters must form a canonical carrier");
         let provisional_profile = ConsensusBootstrapProfile {
             params: provisional_params,
+            offline_cash_mint_finality: provisional_offline_cash_mint_finality.clone(),
             mode_tag: consensus_mode_tag,
             bls_domain: consensus_bls_domain,
             chain_id: consensus_chain_id.clone(),
@@ -7763,6 +7776,7 @@ impl NetworkBuilder {
             .expect("bound test-network genesis parameters must form a canonical carrier");
         let consensus_profile = ConsensusBootstrapProfile {
             params: consensus_params,
+            offline_cash_mint_finality: provisional_offline_cash_mint_finality,
             mode_tag: consensus_mode_tag,
             bls_domain: consensus_bls_domain,
             chain_id: consensus_chain_id.clone(),

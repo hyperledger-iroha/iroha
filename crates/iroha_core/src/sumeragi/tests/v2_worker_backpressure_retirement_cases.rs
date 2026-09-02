@@ -25,7 +25,7 @@ fn production_exact_output_observes_finality_only_after_state_commit() {
             .canonical_proposal_wire_hash()
             .expect("canonical proposal wire"),
     };
-    let mut execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    let mut execution_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
         Hash::new(b"worker applied-finality parent state"),
         Hash::new(b"worker applied-finality post state"),
         Hash::new(b"worker applied-finality writes"),

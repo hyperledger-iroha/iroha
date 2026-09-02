@@ -4,6 +4,8 @@
 //! The ignored test deliberately uses the production wallet prover, encrypted
 //! auditor capsule, Torii restricted-DA routes, and node-held BLS committee
 //! keys.  There is no fixture proof, hand-made vote, or QC verification bypass.
+//! The primary N=3 topology settles one public participant dataspace and two
+//! restricted participant dataspaces in the same confidential atomic bundle.
 //! The included release-harness entrypoint parameterizes the same production
 //! workflow across N=2,3,4,8,16 and publishes only measured process evidence.
 
@@ -43,7 +45,7 @@ use iroha::{
         metadata::Metadata,
         nexus::{
             ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, AtomicPrivateSettlementV1, DataSpaceId, LaneId,
-            PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1, PrivateSettlementAuditAadV1,
+            LaneVisibility, PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1, PrivateSettlementAuditAadV1,
             PrivateSettlementAuditEncryptionOpeningV1, PrivateSettlementAuditNoteOpeningV1,
             PrivateSettlementAuditOutputRoleV1, PrivateSettlementAuditOutputV1,
             PrivateSettlementAuditPayerAuthorizationBodyV1,
@@ -118,6 +120,7 @@ use std::{
 use toml::{Table, Value as TomlValue};
 
 const PARTICIPANT_COUNT: usize = 3;
+const PRIMARY_PUBLIC_PARTICIPANT_ORDINAL: usize = 0;
 const VALIDATORS_PER_LANE: usize = 4;
 const REAL_PROCESS_VALIDATOR_WORKER_THREADS: u64 = 4;
 const GLOBAL_LANE_ID: u32 = 0;
@@ -167,12 +170,66 @@ impl TopologyShape {
         start..start + VALIDATORS_PER_LANE
     }
 
+    fn participant_visibility(self, ordinal: usize) -> LaneVisibility {
+        assert!(
+            ordinal < self.participants,
+            "participant ordinal is in range"
+        );
+        if ordinal == PRIMARY_PUBLIC_PARTICIPANT_ORDINAL {
+            LaneVisibility::Public
+        } else {
+            LaneVisibility::Restricted
+        }
+    }
+
+    fn participant_visibility_profile(self) -> Vec<LaneVisibility> {
+        (0..self.participants)
+            .map(|ordinal| self.participant_visibility(ordinal))
+            .collect()
+    }
+
+    fn p2p_validator_counts_by_visibility(self) -> (usize, usize) {
+        let participant_visibilities = self.participant_visibility_profile();
+        let public_lanes = 1 + participant_visibilities
+            .iter()
+            .filter(|visibility| **visibility == LaneVisibility::Public)
+            .count();
+        let restricted_lanes = participant_visibilities
+            .iter()
+            .filter(|visibility| **visibility == LaneVisibility::Restricted)
+            .count();
+        (
+            public_lanes * VALIDATORS_PER_LANE,
+            restricted_lanes * VALIDATORS_PER_LANE,
+        )
+    }
+
     fn validate(self) -> Result<()> {
         ensure!(
             matches!(self.participants, 2 | 3 | 4 | 8 | 16),
             "real-process release matrix supports N=2,3,4,8,16"
         );
         Ok(())
+    }
+}
+
+fn participant_dataspace_alias(ordinal: usize) -> String {
+    let number = ordinal + 1;
+    if ordinal == PRIMARY_PUBLIC_PARTICIPANT_ORDINAL {
+        format!("public-{number}")
+    } else {
+        format!("private-{number}")
+    }
+}
+
+fn participant_lane_alias(ordinal: usize) -> String {
+    format!("lane-{}", participant_dataspace_alias(ordinal))
+}
+
+const fn visibility_config_value(visibility: LaneVisibility) -> &'static str {
+    match visibility {
+        LaneVisibility::Public => "public",
+        LaneVisibility::Restricted => "restricted",
     }
 }
 
@@ -302,7 +359,7 @@ fn cbdc_asset_definition_id(ordinal: usize) -> AssetDefinitionId {
 fn transparent_control_domain_id(ordinal: usize) -> DomainId {
     DomainId::try_new(
         format!("control{}", ordinal + 1),
-        format!("private-{}", ordinal + 1),
+        participant_dataspace_alias(ordinal),
     )
     .expect("transparent-control domain")
 }
@@ -537,7 +594,7 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
                         TomlValue::String(if lane == 0 {
                             "lane-global".to_owned()
                         } else {
-                            format!("lane-private-{lane}")
+                            participant_lane_alias(lane - 1)
                         }),
                     );
                     table.insert(
@@ -545,12 +602,19 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
                         TomlValue::String(if lane == 0 {
                             "universal".to_owned()
                         } else {
-                            format!("private-{lane}")
+                            participant_dataspace_alias(lane - 1)
                         }),
                     );
                     table.insert(
                         "visibility".into(),
-                        TomlValue::String(if lane == 0 { "public" } else { "restricted" }.into()),
+                        TomlValue::String(
+                            if lane == 0 {
+                                "public"
+                            } else {
+                                visibility_config_value(shape.participant_visibility(lane - 1))
+                            }
+                            .to_owned(),
+                        ),
                     );
                     table.insert("metadata".into(), TomlValue::Table(Table::new()));
                     TomlValue::Table(table)
@@ -564,7 +628,7 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
                         TomlValue::String(if dataspace == 0 {
                             "universal".to_owned()
                         } else {
-                            format!("private-{dataspace}")
+                            participant_dataspace_alias(dataspace - 1)
                         }),
                     );
                     table.insert("id".into(), TomlValue::Integer(dataspace as i64));
@@ -596,7 +660,7 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
                     );
                     rule.insert(
                         "dataspace".into(),
-                        TomlValue::String(format!("private-{}", ordinal + 1)),
+                        TomlValue::String(participant_dataspace_alias(ordinal)),
                     );
                     rule.insert("matcher".into(), TomlValue::Table(matcher));
                     TomlValue::Table(rule)
@@ -766,6 +830,22 @@ fn routes_from_network(
     status
         .validate()
         .wrap_err("validate lane lifecycle status")?;
+    for ordinal in 0..shape.participants {
+        let lane_id = LaneId::new(u32::try_from(ordinal + 1).expect("lane fits u32"));
+        let configured = status
+            .lanes
+            .iter()
+            .find(|lane| lane.id == lane_id)
+            .ok_or_else(|| eyre!("participant lane {} is absent", ordinal + 1))?;
+        let expected = shape.participant_visibility(ordinal);
+        ensure!(
+            configured.visibility == expected,
+            "participant lane {} visibility is {}, expected {}",
+            ordinal + 1,
+            configured.visibility.as_str(),
+            expected.as_str()
+        );
+    }
     (1..=shape.participants)
         .map(|lane| {
             let lane_id = LaneId::new(u32::try_from(lane).expect("lane fits u32"));
@@ -1592,6 +1672,15 @@ fn run_n3_real_process_smoke() -> Result<()> {
         shape.peer_count() == 16,
         "N=3 requires 4 global + 12 participant validators"
     );
+    ensure!(
+        shape.participant_visibility_profile()
+            == [
+                LaneVisibility::Public,
+                LaneVisibility::Restricted,
+                LaneVisibility::Restricted,
+            ],
+        "primary N=3 must mix one public and two restricted participant dataspaces"
+    );
     let context = "atomic_private_settlement_n3_real_process_smoke";
     let started = sandbox::start_network_blocking_or_skip(n3_smoke_builder(shape), context)?;
     let Some((network, _runtime)) = sandbox::enforce_network_start_requirement(started, context)?
@@ -1605,7 +1694,7 @@ fn run_n3_real_process_smoke() -> Result<()> {
     let routes = routes_from_network(&network, shape)?;
     ensure!(
         routes.len() == 3,
-        "exactly three private dataspaces are required"
+        "exactly three mixed-visibility participant dataspaces are required"
     );
     let committees = committees_from_network(&network, shape, &routes)?;
     let governed = governed_legs(&routes, authority_context_height, expiry_height)?;
@@ -1636,7 +1725,7 @@ fn run_n3_real_process_smoke() -> Result<()> {
         sponsor.build_transaction_from_items(activations, bounded_nexus_fee(), Metadata::default());
     sponsor
         .submit_transaction_blocking(&activation_transaction)
-        .wrap_err("activate all three governed private pools at the bound context height")?;
+        .wrap_err("activate all three governed confidential pools at the bound context height")?;
     ensure!(
         sponsor.get_privacy_capabilities()?.committed_height == authority_context_height,
         "pool activation did not land at the manifest authority context"
@@ -1971,6 +2060,23 @@ fn n3_topology_has_one_global_and_three_disjoint_four_validator_committees() {
     assert_eq!(shape.validator_range(1), 4..8);
     assert_eq!(shape.validator_range(2), 8..12);
     assert_eq!(shape.validator_range(3), 12..16);
+}
+
+#[test]
+fn n3_primary_topology_mixes_public_and_permissioned_participant_dataspaces() {
+    let shape = TopologyShape::new(PARTICIPANT_COUNT);
+    assert_eq!(
+        shape.participant_visibility_profile(),
+        [
+            LaneVisibility::Public,
+            LaneVisibility::Restricted,
+            LaneVisibility::Restricted,
+        ]
+    );
+    assert_eq!(participant_dataspace_alias(0), "public-1");
+    assert_eq!(participant_dataspace_alias(1), "private-2");
+    assert_eq!(participant_dataspace_alias(2), "private-3");
+    assert_eq!(shape.p2p_validator_counts_by_visibility(), (8, 8));
 }
 
 #[test]

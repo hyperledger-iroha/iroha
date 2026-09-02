@@ -165,17 +165,17 @@ func genericVoteFixtureAssignment(t *testing.T, variant int) *canonicalVoteFixtu
 	populateKATExecutionCommitment(&witness.Finality.Execution, "generic execution")
 	execution := &witness.Finality.Execution
 	if variant&1 != 0 {
-		execution.HasTopupAnchorRoot = 1
-		execution.TopupAnchorCount = 1
-		set32(&execution.TopupAnchorRoot, nativeIrohaHash([]byte("generic topup root")))
+		execution.HasOfflineCashTopUpRoot = 1
+		execution.OfflineCashTopUpCount = 1_000
+		set32(&execution.OfflineCashTopUpRoot, nativeIrohaHash([]byte("generic offline cash top-up root")))
 		count := make([]byte, 4)
-		binary.LittleEndian.PutUint32(count, 1)
+		binary.LittleEndian.PutUint32(count, 1_000)
 		ordinary := u8Array32(execution.OrdinaryWritesRoot)
-		topup := u8Array32(execution.TopupAnchorRoot)
-		preimage := append([]byte("iroha:kagemusha:v2:post-state-root"), 0)
+		offlineCashTopUp := u8Array32(execution.OfflineCashTopUpRoot)
+		preimage := append([]byte("iroha:offline-cash:v1:post-state-root"), 0)
 		preimage = append(preimage, count...)
 		preimage = append(preimage, ordinary[:]...)
-		preimage = append(preimage, topup[:]...)
+		preimage = append(preimage, offlineCashTopUp[:]...)
 		set32(&execution.PostStateRoot, nativeIrohaHash(preimage))
 	}
 	if variant&2 != 0 {
@@ -203,7 +203,7 @@ func setCanonicalVoteBytes(finality *FinalityWitness, payload []byte) {
 
 func optionVariantName(variant int) string {
 	parts := make([]string, 0, 3)
-	for bit, name := range []string{"topup", "lane", "merge"} {
+	for bit, name := range []string{"offline_cash_top_up", "lane", "merge"} {
 		if variant&(1<<bit) != 0 {
 			parts = append(parts, name)
 		}

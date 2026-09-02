@@ -93,8 +93,6 @@ pub mod interlane;
 pub mod iso_bridge;
 /// Jurisdiction attestation/SDN enforcement helpers.
 pub mod jurisdiction;
-/// Canonical Kagemusha operation carriers and consensus-persisted outcomes.
-pub mod kagemusha_operation;
 /// Kiso: storage primitives and data layout.
 pub mod kiso;
 /// Persistent block storage (Kura) backend.
@@ -114,6 +112,8 @@ pub mod native_amx;
 pub(crate) mod native_amx_fault_injection;
 /// Nexus helpers (UAID portfolio aggregation, etc.).
 pub mod nexus;
+/// Qualified-provider encryption for Offline Cash V1 credit openings.
+pub mod offline_cash_v1_crypto;
 /// Oracle host helpers (admission/aggregation plumbing).
 pub mod oracle;
 /// Panic hook suppression helpers shared across crates.
@@ -260,7 +260,9 @@ const _: () = assert!(
         + SUMERAGI_V2_NETWORK_FRAME_OVERHEAD_BYTES
         <= MAX_SUMERAGI_V2_CERTIFIED_BODY_RESPONSE_NETWORK_FRAME_BYTES
 );
+const NETWORK_MESSAGE_LANE_RELAY_TAG: u32 = 1;
 const NETWORK_MESSAGE_LANE_DRAIN_VOTE_TAG: u32 = 3;
+const NETWORK_MESSAGE_NATIVE_AMX_TAG: u32 = 5;
 const NETWORK_MESSAGE_TORII_PROXY_REQUEST_TAG: u32 = 13;
 const NETWORK_MESSAGE_TORII_PROXY_RESPONSE_TAG: u32 = 14;
 const NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_PUBLICATION_TAG: u32 = 16;
@@ -1051,7 +1053,11 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
         };
         let topic = match tag {
             0 => inbound_sumeragi_topic(field)?,
-            1..=3 | 5 | 17 => Topic::Consensus,
+            NETWORK_MESSAGE_LANE_RELAY_TAG
+            | 2
+            | NETWORK_MESSAGE_LANE_DRAIN_VOTE_TAG
+            | NETWORK_MESSAGE_NATIVE_AMX_TAG
+            | NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_CERTIFICATE_TAG => Topic::Consensus,
             4 => inbound_certified_merge_sidecar_topic(field, flags)?,
             6 => inbound_transaction_gossip_topic(field, flags)?,
             7 => Topic::PeerGossip,
@@ -1100,6 +1106,11 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                         64,
                     )));
                 }
+                Ok(None)
+            }
+            NETWORK_MESSAGE_LANE_RELAY_TAG | NETWORK_MESSAGE_NATIVE_AMX_TAG => {
+                // These recursive consensus carriers intentionally rely on
+                // Norito's unconditional payload-derived global budget.
                 Ok(None)
             }
             NETWORK_MESSAGE_LANE_DRAIN_VOTE_TAG => {
@@ -1330,6 +1341,8 @@ mod isi_gas_fees_tests;
 #[path = "../tests/ivm_corehost_axt.rs"]
 mod ivm_corehost_axt_tests;
 #[cfg(test)]
+mod offline_cash_v1_test_fixtures;
+#[cfg(test)]
 #[path = "../tests/overlay_chunking.rs"]
 mod overlay_chunking_tests;
 #[cfg(test)]
@@ -1380,9 +1393,10 @@ mod tests {
             TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1, TORII_PROXY_REQUEST_MAX_FRAME_BYTES_V1,
             TORII_PROXY_REQUEST_VERSION_V1, TORII_PROXY_RESPONSE_MAX_ENCODED_BYTES_V1,
             TORII_PROXY_RESPONSE_MAX_FRAME_BYTES_V1, TORII_PROXY_RESPONSE_VERSION_V1,
-            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1, ToriiProxyRequestV1,
-            ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiProxyTransactionAdmissionV1,
-            ToriiReadEndpointV1, ToriiReadProxyRequestV1, ToriiRouteHintV1, ToriiRoutingPlanHintV1,
+            ToriiFanoutRouteScopeV1, ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1,
+            ToriiProxyRequestV1, ToriiProxyResponseFormatV1, ToriiProxyResponseV1,
+            ToriiProxyTransactionAdmissionV1, ToriiReadEndpointV1, ToriiReadProxyRequestV1,
+            ToriiRouteHintV1, ToriiRoutingPlanHintV1,
         },
     };
     use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
@@ -1942,7 +1956,10 @@ mod tests {
 
     #[test]
     fn native_amx_and_lane_relay_fall_back_to_canonical_global_decode_limits() {
-        for (tag, label) in [(2_u32, "LaneRelay"), (6_u32, "NativeAmx")] {
+        for (tag, label) in [
+            (super::NETWORK_MESSAGE_LANE_RELAY_TAG, "LaneRelay"),
+            (super::NETWORK_MESSAGE_NATIVE_AMX_TAG, "NativeAmx"),
+        ] {
             let payload = tag.to_le_bytes();
             assert!(
                 <NetworkMessage as ClassifyTopic>::inbound_decode_limits(
@@ -2264,6 +2281,7 @@ mod tests {
             visited_peer_ids: Vec::new(),
             request: ToriiProxyRequestKindV1::Read(ToriiReadProxyRequestV1 {
                 endpoint: ToriiReadEndpointV1::AccountsList,
+                route_scope: ToriiFanoutRouteScopeV1::AllDataspaces,
                 expected_route: ToriiRouteHintV1 {
                     lane_id: LaneId::SINGLE,
                     dataspace_id: DataSpaceId::UNIVERSAL,
@@ -2368,6 +2386,7 @@ mod tests {
             visited_peer_ids: Vec::new(),
             request: ToriiProxyRequestKindV1::Read(ToriiReadProxyRequestV1 {
                 endpoint: ToriiReadEndpointV1::AccountsList,
+                route_scope: ToriiFanoutRouteScopeV1::AllDataspaces,
                 expected_route: ToriiRouteHintV1 {
                     lane_id: LaneId::SINGLE,
                     dataspace_id: DataSpaceId::UNIVERSAL,
@@ -2544,13 +2563,14 @@ mod tests {
                 )),
                 payload_hash: Hash::new(b"v2-safety-topic-payload"),
             },
-            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new(b"v2-safety-topic-parent-state"),
-                Hash::new(b"v2-safety-topic-post-state"),
-                Hash::new(b"v2-safety-topic-ordinary-writes"),
-                1,
-                Hash::new(b"v2-safety-topic-executed-block-wire"),
-            ),
+            execution_commitment:
+                wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                    Hash::new(b"v2-safety-topic-parent-state"),
+                    Hash::new(b"v2-safety-topic-post-state"),
+                    Hash::new(b"v2-safety-topic-ordinary-writes"),
+                    1,
+                    Hash::new(b"v2-safety-topic-executed-block-wire"),
+                ),
             signer: 0,
             signature: vec![1],
         };

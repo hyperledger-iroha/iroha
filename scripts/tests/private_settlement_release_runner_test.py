@@ -281,8 +281,18 @@ def leakage_payload(job: dict[str, Any], evidence: Path) -> dict[str, Any]:
     peer_count = 16
     variant_marker = b"L" if job.get("variant", "left") == "left" else b"R"
     torii_ports = list(range(20_000, 20_000 + peer_count))
-    public_ports = list(range(30_000, 30_004))
-    restricted_ports = list(range(40_000, 40_012))
+    participant_visibilities = MODULE.canonical_participant_visibilities(
+        MODULE.PRIMARY_PARTICIPANTS
+    )
+    public_peer_count = (
+        1
+        + participant_visibilities.count(MODULE.PUBLIC_PARTICIPANT_VISIBILITY)
+    ) * MODULE.VALIDATORS_PER_DATASPACE
+    restricted_peer_count = participant_visibilities.count(
+        MODULE.RESTRICTED_PARTICIPANT_VISIBILITY
+    ) * MODULE.VALIDATORS_PER_DATASPACE
+    public_ports = list(range(30_000, 30_000 + public_peer_count))
+    restricted_ports = list(range(40_000, 40_000 + restricted_peer_count))
     request_packet = _ethernet_ipv4_tcp(50_000, torii_ports[0])
     response_packet = _ethernet_ipv4_tcp(torii_ports[0], 50_000)
     public_packet = _ethernet_ipv4_tcp(public_ports[0], 50_001)
@@ -1299,6 +1309,37 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
         self.assertEqual(first[0]["kind"], "fault")
         self.assertEqual(first[-2]["variant"], "left")
         self.assertEqual(first[-1]["variant"], "right")
+
+    def test_participant_visibility_profiles_are_canonical_and_deterministic(self) -> None:
+        for participants in MODULE.PARTICIPANTS:
+            expected = ["public"] + ["restricted"] * (participants - 1)
+            self.assertEqual(
+                MODULE.canonical_participant_visibilities(participants), expected
+            )
+            configuration = MODULE.build_configuration(
+                participants,
+                seeds=tuple(range(MODULE.MIN_FAULT_SEEDS)),
+                warmups=MODULE.MIN_WARMUPS,
+                measured=MODULE.MIN_MEASURED,
+            )
+            self.assertEqual(configuration["participant_visibilities"], expected)
+        self.assertEqual(
+            MODULE.canonical_participant_visibilities(3),
+            ["public", "restricted", "restricted"],
+        )
+        primary = MODULE.canonical_participant_visibilities(3)
+        self.assertEqual(
+            (1 + primary.count(MODULE.PUBLIC_PARTICIPANT_VISIBILITY))
+            * MODULE.VALIDATORS_PER_DATASPACE,
+            8,
+        )
+        self.assertEqual(
+            primary.count(MODULE.RESTRICTED_PARTICIPANT_VISIBILITY)
+            * MODULE.VALIDATORS_PER_DATASPACE,
+            8,
+        )
+        with self.assertRaisesRegex(MODULE.RunnerError, "visibility policy"):
+            MODULE.canonical_participant_visibilities(255)
 
     def test_canary_sets_cover_both_secret_only_variants(self) -> None:
         manifest = MODULE.build_canary_manifest(COMMIT)
@@ -2358,6 +2399,10 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
             }
             request = MODULE.build_request(frozen_plan, root, job)
             self.assertEqual(request["payload"]["canaries"], selected)
+            self.assertEqual(
+                request["participant_visibilities"],
+                ["public", "restricted", "restricted"],
+            )
             canaries["canaries"][0]["value"] = "changed-secret"
             MODULE.write_json(canary_path, canaries)
             frozen_plan["canary_manifest"].update(

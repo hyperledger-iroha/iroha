@@ -1,5 +1,6 @@
 //! Explicit wire identifiers for the built-in instruction registry.
 use super::*;
+use crate::isi::offline_cash_v1;
 #[cfg(test)]
 type TypeName = fn() -> &'static str;
 /// One built-in instruction's Rust type and path-independent wire identity.
@@ -82,16 +83,8 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(RemoveAssetKeyValue => "iroha.instruction.v1::transparent::RemoveAssetKeyValue"),
     built_in_wire_id!(GrantBox => "iroha.grant"),
     built_in_wire_id!(RevokeBox => "iroha.revoke"),
-    built_in_wire_id!(offline::TopUpKagemushaRecursiveV4 => "iroha.instruction.v1::offline::TopUpKagemushaRecursiveV4"),
-    built_in_wire_id!(offline::RedeemKagemushaRecursiveV4 => "iroha.instruction.v1::offline::RedeemKagemushaRecursiveV4"),
-    built_in_wire_id!(offline::ActivateKagemushaRecursiveReleaseV4 => "iroha.instruction.v1::offline::ActivateKagemushaRecursiveReleaseV4"),
-    built_in_wire_id!(offline::EnableKagemushaRecursiveIssuanceV4 => "iroha.offline.kagemusha.recursive_release.enable.v1"),
-    built_in_wire_id!(offline::CancelKagemushaRecursiveReleaseV4 => "iroha.offline.kagemusha.recursive_release.cancel.v1"),
-    built_in_wire_id!(offline::DeactivateKagemushaRecursiveIssuanceV4 => "iroha.offline.kagemusha.recursive_release.deactivate.v1"),
-    built_in_wire_id!(offline::RecordKagemushaTairaCanaryV4 => "iroha.offline.kagemusha.taira_canary.record.v1"),
-    built_in_wire_id!(offline::AuthorizeKagemushaTairaCanaryV4 => "iroha.offline.kagemusha.taira_canary.authorize.v1"),
-    built_in_wire_id!(offline::RegisterOfflineDeviceAttestation => "iroha.offline.device_attestation.register"),
-    built_in_wire_id!(offline::SetOfflineDeviceAttestationPolicy => "iroha.instruction.v1::offline::SetOfflineDeviceAttestationPolicy"),
+    built_in_wire_id!(offline_cash_v1::TopUpOfflineCashV1 => "iroha.offline_cash.v1.top_up", register),
+    built_in_wire_id!(offline_cash_v1::RedeemOfflineCashV1 => "iroha.offline_cash.v1.redeem", register),
     built_in_wire_id!(crate::isi::staking::RegisterPublicLaneValidator => "iroha.instruction.v1::staking::RegisterPublicLaneValidator"),
     built_in_wire_id!(crate::isi::staking::RebindPublicLaneValidatorPeer => "iroha.staking.rebind_public_lane_validator_peer"),
     built_in_wire_id!(crate::isi::staking::ActivatePublicLaneValidator => "iroha.staking.activate_public_lane_validator"),
@@ -276,10 +269,6 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(sorafs::RegisterSorafsCitizenBond => "iroha.instruction.v1::sorafs::RegisterSorafsCitizenBond"),
     built_in_wire_id!(sorafs::RotateSorafsCitizenBondAuthorization => "iroha.instruction.v1::sorafs::RotateSorafsCitizenBondAuthorization"),
     built_in_wire_id!(sorafs::RequestSorafsCitizenBondExit => "iroha.instruction.v1::sorafs::RequestSorafsCitizenBondExit"),
-    built_in_wire_id!(sorafs::RegisterSorafsAnonymousServiceNote => "iroha.instruction.v1::sorafs::RegisterSorafsAnonymousServiceNote"),
-    built_in_wire_id!(sorafs::RegisterSorafsAnonymousJurorCandidacy => "iroha.instruction.v1::sorafs::RegisterSorafsAnonymousJurorCandidacy"),
-    built_in_wire_id!(sorafs::RefundSorafsAnonymousServiceEscrow => "iroha.instruction.v1::sorafs::RefundSorafsAnonymousServiceEscrow"),
-    built_in_wire_id!(sorafs::SlashSorafsAnonymousServiceEscrow => "iroha.instruction.v1::sorafs::SlashSorafsAnonymousServiceEscrow"),
     built_in_wire_id!(sorafs::SetSorafsOrderbookPolicy => "iroha.instruction.v1::sorafs::SetSorafsOrderbookPolicy"),
     built_in_wire_id!(sorafs::SubmitSorafsOrderbookOrder => "iroha.instruction.v1::sorafs::SubmitSorafsOrderbookOrder"),
     built_in_wire_id!(sorafs::CancelSorafsOrderbookOrder => "iroha.instruction.v1::sorafs::CancelSorafsOrderbookOrder"),

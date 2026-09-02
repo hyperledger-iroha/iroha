@@ -160,6 +160,7 @@ mod app_api_integration_tests {
             &scoped_accounts,
             Some(&rose_def),
             None,
+            &DataspaceReadVisibility::all_for_tests(),
         );
         assert_eq!(projected.len(), 1);
         assert_eq!(projected[0].account_id, alice_id.to_string());

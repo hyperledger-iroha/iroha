@@ -8,8 +8,8 @@ use iroha_core::{
     query::store::LiveQueryStore,
     smartcontracts::Execute,
     state::{
-        GovernanceProposalRecord, GovernanceProposalStatus,
-        GovernanceReferendumRecord, GovernanceReferendumStatus, State, World, WorldReadOnly,
+        GovernanceProposalRecord, GovernanceProposalStatus, GovernanceReferendumRecord,
+        GovernanceReferendumStatus, State, World, WorldReadOnly,
     },
 };
 use iroha_crypto::{Algorithm, KeyPair};

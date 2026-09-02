@@ -307,7 +307,6 @@ fn persisted_tree_profile_roundtrips_and_is_required() {
         crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
         crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID,
         crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
-        crate::zk::confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID,
     ] {
         assert_eq!(
             ConfidentialTreeProfile::for_circuit_id(circuit_id),

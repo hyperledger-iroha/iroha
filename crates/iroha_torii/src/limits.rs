@@ -10,7 +10,7 @@ use parking_lot::Mutex;
 use sha2::{Digest as _, Sha256};
 use std::{
     cmp::Reverse,
-    collections::{BinaryHeap, HashMap, VecDeque, hash_map::DefaultHasher},
+    collections::{BTreeMap, BinaryHeap, HashMap, VecDeque, hash_map::DefaultHasher},
     fmt,
     hash::{Hash, Hasher},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
@@ -107,6 +107,7 @@ struct ShardedLimiter {
     disabled: bool,
     shards: Vec<Mutex<InnerLimiter>>,
 }
+#[derive(Clone)]
 struct InnerLimiter {
     rate_per_sec: f64,
     burst: f64,
@@ -118,6 +119,21 @@ struct InnerLimiter {
 struct TokenBucket {
     tokens: f64,
     last: Instant,
+    pending_reservations: usize,
+}
+
+/// Tokens deducted provisionally from one or more rate-limit buckets.
+///
+/// Call [`Self::commit`] after the protected operation accepts ownership of the
+/// charge. Dropping an uncommitted reservation atomically refunds every key.
+#[must_use = "an uncommitted rate-limit reservation is refunded when dropped"]
+pub struct RateLimitReservation {
+    pending: Option<PendingRateLimitReservation>,
+}
+
+struct PendingRateLimitReservation {
+    limiter: Arc<ShardedLimiter>,
+    charges: Vec<(usize, Vec<(String, usize)>)>,
 }
 const DEFAULT_MAX_BUCKETS: usize = 4_096;
 const DEFAULT_RATE_LIMITER_SHARDS: usize = 64;
@@ -315,13 +331,14 @@ impl ShardedLimiter {
             .collect();
         Self { disabled, shards }
     }
-    fn shard_for(&self, key: &str) -> &Mutex<InnerLimiter> {
+    fn shard_index_for(&self, key: &str) -> usize {
         let mut hasher = DefaultHasher::new();
         key.hash(&mut hasher);
         let shard_count = u64::try_from(self.shards.len()).expect("shard count fits in u64");
-        let index =
-            usize::try_from(hasher.finish() % shard_count).expect("shard index fits in usize");
-        &self.shards[index]
+        usize::try_from(hasher.finish() % shard_count).expect("shard index fits in usize")
+    }
+    fn shard_for(&self, key: &str) -> &Mutex<InnerLimiter> {
+        &self.shards[self.shard_index_for(key)]
     }
 }
 impl InnerLimiter {
@@ -334,11 +351,20 @@ impl InnerLimiter {
             max_buckets,
         }
     }
-    fn insert_full_bucket(&mut self, key: &str, now: Instant) {
-        if self.buckets.len() >= self.max_buckets {
-            if let Some(oldest) = self.order.pop_front() {
-                self.buckets.remove(&oldest);
-            }
+    fn insert_full_bucket(&mut self, key: &str, now: Instant) -> bool {
+        while self.buckets.len() >= self.max_buckets {
+            let Some(position) = self.order.iter().position(|candidate| {
+                self.buckets
+                    .get(candidate)
+                    .is_none_or(|bucket| bucket.pending_reservations == 0)
+            }) else {
+                return false;
+            };
+            let oldest = self
+                .order
+                .remove(position)
+                .expect("rate-limit eviction position must remain valid");
+            self.buckets.remove(&oldest);
         }
         let key_owned = key.to_string();
         self.order.push_back(key_owned.clone());
@@ -347,8 +373,10 @@ impl InnerLimiter {
             TokenBucket {
                 tokens: self.burst,
                 last: now,
+                pending_reservations: 0,
             },
         );
+        true
     }
     fn refill_bucket(rate_per_sec: f64, burst: f64, bucket: &mut TokenBucket, now: Instant) {
         let elapsed = now.saturating_duration_since(bucket.last).as_secs_f64();
@@ -375,7 +403,9 @@ impl InnerLimiter {
         let bucket = match self.buckets.get_mut(key) {
             Some(bucket) => bucket,
             None => {
-                self.insert_full_bucket(key, now);
+                if !self.insert_full_bucket(key, now) {
+                    return false;
+                }
                 self.buckets
                     .get_mut(key)
                     .expect("inserted rate-limit bucket must be present")
@@ -398,6 +428,101 @@ impl InnerLimiter {
             return false;
         }
         self.allow_required(key, required, now)
+    }
+
+    fn prepare_reservation_key(&mut self, key: &str) -> bool {
+        let Some(bucket) = self.buckets.get_mut(key) else {
+            return true;
+        };
+        let Some(updated) = bucket.pending_reservations.checked_add(1) else {
+            return false;
+        };
+        bucket.pending_reservations = updated;
+        true
+    }
+
+    fn reserve_prepared_repeated(&mut self, key: &str, count: usize, now: Instant) -> bool {
+        let already_pinned = self.buckets.contains_key(key);
+        if !self.allow_repeated(key, count, now) {
+            return false;
+        }
+        if !already_pinned {
+            let bucket = self
+                .buckets
+                .get_mut(key)
+                .expect("a successful reservation must have a bucket");
+            bucket.pending_reservations = 1;
+        }
+        true
+    }
+
+    fn reservation_is_pending(&self, key: &str) -> bool {
+        self.buckets
+            .get(key)
+            .is_some_and(|bucket| bucket.pending_reservations > 0)
+    }
+
+    fn finish_reservation(&mut self, key: &str, count: usize, refund: bool) {
+        let bucket = self
+            .buckets
+            .get_mut(key)
+            .expect("a pending reservation's bucket cannot be evicted");
+        bucket.pending_reservations -= 1;
+        if refund {
+            bucket.tokens = (bucket.tokens + count as f64).min(self.burst);
+        }
+    }
+}
+
+impl RateLimitReservation {
+    /// Finalize the provisional token deduction without refunding it.
+    pub fn commit(mut self) {
+        self.finish(false);
+    }
+
+    fn finish(&mut self, refund: bool) {
+        let Some(pending) = self.pending.take() else {
+            return;
+        };
+        pending.finish(refund);
+    }
+}
+
+impl Drop for RateLimitReservation {
+    fn drop(&mut self) {
+        self.finish(true);
+    }
+}
+
+impl PendingRateLimitReservation {
+    fn finish(self, refund: bool) {
+        let mut guards = self
+            .charges
+            .iter()
+            .map(|(shard_index, _)| self.limiter.shards[*shard_index].lock())
+            .collect::<Vec<_>>();
+
+        let all_pending = guards
+            .iter()
+            .zip(&self.charges)
+            .all(|(guard, (_, shard_charges))| {
+                shard_charges
+                    .iter()
+                    .all(|(key, _)| guard.reservation_is_pending(key))
+            });
+        debug_assert!(
+            all_pending,
+            "all provisionally charged buckets must remain reserved"
+        );
+        if !all_pending {
+            return;
+        }
+
+        for (guard, (_, shard_charges)) in guards.iter_mut().zip(&self.charges) {
+            for (key, count) in shard_charges {
+                guard.finish_reservation(key, *count, refund);
+            }
+        }
     }
 }
 impl RateLimiter {
@@ -479,6 +604,99 @@ impl RateLimiter {
             .shard_for(key)
             .lock()
             .allow_repeated(key, count, Instant::now())
+    }
+    /// Atomically consumes the requested token count for every supplied key.
+    ///
+    /// Duplicate keys are combined before admission and zero-count entries are ignored. If any
+    /// combined count overflows, exceeds the configured burst, or lacks available tokens, every
+    /// bucket remains unchanged.
+    #[allow(clippy::unused_async)]
+    pub async fn allow_many_repeated<I, K>(&self, charges: I) -> bool
+    where
+        I: IntoIterator<Item = (K, usize)>,
+        K: AsRef<str>,
+    {
+        let Some(reservation) = self.reserve_many_repeated(charges).await else {
+            return false;
+        };
+        reservation.commit();
+        true
+    }
+
+    /// Provisionally and atomically consume token counts for every supplied key.
+    ///
+    /// Duplicate keys are combined and zero-count entries are ignored. The returned reservation
+    /// protects its buckets from bounded-capacity eviction. Calling [`RateLimitReservation::commit`]
+    /// finalizes the charge; dropping it refunds every key as one atomic operation. If any charge
+    /// cannot be reserved, no bucket is changed.
+    #[allow(clippy::unused_async)]
+    pub async fn reserve_many_repeated<I, K>(&self, charges: I) -> Option<RateLimitReservation>
+    where
+        I: IntoIterator<Item = (K, usize)>,
+        K: AsRef<str>,
+    {
+        if self.inner.disabled {
+            return Some(RateLimitReservation { pending: None });
+        }
+
+        let mut combined = BTreeMap::<String, usize>::new();
+        for (key, count) in charges {
+            if count == 0 {
+                continue;
+            }
+            let entry = combined.entry(key.as_ref().to_owned()).or_default();
+            let Some(updated) = entry.checked_add(count) else {
+                return None;
+            };
+            *entry = updated;
+        }
+        if combined.is_empty() {
+            return Some(RateLimitReservation { pending: None });
+        }
+
+        let mut charges_by_shard = BTreeMap::<usize, Vec<(String, usize)>>::new();
+        for (key, count) in combined {
+            charges_by_shard
+                .entry(self.inner.shard_index_for(&key))
+                .or_default()
+                .push((key, count));
+        }
+
+        let grouped_charges = charges_by_shard.into_iter().collect::<Vec<_>>();
+        let mut guards = grouped_charges
+            .iter()
+            .map(|(shard_index, _)| self.inner.shards[*shard_index].lock())
+            .collect::<Vec<_>>();
+        let now = Instant::now();
+        let mut shadows = guards
+            .iter()
+            .map(|guard| (**guard).clone())
+            .collect::<Vec<_>>();
+        for (shadow, (_, shard_charges)) in shadows.iter_mut().zip(&grouped_charges) {
+            for (key, _) in shard_charges {
+                if !shadow.prepare_reservation_key(key) {
+                    return None;
+                }
+            }
+        }
+        for (shadow, (_, shard_charges)) in shadows.iter_mut().zip(&grouped_charges) {
+            for (key, count) in shard_charges {
+                if !shadow.reserve_prepared_repeated(key, *count, now) {
+                    return None;
+                }
+            }
+        }
+        for (guard, shadow) in guards.iter_mut().zip(shadows) {
+            **guard = shadow;
+        }
+        drop(guards);
+
+        Some(RateLimitReservation {
+            pending: Some(PendingRateLimitReservation {
+                limiter: Arc::clone(&self.inner),
+                charges: grouped_charges,
+            }),
+        })
     }
     #[cfg(test)]
     #[allow(clippy::unused_async)]
@@ -1296,6 +1514,295 @@ mod tests {
         assert!(limiter.allow_repeated("batch", 2).await);
         assert!(limiter.allow("batch").await);
         assert!(!limiter.allow("batch").await);
+    }
+    #[tokio::test]
+    async fn limiter_allow_many_repeated_canonicalizes_duplicate_keys() {
+        let limiter = RateLimiter::new(Some(1), Some(3));
+        assert!(
+            limiter
+                .allow_many_repeated([("same", 1), ("other", 1), ("same", 2)])
+                .await
+        );
+        assert_eq!(limiter.bucket_count().await, 2);
+        assert!(!limiter.allow("same").await);
+        assert!(limiter.allow_repeated("other", 2).await);
+        assert!(!limiter.allow("other").await);
+    }
+    #[tokio::test]
+    async fn limiter_allow_many_repeated_rolls_back_every_key() {
+        let limiter = RateLimiter {
+            inner: Arc::new(ShardedLimiter::new(Some(f64::EPSILON), 2.0, 2)),
+        };
+        assert!(limiter.allow_repeated("z-blocked", 2).await);
+        assert!(
+            !limiter
+                .allow_many_repeated([("a-fresh", 2), ("z-blocked", 1)])
+                .await
+        );
+        assert_eq!(
+            limiter.bucket_count().await,
+            1,
+            "a failed multi-key charge must not allocate a bucket for an earlier key"
+        );
+        assert!(limiter.allow_repeated("a-fresh", 2).await);
+        assert!(!limiter.allow("z-blocked").await);
+    }
+    #[tokio::test]
+    async fn limiter_allow_many_repeated_rejects_impossible_aggregate_without_mutation() {
+        let limiter = RateLimiter::new(Some(1), Some(2));
+        assert!(
+            !limiter
+                .allow_many_repeated([("overflow", usize::MAX), ("overflow", 1)])
+                .await
+        );
+        assert!(
+            !limiter
+                .allow_many_repeated([("too-large", 1), ("too-large", 2)])
+                .await
+        );
+        assert_eq!(limiter.bucket_count().await, 0);
+        assert!(limiter.allow_repeated("too-large", 2).await);
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn limiter_allow_many_repeated_serializes_opposite_order_contention() {
+        const WORKERS: usize = 32;
+
+        let limiter = RateLimiter::new_per_minute(Some(1), Some(1));
+        let first = "contended-0".to_owned();
+        let first_shard = limiter.inner.shard_index_for(&first);
+        let second = (1..10_000)
+            .map(|index| format!("contended-{index}"))
+            .find(|key| limiter.inner.shard_index_for(key) != first_shard)
+            .expect("test keys must cover at least two limiter shards");
+        let start = Arc::new(tokio::sync::Barrier::new(WORKERS + 1));
+        let mut handles = Vec::with_capacity(WORKERS);
+        for worker in 0..WORKERS {
+            let limiter = limiter.clone();
+            let start = Arc::clone(&start);
+            let first = first.clone();
+            let second = second.clone();
+            handles.push(tokio::spawn(async move {
+                start.wait().await;
+                let charges = if worker % 2 == 0 {
+                    [(first, 1), (second, 1)]
+                } else {
+                    [(second, 1), (first, 1)]
+                };
+                limiter.allow_many_repeated(charges).await
+            }));
+        }
+        start.wait().await;
+        let successes = tokio::time::timeout(Duration::from_secs(5), async move {
+            let mut successes = 0;
+            for handle in handles {
+                if handle.await.expect("limiter task should finish") {
+                    successes += 1;
+                }
+            }
+            successes
+        })
+        .await
+        .expect("opposite key ordering must not deadlock");
+        assert_eq!(successes, 1);
+        assert!(!limiter.allow(&first).await);
+        assert!(!limiter.allow(&second).await);
+    }
+    #[tokio::test]
+    async fn limiter_reservation_commit_finalizes_every_charge() {
+        let limiter = RateLimiter {
+            inner: Arc::new(ShardedLimiter::new(Some(f64::EPSILON), 2.0, 2)),
+        };
+        let reservation = limiter
+            .reserve_many_repeated([("first", 2), ("second", 1)])
+            .await
+            .expect("both charges should be reservable");
+        assert!(!limiter.allow("first").await);
+        assert!(limiter.allow("second").await);
+        assert!(!limiter.allow("second").await);
+
+        reservation.commit();
+
+        assert!(!limiter.allow("first").await);
+        assert!(!limiter.allow("second").await);
+        let shard = limiter.inner.shards[0].lock();
+        assert!(
+            shard
+                .buckets
+                .values()
+                .all(|bucket| bucket.pending_reservations == 0),
+            "commit must release every eviction pin"
+        );
+    }
+    #[tokio::test]
+    async fn limiter_reservation_drop_atomically_refunds_every_charge() {
+        let limiter = RateLimiter {
+            inner: Arc::new(ShardedLimiter::new(Some(f64::EPSILON), 2.0, 2)),
+        };
+        let reservation = limiter
+            .reserve_many_repeated([("first", 2), ("second", 2)])
+            .await
+            .expect("both charges should be reservable");
+        assert!(!limiter.allow("first").await);
+        assert!(!limiter.allow("second").await);
+
+        drop(reservation);
+
+        assert!(limiter.allow_repeated("first", 2).await);
+        assert!(limiter.allow_repeated("second", 2).await);
+        assert!(!limiter.allow("first").await);
+        assert!(!limiter.allow("second").await);
+    }
+    #[tokio::test]
+    async fn limiter_reservation_prevents_eviction_until_settled() {
+        let limiter = RateLimiter::new_with_capacity(Some(1), Some(1), 2);
+        let reservation = limiter
+            .reserve_many_repeated([("pinned", 1)])
+            .await
+            .expect("initial key should be reservable");
+        assert!(limiter.allow("transient").await);
+        assert!(
+            limiter.allow("replacement").await,
+            "an unreserved bucket should remain available for eviction"
+        );
+        assert_eq!(limiter.bucket_count().await, 2);
+        assert!(!limiter.allow("pinned").await);
+
+        drop(reservation);
+
+        assert!(
+            limiter.allow("pinned").await,
+            "the protected bucket must survive so its charge can be refunded"
+        );
+        assert!(!limiter.allow("pinned").await);
+    }
+    #[tokio::test]
+    async fn limiter_reservation_fails_closed_when_every_bucket_is_reserved() {
+        let limiter = RateLimiter::new_with_capacity(Some(1), Some(1), 2);
+        let first = limiter
+            .reserve_many_repeated([("first", 1)])
+            .await
+            .expect("first bucket should be reservable");
+        let second = limiter
+            .reserve_many_repeated([("second", 1)])
+            .await
+            .expect("second bucket should be reservable");
+
+        assert!(
+            limiter
+                .reserve_many_repeated([("third", 1)])
+                .await
+                .is_none(),
+            "reservation must not evict a pending bucket"
+        );
+        assert!(!limiter.allow("third").await);
+        assert_eq!(limiter.bucket_count().await, 2);
+
+        drop(first);
+        assert!(limiter.allow("third").await);
+        drop(second);
+        assert_eq!(limiter.bucket_count().await, 2);
+    }
+    #[tokio::test]
+    async fn limiter_reservation_does_not_refill_a_later_key_by_evicting_it() {
+        let limiter = RateLimiter {
+            inner: Arc::new(ShardedLimiter::new(Some(f64::EPSILON), 1.0, 2)),
+        };
+        assert!(limiter.allow("z-drained").await);
+        assert!(limiter.allow("discardable").await);
+
+        assert!(
+            limiter
+                .reserve_many_repeated([("a-new", 1), ("z-drained", 1)])
+                .await
+                .is_none(),
+            "an existing target must remain pinned while earlier target keys are evaluated"
+        );
+
+        let shard = limiter.inner.shards[0].lock();
+        assert!(shard.buckets.contains_key("z-drained"));
+        assert!(shard.buckets.contains_key("discardable"));
+        assert!(!shard.buckets.contains_key("a-new"));
+        assert!(
+            shard
+                .buckets
+                .values()
+                .all(|bucket| bucket.pending_reservations == 0),
+            "a failed reservation must not publish provisional eviction pins"
+        );
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn limiter_reservation_is_refunded_when_owning_task_is_cancelled() {
+        let limiter = RateLimiter {
+            inner: Arc::new(ShardedLimiter::new(Some(f64::EPSILON), 1.0, 2)),
+        };
+        let task_limiter = limiter.clone();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _reservation = task_limiter
+                .reserve_many_repeated([("first", 1), ("second", 1)])
+                .await
+                .expect("both keys should be reservable");
+            ready_tx.send(()).expect("test receiver should remain live");
+            std::future::pending::<()>().await;
+        });
+        ready_rx
+            .await
+            .expect("reservation task should become ready");
+        assert!(!limiter.allow("first").await);
+        assert!(!limiter.allow("second").await);
+
+        task.abort();
+        assert!(
+            task.await
+                .expect_err("the reservation task should be cancelled")
+                .is_cancelled()
+        );
+
+        assert!(limiter.allow("first").await);
+        assert!(limiter.allow("second").await);
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn limiter_concurrent_commit_and_drop_do_not_create_tokens() {
+        let limiter = RateLimiter {
+            inner: Arc::new(ShardedLimiter::new(Some(f64::EPSILON), 2.0, 4_096)),
+        };
+        let first = "settle-0".to_owned();
+        let first_shard = limiter.inner.shard_index_for(&first);
+        let second = (1..10_000)
+            .map(|index| format!("settle-{index}"))
+            .find(|key| limiter.inner.shard_index_for(key) != first_shard)
+            .expect("test keys must cover at least two limiter shards");
+        let refunded = limiter
+            .reserve_many_repeated([(first.clone(), 1), (second.clone(), 1)])
+            .await
+            .expect("first reservation should succeed");
+        let committed = limiter
+            .reserve_many_repeated([(second.clone(), 1), (first.clone(), 1)])
+            .await
+            .expect("second reservation should succeed");
+        let start = Arc::new(tokio::sync::Barrier::new(3));
+        let drop_start = Arc::clone(&start);
+        let drop_task = tokio::spawn(async move {
+            drop_start.wait().await;
+            drop(refunded);
+        });
+        let commit_start = Arc::clone(&start);
+        let commit_task = tokio::spawn(async move {
+            commit_start.wait().await;
+            committed.commit();
+        });
+        start.wait().await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            drop_task.await.expect("refund task should finish");
+            commit_task.await.expect("commit task should finish");
+        })
+        .await
+        .expect("opposite settlement operations must not deadlock");
+
+        assert!(limiter.allow(&first).await);
+        assert!(limiter.allow(&second).await);
+        assert!(!limiter.allow(&first).await);
+        assert!(!limiter.allow(&second).await);
     }
     #[test]
     fn api_token_digest_set_authenticates_exact_text_and_deduplicates() {

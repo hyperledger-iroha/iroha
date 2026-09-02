@@ -1857,7 +1857,6 @@ fn sample_status() -> Status {
             pool_fallback_total: 0,
             budget_hit_total: 0,
         },
-        offline: None,
         sumeragi: Some(SumeragiConsensusStatus {
             mode_tag: PERMISSIONED_TAG.to_string(),
             leader_index: 1,

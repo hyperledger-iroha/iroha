@@ -10,8 +10,7 @@ use iroha_core::{
     query::store::LiveQueryStore,
     state::{
         GovernanceLockCustody, GovernanceLockRecord, GovernanceLocksForReferendum,
-        GovernanceReferendumRecord, GovernanceReferendumStatus, State,
-        World, WorldReadOnly,
+        GovernanceReferendumRecord, GovernanceReferendumStatus, State, World, WorldReadOnly,
     },
 };
 use iroha_data_model::{

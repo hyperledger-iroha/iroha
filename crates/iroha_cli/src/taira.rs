@@ -32,7 +32,7 @@ use iroha::{
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_primitives::json::Json as IrohaJson;
 use iroha_primitives::numeric::Quantity;
-use iroha_torii_shared::{FeeQuoteResponse, PipelineTransactionStatusResponse};
+use iroha_torii_shared::{FeeQuoteResponse, PipelineTransactionStatusResponse, mcp as mcp_wire};
 use iroha_version::codec::DecodeVersioned as _;
 use norito::json::{self, JsonDeserialize, JsonSerialize, Map, Value};
 use reqwest::blocking::Client as HttpClient;
@@ -75,7 +75,9 @@ const WRITE_CANARY_MUTATION_KIND: &str = "write_canary";
 const WRITE_CANARY_OPERATION: &str = "final_canary";
 const FAUCET_POW_ALGORITHM: &str = "scrypt-leading-zero-bits-v1";
 const FAUCET_POW_DOMAIN_SEPARATOR: &[u8] = b"iroha:accounts:faucet:pow:v1";
-const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
+const MCP_ACCEPT: &str = "application/json, text/event-stream";
+const MCP_CLIENT_NAME: &str = "iroha-taira-doctor";
+const MCP_CLIENT_VERSION: &str = "1";
 const REQUIRED_MCP_TOOLS: &[&str] = &[
     "iroha.health",
     "iroha.musubi.queries.exact_package",
@@ -2157,7 +2159,6 @@ fn preflight_taira_network_identity(public_root: &str, config: &Config) -> Resul
 struct HttpJson {
     status: u16,
     body: Option<Value>,
-    raw_body_empty: bool,
 }
 #[derive(Debug)]
 struct CanarySigner {
@@ -2226,72 +2227,34 @@ fn run_doctor(public_root: &str) -> Result<Value> {
             mcp_get.status
         ));
     }
-    let initialize = norito::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": MCP_PROTOCOL_VERSION,
-            "capabilities": {},
-            "clientInfo": { "name": "iroha-taira-doctor", "version": "1" }
-        }
-    });
-    let mcp_init = http_json(
+    let discovery = http_mcp_json(
         &http,
-        reqwest::Method::POST,
         mcp_url.as_str(),
-        Some(&initialize),
+        1,
+        "server/discover",
+        norito::json!({}),
     )?;
-    let mut mcp_init_error = (mcp_init.status == 200)
-        .then(|| validate_mcp_initialize_response(mcp_init.body.as_ref()).err())
+    let discovery_error = (discovery.status == 200)
+        .then(|| validate_mcp_discovery_response(discovery.body.as_ref()).err())
         .flatten();
-    if mcp_init.status == 200 && mcp_init_error.is_none() {
-        let initialized_notification = norito::json!({
-            "jsonrpc": "2.0",
-            "method": "notifications/initialized"
-        });
-        let initialized = http_json_with_mcp_protocol_version(
-            &http,
-            reqwest::Method::POST,
-            mcp_url.as_str(),
-            Some(&initialized_notification),
-        )?;
-        if initialized.status != 202 {
-            mcp_init_error = Some(format!(
-                "MCP initialized notification returned HTTP {}; expected 202",
-                initialized.status
-            ));
-        } else if !initialized.raw_body_empty {
-            mcp_init_error =
-                Some("MCP initialized notification must return an empty response body".to_owned());
-        }
-    }
-    let mcp_init_ok = mcp_init.status == 200 && mcp_init_error.is_none();
+    let discovery_ok = discovery.status == 200 && discovery_error.is_none();
     push_check(
         &mut checks,
+        // Keep this report key stable for the exact public-reset corridor while
+        // its implementation now validates native stateless discovery.
         "mcp_initialize",
-        mcp_init.status,
-        mcp_init_ok,
-        mcp_init_error.clone(),
+        discovery.status,
+        discovery_ok,
+        discovery_error.clone(),
     );
-    if !mcp_init_ok {
+    if !discovery_ok {
         failures.push(
-            mcp_init_error
-                .unwrap_or_else(|| format!("mcp_initialize returned HTTP {}", mcp_init.status)),
+            discovery_error.unwrap_or_else(|| {
+                format!("MCP server/discover returned HTTP {}", discovery.status)
+            }),
         );
     }
-    let tools_payload = norito::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/list",
-        "params": {}
-    });
-    let tools = http_json_with_mcp_protocol_version(
-        &http,
-        reqwest::Method::POST,
-        mcp_url.as_str(),
-        Some(&tools_payload),
-    )?;
+    let tools = http_mcp_json(&http, mcp_url.as_str(), 2, "tools/list", norito::json!({}))?;
     let parsed_tool_names = (tools.status == 200)
         .then(|| mcp_tool_names(tools.body.as_ref()))
         .transpose();
@@ -5317,35 +5280,9 @@ fn http_json(
     url: &str,
     body: Option<&Value>,
 ) -> Result<HttpJson> {
-    http_json_with_optional_mcp_protocol_version(http, method, url, body, None)
-}
-fn http_json_with_mcp_protocol_version(
-    http: &HttpClient,
-    method: reqwest::Method,
-    url: &str,
-    body: Option<&Value>,
-) -> Result<HttpJson> {
-    http_json_with_optional_mcp_protocol_version(
-        http,
-        method,
-        url,
-        body,
-        Some(MCP_PROTOCOL_VERSION),
-    )
-}
-fn http_json_with_optional_mcp_protocol_version(
-    http: &HttpClient,
-    method: reqwest::Method,
-    url: &str,
-    body: Option<&Value>,
-    mcp_protocol_version: Option<&str>,
-) -> Result<HttpJson> {
     let mut request = http
         .request(method, url)
         .header(reqwest::header::ACCEPT, "application/json");
-    if let Some(protocol_version) = mcp_protocol_version {
-        request = request.header("MCP-Protocol-Version", protocol_version);
-    }
     if let Some(body) = body {
         let bytes = json::to_vec(body).map_err(|err| eyre!("encode JSON request body: {err}"))?;
         request = request
@@ -5357,6 +5294,79 @@ fn http_json_with_optional_mcp_protocol_version(
         .wrap_err_with(|| format!("request failed for {url}"))?;
     decode_http_json_response(response)
 }
+fn http_mcp_json(
+    http: &HttpClient,
+    url: &str,
+    request_id: u64,
+    method: &str,
+    params: Value,
+) -> Result<HttpJson> {
+    let mut params = params
+        .as_object()
+        .cloned()
+        .ok_or_else(|| eyre!("MCP `{method}` params must be an object"))?;
+    if params.contains_key("_meta") {
+        eyre::bail!("MCP `{method}` params must not override request metadata");
+    }
+    let routing_name = match method {
+        "tools/call" | "prompts/get" => Some("name"),
+        "resources/read" => Some("uri"),
+        _ => None,
+    }
+    .map(|field| {
+        params
+            .get(field)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| eyre!("MCP `{method}` params require a non-empty `{field}`"))
+    })
+    .transpose()?;
+    let mut meta = Map::new();
+    meta.insert(
+        mcp_wire::META_PROTOCOL_VERSION.to_owned(),
+        Value::String(mcp_wire::MODERN_PROTOCOL_VERSION.to_owned()),
+    );
+    meta.insert(
+        mcp_wire::META_CLIENT_CAPABILITIES.to_owned(),
+        Value::Object(Map::new()),
+    );
+    meta.insert(
+        mcp_wire::META_CLIENT_INFO.to_owned(),
+        norito::json!({
+            "name": MCP_CLIENT_NAME,
+            "version": MCP_CLIENT_VERSION
+        }),
+    );
+    params.insert("_meta".to_owned(), Value::Object(meta));
+    let payload = norito::json!({
+        "jsonrpc": "2.0",
+        "id": (request_id),
+        "method": (method),
+        "params": (Value::Object(params))
+    });
+    let bytes = json::to_vec(&payload).map_err(|err| eyre!("encode MCP request body: {err}"))?;
+    let mut request = http
+        .post(url)
+        .header(reqwest::header::ACCEPT, MCP_ACCEPT)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .header(
+            mcp_wire::HEADER_PROTOCOL_VERSION,
+            mcp_wire::MODERN_PROTOCOL_VERSION,
+        )
+        .header(mcp_wire::HEADER_METHOD, method);
+    if let Some(routing_name) = routing_name.as_deref() {
+        request = request.header(
+            mcp_wire::HEADER_NAME,
+            mcp_wire::encode_mirrored_header_value(routing_name),
+        );
+    }
+    let response = request
+        .body(bytes)
+        .send()
+        .wrap_err_with(|| format!("MCP `{method}` request failed for {url}"))?;
+    decode_http_json_response(response)
+}
 fn account_signed_soracloud_status(client: &IrohaClient) -> Result<HttpJson> {
     let response = client
         .get_soracloud_status_response()
@@ -5364,24 +5374,18 @@ fn account_signed_soracloud_status(client: &IrohaClient) -> Result<HttpJson> {
     let status = response.status().as_u16();
     let text = String::from_utf8(response.body().to_vec())
         .wrap_err("canonical account-signed Soracloud status response is not UTF-8")?;
-    let raw_body_empty = text.is_empty();
     let body = if text.trim().is_empty() {
         None
     } else {
         json::from_str::<Value>(&text).ok()
     };
-    Ok(HttpJson {
-        status,
-        body,
-        raw_body_empty,
-    })
+    Ok(HttpJson { status, body })
 }
 fn decode_http_json_response(response: reqwest::blocking::Response) -> Result<HttpJson> {
     let status = response.status().as_u16();
     let text = response
         .text()
         .wrap_err("failed to read Taira HTTP response body")?;
-    let raw_body_empty = text.is_empty();
     let parsed = if text.trim().is_empty() {
         None
     } else {
@@ -5390,7 +5394,6 @@ fn decode_http_json_response(response: reqwest::blocking::Response) -> Result<Ht
     Ok(HttpJson {
         status,
         body: parsed,
-        raw_body_empty,
     })
 }
 fn decode_inrou_canary_health_response(response: reqwest::blocking::Response) -> Result<HttpJson> {
@@ -5414,17 +5417,12 @@ fn decode_inrou_canary_health_reader(status: u16, reader: impl std::io::Read) ->
     }
     let text = std::str::from_utf8(&bytes)
         .wrap_err("Taira Inrou health response body is not exact UTF-8")?;
-    let raw_body_empty = text.is_empty();
     let body = if text.trim().is_empty() {
         None
     } else {
         json::from_str::<Value>(text).ok()
     };
-    Ok(HttpJson {
-        status,
-        body,
-        raw_body_empty,
-    })
+    Ok(HttpJson { status, body })
 }
 fn collect_status_warnings(status: Option<&Value>, warnings: &mut Vec<String>) {
     let Some(status) = status else {
@@ -5532,31 +5530,23 @@ fn validate_offline_capability(capability: Option<&Value>) -> Result<(), String>
             format!("/v1/offline/readiness is not exact OfflineStatus JSON: {error}")
         })?;
     if capability.cash_handoff_capability
-        != iroha::data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1
+        != iroha::data_model::offline::OFFLINE_CASH_HANDOFF_CAPABILITY_V1
     {
         return Err(
             "/v1/offline/readiness does not advertise the exact cash_handoff_v1 contract"
                 .to_owned(),
         );
     }
-    if capability.required_bridge_abi_version
-        != iroha::data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4
-    {
-        return Err(
-            "/v1/offline/readiness does not require the exact Kagemusha bridge ABI 23".to_owned(),
-        );
+    if capability.wire_version != iroha::data_model::offline::OFFLINE_CASH_WIRE_VERSION_V1 {
+        return Err("/v1/offline/readiness does not advertise Offline Cash wire V1".to_owned());
     }
-    if capability.max_hops != iroha::data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
+    if capability.device_lifecycle_version
+        != iroha::data_model::offline::OFFLINE_CASH_DEVICE_LIFECYCLE_VERSION_V1
     {
-        return Err(
-            "/v1/offline/readiness does not advertise the exact eight-hop bound".to_owned(),
-        );
+        return Err("/v1/offline/readiness does not require secure-device lifecycle V1".to_owned());
     }
     if !capability.ready {
-        return Err(
-            "/v1/offline/readiness reports the universally compiled Kagemusha capability unavailable"
-                .to_owned(),
-        );
+        return Err("/v1/offline/readiness reports Offline Cash V1 unavailable".to_owned());
     }
     Ok(())
 }
@@ -6709,32 +6699,89 @@ fn validate_soracloud_status(status: Option<&Value>) -> Result<(), String> {
     }
     Ok(())
 }
-fn validate_mcp_initialize_response(payload: Option<&Value>) -> Result<(), String> {
-    let payload = payload.ok_or_else(|| "MCP response body is not canonical JSON".to_owned())?;
+fn validate_modern_mcp_result<'a>(
+    payload: Option<&'a Value>,
+    expected_id: u64,
+    method: &str,
+) -> Result<&'a Map, String> {
+    let payload = payload.ok_or_else(|| format!("MCP {method} body is not canonical JSON"))?;
     if payload.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
-        || payload.get("id").and_then(Value::as_u64) != Some(1)
+        || payload.get("id").and_then(Value::as_u64) != Some(expected_id)
     {
-        return Err("MCP initialize response has a substituted JSON-RPC envelope".to_owned());
-    }
-    let capabilities = payload
-        .get("result")
-        .ok_or_else(|| "MCP initialize response omits result".to_owned())?;
-    if capabilities.get("protocolVersion").and_then(Value::as_str) != Some(MCP_PROTOCOL_VERSION) {
         return Err(format!(
-            "MCP response protocolVersion must equal `{MCP_PROTOCOL_VERSION}`"
+            "MCP {method} response has a substituted JSON-RPC envelope"
         ));
+    }
+    if payload.get("error").is_some() {
+        return Err(format!("MCP {method} response contains a JSON-RPC error"));
+    }
+    let result = payload
+        .get("result")
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("MCP {method} response omits its result object"))?;
+    if result.get("resultType").and_then(Value::as_str) != Some("complete") {
+        return Err(format!("MCP {method} resultType must equal `complete`"));
+    }
+    if result.get("ttlMs").and_then(Value::as_u64) == Some(0)
+        || result.get("ttlMs").and_then(Value::as_u64).is_none()
+    {
+        return Err(format!("MCP {method} result requires a positive ttlMs"));
+    }
+    if result.get("cacheScope").and_then(Value::as_str) != Some("private") {
+        return Err(format!("MCP {method} cacheScope must equal `private`"));
+    }
+    let server_info = result
+        .get("_meta")
+        .and_then(Value::as_object)
+        .and_then(|meta| meta.get(mcp_wire::META_SERVER_INFO))
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("MCP {method} result omits serverInfo metadata"))?;
+    for field in ["name", "version"] {
+        if server_info
+            .get(field)
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        {
+            return Err(format!(
+                "MCP {method} serverInfo requires a non-empty `{field}`"
+            ));
+        }
+    }
+    Ok(result)
+}
+
+fn validate_mcp_discovery_response(payload: Option<&Value>) -> Result<(), String> {
+    let result = validate_modern_mcp_result(payload, 1, "server/discover")?;
+    let supported_versions = result
+        .get("supportedVersions")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            "MCP server/discover response omits its supportedVersions array".to_owned()
+        })?;
+    if !supported_versions
+        .iter()
+        .any(|version| version.as_str() == Some(mcp_wire::MODERN_PROTOCOL_VERSION))
+    {
+        return Err(format!(
+            "MCP server/discover supportedVersions does not include protocolVersion `{}`",
+            mcp_wire::MODERN_PROTOCOL_VERSION
+        ));
+    }
+    if !result
+        .get("capabilities")
+        .and_then(Value::as_object)
+        .and_then(|capabilities| capabilities.get("tools"))
+        .is_some_and(Value::is_object)
+    {
+        return Err("MCP server/discover response omits tools capabilities".to_owned());
     }
     Ok(())
 }
 
 fn mcp_tool_names(payload: Option<&Value>) -> Result<Vec<String>, String> {
-    let payload = payload.ok_or_else(|| "MCP tools/list body is not canonical JSON".to_owned())?;
-    if payload.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
-        || payload.get("id").and_then(Value::as_u64) != Some(1)
-    {
-        return Err("MCP tools/list response has a substituted JSON-RPC envelope".to_owned());
-    }
-    let tools = value_path(payload, &["result", "tools"])
+    let result = validate_modern_mcp_result(payload, 2, "tools/list")?;
+    let tools = result
+        .get("tools")
         .and_then(Value::as_array)
         .ok_or_else(|| "MCP tools/list response omits its exact tools array".to_owned())?;
     let mut names = Vec::with_capacity(tools.len());
@@ -7830,6 +7877,48 @@ mod tests {
     fn path_only(path: &str) -> &str {
         path.split_once('?').map_or(path, |(path, _)| path)
     }
+    fn assert_modern_mcp_request(request: &MockRequest, expected_id: u64, method: &str) {
+        assert_eq!(request.header_values("accept"), vec![MCP_ACCEPT]);
+        assert_eq!(
+            request.header_values(mcp_wire::HEADER_PROTOCOL_VERSION),
+            vec![mcp_wire::MODERN_PROTOCOL_VERSION]
+        );
+        assert_eq!(request.header_values(mcp_wire::HEADER_METHOD), vec![method]);
+        assert!(request.header_values(mcp_wire::HEADER_NAME).is_empty());
+        let payload: Value = json::from_str(&request.body).expect("modern MCP request JSON");
+        assert_eq!(payload.get("jsonrpc").and_then(Value::as_str), Some("2.0"));
+        assert_eq!(payload.get("id").and_then(Value::as_u64), Some(expected_id));
+        assert_eq!(payload.get("method").and_then(Value::as_str), Some(method));
+        let params = payload
+            .get("params")
+            .and_then(Value::as_object)
+            .expect("modern MCP params");
+        let meta = params
+            .get("_meta")
+            .and_then(Value::as_object)
+            .expect("modern MCP request metadata");
+        assert_eq!(
+            meta.get(mcp_wire::META_PROTOCOL_VERSION)
+                .and_then(Value::as_str),
+            Some(mcp_wire::MODERN_PROTOCOL_VERSION)
+        );
+        assert!(
+            meta.get(mcp_wire::META_CLIENT_CAPABILITIES)
+                .is_some_and(Value::is_object)
+        );
+        assert_eq!(
+            meta.get(mcp_wire::META_CLIENT_INFO)
+                .and_then(|info| info.get("name"))
+                .and_then(Value::as_str),
+            Some(MCP_CLIENT_NAME)
+        );
+        assert_eq!(
+            meta.get(mcp_wire::META_CLIENT_INFO)
+                .and_then(|info| info.get("version"))
+                .and_then(Value::as_str),
+            Some(MCP_CLIENT_VERSION)
+        );
+    }
     fn doctor_mock_response(request: &MockRequest, omit_tool: Option<&str>) -> MockResponse {
         match (request.method.as_str(), path_only(&request.path)) {
             ("GET", "/status") => MockResponse::json(
@@ -7875,8 +7964,8 @@ mod tests {
                 200,
                 norito::json!({
                     "cash_handoff_capability": "cash_handoff_v1",
-                    "required_bridge_abi_version": 23,
-                    "max_hops": 8,
+                    "wire_version": 1,
+                    "device_lifecycle_version": 1,
                     "ready": true
                 }),
             ),
@@ -7895,18 +7984,36 @@ mod tests {
                 }),
             ),
             ("GET", "/v1/mcp") => MockResponse::text(405, "method not allowed"),
-            ("POST", "/v1/mcp") if request.body.contains("notifications/initialized") => {
-                assert_eq!(
-                    request.header_values("mcp-protocol-version"),
-                    vec![MCP_PROTOCOL_VERSION]
-                );
-                MockResponse::text(202, "")
+            ("POST", "/v1/mcp") if request.body.contains("server/discover") => {
+                assert_modern_mcp_request(request, 1, "server/discover");
+                MockResponse::json(
+                    200,
+                    norito::json!({
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "result": {
+                            "supportedVersions": [
+                                (mcp_wire::MODERN_PROTOCOL_VERSION),
+                                (mcp_wire::LEGACY_PROTOCOL_VERSION)
+                            ],
+                            "capabilities": {
+                                "tools": { "listChanged": false }
+                            },
+                            "resultType": "complete",
+                            "ttlMs": 30_000,
+                            "cacheScope": "private",
+                            "_meta": {
+                                "io.modelcontextprotocol/serverInfo": {
+                                    "name": "iroha-torii-mcp",
+                                    "version": "1"
+                                }
+                            }
+                        }
+                    }),
+                )
             }
             ("POST", "/v1/mcp") if request.body.contains("tools/list") => {
-                assert_eq!(
-                    request.header_values("mcp-protocol-version"),
-                    vec![MCP_PROTOCOL_VERSION]
-                );
+                assert_modern_mcp_request(request, 2, "tools/list");
                 let tools: Vec<Value> = REQUIRED_MCP_TOOLS
                     .iter()
                     .copied()
@@ -7917,22 +8024,22 @@ mod tests {
                     200,
                     norito::json!({
                         "jsonrpc": "2.0",
-                        "id": 1,
-                        "result": { "tools": tools }
+                        "id": 2,
+                        "result": {
+                            "tools": tools,
+                            "resultType": "complete",
+                            "ttlMs": 30_000,
+                            "cacheScope": "private",
+                            "_meta": {
+                                "io.modelcontextprotocol/serverInfo": {
+                                    "name": "iroha-torii-mcp",
+                                    "version": "1"
+                                }
+                            }
+                        }
                     }),
                 )
             }
-            ("POST", "/v1/mcp") => MockResponse::json(
-                200,
-                norito::json!({
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "result": {
-                        "protocolVersion": MCP_PROTOCOL_VERSION,
-                        "capabilities": {}
-                    }
-                }),
-            ),
             ("GET", _) => MockResponse::json(200, norito::json!({"ok": true})),
             _ => MockResponse::text(404, "not found"),
         }
@@ -9958,28 +10065,23 @@ mod tests {
         let requests = finish_mock(server);
         assert_eq!(report_status(&report), Some("ok"));
         assert!(
-            requests
-                .iter()
-                .any(|request| request.method == "POST" && request.body.contains("initialize"))
+            !requests.iter().any(|request| {
+                request.method == "POST"
+                    && (request.body.contains("\"method\":\"initialize\"")
+                        || request.body.contains("notifications/initialized"))
+            }),
+            "native doctor must not use the retired initialization lifecycle"
         );
-        let initialized = requests
+        let discovery = requests
             .iter()
-            .find(|request| {
-                request.method == "POST" && request.body.contains("notifications/initialized")
-            })
-            .expect("MCP initialized notification");
-        assert_eq!(
-            initialized.header_values("mcp-protocol-version"),
-            vec![MCP_PROTOCOL_VERSION]
-        );
+            .find(|request| request.method == "POST" && request.body.contains("server/discover"))
+            .expect("MCP server/discover request");
+        assert_modern_mcp_request(discovery, 1, "server/discover");
         let tools_list = requests
             .iter()
             .find(|request| request.method == "POST" && request.body.contains("tools/list"))
             .expect("MCP tools/list request");
-        assert_eq!(
-            tools_list.header_values("mcp-protocol-version"),
-            vec![MCP_PROTOCOL_VERSION]
-        );
+        assert_modern_mcp_request(tools_list, 2, "tools/list");
         assert!(requests.iter().any(|request| {
             request.method == "GET"
                 && path_only(&request.path) == "/v1/pipeline/transactions/status"
@@ -10180,19 +10282,19 @@ mod tests {
         assert!(validate_time_snapshot(None).is_err());
     }
     #[test]
-    fn offline_capability_requires_exact_universal_kagemusha_contract() {
+    fn offline_capability_requires_exact_universal_offline_cash_contract() {
         let canonical = norito::json!({
             "cash_handoff_capability": "cash_handoff_v1",
-            "required_bridge_abi_version": 23,
-            "max_hops": 8,
+            "wire_version": 1,
+            "device_lifecycle_version": 1,
             "ready": true
         });
         validate_offline_capability(Some(&canonical)).expect("canonical capability");
 
         for (field, replacement) in [
             ("cash_handoff_capability", Value::from("legacy")),
-            ("required_bridge_abi_version", Value::from(22_u64)),
-            ("max_hops", Value::from(7_u64)),
+            ("wire_version", Value::from(2_u64)),
+            ("device_lifecycle_version", Value::from(2_u64)),
             ("ready", Value::Bool(false)),
         ] {
             let mut hostile = canonical.clone();
@@ -10314,19 +10416,16 @@ mod tests {
         let server = spawn_mock_http(16, |request| {
             if request.method == "POST"
                 && path_only(&request.path) == "/v1/mcp"
-                && request.body.contains("initialize")
+                && request.body.contains("server/discover")
             {
-                MockResponse::json(
-                    200,
-                    norito::json!({
-                        "jsonrpc": "2.0",
-                        "id": 1,
-                        "result": {
-                            "protocolVersion": "2024-11-05",
-                            "capabilities": {}
-                        }
-                    }),
-                )
+                let mut response = doctor_mock_response(request, None);
+                let mut payload: Value =
+                    json::from_str(&response.body).expect("mock discovery JSON");
+                *payload
+                    .pointer_mut("/result/supportedVersions")
+                    .expect("mock supportedVersions") = norito::json!(["2024-11-05"]);
+                response.body = json::to_json(&payload).expect("encode mock discovery JSON");
+                response
             } else {
                 doctor_mock_response(request, None)
             }
@@ -10345,20 +10444,27 @@ mod tests {
         );
     }
     #[test]
-    fn doctor_rejects_noncanonical_mcp_initialized_notification_response() {
-        for noncanonical_response in ["wrong_status", "response_body"] {
+    fn doctor_rejects_noncanonical_mcp_discovery_response() {
+        for noncanonical_response in ["wrong_status", "legacy_result"] {
             let server = spawn_mock_http(16, move |request| {
                 if request.method == "POST"
                     && path_only(&request.path) == "/v1/mcp"
-                    && request.body.contains("notifications/initialized")
+                    && request.body.contains("server/discover")
                 {
-                    assert_eq!(
-                        request.header_values("mcp-protocol-version"),
-                        vec![MCP_PROTOCOL_VERSION]
-                    );
+                    assert_modern_mcp_request(request, 1, "server/discover");
                     match noncanonical_response {
-                        "wrong_status" => MockResponse::text(200, ""),
-                        "response_body" => MockResponse::text(202, "unexpected"),
+                        "wrong_status" => MockResponse::text(202, ""),
+                        "legacy_result" => MockResponse::json(
+                            200,
+                            norito::json!({
+                                "jsonrpc": "2.0",
+                                "id": 1,
+                                "result": {
+                                    "protocolVersion": (mcp_wire::LEGACY_PROTOCOL_VERSION),
+                                    "capabilities": {}
+                                }
+                            }),
+                        ),
                         _ => unreachable!(),
                     }
                 } else {
@@ -10375,7 +10481,7 @@ mod tests {
                     .into_iter()
                     .flatten()
                     .filter_map(Value::as_str)
-                    .any(|failure| failure.contains("initialized notification")),
+                    .any(|failure| failure.contains("server/discover")),
                 "unexpected doctor report for {noncanonical_response}: {report:?}"
             );
         }
@@ -10386,7 +10492,9 @@ mod tests {
             if request.method == "GET" && path_only(&request.path) == "/v1/mcp" {
                 MockResponse::json(
                     200,
-                    norito::json!({"protocolVersion": MCP_PROTOCOL_VERSION}),
+                    norito::json!({
+                        "protocolVersion": (mcp_wire::MODERN_PROTOCOL_VERSION)
+                    }),
                 )
             } else {
                 doctor_mock_response(request, None)
@@ -10417,19 +10525,16 @@ mod tests {
                     && path_only(&request.path) == "/v1/mcp"
                     && request.body.contains("tools/list")
                 {
-                    let mut tools: Vec<Value> = REQUIRED_MCP_TOOLS
-                        .iter()
-                        .map(|name| norito::json!({"name": name, "description": "mock"}))
-                        .collect();
-                    tools.push(hostile_tool.clone());
-                    MockResponse::json(
-                        200,
-                        norito::json!({
-                            "jsonrpc": "2.0",
-                            "id": 1,
-                            "result": {"tools": tools}
-                        }),
-                    )
+                    let mut response = doctor_mock_response(request, None);
+                    let mut payload: Value =
+                        json::from_str(&response.body).expect("mock tools/list JSON");
+                    payload
+                        .pointer_mut("/result/tools")
+                        .and_then(Value::as_array_mut)
+                        .expect("mock tools array")
+                        .push(hostile_tool.clone());
+                    response.body = json::to_json(&payload).expect("encode mock tools/list JSON");
+                    response
                 } else {
                     doctor_mock_response(request, None)
                 }

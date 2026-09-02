@@ -1197,14 +1197,6 @@ fn configure_staged_genesis_state(
         state.set_gov(config.gov.clone());
         state.content = config.content.clone();
         state.set_settlement(config.settlement.clone());
-        state.set_kagemusha_release_catalog(
-            iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::from_offline_config_for_genesis_staging(
-                &config.settlement.offline,
-            )
-            .map_err(|error| {
-                eyre!("invalid Kagemusha release policy for staged genesis: {error}")
-            })?,
-        );
         state
             .set_zk(config.zk.clone())
             .map_err(|error| eyre!("invalid ZK config for staged genesis: {error}"))?;

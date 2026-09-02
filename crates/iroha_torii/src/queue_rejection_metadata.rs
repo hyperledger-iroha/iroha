@@ -5,12 +5,12 @@ impl Error {
             | queue::Error::LatencySaturated
             | queue::Error::MaximumTransactionsPerUser => StatusCode::TOO_MANY_REQUESTS,
             queue::Error::Expired => StatusCode::BAD_REQUEST,
-            queue::Error::KagemushaOperationCarrierRejected { .. } => StatusCode::BAD_REQUEST,
+            queue::Error::OfflineCashV1OperationCarrierRejected { .. } => StatusCode::BAD_REQUEST,
             queue::Error::UnresolvedRoute { .. } => StatusCode::BAD_REQUEST,
             queue::Error::InBlockchain => StatusCode::CONFLICT,
             queue::Error::IsInQueue => StatusCode::CONFLICT,
-            queue::Error::KagemushaOperationIdConflict { .. } => StatusCode::CONFLICT,
-            queue::Error::KagemushaOperationIndexInconsistent { .. } => {
+            queue::Error::OfflineCashV1OperationIdConflict { .. } => StatusCode::CONFLICT,
+            queue::Error::OfflineCashV1OperationIndexInconsistent { .. } => {
                 StatusCode::SERVICE_UNAVAILABLE
             }
             queue::Error::UnregisteredAuthority { .. } => StatusCode::FORBIDDEN,
@@ -19,7 +19,6 @@ impl Error {
             queue::Error::LaneComplianceDenied { .. } => StatusCode::FORBIDDEN,
             queue::Error::LanePrivacyProofRejected { .. } => StatusCode::FORBIDDEN,
             queue::Error::NexusFeeAdmissionRejected { .. } => StatusCode::UNPROCESSABLE_ENTITY,
-            queue::Error::ConfidentialPolicyAdmissionRejected { .. } => StatusCode::FORBIDDEN,
             queue::Error::NexusFeeAdmissionConfigInvalid { .. } => StatusCode::SERVICE_UNAVAILABLE,
             queue::Error::PlanJournalDurabilityRejected { .. }
             | queue::Error::PlanJournalDurabilityIndeterminate { .. } => {
@@ -42,9 +41,9 @@ impl Error {
                 "transaction_expired",
                 "transaction expired before admission",
             ),
-            queue::Error::KagemushaOperationCarrierRejected { .. } => (
-                "kagemusha_operation_carrier_rejected",
-                "Kagemusha operation carrier failed canonical admission",
+            queue::Error::OfflineCashV1OperationCarrierRejected { .. } => (
+                "offline_cash_v1_operation_carrier_rejected",
+                "Offline Cash V1 operation carrier failed canonical admission",
             ),
             queue::Error::UnresolvedRoute { .. } => (
                 "queue_unresolved_route",
@@ -58,13 +57,13 @@ impl Error {
                 "already_enqueued",
                 "transaction already present in the queue",
             ),
-            queue::Error::KagemushaOperationIdConflict { .. } => (
-                "kagemusha_operation_id_conflict",
-                "Kagemusha operation identifier is already pending for this authority",
+            queue::Error::OfflineCashV1OperationIdConflict { .. } => (
+                "offline_cash_v1_operation_id_conflict",
+                "Offline Cash V1 operation identifier is already pending",
             ),
-            queue::Error::KagemushaOperationIndexInconsistent { .. } => (
-                "kagemusha_operation_index_inconsistent",
-                "Kagemusha pending-operation index requires recovery",
+            queue::Error::OfflineCashV1OperationIndexInconsistent { .. } => (
+                "offline_cash_v1_operation_index_inconsistent",
+                "Offline Cash V1 pending-operation index requires recovery",
             ),
             queue::Error::UnregisteredAuthority { .. } => (
                 "unregistered_authority",
@@ -89,10 +88,6 @@ impl Error {
             queue::Error::NexusFeeAdmissionRejected { .. } => (
                 "queue_nexus_fee_rejected",
                 "transaction cannot cover the Nexus fee admission bound",
-            ),
-            queue::Error::ConfidentialPolicyAdmissionRejected { .. } => (
-                "queue_confidential_policy_rejected",
-                "confidential policy rejected the transaction",
             ),
             queue::Error::NexusFeeAdmissionConfigInvalid { .. } => (
                 "queue_nexus_fee_config_invalid",
@@ -196,9 +191,9 @@ fn queue_rejection_metadata(err: &queue::Error) -> (&'static str, String) {
             "authority reached per-user queue capacity".to_owned(),
         ),
         queue::Error::Expired => ("ED07", "transaction expired before admission".to_owned()),
-        queue::Error::KagemushaOperationCarrierRejected { reason } => (
-            "PRTRY:KAGEMUSHA_OPERATION_CARRIER_REJECTED",
-            format!("Kagemusha operation carrier failed canonical admission: {reason}"),
+        queue::Error::OfflineCashV1OperationCarrierRejected { reason } => (
+            "PRTRY:OFFLINE_CASH_V1_OPERATION_CARRIER_REJECTED",
+            format!("Offline Cash V1 operation carrier failed canonical admission: {reason}"),
         ),
         queue::Error::UnresolvedRoute { reason } => (
             "PRTRY:ROUTE_UNRESOLVED",
@@ -212,20 +207,19 @@ fn queue_rejection_metadata(err: &queue::Error) -> (&'static str, String) {
             "PRTRY:ALREADY_ENQUEUED",
             "transaction already present in the queue".to_owned(),
         ),
-        queue::Error::KagemushaOperationIdConflict {
-            authority,
+        queue::Error::OfflineCashV1OperationIdConflict {
             operation_id,
             existing_entrypoint_hash,
         } => (
-            "PRTRY:KAGEMUSHA_OPERATION_ID_CONFLICT",
+            "PRTRY:OFFLINE_CASH_V1_OPERATION_ID_CONFLICT",
             format!(
-                "Kagemusha operation {} is already pending for authority {authority} as entrypoint {existing_entrypoint_hash}",
+                "Offline Cash V1 operation {} is already pending as entrypoint {existing_entrypoint_hash}",
                 hex::encode(operation_id)
             ),
         ),
-        queue::Error::KagemushaOperationIndexInconsistent { reason } => (
-            "PRTRY:KAGEMUSHA_OPERATION_INDEX_INCONSISTENT",
-            format!("Kagemusha pending-operation index requires recovery: {reason}"),
+        queue::Error::OfflineCashV1OperationIndexInconsistent { reason } => (
+            "PRTRY:OFFLINE_CASH_V1_OPERATION_INDEX_INCONSISTENT",
+            format!("Offline Cash V1 pending-operation index requires recovery: {reason}"),
         ),
         queue::Error::UnregisteredAuthority { authority } => (
             "PRTRY:UNREGISTERED_AUTHORITY",
@@ -253,10 +247,6 @@ fn queue_rejection_metadata(err: &queue::Error) -> (&'static str, String) {
                 "transaction rejected by Nexus fee admission: {}",
                 code.as_str()
             ),
-        ),
-        queue::Error::ConfidentialPolicyAdmissionRejected { detail, .. } => (
-            "PRTRY:CONFIDENTIAL_POLICY_REJECTED",
-            format!("transaction rejected by confidential policy admission: {detail}"),
         ),
         queue::Error::NexusFeeAdmissionConfigInvalid { code, .. } => (
             "PRTRY:NEXUS_FEE_ADMISSION_CONFIG_INVALID",

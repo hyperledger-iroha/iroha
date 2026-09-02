@@ -11,7 +11,6 @@ import org.hyperledger.iroha.sdk.crypto.KeyProvider
 import org.hyperledger.iroha.sdk.client.queue.DirectoryPendingTransactionQueue
 import org.hyperledger.iroha.sdk.client.queue.FilePendingTransactionQueue
 import org.hyperledger.iroha.sdk.client.queue.PendingTransactionQueue
-import org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProver
 import org.hyperledger.iroha.sdk.telemetry.*
 
 /** Configuration options for [IrohaClient] implementations. */
@@ -130,26 +129,6 @@ class ClientConfig private constructor(builder: Builder) {
         ConfidentialAssetToriiClient.builder().executor(executor).baseUri(baseUri)
             .localSigningContext(requireLocalSigningContext()).timeout(requestTimeout)
             .defaultHeaders(defaultHeaders).observers(observers).build()
-
-    /**
-     * Creates a Kagemusha Torii client using this config's public base URI, request timeout, and
-     * exact deployed network identity. Kagemusha authorization stays in its typed requests and
-     * per-call canonical auth, so ambient default headers are deliberately not copied into the
-     * client.
-     */
-    fun toKagemushaToriiClient(
-        executor: HttpTransportExecutor,
-    ): KagemushaRecursiveSpendProver.ToriiClient =
-        KagemushaRecursiveSpendProver.newToriiClient(
-            baseUri,
-            executor,
-            requireLocalSigningContext(),
-            requestTimeout,
-        )
-
-    /** Creates a Kagemusha Torii client with the default HTTP executor. */
-    fun toKagemushaToriiClient(): KagemushaRecursiveSpendProver.ToriiClient =
-        toKagemushaToriiClient(PlatformHttpTransportExecutor.createDefault())
 
     fun toSubscriptionToriiClient(executor: HttpTransportExecutor): SubscriptionToriiClient =
         SubscriptionToriiClient.builder().executor(executor).baseUri(baseUri).timeout(requestTimeout).defaultHeaders(defaultHeaders).observers(observers).build()

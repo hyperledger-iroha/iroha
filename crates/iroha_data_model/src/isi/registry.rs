@@ -5,7 +5,7 @@ use crate::{
     isi::{
         InstructionRegistry, account_recovery, alias_setup, asset_alias, asset_transfer_control,
         bridge, confidential, consensus_keys, content, contract_alias, defi, endorsement, escrow,
-        identifier, kaigi, ministry, musubi, nexus, offline, oracle, privacy, ram_lfe, repo,
+        identifier, kaigi, ministry, musubi, nexus, oracle, privacy, ram_lfe, repo,
         runtime_upgrade, rwa, settlement, smart_contract_code, social, soracloud, soradns, sorafs,
         space_directory,
         transparent::{
@@ -665,93 +665,6 @@ mod tests {
                 registry.contains(wire_id),
                 "replacement alias lifecycle instruction must decode: {wire_id}"
             );
-        }
-    }
-    #[test]
-    fn retired_offline_note_instruction_ids_reject_valid_and_adversarial_payloads() {
-        let registry = default();
-        let valid_instruction = RegisterBox::Domain(Register::domain(Domain::new(domain_id())));
-        let raw = raw_instruction_payload(&valid_instruction);
-        let framed = framed_instruction_payload(&valid_instruction);
-        let retired_ids = [
-            "iroha_data_model::isi::offline::IssueOfflineNote",
-            "iroha_data_model::isi::offline::RedeemOfflineNote",
-            "iroha_data_model::isi::offline::AuditOfflineNote",
-            "iroha.offline.note.issue",
-            "iroha.offline.note.redeem",
-            "iroha.offline.note.audit",
-        ];
-        for wire_id in retired_ids {
-            assert!(
-                !registry.contains(wire_id),
-                "retired offline-note instruction id must not be registered: {wire_id}"
-            );
-            assert!(
-                registry.decode(wire_id, &framed).is_none(),
-                "a valid current payload must not revive retired id {wire_id}"
-            );
-            assert!(
-                registry.decode(wire_id, &[0xFF; 64]).is_none(),
-                "adversarial bytes under retired id {wire_id} must remain unknown"
-            );
-            assert!(!is_instruction_wire_id_registered(wire_id));
-            assert!(
-                crate::isi::frame_instruction_payload(wire_id, &raw).is_err(),
-                "public framing must reject retired id {wire_id}"
-            );
-            assert!(
-                crate::isi::decode_instruction_from_pair(wire_id, &framed).is_err(),
-                "public pair decoding must reject retired id {wire_id}"
-            );
-        }
-    }
-    #[test]
-    fn device_attestation_registration_has_stable_wire_id() {
-        let registry = default();
-        let type_name = std::any::type_name::<offline::RegisterOfflineDeviceAttestation>();
-        assert_eq!(
-            registry.wire_id(type_name),
-            Some(offline::RegisterOfflineDeviceAttestation::WIRE_ID)
-        );
-        assert!(registry.contains(offline::RegisterOfflineDeviceAttestation::WIRE_ID));
-    }
-    #[test]
-    fn taira_canary_two_step_has_stable_wire_ids() {
-        let registry = default();
-        for (type_name, wire_id) in [
-            (
-                std::any::type_name::<offline::AuthorizeKagemushaTairaCanaryV4>(),
-                offline::AuthorizeKagemushaTairaCanaryV4::WIRE_ID,
-            ),
-            (
-                std::any::type_name::<offline::RecordKagemushaTairaCanaryV4>(),
-                offline::RecordKagemushaTairaCanaryV4::WIRE_ID,
-            ),
-        ] {
-            assert_eq!(registry.wire_id(type_name), Some(wire_id));
-            assert!(registry.contains(wire_id));
-        }
-    }
-    #[test]
-    fn kagemusha_release_lifecycle_has_stable_wire_ids() {
-        let registry = default();
-        for (type_name, wire_id) in [
-            (
-                std::any::type_name::<offline::EnableKagemushaRecursiveIssuanceV4>(),
-                offline::EnableKagemushaRecursiveIssuanceV4::WIRE_ID,
-            ),
-            (
-                std::any::type_name::<offline::CancelKagemushaRecursiveReleaseV4>(),
-                offline::CancelKagemushaRecursiveReleaseV4::WIRE_ID,
-            ),
-            (
-                std::any::type_name::<offline::DeactivateKagemushaRecursiveIssuanceV4>(),
-                offline::DeactivateKagemushaRecursiveIssuanceV4::WIRE_ID,
-            ),
-        ] {
-            assert_eq!(registry.wire_id(type_name), Some(wire_id));
-            assert!(registry.contains(wire_id));
-            assert!(is_instruction_wire_id_registered(wire_id));
         }
     }
     #[test]
@@ -1502,20 +1415,6 @@ mod tests {
                 registry.decode(retired, &[]).is_none(),
                 "retired confidential wire must not be dispatchable: {retired}"
             );
-        }
-        for specialized in [
-            std::any::type_name::<offline::TopUpKagemushaRecursiveV4>(),
-            std::any::type_name::<offline::RedeemKagemushaRecursiveV4>(),
-        ] {
-            let wire_id = registry
-                .wire_id(specialized)
-                .expect("protocol-bound confidential instruction has a V1 wire ID");
-            assert!(
-                registry.contains(wire_id),
-                "protocol-bound confidential instruction must remain registered: {specialized}"
-            );
-            assert_ne!(wire_id, specialized);
-            assert!(!registry.contains(specialized));
         }
     }
     #[cfg(feature = "json")]

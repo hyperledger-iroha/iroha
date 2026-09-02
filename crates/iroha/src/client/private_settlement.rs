@@ -2425,9 +2425,9 @@ impl Client {
 
     /// Fetch one padded encrypted capsule from an exact committee endpoint.
     ///
-    /// `auditor_signer` may be backed by an HSM, KMS, enclave, or threshold
-    /// service. Its advertised key must be an exact governed auditor signing
-    /// key and must not be reused by the participant committee.
+    /// `auditor_signer` may be supplied by a deployment-owned signing service.
+    /// Its advertised key must be an exact governed auditor signing key and
+    /// must not be reused by the participant committee.
     ///
     /// # Errors
     ///

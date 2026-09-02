@@ -14,7 +14,7 @@ let torii = TairaTestnetProfile.makeClient(deployedNetworkId: networkId)
 
 Features:
 - Torii HTTP client (balances, transactions, explorer instructions/transactions/RWAs, subscriptions, VPN quote/session/receipt flows, pipeline recovery, time service, ZK attachments, contracts)
-- Kagemusha cash models, transaction builders, proof binding helpers, and universal capability discovery through `/v1/offline/readiness`
+- Offline Cash V1 aggregate-balance wallet orchestration, cash models, proof binding helpers, and universal capability discovery through `/v1/offline/readiness`
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
 - Norito envelope encoder (header + CRC64-XZ)
 - Required Native NoritoBridge integration (`dist/NoritoBridge.xcframework`) powering transfer/mint/burn builders and JSON inspection helpers
@@ -24,6 +24,28 @@ Features:
 - Confidential key derivation (`ConfidentialKeyset.derive`) mirroring the Rust HKDF so wallets can obtain `sk_spend`, `nk`, `ivk`, `ovk`, and `fvk` locally
 - Runtime capability helpers (`ToriiClient.getNodeCapabilities`, `getRuntimeMetrics`, `getRuntimeAbiActive`) mirroring the Torii `/v1/node/capabilities` and `/v1/runtime/*` surfaces
 - Verifying key registry read/mutation/event helpers (`ToriiClient.getVerifyingKey`, `listVerifyingKeys`, `registerVerifyingKey`, `updateVerifyingKey`, `streamVerifyingKeyEvents`) covering `/v1/zk/vk` operations
+
+### Offline Cash V1 wallet
+
+`OfflineCashWalletV1.open(provider:)` accepts only a provider attesting the complete
+non-forking hardware contract. The wallet stages incoming payments before returning
+their durable acknowledgement, treats exact delivery duplicates idempotently, folds
+an opaque durable inbox prefix without a note-count limit, and drains pending credits
+synchronously before each send or redemption. Sender successors are usable immediately;
+a missing acknowledgement only leaves the byte-identical payment in the retry outbox.
+Apps can call `foldNextPendingCredit()` from their background-work scheduler and use
+`foldAllPendingCredits()` at explicit synchronization points.
+
+The monetary sequence is epoch-local. When it reaches its `u128` maximum, the wallet
+requires a hardware-authorized offline epoch rotation, resets the new epoch's sequence
+to zero, and resumes folding or spending. This avoids stranding funds at counter
+rollover without weakening exact-next checks inside an epoch.
+
+There is intentionally no built-in software provider. Secure Enclave and App Attest
+signatures alone do not supply an atomic rollback-resistant monetary journal, exact-next
+counter, multi-credit inbox, durable outbox, trusted commit time, and offline epoch
+rotation. Unless an audited secure backend supplies that entire contract through
+`OfflineCashHardwareProviderV1`, Apple clients remain online-only.
 
 The DA read/proof surface is fully typed. Use `getDaProofPolicies`,
 `listDaCommitments`, `proveDaCommitment`, `verifyDaCommitment`,
@@ -205,7 +227,7 @@ The builder always compiles all five target libraries into the one caller-select
 uses the root `Cargo.lock`, and fails closed if `xcodebuild` cannot package them.
 There is no skip-build, preserved-target, alternate-lock, or manual-packaging mode.
 
-The Kagemusha pull-request lane preserves that build envelope while avoiding a
+The Offline Cash V1 pull-request lane preserves that build envelope while avoiding a
 hosted-runner timeout: five isolated macOS jobs each build one attested target
 library, and the sole Swift assembler accepts them only when their independent
 archive digests and exact source, lock, toolchain, SDK, deployment-target, and
@@ -501,174 +523,13 @@ convenience APIs are Ed25519-only while native-backed algorithms use
 
 ### Offline peer transport V1
 
-`IrohaPeerWireMessageV1` is the only first-release request/payment/ACK envelope.
-Its sole profile code `2` requires schema `0x0102` and allows a 24,576-byte
-bounded whole-offer body (24,660 bytes including the fixed 84-byte IPM1
-header). Canonical bytes are capped at 32 KiB and must be a kind-matched ABI21
-archive. Construction and decode validate NRT0 v0.0, no compression, exact
-compact-length flags, CRC64, the authoritative fully-qualified schema, and
-static padding (request/payment 8, ACK 0) without requiring the native bridge.
-The typed adapter performs deeper semantics.
-The shared `fixtures/offline/kagemusha_peer_transport_v2.json` vector pins the
-same qualified 49-byte structural archive through IPM1, IQR1, NFC, and an
-authenticated Nearby record. Its one-byte body is structural-only and must not
-be sent to the typed adapter.
-
-QR uses bounded multi-stream `IQR1` scanning with idle and absolute expiry.
-Its standard values are hard V1 ceilings: three active streams, twelve
-pre-header frames, 3,072 pre-header bytes, 30 seconds idle, and 180 seconds
-absolute; custom policies may only tighten them.
-Bind optional expected profile, kind, and schema when constructing the scan
-session; wrong-schema streams are quarantined before completion. The
-`.peerOptimized` compression policy is shared by all rails and uses zlib only
-when it saves at least 32 bytes and one 256-byte shard. If wallet-domain
-validation rejects a structurally valid completion, call
-`scanSession.quarantine(streamID:)` before resuming capture. Scan input is exact
-IQR1 text with no whitespace trimming; explicit Swift scanner uptimes are
-throwing and must be finite and nonnegative.
-Nearby uses Google Connections point-to-point service
-`org.hyperledger.iroha.offline.transfer.v1`, mandatory matching 4...12 ASCII digits,
-and canonical Base64URL-no-padding ASCII IPD1 discovery. Only the sender may
-start with the zero bootstrap; it adopts the receiver's advertised nonzero
-request context before the `IPN1` certificate-bound P-256/HKDF/AES-GCM
-session. The adapter marks
-a BYTES send complete only after its terminal transfer update succeeds. NFC
-uses AID `F0504B45504B524E464301`, exact ISC1 sender checkpoints, 244-byte IPA1
-durable BEGIN records, IDA1 durable ACK records, min(local, peer) chunk
-negotiation, and GET_STATUS recovery after
-ambiguous RF loss. The complete reader runner applies a whole-exchange
-73,996-action default even when a peer advertises one-byte chunks. One NFC
-profile policy binds request, payment, and acknowledgement to the same profile;
-mixed-profile sessions fail closed. Its
-`loadOrCreateDurableCheckpoint` callback is one atomic load-or-create/debit/store
-boundary and must return the exact durable request- and peer-bound ISC1; the
-runner validates it before BEGIN_PAYMENT. `updateDurableCheckpoint` separately
-installs the ACK-bearing ISC1 before CONFIRM_ACK. Failure at either durability
-boundary emits neither the command it gates nor a replacement debit.
-
-Wire limits are hard-capped at 32 KiB canonical and 24,576 bounded Kagemusha
-encoded bytes. NFC messages cannot exceed 24,660 bytes. Nearby timeouts must
-be finite, positive, and at most 300 seconds; its
-receive budget admits the four-record V1 transcript and fails closed on a
-fifth. Epoch invalidation suppresses callbacks not yet admitted; an
-already-admitted application callback may finish.
-Listener callbacks are bounded and reject overload. Terminal send completions
-remain exact-once through a separately bounded fallback; if both callback lanes
-are stalled and saturated, the final nonblocking path runs inline and therefore
-does not promise the configured callback context or global FIFO order.
-
-The portable wire, QR, Nearby cryptography, and NFC state machines live in
-`IrohaSwift`; Google Nearby and Core NFC lifecycle adapters live in
-`IrohaSwiftMobileTransports`. These `IrohaPeer*V1` APIs have no
-MultipeerConnectivity, legacy AID, raw-text, or unauthenticated BYTES fallback.
-That scope does not remove the independent Kagemusha ABI21 bulk family.
-
-The application entry points are:
-
-- QR: produce display strings with
-  `IrohaPeerQRCodecV1.staticCompleteTextCandidate(...)` or
-  `animatedFrameTexts(...)`; feed scanner text to
-  `IrohaPeerQRScanSessionV1.ingest(...)`, and call `reset()` when the camera
-  session or expected kind changes. The producer preflights the exact Base45
-  length before building a complete frame and emits animated strings directly,
-  reusing each repeated header string without changing the V1 wire sequence.
-- Nearby: authenticate records with `IrohaPeerNearbySessionV1`, and own radio
-  lifecycle through `IrohaPeerNearbyConnectionsTransportV1.startAdvertising`,
-  `startDiscovering`, `send`, and `stop`. A `send` completion means delivery
-  only after the exact payload's terminal transfer update is `.success`; queue
-  acceptance is never success.
-- NFC: use `IrohaPeerNfcReaderServiceV1.run(...)` for reader mode and
-  `IrohaPeerNfcCardSessionControllerV1.start(...)` for an eligible receiver.
-  The admission callback receives an ephemeral context and must atomically
-  persist and return a distinct `IrohaPeerNfcDurablePaymentAdmissionV1`; pass
-  that decoded IPA1 back as `restoredPaymentAdmission` after relaunch. Admission
-  and commit callbacks are idempotent because their default and maximum
-  five-second deadline makes a timeout ambiguous. A callback that ignores task
-  cancellation cannot hold the CardSession past that deadline. Admission and
-  COMMIT share one process-wide, queue-free lease: timeout/cancel does not
-  release it until the actual callback returns, and retaps fail immediately
-  with a distinct saturation failure instead of spawning more tasks. A callback
-  that never returns therefore requires process restart. Its late value is not
-  installed or published and is loaded from durable storage on the next start.
-  IPA1 resumes at byte zero; IDA1 wins after COMMIT. Exact/restored BEGIN
-  and COMMIT replays publish the idempotent `.paymentAdmitted` and
-  `.acknowledgementReady` state events.
-  Reader contact retries default to three attempts over three seconds and are
-  hard-capped at ten attempts and 30 seconds. A connect slot is claimed before
-  an attempt, so duplicate detection callbacks cannot consume retry budget.
-  Apps with a custom transceiver can call the portable
-  `IrohaPeerNfcReaderExchangeV1.run(...)` directly, preserving both durable
-  checkpoint callbacks.
-
-The bounded Retail V1 Kagemusha handoff uses profile `2` and only schema `0x0102`.
-`IrohaPeerKagemushaAdapterV1` rejects every other schema before invoking the
-native archive decoder, and its IPM1 adapter fails explicitly above the 24,576
-byte whole-offer body ceiling (24,660 bytes with the IPM1 header). The
-independent ABI21 APIs remain
-`KagemushaQRStreamCodec`, `KagemushaNFCProtocol`, and
-`KagemushaNearbyExchange`, with distinct `PKK2*`/`PKKQ1`, the canonical
-`F0504B45504B524E464301` SDK NFC AID, and
-Bonjour/Multipeer identifiers. They are never negotiated, reinterpreted, or
-used as fallback for Retail V1. Full QR, NFC, and native ABI21 archives up to
-32 MiB continue to use those rails; Kagemusha Nearby's JSON/text envelope has
-its own smaller bound. The profile identifier must not be used for a different
-sidecar or demo encoding.
-
-This transport hardening is client-side and requires no backend API change.
-
-The canonical cross-SDK vector lives in
-`../fixtures/offline/kagemusha_peer_transport_v2.json`.
-From this directory, run the portable/mobile suites and the mainline Kagemusha
-adapter boundary with:
-
-```bash
-swift test --disable-automatic-resolution --filter IrohaPeer
-swift test --disable-automatic-resolution --filter KagemushaPeerTransportTests
-```
-
-See the [peer transport V1 guide](../specs/peer_transport_v1.md) for byte
-layouts, fixture hashes, Android permissions, and durability boundaries.
-
-### Kagemusha offline cash lifecycle
-
-IrohaSwift exposes only Kagemusha offline cash. There is no runtime product-mode
-field or wallet-selectable offline API. The native artifact wire contract is
-authenticated internally and is not another public API. It has no `mode` field;
-the manifest schema/version, ABI, proof backend, transcript, and circuit IDs
-identify the exact contract.
-
-Use the typed `KagemushaRecursiveSpend` and
-`KagemushaRecursiveSpendCodecs` APIs for top-up, recipient-request creation,
-split/append, receiver verification and acknowledgement, and full or partial
-redemption. Amounts are canonical atomic `u128` values paired with the
-asset-definition scale; callers must reject excess decimal precision instead of
-rounding.
-
-Wallet applications own encrypted note state and peer transport. Persist the
-opaque bundle, recipient output, optional sender change, artifact binding, and
-operation status at each commit boundary. Fetch the complete ABI-21/V4 artifact set,
-wrap each one-shot source in `KagemushaRecursiveSpendArtifactStream`, and acquire
-it through a `KagemushaRecursiveSpendArtifactCoordinator` created with
-`.authenticated(...)` from deployment-provisioned release trust. Keep every proof
-operation inside the returned lease's `withInstalledArtifactSet` callback. The
-coordinator verifies the exact manifest generation and eight-file inventory:
-`ParamsIPA`, processed proving key, processed verifying key, and final-key
-selector-zero bootstrap witness for each Eq/Ep parity. The two bounded circuit
-parameter records are authenticated inline in the manifest rather than streamed
-as extra files. The coordinator verifies lengths, offsets, and digests;
-serializes install, use, rotation, and uninstall; and fails stale leases closed.
-No network or artifact access belongs on the offline send or receive path.
-
-The clean Offline Cash V1 state machine additionally requires a platform service
-with one rollback-resistant intent slot, an exact-next monetary counter, trusted
-time, authenticated terminal recovery, and an authenticated staged-payment
-outbox. `OfflineCashDeviceLifecycleBridgeV1.production()` discovers that complete
-optional native contract. App Attest alone does not provide those primitives; if
-either native symbol or any required capability is absent, `availability` is
-`.onlineOnly` and execution fails without a Keychain or software fallback. The
-bridge accepts only bounded V1 command frames and rejects relabelled V4/V5 input.
-The exact offsets and optional symbol signatures are fixed in
-[`specs/offline_cash_device_bridge_v1.md`](../specs/offline_cash_device_bridge_v1.md).
+`OfflineCashV1` is the sole peer-payment namespace. It carries canonical
+payment requests, payments, acknowledgements, mint credits, and redemption
+vouchers through bounded Norito archives or `oc1:` text. QR, NFC, and Nearby
+all use the same canonical bytes from
+`../fixtures/offline/offline_cash_v1.json`; no transport has a second codec.
+Public proofs and payment envelopes remain constant-size as aggregate history
+grows, and there is no hop, input, origin, ancestry, or proof-depth field.
 
 ### Push Devices
 
@@ -1331,92 +1192,6 @@ try archive.enqueue(envelope)
 operators can archive or inspect them later. Archiving does not authorize automatic replay;
 the application owns reconciliation and any later explicit submission.
 
-### Kagemusha Torii API
-
-`ToriiClient` uses only the canonical direct Torii lifecycle:
-`GET /v1/offline/readiness`, `POST /v1/offline/top-up`,
-`POST /v1/offline/redeem`, `GET /v1/offline/operations/{operation_id}`, and
-`POST /v1/offline/receiver-lineage`.
-Use `getOfflineCapability()`, `submitKagemushaTopUp`,
-`submitKagemushaRedeem`,
-`getKagemushaOperationStatus(_:chainDiscriminant:)` with the accepted operation
-reference, and
-`getKagemushaRecipientRegistrationLineage(query:canonicalAuth:)`.
-`getOfflineCapability()` takes no selector.
-
-Receiver-lineage proof evaluation requires `ToriiLocalSigningContext` and a
-per-call `ToriiCanonicalRequestAuth`. Swift signs the exact genesis-derived
-`NetworkId`, POST target, and raw Norito selector body, rejects redirects, and
-never retries the nonce-bearing request.
-
-`ToriiOfflineStatus` is an asset-neutral protocol contract, not backend
-settlement readiness. Swift accepts only
-`cash_handoff_capability: "cash_handoff_v1"`, bridge ABI `23`, the exact maximum
-hop bound, and `ready: true` as its only four fields. Assets and
-dataspaces require no offline enrollment or backend enablement.
-
-`KagemushaTopUpRequest` and `KagemushaRedeemRequest` accept only the corresponding
-typed Kagemusha Norito archive. The native bridge derives the marked lowercase
-operation ID from the canonical request-authority archive and its nonce; Swift
-uses that derived ID as the idempotency key and retains the authorization's
-positive signed `issued_at_ms`. Callers cannot supply or override the operation
-ID. Top-up archives
-are limited to 512 KiB and redeem archives to 48 MiB, exactly matching Torii.
-Keep a submitted
-operation and its input note until the operation status reaches final chain
-state. A transport timeout or unknown state is not permission to create a new
-operation ID. Across Pending observations, the complete signed request identity
-(`operation_id`, both request digests, kind, `issued_at_ms`, and `expires_at_ms`)
-remains immutable even if an exact retry advances the active transaction hash.
-
-Local artifact validation requires exact bridge ABI 23 and manifest
-schema `kagemusha.offline.recursive_spend.artifact_manifest.v4`. The V4
-manifest's eight streamed artifacts are content-addressed and installed
-atomically through `KagemushaRecursiveSpendArtifactInstallSessionV4`; a partial,
-corrupt, unpromoted, or role-substituted generation never becomes active.
-`KagemushaRecursiveSpendReleaseAuthenticationV4` requires the canonical
-candidate-bound promotion record and runner-signed internal-validation receipt in
-addition to policy, attestation, benchmark, and review bytes. Receipt and review
-archives are each limited to 1 MiB. Circuit parameters remain authenticated inline in the Eq/Ep
-profiles. Proof material and verifier bindings are validated by the operation
-that consumes them; they do not change universal offline capability.
-
-Top-up uses the private nonce-bearing `KagemushaTopUpShieldBuildRequestV5`,
-`KagemushaRecursiveSpendTopUpUnsignedV4`, and an authorization over the
-canonical ABI-21 digest. The V5 local carrier never accepts an operation ID;
-native proof preparation returns the authority-and-nonce-derived ID in the
-unsigned V4 request. After direct Torii submission and authenticated
-finality verification, initialize the offline branch with
-`KagemushaRecursiveSpendInitLocalRequestV4` and
-`KagemushaRecursiveSpend.initSpendV4`. Offline transfer is receiver-initiated:
-verify the nonce-bound `KagemushaRecipientPaymentRequest`, construct a
-`KagemushaRecursiveSpendAppendLocalRequestV4` with recipient and optional change
-branches, call `appendSpendV4`, verify the result locally, and send only the V4
-recipient peer-payment archive.
-
-The receiver calls `verifySpendV4`, checks the exact asset, scale, amount,
-recipient commitment, verifier window, hop bound, and lineage requirements,
-then durably stores the bundle before creating a
-`KagemushaReceiverAcknowledgement`. Under `cash_handoff_v1`, the sender has
-already irreversibly consumed its inputs and durably bound/signed the exact
-payment before transport handoff. `verifiedForSender` verifies a delivery
-receipt only; it can never accept, roll back, replace, or claw back the spend.
-Replayed peer payments and acknowledgements remain idempotent at the wallet
-operation layer.
-
-Redemption uses the private nonce-bearing
-`KagemushaRecursiveSpendRedeemLocalRequestV5`, the retained
-unshield-v3 primitive proof APIs, and
-`KagemushaRecursiveSpendRedeemUnsignedV4`. Full redeem has no change branch;
-partial redeem binds one offline change branch to the same proof and the
-authority-and-nonce-derived operation ID returned by native preparation.
-`buildRedeemV4` produces the authorization-bound build result; finalizing it
-returns the canonical V4 request submitted by `submitKagemushaRedeem`.
-
-All accumulator, proof, verifier-record, and finality-proof archives are opaque
-to wallet code. The first-release wire API has no separate lineage-witness
-archive. Do not reconstruct or mutate proof material outside the typed codecs.
-
 ### Native privacy bridge
 
 `PrivacyNativeBridge` is selector-free.
@@ -1575,7 +1350,7 @@ if #available(iOS 15.0, macOS 12.0, *) {
 ```
 
 Generic shield, shielded-transfer, and unshield instructions are not part of
-the first-release SDK surface. Wallets use the typed, proof-bound Kagemusha
+the first-release SDK surface. Wallets use the typed, proof-bound Offline Cash V1
 top-up and redemption flows; the underlying proof codecs remain available to
 those flows without exposing generic transaction builders.
 

@@ -2,6 +2,8 @@ package org.hyperledger.iroha.sdk.core.model.instructions
 
 import java.math.BigInteger
 import java.util.Collections
+import java.util.Locale
+import java.util.Optional
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.requireCanonicalV1ContractAddress
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
@@ -19,6 +21,10 @@ import org.hyperledger.iroha.sdk.norito.TypeAdapter
  * the native enum variant.
  */
 object ContractLifecycleWirePayloadEncoder {
+    const val DEACTIVATE_INSTANCE_WIRE_NAME: String =
+        "iroha.instruction.v1::smart_contract_code::DeactivateContractInstance"
+    const val ACTIVATE_INSTANCE_WIRE_NAME: String =
+        "iroha.instruction.v1::smart_contract_code::ActivateContractInstance"
     const val SET_PARLIAMENT_DELEGATION_WIRE_NAME: String =
         "iroha.instruction.v1::smart_contract_code::SetContractParliamentDelegation"
     const val OFFER_OWNERSHIP_WIRE_NAME: String =
@@ -32,6 +38,8 @@ object ContractLifecycleWirePayloadEncoder {
     @JvmField
     val WIRE_NAMES: List<String> = Collections.unmodifiableList(
         listOf(
+            DEACTIVATE_INSTANCE_WIRE_NAME,
+            ACTIVATE_INSTANCE_WIRE_NAME,
             SET_PARLIAMENT_DELEGATION_WIRE_NAME,
             OFFER_OWNERSHIP_WIRE_NAME,
             ACCEPT_OWNERSHIP_WIRE_NAME,
@@ -39,6 +47,10 @@ object ContractLifecycleWirePayloadEncoder {
         ),
     )
 
+    private const val DEACTIVATE_INSTANCE_SCHEMA =
+        "iroha_data_model::isi::smart_contract_code::DeactivateContractInstance"
+    private const val ACTIVATE_INSTANCE_SCHEMA =
+        "iroha_data_model::isi::smart_contract_code::ActivateContractInstance"
     private const val SET_PARLIAMENT_DELEGATION_SCHEMA =
         "iroha_data_model::isi::smart_contract_code::SetContractParliamentDelegation"
     private const val OFFER_OWNERSHIP_SCHEMA =
@@ -51,6 +63,44 @@ object ContractLifecycleWirePayloadEncoder {
     private val STRING: TypeAdapter<String> = NoritoAdapters.stringAdapter()
     private val BOOL: TypeAdapter<Boolean> = NoritoAdapters.boolAdapter()
     private val UINT32: TypeAdapter<Long> = NoritoAdapters.uint(32)
+    private val OPTIONAL_STRING: TypeAdapter<Optional<String>> = NoritoAdapters.option(STRING)
+
+    /** Encode `DeactivateContractInstance` with an exact revision guard and audit reason. */
+    @JvmStatic
+    @JvmOverloads
+    fun encodeDeactivateContractInstance(
+        contractAddress: String,
+        expectedRevision: BigInteger,
+        reason: String? = null,
+    ): InstructionBox {
+        val payload = DeactivationPayload(
+            canonicalAddress(contractAddress),
+            positiveU64(expectedRevision),
+            Optional.ofNullable(reason),
+        )
+        return wire(
+            DEACTIVATE_INSTANCE_WIRE_NAME,
+            NoritoCodec.encode(payload, DEACTIVATE_INSTANCE_SCHEMA, DeactivationAdapter),
+        )
+    }
+
+    /** Encode `ActivateContractInstance` with an exact revision guard and artifact hash. */
+    @JvmStatic
+    fun encodeActivateContractInstance(
+        contractAddress: String,
+        expectedRevision: BigInteger,
+        codeHashHex: String,
+    ): InstructionBox {
+        val payload = ActivationPayload(
+            canonicalAddress(contractAddress),
+            positiveU64(expectedRevision),
+            canonicalHash(codeHashHex),
+        )
+        return wire(
+            ACTIVATE_INSTANCE_WIRE_NAME,
+            NoritoCodec.encode(payload, ACTIVATE_INSTANCE_SCHEMA, ActivationAdapter),
+        )
+    }
 
     /** Encode `SetContractParliamentDelegation` with an exact revision guard. */
     @JvmStatic
@@ -135,6 +185,24 @@ object ContractLifecycleWirePayloadEncoder {
         return DecodedDelegation(decoded.address, decoded.revision, decoded.delegated)
     }
 
+    internal fun decodeDeactivateContractInstance(payload: ByteArray): DecodedDeactivation {
+        val decoded = NoritoCodec.decode(payload, DeactivationAdapter, DEACTIVATE_INSTANCE_SCHEMA)
+        return DecodedDeactivation(
+            decoded.address,
+            decoded.revision,
+            decoded.reason.orElse(null),
+        )
+    }
+
+    internal fun decodeActivateContractInstance(payload: ByteArray): DecodedActivation {
+        val decoded = NoritoCodec.decode(payload, ActivationAdapter, ACTIVATE_INSTANCE_SCHEMA)
+        return DecodedActivation(
+            decoded.address,
+            decoded.revision,
+            encodeHashHex(decoded.codeHash),
+        )
+    }
+
     internal fun decodeOfferContractOwnership(
         payload: ByteArray,
         chainDiscriminant: Int,
@@ -163,6 +231,18 @@ object ContractLifecycleWirePayloadEncoder {
         val delegated: Boolean,
     )
 
+    internal class DecodedDeactivation(
+        val contractAddress: String,
+        val expectedRevision: BigInteger,
+        val reason: String?,
+    )
+
+    internal class DecodedActivation(
+        val contractAddress: String,
+        val expectedRevision: BigInteger,
+        val codeHashHex: String,
+    )
+
     internal class DecodedOwnershipOffer(
         val contractAddress: String,
         val expectedRevision: BigInteger,
@@ -178,6 +258,18 @@ object ContractLifecycleWirePayloadEncoder {
     private class RevisionGuardPayload(
         val address: String,
         val revision: BigInteger,
+    )
+
+    private class DeactivationPayload(
+        val address: String,
+        val revision: BigInteger,
+        val reason: Optional<String>,
+    )
+
+    private class ActivationPayload(
+        val address: String,
+        val revision: BigInteger,
+        val codeHash: ByteArray,
     )
 
     private class DelegationPayload(
@@ -228,6 +320,46 @@ object ContractLifecycleWirePayloadEncoder {
             RevisionGuardPayload(
                 canonicalAddress(decodeField(decoder, STRING, "contract_address")),
                 positiveU64(decodeField(decoder, U64Adapter, "expected_revision")),
+            )
+    }
+
+    private object HashAdapter : TypeAdapter<ByteArray> {
+        override fun encode(encoder: NoritoEncoder, value: ByteArray) {
+            requireCanonicalHashBytes(value)
+            encoder.writeBytes(value)
+        }
+
+        override fun decode(decoder: NoritoDecoder): ByteArray =
+            decoder.readBytes(32).also(::requireCanonicalHashBytes)
+    }
+
+    private object DeactivationAdapter : TypeAdapter<DeactivationPayload> {
+        override fun encode(encoder: NoritoEncoder, value: DeactivationPayload) {
+            encodeField(encoder, STRING, value.address)
+            encodeField(encoder, U64Adapter, value.revision)
+            encodeField(encoder, OPTIONAL_STRING, value.reason)
+        }
+
+        override fun decode(decoder: NoritoDecoder): DeactivationPayload =
+            DeactivationPayload(
+                canonicalAddress(decodeField(decoder, STRING, "contract_address")),
+                positiveU64(decodeField(decoder, U64Adapter, "expected_revision")),
+                decodeField(decoder, OPTIONAL_STRING, "reason"),
+            )
+    }
+
+    private object ActivationAdapter : TypeAdapter<ActivationPayload> {
+        override fun encode(encoder: NoritoEncoder, value: ActivationPayload) {
+            encodeField(encoder, STRING, value.address)
+            encodeField(encoder, U64Adapter, value.revision)
+            encodeField(encoder, HashAdapter, value.codeHash)
+        }
+
+        override fun decode(decoder: NoritoDecoder): ActivationPayload =
+            ActivationPayload(
+                canonicalAddress(decodeField(decoder, STRING, "contract_address")),
+                positiveU64(decodeField(decoder, U64Adapter, "expected_revision")),
+                decodeField(decoder, HashAdapter, "code_hash"),
             )
     }
 
@@ -318,6 +450,38 @@ object ContractLifecycleWirePayloadEncoder {
 
     private fun canonicalAddress(value: String): String =
         requireCanonicalV1ContractAddress(value)
+
+    private fun canonicalHash(value: String): ByteArray {
+        val normalized = value.lowercase(Locale.ROOT)
+        require(value.isNotEmpty() && value == value.trim()) {
+            "codeHashHex must be an exact non-empty string"
+        }
+        require(normalized.length == 64 && normalized.all { it in '0'..'9' || it in 'a'..'f' }) {
+            "codeHashHex must contain exactly 64 hexadecimal characters"
+        }
+        return ByteArray(32) {
+            normalized.substring(it * 2, it * 2 + 2).toInt(16).toByte()
+        }.also(::requireCanonicalHashBytes)
+    }
+
+    private fun encodeHashHex(value: ByteArray): String {
+        requireCanonicalHashBytes(value)
+        val digits = "0123456789abcdef"
+        return buildString(64) {
+            value.forEach { byte ->
+                val unsigned = byte.toInt() and 0xff
+                append(digits[unsigned ushr 4])
+                append(digits[unsigned and 0x0f])
+            }
+        }
+    }
+
+    private fun requireCanonicalHashBytes(value: ByteArray) {
+        require(value.size == 32) { "code_hash must contain exactly 32 bytes" }
+        require((value.last().toInt() and 1) == 1) {
+            "code_hash must carry the canonical iroha_crypto::Hash marker bit"
+        }
+    }
 
     private fun requireU64(value: BigInteger): BigInteger {
         require(value.signum() >= 0 && value <= U64_MAX) { "expectedRevision must fit u64" }

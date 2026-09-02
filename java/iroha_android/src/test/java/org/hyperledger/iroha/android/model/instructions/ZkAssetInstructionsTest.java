@@ -164,7 +164,7 @@ public final class ZkAssetInstructionsTest {
         Class.forName(packageName + variant + "Instruction");
         throw new AssertionError("retired generic instruction class is still present: " + variant);
       } catch (ClassNotFoundException expected) {
-        // Expected: ABI V1 exposes only typed Kagemusha movement flows.
+        // Expected: ABI V1 exposes only typed first-release movement flows.
       }
       for (java.lang.reflect.Method method : NativeSignerBridge.class.getDeclaredMethods()) {
         final String name = method.getName();

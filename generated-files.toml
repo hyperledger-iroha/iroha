@@ -645,56 +645,6 @@ inputs = [
 check = "cargo run --locked --offline -p iroha_data_model --features dev-tools --bin sumeragi_v2_wire_fixtures -- --check"
 
 [[generated]]
-name = "connect-kagemusha-recipient-v2-fixtures"
-kind = "file"
-outputs = [
-  "crates/connect_norito_bridge/tests/fixtures/offline_recipient_receive_offer_v2.hex",
-  "crates/connect_norito_bridge/tests/fixtures/offline_recipient_payment_request_v2.hex",
-  "crates/connect_norito_bridge/tests/fixtures/offline_recipient_payment_request_v2_fresh_amount.hex",
-  "crates/connect_norito_bridge/tests/fixtures/offline_recipient_registration_lineage_v2.hex",
-  "crates/connect_norito_bridge/tests/fixtures/offline_recipient_checkpoint_envelope.hex",
-  "crates/connect_norito_bridge/tests/fixtures/offline_recipient_checkpoint_publisher_public_key.hex",
-  "crates/connect_norito_bridge/tests/fixtures/offline_recipient_trusted_checkpoint_v2.hex",
-]
-generator = "CARGO_TARGET_DIR=\"${IROHA_CONNECT_RECIPIENT_FIXTURE_CARGO_TARGET_DIR:?set an existing absolute private external Cargo target directory}\" IROHA_CONNECT_RECIPIENT_FIXTURE_STAGE=\"${IROHA_CONNECT_RECIPIENT_FIXTURE_STAGE:?set an existing absolute empty mode-0700 external stage directory}\" cargo test --locked --offline -p connect_norito_bridge --lib recipient_receive_offer_v2_fixture_owner -- --ignored"
-generator_sources = [
-  "crates/connect_norito_bridge/Cargo.toml",
-  "crates/connect_norito_bridge/src/lib.rs",
-  "crates/connect_norito_bridge/src/kagemusha_bridge_tests/tests/recipient_fixture_owner.rs",
-]
-inputs = [
-  "Cargo.toml",
-  "crates/iroha_core/src/**/*.rs",
-  "crates/iroha_crypto/src/**/*.rs",
-  "crates/iroha_data_model/src/**/*.rs",
-  "crates/iroha_primitives/src/**/*.rs",
-  "crates/iroha_torii_shared/src/**/*.rs",
-  "crates/norito/src/**/*.rs",
-  "rust-toolchain.toml",
-]
-check = "CARGO_TARGET_DIR=\"${IROHA_CONNECT_RECIPIENT_FIXTURE_CARGO_TARGET_DIR:?set an existing absolute private external Cargo target directory}\" env -u IROHA_CONNECT_RECIPIENT_FIXTURE_STAGE cargo test --locked --offline -p connect_norito_bridge --lib recipient_receive_offer_v2_fixture_owner -- --ignored"
-
-[[generated]]
-name = "swift-kagemusha-peer-payment-v4-fixture"
-kind = "file"
-outputs = [
-  "crates/connect_norito_bridge/tests/fixtures/offline_peer_payment_v4.hex",
-]
-generator = "cargo run --locked --offline --jobs 1 -Z unstable-options --lockfile-path Cargo.lock -p kotlin-fixture-gen --features dev-tools --bin swift_kagemusha_peer_payment_v4 -- --recipient-request-hex \"$PWD/crates/connect_norito_bridge/tests/fixtures/offline_recipient_payment_request_v2.hex\" --output \"${IROHA_KAGEMUSHA_PEER_PAYMENT_V4_STAGE:?set an absolute external staging file path}\""
-generator_sources = [
-  "tools/kotlin-fixture-gen/Cargo.toml",
-  "tools/kotlin-fixture-gen/src/bin/swift_kagemusha_peer_payment_v4.rs",
-]
-inputs = [
-  "crates/connect_norito_bridge/tests/fixtures/offline_recipient_payment_request_v2.hex",
-  "crates/iroha_crypto/src/**/*.rs",
-  "crates/iroha_data_model/src/**/*.rs",
-  "crates/iroha_primitives/src/**/*.rs",
-  "crates/norito/src/**/*.rs",
-]
-check = "cargo run --locked --offline --jobs 1 -Z unstable-options --lockfile-path Cargo.lock -p kotlin-fixture-gen --features dev-tools --bin swift_kagemusha_peer_payment_v4 -- --recipient-request-hex \"$PWD/crates/connect_norito_bridge/tests/fixtures/offline_recipient_payment_request_v2.hex\" --check \"$PWD/crates/connect_norito_bridge/tests/fixtures/offline_peer_payment_v4.hex\""
-
-[[generated]]
 name = "mochi-canonical-torii-binary-fixtures"
 kind = "file"
 outputs = [

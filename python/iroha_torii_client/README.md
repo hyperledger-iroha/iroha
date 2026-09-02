@@ -51,6 +51,14 @@ debt, the last tracked reducer transition, and any classified delay.
 pressure, governance readiness, and Native AMX participant-application
 records. Diagnostics are operational evidence and are not consensus authority.
 
+Committed Sumeragi evidence is exposed through the authenticated
+`list_sumeragi_evidence()` and `get_sumeragi_evidence_count()` reads. The
+first-release JSON contract accepts only `SumeragiV2Equivocation` records,
+requires a non-null consensus admission height, and models the penalty state
+as the closed `pending`, `applied`, or `cancelled` union. Missing, extra, and
+retired fields fail closed. Both evidence responses require JSON media types;
+count is streamed under a 1 KiB client-side ceiling and list under 1 MiB.
+
 Use `get_status_snapshot()` for `/status`. That route remains a distinct
 operational-health surface; its queue and historical lane telemetry must not be
 treated as consensus-authoritative state.
@@ -66,24 +74,9 @@ marker, not a normalization option. Contract `tx_hash_hex` receipt fields use
 the same exact spelling, as do contract entrypoint hashes, multisig transaction
 hashes, and offline-operation status transaction hashes.
 
-`KagemushaTopUpRequestV4` and `KagemushaRedeemRequestV4` decode the exact
-embedded authorization archive and derive one immutable six-field operation
-identity: operation id, authority digest, canonical request digest, kind,
-issuance time, and expiry time. Submission and every status response must match
-that complete identity; an exact retry may advance only the active transaction
-hash. Callers supply only the canonical Norito request archive and cannot
-override any identity field.
-
-## Kagemusha native validation
-
-Applied Kagemusha top-up status validation requires the ABI-23
-`connect_norito_bridge` shared library, Kagemusha native contract revision 1,
-and its `connect_norito_kagemusha_offline_operation_status_json_validate_v2`
-export.
-Install the platform bridge artifact where the operating-system dynamic loader
-can discover it before starting the Python process. A missing library, a
-different ABI, a missing validator symbol, or a non-zero validation result
-fails closed; the client has no Python or older-ABI compatibility fallback.
+`get_offline_cash_readiness()` validates the closed four-field Offline Cash V1
+response from `GET /v1/offline/readiness`. Peer-payment, mint-credit, and
+redemption-voucher codecs live in the sole `OfflineCashV1` Python namespace.
 
 ## Caller-trusted unsigned drafts
 

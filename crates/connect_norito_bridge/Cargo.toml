@@ -13,11 +13,6 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [[bin]]
-name = "kagemusha_candidate_scenario_validator"
-path = "src/bin/kagemusha_candidate_scenario_validator.rs"
-required-features = ["dev-tools", "kagemusha-candidate-evidence-lab"]
-
-[[bin]]
 name = "soracloud_request_signer"
 path = "src/bin/soracloud_request_signer.rs"
 required-features = ["dev-tools"]
@@ -29,13 +24,8 @@ required-features = ["dev-tools"]
 
 [features]
 dev-tools = []
-# Enable real halo2/ipa proving and verification for confidential-transfer-v2 and unshield.
-# OFF by default; flip on only when all production gates have passed.
-privacy-production-enabled = ["iroha_data_model/kagemusha-production-enabled"]
-# Non-shipping physical-device evidence harness. Candidate symbols, state, and
-# JNI exports are absent unless this feature is selected explicitly; enabling
-# it does not change the production Kagemusha capability gate.
-kagemusha-candidate-evidence-lab = ["iroha_core/kagemusha-candidate-evidence-lab"]
+# Enable qualified proving and verification for the generic privacy bridge.
+privacy-production-enabled = []
 # Build the JNI acceleration surface against IVM's real CUDA backend. This is
 # selected only by hardware-qualified release validation; the default bridge
 # keeps the deterministic CPU fallback.
@@ -78,9 +68,6 @@ tempfile = { workspace = true }
 [dev-dependencies]
 iroha_core = { path = "../iroha_core", default-features = false, features = ["node", "iroha-core-tests"] }
 sorafs_chunker = { workspace = true }
-
-[build-dependencies]
-sha2 = { version = "0.10.8", default-features = false, features = ["std"] }
 
 [target.'cfg(any(target_os = "android", target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
 jni = { version = "0.21.1", default-features = false }

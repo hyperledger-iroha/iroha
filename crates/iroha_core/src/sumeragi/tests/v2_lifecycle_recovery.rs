@@ -398,8 +398,11 @@ fn lifecycle_context_for_peer(local_peer: &PeerId) -> wire::HeightContext {
             power: 1,
         })
         .collect::<Vec<_>>();
+    let network_id = crate::sumeragi::synthetic_network_id("lifecycle-recovery-test");
+    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
     wire::HeightContext {
-        network_id: crate::sumeragi::synthetic_network_id("lifecycle-recovery-test"),
+        network_id,
         protocol_version: wire::PROTOCOL_VERSION,
         height: 1,
         epoch: 0,
@@ -410,9 +413,11 @@ fn lifecycle_context_for_peer(local_peer: &PeerId) -> wire::HeightContext {
         snapshot_bootstrap: None,
         quorum: wire::DualQuorum::from_roster(&roster).expect("four-validator quorum"),
         roster,
+        offline_cash_mint_finality_epoch_id,
+        offline_cash_mint_finality_epoch_roster,
         nexus_amx_context_hash: Hash::new(b"lifecycle-empty-nexus"),
         execution_policy_hash: Hash::new(b"lifecycle-empty-policy"),
-        da_layout: wire::SumeragiV2GenesisContextParameters::recommended().da_layout,
+        da_layout: wire::recommended_data_availability_layout(),
         leader_seed: [0x55; 32],
     }
 }

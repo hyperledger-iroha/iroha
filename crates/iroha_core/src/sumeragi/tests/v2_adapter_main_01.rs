@@ -1162,7 +1162,7 @@ fn body_rebind_coalescence_preserves_the_only_persistent_producer() {
         proposal_round: round,
         phase: wire::GlobalPhase::Commit,
         subject: body_subject,
-        execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
+        execution_commitment: wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
             Hash::new(b"coalescence parent state"),
             Hash::new(b"coalescence post state"),
             Hash::new(b"coalescence writes"),
@@ -1347,7 +1347,7 @@ fn restored_body_available_reuses_logical_lifecycle_spends_one_fresh_slot_and_do
         proposal_round: round,
         phase: wire::GlobalPhase::Commit,
         subject: body_subject,
-        execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
+        execution_commitment: wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
             Hash::new(b"stage-seven parent state"),
             Hash::new(b"stage-seven post state"),
             Hash::new(b"stage-seven writes"),

@@ -62,6 +62,8 @@ CARGO_BUILD_JOBS = 1
 CARGO_RELEASE_CODEGEN_UNITS = 1
 CARGO_INCREMENTAL = False
 PROFILES = ("private", "transparent_control")
+PUBLIC_PARTICIPANT_VISIBILITY = "public"
+RESTRICTED_PARTICIPANT_VISIBILITY = "restricted"
 MIN_FAULT_SEEDS = 10
 MAX_FAULT_SEEDS = 256
 MAX_SEED = (1 << 64) - 1
@@ -512,6 +514,20 @@ def minimum_signed_rs16_da_observations(participants: int) -> int:
     return (participants + 1) * VALIDATORS_PER_DATASPACE
 
 
+def canonical_participant_visibilities(participants: int) -> list[str]:
+    """Return the release profile with one public and remaining restricted legs."""
+
+    if (
+        isinstance(participants, bool)
+        or not isinstance(participants, int)
+        or participants not in PARTICIPANTS
+    ):
+        raise RunnerError("unsupported participant count for visibility policy")
+    return [PUBLIC_PARTICIPANT_VISIBILITY] + [
+        RESTRICTED_PARTICIPANT_VISIBILITY
+    ] * (participants - 1)
+
+
 def build_canary_manifest(commit: str) -> dict[str, Any]:
     """Build two deterministic secret sets for the primary differential run."""
 
@@ -588,6 +604,7 @@ def build_configuration(
         "version": VERSION,
         "protocol": PROTOCOL,
         "participants": participants,
+        "participant_visibilities": canonical_participant_visibilities(participants),
         "primary_paper_configuration": participants == PRIMARY_PARTICIPANTS,
         "execution": {
             "rayon_worker_threads": RAYON_WORKER_THREADS,
@@ -4157,11 +4174,17 @@ def validate_leakage_response(
     except (RunnerError, capture_split.CaptureSplitError) as error:
         raise RunnerError(f"leakage capture port binding is invalid: {error}") from error
     peer_count = (PRIMARY_PARTICIPANTS + 1) * VALIDATORS_PER_DATASPACE
+    participant_visibilities = canonical_participant_visibilities(PRIMARY_PARTICIPANTS)
+    expected_public_p2p = (
+        1 + participant_visibilities.count(PUBLIC_PARTICIPANT_VISIBILITY)
+    ) * VALIDATORS_PER_DATASPACE
+    expected_restricted_p2p = participant_visibilities.count(
+        RESTRICTED_PARTICIPANT_VISIBILITY
+    ) * VALIDATORS_PER_DATASPACE
     if (
         len(groups["torii"]) != peer_count
-        or len(groups["public_p2p"]) != GLOBAL_VALIDATORS
-        or len(groups["restricted_p2p"])
-        != PRIMARY_PARTICIPANTS * VALIDATORS_PER_DATASPACE
+        or len(groups["public_p2p"]) != expected_public_p2p
+        or len(groups["restricted_p2p"]) != expected_restricted_p2p
     ):
         raise RunnerError("leakage capture ports do not cover the exact N=3 topology")
     if capture_split.canonical_port_manifest_binding(groups) != manifest_binding:
@@ -4500,6 +4523,17 @@ def build_request(
         },
         "request configuration",
     )
+    participant_visibilities = canonical_participant_visibilities(
+        job["participants"]
+    )
+    if (
+        not isinstance(configuration, dict)
+        or configuration.get("participant_visibilities") != participant_visibilities
+    ):
+        raise RunnerError(
+            "request configuration does not bind the canonical participant "
+            "visibility profile"
+        )
     invocation_nonce = job.get("invocation_nonce")
     if (
         not isinstance(invocation_nonce, str)
@@ -4518,6 +4552,7 @@ def build_request(
         "hardware_profile_sha256": plan["hardware"]["profile_sha256"],
         "configuration_sha256": job["configuration_sha256"],
         "participants": job["participants"],
+        "participant_visibilities": participant_visibilities,
         "validators_per_dataspace": VALIDATORS_PER_DATASPACE,
         "global_validators": GLOBAL_VALIDATORS,
         "quorum": QUORUM,
@@ -5039,6 +5074,7 @@ def validate_publication_fragment(
     )
     configuration_digests = release_evidence._validate_configuration_manifest(
         publication_root.joinpath(*configurations[0].path.parts),
+        root=publication_root,
         commit=commit,
         artifacts_by_path=by_path,
     )

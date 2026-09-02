@@ -28,7 +28,7 @@ mkdir -p "$MOBILE_SDK_ANDROID_ARTIFACT_DIR"
 # Fail-closed default backend
 ./gradlew :client-android:buildNativeLibs -PprivacyProductionEnabled=false
 
-# Real production privacy/Kagemusha backend
+# Real production privacy backend
 ./gradlew :client-android:buildNativeLibs -PprivacyProductionEnabled=true
 ```
 

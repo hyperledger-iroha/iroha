@@ -23,18 +23,14 @@ use crate::{
     smartcontracts::{code, ivm::cache::IvmCache},
     state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
 };
+pub(crate) use authority_admission::instructions_allow_multisig_envelope_authority;
 pub use authority_admission::{allows_unregistered_authority, executable_self_registers_authority};
-pub(crate) use authority_admission::{
-    instructions_allow_direct_kagemusha_lifecycle_authority,
-    instructions_allow_multisig_envelope_authority,
-};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use core::{fmt, str::FromStr as _};
 use eyre::Result;
 use hex;
 pub use iroha_data_model::prelude::*;
 use iroha_data_model::{
-    asset::definition::ConfidentialPolicyMode,
     fraud::types::FraudAssessment,
     isi::error::Mismatch,
     isi::{
@@ -1082,16 +1078,8 @@ fn is_time_sensitive_instruction_type(type_id: TypeId) -> bool {
         };
     }
     matches_any_type!(
-        iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4,
-        iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4,
-        iroha_data_model::isi::offline::ActivateKagemushaRecursiveReleaseV4,
-        iroha_data_model::isi::offline::EnableKagemushaRecursiveIssuanceV4,
-        iroha_data_model::isi::offline::CancelKagemushaRecursiveReleaseV4,
-        iroha_data_model::isi::offline::DeactivateKagemushaRecursiveIssuanceV4,
-        iroha_data_model::isi::offline::RecordKagemushaTairaCanaryV4,
-        iroha_data_model::isi::offline::AuthorizeKagemushaTairaCanaryV4,
-        iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation,
-        iroha_data_model::isi::offline::SetOfflineDeviceAttestationPolicy,
+        iroha_data_model::isi::offline_cash_v1::TopUpOfflineCashV1,
+        iroha_data_model::isi::offline_cash_v1::RedeemOfflineCashV1,
         iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1,
         iroha_data_model::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1,
         iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1,
@@ -1138,134 +1126,6 @@ fn is_time_sensitive_executable(executable: &Executable) -> bool {
             ExecutableBatchItem::ContractCall(_) => true,
         }),
         Executable::Ivm(_) | Executable::IvmProved(_) => true,
-    }
-}
-#[derive(Clone, Copy)]
-enum ConfidentialPolicyAdmissionAction {
-    TopUp,
-    Redeem,
-}
-impl ConfidentialPolicyAdmissionAction {
-    const fn label(self) -> &'static str {
-        match self {
-            Self::TopUp => "confidential top-up",
-            Self::Redeem => "confidential redemption",
-        }
-    }
-}
-fn confidential_policy_admission_rejection(
-    action: ConfidentialPolicyAdmissionAction,
-) -> TransactionRejectionReason {
-    TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
-        "{} not permitted by policy",
-        action.label()
-    )))
-}
-fn effective_confidential_policy_mode_for_admission(
-    world: &impl WorldReadOnly,
-    asset_def_id: &AssetDefinitionId,
-    block_height: u64,
-) -> Result<ConfidentialPolicyMode, TransactionRejectionReason> {
-    let asset_definition = world
-        .asset_definition(asset_def_id)
-        .map_err(|err| TransactionRejectionReason::Validation(ValidationFail::from(err)))?;
-    let policy = *asset_definition.confidential_policy();
-    let Some(transition) = policy.pending_transition() else {
-        return Ok(policy.mode());
-    };
-    if transition.new_mode() == ConfidentialPolicyMode::ShieldedOnly
-        && block_height >= transition.effective_height()
-    {
-        let transparent_total = world
-            .asset_total_amount(asset_def_id)
-            .map_err(|err| TransactionRejectionReason::Validation(ValidationFail::from(err)))?;
-        if transparent_total > Quantity::zero() {
-            // Entering a conversion window enables confidential commitments and
-            // is irreversible in ABI V1. If finalization is blocked by remaining
-            // transparent supply, retain the currently active mode.
-            return Ok(policy.mode());
-        }
-    }
-    Ok(policy.effective_mode(block_height))
-}
-fn validate_confidential_policy_for_action(
-    world: &impl WorldReadOnly,
-    asset_def_id: &AssetDefinitionId,
-    block_height: u64,
-    action: ConfidentialPolicyAdmissionAction,
-) -> Result<(), TransactionRejectionReason> {
-    let policy_mode =
-        effective_confidential_policy_mode_for_admission(world, asset_def_id, block_height)?;
-    if confidential_policy_allows_action(policy_mode, action) {
-        Ok(())
-    } else {
-        Err(confidential_policy_admission_rejection(action))
-    }
-}
-fn confidential_policy_allows_action(
-    policy_mode: ConfidentialPolicyMode,
-    action: ConfidentialPolicyAdmissionAction,
-) -> bool {
-    matches!(
-        (policy_mode, action),
-        (
-            ConfidentialPolicyMode::Convertible,
-            ConfidentialPolicyAdmissionAction::TopUp | ConfidentialPolicyAdmissionAction::Redeem
-        )
-    )
-}
-pub(crate) fn validate_confidential_policy_admission_for_world(
-    executable: &Executable,
-    world: &impl WorldReadOnly,
-    block_height: u64,
-) -> Result<(), TransactionRejectionReason> {
-    for instruction in executable.explicit_instructions() {
-        let any = instruction.as_any();
-        if let Some(topup) =
-            any.downcast_ref::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4>()
-        {
-            validate_confidential_policy_for_action(
-                world,
-                topup.request.asset.definition(),
-                block_height,
-                ConfidentialPolicyAdmissionAction::TopUp,
-            )?;
-        } else if let Some(redeem) =
-            any.downcast_ref::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4>()
-        {
-            validate_confidential_policy_for_action(
-                world,
-                &redeem.request.bundle.statement.current_note.asset,
-                block_height,
-                ConfidentialPolicyAdmissionAction::Redeem,
-            )?;
-        }
-    }
-    Ok(())
-}
-#[cfg(test)]
-mod confidential_policy_admission_tests {
-    use super::{ConfidentialPolicyAdmissionAction, confidential_policy_allows_action};
-    use iroha_data_model::asset::definition::ConfidentialPolicyMode;
-    #[test]
-    fn kagemusha_value_movement_requires_convertible_policy() {
-        for action in [
-            ConfidentialPolicyAdmissionAction::TopUp,
-            ConfidentialPolicyAdmissionAction::Redeem,
-        ] {
-            assert!(confidential_policy_allows_action(
-                ConfidentialPolicyMode::Convertible,
-                action,
-            ));
-            assert!(!confidential_policy_allows_action(
-                ConfidentialPolicyMode::TransparentOnly,
-                action,
-            ));
-            assert!(!confidential_policy_allows_action(
-                ConfidentialPolicyMode::ShieldedOnly,
-                action,
-            ));
-        }
     }
 }
 fn format_nts_health_reason(status: &crate::time::NetworkTimeStatus) -> String {
@@ -2987,11 +2847,6 @@ impl StateBlock<'_> {
         routing_decision: Option<crate::queue::RoutingDecision>,
     ) -> Result<StatefulAdmission, TransactionRejectionReason> {
         let authority = tx.authority().clone();
-        crate::kagemusha_operation::validate_kagemusha_operation_reservation_v4(
-            tx,
-            state_transaction,
-        )
-        .map_err(TransactionRejectionReason::Validation)?;
         if code::is_historical_contract_subject(&state_transaction.world, &authority) {
             warn!(
                 authority = %authority,
@@ -3021,9 +2876,6 @@ impl StateBlock<'_> {
                 ),
             ));
         }
-        let lifecycle_entrypoint =
-            crate::smartcontracts::isi::offline::signed_lifecycle_entrypoint_context(tx)
-                .map_err(TransactionRejectionReason::Validation)?;
         let (require_height_ttl, require_sequence) = {
             let params = state_transaction.world.parameters();
             (
@@ -3057,11 +2909,6 @@ impl StateBlock<'_> {
                     )),
                 ));
             }
-        }
-        if let Some(context) = lifecycle_entrypoint.as_ref() {
-            context
-                .validate_stage_expiry_horizon(state_transaction.block_height())
-                .map_err(TransactionRejectionReason::Validation)?;
         }
         let mut sequence_to_commit = None;
         if let Some(seq) = tx_sequence_value {
@@ -3116,15 +2963,8 @@ impl StateBlock<'_> {
                 | Executable::IvmProved(_)
                 | Executable::Ivm(_) => false,
             };
-            let allows_direct_kagemusha_lifecycle_authority = lifecycle_entrypoint.is_some()
-                && matches!(
-                    tx.instructions(),
-                    Executable::Instructions(instructions)
-                        if instructions_allow_direct_kagemusha_lifecycle_authority(instructions)
-                );
             if (has_multisig_state || has_multisig_metadata || has_multisig_controller)
                 && !allows_multisig_envelope_authority
-                && !allows_direct_kagemusha_lifecycle_authority
             {
                 warn!(
                     authority = %authority,
@@ -3169,11 +3009,6 @@ impl StateBlock<'_> {
             dataspace_catalog: &state_transaction.nexus.dataspace_catalog,
         };
         enforce_lane_policies(tx, state_transaction, &lane_assignment)?;
-        validate_confidential_policy_admission_for_world(
-            tx.instructions(),
-            &state_transaction.world,
-            state_transaction.block_height(),
-        )?;
         let validation_fee_credit =
             crate::validation_fee::enforce_validation_fee_admission(tx, state_transaction)?;
         enforce_fraud_policy(
@@ -3198,7 +3033,7 @@ impl StateBlock<'_> {
         tx: AcceptedTransaction<'_>,
         ivm_cache: &mut IvmCache,
     ) -> (HashOf<TransactionEntrypoint>, TransactionResultInner) {
-        self.validate_transaction_at_entrypoint_index_and_routing(tx, ivm_cache, None, None, None)
+        self.validate_transaction_at_entrypoint_index_and_routing(tx, ivm_cache, None, None)
     }
     /// Validate and apply a transaction with both its original block entrypoint index and routing context.
     ///
@@ -3215,12 +3050,6 @@ impl StateBlock<'_> {
             ivm_cache,
             Some(u64::try_from(entrypoint_index).unwrap_or(u64::MAX)),
             Some(routing),
-            Some(
-                crate::kagemusha_operation::KagemushaOperationExecutionLocatorV4::new(
-                    crate::kagemusha_operation::KagemushaOperationExecutionPhaseV4::Ordinary,
-                    u64::try_from(entrypoint_index).unwrap_or(u64::MAX),
-                ),
-            ),
         )
     }
     /// Validate recovered standalone lane-block execution input in descriptor order.
@@ -3233,20 +3062,6 @@ impl StateBlock<'_> {
         &mut self,
         artifact: &crate::kura::LaneBlockExecutionInputArtifact,
         ivm_cache: &mut IvmCache,
-    ) -> core::result::Result<
-        Vec<(u64, HashOf<TransactionEntrypoint>, TransactionResultInner)>,
-        &'static str,
-    > {
-        self.validate_lane_block_execution_input_with_routing_and_kagemusha_context(
-            artifact, ivm_cache, 0,
-        )
-    }
-    /// Validate recovered lane input at its canonical flattened merge-phase base.
-    pub(crate) fn validate_lane_block_execution_input_with_routing_and_kagemusha_context(
-        &mut self,
-        artifact: &crate::kura::LaneBlockExecutionInputArtifact,
-        ivm_cache: &mut IvmCache,
-        kagemusha_phase_index_base: u64,
     ) -> core::result::Result<
         Vec<(u64, HashOf<TransactionEntrypoint>, TransactionResultInner)>,
         &'static str,
@@ -3264,11 +3079,6 @@ impl StateBlock<'_> {
             .zip(artifact.entrypoints.iter())
             .enumerate()
         {
-            let phase_offset =
-                u64::try_from(position).map_err(|_| "Kagemusha merge phase index exceeds u64")?;
-            let kagemusha_phase_index = kagemusha_phase_index_base
-                .checked_add(phase_offset)
-                .ok_or("Kagemusha merge phase index exceeds u64")?;
             let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Borrowed(entrypoint));
             let plan = if let Some(bound) = artifact.routing_plans.get(position) {
                 // Autonomous payloads carry a producer-authenticated plan bound
@@ -3295,12 +3105,6 @@ impl StateBlock<'_> {
                     ivm_cache,
                     Some(raw_entrypoint_index),
                     Some(routing),
-                    Some(
-                        crate::kagemusha_operation::KagemushaOperationExecutionLocatorV4::new(
-                            crate::kagemusha_operation::KagemushaOperationExecutionPhaseV4::Merge,
-                            kagemusha_phase_index,
-                        ),
-                    ),
                 );
             results.push((raw_entrypoint_index, entrypoint_hash, result));
         }
@@ -3348,9 +3152,6 @@ impl StateBlock<'_> {
         ivm_cache: &mut IvmCache,
         entrypoint_index: Option<u64>,
         routing_decision: Option<crate::queue::RoutingDecision>,
-        kagemusha_operation_execution_locator: Option<
-            crate::kagemusha_operation::KagemushaOperationExecutionLocatorV4,
-        >,
     ) -> (HashOf<TransactionEntrypoint>, TransactionResultInner) {
         let signed_transaction = match tx.entrypoint() {
             TransactionEntrypoint::External(signed) => Some(signed.clone()),
@@ -3364,10 +3165,6 @@ impl StateBlock<'_> {
         let gas_limit = self.gas_limit_per_block;
         let mut state_transaction = self.transaction();
         state_transaction.current_entrypoint_index = entrypoint_index;
-        state_transaction
-            .bind_kagemusha_operation_execution_locator_v4(kagemusha_operation_execution_locator);
-        state_transaction.kagemusha_taira_canary_external_entrypoint =
-            matches!(tx.entrypoint(), TransactionEntrypoint::External(_));
         if let Some(routing) = routing_decision {
             state_transaction.current_lane_id = Some(routing.lane_id);
             state_transaction.current_dataspace_id = Some(routing.dataspace_id);
@@ -3505,12 +3302,6 @@ impl StateBlock<'_> {
         ivm_cache: &mut IvmCache,
         routing_decision: Option<crate::queue::RoutingDecision>,
     ) -> TransactionResultInner {
-        crate::kagemusha_operation::classify_kagemusha_operation_entrypoint_v4(tx.entrypoint())
-            .map_err(|error| {
-                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
-                    "invalid Kagemusha operation carrier: {error}"
-                )))
-            })?;
         if let TransactionEntrypoint::SealedCommitment(commitment) = tx.entrypoint() {
             return Self::validate_sealed_transaction_commitment(commitment, state_transaction);
         }
@@ -5637,7 +5428,6 @@ pub mod tests {
         KeyPair::try_random_with_algorithm(algorithm)
             .expect("transaction fixture key generation should succeed")
     }
-    include!("tx/kagemusha_lifecycle_admission_tests.rs");
     fn test_network_id() -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([0x15; Hash::LENGTH]),
@@ -8546,16 +8336,8 @@ pub mod tests {
     #[test]
     fn time_sensitive_type_table_covers_offline_and_governance_operations() {
         let classified = [
-            TypeId::of::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4>(),
-            TypeId::of::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4>(),
-            TypeId::of::<iroha_data_model::isi::offline::ActivateKagemushaRecursiveReleaseV4>(),
-            TypeId::of::<iroha_data_model::isi::offline::EnableKagemushaRecursiveIssuanceV4>(),
-            TypeId::of::<iroha_data_model::isi::offline::CancelKagemushaRecursiveReleaseV4>(),
-            TypeId::of::<iroha_data_model::isi::offline::DeactivateKagemushaRecursiveIssuanceV4>(),
-            TypeId::of::<iroha_data_model::isi::offline::RecordKagemushaTairaCanaryV4>(),
-            TypeId::of::<iroha_data_model::isi::offline::AuthorizeKagemushaTairaCanaryV4>(),
-            TypeId::of::<iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation>(),
-            TypeId::of::<iroha_data_model::isi::offline::SetOfflineDeviceAttestationPolicy>(),
+            TypeId::of::<iroha_data_model::isi::offline_cash_v1::TopUpOfflineCashV1>(),
+            TypeId::of::<iroha_data_model::isi::offline_cash_v1::RedeemOfflineCashV1>(),
             TypeId::of::<iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1>(
             ),
             TypeId::of::<

@@ -48,7 +48,8 @@ public final class SumeragiV2WireFixtureTests {
     SumeragiV2Wire.Hash32 ordinary = testHash(0x25);
     SumeragiV2Wire.Hash32 executed = testHash(0x27);
     SumeragiV2Wire.ExecutionCommitment base =
-        SumeragiV2Wire.ExecutionCommitment.withoutTopups(parent, post, ordinary, 123, executed);
+        SumeragiV2Wire.ExecutionCommitment.withoutOfflineCashTopUps(
+            parent, post, ordinary, 123, executed);
     SumeragiV2Wire.LaneFinalityManifestCommitment laneFinality =
         new SumeragiV2Wire.LaneFinalityManifestCommitment(testHash(0x2b), 1);
     SumeragiV2Wire.MergeCarrierCommitment carrier =
@@ -530,7 +531,7 @@ public final class SumeragiV2WireFixtureTests {
     byte[] changedParentState = response.certificate.executionCommitment.parentStateRoot.bytes();
     changedParentState[0] ^= 1;
     SumeragiV2Wire.ExecutionCommitment changedExecutionCommitment =
-        SumeragiV2Wire.ExecutionCommitment.withoutTopups(
+        SumeragiV2Wire.ExecutionCommitment.withoutOfflineCashTopUps(
             new SumeragiV2Wire.Hash32(changedParentState),
             response.certificate.executionCommitment.postStateRoot,
             response.certificate.executionCommitment.ordinaryWritesRoot,
@@ -558,7 +559,7 @@ public final class SumeragiV2WireFixtureTests {
   }
 
   @Test
-  public void executionCommitmentsRejectNonCanonicalTopupBindings() throws Exception {
+  public void executionCommitmentsEnforceCanonicalOfflineCashTopUpBindings() throws Exception {
     FixtureRow responseMessage = fixtureRow("message", "commit_certificate_response");
     SumeragiV2Wire.ConsensusPayload.CommitCertificateResponseMessage responsePayload =
         (SumeragiV2Wire.ConsensusPayload.CommitCertificateResponseMessage)
@@ -567,7 +568,7 @@ public final class SumeragiV2WireFixtureTests {
                 .payload;
     SumeragiV2Wire.ExecutionCommitment base =
         responsePayload.value.certificate.executionCommitment;
-    SumeragiV2Wire.Hash32 topupRoot = base.parentStateRoot;
+    SumeragiV2Wire.Hash32 offlineCashTopUpRoot = base.parentStateRoot;
 
     assertThrows(
         IllegalArgumentException.class,
@@ -576,7 +577,7 @@ public final class SumeragiV2WireFixtureTests {
                 base.parentStateRoot,
                 base.postStateRoot,
                 base.ordinaryWritesRoot,
-                topupRoot,
+                offlineCashTopUpRoot,
                 0,
                 base.nativeAmxApplicationManifestVersion,
                 base.nativeAmxApplicationManifestRoot,
@@ -604,8 +605,8 @@ public final class SumeragiV2WireFixtureTests {
                 base.parentStateRoot,
                 base.postStateRoot,
                 base.ordinaryWritesRoot,
-                topupRoot,
-                SumeragiV2Wire.MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK + 1,
+                offlineCashTopUpRoot,
+                0x1_0000_0000L,
                 base.nativeAmxApplicationManifestVersion,
                 base.nativeAmxApplicationManifestRoot,
                 base.nativeAmxApplicationManifestCount,
@@ -618,7 +619,7 @@ public final class SumeragiV2WireFixtureTests {
                 base.parentStateRoot,
                 base.postStateRoot,
                 base.ordinaryWritesRoot,
-                topupRoot,
+                offlineCashTopUpRoot,
                 1,
                 base.nativeAmxApplicationManifestVersion,
                 base.nativeAmxApplicationManifestRoot,
@@ -626,21 +627,24 @@ public final class SumeragiV2WireFixtureTests {
                 base.executedBlockWireLen,
                 base.executedBlockWireHash));
 
+    long largeCount = 1_000;
     SumeragiV2Wire.Hash32 canonicalPostState =
-        SumeragiV2Wire.ExecutionCommitment.topupPostStateRoot(
-            1, base.ordinaryWritesRoot, topupRoot);
+        SumeragiV2Wire.ExecutionCommitment.offlineCashTopUpPostStateRoot(
+            largeCount, base.ordinaryWritesRoot, offlineCashTopUpRoot);
     SumeragiV2Wire.ExecutionCommitment valid =
         new SumeragiV2Wire.ExecutionCommitment(
             base.parentStateRoot,
             canonicalPostState,
             base.ordinaryWritesRoot,
-            topupRoot,
-            1,
+            offlineCashTopUpRoot,
+            largeCount,
             base.nativeAmxApplicationManifestVersion,
             base.nativeAmxApplicationManifestRoot,
             base.nativeAmxApplicationManifestCount,
             base.executedBlockWireLen,
             base.executedBlockWireHash);
+    assertEquals(largeCount, valid.offlineCashTopUpCount);
+    assertEquals(offlineCashTopUpRoot, valid.offlineCashTopUpRoot);
     assertEquals(base.executedBlockWireHash, valid.executedBlockWireHash);
     assertArrayEquals(
         valid.encode(), SumeragiV2Wire.ExecutionCommitment.decode(valid.encode()).encode());
@@ -724,8 +728,8 @@ public final class SumeragiV2WireFixtureTests {
                 base.parentStateRoot,
                 base.postStateRoot,
                 base.ordinaryWritesRoot,
-                base.topupAnchorRoot,
-                base.topupAnchorCount,
+                base.offlineCashTopUpRoot,
+                base.offlineCashTopUpCount,
                 base.nativeAmxApplicationManifestVersion,
                 base.nativeAmxApplicationManifestRoot,
                 base.nativeAmxApplicationManifestCount,

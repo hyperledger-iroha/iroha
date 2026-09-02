@@ -1,7 +1,16 @@
 # Torii MCP API
 
-Torii exposes a native Model Context Protocol bridge at `/v1/mcp`.
-It lets MCP clients discover tools and call Torii/Connect endpoints through JSON-RPC.
+Torii exposes Model Context Protocol directly at its existing `POST /v1/mcp`
+route. It lets MCP clients discover tools and resources and call reviewed
+Torii/Connect endpoints through JSON-RPC.
+
+Torii itself is the only MCP server, process, and listener involved.
+Route-backed tool and resource dispatch re-enters Torii's existing
+authoritative router in-process and remains subject to the selected route's
+normal admission policy. Explicit Torii-local helpers execute inside the same
+MCP handler without fabricating another route. This design does not start or
+plan a gateway, sidecar, proxy server, second listener, or separate MCP
+deployment unit.
 
 ## Enable And Configure
 MCP defaults to the bounded `read_only` profile with operator routes hidden.
@@ -57,9 +66,9 @@ catalog-projected `torii.*` namespace and all operator routes.
   shared limit prevents a small tool request from amplifying into an unbounded
   in-memory response.
 - `max_tools_per_list`: pagination size for `tools/list`.
-- `max_inflight_dispatches`: maximum number of tool dispatches executing at
-  once. Calls beyond the configured capacity fail closed with a retryable
-  `dispatch_capacity_exhausted` JSON-RPC error.
+- `max_inflight_dispatches`: maximum number of tool or resource-route
+  dispatches executing at once. Calls beyond the configured capacity fail
+  closed with a retryable `dispatch_capacity_exhausted` JSON-RPC error.
 - `profile`: `read_only`, `writer`, or `operator`.
 - `expose_operator_routes`: second, explicit gate for operator tools. Operator
   tools are published only when this is `true` **and** `profile` is `operator`.
@@ -87,6 +96,7 @@ surface.
 - `POST /v1/mcp`: JSON-RPC 2.0 execution endpoint.
 - `GET /v1/mcp`: not supported; returns `405 Method Not Allowed` because Torii
   does not provide an SSE stream on this endpoint.
+- `DELETE /v1/mcp`: not supported; native MCP has no protocol session to end.
 
 The route remains registered when `torii.mcp.enabled` is `false`; after
 listener-wide admission and authentication, POST returns `503 Service
@@ -94,7 +104,7 @@ Unavailable` with `mcp_disabled`.
 
 ## Security And Header Forwarding
 MCP does not bypass Torii authentication. `POST /v1/mcp` is a nested-route
-gateway: it can reach mutations, but every call is dispatched through the
+adapter: it can reach mutations, but every call is dispatched through the
 authoritative router and the exact selected route admits its own principal
 before any target effect.
 
@@ -146,21 +156,55 @@ treat `structuredContent` as data rather than instructions.
 
 - `jsonrpc` is required and must be the string `"2.0"`.
 - Missing, non-string, or different `jsonrpc` values are rejected as `invalid_request`.
-- Each POST accepts exactly one JSON-RPC request, notification, or response
-  object. JSON-RPC array batches, including empty arrays, are rejected as
-  `invalid_request`.
-- A request or response `id` must be a non-null string or JSON number. Numeric
-  IDs, including floating-point values, are echoed as parsed JSON values.
-- The initialization request may omit `MCP-Protocol-Version`. Every later POST
-  must carry exactly one `MCP-Protocol-Version` header containing the negotiated
-  version (`2025-06-18`); missing, ambiguous, or unsupported values are rejected.
-- `initialize.params` must include `protocolVersion`, `capabilities`, and
-  `clientInfo`. `protocolVersion` is a non-empty string, `capabilities` is an
-  object, and `clientInfo` contains non-empty string `name` and `version`
-  fields.
+- Each native POST accepts exactly one JSON-RPC request object. Native client
+  notifications and JSON-RPC responses are rejected. The compatibility adapter
+  additionally accepts its documented legacy notifications and client response
+  objects. JSON-RPC array batches, including empty arrays, are rejected in both
+  eras as `invalid_request`.
+- On the legacy adapter, a request or response `id` must be a non-null string
+  or JSON number. Numeric IDs, including floating-point values, are echoed as
+  parsed JSON values. Native ID rules are stricter, as described below.
+- Native requests use stateless MCP `2026-07-28`. Every request carries object
+  `params._meta` with `io.modelcontextprotocol/protocolVersion` and
+  `io.modelcontextprotocol/clientCapabilities`; client identity under
+  `io.modelcontextprotocol/clientInfo` is recommended. When supplied, client
+  information must contain string `name` and `version` fields.
+- Every native HTTP POST carries exactly one matching
+  `MCP-Protocol-Version` and `Mcp-Method` header. `tools/call` additionally
+  carries `Mcp-Name` matching `params.name`; `resources/read` carries
+  `Mcp-Name` matching `params.uri`. Methods with no corresponding name or URI
+  reject `Mcp-Name`. `prompts/get` is not implemented; if it is added later it
+  will mirror `params.name` through the same header.
+- A mirrored method is ordinary header-safe ASCII. A name or URI is sent as
+  plain header-safe ASCII when possible; otherwise encode its UTF-8 bytes as
+  canonical padded standard Base64 and wrap them as
+  `=?base64?<encoded>?=`. Sentinel-looking literal text uses the encoded form
+  too. The server rejects non-canonical or ambiguous encodings.
+- A header/body mismatch or missing mirrored routing header returns HTTP 400
+  and JSON-RPC `-32020`. An unsupported protocol returns HTTP 400 and
+  `-32022` with `supported` and `requested` values. Missing required modern
+  `_meta` fields returns HTTP 400 and `-32602`.
+- Modern request IDs are non-null strings or integers. An invalid or unreadable
+  ID is not echoed as `null` in a modern error response.
+- Successful modern results carry `resultType = "complete"` and server identity
+  in `_meta["io.modelcontextprotocol/serverInfo"]`. Discovery, tool-list, and
+  resource results also carry reviewed `ttlMs` and `cacheScope` hints.
+- The HTTP envelope remains `Cache-Control: private, no-store` so a generic
+  intermediary never caches different JSON-RPC POST bodies under the shared
+  `/v1/mcp` URL. MCP-aware clients may cache the parsed result only under the
+  protocol cache key (method plus result-affecting params) and, for Torii's
+  `private` scope, the exact same authorization context.
+- Torii retains initialization-based `2025-06-18` behavior on the same endpoint
+  as a compatibility adapter. Only legacy `initialize` may omit the version
+  header; later legacy requests carry `MCP-Protocol-Version: 2025-06-18`.
 - The advertised `tools/call_batch` extension may represent at most 64 tool
-  dispatches. Every requested call is charged separately against the rate
-  limiter; it is not an outer JSON-RPC batch.
+  dispatches. A native request must independently declare
+  `clientCapabilities.extensions["org.hyperledger.iroha/tools"]` as an object;
+  discovery from an earlier request is not session state and does not satisfy
+  this per-request negotiation. Missing extension support returns HTTP 400 and
+  JSON-RPC `-32021` with `requiredCapabilities`. Every requested call is
+  charged separately against the rate limiter; it is not an outer JSON-RPC
+  batch.
 - Request bodies and nested-route response bodies have a 10-second collection
   deadline. Nested routes advertised as streaming operations are not eligible
   MCP tools.
@@ -169,7 +213,8 @@ treat `structuredContent` as data rather than instructions.
 - Long-polling transaction and contract wait helpers use a smaller derived
   quota (at most eight and always below the global limit), reserving capacity
   for bounded tools.
-- When API-token authentication is required, `notifications/cancelled` can stop
+- On the legacy compatibility path, when API-token authentication is required,
+  `notifications/cancelled` can stop
   the currently registered live `tools/call` or `tools/call_batch` owned by the
   same validated token principal and carrying the exact request ID plus
   per-call cancellation nonce. Put a canonical unpadded base64url encoding of
@@ -185,6 +230,9 @@ treat `structuredContent` as data rather than instructions.
   their exact wire identity.
 - Anonymous MCP calls remain usable but are not remotely cancellable: source IP
   is intentionally not treated as cancellation authentication.
+- Native HTTP cancellation uses the request-scoped transport: closing an active
+  response stream cancels that request. The legacy cancellation notification is
+  not accepted as a native `2026-07-28` request.
 - Unknown method is `method_not_found`.
 - Missing `params` is treated as `{}` where the method permits it; non-object
   `params` and non-object `tools/call.arguments` are rejected as
@@ -192,18 +240,21 @@ treat `structuredContent` as data rather than instructions.
 
 ### HTTP Status Behavior
 
-- `200 OK`: JSON-RPC responses (including JSON-RPC-level errors).
-- `202 Accepted`: accepted MCP notifications and client response messages (no
-  response body).
+- `200 OK`: successful JSON-RPC responses and ordinary method-level JSON-RPC
+  errors.
+- `202 Accepted`: accepted legacy MCP notifications and legacy client response
+  messages (no response body).
 - `204 No Content`: the original authenticated request was cancelled before it
   produced a JSON-RPC response. Cancellation does not roll back a transaction
   already submitted to the ledger pipeline.
-- `400 Bad Request`: invalid JSON, an outer JSON-RPC array, or an unsupported or
-  ambiguous protocol-version header.
+- `400 Bad Request`: invalid JSON, an outer JSON-RPC array, malformed modern
+  metadata, mirrored-header mismatch, an unsupported protocol version, or a
+  prohibited native notification/client-response body.
 - `408 Request Timeout`: request body did not complete within the collection deadline.
 - `401 Unauthorized`: API-token middleware rejected a missing or invalid
   token.
 - `403 Forbidden`: a supplied `Origin` did not exactly match the allowlist.
+- `404 Not Found`: a native request names an unimplemented JSON-RPC method.
 - `413 Payload Too Large`: request exceeds `max_request_bytes`.
 - `429 Too Many Requests`: MCP rate-limited.
 - `405 Method Not Allowed`: any HTTP method other than POST, including GET.
@@ -212,19 +263,47 @@ treat `structuredContent` as data rather than instructions.
 
 ## Supported JSON-RPC Methods
 
-- `initialize`
-- `notifications/initialized` (accepted as a notification; returns `202 Accepted` with an empty body)
-- `notifications/cancelled` (best-effort exact authenticated cancellation; returns `202 Accepted`)
-- `ping`
+Native `2026-07-28`:
+
+- `server/discover`
 - `tools/list`
 - `tools/call`
 - `tools/call_batch` (advertised Iroha extension)
+- `resources/list`
+- `resources/read`
+
+Legacy `2025-06-18` compatibility adds:
+
+- `initialize`
+- `notifications/initialized` (accepted with `202 Accepted` and an empty body)
+- `notifications/cancelled` (best-effort exact authenticated cancellation)
+- `ping`
 
 ## Method Reference
 
-### `initialize`
+### `server/discover`
 
-Requires `params.protocolVersion`, `params.capabilities`, and
+This mandatory server method returns the versions served on the existing Torii
+endpoint, request-independent capabilities, server identity, safety
+instructions, and private cache hints. Calling it is optional for clients: a
+native client may call `tools/list` directly and handle a typed unsupported
+version error.
+
+Result shape:
+
+- `resultType = "complete"`
+- `supportedVersions = ["2026-07-28", "2025-06-18"]`
+- `capabilities.tools.listChanged`
+- `capabilities.resources.listChanged = false`
+- `capabilities.extensions["org.hyperledger.iroha/tools"]`, including the
+  current toolset hash and bounded `tools/call_batch` contract
+- `_meta["io.modelcontextprotocol/serverInfo"]`
+- `instructions`, `ttlMs`, and `cacheScope = "private"`
+
+### `initialize` (legacy compatibility)
+
+Only the `2025-06-18` adapter accepts this method. It requires
+`params.protocolVersion`, `params.capabilities`, and
 `params.clientInfo`. It returns MCP protocol metadata, server instructions, and
 capabilities for visible tools. Use the returned `protocolVersion` as the exact
 `MCP-Protocol-Version` header on subsequent POST requests.
@@ -238,16 +317,16 @@ Result shape:
   `callBatch.maxDispatches`)
 - `instructions` (server-wide safety and discovery guidance)
 
-### `notifications/initialized`
+### `notifications/initialized` (legacy compatibility)
 Carries the standard client-ready lifecycle signal after a successful
 `initialize` response.
 
-Torii's MCP HTTP transport is stateless and does not mint or retain an MCP
+Torii's legacy MCP HTTP adapter does not mint or retain an MCP
 session identifier. The notification therefore does not unlock server-side
 session state: negotiation is enforced per request. `initialize` may omit the
 protocol header, while every other POST must carry the exact supported
-`MCP-Protocol-Version`. Clients should still follow the standard initialize,
-initialized-notification, then tool-discovery sequence.
+`MCP-Protocol-Version`. This sequence exists only for compatibility; native
+clients do not send it.
 
 HTTP behavior:
 
@@ -259,7 +338,7 @@ Torii accepts the notification when:
 - `id` is omitted
 - `jsonrpc == "2.0"`
 
-### `notifications/cancelled`
+### `notifications/cancelled` (legacy compatibility)
 
 Accepts the standard best-effort cancellation shape with
 `params.requestId` and an optional string `params.reason`, extended with
@@ -278,9 +357,10 @@ duplicate live cancellable ID for the same authenticated principal is rejected
 as `request_id_in_use`; after completion, the ID can be reused safely with a
 fresh random cancellation nonce.
 
-### `ping`
-Returns an empty result object so MCP clients can use the standard lifecycle
-ping before or after initialization.
+### `ping` (legacy compatibility)
+
+Returns an empty result object for clients using the initialization-based
+`2025-06-18` adapter. Native clients do not send lifecycle pings.
 
 ### `tools/list`
 
@@ -298,6 +378,9 @@ Result:
 - `nextCursor`: string when another page exists; omitted on the final page
 - `_meta.iroha.listChanged`: `true` when the client toolset hash differs
 - `_meta.iroha.toolsetVersion`: current server toolset hash
+- Native responses also include `resultType = "complete"`, `ttlMs`,
+  `cacheScope = "private"`, and
+  `_meta["io.modelcontextprotocol/serverInfo"]`.
 
 Catalog-backed tool descriptors also publish `_meta["iroha/routeAuth"]` with
 the exact route-catalog contract:
@@ -327,9 +410,49 @@ Notes:
   `not` constraints plus `if`/`then`/`else` branches are preserved and enforced
   before dispatch. OpenAPI references are recursively inlined; registry
   construction fails closed if an unresolved `$ref` remains.
-- `annotations.readOnlyHint`, `destructiveHint`, and `idempotentHint` describe
-  the registered tool effect. Clients must still treat annotations as hints and
-  obtain explicit approval for mutations.
+- Every descriptor publishes standard `readOnlyHint`, `destructiveHint`,
+  `idempotentHint`, and `openWorldHint` annotations. These are derived from the
+  orthogonal semantic dimensions below, not from one combined effect label.
+  Clients must still treat annotations as hints and obtain explicit approval
+  for mutations.
+
+Every descriptor also publishes versioned `_meta["iroha/semantics"]`:
+
+```json
+{
+  "schemaVersion": 1,
+  "operation": "mutate",
+  "authority": "signed_body",
+  "mutation": "may_reduce_remove_or_overwrite",
+  "retry": "exact_identity_deduplicated",
+  "world": "iroha_network",
+  "sensitivity": "sensitive",
+  "requiresExternalSignature": true
+}
+```
+
+The independent fields have these values:
+
+- `operation`: `observe`, `construct`, or `mutate`.
+- `authority`: `public`, `listener_credential`, `dataspace_visible`, `account`,
+  `signed_body`, `protocol_principal`, or `operator`.
+- `mutation`: `none`, `additive_only`, or
+  `may_reduce_remove_or_overwrite`.
+- `retry`: `safe`, `exact_identity_deduplicated`, or `unsafe`.
+- `world`: `torii_local`, `iroha_network`, or `external`.
+- `sensitivity`: `normal` or `sensitive`.
+- `requiresExternalSignature`: whether the caller must obtain a signature
+  outside MCP.
+
+Construct-only tools leave Torii and ledger state unchanged even when the
+artifact they return is intended for a later signed mutation. A signed
+transaction submission can be destructive while still being identity-
+deduplicated. `openWorldHint` is true only when the tool can cross beyond the
+configured Iroha network. This metadata is descriptive. For route-backed
+tools, the route catalog and `iroha/routeAuth` remain the authoritative,
+fail-closed admission contract. Explicit in-process capabilities do not
+publish fabricated route-auth metadata; their registered backing, schema, and
+handler policy are authoritative.
 
 ### `tools/call`
 
@@ -343,7 +466,23 @@ Params:
 ### `tools/call_batch`
 
 Executes multiple tool calls inside one JSON-RPC request. This is an Iroha
-extension advertised by `initialize`; it is not JSON-RPC array batching.
+extension advertised by native `server/discover` and legacy `initialize`; it
+is not JSON-RPC array batching.
+
+On the native path, the caller must declare the extension on that same request
+by using this object as
+`params._meta["io.modelcontextprotocol/clientCapabilities"]`:
+
+```json
+{
+  "extensions": {
+    "org.hyperledger.iroha/tools": {}
+  }
+}
+```
+
+The legacy adapter retains its established batch behavior because it predates
+formal per-request extension negotiation.
 
 Params:
 
@@ -359,6 +498,42 @@ rate-limit token, and each active item must acquire an in-flight dispatch slot.
 If retained batch results or the final response exceed `max_request_bytes`, Torii stops
 retaining further results and returns the typed `response_too_large` JSON-RPC
 error instead of allocating an oversized response.
+
+### `resources/list`
+
+Returns Torii's complete fixed resource registry. The method accepts only the
+standard native `_meta`; a `cursor` is rejected because the reviewed registry
+does not paginate. `server/discover` advertises
+`capabilities.resources.listChanged = false`, so no resource-list notification
+or subscription lifecycle is implied.
+
+The current registry contains:
+
+- `iroha://node/health`
+- `iroha://node/api-version`
+- `iroha://chain/head`
+- `iroha://chain/parameters` when Torii is compiled with `app_api`
+- `iroha://runtime/abi/hash`
+
+Each entry has `uri`, `name`, `title`, `description`, and
+`mimeType = "application/json"`. The result is complete, has
+`cacheScope = "private"`, and has a 30-second `ttlMs`. Clients should still use
+the returned registry rather than hardcoding this list.
+
+### `resources/read`
+
+Reads one exact URI returned by `resources/list`. Params contain `uri` plus the
+standard native `_meta`; the HTTP request also carries `Mcp-Name` mirroring the
+URI exactly. An unknown URI is `invalid_params` rather than an arbitrary URL
+fetch.
+
+Resource reads dispatch a reviewed GET through Torii's existing in-process
+router and share its ordinary outer admission, target-route authentication,
+response-size bounds, and MCP dispatch semaphore. They perform no external
+fetch and create no server, listener, sidecar, gateway, proxy, or network hop.
+The complete result contains one JSON text entry under `contents` and private
+per-resource cache hints. Health and chain-head reads have a zero TTL; other
+resource TTLs are bounded by the registry.
 
 ## Tool Names And Discovery
 Tool names are stable and generated from HTTP method + path for
@@ -407,14 +582,56 @@ Those names are curated for live account, asset, contract, governance, and
 transaction workflows and are substantially easier for an agent to use than the
 lower-level catalog-projected `torii.*` tools.
 
+### Canonical transaction artifacts
+
+Two purpose-built capabilities make the external-signing boundary explicit:
+
+- `iroha.transactions.prepare` accepts one non-empty canonical padded
+  standard-Base64 `TransactionPayload` archive in
+  `transaction_payload_base64`. It verifies ordinary construction rules,
+  exact canonical re-encoding, and the serving Torii network id, then returns
+  the unchanged canonical payload, its exact signing message and payload hash,
+  and a bounded structural summary. It does not construct a semantic request,
+  quote or rewrite fees, inspect current ledger state, simulate, sign, or
+  submit.
+- `iroha.transactions.inspect` accepts exactly one of
+  `transaction_payload_base64` or `signed_transaction_base64`. It performs the
+  same canonical and network checks; fixed-V1 signed wires additionally report
+  canonical transaction identities, signature count, and a closed signature-
+  verification result. Signature validity is not transaction admission or
+  execution simulation.
+
+Both capabilities execute as pure bounded helpers inside the existing Torii
+MCP handler. They are explicitly marked as in-process catalogue entries, do
+not pretend to be HTTP routes, do not re-enter the router, and create no new
+server, listener, process, deployment, or network hop. Their inputs and
+outputs never include a private key or detached signing secret.
+
+The safe workflow is:
+
+1. Obtain a canonical unsigned payload from a reviewed instruction/transaction
+   builder and call `iroha.transactions.prepare`.
+2. Review the returned summary and, when useful, call
+   `iroha.transactions.inspect` on the same exact payload.
+3. Sign the unchanged signing message outside MCP and assemble the canonical
+   fixed-V1 `SignedTransaction` with an Iroha SDK or other reviewed signer.
+4. Call `iroha.transactions.inspect` on that complete signed wire and require
+   a valid signature result.
+5. Submit the same wire through `iroha.transactions.submit_and_wait`.
+
+Generic state-aware transaction simulation is not implemented by these tools.
+It will require a reviewed, side-effect-free Core scratch-execution API; Torii
+must not approximate or label structural inspection as simulation.
+
 Streaming/internal paths are intentionally excluded from MCP tool generation
 (for example SSE/WS stream routes and `/v1/mcp` itself). In addition to the
 route-catalog decision, generated tools reject OpenAPI operations whose
 response contract advertises `text/event-stream` or HTTP `101`, so streaming
 exclusion does not depend on a path suffix.
 
-Do not hardcode the full tool catalog in clients.
-Use `initialize` + `tools/list` for runtime discovery.
+Do not hardcode the full tool catalog in clients. Native clients may call
+`server/discover` first or proceed directly to `tools/list`; compatibility
+clients use `initialize` followed by `tools/list`.
 
 ## Tool Arguments
 For OpenAPI-derived tools, pass structured arguments under:
@@ -531,16 +748,30 @@ Route-dispatched HTTP status mapping:
 - `5xx` -> `server_error`
 
 ## JSON-RPC Error Contract
-Protocol/validation errors are returned in top-level `error` with stable `error.data.error_code`.
+Protocol and validation failures are returned in the top-level JSON-RPC
+`error`. Standard modern failures are identified by their reserved top-level
+code; Iroha application errors also carry a stable `error.data.error_code`.
 
-Primary top-level JSON-RPC codes:
+Protocol-level JSON-RPC codes used by both eras:
 
 - `-32700` -> `parse_error`
 - `-32600` -> `invalid_request`
 - `-32601` -> `method_not_found`
 - `-32602` -> `invalid_params`
-- `-32004` -> `dispatch_capacity_exhausted`
-- `-32029` -> `rate_limited`
+
+Native `2026-07-28` transport and application codes:
+
+- `-32020` -> `header_mismatch`
+- `-32021` -> `missing_required_client_capability`
+- `-32022` -> `unsupported_protocol_version`
+- `1001` -> tool lookup or admission failure
+- `1002` -> `response_too_large`
+- `1003` -> `request_timeout`
+- `1004` -> `dispatch_capacity_exhausted`
+- `1029` -> `rate_limited`
+
+Legacy `2025-06-18` compatibility codes retain their established values,
+including `-32004` for dispatch capacity and `-32029` for rate limiting.
 
 Additional MCP-specific `error_code` values may appear in `error.data`:
 
@@ -557,6 +788,10 @@ Additional MCP-specific `error_code` values may appear in `error.data`:
 - `request_timeout`
 - `tool_schema_validation_failed`
 - `unsupported_protocol_version`
+- `invalid_resource_cursor`
+- `resource_registry_invalid`
+- `resource_route_failed`
+- `resource_read_failed`
 
 Notes:
 - Arguments that violate the tool's advertised input schema are rejected before
@@ -571,13 +806,21 @@ Notes:
 
 ## Minimal Usage Flow
 
-1. POST a valid JSON-RPC `initialize` request with the required client fields.
-2. Send `notifications/initialized` and include the negotiated
-   `MCP-Protocol-Version` header on subsequent POSTs.
-3. Call `tools/list` and cache `_meta.iroha.toolsetVersion`.
-4. Call tools with `tools/call`, or use the advertised `tools/call_batch`
-   extension when its per-dispatch charging is acceptable.
-5. Re-run `tools/list` when `_meta.iroha.listChanged` becomes `true`.
+1. Choose native protocol `2026-07-28`; optionally call `server/discover`.
+2. Call `tools/list` with native `_meta` and matching routing headers, then
+   cache `_meta.iroha.toolsetVersion` for the advertised private TTL.
+3. Call tools with `tools/call`, or use the advertised `tools/call_batch`
+   extension when its per-dispatch charging is acceptable and declare the
+   Iroha tools extension in that request's client capabilities.
+4. When stable node context is useful, call `resources/list`, then
+   `resources/read` for one returned URI and honor its private TTL.
+5. Re-run `tools/list` when `_meta.iroha.listChanged` becomes `true` or its
+   cache TTL expires.
+
+Clients explicitly configured for a known `2025-06-18` endpoint may use the
+compatibility sequence: `initialize`, `notifications/initialized`, then
+versioned tool requests. Do not infer a legacy downgrade from a generic modern
+transport, authentication, or protocol failure.
 
 ## Codex Plugin Workflow
 
@@ -585,7 +828,8 @@ This repo ships a Codex plugin bundle under `plugins/iroha/` that assumes the
 target Torii host already exposes native MCP at `/v1/mcp`.
 
 - Built-in preset: `https://taira.sora.org/v1/mcp`
-- Custom deployments: add a user-local MCP server, for example
+- Custom deployments: add a user-local Codex MCP connection pointing to the
+  existing Torii endpoint, for example
   `codex mcp add iroha-custom --url https://<torii>/v1/mcp`
 - Standalone skill: this repo also ships `skills/sora-taira-testnet/` for the
   Codex Skills surface. Install it from a GitHub checkout of this repo with
@@ -598,25 +842,38 @@ transactions.
 
 ## Examples
 
-### Initialize
+Each native example below is sent with:
+
+```text
+Accept: application/json, text/event-stream
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: <the JSON-RPC method>
+```
+
+For `tools/call`, also send `Mcp-Name` with the exact tool name. For
+`resources/read`, send it with the exact resource URI. Encode non-ASCII or
+otherwise header-unsafe names and URIs with the canonical Base64 sentinel
+described under Protocol Behavior.
+
+### Discover Server
 
 ```json
 {
   "jsonrpc": "2.0",
   "id": 1,
-  "method": "initialize",
+  "method": "server/discover",
   "params": {
-    "protocolVersion": "2025-06-18",
-    "capabilities": {},
-    "clientInfo": {
-      "name": "example-client",
-      "version": "1.0.0"
+    "_meta": {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientCapabilities": {},
+      "io.modelcontextprotocol/clientInfo": {
+        "name": "example-client",
+        "version": "1.0.0"
+      }
     }
   }
 }
 ```
-
-After initialization, send `MCP-Protocol-Version: 2025-06-18` on each POST.
 
 ### List Tools (paged)
 ```json
@@ -625,7 +882,15 @@ After initialization, send `MCP-Protocol-Version: 2025-06-18` on each POST.
   "id": 2,
   "method": "tools/list",
   "params": {
-    "cursor": "0"
+    "cursor": "0",
+    "_meta": {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientCapabilities": {},
+      "io.modelcontextprotocol/clientInfo": {
+        "name": "example-client",
+        "version": "1.0.0"
+      }
+    }
   }
 }
 ```
@@ -638,7 +903,11 @@ After initialization, send `MCP-Protocol-Version: 2025-06-18` on each POST.
   "method": "tools/call",
   "params": {
     "name": "torii.get_health",
-    "arguments": {}
+    "arguments": {},
+    "_meta": {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientCapabilities": {}
+    }
   }
 }
 ```
@@ -655,6 +924,10 @@ After initialization, send `MCP-Protocol-Version: 2025-06-18` on each POST.
       "account_id": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
       "limit": 20,
       "offset": 0
+    },
+    "_meta": {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientCapabilities": {}
     }
   }
 }
@@ -670,7 +943,61 @@ After initialization, send `MCP-Protocol-Version: 2025-06-18` on each POST.
     "calls": [
       { "name": "iroha.health" },
       { "name": "iroha.parameters.get" }
-    ]
+    ],
+    "_meta": {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientCapabilities": {
+        "extensions": {
+          "org.hyperledger.iroha/tools": {}
+        }
+      }
+    }
   }
 }
 ```
+
+For this extension request, send `Mcp-Method: tools/call_batch`; `Mcp-Name` is
+not used because the body names multiple tools. Omitting the matching client
+extension declaration returns `-32021` rather than dispatching any item.
+
+### List Resources
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 6,
+  "method": "resources/list",
+  "params": {
+    "_meta": {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientCapabilities": {}
+    }
+  }
+}
+```
+
+### Read Resource
+
+Send `Mcp-Name: iroha://runtime/abi/hash` with this request.
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 7,
+  "method": "resources/read",
+  "params": {
+    "uri": "iroha://runtime/abi/hash",
+    "_meta": {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientCapabilities": {}
+    }
+  }
+}
+```
+
+### Legacy Initialize
+
+Clients explicitly configured for a known compatibility endpoint may initialize
+with `protocolVersion = "2025-06-18"`. The initial request may omit the
+protocol header; every later compatibility POST includes
+`MCP-Protocol-Version: 2025-06-18`.

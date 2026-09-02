@@ -193,7 +193,7 @@ public struct ZkAssetMerklePath: Equatable, Sendable {
     }
 
     /// Recompute the path root after replacing its leaf with one exact
-    /// commitment. Kagemusha uses the authoritative next-zero path to derive
+    /// commitment. Offline Cash V1 uses the authoritative next-zero path to derive
     /// the post-transfer root for a newly appended output.
     public func root(
         replacingLeafWith commitment: Data
@@ -210,7 +210,7 @@ public struct ZkAssetMerklePath: Equatable, Sendable {
     /// Derive the padded-zero path immediately after inserting `commitment`
     /// at this authoritative frontier path. The returned path authenticates
     /// leaf `leafIndex + 1` against the exact post-insertion root and is the
-    /// dummy path consumed by Kagemusha's fixed two-slot circuit layout. The
+    /// dummy path consumed by the fixed two-slot circuit layout. The
     /// current contract permits one real input and binds the second slot to zero.
     public func nextZeroPathAfterInsertion(
         commitment: Data,

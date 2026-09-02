@@ -204,7 +204,7 @@ def test_ci_handoff_never_enters_the_release_publication_corridor() -> None:
     assert "--ci-handoff-only cannot publish an archive or use dirty source" in source
     assert "CI_HANDOFF_ONLY=0" in source
     assert 'CI_HANDOFF_ONLY="${' not in source
-    assert "authenticated Kagemusha Swift producer" in source
+    assert "authenticated Swift SDK producer" in source
     assert "requires canonical release outputs to remain absent" in source
     assert '${GITHUB_WORKFLOW:-}' in source
     assert '${GITHUB_JOB:-}' in source
@@ -241,9 +241,7 @@ def test_ci_handoff_never_enters_the_release_publication_corridor() -> None:
         for workflow in (ROOT / ".github" / "workflows").glob("*.yml")
         if "--ci-handoff-only" in workflow.read_text(encoding="utf-8")
     ]
-    assert workflow_users == [
-        ROOT / ".github" / "workflows" / "pr_kagemusha_payload_bench.yml"
-    ]
+    assert workflow_users == []
 
 
 def test_ci_slice_producers_and_assembler_are_closed_authenticated_modes() -> None:

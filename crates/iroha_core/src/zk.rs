@@ -46,47 +46,26 @@ use std::{
 pub mod confidential_v2;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod halo2_backend;
-/// Constant-depth Pasta IPA accumulation and terminal decisions for Kagemusha.
+/// Shared paired field-native Poseidon relations for Offline Cash V1.
+pub(crate) mod offline_cash_v1_poseidon;
+/// Fixed-profile paired-Pasta recursion and native accumulator decisions for Offline Cash V1.
+pub mod offline_cash_v1_recursion;
+/// Aggregate, hardware-guarded Offline Cash V1 host state machine.
+pub mod offline_cash_v1_state;
+/// Fixed opposite-field Pasta instructions used by paired Pasta recursion.
 #[cfg(feature = "zk-halo2-ipa")]
-pub(crate) mod kagemusha_accumulation;
+pub(crate) mod pasta_cycle_loader;
+/// Dense normalized-GLV MSM used by paired Pasta recursion.
 #[cfg(feature = "zk-halo2-ipa")]
-pub mod kagemusha_artifact_source_v4;
-/// Authenticated KRV4 framing and role-safe ABI-21 artifact carriers.
-#[cfg(feature = "zk-halo2-ipa")]
-pub mod kagemusha_artifact_v4;
-/// Fixed opposite-field Pasta instructions used by both Kagemusha step parities.
-#[cfg(feature = "zk-halo2-ipa")]
-pub(crate) mod kagemusha_cycle_loader;
-/// Dense normalized-GLV MSM used by the reciprocal Kagemusha point audit.
-#[cfg(feature = "zk-halo2-ipa")]
-pub(crate) mod kagemusha_dense_msm;
-/// Offline-verifiable consensus finality for Kagemusha top-up anchors.
-#[cfg(feature = "zk-halo2-ipa")]
-pub mod kagemusha_finality;
-/// Fixed-shape ABI-21/V4 Eq/Ep recursive verifier and terminal IPA decisions.
-#[cfg(feature = "zk-halo2-ipa")]
-pub(crate) mod kagemusha_recursion_adapter;
-pub(crate) mod kagemusha_sha256_table16_v4;
-/// Exact row-bounded SHA-256 used by the composite Kagemusha Step circuit.
-#[cfg(feature = "zk-halo2-ipa")]
-pub(crate) mod kagemusha_sha256_v4;
-#[cfg(feature = "zk-halo2-ipa")]
-/// Exact field-neutral operation ABI and assigned two-parent Step transition.
-#[cfg(feature = "zk-halo2-ipa")]
-pub(crate) mod kagemusha_step_transition;
-/// ABI-21/V4 Kagemusha facade plus unchanged V2 amount, note, and membership primitives.
-#[cfg(feature = "zk-halo2-ipa")]
-pub mod kagemusha_v2;
+pub(crate) mod pasta_dense_msm;
 /// Shared fixed-profile accounting for Pasta IPA recursive proofs.
-#[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod pasta_ipa_recursion;
+/// Exact row-bounded SHA-256 used by the generic Pasta cycle loader.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) mod pasta_sha256;
+pub(crate) mod pasta_sha256_table16;
 /// Core-owned authenticated confidential-spool adapter for MKHE RNS-native sources.
 pub mod rns_native_source_v1;
-/// Canonical verifier-record namespace for Kagemusha offline proofs.
-pub const KAGEMUSHA_VERIFIER_NAMESPACE: &str =
-    iroha_data_model::offline::KAGEMUSHA_VERIFIER_NAMESPACE;
-/// Canonical Halo2 IPA parameter degree for recursive-spend lineage proofs.
-pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K: u32 = 12;
 #[cfg(feature = "zk-preverify")]
 use crate::kura::PipelineProofSnapshot;
 #[cfg(feature = "zk-stark")]
@@ -303,7 +282,6 @@ const HALO2_IPA_PRODUCTION_CIRCUIT_IDS_V1: &[&str] = &[
     IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
     "halo2/pasta/ipa/kaigi-roster-v1",
     "halo2/pasta/ipa/kaigi-usage-v1",
-    "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
     "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
     "halo2/pasta/ipa/confidential-unshield-full-merkle16-axiom-poseidon-v3",
     "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
@@ -322,9 +300,6 @@ fn halo2_ipa_canonical_k_v1(circuit_id: &str) -> Option<u32> {
         IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID => Some(IVM_EXECUTION_V1_IPA_K),
         "halo2/pasta/ipa/kaigi-roster-v1" | "halo2/pasta/ipa/kaigi-usage-v1" => {
             Some(KAIGI_IPA_K_V1)
-        }
-        confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID => {
-            Some(confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_IPA_K)
         }
         confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID => {
             Some(confidential_v2::CONFIDENTIAL_TRANSFER_V2_IPA_K)
@@ -838,10 +813,6 @@ fn halo2_ipa_public_inputs_schema_v1(circuit_id: &str) -> Option<&'static [u8]> 
     let canonical = normalize_halo2_ipa_circuit_id(circuit_id)?;
     match canonical.as_str() {
         IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID => Some(IVM_EXECUTION_PUBLIC_INPUTS_SCHEMA_V1),
-        #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-        confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID => {
-            Some(confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V2)
-        }
         #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
         confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID => {
             Some(confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1)
@@ -3016,16 +2987,6 @@ pub(crate) fn validate_builtin_halo2_ipa_verifying_key_v1(
             &params,
             vk_box,
             confidential_v2::secure_relation_v3::ConfidentialTransferCircuitV3::<
-                { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
-            >::default(),
-        );
-    }
-    if confidential_v2::is_kagemusha_topup_shield_v2_circuit_id(&canonical_circuit_id) {
-        return validate_canonical_halo2_ipa_circuit_key(
-            backend,
-            &params,
-            vk_box,
-            confidential_v2::secure_relation_v3::KagemushaTopUpShieldCircuitV3::<
                 { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
             >::default(),
         );
@@ -5697,10 +5658,6 @@ mod stark_backend_tag_tests {
             ("halo2/pasta/kaigi-roster-v1", BackendTag::Halo2IpaPasta),
             ("halo2/pasta/kaigi-usage-v1", BackendTag::Halo2IpaPasta),
             (
-                "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-                BackendTag::Halo2IpaPasta,
-            ),
-            (
                 "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
                 BackendTag::Halo2IpaPasta,
             ),
@@ -5732,10 +5689,7 @@ mod stark_backend_tag_tests {
             "halo2/unknown-native-v1",
             "halo2/ipa:unknown-native-v1",
             "halo2/pasta/ivm-overlay-bind",
-            "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
-            "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
             "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-            "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
             "halo2/pasta/ipa/confidential-unshield-full-merkle16-axiom-poseidon-v3",
             "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
             "halo2/ipa:ivm-execution-v1",
@@ -7814,11 +7768,6 @@ mod guardrails_tests {
                 "halo2/ipa:ivm-overlay-bind",
             ),
             (
-                "generic halo2 backend with retired recursive-spend circuit",
-                "halo2/ipa",
-                "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
-            ),
-            (
                 "generic halo2 backend with bare trusted-setup circuit",
                 "halo2/ipa",
                 "kzg",
@@ -8263,7 +8212,6 @@ mod halo2_ipa_alias_tests {
             "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
             "halo2/pasta/ipa/confidential-unshield-full-merkle16-axiom-poseidon-v3",
             "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-            "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
         ] {
             assert!(
                 halo2_open_verify_circuit_id_is_production_v1(circuit_id),
@@ -8276,7 +8224,6 @@ mod halo2_ipa_alias_tests {
             "halo2/pasta/anon-transfer-2x2",
             "halo2/ipa:vote-bool-commit-merkle8",
             "halo2/ipa:ivm-overlay-bind",
-            "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
             "kzg",
             "k-z-g",
             "groth16",
@@ -10682,22 +10629,6 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             backend,
             vk_box,
             confidential_v2::secure_relation_v3::ConfidentialTransferCircuitV3::<
-                { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
-            >::default(),
-            |vk| {
-                verify_halo2_ipa_payload_columns(&params, vk, proof_payload.as_slice(), &col_refs)
-            }
-        );
-    }
-    if confidential_v2::is_kagemusha_topup_shield_v2_circuit_id(backend) {
-        if col_refs.len() != 11 || col_refs.iter().any(|col| col.len() != 1) {
-            return false;
-        }
-        return cached_vk_for!(
-            &params,
-            backend,
-            vk_box,
-            confidential_v2::secure_relation_v3::KagemushaTopUpShieldCircuitV3::<
                 { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
             >::default(),
             |vk| {

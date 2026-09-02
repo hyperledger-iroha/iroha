@@ -66,68 +66,10 @@ EXPECTED_METHODS = {
         "nativeValidatePdpChallengeProofJson",
         "nativeValidatePdpBundleJson",
     ),
-    "offline_KagemushaRecursiveSpendProver": (
-        "nativeBridgeAbiVersion",
-        "nativeKagemushaContractRevision",
-        "nativePastaCycleV4BackendAvailable",
-        "nativeArtifactBeginV4",
-        "nativeArtifactWriteV4",
-        "nativeArtifactFinalizeV4",
-        "nativeArtifactCancelV4",
-        "nativeArtifactSetInstallV4",
-        "nativeArtifactSetIsInstalledV4",
-        "nativeInstalledManifestSha256V4",
-        "nativeBuildArtifactBindingV4",
-        "nativeArtifactSetUninstallV4",
-        "nativeInitSpendV4",
-        "nativeAppendSpendV4",
-        "nativeVerifySpendV4",
-        "nativeBuildRedeemV4",
-        "nativePrepareRecipientRequestV2",
-        "nativeCreateRecipientRequestV2",
-        "nativeVerifyRecipientRequestV2",
-        "nativeCreateRecipientLineageQueryV2",
-        "nativeVerifyRecipientRegistrationLineageV2",
-        "nativeCreateRecipientReceiveOfferV2",
-        "nativeProjectRecipientReceiveOfferV2",
-        "nativeVerifyRecipientReceiveOfferV2",
-        "nativeBuildOutputMembershipFrontierV4",
-        "nativeDeriveOutputMembershipPathsV4",
-        "nativeValidateSpendableBranchV4",
-        "nativeBuildOutputMembershipPathsV4",
-        "nativeBuildInitRequestV4",
-        "nativeBuildTopUpProvenanceV4",
-        "nativeValidateTopUpProvenanceV4",
-        "nativeBuildAppendRequestV4",
-        "nativeBuildVerifyRequestV4",
-        "nativeBuildRedeemRequestV5",
-        "nativeProjectPeerPaymentV4",
-        "nativeProjectInitResultV4",
-        "nativeProjectSplitResultV4",
-        "nativeProjectVerifyResultV4",
-        "nativeProjectRedeemBuildResultV4",
-        "nativePrepareAcknowledgementV2",
-        "nativeCreateAcknowledgementV2",
-        "nativeVerifyAcknowledgementV2",
-        "nativePrepareAuthorizationV3",
-        "nativeFinalizeHardwareAuthorizationV3",
-        "nativeFinalizeIosAppAttestAuthorizationV3",
-        "nativeFinalizeTopUpV5",
-        "nativeFinalizeRedeemV5",
-        "nativePrepareTopUpV5",
-        "nativeProjectOperationReferenceV2",
-        "nativeProjectOperationStatusV2",
-        "nativeBranchClaimsConflictV2",
-        "nativePrepareRedemptionChangeV5",
-        "nativePreparePeerSplitChangeV4",
-        "nativePrepareNoteOpeningV2",
-        "nativeProjectRecipientRequestV2",
-    ),
 }
 EXPECTED_SUFFIXES = tuple(
     f"{bridge}_{method}"
     for bridge, methods in EXPECTED_METHODS.items()
-    if bridge != "offline_KagemushaRecursiveSpendProver"
     for method in methods
 )
 
@@ -356,10 +298,6 @@ def audit_source(source: str) -> AuditResult:
         direct_android = f'pub unsafe extern "system" fn {android_name}('
         if direct_android in source:
             raise AuditError(f"Android wrapper escaped the exact pair macro: {android_name}")
-    for method in EXPECTED_METHODS["offline_KagemushaRecursiveSpendProver"]:
-        if method not in source:
-            raise AuditError(f"paired Kagemusha JNI method is missing: {method}")
-
     abi_digest = hashlib.sha256("\0\0".join(sorted(abi_records)).encode()).hexdigest()
     if abi_digest != EXPECTED_ABI_DIGEST:
         raise AuditError(

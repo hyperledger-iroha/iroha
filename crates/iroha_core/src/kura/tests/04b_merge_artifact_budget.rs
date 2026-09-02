@@ -5,7 +5,7 @@ fn merge_carrier_budget_reserves_receipt_frontier_without_double_counting_termin
     let (mut kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&cfg, &RuntimeLaneConfig::default())
             .expect("initialize merge budget Kura");
-    let entrypoint = offline_top_up_entrypoint_for_index([0x61; 32], [0x62; 32]);
+    let entrypoint = indexed_log_entrypoint([0x61; 32], [0x62; 32]);
     let mut entry = merge_entry_with_indexed_entrypoint(entrypoint);
     let mut blocks = DummyBlocks::new();
     let _parent = blocks.next();
@@ -121,7 +121,7 @@ fn merge_carrier_budget_reserves_receipt_frontier_without_double_counting_termin
 }
 #[test]
 fn post_wsv_successor_plan_accepts_lower_durable_frontier() {
-    let entrypoint = offline_top_up_entrypoint_for_index([0x69; 32], [0x6A; 32]);
+    let entrypoint = indexed_log_entrypoint([0x69; 32], [0x6A; 32]);
     let mut entry = merge_entry_with_indexed_entrypoint(entrypoint);
     let mut blocks = DummyBlocks::new();
     let _parent = blocks.next();
@@ -174,7 +174,7 @@ fn committed_merge_carrier_reconstructs_only_outstanding_post_wsv_components() {
     let (mut kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&cfg, &RuntimeLaneConfig::default())
             .expect("initialize reservation Kura");
-    let entrypoint = offline_top_up_entrypoint_for_index([0x71; 32], [0x72; 32]);
+    let entrypoint = indexed_log_entrypoint([0x71; 32], [0x72; 32]);
     let mut entry = merge_entry_with_indexed_entrypoint(entrypoint);
     let mut blocks = DummyBlocks::new();
     let parent = blocks.next();
@@ -414,12 +414,9 @@ fn canonical_lane_receipt_preflights_its_exact_unreserved_append_peak() {
 }
 #[test]
 fn latest_execution_index_rejects_equal_height_forks_on_append_and_rebuild() {
-    let first = merge_entry_with_indexed_entrypoint(offline_top_up_entrypoint_for_index(
-        [0x81; 32], [0x82; 32],
-    ));
-    let mut fork = merge_entry_with_indexed_entrypoint(offline_top_up_entrypoint_for_index(
-        [0x83; 32], [0x84; 32],
-    ));
+    let first = merge_entry_with_indexed_entrypoint(indexed_log_entrypoint([0x81; 32], [0x82; 32]));
+    let mut fork =
+        merge_entry_with_indexed_entrypoint(indexed_log_entrypoint([0x83; 32], [0x84; 32]));
     fork.epoch_id = 2;
     let first_execution = first
         .execution_batch
@@ -484,9 +481,7 @@ fn latest_execution_index_rejects_equal_height_forks_on_append_and_rebuild() {
 }
 #[test]
 fn bounded_forward_execution_reconstruction_keeps_an_incomplete_nonlatest_carrier() {
-    let first = merge_entry_with_indexed_entrypoint(offline_top_up_entrypoint_for_index(
-        [0x91; 32], [0x92; 32],
-    ));
+    let first = merge_entry_with_indexed_entrypoint(indexed_log_entrypoint([0x91; 32], [0x92; 32]));
     let first_descriptor = first
         .execution_batch
         .as_ref()
@@ -495,9 +490,8 @@ fn bounded_forward_execution_reconstruction_keeps_an_incomplete_nonlatest_carrie
         .proposal
         .descriptor
         .clone();
-    let mut second = merge_entry_with_indexed_entrypoint(offline_top_up_entrypoint_for_index(
-        [0x93; 32], [0x94; 32],
-    ));
+    let mut second =
+        merge_entry_with_indexed_entrypoint(indexed_log_entrypoint([0x93; 32], [0x94; 32]));
     second.epoch_id = 2;
     {
         let batch = second

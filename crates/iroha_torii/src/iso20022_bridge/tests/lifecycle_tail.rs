@@ -295,7 +295,7 @@ fn lifecycle_profile_mismatch_does_not_mutate_original() {
     );
 }
 #[test]
-fn lifecycle_does_not_settle_an_unqueued_original() {
+fn lifecycle_rejects_settlement_without_an_original_transaction_hash() {
     let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
         .expect("cfg")
         .expect("enabled");
@@ -306,10 +306,10 @@ fn lifecycle_does_not_settle_an_unqueued_original() {
     )
     .expect("pacs.002 parsed");
     record_lifecycle(&runtime, "in-flight-status", "pacs.002");
-    let outcome = runtime
+    let error = runtime
         .apply_inbound_lifecycle_message("in-flight-status", "pacs.002", &parsed)
-        .expect("lifecycle recorded");
-    assert_eq!(outcome.action(), "ignored_in_flight");
+        .expect_err("settlement without an exact original transaction hash must fail closed");
+    assert!(matches!(error, MsgError::ValidationFailed));
     assert_eq!(
         runtime
             .message_status("in-flight-original")
@@ -574,7 +574,7 @@ fn settled_original_accepts_pacs004_return_without_losing_success_evidence() {
     assert_eq!(original.rejection_reason_code(), Some("AC01"));
 }
 #[test]
-fn rejected_original_ignores_late_success_status() {
+fn rejected_original_rejects_late_success_without_transaction_evidence() {
     let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
         .expect("cfg")
         .expect("enabled");
@@ -590,10 +590,10 @@ fn rejected_original_ignores_late_success_status() {
     )
     .expect("pacs.002 parsed");
     record_lifecycle(&runtime, "late-success", "pacs.002");
-    let outcome = runtime
+    let error = runtime
         .apply_inbound_lifecycle_message("late-success", "pacs.002", &parsed)
-        .expect("late lifecycle recorded");
-    assert_eq!(outcome.action(), "ignored_stale_transition");
+        .expect_err("late success without exact transaction evidence must fail closed");
+    assert!(matches!(error, MsgError::ValidationFailed));
     let original = runtime
         .message_status("rejected-status")
         .expect("rejected original");

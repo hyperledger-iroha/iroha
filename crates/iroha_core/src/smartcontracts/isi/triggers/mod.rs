@@ -20,6 +20,7 @@ pub(crate) const DATA_TRIGGER_SCOPE_AUTHORIZATION_GRANTEE_METADATA_KEY: &str =
     "__data_scope_authorization_grantee_v1";
 const DATA_TRIGGER_SCOPE_AUTHORIZATION_OWNED: u64 = 0;
 const DATA_TRIGGER_SCOPE_AUTHORIZATION_GLOBAL: u64 = 1;
+#[cfg(test)]
 const DATA_TRIGGER_SCOPE_AUTHORIZATION_GENESIS_GLOBAL: u64 = 2;
 fn trigger_enabled_metadata_key() -> &'static Name {
     static KEY: OnceLock<Name> = OnceLock::new();
@@ -70,7 +71,6 @@ pub(crate) fn trigger_was_registered_before_block(
 enum DataTriggerScopeAuthorization {
     Owned,
     GlobalPermission(AccountId),
-    GenesisGlobal,
 }
 
 fn data_trigger_scope_authorization_key() -> &'static Name {
@@ -108,9 +108,6 @@ fn decode_data_trigger_scope_authorization(
             let grantee = grantee?.clone().try_into_any_norito::<AccountId>().ok()?;
             Some(DataTriggerScopeAuthorization::GlobalPermission(grantee))
         }
-        DATA_TRIGGER_SCOPE_AUTHORIZATION_GENESIS_GLOBAL if grantee.is_none() => {
-            Some(DataTriggerScopeAuthorization::GenesisGlobal)
-        }
         _ => None,
     }
 }
@@ -120,19 +117,77 @@ pub(crate) fn data_trigger_scope_authorization_is_well_formed(metadata: &Metadat
     decode_data_trigger_scope_authorization(metadata).is_some()
 }
 
+/// Return the exact direct-capability holder recorded for a global data trigger.
+///
+/// An error means the persisted v1 authorization record is not canonical and
+/// callers must fail closed rather than guessing provenance.
+pub(crate) fn data_trigger_global_permission_grantee(
+    metadata: &Metadata,
+) -> Result<Option<AccountId>, ()> {
+    match decode_data_trigger_scope_authorization(metadata).ok_or(())? {
+        DataTriggerScopeAuthorization::GlobalPermission(grantee) => Ok(Some(grantee)),
+        DataTriggerScopeAuthorization::Owned => Ok(None),
+    }
+}
+
+/// Rekey the exact global-capability holder captured in trigger metadata.
+///
+/// Returns whether the metadata changed. Malformed records are rejected so an
+/// account migration cannot silently convert them into a different policy.
+pub(crate) fn replace_data_trigger_global_permission_grantee(
+    metadata: &mut Metadata,
+    old: &AccountId,
+    new: &AccountId,
+) -> Result<bool, ()> {
+    let Some(grantee) = data_trigger_global_permission_grantee(metadata)? else {
+        return Ok(false);
+    };
+    if grantee != *old {
+        return Ok(false);
+    }
+    metadata.insert(
+        data_trigger_scope_authorization_grantee_key().clone(),
+        iroha_primitives::json::Json::new(new.to_string()),
+    );
+    Ok(true)
+}
+
 #[cfg(test)]
-pub(crate) fn data_trigger_scope_metadata_for_testing(genesis_global: bool) -> Metadata {
+pub(crate) fn owned_data_trigger_scope_metadata_for_testing() -> Metadata {
     use iroha_primitives::json::Json;
 
     let mut metadata = Metadata::default();
-    let mode = if genesis_global {
-        DATA_TRIGGER_SCOPE_AUTHORIZATION_GENESIS_GLOBAL
-    } else {
-        DATA_TRIGGER_SCOPE_AUTHORIZATION_OWNED
-    };
     metadata.insert(
         data_trigger_scope_authorization_key().clone(),
-        Json::new(mode),
+        Json::new(DATA_TRIGGER_SCOPE_AUTHORIZATION_OWNED),
+    );
+    metadata
+}
+
+#[cfg(test)]
+pub(crate) fn legacy_genesis_global_scope_metadata_for_testing() -> Metadata {
+    use iroha_primitives::json::Json;
+
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        data_trigger_scope_authorization_key().clone(),
+        Json::new(DATA_TRIGGER_SCOPE_AUTHORIZATION_GENESIS_GLOBAL),
+    );
+    metadata
+}
+
+#[cfg(test)]
+pub(crate) fn global_data_trigger_scope_metadata_for_testing(grantee: &AccountId) -> Metadata {
+    use iroha_primitives::json::Json;
+
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        data_trigger_scope_authorization_key().clone(),
+        Json::new(DATA_TRIGGER_SCOPE_AUTHORIZATION_GLOBAL),
+    );
+    metadata.insert(
+        data_trigger_scope_authorization_grantee_key().clone(),
+        Json::new(grantee.to_string()),
     );
     metadata
 }
@@ -143,7 +198,7 @@ pub(crate) fn data_trigger_scope_metadata_for_testing(genesis_global: bool) -> M
 /// - adjusting trigger metadata to reflect registration height and block time
 #[allow(clippy::used_underscore_binding)]
 pub mod isi {
-    use super::specialized::LoadedActionTrait;
+    use super::specialized::LoadedActionTrait as _;
     use super::{super::prelude::*, *};
     use iroha_data_model::{
         isi::error::{InvalidParameterError, RepetitionError},
@@ -265,7 +320,6 @@ pub mod isi {
             return Ok(None);
         };
         let trigger_authority = trigger.action().authority();
-        let is_genesis = state_transaction._curr_block.is_genesis();
         let authorization = if account_owns_data_trigger_scope(
             state_transaction,
             trigger_authority,
@@ -278,8 +332,6 @@ pub mod isi {
             trigger_authority,
         ) {
             DataTriggerScopeAuthorization::GlobalPermission(submitting_authority.clone())
-        } else if is_genesis {
-            DataTriggerScopeAuthorization::GenesisGlobal
         } else {
             return Err(Error::InvalidParameter(
                 InvalidParameterError::SmartContract(
@@ -314,7 +366,7 @@ pub mod isi {
     ///
     /// Missing or malformed metadata fails closed. Owned scopes follow current
     /// ownership; global scopes follow the exact capability holder recorded at
-    /// registration; only genesis may create the immutable global override.
+    /// registration. Genesis uses the same exact, revocable capability corridor.
     pub(crate) fn data_trigger_scope_is_currently_authorized(
         state_transaction: &StateTransaction<'_, '_>,
         action: &super::specialized::LoadedAction<DataEventFilter>,
@@ -332,7 +384,6 @@ pub mod isi {
                     action.authority(),
                 )
             }
-            Some(DataTriggerScopeAuthorization::GenesisGlobal) => true,
             None => false,
         }
     }
@@ -534,16 +585,6 @@ pub mod isi {
                 ),
             ));
         }
-        if crate::kagemusha_operation::executable_contains_kagemusha_operation_v4(
-            new_trigger.action().executable(),
-        ) {
-            return Err(Error::InvalidParameter(
-                InvalidParameterError::SmartContract(
-                    "Kagemusha operations require one direct external signed transaction and cannot be registered in a trigger"
-                        .into(),
-                ),
-            ));
-        }
         enforce_ivm_trigger_program_policy(
             new_trigger.action().executable(),
             new_trigger.metadata(),
@@ -705,9 +746,6 @@ pub mod isi {
                     }
                     DataTriggerScopeAuthorization::GlobalPermission(grantee) => {
                         (DATA_TRIGGER_SCOPE_AUTHORIZATION_GLOBAL, Some(grantee))
-                    }
-                    DataTriggerScopeAuthorization::GenesisGlobal => {
-                        (DATA_TRIGGER_SCOPE_AUTHORIZATION_GENESIS_GLOBAL, None)
                     }
                 };
                 metadata.insert(
@@ -1657,6 +1695,56 @@ mod tests {
         .expect("the exact global capability authorizes global scope");
     }
     #[test]
+    fn genesis_global_data_trigger_requires_prior_exact_capability_and_remains_revocable() {
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let block = new_dummy_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+        Register::account(Account::new(ALICE_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register genesis trigger authority");
+        let trigger = data_trigger(
+            "genesis_capability_ordering",
+            ALICE_ID.clone(),
+            DataEventFilter::Any,
+        );
+        let error = Register::trigger(trigger.clone())
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("genesis must not mint an uncredentialed global trigger");
+        assert!(error.to_string().contains("CanRegisterGlobalDataTrigger"));
+
+        let capability: Permission =
+            iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
+                authority: ALICE_ID.clone(),
+            }
+            .into();
+        Grant::account_permission(capability.clone(), ALICE_ID.clone())
+            .execute(&ALICE_ID, &mut stx)
+            .expect("grant exact genesis global-trigger capability first");
+        Register::trigger(trigger)
+            .execute(&ALICE_ID, &mut stx)
+            .expect("capability-backed genesis global trigger registers");
+        Revoke::account_permission(capability, ALICE_ID.clone())
+            .execute(&ALICE_ID, &mut stx)
+            .expect("revoke exact genesis global-trigger capability");
+        stx.world.internal_event_buf.clear();
+        Register::domain(Domain::new(
+            DomainId::try_new("genesis_revoked_scope", "universal").expect("valid domain"),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .expect("emit data event after genesis capability revocation");
+        assert!(
+            stx.execute_data_triggers_dfs(&ALICE_ID)
+                .expect("revoked genesis watcher must be skipped")
+                .is_empty(),
+            "genesis provenance must not outlive revocation",
+        );
+    }
+    #[test]
     fn data_trigger_scope_recheck_blocks_reused_trigger_id() {
         let state = State::new(
             World::default(),
@@ -1839,7 +1927,7 @@ mod tests {
             )
             .try_into()
             .expect("data trigger specializes");
-            trigger.action.metadata = data_trigger_scope_metadata_for_testing(true);
+            trigger.action.metadata = global_data_trigger_scope_metadata_for_testing(&ALICE_ID);
             assert!(
                 stx.world
                     .triggers
@@ -1847,6 +1935,13 @@ mod tests {
                     .expect("seed data trigger")
             );
         }
+        stx.world.add_account_permission(
+            &ALICE_ID,
+            iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
+                authority: ALICE_ID.clone(),
+            }
+            .into(),
+        );
 
         let error = Register::trigger(data_trigger(
             "authority_capacity_overflow",
@@ -1870,15 +1965,27 @@ mod tests {
         let block = new_dummy_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
+        let authorities = (1_u8..=64)
+            .map(|seed| {
+                AccountId::new(
+                    KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519)
+                        .public_key()
+                        .clone(),
+                )
+            })
+            .collect::<Vec<_>>();
         for index in 0..isi::MAX_DATA_TRIGGERS_TOTAL {
+            let trigger_authority =
+                authorities[index / isi::MAX_DATA_TRIGGERS_PER_AUTHORITY].clone();
             let mut trigger: SpecializedTrigger<DataEventFilter> = data_trigger(
                 &format!("global_capacity_{index}"),
-                ALICE_ID.clone(),
+                trigger_authority.clone(),
                 DataEventFilter::Any,
             )
             .try_into()
             .expect("data trigger specializes");
-            trigger.action.metadata = data_trigger_scope_metadata_for_testing(true);
+            trigger.action.metadata =
+                global_data_trigger_scope_metadata_for_testing(&trigger_authority);
             assert!(
                 stx.world
                     .triggers
@@ -1886,6 +1993,13 @@ mod tests {
                     .expect("seed data trigger")
             );
         }
+        stx.world.add_account_permission(
+            &ALICE_ID,
+            iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
+                authority: ALICE_ID.clone(),
+            }
+            .into(),
+        );
 
         let error = Register::trigger(data_trigger(
             "global_capacity_overflow",

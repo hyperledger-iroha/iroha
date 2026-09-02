@@ -28,14 +28,7 @@ use iroha::{
     },
     http::{Response, StatusCode},
 };
-use iroha_config::{
-    client_api::{
-        ConfigUpdateDTO, Logger as LoggerDTO, NetworkUpdate, ResumeHashDirective,
-        SoranetHandshakePowUpdate, SoranetHandshakePuzzleUpdate, SoranetHandshakeSummary,
-        SoranetHandshakeUpdate,
-    },
-    parameters::defaults,
-};
+use iroha_config::{client_api::SoranetHandshakeSummary, parameters::defaults};
 use iroha_core::soranet_incentives::{RelayEarningsAccumulator, RelayPayoutLedger};
 use iroha_crypto::{
     HashOf, HybridPublicKey, HybridSuite,
@@ -514,7 +507,7 @@ pub enum Command {
     /// Offline helpers for relay payouts, disputes, and dashboards.
     #[command(subcommand)]
     Incentives(IncentivesCommand),
-    /// Observe or modify the Torii `SoraNet` handshake configuration.
+    /// Observe the Torii `SoraNet` handshake configuration or manage admission tokens.
     #[command(subcommand)]
     Handshake(HandshakeCommand),
     /// Local tooling for packaging manifests and payloads.
@@ -10287,8 +10280,6 @@ fn unix_now() -> u64 {
 pub enum HandshakeCommand {
     /// Display the current `SoraNet` handshake summary as reported by Torii.
     Show,
-    /// Update one or more `SoraNet` handshake parameters via `/v1/config`.
-    Update(HandshakeUpdateArgs),
     /// Admission token helpers (issuance, fingerprinting, revocation digests).
     #[command(subcommand)]
     Token(HandshakeTokenCommand),
@@ -10312,242 +10303,8 @@ impl Run for HandshakeCommand {
                 ))?;
                 Ok(())
             }
-            HandshakeCommand::Update(args) => args.run(context),
             HandshakeCommand::Token(cmd) => cmd.run(context),
         }
-    }
-}
-#[derive(clap::Args, Debug, Default)]
-#[allow(clippy::struct_excessive_bools)]
-pub struct HandshakeUpdateArgs {
-    /// Override the descriptor commitment advertised during handshake (hex).
-    #[arg(long = "descriptor-commit", value_name = "HEX")]
-    descriptor_commit: Option<String>,
-    /// Override the client capability TLV vector (hex).
-    #[arg(long = "client-capabilities", value_name = "HEX")]
-    client_capabilities: Option<String>,
-    /// Override the relay capability TLV vector (hex).
-    #[arg(long = "relay-capabilities", value_name = "HEX")]
-    relay_capabilities: Option<String>,
-    /// Override the negotiated ML-KEM identifier.
-    #[arg(long = "kem-id", value_parser = clap::value_parser!(u8))]
-    kem_id: Option<u8>,
-    /// Override the negotiated signature suite identifier.
-    #[arg(long = "sig-id", value_parser = clap::value_parser!(u8))]
-    sig_id: Option<u8>,
-    /// Override the resume hash advertised to peers (64 hex chars).
-    #[arg(
-        long = "resume-hash",
-        value_name = "HEX",
-        conflicts_with = "clear_resume_hash"
-    )]
-    resume_hash: Option<String>,
-    /// Clear the configured resume hash.
-    #[arg(long = "clear-resume-hash", action = clap::ArgAction::SetTrue)]
-    clear_resume_hash: bool,
-    /// Override the proof-of-work difficulty.
-    #[arg(long = "pow-difficulty", value_parser = clap::value_parser!(u8))]
-    pow_difficulty: Option<u8>,
-    /// Override the maximum clock skew accepted on `PoW` tickets (seconds).
-    #[arg(long = "pow-max-future-skew", value_parser = clap::value_parser!(u64))]
-    pow_max_future_skew: Option<u64>,
-    /// Override the minimum `PoW` ticket TTL (seconds).
-    #[arg(long = "pow-min-ttl", value_parser = clap::value_parser!(u64))]
-    pow_min_ttl: Option<u64>,
-    /// Override the `PoW` ticket TTL (seconds).
-    #[arg(long = "pow-ttl", value_parser = clap::value_parser!(u64))]
-    pow_ttl: Option<u64>,
-    /// Override the puzzle memory cost (KiB).
-    #[arg(long = "pow-puzzle-memory", value_parser = clap::value_parser!(u32))]
-    pow_puzzle_memory: Option<u32>,
-    /// Override the puzzle time cost (iterations).
-    #[arg(long = "pow-puzzle-time", value_parser = clap::value_parser!(u32))]
-    pow_puzzle_time: Option<u32>,
-    /// Override the puzzle parallelism (lanes).
-    #[arg(long = "pow-puzzle-lanes", value_parser = clap::value_parser!(u32))]
-    pow_puzzle_lanes: Option<u32>,
-    /// Require peers to match SM helper availability.
-    #[arg(
-        long = "require-sm-handshake-match",
-        action = clap::ArgAction::SetTrue,
-    )]
-    require_sm_handshake_match: bool,
-    /// Require peers to match the OpenSSL preview flag.
-    #[arg(long = "require-sm-openssl-preview-match", action = clap::ArgAction::SetTrue)]
-    require_sm_openssl_preview_match: bool,
-}
-impl HandshakeUpdateArgs {
-    #[cfg(test)]
-    fn into_update(self) -> Result<SoranetHandshakeUpdate> {
-        let (handshake, _) = self.into_payload()?;
-        handshake.ok_or_else(|| {
-            eyre!("no handshake overrides provided; specify at least one handshake option")
-        })
-    }
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client = context.client_from_config();
-        let config = client
-            .get_config()
-            .wrap_err("failed to fetch configuration for update")?;
-        let (handshake_update, network_update) = self.into_payload()?;
-        let dto = ConfigUpdateDTO {
-            logger: LoggerDTO {
-                level: config.logger.level,
-                filter: config.logger.filter.clone(),
-            },
-            network_acl: None,
-            network: network_update,
-            soranet_handshake: handshake_update,
-            transport: None,
-            compute_pricing: None,
-        };
-        client
-            .set_config(&dto)
-            .wrap_err("failed to submit SoraNet handshake update")?;
-        context.println("SoraNet handshake updated.")?;
-        Ok(())
-    }
-    #[allow(clippy::too_many_lines)]
-    fn into_payload(self) -> Result<(Option<SoranetHandshakeUpdate>, Option<NetworkUpdate>)> {
-        let mut update = SoranetHandshakeUpdate::default();
-        let descriptor_commit_touched = if let Some(value) = self.descriptor_commit {
-            update.descriptor_commit_hex =
-                Some(Self::normalise_hex(&value, "--descriptor-commit")?);
-            true
-        } else {
-            false
-        };
-        let client_capabilities_touched = if let Some(value) = self.client_capabilities {
-            update.client_capabilities_hex =
-                Some(Self::normalise_hex(&value, "--client-capabilities")?);
-            true
-        } else {
-            false
-        };
-        let relay_capabilities_touched = if let Some(value) = self.relay_capabilities {
-            update.relay_capabilities_hex =
-                Some(Self::normalise_hex(&value, "--relay-capabilities")?);
-            true
-        } else {
-            false
-        };
-        let kem_touched = if let Some(kem_id) = self.kem_id {
-            update.kem_id = Some(kem_id);
-            true
-        } else {
-            false
-        };
-        let sig_touched = if let Some(sig_id) = self.sig_id {
-            update.sig_id = Some(sig_id);
-            true
-        } else {
-            false
-        };
-        let resume_hash_touched = if let Some(hash_hex) = self.resume_hash {
-            update.resume_hash_hex = Some(ResumeHashDirective::Set(Self::normalise_resume_hash(
-                &hash_hex,
-            )?));
-            true
-        } else if self.clear_resume_hash {
-            update.resume_hash_hex = Some(ResumeHashDirective::Clear);
-            true
-        } else {
-            false
-        };
-        let mut pow_update = SoranetHandshakePowUpdate::default();
-        if let Some(value) = self.pow_difficulty {
-            pow_update.difficulty = Some(value);
-        }
-        if let Some(value) = self.pow_max_future_skew {
-            pow_update.max_future_skew_secs = Some(value);
-        }
-        if let Some(value) = self.pow_min_ttl {
-            pow_update.min_ticket_ttl_secs = Some(value);
-        }
-        if let Some(value) = self.pow_ttl {
-            pow_update.ticket_ttl_secs = Some(value);
-        }
-        let mut pow_touched = self.pow_difficulty.is_some()
-            || self.pow_max_future_skew.is_some()
-            || self.pow_min_ttl.is_some()
-            || self.pow_ttl.is_some();
-        let mut puzzle_update = SoranetHandshakePuzzleUpdate::default();
-        if let Some(value) = self.pow_puzzle_memory {
-            puzzle_update.memory_kib = Some(value);
-        }
-        if let Some(value) = self.pow_puzzle_time {
-            puzzle_update.time_cost = Some(value);
-        }
-        if let Some(value) = self.pow_puzzle_lanes {
-            puzzle_update.lanes = Some(value);
-        }
-        let puzzle_touched = self.pow_puzzle_memory.is_some()
-            || self.pow_puzzle_time.is_some()
-            || self.pow_puzzle_lanes.is_some();
-        if puzzle_touched {
-            pow_update.puzzle = Some(puzzle_update);
-            pow_touched = true;
-        }
-        if pow_touched {
-            update.pow = Some(pow_update);
-        }
-        let handshake_update = if descriptor_commit_touched
-            || client_capabilities_touched
-            || relay_capabilities_touched
-            || kem_touched
-            || sig_touched
-            || resume_hash_touched
-            || pow_touched
-        {
-            Some(update)
-        } else {
-            None
-        };
-        let mut network_update = NetworkUpdate::default();
-        if self.require_sm_handshake_match {
-            network_update.require_sm_handshake_match = Some(true);
-        }
-        if self.require_sm_openssl_preview_match {
-            network_update.require_sm_openssl_preview_match = Some(true);
-        }
-        let network_touched =
-            self.require_sm_handshake_match || self.require_sm_openssl_preview_match;
-        let network_update = if network_touched {
-            Some(network_update)
-        } else {
-            None
-        };
-        if handshake_update.is_none() && network_update.is_none() {
-            return Err(eyre!(
-                "no handshake or SM policy overrides provided; specify at least one option"
-            ));
-        }
-        Ok((handshake_update, network_update))
-    }
-    fn normalise_hex(value: &str, flag: &str) -> Result<String> {
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            return Err(eyre!("{flag} must not be empty"));
-        }
-        let stripped = trimmed.strip_prefix("0x").unwrap_or(trimmed);
-        if !stripped.len().is_multiple_of(2) {
-            return Err(eyre!(
-                "{flag} must contain an even number of hex characters"
-            ));
-        }
-        if !stripped.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Err(eyre!("{flag} must contain only hex characters [0-9a-fA-F]"));
-        }
-        Ok(stripped.to_ascii_lowercase())
-    }
-    fn normalise_resume_hash(value: &str) -> Result<String> {
-        let hex = Self::normalise_hex(value, "--resume-hash")?;
-        if hex.len() != 64 {
-            return Err(eyre!(
-                "--resume-hash must be exactly 64 hex characters (32 bytes)"
-            ));
-        }
-        Ok(hex)
     }
 }
 #[derive(clap::Subcommand, Debug)]
@@ -17957,46 +17714,6 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
         let summary = DaemonIterationSummary::default();
         log_daemon_summary(&mut ctx, &summary, false).expect("daemon summary");
         assert_eq!(ctx.printed, vec!["json"]);
-    }
-    fn handshake_update_requires_flags() {
-        let result = HandshakeUpdateArgs::default().into_update();
-        assert!(result.is_err(), "expected at least one override");
-    }
-    fn handshake_update_accepts_pow_overrides() {
-        let args = HandshakeUpdateArgs {
-            descriptor_commit: Some("aa".into()),
-            pow_difficulty: Some(7),
-            pow_max_future_skew: Some(120),
-            ..Default::default()
-        };
-        let update = args.into_update().expect("update should succeed");
-        assert_eq!(update.descriptor_commit_hex.as_deref(), Some("aa"));
-        let pow = update.pow.expect("pow overrides present");
-        assert_eq!(pow.difficulty, Some(7));
-        assert_eq!(pow.max_future_skew_secs, Some(120));
-        assert!(pow.min_ticket_ttl_secs.is_none());
-        assert!(pow.ticket_ttl_secs.is_none());
-    }
-    fn handshake_update_validates_resume_hash_length() {
-        let args = HandshakeUpdateArgs {
-            descriptor_commit: Some("aa".into()),
-            resume_hash: Some("deadbeef".into()),
-            ..Default::default()
-        };
-        assert!(args.into_update().is_err(), "resume hash must be 32 bytes");
-        let ok_args = HandshakeUpdateArgs {
-            descriptor_commit: Some("aa".into()),
-            resume_hash: Some("ab".repeat(32)),
-            ..Default::default()
-        };
-        let update = ok_args.into_update().expect("valid resume hash");
-        match update
-            .resume_hash_hex
-            .expect("resume hash directive present")
-        {
-            ResumeHashDirective::Set(hex) => assert_eq!(hex.len(), 64),
-            ResumeHashDirective::Clear => panic!("expected Set directive"),
-        }
     }
     }
     fn sample_reward_config_json() -> norito::json::Value {

@@ -193,13 +193,14 @@ fn authenticated_serve_request(
             proposal_round: round,
             phase,
             subject,
-            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new(b"Serve fixture parent state"),
-                Hash::new(b"Serve fixture post state"),
-                Hash::new(b"Serve fixture ordinary writes"),
-                1,
-                Hash::new(b"Serve fixture executed block"),
-            ),
+            execution_commitment:
+                wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                    Hash::new(b"Serve fixture parent state"),
+                    Hash::new(b"Serve fixture post state"),
+                    Hash::new(b"Serve fixture ordinary writes"),
+                    1,
+                    Hash::new(b"Serve fixture executed block"),
+                ),
             signers: (0..super::super::network_topology::commit_quorum_from_len(
                 context.roster.len(),
             ))
@@ -778,6 +779,35 @@ fn saturated_completion_runtime_preserves_bounded_body_pipeline_ownership() {
         "rejected publication must preserve the prior bounded owner set"
     );
 }
+fn fixture_offline_cash_mint_finality_roster(
+    network_id: iroha_data_model::NetworkId,
+    epoch: u64,
+    roster: &[wire::ValidatorPower],
+    seed_base: u8,
+) -> iroha_data_model::isi::offline_cash_v1::OfflineCashMintFinalityEpochRosterV1 {
+    let validators = roster
+        .iter()
+        .enumerate()
+        .map(|(index, validator)| {
+            let seed = [
+                seed_base.wrapping_add(u8::try_from(index).expect("fixture index fits u8"));
+                32
+            ];
+            crate::zk::offline_cash_v1_recursion::derive_offline_cash_mint_finality_validator_keys_v1(
+                &seed,
+                epoch,
+                validator.validator.clone(),
+            )
+            .expect("derive deterministic fixture Pasta keys")
+        })
+        .collect();
+    iroha_data_model::isi::offline_cash_v1::OfflineCashMintFinalityEpochRosterV1 {
+        version: iroha_data_model::isi::offline_cash_v1::OFFLINE_CASH_CHAIN_VERSION_V1,
+        network_id,
+        epoch,
+        validators,
+    }
+}
 /// Build closed-network production services for sibling runner tests.
 pub(in crate::sumeragi) fn fixture() -> (ProductionV2Services, Vec<KeyPair>) {
     let (exact_output_handoff_owner, _) = durable_exact_output_handoff_owner_pair();
@@ -795,11 +825,19 @@ pub(in crate::sumeragi) fn fixture() -> (ProductionV2Services, Vec<KeyPair>) {
             power: 1,
         })
         .collect::<Vec<_>>();
+    let network_id = crate::sumeragi::synthetic_network_id("v2-worker-test");
+    let offline_cash_mint_finality_epoch_roster =
+        fixture_offline_cash_mint_finality_roster(network_id, 0, &roster, 0xA0);
+    let offline_cash_mint_finality_epoch_id = offline_cash_mint_finality_epoch_roster
+        .finality_epoch_id()
+        .expect("derive fixture mint-finality epoch ID");
     let context = wire::HeightContext {
-        network_id: crate::sumeragi::synthetic_network_id("v2-worker-test"),
+        network_id,
         protocol_version: wire::PROTOCOL_VERSION,
         height: 1,
         epoch: 0,
+        offline_cash_mint_finality_epoch_id,
+        offline_cash_mint_finality_epoch_roster,
         epoch_end_height: u64::MAX,
         next_epoch_snapshot: None,
         mode: wire::ConsensusMode::Permissioned,

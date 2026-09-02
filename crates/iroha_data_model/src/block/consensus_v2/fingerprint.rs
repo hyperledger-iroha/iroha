@@ -36,10 +36,13 @@ struct NposGenesisFingerprintInput {
 ///
 /// Only first-release frozen inputs are representable in the encoded
 /// projection: mode, cadence, block bound, signed DA/Nexus context, and NPoS
-/// election parameters. Exact network identity is deliberately not part of
-/// this genesis-embedded value: runtime handshakes authenticate a separate
-/// required `NetworkId`, avoiding a self-reference through the genesis block
-/// hash.
+/// election parameters. The separately signed, network-independent Offline
+/// Cash mint-finality genesis templates are intentionally excluded from this
+/// secondary fingerprint; they remain authenticated by the genesis metadata
+/// that carries both this digest and the templates. Exact network identity is
+/// likewise not part of this genesis-embedded value: runtime handshakes
+/// authenticate a separate required `NetworkId`, avoiding a self-reference
+/// through the genesis block hash.
 ///
 /// # Errors
 ///
@@ -94,7 +97,7 @@ mod tests {
             block_max_transactions: core::num::NonZeroU64::new(512).unwrap(),
             mode: ConsensusGenesisModeParams::Permissioned,
             protocol_version: u32::from(super::super::PROTOCOL_VERSION),
-            v2_context: SumeragiV2GenesisContextParameters::recommended(),
+            v2_context: super::super::test_genesis_context_parameters(),
         }
     }
     fn npos_params() -> ConsensusGenesisParams {

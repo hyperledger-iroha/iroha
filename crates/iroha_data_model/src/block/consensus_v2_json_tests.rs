@@ -137,7 +137,7 @@ fn current_consensus_json_requires_explicit_nullable_slots() {
     );
 
     let commitment = execution_commitment(0x71);
-    assert_required_nullable_field!(ExecutionCommitment, commitment, "topup_anchor_root");
+    assert_required_nullable_field!(ExecutionCommitment, commitment, "offline_cash_top_up_root");
 
     let round = round(&context, 0);
     let timeout_vote = TimeoutVote {
@@ -469,7 +469,7 @@ fn execution_commitment_json_requires_explicit_finality_and_merge_manifests() {
         lane_finality_manifest.ty,
         core::any::TypeId::of::<Option<MerkleTreeCommitment<LaneFinalityStatement>>>()
     );
-    let carrier_free = ExecutionCommitment::without_topups_or_merge_carrier(
+    let carrier_free = ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
         Hash::new(b"json parent"),
         Hash::new(b"json post"),
         Hash::new(b"json ordinary"),

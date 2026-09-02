@@ -180,25 +180,27 @@ native dispatch. Fixture-bundle and Governance DAG block entries use `bytes`.
 
 ## Offline cash SDK boundary
 
-The JavaScript package exposes the four stable Kagemusha Torii routes through
-`getOfflineCapability`, `submitKagemushaTopUpV4`,
-`submitKagemushaRedeemV4`, and `getKagemushaOperationStatus`. Discovery is
-an asset-neutral protocol capability compiled into every deployment and accepts
-only the exact four-field `cash_handoff_v1`, bridge ABI 23, eight-hop
-`OfflineStatus` with `ready: true`.
+The JavaScript package exposes the sole `OfflineCashV1` namespace. It models
+the five-message request, proof-bearing acceptance authorization, one-use
+ticket, unlinkable payment, and acknowledgement exchange, plus mint
+authorization/credit binding and typed encrypted-credit opening, AAD, and
+envelope codecs. Governed sender recovery uses the fully cross-bound,
+16,384-byte `NoCommitClosure` canonical wire; its proof remains native-verified.
+Each request binds one positive exact amount. Every distinct valid payment
+against the same request remains protocol-acceptable; invoice deduplication is
+application policy. Strict canonical Norito and unpadded `oc1:` decoders enforce
+the raw/text message and composed-exchange caps before allocation.
 
-This is deliberately a transport-only boundary. Command helpers require an
-externally produced `{ version: 4, norito }` archive; they derive the operation
-id and signed request time from its exact compact V4 fields and reject a 202
-response that changes either value. They never derive witnesses, install
-recursive artifacts, or claim a native prover. Use a
-supported Swift or JVM wallet implementation to create the archive, then pass a
-detached copy to JavaScript only when a web or Node service owns Torii
-submission and operation polling. Top-up archives are limited to 512 KiB and
-redeem archives to 48 MiB; the exported
-`KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES` and
-`KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES` constants expose those exact Torii
-boundaries.
+The namespace is codec and orchestration support only. Monetary proving,
+signing, encryption, decryption, and hardware state changes must come from the
+release-pinned native implementation. No public predecessor/successor link or
+software money-crypto fallback is exposed.
+
+`getOfflineCapability` reads the universally compiled four-field readiness
+projection: `cash_handoff_v1`, wire version `1`, secure-device lifecycle
+version `1`, and `ready: true`. Monetary transitions still require a qualified
+non-forking hardware profile; successful transport decoding alone grants no
+monetary authority.
 
 ## Atomic private settlement transport
 
@@ -2022,11 +2024,21 @@ reads and Prometheus transport metrics for operations. Consensus evidence is
 available through the supported read-only endpoints:
 
 ```js
-const evidence = await torii.listSumeragiEvidence({ limit: 20, kind: "DoublePrepare" });
-console.log(`Observed ${evidence.total} evidence entries`);
+const evidence = await torii.listSumeragiEvidence({
+  limit: 20,
+  kind: "SumeragiV2Equivocation",
+});
+console.log(`Committed ${evidence.total} evidence entries`);
 const count = await torii.getSumeragiEvidenceCount();
-console.log(`Node retains ${count.count} evidence entries`);
+console.log(`Committed evidence count: ${count.count}`);
 ```
+
+The first-release JSON contract is closed: each item is a
+`SumeragiV2Equivocation` record with a non-null consensus admission height and
+a `pending`, `applied`, or `cancelled` penalty status. Unknown response fields
+and retired evidence kinds are rejected. Unsigned 64-bit values above
+`Number.MAX_SAFE_INTEGER` are returned as `bigint` without rounding. Count
+responses are capped at 1 KiB and JSON list responses at 1 MiB.
 
 ## SoraFS Storage Helpers
 
@@ -3336,8 +3348,8 @@ part of the portable registry tarball.
 Node.js clients can register confidential assets and schedule policy
 transitions without hand-writing Norito payloads. ABI V1 does not expose
 generic shield, transfer, or unshield instructions: wallets use the typed,
-proof-bound Kagemusha top-up and redemption routes described above. The
-underlying confidential proof helpers remain available for those typed flows.
+proof-bound `OfflineCashV1` mint and redemption operations described above.
+The underlying confidential proof helpers remain available for those typed flows.
 
 ```js
 import { buildRegisterZkAssetTransaction } from "@iroha/iroha-js";
@@ -4134,12 +4146,10 @@ Asset and RWA quantities use the stricter `QuantityInput` surface:
 `number` is deliberately rejected, and strings are never trimmed or rewritten;
 for example `"1"` is valid while `" 1"`, `"01"`, `"+1"`, and `"1.0"` are not.
 
-Kagemusha proving is intentionally not exposed through the JavaScript client.
-Its top-up and redemption bodies are canonical manifest-V4 Norito archives and
-its peer-transfer keys must remain device-bound, so browser and Node
-applications must not hand-encode those payloads. They may submit and poll an
-archive produced by a supported IrohaSwift or JVM wallet through the typed
-ABI-21/V4 Torii helpers described above.
+`OfflineCashV1` exposes canonical wire encoding and verification, not a software
+prover or a software fallback for device authority. Peer-transfer keys and
+state transitions remain hardware-bound; applications must obtain transition
+proofs from a qualified wallet implementation.
 
 for await (const assetDef of torii.iterateAssetDefinitions({
   pageSize: 50,

@@ -22,10 +22,8 @@ import org.hyperledger.iroha.android.model.NetworkId;
 public final class SumeragiV2Wire {
   /** Live Sumeragi protocol revision. */
   public static final int PROTOCOL_VERSION = 4;
-  /** Maximum number of real Kagemusha top-up leaves committed by one block. */
-  public static final long MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK = 16;
-  private static final byte[] KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN =
-      "iroha:kagemusha:v2:post-state-root".getBytes(StandardCharsets.UTF_8);
+  private static final byte[] OFFLINE_CASH_TOP_UP_POST_STATE_ROOT_DOMAIN =
+      "iroha:offline-cash:v1:post-state-root".getBytes(StandardCharsets.UTF_8);
   /** Canonical Native AMX application-manifest wire version. */
   public static final int NATIVE_AMX_APPLICATION_MANIFEST_VERSION = 1;
   /** Exact first-release merge-carrier projection version. */
@@ -291,8 +289,8 @@ public final class SumeragiV2Wire {
     public final Hash32 parentStateRoot;
     public final Hash32 postStateRoot;
     public final Hash32 ordinaryWritesRoot;
-    public final Hash32 topupAnchorRoot;
-    public final long topupAnchorCount;
+    public final Hash32 offlineCashTopUpRoot;
+    public final long offlineCashTopUpCount;
     public final int nativeAmxApplicationManifestVersion;
     public final Hash32 nativeAmxApplicationManifestRoot;
     public final long nativeAmxApplicationManifestCount;
@@ -305,8 +303,8 @@ public final class SumeragiV2Wire {
         Hash32 parentStateRoot,
         Hash32 postStateRoot,
         Hash32 ordinaryWritesRoot,
-        Hash32 topupAnchorRoot,
-        long topupAnchorCount,
+        Hash32 offlineCashTopUpRoot,
+        long offlineCashTopUpCount,
         int nativeAmxApplicationManifestVersion,
         Hash32 nativeAmxApplicationManifestRoot,
         long nativeAmxApplicationManifestCount,
@@ -316,8 +314,8 @@ public final class SumeragiV2Wire {
           parentStateRoot,
           postStateRoot,
           ordinaryWritesRoot,
-          topupAnchorRoot,
-          topupAnchorCount,
+          offlineCashTopUpRoot,
+          offlineCashTopUpCount,
           nativeAmxApplicationManifestVersion,
           nativeAmxApplicationManifestRoot,
           nativeAmxApplicationManifestCount,
@@ -331,8 +329,8 @@ public final class SumeragiV2Wire {
         Hash32 parentStateRoot,
         Hash32 postStateRoot,
         Hash32 ordinaryWritesRoot,
-        Hash32 topupAnchorRoot,
-        long topupAnchorCount,
+        Hash32 offlineCashTopUpRoot,
+        long offlineCashTopUpCount,
         int nativeAmxApplicationManifestVersion,
         Hash32 nativeAmxApplicationManifestRoot,
         long nativeAmxApplicationManifestCount,
@@ -343,9 +341,9 @@ public final class SumeragiV2Wire {
       this.parentStateRoot = nonNull(parentStateRoot, "parentStateRoot");
       this.postStateRoot = nonNull(postStateRoot, "postStateRoot");
       this.ordinaryWritesRoot = nonNull(ordinaryWritesRoot, "ordinaryWritesRoot");
-      requireU32(topupAnchorCount, "topupAnchorCount");
-      this.topupAnchorRoot = topupAnchorRoot;
-      this.topupAnchorCount = topupAnchorCount;
+      requireU32(offlineCashTopUpCount, "offlineCashTopUpCount");
+      this.offlineCashTopUpRoot = offlineCashTopUpRoot;
+      this.offlineCashTopUpCount = offlineCashTopUpCount;
       this.nativeAmxApplicationManifestVersion = nativeAmxApplicationManifestVersion;
       this.nativeAmxApplicationManifestRoot =
           nonNull(nativeAmxApplicationManifestRoot, "nativeAmxApplicationManifestRoot");
@@ -356,17 +354,19 @@ public final class SumeragiV2Wire {
       require(executedBlockWireLen != 0, "executed block wire length must be non-zero");
       this.executedBlockWireLen = executedBlockWireLen;
       this.executedBlockWireHash = nonNull(executedBlockWireHash, "executedBlockWireHash");
-      if (topupAnchorCount == 0) {
-        require(topupAnchorRoot == null, "zero top-up count must not carry an anchor root");
-      } else {
-        require(topupAnchorRoot != null, "non-zero top-up count requires an anchor root");
+      if (offlineCashTopUpCount == 0) {
         require(
-            topupAnchorCount <= MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK,
-            "top-up anchor count exceeds the consensus bound");
+            offlineCashTopUpRoot == null,
+            "zero Offline Cash top-up count must not carry a root");
+      } else {
+        require(
+            offlineCashTopUpRoot != null,
+            "non-zero Offline Cash top-up count requires a root");
         require(
             postStateRoot.equals(
-                topupPostStateRoot(topupAnchorCount, ordinaryWritesRoot, topupAnchorRoot)),
-            "post-state root does not bind the top-up anchor projection");
+                offlineCashTopUpPostStateRoot(
+                    offlineCashTopUpCount, ordinaryWritesRoot, offlineCashTopUpRoot)),
+            "post-state root does not bind the Offline Cash top-up projection");
       }
       require(
           nativeAmxApplicationManifestVersion == NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
@@ -381,8 +381,8 @@ public final class SumeragiV2Wire {
           "Native AMX application-manifest count/root projection is not canonical");
     }
 
-    /** Construct an execution commitment for a block with no Kagemusha top-ups. */
-    public static ExecutionCommitment withoutTopups(
+    /** Construct an execution commitment for a block with no Offline Cash top-ups. */
+    public static ExecutionCommitment withoutOfflineCashTopUps(
         Hash32 parentStateRoot,
         Hash32 postStateRoot,
         Hash32 ordinaryWritesRoot,
@@ -406,21 +406,22 @@ public final class SumeragiV2Wire {
       return new Hash32(IrohaHash.prehash(NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT_DOMAIN));
     }
 
-    /** Derive the canonical post-state root for a non-empty top-up tree. */
-    public static Hash32 topupPostStateRoot(
-        long topupAnchorCount, Hash32 ordinaryWritesRoot, Hash32 topupAnchorRoot) {
+    /** Derive the canonical post-state root for non-empty Offline Cash top-ups. */
+    public static Hash32 offlineCashTopUpPostStateRoot(
+        long offlineCashTopUpCount,
+        Hash32 ordinaryWritesRoot,
+        Hash32 offlineCashTopUpRoot) {
       require(
-          topupAnchorCount > 0
-              && topupAnchorCount <= MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK,
-          "top-up anchor count must fit the non-empty consensus bound");
+          offlineCashTopUpCount > 0 && offlineCashTopUpCount <= 0xffff_ffffL,
+          "Offline Cash top-up count must fit a non-zero unsigned 32-bit integer");
       nonNull(ordinaryWritesRoot, "ordinaryWritesRoot");
-      nonNull(topupAnchorRoot, "topupAnchorRoot");
+      nonNull(offlineCashTopUpRoot, "offlineCashTopUpRoot");
       ByteArrayOutputStream preimage = new ByteArrayOutputStream();
-      append(preimage, KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN);
+      append(preimage, OFFLINE_CASH_TOP_UP_POST_STATE_ROOT_DOMAIN);
       preimage.write(0);
-      append(preimage, u32(topupAnchorCount));
+      append(preimage, u32(offlineCashTopUpCount));
       append(preimage, ordinaryWritesRoot.bytes());
-      append(preimage, topupAnchorRoot.bytes());
+      append(preimage, offlineCashTopUpRoot.bytes());
       return new Hash32(IrohaHash.prehash(preimage.toByteArray()));
     }
 
@@ -430,8 +431,8 @@ public final class SumeragiV2Wire {
           parentStateRoot.bytes(),
           postStateRoot.bytes(),
           ordinaryWritesRoot.bytes(),
-          option(topupAnchorRoot == null ? null : topupAnchorRoot.bytes()),
-          u32(topupAnchorCount),
+          option(offlineCashTopUpRoot == null ? null : offlineCashTopUpRoot.bytes()),
+          u32(offlineCashTopUpCount),
           u16(nativeAmxApplicationManifestVersion),
           nativeAmxApplicationManifestRoot.bytes(),
           u32(nativeAmxApplicationManifestCount),
@@ -449,12 +450,12 @@ public final class SumeragiV2Wire {
           new Hash32(reader.field("execution post state", SumeragiV2Wire::decodeHash));
       Hash32 ordinaryWritesRoot =
           new Hash32(reader.field("execution ordinary writes", SumeragiV2Wire::decodeHash));
-      Hash32 topupAnchorRoot =
+      Hash32 offlineCashTopUpRoot =
           reader.field(
-              "execution top-up root",
+              "execution Offline Cash top-up root",
               payload -> decodeOption(payload, data -> new Hash32(decodeHash(data))));
-      long topupAnchorCount =
-          reader.field("execution top-up count", SumeragiV2Wire::decodeU32);
+      long offlineCashTopUpCount =
+          reader.field("execution Offline Cash top-up count", SumeragiV2Wire::decodeU32);
       int manifestVersion =
           reader.field(
               "execution Native AMX application manifest version",
@@ -486,8 +487,8 @@ public final class SumeragiV2Wire {
               parentStateRoot,
               postStateRoot,
               ordinaryWritesRoot,
-              topupAnchorRoot,
-              topupAnchorCount,
+              offlineCashTopUpRoot,
+              offlineCashTopUpCount,
               manifestVersion,
               manifestRoot,
               manifestCount,

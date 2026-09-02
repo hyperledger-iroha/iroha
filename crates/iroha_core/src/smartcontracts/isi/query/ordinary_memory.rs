@@ -908,7 +908,6 @@ define_singular_source_admission! {
     54 => FindSorafsPopRegistryStatus: ProvenBounded,
     55 => FindSorafsCitizenBondBySerialCommitment: ProvenBounded,
     56 => FindSorafsCitizenBondSnapshot: ProvenBounded,
-    57 => FindSorafsAnonymousServiceEscrowById: ProvenBounded,
     58 => FindSorafsPinManifest: ProvenBounded,
     59 => FindSorafsPinManifests: ProvenBounded,
     60 => FindSorafsRepairTask: ProvenBounded,
@@ -923,7 +922,6 @@ define_singular_source_admission! {
     69 => FindSorafsModerationPolicy: ProvenBounded,
     70 => FindSorafsModerationAppeal: ProvenBounded,
     71 => FindSorafsModerationJurorEligibility: ProvenBounded,
-    72 => FindSorafsAnonymousJurorCandidacy: ProvenBounded,
     73 => FindSorafsModerationCase: ProvenBounded,
     74 => FindSorafsModerationCommit: ProvenBounded,
     75 => FindSorafsModerationReveal: ProvenBounded,
@@ -1334,9 +1332,7 @@ pub(super) fn preflight_server_singular_source_materialization(
             require_active_adapter(singular_output_lane_active, "SoraFS PoP registry query")?;
         }
         SingularQueryBox::FindSorafsCitizenBondBySerialCommitment(_)
-        | SingularQueryBox::FindSorafsCitizenBondSnapshot(_)
-        | SingularQueryBox::FindSorafsAnonymousServiceEscrowById(_)
-        | SingularQueryBox::FindSorafsAnonymousJurorCandidacy(_) => {
+        | SingularQueryBox::FindSorafsCitizenBondSnapshot(_) => {
             require_active_adapter(singular_output_lane_active, "SoraFS anonymity query")?;
         }
         SingularQueryBox::FindSorafsRepairTask(_)

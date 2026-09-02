@@ -18,6 +18,8 @@ use crate::{
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
 use core::fmt;
+#[cfg(test)]
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_crypto::{Hash, HashOf, MerkleTree, MerkleTreeCommitment};
 use iroha_primitives::erasure::rs16;
 use iroha_schema::{EnumMeta, EnumVariant, Ident, IntoSchema, MetaMap, Metadata, TypeId};
@@ -69,9 +71,22 @@ pub const MAX_DA_CHUNK_COUNT: u32 = 1024;
 /// round contains at most one distinct subject group per validator.
 pub const MAX_COMMIT_QUORUM_GROUPS_PER_HEIGHT: usize = MAX_VALIDATORS_PER_HEIGHT + 1;
 const MAX_LIVENESS_IGNORE_REASONS: usize = 12;
-/// Tight allocation bound for one consensus signature or aggregate.
-pub const MAX_CONSENSUS_SIGNATURE_BYTES: usize = 256;
-const HEIGHT_CONTEXT_IDENTITY_VERSION: u16 = 5;
+/// Allocation bound for one consensus signature or aggregate.
+///
+/// Ordinary BLS signatures remain compact. A Commit vote for a block containing
+/// Offline Cash V1 top-ups additionally carries one paired Pasta finality-seal
+/// share, while its `CommitQC` carries the exact `2f + 1` share bundle. The
+/// bound covers the largest admitted 31-validator committee without making the
+/// auxiliary proof payload unbounded.
+pub const MAX_CONSENSUS_SIGNATURE_BYTES: usize = 16 * 1024;
+/// Reserved envelope kind for one Offline Cash V1 Commit-vote seal share.
+pub const OFFLINE_CASH_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1: u8 = 1;
+/// Reserved envelope kind for an Offline Cash V1 CommitQC seal bundle.
+pub const OFFLINE_CASH_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1: u8 = 2;
+const OFFLINE_CASH_CONSENSUS_SIGNATURE_ENVELOPE_MAGIC_V1: [u8; 16] = *b"iroha-oc-seal-v1";
+const OFFLINE_CASH_CONSENSUS_SIGNATURE_ENVELOPE_HEADER_BYTES_V1: usize = 16 + 1 + 2 + 4;
+const OFFLINE_CASH_CONSENSUS_BLS_SIGNATURE_MAX_BYTES_V1: usize = 256;
+const HEIGHT_CONTEXT_IDENTITY_VERSION: u16 = 6;
 /// Permissioned Sumeragi v2 handshake and domain-separation tag.
 pub const PERMISSIONED_TAG: &str = "iroha2-consensus::permissioned-sumeragi@v2";
 /// `NPoS` Sumeragi v2 handshake and domain-separation tag.
@@ -80,8 +95,6 @@ pub const NPOS_TAG: &str = "iroha2-consensus::npos-sumeragi@v2";
 pub const PERMISSIONED_BLS_DOMAIN: &str = "bls-iroha2:permissioned-sumeragi:v2";
 /// BLS domain selected by an `NPoS` v2 genesis.
 pub const NPOS_BLS_DOMAIN: &str = "bls-iroha2:npos-sumeragi:v2";
-/// Maximum block-local Kagemusha top-up anchors authenticated by one execution commitment.
-pub const MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK: u32 = 16;
 /// Consensus-wide upper bound for the canonical result-bearing block wire.
 ///
 /// This is the protocol authority shared by execution-commitment admission and
@@ -89,7 +102,8 @@ pub const MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK: u32 = 16;
 /// Kura hard limit; runtime configuration may select a lower bound but must
 /// never admit a larger consensus value.
 pub const MAX_EXECUTED_BLOCK_WIRE_BYTES: u64 = 256 * 1024 * 1024;
-const KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN: &[u8] = b"iroha:kagemusha:v2:post-state-root";
+const OFFLINE_CASH_TOP_UP_POST_STATE_ROOT_DOMAIN_V1: &[u8] =
+    b"iroha:offline-cash:v1:post-state-root";
 /// Canonical Native AMX application-manifest wire version.
 pub const NATIVE_AMX_APPLICATION_MANIFEST_VERSION: u16 = 1;
 /// Maximum participant route/incarnation leaves committed by one global block.
@@ -130,6 +144,18 @@ pub const RECOMMENDED_EXECUTION_POLICY_HASH: [u8; 32] = [
     63, 148, 116, 83, 117, 143, 142, 233, 11, 44, 102, 67, 122, 18, 143, 194, 45, 147, 196, 210,
     224, 202, 96, 194, 97, 216, 40, 183, 224, 184, 151, 195,
 ];
+/// Recommended deterministic data-availability layout.
+#[must_use]
+pub const fn recommended_data_availability_layout() -> DataAvailabilityLayout {
+    DataAvailabilityLayout {
+        encoding: PayloadEncoding::ReedSolomon16,
+        chunk_size_bytes: MAX_DA_CHUNK_SIZE_BYTES,
+        data_shards: 4,
+        parity_shards: 2,
+        max_payload_size_bytes: MAX_DA_PAYLOAD_SIZE_BYTES,
+        max_chunk_count: MAX_DA_CHUNK_COUNT,
+    }
+}
 /// Block height in the v2 protocol.
 pub type Height = u64;
 /// View number within one block height.
@@ -329,8 +355,12 @@ pub enum PayloadEncoding {
 ///
 /// The value is embedded in the signed consensus-genesis parameters. Live v2
 /// startup must reject a genesis which omits it; it must never reconstruct
-/// these fields from a node's mutable runtime configuration.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+/// these fields from a node's mutable runtime configuration. The separately
+/// signed, network-independent Offline Cash authority templates live beside
+/// this value in [`crate::parameter::system::ConsensusHandshakeMetadata`]; they
+/// are deliberately absent from this snapshot-reconstructible context and its
+/// secondary consensus fingerprint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SumeragiV2GenesisContextParameters {
@@ -351,16 +381,9 @@ impl SumeragiV2GenesisContextParameters {
     /// This value is serialized into, fingerprinted by, and signed with the
     /// genesis block. It is not a live-node fallback.
     #[must_use]
-    pub fn recommended() -> Self {
+    pub const fn recommended() -> Self {
         Self {
-            da_layout: DataAvailabilityLayout {
-                encoding: PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: MAX_DA_CHUNK_SIZE_BYTES,
-                data_shards: 4,
-                parity_shards: 2,
-                max_payload_size_bytes: MAX_DA_PAYLOAD_SIZE_BYTES,
-                max_chunk_count: MAX_DA_CHUNK_COUNT,
-            },
+            da_layout: recommended_data_availability_layout(),
             nexus_amx_context_hash: RECOMMENDED_NEXUS_AMX_CONTEXT_HASH,
             execution_policy_hash: RECOMMENDED_EXECUTION_POLICY_HASH,
         }
@@ -468,6 +491,14 @@ pub struct HeightContext {
     pub height: Height,
     /// Finalized validator-election epoch.
     pub epoch: u64,
+    /// Canonical identifier of the exact paired-Pasta validator-key roster authorized for this
+    /// epoch's Offline Cash V1 mint-finality seals.
+    pub offline_cash_mint_finality_epoch_id: [u8; 32],
+    /// Complete bounded paired-Pasta public-key roster whose canonical digest equals
+    /// [`Self::offline_cash_mint_finality_epoch_id`]. Keeping the roster in the immutable context
+    /// makes historical top-up finality independently verifiable after key rotation.
+    pub offline_cash_mint_finality_epoch_roster:
+        crate::isi::offline_cash_v1::OfflineCashMintFinalityEpochRosterV1,
     /// Last height governed by this epoch's frozen election snapshot.
     pub epoch_end_height: Height,
     /// Complete transition selected from the committed pre-state when this is
@@ -517,6 +548,10 @@ impl HeightContext {
             protocol_version: self.protocol_version,
             height: self.height,
             epoch: self.epoch,
+            offline_cash_mint_finality_epoch_id: self.offline_cash_mint_finality_epoch_id,
+            offline_cash_mint_finality_epoch_roster: self
+                .offline_cash_mint_finality_epoch_roster
+                .clone(),
             epoch_end_height: self.epoch_end_height,
             next_epoch_snapshot: self.next_epoch_snapshot.clone(),
             mode: self.mode,
@@ -557,6 +592,24 @@ impl HeightContext {
         }
         if self.epoch_end_height < self.height {
             return Err(ValidationError::EpochEndsBeforeHeight);
+        }
+        if self.offline_cash_mint_finality_epoch_id == [0; 32] {
+            return Err(ValidationError::InvalidOfflineCashMintFinalityEpochId);
+        }
+        let mint_roster = &self.offline_cash_mint_finality_epoch_roster;
+        if mint_roster.validate().is_err()
+            || mint_roster.network_id != self.network_id
+            || mint_roster.epoch != self.epoch
+            || mint_roster.validators.len() != self.roster.len()
+            || mint_roster
+                .validators
+                .iter()
+                .zip(&self.roster)
+                .any(|(mint, consensus)| mint.validator != consensus.validator)
+            || mint_roster.finality_epoch_id().ok()
+                != Some(self.offline_cash_mint_finality_epoch_id)
+        {
+            return Err(ValidationError::InvalidOfflineCashMintFinalityEpochRoster);
         }
         if self.nexus_amx_context_hash == Hash::prehashed([0; Hash::LENGTH]) {
             return Err(ValidationError::InvalidNexusAmxContextHash);
@@ -672,6 +725,9 @@ struct HeightContextIdentity {
     protocol_version: u16,
     height: Height,
     epoch: u64,
+    offline_cash_mint_finality_epoch_id: [u8; 32],
+    offline_cash_mint_finality_epoch_roster:
+        crate::isi::offline_cash_v1::OfflineCashMintFinalityEpochRosterV1,
     epoch_end_height: Height,
     next_epoch_snapshot: Option<finality::FinalizedNextEpochSnapshot>,
     mode: ConsensusMode,
@@ -941,13 +997,13 @@ pub struct ExecutionCommitment {
     pub parent_state_root: Hash,
     /// Root of the complete deterministic post-state projection.
     pub post_state_root: Hash,
-    /// Root of all canonical last-write-wins writes other than Kagemusha top-up anchors.
+    /// Root of all canonical last-write-wins writes other than Offline Cash V1 top-ups.
     pub ordinary_writes_root: Hash,
-    /// Root of the canonical balanced Kagemusha top-up tree, when the block has top-ups.
+    /// Root of the canonical balanced Offline Cash V1 top-up tree, when present.
     #[norito(required)]
-    pub topup_anchor_root: Option<Hash>,
-    /// Number of real Kagemusha top-up leaves committed by `topup_anchor_root`.
-    pub topup_anchor_count: u32,
+    pub offline_cash_top_up_root: Option<Hash>,
+    /// Number of real Offline Cash V1 top-up leaves committed by `offline_cash_top_up_root`.
+    pub offline_cash_top_up_count: u32,
     /// Exact Native AMX application-manifest schema version.
     pub native_amx_application_manifest_version: u16,
     /// Merkle root of canonical separate-participant application leaves.
@@ -974,10 +1030,10 @@ pub struct ExecutionCommitment {
     pub executed_block_wire_hash: Hash,
 }
 impl ExecutionCommitment {
-    /// Construct a transition that contains neither Kagemusha top-up anchors
+    /// Construct a transition that contains neither Offline Cash V1 top-ups
     /// nor a compact merge carrier.
     #[must_use]
-    pub fn without_topups_or_merge_carrier(
+    pub fn without_offline_cash_top_ups_or_merge_carrier(
         parent_state_root: Hash,
         post_state_root: Hash,
         ordinary_writes_root: Hash,
@@ -988,8 +1044,8 @@ impl ExecutionCommitment {
             parent_state_root,
             post_state_root,
             ordinary_writes_root,
-            topup_anchor_root: None,
-            topup_anchor_count: 0,
+            offline_cash_top_up_root: None,
+            offline_cash_top_up_count: 0,
             native_amx_application_manifest_version: NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
             native_amx_application_manifest_root: native_amx_application_manifest_empty_root(),
             native_amx_application_manifest_count: 0,
@@ -1003,15 +1059,14 @@ impl ExecutionCommitment {
     ///
     /// # Errors
     ///
-    /// Returns an error when root presence disagrees with the count, the
-    /// bounded top-up count is exceeded, or the combined post-state root is
-    /// not the canonical hash of the advertised top-up projection.
+    /// Returns an error when root presence disagrees with the count or the combined post-state
+    /// root is not the canonical hash of the advertised top-up projection.
     pub fn new_without_merge_carrier(
         parent_state_root: Hash,
         post_state_root: Hash,
         ordinary_writes_root: Hash,
-        topup_anchor_root: Option<Hash>,
-        topup_anchor_count: u32,
+        offline_cash_top_up_root: Option<Hash>,
+        offline_cash_top_up_count: u32,
         executed_block_wire_len: u64,
         executed_block_wire_hash: Hash,
     ) -> Result<Self, ValidationError> {
@@ -1019,8 +1074,8 @@ impl ExecutionCommitment {
             parent_state_root,
             post_state_root,
             ordinary_writes_root,
-            topup_anchor_root,
-            topup_anchor_count,
+            offline_cash_top_up_root,
+            offline_cash_top_up_count,
             NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
             native_amx_application_manifest_empty_root(),
             0,
@@ -1042,8 +1097,8 @@ impl ExecutionCommitment {
         parent_state_root: Hash,
         post_state_root: Hash,
         ordinary_writes_root: Hash,
-        topup_anchor_root: Option<Hash>,
-        topup_anchor_count: u32,
+        offline_cash_top_up_root: Option<Hash>,
+        offline_cash_top_up_count: u32,
         native_amx_application_manifest_version: u16,
         native_amx_application_manifest_root: Hash,
         native_amx_application_manifest_count: u32,
@@ -1054,8 +1109,8 @@ impl ExecutionCommitment {
             parent_state_root,
             post_state_root,
             ordinary_writes_root,
-            topup_anchor_root,
-            topup_anchor_count,
+            offline_cash_top_up_root,
+            offline_cash_top_up_count,
             native_amx_application_manifest_version,
             native_amx_application_manifest_root,
             native_amx_application_manifest_count,
@@ -1078,8 +1133,8 @@ impl ExecutionCommitment {
         parent_state_root: Hash,
         post_state_root: Hash,
         ordinary_writes_root: Hash,
-        topup_anchor_root: Option<Hash>,
-        topup_anchor_count: u32,
+        offline_cash_top_up_root: Option<Hash>,
+        offline_cash_top_up_count: u32,
         native_amx_application_manifest_version: u16,
         native_amx_application_manifest_root: Hash,
         native_amx_application_manifest_count: u32,
@@ -1091,8 +1146,8 @@ impl ExecutionCommitment {
             parent_state_root,
             post_state_root,
             ordinary_writes_root,
-            topup_anchor_root,
-            topup_anchor_count,
+            offline_cash_top_up_root,
+            offline_cash_top_up_count,
             native_amx_application_manifest_version,
             native_amx_application_manifest_root,
             native_amx_application_manifest_count,
@@ -1116,8 +1171,8 @@ impl ExecutionCommitment {
         parent_state_root: Hash,
         post_state_root: Hash,
         ordinary_writes_root: Hash,
-        topup_anchor_root: Option<Hash>,
-        topup_anchor_count: u32,
+        offline_cash_top_up_root: Option<Hash>,
+        offline_cash_top_up_count: u32,
         native_amx_application_manifest_version: u16,
         native_amx_application_manifest_root: Hash,
         native_amx_application_manifest_count: u32,
@@ -1130,8 +1185,8 @@ impl ExecutionCommitment {
             parent_state_root,
             post_state_root,
             ordinary_writes_root,
-            topup_anchor_root,
-            topup_anchor_count,
+            offline_cash_top_up_root,
+            offline_cash_top_up_count,
             native_amx_application_manifest_version,
             native_amx_application_manifest_root,
             native_amx_application_manifest_count,
@@ -1160,19 +1215,21 @@ impl ExecutionCommitment {
         if let Some(merge_carrier) = self.merge_carrier {
             merge_carrier.validate()?;
         }
-        match (self.topup_anchor_count, self.topup_anchor_root) {
+        match (
+            self.offline_cash_top_up_count,
+            self.offline_cash_top_up_root,
+        ) {
             (0, None) => {}
             (0, Some(_)) | (_, None) => {
                 return Err(ValidationError::InvalidExecutionCommitment);
             }
-            (count, Some(root)) if count <= MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK => {
+            (count, Some(root)) => {
                 if self.post_state_root
-                    != Self::topup_post_state_root(count, self.ordinary_writes_root, root)
+                    != Self::offline_cash_post_state_root_v1(count, self.ordinary_writes_root, root)
                 {
                     return Err(ValidationError::ExecutionCommitmentPostRootMismatch);
                 }
             }
-            (_, Some(_)) => return Err(ValidationError::TooManyKagemushaTopupAnchors),
         }
         if self.native_amx_application_manifest_version != NATIVE_AMX_APPLICATION_MANIFEST_VERSION {
             return Err(ValidationError::InvalidNativeAmxApplicationManifestVersion);
@@ -1198,24 +1255,136 @@ impl ExecutionCommitment {
     }
     /// Derive the canonical combined post-state root for a non-empty top-up tree.
     #[must_use]
-    pub fn topup_post_state_root(
-        topup_anchor_count: u32,
+    pub fn offline_cash_post_state_root_v1(
+        offline_cash_top_up_count: u32,
         ordinary_writes_root: Hash,
-        topup_anchor_root: Hash,
+        offline_cash_top_up_root: Hash,
     ) -> Hash {
         let mut preimage = Vec::with_capacity(
-            KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN.len()
+            OFFLINE_CASH_TOP_UP_POST_STATE_ROOT_DOMAIN_V1.len()
                 + 1
                 + core::mem::size_of::<u32>()
                 + 2 * Hash::LENGTH,
         );
-        preimage.extend_from_slice(KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN);
+        preimage.extend_from_slice(OFFLINE_CASH_TOP_UP_POST_STATE_ROOT_DOMAIN_V1);
         preimage.push(0);
-        preimage.extend_from_slice(&topup_anchor_count.to_le_bytes());
+        preimage.extend_from_slice(&offline_cash_top_up_count.to_le_bytes());
         preimage.extend_from_slice(ordinary_writes_root.as_ref());
-        preimage.extend_from_slice(topup_anchor_root.as_ref());
+        preimage.extend_from_slice(offline_cash_top_up_root.as_ref());
         Hash::new(preimage)
     }
+}
+
+/// Borrowed components of one Offline Cash V1 consensus-signature envelope.
+///
+/// The framing deliberately keeps the ordinary BLS signature first-class so
+/// generic finality verification can authenticate the same vote preimage while
+/// the Offline Cash verifier separately checks the paired Pasta payload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OfflineCashConsensusSignatureEnvelopePartsV1<'a> {
+    /// Whether the auxiliary payload is a Commit-vote share or CommitQC bundle.
+    pub kind: u8,
+    /// Ordinary BLS signature or aggregate signature.
+    pub bls_signature: &'a [u8],
+    /// Canonical Norito bytes of the paired Pasta share or bundle.
+    pub auxiliary_payload: &'a [u8],
+}
+
+/// Encode one bounded Offline Cash V1 consensus-signature envelope.
+///
+/// # Errors
+///
+/// Returns an error when the kind, BLS signature, auxiliary payload, or total
+/// length is outside the sole V1 framing contract.
+pub fn encode_offline_cash_consensus_signature_envelope_v1(
+    kind: u8,
+    bls_signature: &[u8],
+    auxiliary_payload: &[u8],
+) -> Result<Vec<u8>, ValidationError> {
+    if !matches!(
+        kind,
+        OFFLINE_CASH_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1
+            | OFFLINE_CASH_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1
+    ) || bls_signature.is_empty()
+        || bls_signature.len() > OFFLINE_CASH_CONSENSUS_BLS_SIGNATURE_MAX_BYTES_V1
+        || auxiliary_payload.is_empty()
+    {
+        return Err(ValidationError::InvalidOfflineCashSignatureEnvelope);
+    }
+    let bls_len = u16::try_from(bls_signature.len())
+        .map_err(|_| ValidationError::InvalidOfflineCashSignatureEnvelope)?;
+    let auxiliary_len = u32::try_from(auxiliary_payload.len())
+        .map_err(|_| ValidationError::InvalidOfflineCashSignatureEnvelope)?;
+    let total = OFFLINE_CASH_CONSENSUS_SIGNATURE_ENVELOPE_HEADER_BYTES_V1
+        .checked_add(bls_signature.len())
+        .and_then(|value| value.checked_add(auxiliary_payload.len()))
+        .ok_or(ValidationError::SignatureTooLarge)?;
+    if total > MAX_CONSENSUS_SIGNATURE_BYTES {
+        return Err(ValidationError::SignatureTooLarge);
+    }
+    let mut envelope = Vec::with_capacity(total);
+    envelope.extend_from_slice(&OFFLINE_CASH_CONSENSUS_SIGNATURE_ENVELOPE_MAGIC_V1);
+    envelope.push(kind);
+    envelope.extend_from_slice(&bls_len.to_le_bytes());
+    envelope.extend_from_slice(&auxiliary_len.to_le_bytes());
+    envelope.extend_from_slice(bls_signature);
+    envelope.extend_from_slice(auxiliary_payload);
+    Ok(envelope)
+}
+
+/// Decode one reserved Offline Cash V1 consensus-signature envelope.
+///
+/// A byte string without the complete 128-bit reserved prefix is an ordinary
+/// BLS signature and returns `Ok(None)`. A prefixed but non-canonical frame
+/// fails closed.
+///
+/// # Errors
+///
+/// Returns an error for an unknown kind, empty component, length mismatch, or
+/// oversized frame.
+pub fn decode_offline_cash_consensus_signature_envelope_v1(
+    bytes: &[u8],
+) -> Result<Option<OfflineCashConsensusSignatureEnvelopePartsV1<'_>>, ValidationError> {
+    if !bytes.starts_with(&OFFLINE_CASH_CONSENSUS_SIGNATURE_ENVELOPE_MAGIC_V1) {
+        return Ok(None);
+    }
+    if bytes.len() < OFFLINE_CASH_CONSENSUS_SIGNATURE_ENVELOPE_HEADER_BYTES_V1
+        || bytes.len() > MAX_CONSENSUS_SIGNATURE_BYTES
+    {
+        return Err(ValidationError::InvalidOfflineCashSignatureEnvelope);
+    }
+    let kind = bytes[16];
+    if !matches!(
+        kind,
+        OFFLINE_CASH_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1
+            | OFFLINE_CASH_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1
+    ) {
+        return Err(ValidationError::InvalidOfflineCashSignatureEnvelope);
+    }
+    let bls_len = usize::from(u16::from_le_bytes([bytes[17], bytes[18]]));
+    let auxiliary_len = usize::try_from(u32::from_le_bytes([
+        bytes[19], bytes[20], bytes[21], bytes[22],
+    ]))
+    .map_err(|_| ValidationError::InvalidOfflineCashSignatureEnvelope)?;
+    let bls_start = OFFLINE_CASH_CONSENSUS_SIGNATURE_ENVELOPE_HEADER_BYTES_V1;
+    let bls_end = bls_start
+        .checked_add(bls_len)
+        .ok_or(ValidationError::InvalidOfflineCashSignatureEnvelope)?;
+    let auxiliary_end = bls_end
+        .checked_add(auxiliary_len)
+        .ok_or(ValidationError::InvalidOfflineCashSignatureEnvelope)?;
+    if bls_len == 0
+        || bls_len > OFFLINE_CASH_CONSENSUS_BLS_SIGNATURE_MAX_BYTES_V1
+        || auxiliary_len == 0
+        || auxiliary_end != bytes.len()
+    {
+        return Err(ValidationError::InvalidOfflineCashSignatureEnvelope);
+    }
+    Ok(Some(OfflineCashConsensusSignatureEnvelopePartsV1 {
+        kind,
+        bls_signature: &bytes[bls_start..bls_end],
+        auxiliary_payload: &bytes[bls_end..auxiliary_end],
+    }))
 }
 /// One global Prepare or Commit vote.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
@@ -1257,6 +1426,42 @@ impl Vote {
         };
         signature_preimage(b"iroha:sumeragi:v2:vote", &payload.encode())
     }
+    /// Borrow the ordinary BLS signature from either its raw representation or
+    /// the required Offline Cash V1 Commit-vote envelope.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the signature framing is malformed or disagrees
+    /// with the vote phase/top-up commitment.
+    pub fn bls_signature(&self) -> Result<&[u8], ValidationError> {
+        match self.offline_cash_finality_seal_payload()? {
+            Some(_) => decode_offline_cash_consensus_signature_envelope_v1(&self.signature)?
+                .map(|parts| parts.bls_signature)
+                .ok_or(ValidationError::InvalidOfflineCashSignatureEnvelope),
+            None => Ok(&self.signature),
+        }
+    }
+    /// Borrow the canonical paired-Pasta Commit-vote seal payload when this vote certifies a
+    /// non-empty Offline Cash V1 top-up root or carries an epoch-boundary roster rotation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a required envelope is absent, an envelope occurs
+    /// on another vote kind, or its framing is malformed.
+    pub fn offline_cash_finality_seal_payload(&self) -> Result<Option<&[u8]>, ValidationError> {
+        let envelope = decode_offline_cash_consensus_signature_envelope_v1(&self.signature)?;
+        let commit = self.phase == GlobalPhase::Commit;
+        let required = commit && self.execution_commitment.offline_cash_top_up_count != 0;
+        match (commit, required, envelope) {
+            (true, _, Some(parts))
+                if parts.kind == OFFLINE_CASH_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1 =>
+            {
+                Ok(Some(parts.auxiliary_payload))
+            }
+            (true, false, None) | (false, false, None) => Ok(None),
+            _ => Err(ValidationError::InvalidOfflineCashSignatureEnvelope),
+        }
+    }
     /// Validate the vote's context, signer, and signature presence.
     ///
     /// Cryptographic verification remains the authenticated-ingress adapter's
@@ -1273,7 +1478,8 @@ impl Vote {
         validate_proposal_round(self.proposal_round, self.round, context)?;
         validate_validator_index(self.signer, context)?;
         self.execution_commitment.validate()?;
-        require_signature(&self.signature)
+        require_signature(&self.signature)?;
+        self.bls_signature().map(|_| ())
     }
 }
 /// Canonical same-message fields authenticated by Prepare and Commit votes.
@@ -1359,6 +1565,45 @@ impl QuorumCertificate {
             execution_commitment: self.execution_commitment,
         }
     }
+    /// Borrow the ordinary BLS aggregate from either its raw representation or
+    /// the required Offline Cash V1 CommitQC envelope.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the signature framing is malformed or disagrees
+    /// with the certificate phase/top-up commitment.
+    pub fn bls_aggregate_signature(&self) -> Result<&[u8], ValidationError> {
+        match self.offline_cash_finality_seal_payload()? {
+            Some(_) => {
+                decode_offline_cash_consensus_signature_envelope_v1(&self.aggregate_signature)?
+                    .map(|parts| parts.bls_signature)
+                    .ok_or(ValidationError::InvalidOfflineCashSignatureEnvelope)
+            }
+            None => Ok(&self.aggregate_signature),
+        }
+    }
+    /// Borrow the canonical paired-Pasta CommitQC seal bundle payload when the certificate
+    /// commits a non-empty Offline Cash V1 top-up root or an epoch-boundary roster rotation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a required envelope is absent, an envelope occurs
+    /// on another certificate kind, or its framing is malformed.
+    pub fn offline_cash_finality_seal_payload(&self) -> Result<Option<&[u8]>, ValidationError> {
+        let envelope =
+            decode_offline_cash_consensus_signature_envelope_v1(&self.aggregate_signature)?;
+        let commit = self.phase == GlobalPhase::Commit;
+        let required = commit && self.execution_commitment.offline_cash_top_up_count != 0;
+        match (commit, required, envelope) {
+            (true, _, Some(parts))
+                if parts.kind == OFFLINE_CASH_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1 =>
+            {
+                Ok(Some(parts.auxiliary_payload))
+            }
+            (true, false, None) | (false, false, None) => Ok(None),
+            _ => Err(ValidationError::InvalidOfflineCashSignatureEnvelope),
+        }
+    }
     /// Validate the certificate's context binding and equal-vote quorum.
     ///
     /// Cryptographic aggregate-signature verification remains the caller's
@@ -1373,7 +1618,8 @@ impl QuorumCertificate {
         validate_proposal_round(self.proposal_round, self.round, context)?;
         self.execution_commitment.validate()?;
         context.validate_certificate_signers(&self.signers)?;
-        require_aggregate_signature(&self.aggregate_signature)
+        require_aggregate_signature(&self.aggregate_signature)?;
+        self.bls_aggregate_signature().map(|_| ())
     }
     /// Reconstruct the canonical vote preimage for one certified signer.
     ///
@@ -3834,6 +4080,10 @@ pub enum ValidationError {
     InvalidNexusAmxContextHash,
     /// The mandatory process-local execution-policy commitment is zero or non-canonical.
     InvalidExecutionPolicyHash,
+    /// The mandatory Offline Cash V1 mint-finality epoch-roster commitment is zero.
+    InvalidOfflineCashMintFinalityEpochId,
+    /// The embedded public Pasta roster does not exactly match its context commitment/election.
+    InvalidOfflineCashMintFinalityEpochRoster,
     /// A certificate or message is bound to another height context.
     WrongHeightContext,
     /// Signer count cannot be represented on the wire.
@@ -3857,8 +4107,6 @@ pub enum ValidationError {
     InvalidExecutionCommitment,
     /// The result-bearing block wire commitment declares a zero or oversized byte length.
     InvalidExecutedBlockWireLength,
-    /// The advertised Kagemusha top-up count exceeds the consensus bound.
-    TooManyKagemushaTopupAnchors,
     /// A top-up execution commitment's combined post root is not canonical.
     ExecutionCommitmentPostRootMismatch,
     /// A Native AMX application manifest declared an unsupported version.
@@ -3879,6 +4127,9 @@ pub enum ValidationError {
     MissingAggregateSignature,
     /// A signature or aggregate exceeds the protocol allocation bound.
     SignatureTooLarge,
+    /// A paired-Pasta Offline Cash V1 signature envelope is missing,
+    /// unexpected, malformed, or uses the wrong vote/certificate kind.
+    InvalidOfflineCashSignatureEnvelope,
     /// Too few distinct validators signed.
     InsufficientSignerCount,
     /// The redundant signed-vote projection is not a strict supermajority.
@@ -4017,6 +4268,12 @@ impl fmt::Display for ValidationError {
             Self::InvalidExecutionPolicyHash => {
                 f.write_str("height context has an invalid execution-policy hash")
             }
+            Self::InvalidOfflineCashMintFinalityEpochId => {
+                f.write_str("height context has an invalid Offline Cash V1 mint-finality epoch id")
+            }
+            Self::InvalidOfflineCashMintFinalityEpochRoster => f.write_str(
+                "height context Offline Cash V1 mint-finality roster does not match its commitment",
+            ),
             Self::WrongHeightContext => f.write_str("message is bound to another height context"),
             Self::TooManySigners => f.write_str("signer count exceeds the wire range"),
             Self::SignerCountMismatch { expected, actual } => write!(
@@ -4037,9 +4294,6 @@ impl fmt::Display for ValidationError {
                     f,
                     "execution commitment block wire length must be between 1 and {MAX_EXECUTED_BLOCK_WIRE_BYTES} bytes"
                 )
-            }
-            Self::TooManyKagemushaTopupAnchors => {
-                f.write_str("execution commitment exceeds the Kagemusha top-up anchor limit")
             }
             Self::ExecutionCommitmentPostRootMismatch => {
                 f.write_str("execution commitment post-state root is not canonical")
@@ -4069,6 +4323,9 @@ impl fmt::Display for ValidationError {
                 f.write_str("certificate has an empty aggregate signature")
             }
             Self::SignatureTooLarge => f.write_str("consensus signature exceeds protocol bound"),
+            Self::InvalidOfflineCashSignatureEnvelope => {
+                f.write_str("Offline Cash V1 consensus signature envelope is invalid")
+            }
             Self::InsufficientSignerCount => {
                 f.write_str("insufficient distinct validator signatures")
             }
@@ -4299,6 +4556,77 @@ fn signature_preimage(domain: &[u8], encoded_payload: &[u8]) -> Vec<u8> {
     preimage.extend_from_slice(encoded_payload);
     preimage
 }
+
+/// Build deterministic paired-Pasta authority aligned to a unit-test consensus roster.
+#[cfg(test)]
+pub(crate) fn test_offline_cash_mint_finality_roster(
+    network_id: NetworkId,
+    epoch: u64,
+    roster: &[ValidatorPower],
+) -> crate::isi::offline_cash_v1::OfflineCashMintFinalityEpochRosterV1 {
+    use crate::isi::offline_cash_v1::{
+        OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterV1,
+        OfflineCashMintFinalityValidatorKeysV1,
+    };
+
+    OfflineCashMintFinalityEpochRosterV1 {
+        version: OFFLINE_CASH_CHAIN_VERSION_V1,
+        network_id,
+        epoch,
+        validators: roster
+            .iter()
+            .enumerate()
+            .map(
+                |(index, validator)| OfflineCashMintFinalityValidatorKeysV1 {
+                    validator: validator.validator.clone(),
+                    eq_proof_public_key: [u8::try_from(index + 1).expect("small fixture roster");
+                        32],
+                    ep_proof_public_key: [u8::try_from(index + 17).expect("small fixture roster");
+                        32],
+                },
+            )
+            .collect(),
+    }
+}
+
+/// Build deterministic signed-genesis context parameters for unit tests.
+#[cfg(test)]
+pub(crate) fn test_genesis_context_parameters() -> SumeragiV2GenesisContextParameters {
+    SumeragiV2GenesisContextParameters::recommended()
+}
+
+/// Build deterministic network-independent Offline Cash genesis authority for unit tests.
+#[cfg(test)]
+pub(crate) fn test_offline_cash_mint_finality_genesis_parameters()
+-> crate::isi::offline_cash_v1::OfflineCashMintFinalityGenesisParametersV1 {
+    use crate::isi::offline_cash_v1::{
+        OfflineCashMintFinalityEpochRosterTemplateV1, OfflineCashMintFinalityGenesisParametersV1,
+    };
+
+    let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::new(b"Sumeragi v2 unit-test genesis"),
+    ));
+    let mut roster = (1_u8..=4)
+        .map(|seed| {
+            let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                .expect("derive deterministic test validator");
+            ValidatorPower {
+                validator: PeerId::new(key_pair.public_key().clone()),
+                power: 1,
+            }
+        })
+        .collect::<Vec<_>>();
+    roster.sort_by(|left, right| left.validator.cmp(&right.validator));
+    let bound = test_offline_cash_mint_finality_roster(network_id, 0, &roster);
+    OfflineCashMintFinalityGenesisParametersV1 {
+        epoch_roster: OfflineCashMintFinalityEpochRosterTemplateV1 {
+            version: bound.version,
+            epoch: bound.epoch,
+            validators: bound.validators,
+        },
+        next_epoch_roster: None,
+    }
+}
 include!("consensus_v2_tests.rs");
 
 #[cfg(test)]
@@ -4338,25 +4666,32 @@ mod terminal_height_context_tests {
                 )),
                 payload_hash: Hash::new(b"terminal-height parent payload"),
             },
-            execution_commitment: ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new(b"terminal-height parent state"),
-                Hash::new(b"terminal-height post state"),
-                Hash::new(b"terminal-height ordinary writes"),
-                1,
-                Hash::new(b"terminal-height executed block wire"),
-            ),
+            execution_commitment:
+                ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                    Hash::new(b"terminal-height parent state"),
+                    Hash::new(b"terminal-height post state"),
+                    Hash::new(b"terminal-height ordinary writes"),
+                    1,
+                    Hash::new(b"terminal-height executed block wire"),
+                ),
             signers: vec![0, 1, 2],
             aggregate_signature: vec![0xA5; 48],
         };
+        let network_id = NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"terminal-height genesis")),
+        );
+        let mint_finality_roster =
+            test_offline_cash_mint_finality_roster(network_id, u64::MAX, &roster);
+        let mint_finality_epoch_id = mint_finality_roster
+            .finality_epoch_id()
+            .expect("valid terminal mint-finality roster");
         HeightContext {
-            network_id: NetworkId::from_genesis_hash(
-                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-                    b"terminal-height genesis",
-                )),
-            ),
+            network_id,
             protocol_version: PROTOCOL_VERSION,
             height: u64::MAX,
             epoch: u64::MAX,
+            offline_cash_mint_finality_epoch_id: mint_finality_epoch_id,
+            offline_cash_mint_finality_epoch_roster: mint_finality_roster,
             epoch_end_height: u64::MAX,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Permissioned,

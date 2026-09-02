@@ -127,6 +127,10 @@ use iroha_data_model::{
     events::pipeline::{TransactionEvent, TransactionStatus},
     isi::{
         InstructionBox,
+        offline_cash_v1::{
+            OfflineCashOperationKindV1, OfflineCashRedemptionRequestV1, OfflineCashTopUpRequestV1,
+            RedeemOfflineCashV1, TopUpOfflineCashV1,
+        },
         runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
         smart_contract_code::{
             ActivateContractInstance, CommitContractDeployment, DeactivateContractInstance,
@@ -135,14 +139,10 @@ use iroha_data_model::{
         },
     },
     name::Name,
-    offline::{
-        KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2, KagemushaOperationKindV4,
-        is_kagemusha_marked_hash_v4, kagemusha_operation_authority_digest_v4,
-    },
     peer::PeerId,
     transaction::{
         Executable, ExecutableBatchItem, SignedTransaction, TransactionAdmissionIntent,
-        TransactionEntrypoint, error::TransactionRejectionReason, signed::TransactionPayload,
+        TransactionEntrypoint, signed::TransactionPayload,
     },
 };
 use iroha_logger::{trace, warn};
@@ -203,7 +203,7 @@ use tokio::{
     time::{MissedTickBehavior, interval},
 };
 type EntrypointHash = HashOf<TransactionEntrypoint>;
-type PendingKagemushaOperationKey = (AccountId, [u8; 32]);
+type PendingOfflineCashOperationKey = [u8; 32];
 type QueuePlanJournalRemoval = (HashOf<TransactionEntrypoint>, Hash, Hash);
 #[cfg(test)]
 fn queue_test_network_id() -> iroha_data_model::NetworkId {
@@ -3623,33 +3623,95 @@ static GOV_APPROVERS_METADATA_KEY: LazyLock<Name> = LazyLock::new(|| {
 static CONTRACT_ADDRESS_METADATA_KEY: LazyLock<Name> =
     LazyLock::new(|| Name::from_str("contract_address").expect("static contract metadata key"));
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct PendingKagemushaOperationBinding {
-    /// Outer transaction authority that owns the pending-attempt namespace.
-    authority: AccountId,
-    operation_id: [u8; 32],
-    request_authority_digest: [u8; 32],
-    kind: KagemushaOperationKindV4,
-    canonical_request_digest: [u8; 32],
-    issued_at_ms: u64,
-    expires_at_ms: u64,
-    entrypoint_hash: EntrypointHash,
-    signed_transaction_wire_hash: [u8; 32],
+#[derive(Clone, Copy)]
+enum OfflineCashOperationRequestV1<'request> {
+    TopUp(&'request OfflineCashTopUpRequestV1),
+    Redemption(&'request OfflineCashRedemptionRequestV1),
 }
 
-impl PendingKagemushaOperationBinding {
-    fn key(&self) -> PendingKagemushaOperationKey {
-        (self.authority.clone(), self.operation_id)
+impl OfflineCashOperationRequestV1<'_> {
+    const fn kind(self) -> OfflineCashOperationKindV1 {
+        match self {
+            Self::TopUp(_) => OfflineCashOperationKindV1::TopUp,
+            Self::Redemption(_) => OfflineCashOperationKindV1::Redemption,
+        }
+    }
+
+    const fn operation_id(self) -> [u8; 32] {
+        match self {
+            Self::TopUp(request) => request.operation_id,
+            Self::Redemption(request) => request.operation_id,
+        }
+    }
+
+    fn validate(self) -> Result<(), String> {
+        match self {
+            Self::TopUp(request) => request.validate_shape(),
+            Self::Redemption(request) => request.validate_shape(),
+        }
+        .map_err(|error| error.to_string())
+    }
+
+    fn canonical_digest(self) -> Result<[u8; 32], String> {
+        match self {
+            Self::TopUp(request) => request.canonical_digest(),
+            Self::Redemption(request) => request.canonical_digest(),
+        }
+        .map_err(|error| error.to_string())
+    }
+}
+
+fn offline_cash_operation_request_v1(
+    instruction: &InstructionBox,
+) -> Option<OfflineCashOperationRequestV1<'_>> {
+    let instruction = instruction.as_any();
+    if let Some(top_up) = instruction.downcast_ref::<TopUpOfflineCashV1>() {
+        Some(OfflineCashOperationRequestV1::TopUp(&top_up.request))
+    } else {
+        instruction
+            .downcast_ref::<RedeemOfflineCashV1>()
+            .map(|redeem| OfflineCashOperationRequestV1::Redemption(&redeem.request))
+    }
+}
+
+fn executable_contains_offline_cash_operation_v1(executable: &Executable) -> bool {
+    executable
+        .explicit_instructions()
+        .any(|instruction| offline_cash_operation_request_v1(instruction).is_some())
+        || matches!(
+            executable,
+            Executable::IvmProved(proved)
+                if proved
+                    .overlay
+                    .iter()
+                    .any(|instruction| offline_cash_operation_request_v1(instruction).is_some())
+        )
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PendingOfflineCashOperationBinding {
+    /// Outer transaction authority retained for status attribution.
+    authority: AccountId,
+    operation_id: [u8; 32],
+    kind: OfflineCashOperationKindV1,
+    canonical_request_digest: [u8; 32],
+    entrypoint_hash: EntrypointHash,
+    signed_transaction_hash: HashOf<SignedTransaction>,
+}
+
+impl PendingOfflineCashOperationBinding {
+    fn key(&self) -> PendingOfflineCashOperationKey {
+        self.operation_id
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum PendingKagemushaOperationClaimError {
+enum PendingOfflineCashOperationClaimError {
     OperationIdClaimed {
         existing_entrypoint_hash: EntrypointHash,
     },
     EntrypointClaimed {
-        existing_key: PendingKagemushaOperationKey,
+        existing_key: PendingOfflineCashOperationKey,
     },
     Inconsistent {
         entrypoint_hash: EntrypointHash,
@@ -3658,57 +3720,43 @@ enum PendingKagemushaOperationClaimError {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct PendingKagemushaOperationIndexError {
+struct PendingOfflineCashOperationIndexError {
     entrypoint_hash: EntrypointHash,
     reason: String,
 }
 
 #[derive(Clone, Debug, Default)]
-struct PendingKagemushaOperationIndex {
-    by_key: BTreeMap<PendingKagemushaOperationKey, PendingKagemushaOperationBinding>,
-    key_by_entrypoint: BTreeMap<EntrypointHash, PendingKagemushaOperationKey>,
+struct PendingOfflineCashOperationIndex {
+    by_key: BTreeMap<PendingOfflineCashOperationKey, PendingOfflineCashOperationBinding>,
+    key_by_entrypoint: BTreeMap<EntrypointHash, PendingOfflineCashOperationKey>,
 }
 
-impl PendingKagemushaOperationIndex {
+impl PendingOfflineCashOperationIndex {
     fn validate_binding_identity(
-        binding: &PendingKagemushaOperationBinding,
-    ) -> Result<(), PendingKagemushaOperationIndexError> {
-        if !is_kagemusha_marked_hash_v4(&binding.operation_id)
-            || !is_kagemusha_marked_hash_v4(&binding.request_authority_digest)
-            || !is_kagemusha_marked_hash_v4(&binding.canonical_request_digest)
-            || !is_kagemusha_marked_hash_v4(&binding.signed_transaction_wire_hash)
-            || binding.issued_at_ms == 0
-            || binding.expires_at_ms <= binding.issued_at_ms
-            || binding.expires_at_ms - binding.issued_at_ms
-                > KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2
+        binding: &PendingOfflineCashOperationBinding,
+    ) -> Result<(), PendingOfflineCashOperationIndexError> {
+        if binding.operation_id == [0; 32]
+            || binding.canonical_request_digest == [0; 32]
+            || binding.signed_transaction_hash.as_ref() == &[0; Hash::LENGTH]
         {
-            return Err(PendingKagemushaOperationIndexError {
+            return Err(PendingOfflineCashOperationIndexError {
                 entrypoint_hash: binding.entrypoint_hash,
-                reason: "pending Kagemusha binding has a non-canonical immutable identity"
-                    .to_owned(),
+                reason: "pending Offline Cash V1 binding has a zero immutable identity".to_owned(),
             });
         }
         Ok(())
     }
 
-    fn binding(
-        &self,
-        authority: &AccountId,
-        operation_id: [u8; 32],
-    ) -> Option<&PendingKagemushaOperationBinding> {
-        self.by_key.get(&(authority.clone(), operation_id))
+    fn binding(&self, operation_id: [u8; 32]) -> Option<&PendingOfflineCashOperationBinding> {
+        self.by_key.get(&operation_id)
     }
 
-    fn entrypoint_for(
-        &self,
-        authority: &AccountId,
-        operation_id: [u8; 32],
-    ) -> Option<EntrypointHash> {
-        self.binding(authority, operation_id)
+    fn entrypoint_for(&self, operation_id: [u8; 32]) -> Option<EntrypointHash> {
+        self.binding(operation_id)
             .map(|binding| binding.entrypoint_hash)
     }
 
-    fn validate_cardinality(&self) -> Result<(), PendingKagemushaOperationIndexError> {
+    fn validate_cardinality(&self) -> Result<(), PendingOfflineCashOperationIndexError> {
         if self.by_key.len() == self.key_by_entrypoint.len() {
             return Ok(());
         }
@@ -3724,10 +3772,10 @@ impl PendingKagemushaOperationIndex {
                     .map(|binding| binding.entrypoint_hash)
             })
             .expect("unequal non-negative index cardinalities cannot both be zero");
-        Err(PendingKagemushaOperationIndexError {
+        Err(PendingOfflineCashOperationIndexError {
             entrypoint_hash,
             reason: format!(
-                "Kagemusha pending-operation index cardinality differs: {} forward owners and {} reverse owners",
+                "Offline Cash V1 pending-operation index cardinality differs: {} forward owners and {} reverse owners",
                 self.by_key.len(),
                 self.key_by_entrypoint.len()
             ),
@@ -3736,33 +3784,33 @@ impl PendingKagemushaOperationIndex {
 
     fn validate_forward_owner(
         &self,
-        key: &PendingKagemushaOperationKey,
-        binding: &PendingKagemushaOperationBinding,
-    ) -> Result<(), PendingKagemushaOperationIndexError> {
+        key: &PendingOfflineCashOperationKey,
+        binding: &PendingOfflineCashOperationBinding,
+    ) -> Result<(), PendingOfflineCashOperationIndexError> {
         Self::validate_binding_identity(binding)?;
         if binding.key() != *key {
-            return Err(PendingKagemushaOperationIndexError {
+            return Err(PendingOfflineCashOperationIndexError {
                 entrypoint_hash: binding.entrypoint_hash,
                 reason: format!(
                     "forward operation key {:?} disagrees with its binding key {:?}",
-                    key.1, binding.operation_id
+                    key, binding.operation_id
                 ),
             });
         }
         match self.key_by_entrypoint.get(&binding.entrypoint_hash) {
             Some(reverse_key) if reverse_key == key => Ok(()),
-            Some(reverse_key) => Err(PendingKagemushaOperationIndexError {
+            Some(reverse_key) => Err(PendingOfflineCashOperationIndexError {
                 entrypoint_hash: binding.entrypoint_hash,
                 reason: format!(
                     "forward operation {:?} points to {}, whose reverse owner is operation {:?}",
-                    key.1, binding.entrypoint_hash, reverse_key.1
+                    key, binding.entrypoint_hash, reverse_key
                 ),
             }),
-            None => Err(PendingKagemushaOperationIndexError {
+            None => Err(PendingOfflineCashOperationIndexError {
                 entrypoint_hash: binding.entrypoint_hash,
                 reason: format!(
                     "forward operation {:?} points to {}, which has no reverse owner",
-                    key.1, binding.entrypoint_hash
+                    key, binding.entrypoint_hash
                 ),
             }),
         }
@@ -3771,24 +3819,24 @@ impl PendingKagemushaOperationIndex {
     fn validate_reverse_owner(
         &self,
         entrypoint_hash: EntrypointHash,
-        key: &PendingKagemushaOperationKey,
-    ) -> Result<(), PendingKagemushaOperationIndexError> {
+        key: &PendingOfflineCashOperationKey,
+    ) -> Result<(), PendingOfflineCashOperationIndexError> {
         match self.by_key.get(key) {
             Some(binding) if binding.entrypoint_hash == entrypoint_hash => {
                 self.validate_forward_owner(key, binding)
             }
-            Some(binding) => Err(PendingKagemushaOperationIndexError {
+            Some(binding) => Err(PendingOfflineCashOperationIndexError {
                 entrypoint_hash,
                 reason: format!(
                     "reverse entry {entrypoint_hash} names operation {:?}, whose forward owner is {}",
-                    key.1, binding.entrypoint_hash
+                    key, binding.entrypoint_hash
                 ),
             }),
-            None => Err(PendingKagemushaOperationIndexError {
+            None => Err(PendingOfflineCashOperationIndexError {
                 entrypoint_hash,
                 reason: format!(
                     "reverse entry {entrypoint_hash} names operation {:?}, which has no forward owner",
-                    key.1
+                    key
                 ),
             }),
         }
@@ -3800,7 +3848,7 @@ impl PendingKagemushaOperationIndex {
     /// inductively with cardinality plus exact reciprocal-owner checks. Scanning
     /// every unrelated owner while holding Queue's mutation lock would make a
     /// public status miss linear in the global pending-operation population.
-    fn validate_bijection(&self) -> Result<(), PendingKagemushaOperationIndexError> {
+    fn validate_bijection(&self) -> Result<(), PendingOfflineCashOperationIndexError> {
         self.validate_cardinality()?;
         for (key, binding) in &self.by_key {
             self.validate_forward_owner(key, binding)?;
@@ -3813,12 +3861,11 @@ impl PendingKagemushaOperationIndex {
 
     fn checked_binding(
         &self,
-        authority: &AccountId,
         operation_id: [u8; 32],
-    ) -> Result<Option<&PendingKagemushaOperationBinding>, PendingKagemushaOperationIndexError>
+    ) -> Result<Option<&PendingOfflineCashOperationBinding>, PendingOfflineCashOperationIndexError>
     {
         self.validate_cardinality()?;
-        let key = (authority.clone(), operation_id);
+        let key = operation_id;
         let Some(binding) = self.by_key.get(&key) else {
             return Ok(None);
         };
@@ -3828,10 +3875,10 @@ impl PendingKagemushaOperationIndex {
 
     fn validate_claim(
         &self,
-        binding: &PendingKagemushaOperationBinding,
-    ) -> Result<(), PendingKagemushaOperationClaimError> {
-        let inconsistent = |error: PendingKagemushaOperationIndexError| {
-            PendingKagemushaOperationClaimError::Inconsistent {
+        binding: &PendingOfflineCashOperationBinding,
+    ) -> Result<(), PendingOfflineCashOperationClaimError> {
+        let inconsistent = |error: PendingOfflineCashOperationIndexError| {
+            PendingOfflineCashOperationClaimError::Inconsistent {
                 entrypoint_hash: error.entrypoint_hash,
                 reason: error.reason,
             }
@@ -3842,14 +3889,14 @@ impl PendingKagemushaOperationIndex {
         if let Some(existing) = self.by_key.get(&key) {
             self.validate_forward_owner(&key, existing)
                 .map_err(&inconsistent)?;
-            return Err(PendingKagemushaOperationClaimError::OperationIdClaimed {
+            return Err(PendingOfflineCashOperationClaimError::OperationIdClaimed {
                 existing_entrypoint_hash: existing.entrypoint_hash,
             });
         }
         if let Some(existing_key) = self.key_by_entrypoint.get(&binding.entrypoint_hash) {
             self.validate_reverse_owner(binding.entrypoint_hash, existing_key)
                 .map_err(&inconsistent)?;
-            return Err(PendingKagemushaOperationClaimError::EntrypointClaimed {
+            return Err(PendingOfflineCashOperationClaimError::EntrypointClaimed {
                 existing_key: existing_key.clone(),
             });
         }
@@ -3858,8 +3905,8 @@ impl PendingKagemushaOperationIndex {
 
     fn claim(
         &mut self,
-        binding: PendingKagemushaOperationBinding,
-    ) -> Result<(), PendingKagemushaOperationClaimError> {
+        binding: PendingOfflineCashOperationBinding,
+    ) -> Result<(), PendingOfflineCashOperationClaimError> {
         self.validate_claim(&binding)?;
         let key = binding.key();
         self.key_by_entrypoint
@@ -3871,7 +3918,7 @@ impl PendingKagemushaOperationIndex {
     fn remove_entrypoint(
         &mut self,
         hash: &EntrypointHash,
-    ) -> Result<(), PendingKagemushaOperationIndexError> {
+    ) -> Result<(), PendingOfflineCashOperationIndexError> {
         self.validate_cardinality()?;
         let Some(key) = self.key_by_entrypoint.get(hash).cloned() else {
             return Ok(());
@@ -3892,15 +3939,15 @@ impl PendingKagemushaOperationIndex {
     }
 }
 
-/// One uniquely indexed pending Kagemusha operation.
+/// One globally indexed pending Offline Cash V1 operation.
 #[derive(Clone, Debug)]
-pub struct PendingKagemushaOperation {
-    binding: PendingKagemushaOperationBinding,
+pub struct PendingOfflineCashOperation {
+    binding: PendingOfflineCashOperationBinding,
     transaction: Arc<CheckedTransaction<'static>>,
 }
 
-impl PendingKagemushaOperation {
-    /// Return the outer transaction authority that owns the operation namespace.
+impl PendingOfflineCashOperation {
+    /// Return the outer transaction authority that submitted the operation.
     #[must_use]
     pub fn authority(&self) -> &AccountId {
         &self.binding.authority
@@ -3912,15 +3959,9 @@ impl PendingKagemushaOperation {
         self.binding.operation_id
     }
 
-    /// Return the canonical digest of the authority that signed the request.
-    #[must_use]
-    pub const fn request_authority_digest(&self) -> [u8; 32] {
-        self.binding.request_authority_digest
-    }
-
     /// Return whether this is a top-up or redemption.
     #[must_use]
-    pub const fn kind(&self) -> KagemushaOperationKindV4 {
+    pub const fn kind(&self) -> OfflineCashOperationKindV1 {
         self.binding.kind
     }
 
@@ -3930,28 +3971,16 @@ impl PendingKagemushaOperation {
         self.binding.canonical_request_digest
     }
 
-    /// Return the request's signed issue timestamp in milliseconds.
-    #[must_use]
-    pub const fn issued_at_ms(&self) -> u64 {
-        self.binding.issued_at_ms
-    }
-
-    /// Return the request's signed expiry timestamp in milliseconds.
-    #[must_use]
-    pub const fn expires_at_ms(&self) -> u64 {
-        self.binding.expires_at_ms
-    }
-
     /// Return the canonical transaction-entrypoint hash.
     #[must_use]
     pub const fn entrypoint_hash(&self) -> HashOf<TransactionEntrypoint> {
         self.binding.entrypoint_hash
     }
 
-    /// Return the domain-separated digest of the exact signed-transaction wire.
+    /// Return the exact signed-transaction identity.
     #[must_use]
-    pub const fn signed_transaction_wire_hash(&self) -> [u8; 32] {
-        self.binding.signed_transaction_wire_hash
+    pub const fn signed_transaction_hash(&self) -> HashOf<SignedTransaction> {
+        self.binding.signed_transaction_hash
     }
 
     /// Borrow the exact external transaction without cloning its proof-heavy request.
@@ -3962,32 +3991,34 @@ impl PendingKagemushaOperation {
             TransactionEntrypoint::SealedCommitment(_)
             | TransactionEntrypoint::SealedReveal(_)
             | TransactionEntrypoint::Time(_) => {
-                unreachable!("indexed Kagemusha operation must retain its external carrier")
+                unreachable!("indexed Offline Cash V1 operation must retain its external carrier")
             }
         }
     }
 }
 
-/// Failure to resolve one pending Kagemusha operation from a coherent Queue snapshot.
+/// Failure to resolve one pending Offline Cash V1 operation from a coherent Queue snapshot.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
-pub enum PendingKagemushaOperationLookupError {
-    /// The supplied operation identifier is not a canonical marked hash.
-    #[error("Kagemusha pending-operation lookup requires a canonical operation id")]
+pub enum PendingOfflineCashOperationLookupError {
+    /// The supplied operation identifier is zero.
+    #[error("Offline Cash V1 pending-operation lookup requires a non-zero operation id")]
     InvalidOperationId,
     /// Queue ownership is not safe to inspect until startup or fault recovery completes.
-    #[error("Kagemusha pending-operation lookup is unavailable: {reason}")]
+    #[error("Offline Cash V1 pending-operation lookup is unavailable: {reason}")]
     Unavailable {
         /// Closed reason for the unavailable lookup.
         reason: String,
     },
     /// The matching operation is crossing its pending-plan durability boundary.
-    #[error("Kagemusha pending operation {entrypoint_hash} is crossing a durability boundary")]
+    #[error(
+        "Offline Cash V1 pending operation {entrypoint_hash} is crossing a durability boundary"
+    )]
     DurabilityTransition {
         /// Exact entrypoint whose transition must finish before retry.
         entrypoint_hash: HashOf<TransactionEntrypoint>,
     },
     /// Forward, reverse, or transaction ownership no longer agrees.
-    #[error("Kagemusha pending-operation index is inconsistent: {reason}")]
+    #[error("Offline Cash V1 pending-operation index is inconsistent: {reason}")]
     Inconsistent {
         /// Closed identity-consistency failure reason.
         reason: String,
@@ -4016,11 +4047,11 @@ pub struct Queue {
     /// Stored behind `Arc` to avoid deep cloning heavy transactions
     /// (including instruction payloads) during queue operations.
     txs: DashMap<EntrypointHash, Arc<CheckedTransaction<'static>>>,
-    /// Complete pending Kagemusha operation identity, maintained atomically with `txs`.
+    /// Complete pending Offline Cash V1 operation identity, maintained atomically with `txs`.
     ///
     /// Every mutation is serialized by `push_remove_lock`; the inner mutex provides interior
     /// mutability without introducing an independent mutation order.
-    pending_kagemusha_operations: parking_lot::Mutex<PendingKagemushaOperationIndex>,
+    pending_offline_cash_operations: parking_lot::Mutex<PendingOfflineCashOperationIndex>,
     /// Cached count of transactions tracked by `txs`.
     active_count: AtomicUsize,
     /// Durable reservation owners whose transaction payload has not yet been
@@ -4513,7 +4544,7 @@ struct QueueDurabilityObserverLockHandoff {
 struct PreparedQueueAdmission {
     checked: CheckedTransaction<'static>,
     hash: EntrypointHash,
-    kagemusha_operation: Option<PendingKagemushaOperationBinding>,
+    offline_cash_operation: Option<PendingOfflineCashOperationBinding>,
     routing_decision: RoutingDecision,
     routing_plan: RoutingPlan,
     encoded_len: usize,
@@ -4544,7 +4575,7 @@ struct PreparedQueuePlanReplay {
     next_fifo_ordinal: u64,
     fee_reservations: FeeAdmissionReservationStore,
     per_user_increments: HashMap<AccountId, usize>,
-    pending_kagemusha_operations: PendingKagemushaOperationIndex,
+    pending_offline_cash_operations: PendingOfflineCashOperationIndex,
 }
 struct QueuePlanReplayReservationShape {
     durable_owned_hashes: HashSet<EntrypointHash>,
@@ -4963,22 +4994,20 @@ pub enum Error {
     MaximumTransactionsPerUser,
     /// The transaction is already in the queue
     IsInQueue,
-    /// Kagemusha operation carrier is not canonical: {reason}
-    KagemushaOperationCarrierRejected {
+    /// Offline Cash V1 operation carrier is not canonical: {reason}
+    OfflineCashV1OperationCarrierRejected {
         /// Closed carrier-shape or request-validation reason.
         reason: String,
     },
-    /// Kagemusha operation {operation_id:?} is already pending for authority {authority} as {existing_entrypoint_hash}
-    KagemushaOperationIdConflict {
-        /// Outer transaction authority that owns this pending attempt namespace.
-        authority: AccountId,
-        /// Signed Kagemusha operation identifier.
+    /// Offline Cash V1 operation {operation_id:?} is already pending as {existing_entrypoint_hash}
+    OfflineCashV1OperationIdConflict {
+        /// Globally unique Offline Cash V1 operation identifier.
         operation_id: [u8; 32],
         /// Existing exact transaction-entrypoint owner.
         existing_entrypoint_hash: HashOf<TransactionEntrypoint>,
     },
-    /// Kagemusha pending-operation index is inconsistent: {reason}
-    KagemushaOperationIndexInconsistent {
+    /// Offline Cash V1 pending-operation index is inconsistent: {reason}
+    OfflineCashV1OperationIndexInconsistent {
         /// Closed forward/reverse ownership mismatch.
         reason: String,
     },
@@ -5021,13 +5050,6 @@ pub enum Error {
         code: FeeRejectionCode,
         /// Reason describing why the transaction could not cover the Nexus fee bound.
         reason: String,
-    },
-    /// Confidential policy admission rejected the transaction before queueing: {detail} ({reason})
-    ConfidentialPolicyAdmissionRejected {
-        /// Reason describing why the confidential policy rejected the transaction.
-        reason: TransactionRejectionReason,
-        /// Human-readable confidential policy rejection detail.
-        detail: String,
     },
     /// Nexus fee admission encountered invalid node configuration [{code}]: {reason}
     NexusFeeAdmissionConfigInvalid {
@@ -5319,10 +5341,6 @@ trait QueueAdmissionStateAccess {
         authority: &AccountId,
         lane_alias: &str,
     ) -> Result<Vec<iroha_data_model::domain::DomainId>, Error>;
-    fn validate_confidential_policy_admission(
-        &mut self,
-        executable: &Executable,
-    ) -> Result<(), Error>;
 }
 struct EagerAdmissionStateAccess<'view, W: WorldReadOnly> {
     world: &'view W,
@@ -5330,14 +5348,6 @@ struct EagerAdmissionStateAccess<'view, W: WorldReadOnly> {
     pipeline: &'view Pipeline,
     next_block_height: u64,
     ledger_time_ms: u64,
-}
-fn transaction_rejection_detail(reason: &TransactionRejectionReason) -> String {
-    match reason {
-        TransactionRejectionReason::Validation(iroha_data_model::ValidationFail::NotPermitted(
-            detail,
-        )) => detail.clone(),
-        _ => reason.to_string(),
-    }
 }
 impl<W: WorldReadOnly> EagerAdmissionStateAccess<'_, W> {
     const fn new<'view>(
@@ -5407,91 +5417,95 @@ impl<W: WorldReadOnly> QueueAdmissionStateAccess for EagerAdmissionStateAccess<'
             self.ledger_time_ms,
         )
     }
-    fn validate_confidential_policy_admission(
-        &mut self,
-        executable: &Executable,
-    ) -> Result<(), Error> {
-        crate::tx::validate_confidential_policy_admission_for_world(
-            executable,
-            self.world,
-            self.next_block_height,
-        )
-        .map_err(|reason| Error::ConfidentialPolicyAdmissionRejected {
-            detail: transaction_rejection_detail(&reason),
-            reason,
-        })
-    }
 }
 impl Queue {
-    fn classify_pending_kagemusha_operation(
+    fn classify_pending_offline_cash_operation(
         checked: &CheckedTransaction<'static>,
-    ) -> Result<Option<PendingKagemushaOperationBinding>, Error> {
+    ) -> Result<Option<PendingOfflineCashOperationBinding>, Error> {
         let accepted = checked.as_accepted();
-        let carrier = match accepted.entrypoint() {
-            TransactionEntrypoint::External(transaction) => {
-                crate::kagemusha_operation::classify_kagemusha_operation_transaction_v4(transaction)
-            }
-            entrypoint => {
-                crate::kagemusha_operation::classify_kagemusha_operation_entrypoint_v4(entrypoint)
-            }
-        }
-        .map_err(|error| Error::KagemushaOperationCarrierRejected {
-            reason: error.to_string(),
-        })?;
-        let Some(carrier) = carrier else {
-            return Ok(None);
-        };
         let TransactionEntrypoint::External(transaction) = accepted.entrypoint() else {
-            unreachable!("the shared classifier only accepts an external Kagemusha carrier")
-        };
-        let authorization = carrier.request().authorization();
-        let request_authority_digest =
-            kagemusha_operation_authority_digest_v4(&authorization.authority).map_err(|error| {
-                Error::KagemushaOperationCarrierRejected {
-                    reason: error.to_string(),
+            let contains_operation = match accepted.entrypoint() {
+                TransactionEntrypoint::SealedReveal(reveal) => {
+                    executable_contains_offline_cash_operation_v1(
+                        reveal.signed_transaction().instructions(),
+                    )
                 }
-            })?;
-        let signed_transaction_wire_hash =
-            crate::kagemusha_operation::signed_transaction_wire_hash_v4(transaction).map_err(
-                |error| Error::KagemushaOperationCarrierRejected {
-                    reason: error.to_string(),
-                },
-            )?;
-        Ok(Some(PendingKagemushaOperationBinding {
+                TransactionEntrypoint::Time(time) => time
+                    .instructions
+                    .iter()
+                    .any(|instruction| offline_cash_operation_request_v1(instruction).is_some()),
+                TransactionEntrypoint::SealedCommitment(_) => false,
+                TransactionEntrypoint::External(_) => unreachable!(),
+            };
+            return if contains_operation {
+                Err(Error::OfflineCashV1OperationCarrierRejected {
+                    reason:
+                        "Offline Cash V1 operations require one direct external signed transaction"
+                            .to_owned(),
+                })
+            } else {
+                Ok(None)
+            };
+        };
+        if !executable_contains_offline_cash_operation_v1(transaction.instructions()) {
+            return Ok(None);
+        }
+        let Executable::Instructions(instructions) = transaction.instructions() else {
+            return Err(Error::OfflineCashV1OperationCarrierRejected {
+                reason:
+                    "Offline Cash V1 operations cannot be carried by proved or overlay execution"
+                        .to_owned(),
+            });
+        };
+        let [instruction] = instructions.as_ref() else {
+            return Err(Error::OfflineCashV1OperationCarrierRejected {
+                reason: "an Offline Cash V1 operation must be the only instruction in its signed transaction"
+                    .to_owned(),
+            });
+        };
+        let request = offline_cash_operation_request_v1(instruction).ok_or_else(|| {
+            Error::OfflineCashV1OperationCarrierRejected {
+                reason: "Offline Cash V1 carrier shape changed during classification".to_owned(),
+            }
+        })?;
+        request
+            .validate()
+            .map_err(|reason| Error::OfflineCashV1OperationCarrierRejected { reason })?;
+        let canonical_request_digest = request
+            .canonical_digest()
+            .map_err(|reason| Error::OfflineCashV1OperationCarrierRejected { reason })?;
+        Ok(Some(PendingOfflineCashOperationBinding {
             authority: transaction.authority().clone(),
-            operation_id: carrier.operation_id(),
-            request_authority_digest,
-            kind: carrier.kind(),
-            canonical_request_digest: carrier.canonical_request_digest(),
-            issued_at_ms: authorization.issued_at_ms,
-            expires_at_ms: authorization.expires_at_ms,
+            operation_id: request.operation_id(),
+            kind: request.kind(),
+            canonical_request_digest,
             entrypoint_hash: accepted.hash_as_entrypoint(),
-            signed_transaction_wire_hash,
+            signed_transaction_hash: transaction.hash(),
         }))
     }
 
-    fn latch_pending_kagemusha_operation_index_fault(&self, hash: EntrypointHash, reason: &str) {
+    fn latch_pending_offline_cash_operation_index_fault(&self, hash: EntrypointHash, reason: &str) {
         if !self
             .accepted_work_validation_fault
             .swap(true, Ordering::AcqRel)
         {
             iroha_logger::error!(
                 tx = %hash,
-                stage = "pending_kagemusha_operation_index",
+                stage = "pending_offline_cash_operation_index",
                 reason,
-                "pending Kagemusha operation index lost exact Queue ownership; disabled admission and transaction selection until restart recovery"
+                "pending Offline Cash V1 operation index lost exact Queue ownership; disabled admission and transaction selection until restart recovery"
             );
         }
     }
 
     /// Remove an operation claim with its transaction while holding `push_remove_lock`.
-    fn remove_pending_kagemusha_operation_locked(&self, hash: EntrypointHash) {
+    fn remove_pending_offline_cash_operation_locked(&self, hash: EntrypointHash) {
         if let Err(error) = self
-            .pending_kagemusha_operations
+            .pending_offline_cash_operations
             .lock()
             .remove_entrypoint(&hash)
         {
-            self.latch_pending_kagemusha_operation_index_fault(
+            self.latch_pending_offline_cash_operation_index_fault(
                 error.entrypoint_hash,
                 &error.reason,
             );
@@ -11286,7 +11300,7 @@ impl Queue {
     /// Caller must hold `push_remove_lock`.
     fn ensure_plan_journal_replay_startup_shape_locked(&self) -> std::io::Result<()> {
         let materialized_shape_is_empty = self.txs.is_empty()
-            && self.pending_kagemusha_operations.lock().is_empty()
+            && self.pending_offline_cash_operations.lock().is_empty()
             && self.materialized_active_len() == 0
             && self.materialized_retained_bytes() == 0
             && self.tx_hashes.is_empty()
@@ -11730,10 +11744,10 @@ impl Queue {
             let checked = CheckedTransaction::new_unchecked(accepted);
             let enforce_pending_limits = !state_committed;
             let mut admission = if state_committed {
-                let kagemusha_operation = Self::classify_pending_kagemusha_operation(&checked)
+                let offline_cash_operation = Self::classify_pending_offline_cash_operation(&checked)
                     .map_err(|error| {
                         invalid(format!(
-                            "queue-plan journal transaction {hash} has an invalid Kagemusha operation carrier; retaining its durable record: {error}"
+                            "queue-plan journal transaction {hash} has an invalid Offline Cash V1 operation carrier; retaining its durable record: {error}"
                         ))
                     })?;
                 let proposal_gas_cost =
@@ -11749,7 +11763,7 @@ impl Queue {
                     routing_plan: recorded_routing_plan,
                     checked,
                     hash,
-                    kagemusha_operation,
+                    offline_cash_operation,
                     enqueued_at_ms: enqueue_timestamp_ms,
                     admission_context: None,
                     global_admission_identity: None,
@@ -11826,7 +11840,8 @@ impl Queue {
         let mut projected_retained = self.retained_bytes();
         let mut per_user_increments = HashMap::<AccountId, usize>::new();
         let mut projected_fee_reservations = self.fee_admission_reservations.lock().clone();
-        let mut projected_pending_kagemusha_operations = PendingKagemushaOperationIndex::default();
+        let mut projected_pending_offline_cash_operations =
+            PendingOfflineCashOperationIndex::default();
         for (
             admission,
             _claim,
@@ -11836,12 +11851,12 @@ impl Queue {
             enforce_pending_limits,
         ) in &pending_admissions
         {
-            if let Some(binding) = admission.kagemusha_operation.clone() {
-                projected_pending_kagemusha_operations
+            if let Some(binding) = admission.offline_cash_operation.clone() {
+                projected_pending_offline_cash_operations
                     .claim(binding)
                     .map_err(|error| {
                         invalid(format!(
-                            "queue-plan journal replay contains conflicting Kagemusha operation ownership: {error:?}"
+                            "queue-plan journal replay contains conflicting Offline Cash V1 operation ownership: {error:?}"
                         ))
                     })?;
             }
@@ -12110,11 +12125,11 @@ impl Queue {
                 journal_record_digest: replayed.claim.journal_record_digest,
             })
             .collect();
-        projected_pending_kagemusha_operations
+        projected_pending_offline_cash_operations
             .validate_bijection()
             .map_err(|error| {
                 invalid(format!(
-                    "queue-plan journal replay produced an inconsistent Kagemusha operation index: {}",
+                    "queue-plan journal replay produced an inconsistent Offline Cash V1 operation index: {}",
                     error.reason
                 ))
             })?;
@@ -12129,7 +12144,7 @@ impl Queue {
             next_fifo_ordinal,
             fee_reservations: projected_fee_reservations,
             per_user_increments,
-            pending_kagemusha_operations: projected_pending_kagemusha_operations,
+            pending_offline_cash_operations: projected_pending_offline_cash_operations,
         })
     }
     #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
@@ -12150,10 +12165,10 @@ impl Queue {
             next_fifo_ordinal,
             fee_reservations,
             per_user_increments,
-            pending_kagemusha_operations,
+            pending_offline_cash_operations,
         } = replay;
         *self.fee_admission_reservations.lock() = fee_reservations;
-        *self.pending_kagemusha_operations.lock() = pending_kagemusha_operations;
+        *self.pending_offline_cash_operations.lock() = pending_offline_cash_operations;
         *self.next_fifo_ordinal.lock() = next_fifo_ordinal;
         let mut notifications = Vec::with_capacity(admissions.len());
         for replayed in admissions {
@@ -12167,7 +12182,7 @@ impl Queue {
             let PreparedQueueAdmission {
                 checked,
                 hash,
-                kagemusha_operation: _,
+                offline_cash_operation: _,
                 routing_decision,
                 routing_plan,
                 encoded_len,
@@ -13732,8 +13747,8 @@ impl Queue {
                 routing_policy: RwLock::new(LaneRoutingPolicy::default()),
                 tx_hashes: ArrayQueue::new(capacity.get()),
                 txs: DashMap::new(),
-                pending_kagemusha_operations: parking_lot::Mutex::new(
-                    PendingKagemushaOperationIndex::default(),
+                pending_offline_cash_operations: parking_lot::Mutex::new(
+                    PendingOfflineCashOperationIndex::default(),
                 ),
                 active_count: AtomicUsize::new(0),
                 missing_reservation_payload_count: AtomicUsize::new(0),
@@ -14215,24 +14230,22 @@ impl Queue {
             relay_lease_remaining,
         })
     }
-    /// Resolve one pending Kagemusha operation from an exact Queue ownership snapshot.
+    /// Resolve one pending Offline Cash V1 operation from an exact Queue ownership snapshot.
     ///
-    /// The composite key is an attempt identity, not global economic finality: a pending or
-    /// rejected foreign-authority carrier cannot shadow the configured issuer's attempt. A
-    /// transaction crossing its journal durability boundary is reported as unavailable instead
-    /// of being misclassified as absent.
+    /// Operation identifiers are globally unique across authorities. A transaction crossing its
+    /// journal durability boundary is reported as unavailable instead of being misclassified as
+    /// absent.
     ///
     /// # Errors
     /// Returns a typed unavailable or consistency failure while Queue ownership cannot safely
     /// support an authoritative pending result.
-    pub fn pending_kagemusha_operation(
+    pub fn pending_offline_cash_operation(
         &self,
         state_view: &StateView<'_>,
-        authority: &AccountId,
         operation_id: [u8; 32],
-    ) -> Result<Option<PendingKagemushaOperation>, PendingKagemushaOperationLookupError> {
-        if !is_kagemusha_marked_hash_v4(&operation_id) {
-            return Err(PendingKagemushaOperationLookupError::InvalidOperationId);
+    ) -> Result<Option<PendingOfflineCashOperation>, PendingOfflineCashOperationLookupError> {
+        if operation_id == [0; 32] {
+            return Err(PendingOfflineCashOperationLookupError::InvalidOperationId);
         }
         let unavailable_reason = || {
             if self.lane_reservation_startup_reconciliation_pending() {
@@ -14244,32 +14257,32 @@ impl Queue {
             }
         };
         if let Some(reason) = unavailable_reason() {
-            return Err(PendingKagemushaOperationLookupError::Unavailable {
+            return Err(PendingOfflineCashOperationLookupError::Unavailable {
                 reason: reason.to_owned(),
             });
         }
 
         let queue_guard = self.push_remove_lock.lock();
         if let Some(reason) = unavailable_reason() {
-            return Err(PendingKagemushaOperationLookupError::Unavailable {
+            return Err(PendingOfflineCashOperationLookupError::Unavailable {
                 reason: reason.to_owned(),
             });
         }
         let binding = {
-            let index = self.pending_kagemusha_operations.lock();
+            let index = self.pending_offline_cash_operations.lock();
             index
-                .checked_binding(authority, operation_id)
+                .checked_binding(operation_id)
                 .map(|binding| binding.cloned())
         };
         let binding = match binding {
             Ok(Some(binding)) => binding,
             Ok(None) => return Ok(None),
             Err(error) => {
-                self.latch_pending_kagemusha_operation_index_fault(
+                self.latch_pending_offline_cash_operation_index_fault(
                     error.entrypoint_hash,
                     &error.reason,
                 );
-                return Err(PendingKagemushaOperationLookupError::Inconsistent {
+                return Err(PendingOfflineCashOperationLookupError::Inconsistent {
                     reason: error.reason,
                 });
             }
@@ -14283,64 +14296,67 @@ impl Queue {
                 "operation key points to absent transaction {}",
                 binding.entrypoint_hash
             );
-            self.latch_pending_kagemusha_operation_index_fault(binding.entrypoint_hash, &reason);
-            return Err(PendingKagemushaOperationLookupError::Inconsistent { reason });
+            self.latch_pending_offline_cash_operation_index_fault(binding.entrypoint_hash, &reason);
+            return Err(PendingOfflineCashOperationLookupError::Inconsistent { reason });
         };
-        let exact_binding = match Self::classify_pending_kagemusha_operation(transaction.as_ref()) {
-            Ok(Some(exact_binding)) => exact_binding,
-            Ok(None) => {
-                let reason = format!(
-                    "operation key points to non-Kagemusha transaction {}",
-                    binding.entrypoint_hash
-                );
-                self.latch_pending_kagemusha_operation_index_fault(
-                    binding.entrypoint_hash,
-                    &reason,
-                );
-                return Err(PendingKagemushaOperationLookupError::Inconsistent { reason });
-            }
-            Err(error) => {
-                let reason = format!(
-                    "operation key points to invalid Kagemusha transaction {}: {error}",
-                    binding.entrypoint_hash
-                );
-                self.latch_pending_kagemusha_operation_index_fault(
-                    binding.entrypoint_hash,
-                    &reason,
-                );
-                return Err(PendingKagemushaOperationLookupError::Inconsistent { reason });
-            }
-        };
+        let exact_binding =
+            match Self::classify_pending_offline_cash_operation(transaction.as_ref()) {
+                Ok(Some(exact_binding)) => exact_binding,
+                Ok(None) => {
+                    let reason = format!(
+                        "operation key points to a non-Offline-Cash-V1 transaction {}",
+                        binding.entrypoint_hash
+                    );
+                    self.latch_pending_offline_cash_operation_index_fault(
+                        binding.entrypoint_hash,
+                        &reason,
+                    );
+                    return Err(PendingOfflineCashOperationLookupError::Inconsistent { reason });
+                }
+                Err(error) => {
+                    let reason = format!(
+                        "operation key points to invalid Offline Cash V1 transaction {}: {error}",
+                        binding.entrypoint_hash
+                    );
+                    self.latch_pending_offline_cash_operation_index_fault(
+                        binding.entrypoint_hash,
+                        &reason,
+                    );
+                    return Err(PendingOfflineCashOperationLookupError::Inconsistent { reason });
+                }
+            };
         if exact_binding != binding {
             let reason = format!(
                 "operation key disagrees with immutable transaction {}",
                 binding.entrypoint_hash
             );
-            self.latch_pending_kagemusha_operation_index_fault(binding.entrypoint_hash, &reason);
-            return Err(PendingKagemushaOperationLookupError::Inconsistent { reason });
+            self.latch_pending_offline_cash_operation_index_fault(binding.entrypoint_hash, &reason);
+            return Err(PendingOfflineCashOperationLookupError::Inconsistent { reason });
         }
         if self.durability_transition_active(&binding.entrypoint_hash) {
-            return Err(PendingKagemushaOperationLookupError::DurabilityTransition {
-                entrypoint_hash: binding.entrypoint_hash,
-            });
+            return Err(
+                PendingOfflineCashOperationLookupError::DurabilityTransition {
+                    entrypoint_hash: binding.entrypoint_hash,
+                },
+            );
         }
         let pending = match self
             .pending_status_with_stable_durability_owner(transaction.as_ref(), state_view)
         {
             Ok(pending) => pending,
             Err(reason) => {
-                self.latch_pending_kagemusha_operation_index_fault(
+                self.latch_pending_offline_cash_operation_index_fault(
                     binding.entrypoint_hash,
                     &reason,
                 );
-                return Err(PendingKagemushaOperationLookupError::Inconsistent { reason });
+                return Err(PendingOfflineCashOperationLookupError::Inconsistent { reason });
             }
         };
         drop(queue_guard);
         if !pending {
             return Ok(None);
         }
-        Ok(Some(PendingKagemushaOperation {
+        Ok(Some(PendingOfflineCashOperation {
             binding,
             transaction,
         }))
@@ -16420,8 +16436,8 @@ impl Queue {
                 err,
             });
         }
-        let kagemusha_operation =
-            Self::classify_pending_kagemusha_operation(&checked).map_err(|err| Failure {
+        let offline_cash_operation = Self::classify_pending_offline_cash_operation(&checked)
+            .map_err(|err| Failure {
                 tx: Box::new(checked.as_accepted().clone()),
                 err,
             })?;
@@ -16441,7 +16457,7 @@ impl Queue {
             return Ok(PreparedQueueAdmission {
                 checked,
                 hash,
-                kagemusha_operation,
+                offline_cash_operation,
                 routing_decision,
                 routing_plan,
                 encoded_len,
@@ -16488,15 +16504,6 @@ impl Queue {
         } else {
             None
         };
-        if let Some(transaction) = checked.as_accepted().external()
-            && let Err(err) =
-                state_access.validate_confidential_policy_admission(transaction.instructions())
-        {
-            return Err(Failure {
-                tx: Box::new(checked.as_accepted().clone()),
-                err,
-            });
-        }
         #[cfg(feature = "telemetry")]
         let mut manifest_allowed = false;
         let manifest_authority_eligible_lanes =
@@ -16832,7 +16839,7 @@ impl Queue {
         Ok(PreparedQueueAdmission {
             checked,
             hash,
-            kagemusha_operation,
+            offline_cash_operation,
             routing_decision,
             routing_plan,
             encoded_len,
@@ -16865,7 +16872,7 @@ impl Queue {
             let PreparedQueueAdmission {
                 checked,
                 hash,
-                kagemusha_operation,
+                offline_cash_operation,
                 routing_decision,
                 routing_plan,
                 encoded_len,
@@ -16887,11 +16894,11 @@ impl Queue {
                 let transitioning_hash = if self.durability_transition_active(&hash) {
                     Some(hash)
                 } else {
-                    kagemusha_operation.as_ref().and_then(|binding| {
+                    offline_cash_operation.as_ref().and_then(|binding| {
                         let owner = self
-                            .pending_kagemusha_operations
+                            .pending_offline_cash_operations
                             .lock()
-                            .entrypoint_for(&binding.authority, binding.operation_id);
+                            .entrypoint_for(binding.operation_id);
                         owner.filter(|owner| self.durability_transition_active(owner))
                     })
                 };
@@ -16938,51 +16945,50 @@ impl Queue {
                 });
                 break;
             }
-            if let Some(binding) = kagemusha_operation.as_ref() {
+            if let Some(binding) = offline_cash_operation.as_ref() {
                 let claim = self
-                    .pending_kagemusha_operations
+                    .pending_offline_cash_operations
                     .lock()
                     .validate_claim(binding);
                 match claim {
                     Ok(()) => {}
-                    Err(PendingKagemushaOperationClaimError::OperationIdClaimed {
+                    Err(PendingOfflineCashOperationClaimError::OperationIdClaimed {
                         existing_entrypoint_hash,
                     }) => {
                         failure = Some(Failure {
                             tx: checked.as_accepted().clone().into(),
-                            err: Error::KagemushaOperationIdConflict {
-                                authority: binding.authority.clone(),
+                            err: Error::OfflineCashV1OperationIdConflict {
                                 operation_id: binding.operation_id,
                                 existing_entrypoint_hash,
                             },
                         });
                         break;
                     }
-                    Err(PendingKagemushaOperationClaimError::EntrypointClaimed {
+                    Err(PendingOfflineCashOperationClaimError::EntrypointClaimed {
                         existing_key,
                     }) => {
                         let reason = format!(
-                            "entrypoint {hash} is already bound to Kagemusha operation {:?}",
-                            existing_key.1
+                            "entrypoint {hash} is already bound to Offline Cash V1 operation {:?}",
+                            existing_key
                         );
-                        self.latch_pending_kagemusha_operation_index_fault(hash, &reason);
+                        self.latch_pending_offline_cash_operation_index_fault(hash, &reason);
                         failure = Some(Failure {
                             tx: checked.as_accepted().clone().into(),
-                            err: Error::KagemushaOperationIndexInconsistent { reason },
+                            err: Error::OfflineCashV1OperationIndexInconsistent { reason },
                         });
                         break;
                     }
-                    Err(PendingKagemushaOperationClaimError::Inconsistent {
+                    Err(PendingOfflineCashOperationClaimError::Inconsistent {
                         entrypoint_hash,
                         reason,
                     }) => {
-                        self.latch_pending_kagemusha_operation_index_fault(
+                        self.latch_pending_offline_cash_operation_index_fault(
                             entrypoint_hash,
                             &reason,
                         );
                         failure = Some(Failure {
                             tx: checked.as_accepted().clone().into(),
-                            err: Error::KagemushaOperationIndexInconsistent { reason },
+                            err: Error::OfflineCashV1OperationIndexInconsistent { reason },
                         });
                         break;
                     }
@@ -17060,8 +17066,8 @@ impl Queue {
             let transition = self
                 .begin_durability_transition_locked([hash])
                 .expect("duplicate checks serialize exact admission transitions");
-            if let Some(binding) = kagemusha_operation {
-                self.pending_kagemusha_operations
+            if let Some(binding) = offline_cash_operation {
+                self.pending_offline_cash_operations
                     .lock()
                     .claim(binding)
                     .expect("operation claim was validated under the same Queue mutation lock");
@@ -17134,7 +17140,7 @@ impl Queue {
                         "queue admission failed before durable acknowledgement"
                     );
                     self.txs.remove(&hash);
-                    self.remove_pending_kagemusha_operation_locked(hash);
+                    self.remove_pending_offline_cash_operation_locked(hash);
                     self.untrack_active_transaction();
                     if fee_reserved {
                         self.fee_admission_reservations.lock().release(&hash);
@@ -17752,15 +17758,15 @@ impl Queue {
         let lane_id = routing_decision.lane_id;
         let dataspace_id = routing_decision.dataspace_id;
         let enqueue_at_ms = self.validation_timestamp_ms(checked.as_accepted());
-        let kagemusha_operation =
-            Self::classify_pending_kagemusha_operation(&checked).map_err(|err| Failure {
+        let offline_cash_operation = Self::classify_pending_offline_cash_operation(&checked)
+            .map_err(|err| Failure {
                 tx: Box::new(checked.as_accepted().clone()),
                 err,
             })?;
         let prepared = PreparedQueueAdmission {
             checked,
             hash,
-            kagemusha_operation,
+            offline_cash_operation,
             routing_decision,
             routing_plan,
             encoded_len,
@@ -17866,7 +17872,7 @@ impl Queue {
                 }
                 self.removed_hashes.remove(&hash);
             }
-            self.pending_kagemusha_operations.lock().clear();
+            self.pending_offline_cash_operations.lock().clear();
             while self.tx_gossip.pop().is_some() {}
             self.fee_admission_reservations
                 .lock()
@@ -18034,7 +18040,7 @@ impl Queue {
                         continue;
                     }
                     let removed = self.txs.remove(&hash).map(|(_, removed_tx)| {
-                        self.remove_pending_kagemusha_operation_locked(hash);
+                        self.remove_pending_offline_cash_operation_locked(hash);
                         self.fee_admission_reservations.lock().release(&hash);
                         self.untrack_active_transaction();
                         self.untrack_expiry_hash(&hash);
@@ -19989,7 +19995,7 @@ impl Queue {
                 continue;
             }
             if let Some((_, tx_arc)) = self.txs.remove(&hash) {
-                self.remove_pending_kagemusha_operation_locked(hash);
+                self.remove_pending_offline_cash_operation_locked(hash);
                 self.fee_admission_reservations.lock().release(&hash);
                 self.untrack_active_transaction();
                 let (routing, _removed_plan, journal_removal) =
@@ -20110,7 +20116,7 @@ impl Queue {
     ) {
         let hash = tx.hash_as_entrypoint();
         if self.txs.remove(&hash).is_some() {
-            self.remove_pending_kagemusha_operation_locked(hash);
+            self.remove_pending_offline_cash_operation_locked(hash);
             // Execution has materialized the authoritative vault/counter debit;
             // the in-memory queue hold is no longer needed.
             self.fee_admission_reservations.lock().release(&hash);
@@ -20805,7 +20811,7 @@ impl Queue {
                     .get(&hash)
                     .and_then(|plan| self.exact_plan_journal_removal(hash, plan.value().digest()));
                 let tx_arc = self.txs.remove(&hash).map(|(_, tx)| tx);
-                self.remove_pending_kagemusha_operation_locked(hash);
+                self.remove_pending_offline_cash_operation_locked(hash);
                 self.fee_admission_reservations.lock().release(&hash);
                 self.untrack_expiry_hash(&hash);
                 let _ = self.routing_plans.remove(&hash);
@@ -21689,146 +21695,129 @@ pub mod tests {
                 .collect(),
         }
     }
-    fn pending_kagemusha_binding_for_test(
+    fn pending_offline_cash_binding_for_test(
         authority: AccountId,
         operation_id: [u8; 32],
         hash_seed: u8,
-    ) -> PendingKagemushaOperationBinding {
-        PendingKagemushaOperationBinding {
-            request_authority_digest: kagemusha_operation_authority_digest_v4(&authority)
-                .expect("test authority digest"),
+    ) -> PendingOfflineCashOperationBinding {
+        PendingOfflineCashOperationBinding {
             authority,
             operation_id,
-            kind: KagemushaOperationKindV4::TopUp,
+            kind: OfflineCashOperationKindV1::TopUp,
             canonical_request_digest: Hash::new([hash_seed, 1]).into(),
-            issued_at_ms: u64::from(hash_seed),
-            expires_at_ms: u64::from(hash_seed).saturating_add(1),
             entrypoint_hash: HashOf::from_untyped_unchecked(Hash::new([hash_seed])),
-            signed_transaction_wire_hash: Hash::new([hash_seed, 2]).into(),
+            signed_transaction_hash: HashOf::from_untyped_unchecked(Hash::new([hash_seed, 2])),
         }
     }
     #[test]
-    fn pending_kagemusha_index_uses_per_authority_attempts_and_exact_reverse_owner() {
-        let (first_authority, _) = gen_account_in("pending-kagemusha-first");
-        let (second_authority, _) = gen_account_in("pending-kagemusha-second");
-        let operation_id: [u8; 32] = Hash::new(b"pending operation A5").into();
-        let first = pending_kagemusha_binding_for_test(first_authority.clone(), operation_id, 1);
-        let conflicting =
-            pending_kagemusha_binding_for_test(first_authority.clone(), operation_id, 2);
-        let foreign = pending_kagemusha_binding_for_test(second_authority.clone(), operation_id, 3);
-        let mut index = PendingKagemushaOperationIndex::default();
+    fn pending_offline_cash_index_uses_global_operation_ids_and_exact_reverse_owner() {
+        let (first_authority, _) = gen_account_in("pending-offline-cash-first");
+        let (second_authority, _) = gen_account_in("pending-offline-cash-second");
+        let operation_id = [0xA5; 32];
+        let first = pending_offline_cash_binding_for_test(first_authority.clone(), operation_id, 1);
+        let conflicting = pending_offline_cash_binding_for_test(first_authority, operation_id, 2);
+        let foreign = pending_offline_cash_binding_for_test(second_authority, operation_id, 3);
+        let mut index = PendingOfflineCashOperationIndex::default();
 
         index.claim(first.clone()).expect("claim first operation");
         assert!(matches!(
             index.claim(conflicting.clone()),
-            Err(PendingKagemushaOperationClaimError::OperationIdClaimed {
+            Err(PendingOfflineCashOperationClaimError::OperationIdClaimed {
                 existing_entrypoint_hash
             }) if existing_entrypoint_hash == first.entrypoint_hash
         ));
-        index
-            .claim(foreign.clone())
-            .expect("foreign outer authority owns an independent attempt");
+        assert!(matches!(
+            index.claim(foreign.clone()),
+            Err(PendingOfflineCashOperationClaimError::OperationIdClaimed {
+                existing_entrypoint_hash
+            }) if existing_entrypoint_hash == first.entrypoint_hash
+        ));
         assert_eq!(
-            index.entrypoint_for(&first_authority, operation_id),
+            index.entrypoint_for(operation_id),
             Some(first.entrypoint_hash)
-        );
-        assert_eq!(
-            index.entrypoint_for(&second_authority, operation_id),
-            Some(foreign.entrypoint_hash)
         );
 
         index
             .remove_entrypoint(&first.entrypoint_hash)
             .expect("remove exact forward and reverse owner");
         index
-            .claim(conflicting.clone())
+            .claim(foreign.clone())
             .expect("operation id becomes available after exact removal");
         assert_eq!(
-            index.entrypoint_for(&first_authority, operation_id),
-            Some(conflicting.entrypoint_hash)
+            index.entrypoint_for(operation_id),
+            Some(foreign.entrypoint_hash)
         );
     }
     #[test]
-    fn pending_kagemusha_index_rejects_reverse_only_operation_owner() {
-        let (authority, _) = gen_account_in("pending-kagemusha-reverse-only");
-        let operation_id: [u8; 32] = Hash::new(b"pending operation A6").into();
-        let orphan = pending_kagemusha_binding_for_test(authority.clone(), operation_id, 4);
-        let replacement = pending_kagemusha_binding_for_test(authority.clone(), operation_id, 5);
-        let mut index = PendingKagemushaOperationIndex::default();
+    fn pending_offline_cash_index_rejects_reverse_only_operation_owner() {
+        let (authority, _) = gen_account_in("pending-offline-cash-reverse-only");
+        let operation_id = [0xA6; 32];
+        let orphan = pending_offline_cash_binding_for_test(authority.clone(), operation_id, 4);
+        let replacement = pending_offline_cash_binding_for_test(authority, operation_id, 5);
+        let mut index = PendingOfflineCashOperationIndex::default();
         index
             .key_by_entrypoint
             .insert(orphan.entrypoint_hash, orphan.key());
 
         assert!(matches!(
             index.validate_claim(&replacement),
-            Err(PendingKagemushaOperationClaimError::Inconsistent {
+            Err(PendingOfflineCashOperationClaimError::Inconsistent {
                 entrypoint_hash,
                 ..
             }) if entrypoint_hash == orphan.entrypoint_hash
         ));
         assert!(matches!(
-            index.checked_binding(&authority, operation_id),
-            Err(PendingKagemushaOperationIndexError {
+            index.checked_binding(operation_id),
+            Err(PendingOfflineCashOperationIndexError {
                 entrypoint_hash,
                 ..
             }) if entrypoint_hash == orphan.entrypoint_hash
         ));
     }
     #[test]
-    fn pending_kagemusha_index_rejects_forward_only_owner_on_removal() {
-        let (authority, _) = gen_account_in("pending-kagemusha-forward-only");
-        let operation_id: [u8; 32] = Hash::new(b"pending operation A7").into();
-        let orphan = pending_kagemusha_binding_for_test(authority, operation_id, 6);
-        let mut index = PendingKagemushaOperationIndex::default();
+    fn pending_offline_cash_index_rejects_forward_only_owner_on_removal() {
+        let (authority, _) = gen_account_in("pending-offline-cash-forward-only");
+        let operation_id = [0xA7; 32];
+        let orphan = pending_offline_cash_binding_for_test(authority, operation_id, 6);
+        let mut index = PendingOfflineCashOperationIndex::default();
         index.by_key.insert(orphan.key(), orphan.clone());
 
         assert!(matches!(
             index.remove_entrypoint(&orphan.entrypoint_hash),
-            Err(PendingKagemushaOperationIndexError {
+            Err(PendingOfflineCashOperationIndexError {
                 entrypoint_hash,
                 ..
             }) if entrypoint_hash == orphan.entrypoint_hash
         ));
     }
     #[test]
-    fn pending_kagemusha_index_rejects_unmarked_immutable_identity() {
-        let (authority, _) = gen_account_in("pending-kagemusha-unmarked");
-        let operation_id: [u8; 32] = Hash::new(b"pending marked identity").into();
-        let mut malformed = pending_kagemusha_binding_for_test(authority, operation_id, 9);
-        malformed.canonical_request_digest[Hash::LENGTH - 1] &= !1;
-        let index = PendingKagemushaOperationIndex::default();
+    fn pending_offline_cash_index_rejects_zero_immutable_identity() {
+        let (authority, _) = gen_account_in("pending-offline-cash-zero");
+        let operation_id = [0xA8; 32];
+        let mut malformed = pending_offline_cash_binding_for_test(authority, operation_id, 9);
+        malformed.canonical_request_digest = [0; 32];
+        let index = PendingOfflineCashOperationIndex::default();
         assert!(matches!(
             index.validate_claim(&malformed),
-            Err(PendingKagemushaOperationClaimError::Inconsistent { .. })
+            Err(PendingOfflineCashOperationClaimError::Inconsistent { .. })
         ));
 
-        let (authority, _) = gen_account_in("pending-kagemusha-overlong-ttl");
-        let operation_id: [u8; 32] = Hash::new(b"pending overlong ttl identity").into();
-        let mut malformed = pending_kagemusha_binding_for_test(authority, operation_id, 10);
-        malformed.expires_at_ms = malformed
-            .issued_at_ms
-            .saturating_add(KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2)
-            .saturating_add(1);
+        let (authority, _) = gen_account_in("pending-offline-cash-zero-operation");
+        let mut malformed = pending_offline_cash_binding_for_test(authority, [0; 32], 10);
+        malformed.signed_transaction_hash =
+            HashOf::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH]));
         assert!(matches!(
             index.validate_claim(&malformed),
-            Err(PendingKagemushaOperationClaimError::Inconsistent { .. })
+            Err(PendingOfflineCashOperationClaimError::Inconsistent { .. })
         ));
     }
     #[test]
-    fn pending_kagemusha_cold_replay_validation_rejects_balanced_cross_wiring() {
-        let (first_authority, _) = gen_account_in("pending-kagemusha-cross-first");
-        let (second_authority, _) = gen_account_in("pending-kagemusha-cross-second");
-        let first = pending_kagemusha_binding_for_test(
-            first_authority,
-            Hash::new(b"pending operation A8").into(),
-            7,
-        );
-        let second = pending_kagemusha_binding_for_test(
-            second_authority,
-            Hash::new(b"pending operation A9").into(),
-            8,
-        );
-        let mut index = PendingKagemushaOperationIndex::default();
+    fn pending_offline_cash_cold_replay_validation_rejects_balanced_cross_wiring() {
+        let (first_authority, _) = gen_account_in("pending-offline-cash-cross-first");
+        let (second_authority, _) = gen_account_in("pending-offline-cash-cross-second");
+        let first = pending_offline_cash_binding_for_test(first_authority, [0xA9; 32], 7);
+        let second = pending_offline_cash_binding_for_test(second_authority, [0xAA; 32], 8);
+        let mut index = PendingOfflineCashOperationIndex::default();
         index.by_key.insert(first.key(), first.clone());
         index.by_key.insert(second.key(), second.clone());
         index
@@ -21840,7 +21829,7 @@ pub mod tests {
 
         assert!(matches!(
             index.validate_bijection(),
-            Err(PendingKagemushaOperationIndexError { .. })
+            Err(PendingOfflineCashOperationIndexError { .. })
         ));
     }
     #[test]

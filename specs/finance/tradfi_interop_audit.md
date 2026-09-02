@@ -236,13 +236,26 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   prevents dispatch. An indeterminate plan-journal result remains pending and
   retention-pinned for exact-hash reconciliation instead of being marked
   rejected and retried as a replacement transfer.
-- Lifecycle updates now require the same non-empty profile id, business service,
-  and compatible message family as the referenced original. Missing or
-  cross-profile evidence fails closed, in-flight originals are not mutated, and
-  rejected originals are terminal. Settled payments accept only an explicit
-  `pacs.004` return while retaining the original transaction hash and settlement
-  evidence; other stale transitions remain ignored. Direct status mutators
-  enforce the same terminal monotonicity.
+- ISO admission now authenticates against a canonical participant catalog with
+  unique participant IDs, operator keys, financial identities, allowed
+  profiles, and lifecycle roles; audit-admin keys are configured separately.
+  The authenticated participant must own an initial message's `From` identity.
+  `IsoMessageRecordV2` immutably records originator, counterparty, admitting
+  operator, pinned profile and signature policy, and replay identities.
+- Lifecycle updates are authorized from the referenced record rather than a
+  caller-selected profile: `pacs.002`, `pacs.004`, `sese.024`, and `sese.025`
+  belong to the original counterparty, while `camt.056` belongs to the
+  originator. Missing or cross-profile evidence fails closed, in-flight
+  originals are not mutated, and rejected originals are terminal. A settling
+  `pacs.002` additionally requires exact committed-transaction evidence.
+  Settled payments accept only an explicit `pacs.004` return while retaining
+  the original transaction hash and settlement evidence; other stale
+  transitions remain ignored. Direct status mutators enforce the same terminal
+  monotonicity.
+- Either recorded party may read its own records; configured audit admins have
+  global read-only access. Outbound ISO documents are signed. Prunable record
+  details are separated from durable replay tombstones, so message ID, payload
+  hash, business message ID, and UETR remain reserved for the full dedupe TTL.
 - The exact append-only `status_history` is bounded in V1 to 256 entries and
   256 KiB of canonical compact JSON. Live lifecycle updates build a bounded
   candidate and reject the whole transition before changing memory, indexes, or

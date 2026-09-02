@@ -81,17 +81,6 @@ pub fn verify_committee_proof_response_v1(
     .map_err(|_| invalid())
 }
 
-/// Legacy capsule verifier retained only as a fail-closed ABI shim.
-#[napi(js_name = "privateSettlementVerifyAuditorCapsuleResponseV1")]
-pub fn verify_auditor_capsule_response_v1(
-    _response_json: Uint8Array,
-    _expected_network_id: Uint8Array,
-    _requested_payload_digest: Uint8Array,
-    _auditor_signing_key_literal: String,
-) -> napi::Result<()> {
-    Err(invalid())
-}
-
 /// Verify an auditor-only capsule response and the requesting auditor identity.
 #[napi(js_name = "privateSettlementVerifyAuditorCapsuleResponseWithRequestV1")]
 pub fn verify_auditor_capsule_response_with_request_v1(

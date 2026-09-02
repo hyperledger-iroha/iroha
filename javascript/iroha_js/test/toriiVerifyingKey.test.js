@@ -1119,7 +1119,7 @@ test("registerVerifyingKey accepts current production backend labels", async () 
     "halo2/pasta/kaigi-roster-v1",
     "halo2/pasta/kaigi-usage-v1",
     "halo2/pasta/ivm-execution-v1",
-    "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
+    "halo2/pasta/offline-cash-v1-mint-fold-merkle16-axiom-poseidon-v1",
     "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
@@ -1154,7 +1154,7 @@ test("updateVerifyingKey accepts current production backend labels", async () =>
   const backends = [
     "halo2/ipa",
     "halo2/pasta/ivm-execution-v1",
-    "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
+    "halo2/pasta/offline-cash-v1-mint-fold-merkle16-axiom-poseidon-v1",
     "stark/fri/poseidon-x7-goldilocks-6x64-v1",
   ];
   for (const [index, backend] of backends.entries()) {

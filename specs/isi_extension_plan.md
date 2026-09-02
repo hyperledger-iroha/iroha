@@ -35,8 +35,8 @@ security and operability risk first, UX throughput second.
   existing accounts can keep stable alias bindings during a rolling upgrade without hash breaks.
 
 ### DeactivateContractInstance
-- Remove or tombstone the `contract_address` binding while persisting provenance data
-  (who, when, reason code) for troubleshooting.
+- Clear the active code from the retained `contract_address` lifecycle while
+  preserving deployment origin, ownership, and the audit reason.
 - Require the exact retained lifecycle `expected_revision`. Direct activation and deactivation
   are restricted to the current account owner; Parliament uses the certified governance
   lifecycle corridor when it owns the contract or holds revocable lifecycle delegation.
@@ -47,8 +47,9 @@ security and operability risk first, UX throughput second.
 ### RemoveSmartContractBytes
 - Allow pruning of stored bytecode by `code_hash` only when no manifests or active instances
   reference the artifact; otherwise fail with a descriptive error.
-- Permission gate mirrors registration (`CanRegisterSmartContractCode`) plus an operator-level
-  guard (e.g., `CanManageSmartContractStorage`).
+- Permission gate mirrors artifact registration exactly
+  (`CanRegisterSmartContractCode`); removal remains impossible while any
+  manifest or active instance references the bytes.
 - Verify the provided `code_hash` matches the stored body digest just before deletion to avoid
   stale handles.
 - Emit `ContractCodeEvent::Removed` with hash and caller metadata.

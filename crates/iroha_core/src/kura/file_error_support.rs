@@ -468,20 +468,20 @@ pub enum Error {
         /// Height whose complete canonical header could not be loaded.
         height: u64,
     },
-    /// Invalid or conflicting Kagemusha top-up finality sidecar: {0}
-    KagemushaTopUpFinalitySidecar(String),
-    /// Encoded Kagemusha top-up finality sidecar is {actual} bytes; hard maximum is {max}
-    KagemushaTopUpFinalitySidecarTooLarge {
+    /// Invalid or conflicting Offline Cash V1 finality sidecar: {0}
+    OfflineCashFinalitySidecar(String),
+    /// Encoded Offline Cash V1 sidecar is {actual} bytes; hard maximum is {max}
+    OfflineCashFinalitySidecarTooLarge {
         /// Encoded sidecar size.
         actual: usize,
         /// Hard persistence/read limit.
         max: usize,
     },
-    /// Invalid or conflicting Kagemusha active-receiver finality sidecar: {0}
-    KagemushaActiveReceiverFinalitySidecar(String),
-    /// Encoded Kagemusha active-receiver sidecar is {actual} bytes; hard maximum is {max}
-    KagemushaActiveReceiverFinalitySidecarTooLarge {
-        /// Encoded sidecar size.
+    /// Invalid or conflicting Offline Cash V1 mint outbox entry: {0}
+    OfflineCashMintOutbox(String),
+    /// Encoded Offline Cash V1 mint outbox entry is {actual} bytes; hard maximum is {max}
+    OfflineCashMintOutboxTooLarge {
+        /// Encoded outbox entry size.
         actual: usize,
         /// Hard persistence/read limit.
         max: usize,

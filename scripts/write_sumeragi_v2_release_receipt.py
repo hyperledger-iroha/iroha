@@ -650,18 +650,8 @@ _PRODUCTION_MODULES = (
         19,
     ),
     (
-        "production-kagemusha-finality",
-        "zk::kagemusha_finality::tests",
-        1,
-    ),
-    (
         "production-data-model-v2-finality",
         "block::consensus_v2::finality::tests",
-        1,
-    ),
-    (
-        "production-data-model-offline-compact-qc",
-        "offline::kagemusha_v4_topup_provenance_tests",
         1,
     ),
     (
@@ -728,7 +718,6 @@ _PRODUCTION_MODULES = (
 _PRODUCTION_INTEGRATION_MODULE = "sumeragi_v2_runner::prepare_qc_split_tests"
 _DATA_MODEL_PRODUCTION_MODULES = (
     "block::consensus_v2::finality::tests",
-    "offline::kagemusha_v4_topup_provenance_tests",
     "block::consensus_v2::tests",
 )
 _DATA_STATUS_TEST = (

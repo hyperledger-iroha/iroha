@@ -1,10 +1,12 @@
 //! Explorer DTOs and bounded collection projections for Torii's app API.
 //!
 //! The six world-backed collection routes use canonical, filter-bound seek cursors. A request
-//! returns at most 100 matches and inspects at most 512 candidate keys, so sparse secondary
-//! filters cannot turn one read-admission token into a ledger-scale scan. Block, transaction, and
-//! instruction history use a separate cursor that pins the committed chain snapshot and the
-//! caller's visible dataspace set.
+//! returns at most 100 matches and applies secondary filters to at most 512 visible candidate keys,
+//! so sparse secondary filters cannot turn one read-admission token into a ledger-scale scan.
+//! Authorization filtering precedes cursor accounting so a continuation never exposes a hidden
+//! entity key. Block, transaction, and instruction history use a separate cursor that pins the
+//! committed chain snapshot and the caller's visible dataspace set; transaction and instruction
+//! continuations use authorized entrypoint hashes rather than physical block offsets.
 use crate::{
     account_literal,
     json_macros::{JsonDeserialize, JsonSerialize},
@@ -28,7 +30,7 @@ use iroha_data_model::{
         RevokeBox, SetAssetKeyValue, SetKeyValueBox, SetParameter, TransferAssetBatch, TransferBox,
         UnregisterBox, Upgrade,
         mint_burn::BurnBox,
-        offline::{RedeemKagemushaRecursiveV4, TopUpKagemushaRecursiveV4},
+        offline_cash_v1::{RedeemOfflineCashV1, TopUpOfflineCashV1},
         runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
     },
     metadata::Metadata,
@@ -68,10 +70,10 @@ const EXPLORER_CURSOR_MAGIC: [u8; 4] = *b"IXC1";
 const EXPLORER_CURSOR_FILTER_DOMAIN: &[u8] = b"iroha-explorer-filter-v2";
 const EXPLORER_CURSOR_MAX_KEY_BYTES: usize = 1_024;
 const EXPLORER_CURSOR_MAX_ENCODED_BYTES: usize = 1_424;
-const EXPLORER_HISTORY_CURSOR_MAGIC: [u8; 4] = *b"IHC1";
-const EXPLORER_HISTORY_FILTER_DOMAIN: &[u8] = b"iroha-explorer-history-filter-v1";
-const EXPLORER_HISTORY_CURSOR_FRAME_BYTES: usize = 4 + 1 + 8 + 32 + 32 + 32 + 8 + 4 + 4;
-const EXPLORER_HISTORY_CURSOR_MAX_ENCODED_BYTES: usize = 192;
+const EXPLORER_HISTORY_CURSOR_MAGIC: [u8; 4] = *b"IHC2";
+const EXPLORER_HISTORY_FILTER_DOMAIN: &[u8] = b"iroha-explorer-history-filter-v2";
+const EXPLORER_HISTORY_CURSOR_FRAME_BYTES: usize = 4 + 1 + 8 + 32 + 32 + 32 + 8 + 32 + 4;
+const EXPLORER_HISTORY_CURSOR_MAX_ENCODED_BYTES: usize = 208;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 enum ExplorerCursorCollection {
@@ -87,7 +89,7 @@ impl ExplorerCursorCollection {
         self as u8
     }
 }
-/// Invalid Explorer cursor request.
+/// Explorer cursor-page failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ExplorerCursorError {
     /// The requested page limit is outside the first-release bound.
@@ -102,6 +104,8 @@ pub(crate) enum ExplorerCursorError {
     InvalidKey,
     /// The cursor names a committed snapshot that this node cannot validate.
     InvalidSnapshot,
+    /// Visibility could not be resolved within the bounded raw candidate scan.
+    ScanLimitExceeded,
 }
 impl fmt::Display for ExplorerCursorError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -112,6 +116,9 @@ impl fmt::Display for ExplorerCursorError {
             Self::ScopeMismatch => "cursor does not belong to these filters",
             Self::InvalidKey => "cursor contains a non-canonical collection key",
             Self::InvalidSnapshot => "cursor snapshot is not available on this node",
+            Self::ScanLimitExceeded => {
+                "Explorer visibility scan exceeded the bounded candidate limit"
+            }
         })
     }
 }
@@ -184,21 +191,26 @@ impl ExplorerHistoryCollection {
             return false;
         }
         match self {
-            Self::Blocks => position.entrypoint_index == 0 && position.instruction_index == 0,
-            Self::Transactions | Self::LatestTransactions => position.instruction_index == 0,
-            Self::Instructions | Self::LatestInstructions => true,
+            Self::Blocks => position.entrypoint_hash.is_none() && position.instruction_index == 0,
+            Self::Transactions | Self::LatestTransactions => {
+                position.entrypoint_hash.is_some() && position.instruction_index == 0
+            }
+            Self::Instructions | Self::LatestInstructions => position.entrypoint_hash.is_some(),
         }
     }
 }
 
-/// Next chain-history candidate encoded by an Explorer seek cursor.
+/// Chain-history scan or visible resume position.
+///
+/// Encoded transaction and instruction cursors accept only positions with a stable entrypoint hash;
+/// hashless start positions remain internal to one request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ExplorerHistoryPosition {
     /// One-based committed block height.
     pub height: u64,
-    /// Zero-based external entrypoint index within the block.
-    pub entrypoint_index: u32,
-    /// Zero-based explicit instruction index within the entrypoint.
+    /// Stable hash of the next caller-visible external entrypoint.
+    pub entrypoint_hash: Option<HashOf<TransactionEntrypoint>>,
+    /// Zero-based explicit instruction index within the visible entrypoint.
     pub instruction_index: u32,
 }
 
@@ -207,29 +219,50 @@ impl ExplorerHistoryPosition {
     pub(crate) const fn block(height: u64) -> Self {
         Self {
             height,
-            entrypoint_index: 0,
+            entrypoint_hash: None,
             instruction_index: 0,
         }
     }
 
-    /// Construct a transaction position.
-    pub(crate) const fn transaction(height: u64, entrypoint_index: u32) -> Self {
+    /// Construct an internal start-of-block transaction scan position.
+    pub(crate) const fn transaction_start(height: u64) -> Self {
         Self {
             height,
-            entrypoint_index,
+            entrypoint_hash: None,
             instruction_index: 0,
         }
     }
 
-    /// Construct an instruction position.
+    /// Construct a stable caller-visible transaction position.
+    pub(crate) const fn transaction(
+        height: u64,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) -> Self {
+        Self {
+            height,
+            entrypoint_hash: Some(entrypoint_hash),
+            instruction_index: 0,
+        }
+    }
+
+    /// Construct an internal start-of-block instruction scan position.
+    pub(crate) const fn instruction_start(height: u64) -> Self {
+        Self {
+            height,
+            entrypoint_hash: None,
+            instruction_index: 0,
+        }
+    }
+
+    /// Construct a stable caller-visible instruction position.
     pub(crate) const fn instruction(
         height: u64,
-        entrypoint_index: u32,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
         instruction_index: u32,
     ) -> Self {
         Self {
             height,
-            entrypoint_index,
+            entrypoint_hash: Some(entrypoint_hash),
             instruction_index,
         }
     }
@@ -310,7 +343,10 @@ fn encode_explorer_history_cursor(
     frame.extend_from_slice(&filter_digest);
     frame.extend_from_slice(&visibility_digest);
     frame.extend_from_slice(&cursor.position.height.to_be_bytes());
-    frame.extend_from_slice(&cursor.position.entrypoint_index.to_be_bytes());
+    match cursor.position.entrypoint_hash {
+        Some(entrypoint_hash) => frame.extend_from_slice(entrypoint_hash.as_ref()),
+        None => frame.extend_from_slice(&[0; 32]),
+    }
     frame.extend_from_slice(&cursor.position.instruction_index.to_be_bytes());
     debug_assert_eq!(frame.len(), EXPLORER_HISTORY_CURSOR_FRAME_BYTES);
     Ok(URL_SAFE_NO_PAD.encode(frame))
@@ -362,13 +398,13 @@ pub(crate) fn decode_explorer_history_cursor(
                 .try_into()
                 .expect("fixed Explorer cursor position-height slice"),
         ),
-        entrypoint_index: u32::from_be_bytes(
-            frame[117..121]
+        entrypoint_hash: decode_explorer_history_entrypoint_hash(
+            frame[117..149]
                 .try_into()
-                .expect("fixed Explorer cursor entrypoint-index slice"),
-        ),
+                .expect("fixed Explorer cursor entrypoint-hash slice"),
+        )?,
         instruction_index: u32::from_be_bytes(
-            frame[121..125]
+            frame[149..153]
                 .try_into()
                 .expect("fixed Explorer cursor instruction-index slice"),
         ),
@@ -384,6 +420,21 @@ pub(crate) fn decode_explorer_history_cursor(
         snapshot_hash,
         position,
     })
+}
+
+fn decode_explorer_history_entrypoint_hash(
+    bytes: [u8; 32],
+) -> Result<Option<HashOf<TransactionEntrypoint>>, ExplorerCursorError> {
+    if bytes == [0; 32] {
+        return Ok(None);
+    }
+    let hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+        iroha_crypto::Hash::prehashed(bytes),
+    );
+    if hash.as_ref() != &bytes {
+        return Err(ExplorerCursorError::InvalidKey);
+    }
+    Ok(Some(hash))
 }
 
 /// Build response metadata and, when needed, an opaque cursor for the next candidate.
@@ -862,8 +913,8 @@ pub(crate) enum ExplorerInstructionKind {
     SetParameter,
     Upgrade,
     Log,
-    KagemushaTopUp,
-    KagemushaRedeem,
+    OfflineCashTopUp,
+    OfflineCashRedemption,
     Custom,
 }
 impl ExplorerInstructionKind {
@@ -882,8 +933,8 @@ impl ExplorerInstructionKind {
             Self::SetParameter => "SetParameter",
             Self::Upgrade => "Upgrade",
             Self::Log => "Log",
-            Self::KagemushaTopUp => "KagemushaTopUp",
-            Self::KagemushaRedeem => "KagemushaRedeem",
+            Self::OfflineCashTopUp => "OfflineCashTopUp",
+            Self::OfflineCashRedemption => "OfflineCashRedemption",
             Self::Custom => "Custom",
         }
     }
@@ -905,8 +956,8 @@ impl std::str::FromStr for ExplorerInstructionKind {
             "setparameter" | "set_parameter" => Ok(Self::SetParameter),
             "upgrade" => Ok(Self::Upgrade),
             "log" => Ok(Self::Log),
-            "kagemushatopup" | "kagemusha_top_up" => Ok(Self::KagemushaTopUp),
-            "kagemusharedeem" | "kagemusha_redeem" => Ok(Self::KagemushaRedeem),
+            "offlinecashtopup" | "offline_cash_top_up" => Ok(Self::OfflineCashTopUp),
+            "offlinecashredemption" | "offline_cash_redemption" => Ok(Self::OfflineCashRedemption),
             "custom" => Ok(Self::Custom),
             _ => Err(()),
         }
@@ -1010,10 +1061,10 @@ pub(crate) fn instruction_kind(instruction: &InstructionBox) -> ExplorerInstruct
                 ExplorerInstructionKind::Upgrade
             } else if any.downcast_ref::<Log>().is_some() {
                 ExplorerInstructionKind::Log
-            } else if any.downcast_ref::<TopUpKagemushaRecursiveV4>().is_some() {
-                ExplorerInstructionKind::KagemushaTopUp
-            } else if any.downcast_ref::<RedeemKagemushaRecursiveV4>().is_some() {
-                ExplorerInstructionKind::KagemushaRedeem
+            } else if any.downcast_ref::<TopUpOfflineCashV1>().is_some() {
+                ExplorerInstructionKind::OfflineCashTopUp
+            } else if any.downcast_ref::<RedeemOfflineCashV1>().is_some() {
+                ExplorerInstructionKind::OfflineCashRedemption
             } else {
                 ExplorerInstructionKind::Custom
             }
@@ -1132,8 +1183,10 @@ fn structured_instruction_payload(
         ExplorerInstructionKind::SetParameter => set_parameter_payload(instruction),
         ExplorerInstructionKind::Upgrade => upgrade_payload(instruction),
         ExplorerInstructionKind::Log => log_payload(instruction),
-        ExplorerInstructionKind::KagemushaTopUp => kagemusha_top_up_payload(instruction),
-        ExplorerInstructionKind::KagemushaRedeem => kagemusha_redeem_payload(instruction),
+        ExplorerInstructionKind::OfflineCashTopUp => offline_cash_top_up_payload(instruction),
+        ExplorerInstructionKind::OfflineCashRedemption => {
+            offline_cash_redemption_payload(instruction)
+        }
         ExplorerInstructionKind::Custom => custom_payload(instruction),
     }
     .unwrap_or_else(|| fallback_structured_payload(instruction))
@@ -1309,10 +1362,8 @@ fn log_payload(instruction: &InstructionBox) -> Option<Value> {
     let value = json::to_value(log).ok()?;
     Some(instruction_variant_value("Log", value))
 }
-fn kagemusha_top_up_payload(instruction: &InstructionBox) -> Option<Value> {
-    let isi = instruction
-        .as_any()
-        .downcast_ref::<TopUpKagemushaRecursiveV4>()?;
+fn offline_cash_top_up_payload(instruction: &InstructionBox) -> Option<Value> {
+    let isi = instruction.as_any().downcast_ref::<TopUpOfflineCashV1>()?;
     let request = &isi.request;
     let mut value = Map::new();
     value.insert(
@@ -1321,59 +1372,55 @@ fn kagemusha_top_up_payload(instruction: &InstructionBox) -> Option<Value> {
     );
     value.insert(
         "amount_atomic_units".to_string(),
-        Value::String(request.amount.atomic_units.to_string()),
+        Value::String(request.amount.to_string()),
     );
     value.insert(
         "asset_scale".to_string(),
-        Value::Number(u64::from(request.amount.scale).into()),
+        Value::Number(u64::from(request.scale).into()),
     );
     value.insert(
-        "note_commitment".to_string(),
-        Value::String(hex::encode(request.current_note.note_commitment)),
+        "credit_id".to_string(),
+        Value::String(hex::encode(request.credit_id)),
     );
     value.insert(
         "operation_id".to_string(),
         Value::String(hex::encode(request.operation_id)),
     );
     Some(instruction_variant_value(
-        "KagemushaTopUp",
+        "OfflineCashTopUp",
         Value::Object(value),
     ))
 }
-fn kagemusha_redeem_payload(instruction: &InstructionBox) -> Option<Value> {
-    let isi = instruction
-        .as_any()
-        .downcast_ref::<RedeemKagemushaRecursiveV4>()?;
+fn offline_cash_redemption_payload(instruction: &InstructionBox) -> Option<Value> {
+    let isi = instruction.as_any().downcast_ref::<RedeemOfflineCashV1>()?;
     let request = &isi.request;
     let mut value = Map::new();
     value.insert(
-        "note_commitment".to_string(),
-        Value::String(hex::encode(
-            request.bundle.statement.current_note.note_commitment,
-        )),
+        "terminal_nullifier".to_string(),
+        Value::String(hex::encode(request.voucher.statement.terminal_nullifier)),
     );
     value.insert(
         "recipient".to_string(),
-        Value::String(request.recipient.to_string()),
+        Value::String(request.voucher.statement.beneficiary.to_string()),
     );
     value.insert(
         "asset".to_string(),
-        json::to_value(&request.bundle.statement.asset).unwrap_or(Value::Null),
+        json::to_value(&request.voucher.statement.lifecycle.asset).unwrap_or(Value::Null),
     );
     value.insert(
         "amount_atomic_units".to_string(),
-        Value::String(request.amount.atomic_units.to_string()),
+        Value::String(request.voucher.statement.amount.to_string()),
     );
     value.insert(
         "asset_scale".to_string(),
-        Value::Number(u64::from(request.amount.scale).into()),
+        Value::Number(u64::from(request.voucher.statement.lifecycle.scale).into()),
     );
     value.insert(
         "operation_id".to_string(),
         Value::String(hex::encode(request.operation_id)),
     );
     Some(instruction_variant_value(
-        "KagemushaRedeem",
+        "OfflineCashRedemption",
         Value::Object(value),
     ))
 }
@@ -1767,9 +1814,10 @@ fn collect_explorer_cursor_page<I, Candidate, K, T>(
     candidates: I,
     limit: usize,
     key_of: impl for<'candidate> Fn(&'candidate Candidate) -> &'candidate K,
+    visible: impl Fn(&Candidate) -> bool,
     include: impl Fn(&Candidate) -> bool,
     project: impl Fn(Candidate) -> T,
-) -> ExplorerScanPage<K, T>
+) -> Result<ExplorerScanPage<K, T>, ExplorerCursorError>
 where
     I: IntoIterator<Item = Candidate>,
     K: Clone,
@@ -1778,27 +1826,64 @@ where
         .saturating_mul(8)
         .max(limit)
         .min(EXPLORER_CURSOR_MAX_SCAN);
-    let mut candidates = candidates.into_iter().peekable();
+    // Keep authorization outside the bounded secondary-filter scan. Besides making `has_more`
+    // describe only the caller-visible range, this ensures `last_scanned` can be serialized into a
+    // reversible cursor without disclosing a hidden entity key. Raw authorization work retains an
+    // independent hard cap; a page fails closed when that cap cannot prove a safe continuation.
+    let mut candidates = candidates.into_iter();
     let mut items = Vec::with_capacity(limit);
     let mut last_scanned = None;
     let mut scanned = 0_usize;
+    let mut raw_scanned = 0_usize;
+    let mut exhausted = false;
     while items.len() < limit && scanned < scan_budget {
+        if raw_scanned == EXPLORER_CURSOR_MAX_SCAN {
+            if candidates.size_hint().1 == Some(0) {
+                exhausted = true;
+                break;
+            }
+            return Err(ExplorerCursorError::ScanLimitExceeded);
+        }
         let Some(candidate) = candidates.next() else {
+            exhausted = true;
             break;
         };
+        raw_scanned = raw_scanned.saturating_add(1);
+        if !visible(&candidate) {
+            continue;
+        }
         last_scanned = Some(key_of(&candidate).clone());
         scanned = scanned.saturating_add(1);
         if include(&candidate) {
             items.push(project(candidate));
         }
     }
-    ExplorerScanPage {
+    let has_more = if exhausted {
+        false
+    } else {
+        loop {
+            if raw_scanned == EXPLORER_CURSOR_MAX_SCAN {
+                if candidates.size_hint().1 == Some(0) {
+                    break false;
+                }
+                return Err(ExplorerCursorError::ScanLimitExceeded);
+            }
+            let Some(candidate) = candidates.next() else {
+                break false;
+            };
+            raw_scanned = raw_scanned.saturating_add(1);
+            if visible(&candidate) {
+                break true;
+            }
+        }
+    };
+    Ok(ExplorerScanPage {
         items,
         last_scanned,
         #[cfg(test)]
         scanned,
-        has_more: candidates.peek().is_some(),
-    }
+        has_more,
+    })
 }
 fn explorer_cursor_meta<K: ToString>(
     collection: ExplorerCursorCollection,
@@ -1987,10 +2072,9 @@ pub(crate) fn accounts_page_for_filters<'world>(
         accounts,
         limit,
         AccountEntry::id,
+        |entry| visibility.allows_account(world, entry.id()),
         |entry| {
-            visibility.allows_account(world, entry.id())
-                && domain_filter
-                    .is_none_or(|domain| world.account_has_alias_domain(entry.id(), domain))
+            domain_filter.is_none_or(|domain| world.account_has_alias_domain(entry.id(), domain))
                 && definition_filter.is_none_or(|definition| {
                     account_holds_definition_from_world(world, definition, entry.id())
                 })
@@ -1999,7 +2083,7 @@ pub(crate) fn accounts_page_for_filters<'world>(
             let counts = account_counters_from_world(world, entry.id(), visibility);
             ExplorerAccountDto::from_entry(entry, counts)
         },
-    );
+    )?;
     let pagination = explorer_cursor_meta(
         ExplorerCursorCollection::Accounts,
         filter_digest,
@@ -2057,15 +2141,13 @@ pub(crate) fn domains_page_for_filters<'world>(
         domains,
         limit,
         |domain| domain.id(),
-        |domain| {
-            visibility.allows_domain(world, domain.id())
-                && owned_by.is_none_or(|owner| domain.owned_by() == owner)
-        },
+        |domain| visibility.allows_domain(world, domain.id()),
+        |domain| owned_by.is_none_or(|owner| domain.owned_by() == owner),
         |domain| {
             let counts = domain_counters_from_world(world, domain.id(), visibility);
             ExplorerDomainDto::from_domain(domain, counts)
         },
-    );
+    )?;
     let pagination = explorer_cursor_meta(
         ExplorerCursorCollection::Domains,
         filter_digest,
@@ -2142,12 +2224,11 @@ pub(crate) fn asset_definitions_page_for_filters<'world>(
         definitions,
         limit,
         |definition| definition.id(),
+        |definition| visibility.allows_asset_definition(world, definition.id()),
         |definition| {
-            visibility.allows_asset_definition(world, definition.id())
-                && owning_domain_filter.is_none_or(|domain| {
-                    world.asset_definition_domains().get(definition.id()) == Some(domain)
-                })
-                && owner_filter.is_none_or(|owner| definition.owned_by() == owner)
+            owning_domain_filter.is_none_or(|domain| {
+                world.asset_definition_domains().get(definition.id()) == Some(domain)
+            }) && owner_filter.is_none_or(|owner| definition.owned_by() == owner)
         },
         |definition| {
             ExplorerAssetDefinitionDto::from_definition_with_asset_count(
@@ -2155,7 +2236,7 @@ pub(crate) fn asset_definitions_page_for_filters<'world>(
                 definition_instance_count_from_world(world, definition.id(), visibility),
             )
         },
-    );
+    )?;
     let pagination = explorer_cursor_meta(
         ExplorerCursorCollection::AssetDefinitions,
         filter_digest,
@@ -2272,14 +2353,14 @@ pub(crate) fn assets_page_for_filters<'world>(
         assets,
         limit,
         AssetEntry::id,
+        |asset| visibility.allows_asset(world, asset.id()),
         |asset| {
-            visibility.allows_asset(world, asset.id())
-                && asset_filter.is_none_or(|expected| asset.id() == expected)
+            asset_filter.is_none_or(|expected| asset.id() == expected)
                 && owned_by.is_none_or(|owner| asset.id().account() == owner)
                 && definition_filter.is_none_or(|definition| asset.id().definition() == definition)
         },
         ExplorerAssetDto::from_entry,
-    );
+    )?;
     let pagination = explorer_cursor_meta(
         ExplorerCursorCollection::Assets,
         filter_digest,
@@ -2368,13 +2449,13 @@ pub(crate) fn nfts_page_for_filters<'world>(
         nfts,
         limit,
         NftEntry::id,
+        |nft| visibility.allows_nft(world, nft.id()),
         |nft| {
-            visibility.allows_nft(world, nft.id())
-                && owned_by.is_none_or(|owner| nft.value().owned_by == *owner)
+            owned_by.is_none_or(|owner| nft.value().owned_by == *owner)
                 && domain_filter.is_none_or(|domain| nft.id().domain() == domain)
         },
         ExplorerNftDto::from_entry,
-    );
+    )?;
     let pagination = explorer_cursor_meta(
         ExplorerCursorCollection::Nfts,
         filter_digest,
@@ -2460,13 +2541,13 @@ pub(crate) fn rwas_page_for_filters<'world>(
         rwas,
         limit,
         RwaEntry::id,
+        |rwa| visibility.allows_rwa(world, rwa.id()),
         |rwa| {
-            visibility.allows_rwa(world, rwa.id())
-                && owned_by.is_none_or(|owner| rwa.value().owned_by == *owner)
+            owned_by.is_none_or(|owner| rwa.value().owned_by == *owner)
                 && domain_filter.is_none_or(|domain| rwa.id().domain() == domain)
         },
         ExplorerRwaDto::from_entry,
-    );
+    )?;
     let pagination = explorer_cursor_meta(
         ExplorerCursorCollection::Rwas,
         filter_digest,
@@ -2613,30 +2694,30 @@ mod tests {
     use super::*;
     use nonzero_ext::nonzero;
     #[test]
-    fn instruction_kind_filter_accepts_kagemusha_camelcase_and_snake_case() {
+    fn instruction_kind_filter_accepts_offline_cash_v1_camelcase_and_snake_case() {
         assert_eq!(
-            "KagemushaTopUp"
+            "OfflineCashTopUp"
                 .parse::<ExplorerInstructionKind>()
-                .expect("Kagemusha top-up kind"),
-            ExplorerInstructionKind::KagemushaTopUp
+                .expect("Offline Cash V1 top-up kind"),
+            ExplorerInstructionKind::OfflineCashTopUp
         );
         assert_eq!(
-            "kagemusha_top_up"
+            "offline_cash_top_up"
                 .parse::<ExplorerInstructionKind>()
-                .expect("Kagemusha top-up kind"),
-            ExplorerInstructionKind::KagemushaTopUp
+                .expect("Offline Cash V1 top-up kind"),
+            ExplorerInstructionKind::OfflineCashTopUp
         );
         assert_eq!(
-            "KagemushaRedeem"
+            "OfflineCashRedemption"
                 .parse::<ExplorerInstructionKind>()
-                .expect("Kagemusha redeem kind"),
-            ExplorerInstructionKind::KagemushaRedeem
+                .expect("Offline Cash V1 redemption kind"),
+            ExplorerInstructionKind::OfflineCashRedemption
         );
         assert_eq!(
-            "kagemusha_redeem"
+            "offline_cash_redemption"
                 .parse::<ExplorerInstructionKind>()
-                .expect("Kagemusha redeem kind"),
-            ExplorerInstructionKind::KagemushaRedeem
+                .expect("Offline Cash V1 redemption kind"),
+            ExplorerInstructionKind::OfflineCashRedemption
         );
     }
     #[test]
@@ -2646,7 +2727,10 @@ mod tests {
             explorer_history_filter_digest(collection, &[Some("authority".to_owned()), None]);
         let visibility_digest = [0x22; 32];
         let snapshot_hash = [0x33; 32];
-        let position = ExplorerHistoryPosition::transaction(41, 7);
+        let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0x55; iroha_crypto::Hash::LENGTH]),
+        );
+        let position = ExplorerHistoryPosition::transaction(41, entrypoint_hash);
         let meta = explorer_history_cursor_meta(
             collection,
             filter_digest,
@@ -2697,6 +2781,66 @@ mod tests {
                 visibility_digest,
             ),
             Err(ExplorerCursorError::ScopeMismatch),
+        );
+    }
+    #[test]
+    fn history_cursor_stable_key_is_independent_of_hidden_entrypoint_positions() {
+        let collection = ExplorerHistoryCollection::Instructions;
+        let filter_digest = explorer_history_filter_digest(collection, &[]);
+        let visibility_digest = [0x22; 32];
+        let snapshot_hash = [0x33; 32];
+        let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0x55; iroha_crypto::Hash::LENGTH]),
+        );
+        let encode_after_hidden_rows = |_hidden_before: usize| {
+            encode_explorer_history_cursor(
+                collection,
+                filter_digest,
+                visibility_digest,
+                ExplorerHistoryCursor {
+                    snapshot_height: 42,
+                    snapshot_hash,
+                    position: ExplorerHistoryPosition::instruction(41, entrypoint_hash, 7),
+                },
+            )
+            .expect("stable visible instruction cursor")
+        };
+
+        assert_eq!(
+            encode_after_hidden_rows(0),
+            encode_after_hidden_rows(37),
+            "hidden physical rows must not change a visible continuation key",
+        );
+        assert_eq!(
+            encode_explorer_history_cursor(
+                ExplorerHistoryCollection::Transactions,
+                explorer_history_filter_digest(ExplorerHistoryCollection::Transactions, &[]),
+                visibility_digest,
+                ExplorerHistoryCursor {
+                    snapshot_height: 42,
+                    snapshot_hash,
+                    position: ExplorerHistoryPosition::transaction_start(41),
+                },
+            ),
+            Err(ExplorerCursorError::InvalidKey),
+            "an internal physical scan sentinel must never be serialized",
+        );
+
+        let encoded = encode_after_hidden_rows(0);
+        let mut malformed_frame = URL_SAFE_NO_PAD
+            .decode(encoded)
+            .expect("canonical history cursor frame");
+        malformed_frame[148] &= !1;
+        let malformed = URL_SAFE_NO_PAD.encode(malformed_frame);
+        assert_eq!(
+            decode_explorer_history_cursor(
+                &malformed,
+                collection,
+                filter_digest,
+                visibility_digest,
+            ),
+            Err(ExplorerCursorError::InvalidKey),
+            "a malformed stable anchor hash must fail as a generic invalid key",
         );
     }
     #[test]
@@ -2852,9 +2996,11 @@ mod tests {
                 candidates,
                 1,
                 |candidate| candidate,
+                |_| true,
                 |candidate| *candidate == 1_000,
                 |candidate| candidate,
-            );
+            )
+            .expect("bounded visible scan");
             assert!(
                 page.scanned <= 8,
                 "one-token sparse scan exceeded its budget"
@@ -2869,6 +3015,69 @@ mod tests {
             after = page.last_scanned;
             assert!(pages < 200, "bounded continuation failed to make progress");
         }
+    }
+    #[test]
+    fn hidden_candidates_never_become_reversible_cursor_boundaries() {
+        let page = collect_explorer_cursor_page(
+            0_u32..40,
+            1,
+            |candidate| candidate,
+            |candidate| *candidate % 2 == 0,
+            |_| false,
+            |candidate| candidate,
+        )
+        .expect("bounded authorized page");
+        assert_eq!(page.scanned, 8);
+        assert_eq!(page.last_scanned, Some(14));
+        assert!(page.has_more);
+
+        let digest = explorer_filter_digest(ExplorerCursorCollection::Accounts, &[], [0; 32]);
+        let meta = explorer_cursor_meta(
+            ExplorerCursorCollection::Accounts,
+            digest,
+            1,
+            page.last_scanned.as_ref(),
+            page.has_more,
+        )
+        .expect("visible cursor boundary");
+        let encoded = meta.next_cursor.expect("visible continuation cursor");
+        let decoded =
+            decode_explorer_cursor_key(&encoded, ExplorerCursorCollection::Accounts, digest)
+                .expect("reversible cursor key");
+        assert_eq!(decoded, "14");
+        assert!(
+            decoded.parse::<u32>().is_ok_and(|key| key % 2 == 0),
+            "a reversible cursor must never carry a hidden candidate key",
+        );
+
+        let hidden_tail = collect_explorer_cursor_page(
+            0_u32..40,
+            1,
+            |candidate| candidate,
+            |candidate| *candidate == 0,
+            |_| false,
+            |candidate| candidate,
+        )
+        .expect("bounded hidden tail");
+        assert!(!hidden_tail.has_more);
+    }
+    #[test]
+    fn hidden_candidate_scan_fails_closed_at_raw_work_limit() {
+        let inspected = std::cell::Cell::new(0_usize);
+        let error = collect_explorer_cursor_page(
+            0_u32..600,
+            1,
+            |candidate| candidate,
+            |candidate| {
+                inspected.set(inspected.get().saturating_add(1));
+                *candidate == 599
+            },
+            |_| false,
+            |candidate| candidate,
+        )
+        .expect_err("a visible candidate beyond the raw scan bound must fail closed");
+        assert_eq!(error, ExplorerCursorError::ScanLimitExceeded);
+        assert_eq!(inspected.get(), EXPLORER_CURSOR_MAX_SCAN);
     }
     #[test]
     fn metadata_conversion_handles_entries() {

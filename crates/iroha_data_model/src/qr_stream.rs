@@ -51,19 +51,19 @@ impl QrStreamFrameKind {
 pub enum QrPayloadKind {
     /// No specific payload kind.
     Unspecified = 0,
-    /// Kagemusha recipient payment request.
-    KagemushaPaymentRequest = 1,
-    /// Kagemusha recursive-spend payment.
-    KagemushaPayment = 2,
-    /// Kagemusha receiver acknowledgement.
-    KagemushaAcknowledgement = 3,
+    /// Offline Cash V1 recipient payment request.
+    OfflineCashPaymentRequest = 1,
+    /// Offline Cash V1 payment.
+    OfflineCashPayment = 2,
+    /// Offline Cash V1 receiver acknowledgement.
+    OfflineCashAcknowledgement = 3,
 }
 impl QrPayloadKind {
     fn from_u16(value: u16) -> Self {
         match value {
-            1 => Self::KagemushaPaymentRequest,
-            2 => Self::KagemushaPayment,
-            3 => Self::KagemushaAcknowledgement,
+            1 => Self::OfflineCashPaymentRequest,
+            2 => Self::OfflineCashPayment,
+            3 => Self::OfflineCashAcknowledgement,
             _ => Self::Unspecified,
         }
     }
@@ -873,9 +873,9 @@ mod tests {
             .and_then(|v| v.as_str())
             .unwrap_or("unspecified");
         let payload_kind = match payload_kind {
-            "kagemusha_payment_request" => QrPayloadKind::KagemushaPaymentRequest,
-            "kagemusha_payment" => QrPayloadKind::KagemushaPayment,
-            "kagemusha_acknowledgement" => QrPayloadKind::KagemushaAcknowledgement,
+            "offline_cash_payment_request" => QrPayloadKind::OfflineCashPaymentRequest,
+            "offline_cash_payment" => QrPayloadKind::OfflineCashPayment,
+            "offline_cash_acknowledgement" => QrPayloadKind::OfflineCashAcknowledgement,
             _ => QrPayloadKind::Unspecified,
         };
         let envelope_hex = value

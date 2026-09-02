@@ -1605,8 +1605,6 @@ test("required-export probe rejects missing strict boundary symbols", (t) => {
     "privacyValidateExact12CapabilityManifestV1",
     "blockProofsVerifyAuthenticatedV1",
     "inspectSorafsOrderbookSubmissionForDiscriminantV1",
-    "kagemushaNativeContractRevision",
-    "kagemushaOfflineOperationStatusJsonValidateV2",
     "validationFeeHijiriQuoteRequestV1",
     "validationFeeVerifyHijiriQuoteResponseV1",
     "verifySorafsOrderbookSubmissionReceiptV1",

@@ -232,9 +232,12 @@ A `kotoage fn`/`言挙げ fn` mutates or submits ledger state and always declare
 caller authorization. Authorization is checked at runtime and is separate from
 compiler-derived effects and operation-specific host authorization. Views are
 public unless they add `authorize`. Lifecycle declarations never accept
-source-level authorization: ABI V1 requires the runtime-defined
-`CanRegisterSmartContractCode` permission for both `hajimari`/`始まり` and
-`kaizen`/`改善`.
+source-level authorization: ABI V1 binds both `hajimari`/`始まり` and
+`kaizen`/`改善` hook dispatch to the runtime-defined
+`CanInvokeContractEntrypoint` permission. That hook permission does not grant
+address lifecycle control: deployment creates the address atomically, while
+later activation and deactivation require its account owner plus an exact
+lifecycle revision or the certified Parliament corridor.
 
 Lifecycle hooks are accepted only as top-level calls to a deployed seiyaku
 instance. A hash-only governance stub can never become active: the complete

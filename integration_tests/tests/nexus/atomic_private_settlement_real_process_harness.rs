@@ -1,6 +1,6 @@
 use base64::Engine as _;
 use futures_util::StreamExt as _;
-use iroha::data_model::block::consensus_v2::SumeragiV2GenesisContextParameters;
+use iroha::data_model::block::consensus_v2::recommended_data_availability_layout;
 use iroha::data_model::events::{
     EventBox,
     pipeline::{PipelineEventBox, TransactionEventFilter, TransactionStatus},
@@ -95,6 +95,7 @@ struct RealProcessBenchmarkRequestV1 {
     hardware_profile_sha256: String,
     configuration_sha256: String,
     participants: usize,
+    participant_visibilities: Vec<String>,
     validators_per_dataspace: usize,
     global_validators: usize,
     quorum: String,
@@ -146,6 +147,7 @@ struct RealProcessFaultRequestV1 {
     hardware_profile_sha256: String,
     configuration_sha256: String,
     participants: usize,
+    participant_visibilities: Vec<String>,
     validators_per_dataspace: usize,
     global_validators: usize,
     quorum: String,
@@ -197,6 +199,7 @@ struct RealProcessLeakageRequestV1 {
     hardware_profile_sha256: String,
     configuration_sha256: String,
     participants: usize,
+    participant_visibilities: Vec<String>,
     validators_per_dataspace: usize,
     global_validators: usize,
     quorum: String,
@@ -602,6 +605,15 @@ fn harness_json_object_bool(value: &HarnessJsonValue, outer: &str, inner: &str) 
     value.get(outer)?.get(inner)?.as_bool()
 }
 
+fn harness_json_string_array<'a>(value: &'a HarnessJsonValue, key: &str) -> Option<Vec<&'a str>> {
+    value
+        .get(key)?
+        .as_array()?
+        .iter()
+        .map(HarnessJsonValue::as_str)
+        .collect()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn validate_real_process_request_common(
     version: u8,
@@ -614,6 +626,7 @@ fn validate_real_process_request_common(
     hardware_profile_sha256: &str,
     configuration_sha256: &str,
     participants: usize,
+    participant_visibilities: &[String],
     validators_per_dataspace: usize,
     global_validators: usize,
     quorum: &str,
@@ -624,6 +637,11 @@ fn validate_real_process_request_common(
 ) -> Result<()> {
     let shape = TopologyShape::new(participants);
     shape.validate()?;
+    let expected_participant_visibilities = shape
+        .participant_visibility_profile()
+        .into_iter()
+        .map(LaneVisibility::as_str)
+        .collect::<Vec<_>>();
     ensure!(
         version == 1
             && protocol == "AtomicPrivateSettlementV1"
@@ -642,6 +660,18 @@ fn validate_real_process_request_common(
         minimum_signed_rs16_da_observations
             == u64::try_from(shape.peer_count()).expect("peer count fits u64"),
         "signed RS16 observation minimum must cover every validator"
+    );
+    ensure!(
+        participant_visibilities
+            .iter()
+            .map(String::as_str)
+            .eq(expected_participant_visibilities.iter().copied()),
+        "request substitutes the canonical mixed participant visibility profile"
+    );
+    ensure!(
+        harness_json_string_array(configuration, "participant_visibilities")
+            .is_some_and(|profile| profile == expected_participant_visibilities),
+        "embedded configuration substitutes the canonical mixed participant visibility profile"
     );
     ensure!(
         lowercase_digest(request_id, &[64])
@@ -723,6 +753,7 @@ fn validate_real_process_request(request: &RealProcessBenchmarkRequestV1) -> Res
         &request.hardware_profile_sha256,
         &request.configuration_sha256,
         request.participants,
+        &request.participant_visibilities,
         request.validators_per_dataspace,
         request.global_validators,
         &request.quorum,
@@ -777,6 +808,7 @@ fn validate_real_process_fault_request(request: &RealProcessFaultRequestV1) -> R
         &request.hardware_profile_sha256,
         &request.configuration_sha256,
         request.participants,
+        &request.participant_visibilities,
         request.validators_per_dataspace,
         request.global_validators,
         &request.quorum,
@@ -831,6 +863,7 @@ fn validate_real_process_leakage_request(request: &RealProcessLeakageRequestV1) 
         &request.hardware_profile_sha256,
         &request.configuration_sha256,
         request.participants,
+        &request.participant_visibilities,
         request.validators_per_dataspace,
         request.global_validators,
         &request.quorum,
@@ -1655,14 +1688,24 @@ fn write_leakage_port_manifest(network: &Network, shape: TopologyShape) -> Resul
         .iter()
         .map(|peer| peer.api_address().port())
         .collect::<Vec<_>>();
-    let mut public_p2p_ports = network.peers()[shape.validator_range(0)]
-        .iter()
-        .map(|peer| peer.p2p_address().port())
-        .collect::<Vec<_>>();
-    let mut restricted_p2p_ports = network.peers()[VALIDATORS_PER_LANE..]
-        .iter()
-        .map(|peer| peer.p2p_address().port())
-        .collect::<Vec<_>>();
+    let mut public_p2p_ports = Vec::new();
+    let mut restricted_p2p_ports = Vec::new();
+    for lane in 0..shape.lane_count() {
+        let visibility = if lane == 0 {
+            LaneVisibility::Public
+        } else {
+            shape.participant_visibility(lane - 1)
+        };
+        let destination = match visibility {
+            LaneVisibility::Public => &mut public_p2p_ports,
+            LaneVisibility::Restricted => &mut restricted_p2p_ports,
+        };
+        destination.extend(
+            network.peers()[shape.validator_range(lane)]
+                .iter()
+                .map(|peer| peer.p2p_address().port()),
+        );
+    }
     for ports in [
         &mut torii_ports,
         &mut public_p2p_ports,
@@ -1677,10 +1720,11 @@ fn write_leakage_port_manifest(network: &Network, shape: TopologyShape) -> Resul
         .chain(&restricted_p2p_ports)
         .copied()
         .collect::<BTreeSet<_>>();
+    let (expected_public_p2p, expected_restricted_p2p) = shape.p2p_validator_counts_by_visibility();
     ensure!(
         torii_ports.len() == shape.peer_count()
-            && public_p2p_ports.len() == VALIDATORS_PER_LANE
-            && restricted_p2p_ports.len() == shape.participants * VALIDATORS_PER_LANE
+            && public_p2p_ports.len() == expected_public_p2p
+            && restricted_p2p_ports.len() == expected_restricted_p2p
             && all_ports.len()
                 == torii_ports.len() + public_p2p_ports.len() + restricted_p2p_ports.len(),
         "leakage capture ports are incomplete or overlap"
@@ -3584,7 +3628,7 @@ fn ensure_fault_ledger_unchanged_before_finality(
 fn verify_signed_rs16_finality(network: &Network, finalized_height: u64) -> Result<u64> {
     let height = NonZeroU64::new(finalized_height)
         .ok_or_else(|| eyre!("finalized receipt height is zero"))?;
-    let expected_layout = SumeragiV2GenesisContextParameters::recommended().da_layout;
+    let expected_layout = recommended_data_availability_layout();
     let mut observations = 0_u64;
     for peer in network.peers() {
         let (proof, block_hash) = peer

@@ -458,7 +458,7 @@ class FakeRuntime:
         self.leave_peer_running_on_stop = False
         self.process_commands = self.process_ops.process_commands
         self.start_env: dict[str, str] | None = None
-        self.mcp_protocol_version = module.MCP_PROTOCOL_VERSION_V1
+        self.mcp_protocol_version = module.MCP_PROTOCOL_VERSION
         self.requests: list[tuple[str, object | None]] = []
         self.api_port = module.DEFAULT_API_PORT
         self.help_options = {
@@ -1298,22 +1298,40 @@ class FakeRuntime:
         self.requests.append((url, payload))
         if url.endswith("v1/mcp"):
             assert isinstance(payload, dict)
-            if payload.get("method") == "initialize":
-                params = payload.get("params")
-                assert isinstance(params, dict)
-                assert params.get("protocolVersion") == self.mcp_protocol_version
+            params = payload.get("params")
+            assert isinstance(params, dict)
+            meta = params.get("_meta")
+            assert isinstance(meta, dict)
+            assert (
+                meta.get(module.MCP_META_PROTOCOL_VERSION)
+                == self.mcp_protocol_version
+            )
+            assert isinstance(
+                meta.get(module.MCP_META_CLIENT_CAPABILITIES), dict
+            )
+            assert meta.get(module.MCP_META_CLIENT_INFO) == module.MCP_CLIENT_INFO
+            if payload.get("method") == "server/discover":
                 return 200, {
                     "jsonrpc": "2.0",
                     "id": 1,
-                    "result": {"protocolVersion": self.mcp_protocol_version},
+                    "result": {
+                        "resultType": "complete",
+                        "supportedVersions": [self.mcp_protocol_version],
+                        "capabilities": {"tools": {}},
+                        "ttlMs": 0,
+                        "cacheScope": "private",
+                    },
                 }
-            if payload.get("method") == "notifications/initialized":
-                return 202, None
             if payload.get("method") == "tools/list":
                 return 200, {
                     "jsonrpc": "2.0",
                     "id": 2,
-                    "result": {"tools": [{"name": "iroha.health"}]},
+                    "result": {
+                        "resultType": "complete",
+                        "tools": [{"name": "iroha.health"}],
+                        "ttlMs": 0,
+                        "cacheScope": "private",
+                    },
                 }
             raise AssertionError(f"unexpected MCP payload: {payload}")
         for index in range(module.PEER_COUNT):
@@ -2550,8 +2568,7 @@ class TairaDevnetTests(unittest.TestCase):
         ]
         self.assertEqual(
             mcp_methods,
-            ["initialize", "notifications/initialized", "tools/list"]
-            * module.PEER_COUNT,
+            ["server/discover", "tools/list"] * module.PEER_COUNT,
         )
         mcp_roots = {
             url.removesuffix("v1/mcp")
@@ -5752,6 +5769,63 @@ class TairaDevnetTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload, 2)
 
+    def test_http_request_adds_native_mcp_metadata_and_routing_headers(self) -> None:
+        class JsonResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+            @staticmethod
+            def read(_limit: int = -1) -> bytes:
+                return b"{}"
+
+        def open_mcp(request, *, timeout: int):
+            self.assertEqual(timeout, 3)
+            self.assertEqual(request.get_method(), "POST")
+            headers = {name.lower(): value for name, value in request.header_items()}
+            self.assertEqual(
+                headers["accept"], "application/json, text/event-stream"
+            )
+            self.assertEqual(headers["content-type"], "application/json")
+            self.assertEqual(
+                headers["mcp-protocol-version"], module.MCP_PROTOCOL_VERSION
+            )
+            self.assertEqual(headers["mcp-method"], "tools/call")
+            self.assertEqual(
+                headers["mcp-name"], "=?base64?aXJvaGEu5YGl5bq3?="
+            )
+            body = json.loads(request.data)
+            meta = body["params"]["_meta"]
+            self.assertEqual(
+                meta[module.MCP_META_PROTOCOL_VERSION], module.MCP_PROTOCOL_VERSION
+            )
+            self.assertEqual(meta[module.MCP_META_CLIENT_CAPABILITIES], {})
+            self.assertEqual(meta[module.MCP_META_CLIENT_INFO], module.MCP_CLIENT_INFO)
+            return JsonResponse()
+
+        payload = module.mcp_jsonrpc_request(
+            7,
+            "tools/call",
+            {"name": "iroha.健康", "arguments": {}},
+        )
+        with mock.patch.object(module.urllib.request, "urlopen", side_effect=open_mcp):
+            status, response = module.http_request(
+                "http://127.0.0.1:29080/v1/mcp", payload
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(response, {})
+        self.assertNotIn(
+            "Mcp-Name",
+            module.mcp_http_headers(
+                module.mcp_jsonrpc_request(8, "server/discover")
+            ),
+        )
+
     def test_http_request_rejects_an_oversized_response(self) -> None:
         class OversizedResponse:
             status = 200
@@ -5806,40 +5880,68 @@ class TairaDevnetTests(unittest.TestCase):
             with self.assertRaisesRegex(module.DevnetError, "cargo timed out after 7s"):
                 module.run_command(["cargo", "build"], timeout=7)
 
-    def test_mcp_rejects_stale_protocol_and_nonaccepted_notification(self) -> None:
-        def stale_initialize(_url: str, payload: object | None) -> tuple[int, object]:
+    def test_mcp_rejects_stale_discovery_and_invalid_tool_cache_hints(self) -> None:
+        def stale_discovery(_url: str, payload: object | None) -> tuple[int, object]:
             self.assertIsInstance(payload, dict)
             assert isinstance(payload, dict)
+            self.assertEqual(payload.get("method"), "server/discover")
+            params = payload.get("params")
+            self.assertIsInstance(params, dict)
+            assert isinstance(params, dict)
+            meta = params.get("_meta")
+            self.assertIsInstance(meta, dict)
+            assert isinstance(meta, dict)
             self.assertEqual(
-                payload["params"]["protocolVersion"], module.MCP_PROTOCOL_VERSION_V1
+                meta[module.MCP_META_PROTOCOL_VERSION], module.MCP_PROTOCOL_VERSION
             )
             return 200, {
                 "jsonrpc": "2.0",
                 "id": 1,
-                "result": {"protocolVersion": "2024-11-05"},
+                "result": {
+                    "resultType": "complete",
+                    "supportedVersions": ["2025-06-18"],
+                    "capabilities": {"tools": {}},
+                    "ttlMs": 0,
+                    "cacheScope": "private",
+                },
             }
 
-        with self.assertRaisesRegex(module.DevnetError, "MCP initialize failed"):
-            module.check_mcp("http://127.0.0.1:29080/", stale_initialize)
+        with self.assertRaisesRegex(module.DevnetError, "MCP server/discover failed"):
+            module.check_mcp("http://127.0.0.1:29080/", stale_discovery)
 
-        def rejected_notification(
+        def invalid_tool_cache_hints(
             _url: str, payload: object | None
         ) -> tuple[int, object | None]:
             assert isinstance(payload, dict)
-            if payload.get("method") == "initialize":
+            if payload.get("method") == "server/discover":
                 return 200, {
                     "jsonrpc": "2.0",
                     "id": 1,
-                    "result": {"protocolVersion": module.MCP_PROTOCOL_VERSION_V1},
+                    "result": {
+                        "resultType": "complete",
+                        "supportedVersions": [module.MCP_PROTOCOL_VERSION],
+                        "capabilities": {"tools": {}},
+                        "ttlMs": 0,
+                        "cacheScope": "private",
+                    },
                 }
-            if payload.get("method") == "notifications/initialized":
-                return 200, None
+            if payload.get("method") == "tools/list":
+                return 200, {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "result": {
+                        "resultType": "complete",
+                        "tools": [{"name": "iroha.health"}],
+                        "ttlMs": -1,
+                        "cacheScope": "private",
+                    },
+                }
             raise AssertionError(f"unexpected MCP payload: {payload}")
 
-        with self.assertRaisesRegex(
-            module.DevnetError, "MCP initialized notification failed"
-        ):
-            module.check_mcp("http://127.0.0.1:29080/", rejected_notification)
+        with self.assertRaisesRegex(module.DevnetError, "MCP tools/list failed"):
+            module.check_mcp(
+                "http://127.0.0.1:29080/", invalid_tool_cache_hints
+            )
 
     def test_help_exposes_only_up_check_and_down(self) -> None:
         completed = subprocess.run(

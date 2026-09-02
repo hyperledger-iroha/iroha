@@ -139,19 +139,19 @@ def validate_server_template(path: pathlib.Path) -> str:
     ]
     torii = table.get("torii")
     if isinstance(torii, Mapping):
-        kagemusha_commands = torii.get("kagemusha_commands")
-        if isinstance(kagemusha_commands, Mapping) and kagemusha_commands.get(
+        offline_cash_v1_commands = torii.get("offline_cash_v1_commands")
+        if isinstance(offline_cash_v1_commands, Mapping) and offline_cash_v1_commands.get(
             "enabled", True
         ):
-            if "private_key" in kagemusha_commands:
+            if "private_key" in offline_cash_v1_commands:
                 raise ProvisioningTemplateError(
-                    f"{path} embeds forbidden runtime secret field `torii.kagemusha_commands.private_key`"
+                    f"{path} embeds forbidden runtime secret field `torii.offline_cash_v1_commands.private_key`"
                 )
             secret_paths.append(
                 _require_secret_file(
-                    kagemusha_commands,
+                    offline_cash_v1_commands,
                     "private_key_file",
-                    f"{path}.torii.kagemusha_commands",
+                    f"{path}.torii.offline_cash_v1_commands",
                 )
             )
     if len(set(secret_paths)) != len(secret_paths):

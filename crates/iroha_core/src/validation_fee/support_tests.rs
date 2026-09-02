@@ -2,7 +2,7 @@
 use super::*;
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
-    ChainId, NetworkId,
+    ChainId,
     asset::{AssetDefinitionId, AssetId},
     block::BlockHeader,
     domain::DomainId,
@@ -14,34 +14,10 @@ use iroha_data_model::{
     hijiri::{FeeMultiplierBand, HijiriAccountRiskV1, HijiriFeePolicy, Q16},
     isi::{
         InstructionBox, Transfer, TransferAssetBatchEntry,
-        offline::{RedeemKagemushaRecursiveV4, TopUpKagemushaRecursiveV4},
         repo::RepoMarginCallIsi,
         settlement::{SettlementLeg, SettlementPlan},
     },
-    offline::{
-        KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND, KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4,
-        KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
-        KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
-        KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4,
-        KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5,
-        KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5,
-        KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
-        KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4, KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
-        KagemushaAndroidKeyMintHardwareAssertionV1, KagemushaOnlineHardwareAssertionV1,
-        KagemushaPastaCycleParityV1, KagemushaPastaCycleProofEnvelopeV4,
-        KagemushaRecursiveSpendArtifactBindingV4, KagemushaRecursiveSpendBranchClaimV2,
-        KagemushaRecursiveSpendBundleV4, KagemushaRecursiveSpendOperationVectorV4,
-        KagemushaRecursiveSpendProofV4, KagemushaRecursiveSpendPublicStatementV4,
-        KagemushaRecursiveSpendRedeemRequestV4, KagemushaRecursiveSpendRedeemUnsignedV4,
-        KagemushaRecursiveSpendRedemptionIntentV4, KagemushaRecursiveSpendStateBoundaryV5,
-        KagemushaRecursiveSpendTopUpAnchorRefV2, KagemushaRecursiveSpendTopUpRequestV4,
-        KagemushaRecursiveSpendTopUpUnsignedV4, KagemushaRequestAuthorizationV2,
-        KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
-        KagemushaUnshieldPublicInputsBindingV2, kagemusha_confidential_amount_encoding_v2,
-        kagemusha_recursive_spend_verifier_key_id_v4,
-    },
     prelude::Register,
-    proof::{ProofAttachment, ProofBox, VerifyingKeyId},
     repo::{RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     transaction::{
         Executable, IvmBytecode, IvmProved, TransactionBuilder, executable::ContractInvocation,
@@ -561,10 +537,9 @@ pub(crate) fn activate_bound_payout_runtime(
         DataSpaceId::UNIVERSAL,
     )
     .expect("derive payout contract address");
-    state_tx.world.bind_inactive_contract_subject_for_testing(
-        contract_address.clone(),
-        deployer.clone(),
-    );
+    state_tx
+        .world
+        .bind_inactive_contract_subject_for_testing(contract_address.clone(), deployer.clone());
     crate::smartcontracts::code::activate_instance(
         deployer,
         contract_address.clone(),
@@ -650,10 +625,9 @@ fn install_active_bound_validation_fee_policy(
     let contract_address =
         ContractAddress::derive(&state_tx.network_id, deployer, 0, DataSpaceId::UNIVERSAL)
             .expect("contract address");
-    state_tx.world.bind_inactive_contract_subject_for_testing(
-        contract_address.clone(),
-        deployer.clone(),
-    );
+    state_tx
+        .world
+        .bind_inactive_contract_subject_for_testing(contract_address.clone(), deployer.clone());
     crate::smartcontracts::code::activate_instance(
         deployer,
         contract_address.clone(),
@@ -752,225 +726,6 @@ fn assert_treasury_payout_plan_mismatch(
             | Err(ValidationFeeAdmissionError::TreasuryPayoutEffectPlanMismatch { .. })
             | Err(ValidationFeeAdmissionError::TreasuryPayoutArithmeticFailure)
     ));
-}
-fn kagemusha_artifact_binding() -> KagemushaRecursiveSpendArtifactBindingV4 {
-    KagemushaRecursiveSpendArtifactBindingV4 {
-        version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
-        generation: "validation-fee-kagemusha-v4".to_owned(),
-        manifest_sha256: [0xA1; 32],
-    }
-}
-fn kagemusha_authorization(
-    authority: AccountId,
-    asset_definition_id: AssetDefinitionId,
-    operation_id: [u8; 32],
-    payload_digest: [u8; 32],
-) -> KagemushaRequestAuthorizationV2 {
-    KagemushaRequestAuthorizationV2 {
-        authority,
-        device_id: "validation-fee-kagemusha-device".to_owned(),
-        asset_definition_id,
-        operation_id,
-        issued_at_ms: 1,
-        expires_at_ms: 2,
-        nonce: [0xA2; 32],
-        payload_digest,
-        registration_hash: [0xA3; 32],
-        hardware_assertion: KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(
-            KagemushaAndroidKeyMintHardwareAssertionV1 {
-                signature: iroha_data_model::offline::KagemushaDeviceSignatureV2::from_raw_bytes(
-                    &[1; 64],
-                )
-                .expect("canonical low-S fixture signature"),
-            },
-        ),
-    }
-}
-fn kagemusha_top_up_request(
-    asset_definition_id: &AssetDefinitionId,
-) -> KagemushaRecursiveSpendTopUpRequestV4 {
-    let payer = account(1);
-    let network_id = NetworkId::from_genesis_hash(block_hash([0xA0; 32]));
-    let amount = KagemushaScaledAmountV2::new(500, u32::from(TEST_VALIDATION_FEE_ASSET_SCALE))
-        .expect("positive top-up amount");
-    let operation_id = [0xA4; 32];
-    let mut shield_proof = ProofAttachment::new_ref(
-        KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND.into(),
-        ProofBox::new(KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND.to_owned(), vec![0xA5]),
-        VerifyingKeyId::new(
-            KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND,
-            "validation-fee-topup-shield",
-        ),
-    );
-    shield_proof.vk_commitment = Some([0xA6; 32]);
-    let unsigned = KagemushaRecursiveSpendTopUpUnsignedV4 {
-        version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
-        asset: AssetId::new(asset_definition_id.clone(), payer.clone()),
-        amount,
-        current_note: KagemushaSpendableNoteDescriptorV2 {
-            network_id,
-            asset: asset_definition_id.clone(),
-            note_commitment: [0xA7; 32],
-            spend_nullifier: [0xA8; 32],
-            amount,
-        },
-        shield_evidence: iroha_data_model::offline::KagemushaTopUpShieldEvidenceV2 {
-            initial_root: [0xA9; 32],
-            finalized_root: [0xAA; 32],
-            leaf_index: 0,
-            proof: shield_proof,
-        },
-        artifact_binding: kagemusha_artifact_binding(),
-        operation_id,
-    };
-    let payload_digest = unsigned.digest().expect("valid top-up payload");
-    unsigned
-        .into_request(kagemusha_authorization(
-            payer,
-            asset_definition_id.clone(),
-            operation_id,
-            payload_digest,
-        ))
-        .expect("valid top-up request")
-}
-fn kagemusha_redeem_request(
-    asset_definition_id: &AssetDefinitionId,
-) -> KagemushaRecursiveSpendRedeemRequestV4 {
-    let recipient = account(1);
-    let network_id = NetworkId::from_genesis_hash(block_hash([0xA0; 32]));
-    let amount = KagemushaScaledAmountV2::new(500, u32::from(TEST_VALIDATION_FEE_ASSET_SCALE))
-        .expect("positive redemption amount");
-    let operation_id = [0xB1; 32];
-    let topup_anchor_ref = KagemushaRecursiveSpendTopUpAnchorRefV2 {
-        topup_operation_id: [0xB2; 32],
-        anchor_digest: [0xB3; 32],
-    };
-    let branch_claim = KagemushaRecursiveSpendBranchClaimV2::root(topup_anchor_ref.anchor_digest)
-        .expect("canonical root branch claim");
-    let note = KagemushaSpendableNoteDescriptorV2 {
-        network_id,
-        asset: asset_definition_id.clone(),
-        note_commitment: [0xB4; 32],
-        spend_nullifier: [0xB5; 32],
-        amount,
-    };
-    let binding = kagemusha_artifact_binding();
-    let verifier_key_id = kagemusha_recursive_spend_verifier_key_id_v4(
-        KagemushaPastaCycleParityV1::StepEq,
-        binding.manifest_sha256,
-    );
-    let statement = KagemushaRecursiveSpendPublicStatementV4 {
-        network_id,
-        asset: asset_definition_id.clone(),
-        asset_scale: u32::from(TEST_VALIDATION_FEE_ASSET_SCALE),
-        final_root: [0xB6; 32],
-        next_zero_leaf_index: 1,
-        topup_anchor_refs: vec![topup_anchor_ref.clone()],
-        proof_step_count: 1,
-        peer_hop_count: 0,
-        current_note: note.clone(),
-        branch_claims: vec![branch_claim.clone()],
-        transition: None,
-        artifact_binding: binding.clone(),
-        verifier_key_id: verifier_key_id.clone(),
-    };
-    let public_statement_digest = statement.digest().expect("valid public statement");
-    let mut state_limbs = vec![0; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V5];
-    state_limbs[0] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V5;
-    let mut operation_limbs = [0; KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4];
-    operation_limbs[0] = 1;
-    let bundle = KagemushaRecursiveSpendBundleV4 {
-        statement,
-        operation: KagemushaRecursiveSpendOperationVectorV4 {
-            limbs: operation_limbs,
-        },
-        recursive_proof: KagemushaRecursiveSpendProofV4 {
-            verifier_key_id,
-            public_statement_digest,
-            proof_envelope: KagemushaPastaCycleProofEnvelopeV4 {
-                version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
-                proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
-                transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4.to_owned(),
-                step_eq_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4.to_owned(),
-                step_ep_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4.to_owned(),
-                artifact_generation: binding.generation.clone(),
-                manifest_sha256: binding.manifest_sha256,
-                step_eq_parameter_generation: "validation-fee-eq-params".to_owned(),
-                step_ep_parameter_generation: "validation-fee-ep-params".to_owned(),
-                step_eq_circuit_params_sha256: [0xB7; 32],
-                step_ep_circuit_params_sha256: [0xB8; 32],
-                step_eq_verifier_key_sha256: [0xB9; 32],
-                step_ep_verifier_key_sha256: [0xBA; 32],
-                state_boundary: KagemushaRecursiveSpendStateBoundaryV5::new(state_limbs)
-                    .expect("valid state boundary"),
-                proof: ProofBox::new(
-                    KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
-                    vec![0xBB],
-                ),
-            },
-        },
-    };
-    let bundle_digest = bundle.digest().expect("valid recursive bundle");
-    let unshield_public_inputs = KagemushaUnshieldPublicInputsBindingV2 {
-        input_commitment_0: note.note_commitment,
-        input_commitment_1: [0; 32],
-        nullifier_0: note.spend_nullifier,
-        nullifier_1: [0; 32],
-        change_output_commitment: [0; 32],
-        root: [0xB6; 32],
-        public_amount: kagemusha_confidential_amount_encoding_v2(amount.atomic_units),
-        asset_tag: [0xBC; 32],
-        network_tag: [0xBD; 32],
-    };
-    let redemption = KagemushaRecursiveSpendRedemptionIntentV4 {
-        network_id,
-        asset: asset_definition_id.clone(),
-        input_note: note,
-        parent_branch_claims: vec![branch_claim],
-        parent_topup_anchor_refs: vec![topup_anchor_ref],
-        parent_proof_step_count: 1,
-        parent_peer_hop_count: 0,
-        parent_bundle_digest: bundle_digest,
-        input_root: [0xB6; 32],
-        recipient: recipient.clone(),
-        public_amount: amount,
-        change_output: None,
-        change_artifact_binding: None,
-        unshield_public_inputs_digest: unshield_public_inputs
-            .digest()
-            .expect("valid unshield public inputs"),
-        unshield_public_inputs,
-        operation_id,
-    };
-    let mut redeem_proof = ProofAttachment::new_ref(
-        KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND.into(),
-        ProofBox::new(KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND.to_owned(), vec![0xBE]),
-        VerifyingKeyId::new(
-            KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND,
-            "validation-fee-unshield",
-        ),
-    );
-    redeem_proof.vk_commitment = Some([0xBF; 32]);
-    let unsigned = KagemushaRecursiveSpendRedeemUnsignedV4 {
-        version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
-        bundle,
-        recipient: recipient.clone(),
-        amount,
-        redeem_proof,
-        redemption,
-        offline_change: None,
-        block_height: 10,
-        operation_id,
-    };
-    let payload_digest = unsigned.digest().expect("valid redemption payload");
-    unsigned
-        .into_request(kagemusha_authorization(
-            recipient,
-            asset_definition_id.clone(),
-            operation_id,
-            payload_digest,
-        ))
-        .expect("valid redemption request")
 }
 fn repo_initiate(
     agreement: &str,

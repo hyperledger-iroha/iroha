@@ -29,10 +29,6 @@ test("release test profiles separate provisioned lanes and reject skipped result
     packageDocument.scripts["test:heavy"],
     "node ./scripts/run-test-profile.mjs heavy",
   );
-  assert.equal(
-    packageDocument.scripts["test:taira-kagemusha-read-only"],
-    "node ./scripts/run-test-profile.mjs taira-kagemusha-read-only",
-  );
 
   const runner = readFileSync(
     path.join(SDK_DIRECTORY, "scripts", "run-test-profile.mjs"),
@@ -40,7 +36,6 @@ test("release test profiles separate provisioned lanes and reject skipped result
   );
   for (const required of [
     '"integrationTorii.test.js"',
-    '"liveTairaKagemushaReadOnly.test.js"',
     '"sorafsChunker.oneGib.test.js"',
     '"sorafsAppealFinanceValidation.test.js"',
     '"sorafsFixtureBundleValidation.test.js"',
@@ -48,7 +43,6 @@ test("release test profiles separate provisioned lanes and reject skipped result
     '"sorafsOrchestrator.parity.test.js"',
     '"sorafsPdpValidation.test.js"',
     'testArguments.push("--test-concurrency=1")',
-    'IROHA_TAIRA_KAGEMUSHA_READ_ONLY: "1"',
     '/# (?:SKIP|TODO)(?:\\s|$)/u',
   ]) {
     assert.ok(runner.includes(required), `test profile runner must contain ${required}`);

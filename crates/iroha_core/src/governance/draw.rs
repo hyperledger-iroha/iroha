@@ -127,6 +127,7 @@ fn derive_body_plan(
             candidates,
             bodies,
             &rankings,
+            epoch,
             alternates_per_body,
             candidate_count,
             assignment_cap,
@@ -144,6 +145,7 @@ fn try_derive_body_plan_with_cap(
     candidates: &[AccountId],
     bodies: &[ParliamentBody],
     rankings: &BTreeMap<ParliamentBody, Vec<AccountId>>,
+    pulse_height: u64,
     alternates_per_body: usize,
     candidate_count: u32,
     assignment_cap: u32,
@@ -212,7 +214,7 @@ fn try_derive_body_plan_with_cap(
             *body,
             ParliamentDrawRoster {
                 body: *body,
-                pulse_height: epoch,
+                pulse_height,
                 members,
                 alternates,
                 candidate_count,
@@ -587,6 +589,12 @@ mod tests {
             &[0xA7; 32],
             &reordered_with_duplicate,
             &bodies,
+        );
+        assert!(
+            expected
+                .rosters
+                .values()
+                .all(|roster| roster.pulse_height == 31)
         );
         assert_eq!(expected, reordered);
         assert_ne!(

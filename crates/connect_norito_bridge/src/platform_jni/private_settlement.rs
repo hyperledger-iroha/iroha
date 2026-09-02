@@ -164,19 +164,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AtomicPrivat
         requested_payload_digest,
     )
 }
-android: fn Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseV1();
-sdk:
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseV1(
-    _env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    _response_json: jni::objects::JByteArray<'_>,
-    _expected_network_id: jni::objects::JByteArray<'_>,
-    _requested_payload_digest: jni::objects::JByteArray<'_>,
-    _auditor_public_key_utf8: jni::objects::JByteArray<'_>,
-) -> jni::sys::jint {
-    ERR_PRIVATE_SETTLEMENT_RESPONSE as jni::sys::jint
-}
 android: fn Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseWithRequestV1();
 sdk:
 #[allow(clippy::too_many_arguments)]

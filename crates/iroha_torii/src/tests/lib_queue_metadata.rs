@@ -1,7 +1,6 @@
 #[cfg(test)]
 mod tests_queue_metadata {
     use super::*;
-    use iroha_test_samples::ALICE_ID;
     #[test]
     fn queue_errors_map_to_reason_codes() {
         let cases = [
@@ -21,11 +20,11 @@ mod tests_queue_metadata {
                 "transaction expired before admission",
             ),
             (
-                queue::Error::KagemushaOperationCarrierRejected {
+                queue::Error::OfflineCashV1OperationCarrierRejected {
                     reason: "non-canonical carrier".to_owned(),
                 },
-                "PRTRY:KAGEMUSHA_OPERATION_CARRIER_REJECTED",
-                "Kagemusha operation carrier failed canonical admission: non-canonical carrier",
+                "PRTRY:OFFLINE_CASH_V1_OPERATION_CARRIER_REJECTED",
+                "Offline Cash V1 operation carrier failed canonical admission: non-canonical carrier",
             ),
             (
                 queue::Error::UnresolvedRoute {
@@ -45,11 +44,11 @@ mod tests_queue_metadata {
                 "transaction already present in the queue",
             ),
             (
-                queue::Error::KagemushaOperationIndexInconsistent {
+                queue::Error::OfflineCashV1OperationIndexInconsistent {
                     reason: "reverse owner missing".to_owned(),
                 },
-                "PRTRY:KAGEMUSHA_OPERATION_INDEX_INCONSISTENT",
-                "Kagemusha pending-operation index requires recovery: reverse owner missing",
+                "PRTRY:OFFLINE_CASH_V1_OPERATION_INDEX_INCONSISTENT",
+                "Offline Cash V1 pending-operation index requires recovery: reverse owner missing",
             ),
         ];
         for (error, expected_code, expected_detail) in cases {
@@ -60,27 +59,24 @@ mod tests_queue_metadata {
         }
     }
     #[test]
-    fn kagemusha_queue_conflict_has_stable_code_and_status() {
+    fn offline_cash_v1_queue_conflict_has_stable_code_and_status() {
         let existing_entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
-            Hash::new(b"existing-kagemusha-entrypoint"),
+            Hash::new(b"existing-offline-cash-v1-entrypoint"),
         );
         let operation_id = [0xA5; 32];
-        let authority = ALICE_ID.clone();
-        let error = queue::Error::KagemushaOperationIdConflict {
-            authority: authority.clone(),
+        let error = queue::Error::OfflineCashV1OperationIdConflict {
             operation_id,
             existing_entrypoint_hash,
         };
         let (code, detail) = queue_rejection_metadata(&error);
-        assert_eq!(code, "PRTRY:KAGEMUSHA_OPERATION_ID_CONFLICT");
-        assert!(detail.contains(&authority.to_string()));
+        assert_eq!(code, "PRTRY:OFFLINE_CASH_V1_OPERATION_ID_CONFLICT");
         assert!(detail.contains(&hex::encode(operation_id)));
         assert!(detail.contains(&existing_entrypoint_hash.to_string()));
         assert_eq!(
             super::Error::queue_error_summary(&error),
             (
-                "kagemusha_operation_id_conflict",
-                "Kagemusha operation identifier is already pending for this authority",
+                "offline_cash_v1_operation_id_conflict",
+                "Offline Cash V1 operation identifier is already pending",
             )
         );
         assert_eq!(
@@ -88,7 +84,7 @@ mod tests_queue_metadata {
             StatusCode::CONFLICT
         );
 
-        let inconsistent = queue::Error::KagemushaOperationIndexInconsistent {
+        let inconsistent = queue::Error::OfflineCashV1OperationIndexInconsistent {
             reason: "reverse owner missing".to_owned(),
         };
         assert_eq!(

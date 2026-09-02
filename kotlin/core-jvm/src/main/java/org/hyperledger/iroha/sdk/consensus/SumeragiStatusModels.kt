@@ -78,8 +78,8 @@ class SumeragiStatusExecutionCommitment internal constructor(
     @JvmField val parentStateRoot: String,
     @JvmField val postStateRoot: String,
     @JvmField val ordinaryWritesRoot: String,
-    @JvmField val topupAnchorRoot: String?,
-    @JvmField val topupAnchorCount: BigInteger,
+    @JvmField val offlineCashTopUpRoot: String?,
+    @JvmField val offlineCashTopUpCount: BigInteger,
     @JvmField val nativeAmxApplicationManifestVersion: Int,
     @JvmField val nativeAmxApplicationManifestRoot: String,
     @JvmField val nativeAmxApplicationManifestCount: BigInteger,
@@ -92,8 +92,8 @@ class SumeragiStatusExecutionCommitment internal constructor(
         parentStateRoot,
         postStateRoot,
         ordinaryWritesRoot,
-        topupAnchorRoot,
-        topupAnchorCount,
+        offlineCashTopUpRoot,
+        offlineCashTopUpCount,
         nativeAmxApplicationManifestVersion,
         nativeAmxApplicationManifestRoot,
         nativeAmxApplicationManifestCount,
@@ -769,22 +769,23 @@ private object SumeragiStatusParser {
             record,
             setOf(
                 "parent_state_root", "post_state_root", "ordinary_writes_root",
-                "topup_anchor_count", "native_amx_application_manifest_version",
+                "offline_cash_top_up_count", "native_amx_application_manifest_version",
                 "native_amx_application_manifest_root", "native_amx_application_manifest_count",
                 "lane_finality_manifest", "merge_carrier", "executed_block_wire_len",
                 "executed_block_wire_hash",
             ),
-            setOf("topup_anchor_root"),
+            setOf("offline_cash_top_up_root"),
             context,
         )
-        val topupCount = SumeragiJsonPrimitives.unsigned(
-            record["topup_anchor_count"], BigInteger.valueOf(16), "$context.topup_anchor_count",
+        val offlineCashTopUpCount = SumeragiJsonPrimitives.u32(
+            record["offline_cash_top_up_count"], "$context.offline_cash_top_up_count",
         )
-        val topupRoot = record["topup_anchor_root"]?.let {
-            SumeragiJsonPrimitives.hash(it, "$context.topup_anchor_root")
+        val offlineCashTopUpRoot = record["offline_cash_top_up_root"]?.let {
+            SumeragiJsonPrimitives.hash(it, "$context.offline_cash_top_up_root")
         }
-        require((topupCount == BigInteger.ZERO) == (topupRoot == null)) {
-            "$context.topup_anchor_root must be present exactly when topup_anchor_count is positive"
+        require((offlineCashTopUpCount == BigInteger.ZERO) == (offlineCashTopUpRoot == null)) {
+            "$context.offline_cash_top_up_root must be present exactly when " +
+                "offline_cash_top_up_count is positive"
         }
         val manifestVersion = SumeragiJsonPrimitives.u16(
             record["native_amx_application_manifest_version"],
@@ -853,8 +854,8 @@ private object SumeragiStatusParser {
             ordinaryWritesRoot = SumeragiJsonPrimitives.hash(
                 record["ordinary_writes_root"], "$context.ordinary_writes_root",
             ),
-            topupAnchorRoot = topupRoot,
-            topupAnchorCount = topupCount,
+            offlineCashTopUpRoot = offlineCashTopUpRoot,
+            offlineCashTopUpCount = offlineCashTopUpCount,
             nativeAmxApplicationManifestVersion = manifestVersion,
             nativeAmxApplicationManifestRoot = manifestRoot,
             nativeAmxApplicationManifestCount = manifestCount,
@@ -1348,8 +1349,8 @@ private object SumeragiStatusParser {
     ): Boolean = left.parentStateRoot == right.parentStateRoot &&
         left.postStateRoot == right.postStateRoot &&
         left.ordinaryWritesRoot == right.ordinaryWritesRoot &&
-        left.topupAnchorRoot == right.topupAnchorRoot &&
-        left.topupAnchorCount == right.topupAnchorCount &&
+        left.offlineCashTopUpRoot == right.offlineCashTopUpRoot &&
+        left.offlineCashTopUpCount == right.offlineCashTopUpCount &&
         left.nativeAmxApplicationManifestVersion == right.nativeAmxApplicationManifestVersion &&
         left.nativeAmxApplicationManifestRoot == right.nativeAmxApplicationManifestRoot &&
         left.nativeAmxApplicationManifestCount == right.nativeAmxApplicationManifestCount &&

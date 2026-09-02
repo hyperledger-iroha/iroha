@@ -958,12 +958,6 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindSorafsCitizenBondSnapshot(_) => {
                 Err(Error::Find(FindError::SorafsCitizenBondSnapshot))
             }
-            SingularQueryBox::FindSorafsAnonymousServiceEscrowById(q) => Err(Error::Find(
-                FindError::SorafsAnonymousServiceEscrow(q.escrow_id),
-            )),
-            SingularQueryBox::FindSorafsAnonymousJurorCandidacy(q) => Err(Error::Find(
-                FindError::SorafsAnonymousJurorCandidacy(q.action_digest),
-            )),
             SingularQueryBox::FindSorafsRepairTask(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
@@ -4057,7 +4051,6 @@ mod tests {
     #[test]
     fn sorafs_anonymity_queries_require_bounded_lane_and_fail_closed() {
         use iroha_data_model::query::sorafs::prelude::{
-            FindSorafsAnonymousJurorCandidacy, FindSorafsAnonymousServiceEscrowById,
             FindSorafsCitizenBondBySerialCommitment, FindSorafsCitizenBondSnapshot,
         };
 
@@ -4075,7 +4068,7 @@ mod tests {
         );
         let view = state.view();
         let budget = QueryExecutionBudget::from_weighted_limit(1_000_000, 1, 1);
-        let cases: [(SingularQueryBox, FindError); 4] = [
+        let cases: [(SingularQueryBox, FindError); 2] = [
             (
                 FindSorafsCitizenBondBySerialCommitment::new([0x11; 32]).into(),
                 FindError::SorafsCitizenBond([0x11; 32]),
@@ -4083,14 +4076,6 @@ mod tests {
             (
                 FindSorafsCitizenBondSnapshot.into(),
                 FindError::SorafsCitizenBondSnapshot,
-            ),
-            (
-                FindSorafsAnonymousServiceEscrowById::new([0x22; 32]).into(),
-                FindError::SorafsAnonymousServiceEscrow([0x22; 32]),
-            ),
-            (
-                FindSorafsAnonymousJurorCandidacy::new([0x33; 32]).into(),
-                FindError::SorafsAnonymousJurorCandidacy([0x33; 32]),
             ),
         ];
         for (query, expected) in cases {

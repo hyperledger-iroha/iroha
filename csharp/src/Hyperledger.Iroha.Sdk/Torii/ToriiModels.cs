@@ -829,7 +829,7 @@ public sealed class ToriiVerifyingKeyTransactionDraft
     public byte[] TransactionPayload => transactionPayload.ToArray();
 
     /// <summary>
-    /// Already-prehashed bytes for raw signature primitives and HSM integrations.
+    /// Already-prehashed bytes for external signature primitives.
     /// </summary>
     [JsonIgnore]
     public byte[] SigningMessage => signingMessage.ToArray();
@@ -2450,19 +2450,6 @@ public record class ToriiExplorerCursorQuery
     public string? Cursor { get; init; }
 
     public uint? Limit { get; init; }
-}
-
-public sealed record class ToriiContractInstancesQuery
-{
-    public string? Contains { get; init; }
-
-    public string? HashPrefix { get; init; }
-
-    public ulong? Offset { get; init; }
-
-    public ulong? Limit { get; init; }
-
-    public string? Order { get; init; }
 }
 
 public sealed record class ToriiContractStateQuery
@@ -5792,73 +5779,111 @@ public sealed record class ToriiContractCodeBytesResponse
     }
 }
 
-[JsonConverter(typeof(ToriiContractInstanceJsonConverter))]
-public sealed record class ToriiContractInstance
+[JsonConverter(typeof(ToriiGovernedContractResponseJsonConverter))]
+public sealed record class ToriiGovernedContractResponse
 {
-    private string contractId = string.Empty;
-    private string codeHashHex = string.Empty;
+    private string contractAddress = string.Empty;
+    private string dataspace = string.Empty;
+    private string[]? publicEntrypoints;
 
-    [JsonPropertyName("contract_id")]
-    public string ContractId
+    [JsonPropertyName("found")]
+    public bool Found { get; init; }
+
+    [JsonPropertyName("contract_address")]
+    public string ContractAddress
     {
-        get => contractId;
-        init => contractId = ToriiContractInstancesDirectMetadata.RequireExactTokenText(value, nameof(ContractId));
+        get => contractAddress;
+        init => contractAddress = value;
     }
+
+    [JsonPropertyName("contract_subject_account")]
+    public string? ContractSubjectAccount { get; init; }
+
+    [JsonPropertyName("dataspace")]
+    public string Dataspace
+    {
+        get => dataspace;
+        init => dataspace = value;
+    }
+
+    [JsonPropertyName("active")]
+    public bool? Active { get; init; }
+
+    [JsonPropertyName("lifecycle")]
+    public ToriiGovernedContractLifecycle? Lifecycle { get; init; }
+
+    [JsonPropertyName("emergency_hold_active")]
+    public bool? EmergencyHoldActive { get; init; }
 
     [JsonPropertyName("code_hash_hex")]
-    public string CodeHashHex
+    public string? CodeHashHex { get; init; }
+
+    [JsonPropertyName("abi_hash_hex")]
+    public string? AbiHashHex { get; init; }
+
+    [JsonPropertyName("public_entrypoints")]
+    public IReadOnlyList<string>? PublicEntrypoints
     {
-        get => codeHashHex;
-        init => codeHashHex = ToriiContractInstancesDirectMetadata.RequireExactSizedHex(value, nameof(CodeHashHex));
+        get => ToriiListSnapshots.Copy(publicEntrypoints);
+        init => publicEntrypoints = ToriiListSnapshots.Copy(value);
     }
 }
 
-[JsonConverter(typeof(ToriiContractInstancesResponseJsonConverter))]
-public sealed record class ToriiContractInstancesResponse
+public sealed record class ToriiGovernedContractLifecycle
 {
-    private string @namespace = string.Empty;
-    private ToriiContractInstance[] instances = Array.Empty<ToriiContractInstance>();
+    [JsonPropertyName("version")]
+    public ushort Version { get; init; }
 
-    [JsonPropertyName("namespace")]
-    public string Namespace
-    {
-        get => @namespace;
-        init => @namespace = ToriiContractInstancesDirectMetadata.RequireExactTokenText(value, nameof(Namespace));
-    }
+    [JsonPropertyName("origin")]
+    public string Origin { get; init; } = string.Empty;
 
-    [JsonPropertyName("instances")]
-    public IReadOnlyList<ToriiContractInstance> Instances
-    {
-        get => ToriiListSnapshots.CopyRequired(instances);
-        init => instances = ToriiListSnapshots.CopyRequired(value);
-    }
+    [JsonPropertyName("origin_account")]
+    public string OriginAccount { get; init; } = string.Empty;
 
-    [JsonPropertyName("total")]
-    public ulong Total { get; init; }
+    [JsonPropertyName("origin_proposal_content_id_hex")]
+    public string? OriginProposalContentIdHex { get; init; }
 
-    [JsonPropertyName("offset")]
-    public ulong Offset { get; init; }
+    [JsonPropertyName("origin_governance_attempt_id_hex")]
+    public string? OriginGovernanceAttemptIdHex { get; init; }
 
-    [JsonPropertyName("limit")]
-    public ulong Limit { get; init; }
+    [JsonPropertyName("owner")]
+    public string Owner { get; init; } = string.Empty;
+
+    [JsonPropertyName("pending_owner")]
+    public string? PendingOwner { get; init; }
+
+    [JsonPropertyName("parliament_delegated")]
+    public bool ParliamentDelegated { get; init; }
+
+    [JsonPropertyName("active_code_hash_hex")]
+    public string? ActiveCodeHashHex { get; init; }
+
+    [JsonPropertyName("revision")]
+    public ulong Revision { get; init; }
+
+    [JsonPropertyName("emergency_hold")]
+    public ToriiGovernedContractEmergencyHold? EmergencyHold { get; init; }
 }
 
-internal static class ToriiContractInstancesDirectMetadata
+public sealed record class ToriiGovernedContractEmergencyHold
 {
-    internal static string RequireExactTokenText(string? value, string paramName)
-    {
-        return ToriiExplorerDirectMetadata.RequireExactTokenText(value, paramName);
-    }
+    [JsonPropertyName("incident_digest_hex")]
+    public string IncidentDigestHex { get; init; } = string.Empty;
 
-    internal static string RequireExactSizedHex(string? value, string paramName)
-    {
-        if (value is not null && value.Length == 0)
-        {
-            throw new ArgumentException("Value must be a non-empty 32-byte hex string.", paramName);
-        }
+    [JsonPropertyName("proposal_content_id_hex")]
+    public string ProposalContentIdHex { get; init; } = string.Empty;
 
-        return ToriiExplorerDirectMetadata.RequireExactSizedHex(value, paramName, 32);
-    }
+    [JsonPropertyName("governance_attempt_id_hex")]
+    public string GovernanceAttemptIdHex { get; init; } = string.Empty;
+
+    [JsonPropertyName("reason")]
+    public string Reason { get; init; } = string.Empty;
+
+    [JsonPropertyName("imposed_at_height")]
+    public ulong ImposedAtHeight { get; init; }
+
+    [JsonPropertyName("expires_at_height")]
+    public ulong ExpiresAtHeight { get; init; }
 }
 
 

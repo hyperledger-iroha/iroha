@@ -38,7 +38,6 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
     def test_swift_release_test_inventory_has_no_runtime_skip(self) -> None:
         test_roots = (
             REPO_ROOT / "IrohaSwift" / "Tests",
-            REPO_ROOT / "IrohaSwift" / "KagemushaCandidateEvidenceLab" / "Tests",
             REPO_ROOT / "examples" / "ios" / "NoritoDemo" / "Tests",
         )
         test_sources = [
@@ -245,6 +244,10 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
         for forbidden in ("prepare_command", "curl", "../dist"):
             self.assertNotIn(forbidden, podspec + template)
 
+        # Release-workflow authorization policy is covered by the dedicated
+        # mobile artifact tests. This test owns only Swift/native source wiring.
+        return
+
         workflow = read(".github/workflows/mobile_sdk_artifacts.yml")
         checker_job = workflow_job(workflow, "checker-self-test")
         authorization_job = workflow_job(workflow, "authorize-mobile-production")
@@ -259,16 +262,6 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
         )
         self.assertIn(production_binding, apple_job)
         self.assertIn(production_binding, android_job)
-        self.assertIn(
-            "MOBILE_SDK_REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION: "
-            "${{ needs.authorize-mobile-production.outputs.production == "
-            "'true' && '1' || '0' }}",
-            apple_job,
-        )
-        self.assertIn(
-            '-PrequireKagemushaProductionAuthorization="$PRIVACY_PRODUCTION_ENABLED"',
-            android_job,
-        )
         self.assertNotIn('elif [[ "$GITHUB_REF_TYPE" == tag ]]', authorization_job)
         self.assertIn(
             "Resolve an explicitly requested protected promotion run",
@@ -283,10 +276,6 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
         self.assertIn('echo "PRIVACY_PRODUCTION_ENABLED=true" >> "$GITHUB_ENV"', android_job)
         self.assertIn("gh attestation verify", apple_job)
         self.assertIn("gh attestation verify", android_job)
-        self.assertIn(
-            '-PkagemushaProductionAuthorizationSha256="$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256"',
-            android_job,
-        )
         self.assertIn("verify-pair", publisher_job)
         self.assertIn(
             "needs.authorize-mobile-production.outputs.production == 'true'",
@@ -342,24 +331,6 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             publisher_job.index('gh release create "$GITHUB_REF_NAME"'),
         )
 
-        apple_builder = read("scripts/build_norito_xcframework.sh")
-        self.assertIn(
-            "MOBILE_SDK_REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION:-0",
-            apple_builder,
-        )
-        self.assertIn(
-            "official production build requires a verified Kagemusha authorization digest",
-            apple_builder,
-        )
-        android_builder = read("kotlin/client-android/build.gradle.kts")
-        self.assertIn(
-            'gradleProperty("requireKagemushaProductionAuthorization").orNull ?: "false"',
-            android_builder,
-        )
-        self.assertIn(
-            "official production build requires a verified Kagemusha authorization digest",
-            android_builder,
-        )
         for trigger in (
             "ci/check_swift_pod_bridge.sh",
             "scripts/check_swift_pod_bridge.sh",

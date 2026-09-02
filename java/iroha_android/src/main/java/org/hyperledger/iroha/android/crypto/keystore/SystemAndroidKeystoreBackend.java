@@ -32,6 +32,8 @@ final class SystemAndroidKeystoreBackend implements AndroidKeystoreBackend {
       "android.security.keystore.KeyGenParameterSpec$Builder";
   private static final String KEY_PROPERTIES_CLASS =
       "android.security.keystore.KeyProperties";
+  private static final String ANDROID_STRONGBOX_UNAVAILABLE_EXCEPTION =
+      "android.security.keystore.StrongBoxUnavailableException";
 
   private final KeyProviderMetadata metadata;
 
@@ -109,18 +111,68 @@ final class SystemAndroidKeystoreBackend implements AndroidKeystoreBackend {
       throw new IllegalArgumentException("alias must not be blank");
     }
 
-    final KeyPairGenerator generator = createKeyPairGenerator(parameters.algorithm());
+    if (parameters.requireStrongBox() && !metadata.strongBoxBacked()) {
+      throw new KeyManagementException("StrongBox required but backend is not StrongBox-capable");
+    }
+    final KeyGenParameters effective;
+    if (parameters.preferStrongBox() && !metadata.strongBoxBacked()) {
+      effective =
+          parameters.toBuilder().setRequireStrongBox(false).setPreferStrongBox(false).build();
+    } else {
+      effective = parameters;
+    }
+    return generateWithPreferredStrongBoxFallback(
+        effective,
+        request -> {
+          final KeyPairGenerator generator = createKeyPairGenerator(request.algorithm());
+          final boolean strongBoxRequested =
+              request.requireStrongBox() || request.preferStrongBox();
+          return generateInternal(generator, alias, request, strongBoxRequested);
+        });
+  }
 
-    final boolean strongBoxRequested =
-        parameters.requireStrongBox() || parameters.preferStrongBox();
-    final KeyGenerationResult generated =
-        generateInternal(
-            generator,
-            alias,
-            parameters,
-            /*strongBoxRequested=*/ strongBoxRequested);
+  static KeyGenerationResult generateWithPreferredStrongBoxFallback(
+      final KeyGenParameters parameters, final GenerationAttempt attempt)
+      throws KeyManagementException {
+    try {
+      final KeyGenerationResult result = attempt.generate(parameters);
+      if (parameters.requireStrongBox() && !result.strongBoxBacked()) {
+        throw new KeyManagementException(
+            "StrongBox required but Android Keystore produced a weaker security level");
+      }
+      return result;
+    } catch (final KeyManagementException strongBoxFailure) {
+      if (!parameters.preferStrongBox()
+          || parameters.requireStrongBox()
+          || !isStrongBoxUnavailableFailure(strongBoxFailure)) {
+        throw strongBoxFailure;
+      }
+      final KeyGenParameters fallback =
+          parameters.toBuilder().setRequireStrongBox(false).setPreferStrongBox(false).build();
+      try {
+        return attempt.generate(fallback);
+      } catch (final KeyManagementException fallbackFailure) {
+        fallbackFailure.addSuppressed(strongBoxFailure);
+        throw fallbackFailure;
+      }
+    }
+  }
 
-    return generated;
+  private static boolean isStrongBoxUnavailableFailure(final Throwable failure) {
+    Throwable current = failure;
+    while (current != null) {
+      if (current instanceof StrongBoxUnavailableFailure
+          || ANDROID_STRONGBOX_UNAVAILABLE_EXCEPTION.equals(current.getClass().getName())) {
+        return true;
+      }
+      current = current.getCause();
+    }
+    return false;
+  }
+
+  @FunctionalInterface
+  interface GenerationAttempt {
+    KeyGenerationResult generate(KeyGenParameters parameters) throws KeyManagementException;
   }
 
   private KeyGenerationResult generateInternal(
@@ -325,8 +377,12 @@ final class SystemAndroidKeystoreBackend implements AndroidKeystoreBackend {
       }
 
       if (strongBox) {
-        // This throws when StrongBox is unsupported; propagate so the caller can decide on downgrade.
-        invoke(builder, "setIsStrongBoxBacked", new Class<?>[] {boolean.class}, true);
+        try {
+          invoke(builder, "setIsStrongBoxBacked", new Class<?>[] {boolean.class}, true);
+        } catch (final NoSuchMethodException ex) {
+          throw new StrongBoxUnavailableFailure(
+              "StrongBox selection is unavailable on this Android API level", ex);
+        }
       } else {
         invokeIfPresent(builder, "setIsStrongBoxBacked", new Class<?>[] {boolean.class}, false);
       }

@@ -63,8 +63,14 @@ StrongBox lane does not block the software/simulator build or release corridor.
 
 ## Android StrongBox attestation sweep
 
-Run this workflow whenever new attestation bundles land (at minimum, prior to AND2/AND6 reviews and
-before partner pilots).
+This workflow applies only when a team explicitly selects the optional
+StrongBox qualification profile. It is not an ordinary build, test, governance,
+deployment, or release gate; the software-backed baseline remains valid without
+attestation bundles or physical hardware.
+
+Run this workflow whenever new attestation bundles land for that selected
+profile, at minimum before hardware-specific AND2/AND6 reviews and partner
+pilots that claim the profile.
 
 1. **Ensure evidence and governed expectations exist.**
    - Sync the latest device captures under `artifacts/android/attestation/<fleet-tag>/<date>/`.

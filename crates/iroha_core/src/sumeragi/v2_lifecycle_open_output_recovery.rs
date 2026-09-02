@@ -518,8 +518,13 @@ mod output_recovery_tests {
                 power: 1,
             })
             .collect::<Vec<_>>();
+        let network_id = crate::sumeragi::synthetic_network_id("cold-output-recovery-test");
+        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+                network_id, 0, &roster,
+            );
         let context = wire::HeightContext {
-            network_id: crate::sumeragi::synthetic_network_id("cold-output-recovery-test"),
+            network_id,
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -530,9 +535,11 @@ mod output_recovery_tests {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
+            offline_cash_mint_finality_epoch_id,
+            offline_cash_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"cold output AMX"),
             execution_policy_hash: Hash::new(b"cold output execution policy"),
-            da_layout: wire::SumeragiV2GenesisContextParameters::recommended().da_layout,
+            da_layout: wire::recommended_data_availability_layout(),
             leader_seed: [0x95; 32],
         };
         let proofs = keys
@@ -564,13 +571,14 @@ mod output_recovery_tests {
             proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject,
-            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new([marker, 3]),
-                Hash::new([marker, 4]),
-                Hash::new([marker, 5]),
-                1,
-                Hash::new([marker, 6]),
-            ),
+            execution_commitment:
+                wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                    Hash::new([marker, 3]),
+                    Hash::new([marker, 4]),
+                    Hash::new([marker, 5]),
+                    1,
+                    Hash::new([marker, 6]),
+                ),
             signer: 0,
             signature: Vec::new(),
         };
@@ -625,13 +633,14 @@ mod output_recovery_tests {
         subject: wire::BlockSubject,
         corrupt: bool,
     ) -> wire::QuorumCertificate {
-        let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"cold invalid parent state"),
-            Hash::new(b"cold invalid events"),
-            Hash::new(b"cold invalid trace"),
-            1,
-            Hash::new(b"cold invalid fee summary"),
-        );
+        let execution_commitment =
+            wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                Hash::new(b"cold invalid parent state"),
+                Hash::new(b"cold invalid events"),
+                Hash::new(b"cold invalid trace"),
+                1,
+                Hash::new(b"cold invalid fee summary"),
+            );
         let signers = vec![0, 1, 2];
         let preimage = wire::Vote {
             round,

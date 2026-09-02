@@ -79,6 +79,8 @@ pub mod isi {
     // Governance ISIs
     use iroha_data_model::isi::confidential;
     // Bring runtime upgrade ISIs into scope
+    #[cfg(test)]
+    use iroha_data_model::governance::types::GlobalDataTriggerPermissionGovernanceProposalV1;
     use iroha_data_model::isi::runtime_upgrade;
     #[cfg(feature = "zk-stark")]
     use iroha_data_model::proof::VerifyingKeyBox;
@@ -113,8 +115,7 @@ pub mod isi {
             CompleteContractEmergencyHoldRetrospectiveGovernanceActionV1,
             ContractEmergencyHoldProposalV1, ContractLifecycleGovernanceActionV1,
             ContractLifecycleGovernanceProposalV1, DeployContractProposal,
-            GlobalDataTriggerPermissionGovernanceActionV1,
-            GlobalDataTriggerPermissionGovernanceProposalV1, GovernanceAttemptId,
+            GlobalDataTriggerPermissionGovernanceActionV1, GovernanceAttemptId,
             GovernanceAttemptStatusV1, GovernanceCertificateV1, GovernanceExpectedHeadAbsentV1,
             GovernanceExpectedHeadPresentV1, GovernanceExpectedHeadV1, GovernanceStageV1,
             MAX_PARLIAMENT_CANDIDATE_SNAPSHOT_BYTES_V1, MAX_PARLIAMENT_CITIZENS_V1,
@@ -258,10 +259,11 @@ pub mod isi {
         }
     }
     use super::*;
+    #[cfg(test)]
+    use crate::governance::timed_ovn::TIMED_OVN_BALLOT_RECORD_BYTES_V1;
     use crate::{
         governance::timed_ovn::{
-            TIMED_OVN_BALLOT_RECORD_BYTES_V1, TimedOvnLifecycleStateV1, TimedOvnSessionPublicV1,
-            timed_ovn_parameter_hash_v1,
+            TimedOvnLifecycleStateV1, TimedOvnSessionPublicV1, timed_ovn_parameter_hash_v1,
         },
         smartcontracts::{
             code::fetch_bound_contract_record,
@@ -1204,7 +1206,7 @@ pub mod isi {
         }
         Ok(false)
     }
-    fn ensure_contract_lifecycle_authority(
+    fn ensure_contract_artifact_authority(
         authority: &AccountId,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
@@ -1661,49 +1663,6 @@ pub mod isi {
                 ),
             )
             .into());
-        }
-        Ok(())
-    }
-    // Release activation installs a digest-qualified Eq/Ep pair atomically. Generic
-    // registration or rotation can split that pair and strand issued notes.
-    fn ensure_generic_verifying_key_is_not_kagemusha_release_owned(
-        id: &VerifyingKeyId,
-        records: &[&VerifyingKeyRecord],
-    ) -> Result<(), Error> {
-        let reserved_circuits = [
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
-        ];
-        let is_manifest_digest = |manifest: &str| {
-            manifest.len() == 64
-                && manifest
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-        };
-        let reserved_id = id.backend.as_str()
-            == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
-            && reserved_circuits.iter().any(|circuit_id| {
-                let v4_manifest = id
-                    .name
-                    .strip_prefix(circuit_id)
-                    .and_then(|suffix| suffix.strip_prefix('-'));
-                let v5_manifest = id
-                    .name
-                    .strip_prefix("v5-")
-                    .and_then(|name| name.strip_prefix(circuit_id))
-                    .and_then(|suffix| suffix.strip_prefix('-'));
-                v4_manifest.or(v5_manifest).is_some_and(is_manifest_digest)
-            });
-        if reserved_id
-            || records.iter().any(|record| {
-                reserved_circuits
-                    .iter()
-                    .any(|circuit_id| record.circuit_id == *circuit_id)
-            })
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "Kagemusha release verifier records are owned by atomic release activation".into(),
-            ));
         }
         Ok(())
     }
@@ -2637,7 +2596,6 @@ pub mod isi {
             }
             let id = self.id().clone();
             let record = self.record().clone();
-            ensure_generic_verifying_key_is_not_kagemusha_release_owned(&id, &[&record])?;
             let id_backend = id.backend.as_str();
             ensure_open_verify_circuit_id_is_admitted_v1(id_backend, &record.circuit_id)?;
             if matches!(record.status, ConfidentialStatus::Withdrawn) {
@@ -6919,6 +6877,20 @@ pub mod isi {
         binding
             .validate_for(contract_address)
             .map_err(|message| InstructionExecutionError::InvariantViolation(message.into()))?;
+        if state_transaction
+            .world
+            .accounts
+            .get(&binding.subject)
+            .is_none()
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "contract subject account `{}` for `{contract_address}` does not exist",
+                    binding.subject
+                )
+                .into(),
+            ));
+        }
         let indexed_active_code_hash = state_transaction
             .world
             .contract_instances
@@ -7144,7 +7116,6 @@ pub mod isi {
                 .world
                 .account(authority)
                 .map_err(Error::from)?;
-            ensure_contract_lifecycle_authority(authority, state_transaction)?;
             let protected = crate::smartcontracts::code::protected_contract_namespaces(
                 state_transaction.world.parameters.get(),
             )
@@ -7814,7 +7785,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_contract_lifecycle_authority(authority, state_transaction)?;
+            ensure_contract_artifact_authority(authority, state_transaction)?;
             register_verified_contract_code_bytes(
                 authority,
                 *self.code_hash(),
@@ -7829,7 +7800,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_contract_lifecycle_authority(authority, state_transaction)?;
+            ensure_contract_artifact_authority(authority, state_transaction)?;
             let cap_bytes = contract_code_cap_bytes(state_transaction);
             let total_size = *self.total_size();
             let chunk_count = *self.chunk_count();
@@ -7954,7 +7925,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_contract_lifecycle_authority(authority, state_transaction)?;
+            ensure_contract_artifact_authority(authority, state_transaction)?;
             let cap_bytes = contract_code_cap_bytes(state_transaction);
             let total_size = *self.total_size();
             let chunk_count = *self.chunk_count();
@@ -8059,7 +8030,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_contract_lifecycle_authority(authority, state_transaction)?;
+            ensure_contract_artifact_authority(authority, state_transaction)?;
             if state_transaction
                 .world
                 .contract_manifests
@@ -10796,7 +10767,6 @@ pub mod isi {
         old: &VerifyingKeyRecord,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        ensure_generic_verifying_key_is_not_kagemusha_release_owned(id, &[old, new])?;
         if matches!(old.status, ConfidentialStatus::Withdrawn) {
             return Err(InstructionExecutionError::InvariantViolation(
                 "cannot update withdrawn verifying key".into(),
@@ -15884,32 +15854,10 @@ pub mod isi {
                     )
                 })?;
             }
-            if let Some(binding) = vk_shield_binding.as_ref() {
-                let record = state_transaction
-                    .world
-                    .verifying_keys
-                    .get(&binding.id)
-                    .expect("binding was resolved from the verifying-key registry");
-                if !crate::zk::confidential_v2::is_kagemusha_topup_shield_v2_circuit_id(
-                    &record.circuit_id,
-                ) {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "vk_shield must name the canonical Kagemusha top-up shield circuit".into(),
-                    ));
-                }
-                let vk_box = record.key.as_ref().ok_or_else(|| {
-                    InstructionExecutionError::InvariantViolation(
-                        "vk_shield verifying key bytes are missing".into(),
-                    )
-                })?;
-                crate::zk::confidential_v2::ensure_kagemusha_topup_shield_v2_canonical_vk_box(
-                    vk_box,
-                )
-                .map_err(|err| {
-                    InstructionExecutionError::InvariantViolation(
-                        format!("invalid vk_shield verifying key: {err}").into(),
-                    )
-                })?;
+            if vk_shield_binding.is_some() {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "vk_shield is not part of the first-release confidential asset model".into(),
+                ));
             }
             let mut derived_tree_profile = None;
             for (role, binding) in [
@@ -16705,7 +16653,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_contract_lifecycle_authority(authority, state_transaction)?;
+            ensure_contract_artifact_authority(authority, state_transaction)?;
             let manifest = self.manifest().clone();
             let Some(key @ Hash { .. }) = manifest.code_hash else {
                 return Err(InstructionExecutionError::InvalidParameter(
@@ -19687,6 +19635,20 @@ pub mod isi {
                 &remove_asset_definitions,
                 &format!("unregister domain {domain_id}"),
             )?;
+            if let Some((asset_definition_id, reference)) =
+                crate::smartcontracts::isi::sorafs_moderation::retained_moderation_asset_definition_reference_in(
+                    state_transaction.world(),
+                    &remove_asset_definitions,
+                )?
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is retained by moderation {reference}"
+                    )
+                    .into(),
+                )
+                .into());
+            }
             if let Some((proposal_id, reference_kind, asset_definition_id)) =
                 crate::validation_fee::retained_enacted_validation_fee_asset_reference_in(
                     state_transaction,
@@ -20179,7 +20141,7 @@ pub mod isi {
                 state_transaction
                     .settlement
                     .offline
-                    .escrow_accounts
+                    .reserve_accounts
                     .remove(&asset_definition_id);
                 state_transaction
                     .world
@@ -20451,11 +20413,6 @@ pub mod isi {
             _authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            crate::smartcontracts::isi::offline::validate_runtime_consensus_parameter_update(
-                self.inner(),
-                &state_transaction.world,
-                state_transaction.kagemusha_release_catalog.is_configured(),
-            )?;
             super::parameter_validation::validate_ivm_heap_parameter(self.inner())?;
             if let Parameter::Custom(custom) = self.inner() {
                 validate_governed_pipeline_gas_parameter(custom)?;
@@ -20686,6 +20643,46 @@ pub mod isi {
                                                 previous.epoch_length_blocks,
                                                 npos.epoch_length_blocks,
                                             )),
+                                        ));
+                                    }
+                                }
+                            }
+                            if next.id()
+                                == &iroha_data_model::parameter::system::OfflineCashMintFinalityNextEpochParameterV1::parameter_id()
+                            {
+                                let staged = iroha_data_model::parameter::system::OfflineCashMintFinalityNextEpochParameterV1::from_custom_parameter(&next)
+                                    .ok_or_else(|| {
+                                        InstructionExecutionError::InvalidParameter(
+                                            InvalidParameterError::SmartContract(
+                                                "invalid Offline Cash V1 next mint-finality roster parameter"
+                                                    .to_owned(),
+                                            ),
+                                        )
+                                    })?;
+                                if let Some(previous_custom) = state_transaction
+                                    .world
+                                    .parameters
+                                    .get()
+                                    .custom()
+                                    .get(next.id())
+                                {
+                                    let previous = iroha_data_model::parameter::system::OfflineCashMintFinalityNextEpochParameterV1::from_custom_parameter(previous_custom)
+                                        .ok_or_else(|| {
+                                            InstructionExecutionError::InvalidParameter(
+                                                InvalidParameterError::SmartContract(
+                                                    "installed Offline Cash V1 next mint-finality roster parameter is invalid"
+                                                        .to_owned(),
+                                                ),
+                                            )
+                                        })?;
+                                    if staged.roster.network_id != previous.roster.network_id
+                                        || staged.roster.epoch < previous.roster.epoch
+                                    {
+                                        return Err(InstructionExecutionError::InvalidParameter(
+                                            InvalidParameterError::SmartContract(
+                                                "Offline Cash V1 next mint-finality roster cannot change network or roll back its epoch"
+                                                    .to_owned(),
+                                            ),
                                         ));
                                     }
                                 }
@@ -33068,6 +33065,68 @@ seiyaku GovernanceLifecycle {
                 "custody asset definition must remain after rejected unregister"
             );
         });
+        world_test!(unregister_domain_rejects_retained_moderation_policy_after_config_change {
+            let state = blank_state();
+            let domain_id: DomainId =
+                DomainId::try_new("moderation", "history").expect("domain id parses");
+            state_transaction!(state, block, state_block, stx);
+            Register::domain(Domain::new(domain_id.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "register moderation domain");
+            let retained_definition = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "bond".parse().expect("asset name"),
+            );
+            Register::asset_definition(AssetDefinition::numeric(
+                retained_definition.clone(),
+                "moderation bond",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(domain_id.clone()),
+            ))
+            .expect_execute(&ALICE_ID, &mut stx, "register moderation bond definition");
+            assert_ne!(
+                stx.gov.voting_asset_id, retained_definition,
+                "the fixture must exercise retained state after current config changed"
+            );
+            crate::smartcontracts::isi::sorafs_moderation::seed_moderation_policy_asset_reference_for_test(
+                &mut stx.world,
+                retained_definition.clone(),
+                (*ALICE_ID).clone(),
+                (*ALICE_ID).clone(),
+            )
+            .expect("seed a valid retained moderation policy");
+            let policy_path: iroha_data_model::state_path::StatePath =
+                "sorafs_moderation_policy_v1"
+                    .parse()
+                    .expect("moderation policy state path");
+            let policy_before = stx.world.smart_contract_state.get(&policy_path).cloned();
+
+            let error = Unregister::domain(domain_id.clone()).expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "domain containing moderation-retained definition must remain registered",
+            );
+            assert_contains!(
+                error.to_string(),
+                "retained by moderation active policy challenge voting asset",
+                "error should identify moderation retention: {error}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "domain must remain after rejected unregister"
+            );
+            assert!(
+                stx.world
+                    .asset_definitions
+                    .get(&retained_definition)
+                    .is_some(),
+                "moderation-retained definition must remain after rejected domain cascade"
+            );
+            assert_eq!(
+                stx.world.smart_contract_state.get(&policy_path),
+                policy_before.as_ref(),
+                "rejected domain cascade must not mutate moderation state"
+            );
+        });
         #[test]
         fn unregister_domain_rejects_when_domain_asset_definition_is_governance_viral_reward_asset()
         {
@@ -33212,7 +33271,7 @@ seiyaku GovernanceLifecycle {
                 "asset definition should remain after rejected unregister"
             );
         });
-        world_test!(unregister_domain_removes_offline_escrow_mappings_for_domain_asset_definitions {
+        world_test!(unregister_domain_removes_offline_reserve_mappings_for_domain_asset_definitions {
             let state = blank_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "world").expect("domain id parses");
@@ -33236,31 +33295,31 @@ seiyaku GovernanceLifecycle {
                 owning_domain: None,
             })
             .expect_execute(&ALICE_ID, &mut stx, "register cleanup-domain asset definition");
-            let escrow = crate::smartcontracts::isi::domain::isi::offline_escrow_account_id(
+            let escrow = crate::smartcontracts::isi::domain::isi::offline_cash_reserve_account_id(
                 stx.network_id(),
                 &reward_def,
             );
             stx.settlement
                 .offline
-                .escrow_accounts
+                .reserve_accounts
                 .insert(reward_def.clone(), escrow);
             assert!(
                 stx.settlement
                     .offline
-                    .escrow_accounts
+                    .reserve_accounts
                     .get(&reward_def)
                     .is_some(),
-                "offline escrow mapping should exist before domain unregister"
+                "Offline Cash reserve mapping should exist before domain unregister"
             );
             Unregister::domain(domain_id.clone())
-                .expect_execute(&ALICE_ID, &mut stx, "domain unregister should remove domain-local offline escrow mapping");
+                .expect_execute(&ALICE_ID, &mut stx, "domain unregister should remove domain-local Offline Cash reserve mapping");
             assert!(
                 stx.settlement
                     .offline
-                    .escrow_accounts
+                    .reserve_accounts
                     .get(&reward_def)
                     .is_none(),
-                "offline escrow mapping should be removed with domain asset definitions"
+                "Offline Cash reserve mapping should be removed with domain asset definitions"
             );
             assert!(
                 stx.world.domains.get(&domain_id).is_none(),
@@ -34582,6 +34641,67 @@ seiyaku GovernanceLifecycle {
                     .get(&replay_accumulator_id)
                     .map(|forest| forest.leaf_count),
                 Some(1)
+            );
+        });
+        world_test!(submit_native_transfer_proof_cannot_consume_overlapping_moderation_bond_reserve {
+            blank_state_transaction!(state, block, state_block, stx);
+            let (proof, _native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
+                sccp_native_inbound_transfer_payload_for_test(198, 7),
+            );
+            let (asset, custody) = configure_native_sccp_settlement_for_test(
+                &mut stx,
+                registry,
+                NumericSpec::default(),
+                Quantity::from(
+                    iroha_data_model::sorafs::moderation_ledger::MODERATION_CHALLENGE_BOND_AMOUNT_V1,
+                ),
+            );
+            let custody_asset = AssetId::new(asset.clone(), custody.clone());
+            crate::smartcontracts::isi::sorafs_moderation::seed_unsettled_moderation_bond_liability_for_test(
+                &mut stx.world,
+                custody_asset.clone(),
+                ALICE_ID.clone(),
+            )
+            .expect("seed a valid moderation claim over the same protocol custody");
+            assert_eq!(
+                crate::smartcontracts::isi::sorafs_moderation::unsettled_moderation_bond_liability(
+                    stx.world(),
+                    &custody_asset,
+                )
+                .expect("read overlapping moderation liability"),
+                Quantity::from(
+                    iroha_data_model::sorafs::moderation_ledger::MODERATION_CHALLENGE_BOND_AMOUNT_V1,
+                )
+            );
+            seed_sccp_test_tx_call_hash(&mut stx, 0xBC);
+            let before = sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID);
+
+            let error = native_submit_bridge_proof_for_test(proof)
+                .expect_execute_err(
+                    &ALICE_ID,
+                    &mut stx,
+                    "SCCP release must not consume a co-located moderation bond",
+                );
+
+            assert_err!(
+                format!("{error:?}"),
+                "must retain unsettled bond liability",
+                "unexpected overlapping-custody rejection: {error:?}"
+            );
+            assert_eq!(
+                sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID),
+                before,
+                "reserve rejection must precede balances, liability, proof, replay, transcript, marker, control, and event mutation"
+            );
+            assert_eq!(
+                crate::smartcontracts::isi::sorafs_moderation::unsettled_moderation_bond_liability(
+                    stx.world(),
+                    &custody_asset,
+                )
+                .expect("retained moderation liability remains valid after rejection"),
+                Quantity::from(
+                    iroha_data_model::sorafs::moderation_ledger::MODERATION_CHALLENGE_BOND_AMOUNT_V1,
+                )
             );
         });
         world_test!(submit_native_transfer_proof_rejects_blacklisted_custody_before_proof_work {
@@ -37099,134 +37219,6 @@ seiyaku GovernanceLifecycle {
             assert_eq!(
                 crate::sumeragi::status::peer_key_policy_reject_snapshot_for_tests(),
                 (1, Some("identifier_collision"))
-            );
-        });
-        world_test!(generic_vk_management_rejects_kagemusha_release_owned_records {
-            alice_state_transaction!(state, block, state_block, stx);
-            grant_manage_verifying_keys(&mut stx);
-            stx.apply();
-            let mut stx = state_block.transaction();
-
-            let record = |circuit_id: &str, version: u32| {
-                VerifyingKeyRecord::new_with_owner(
-                    version,
-                    circuit_id,
-                    None,
-                    "test",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    [0x41; 32],
-                    [0x42; 32],
-                )
-            };
-            let ordinary_id = VerifyingKeyId::new(
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
-                "ordinary-key",
-            );
-            let reserved_circuit_record = record(
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
-                1,
-            );
-            let err = verifying_keys::RegisterVerifyingKey {
-                id: ordinary_id.clone(),
-                record: reserved_circuit_record,
-            }
-            .expect_execute_err(
-                &ALICE_ID,
-                &mut stx,
-                "generic registration must not occupy a Kagemusha release circuit",
-            );
-            assert_contains!(
-                smart_contract_instruction_error_message(err),
-                "owned by atomic release activation"
-            );
-            assert!(stx.world.verifying_keys.get(&ordinary_id).is_none());
-
-            let reserved_id =
-                iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v4(
-                    iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp,
-                    [0x43; 32],
-                );
-            let ordinary_record = record(TEST_HALO2_CIRCUIT_ID, 1);
-            let err = verifying_keys::RegisterVerifyingKey {
-                id: reserved_id.clone(),
-                record: ordinary_record,
-            }
-            .expect_execute_err(
-                &ALICE_ID,
-                &mut stx,
-                "generic registration must not occupy a release-qualified Kagemusha id",
-            );
-            assert_contains!(
-                smart_contract_instruction_error_message(err),
-                "owned by atomic release activation"
-            );
-            assert!(stx.world.verifying_keys.get(&reserved_id).is_none());
-
-            let lookalike_id = VerifyingKeyId::new(
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
-                format!(
-                    "unrelated-{}-not-a-release-digest",
-                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4
-                ),
-            );
-            let lookalike_record = record(TEST_HALO2_CIRCUIT_ID, 1);
-            ensure_generic_verifying_key_is_not_kagemusha_release_owned(
-                &lookalike_id,
-                &[&lookalike_record],
-            )
-            .expect("an unrelated lookalike id must not be classified as release-owned");
-
-            let legacy_release_record = record(
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
-                1,
-            );
-            stx.world
-                .verifying_keys
-                .insert(ordinary_id.clone(), legacy_release_record.clone());
-            let replacement = record(
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
-                2,
-            );
-            let err = verifying_keys::UpdateVerifyingKey {
-                id: ordinary_id.clone(),
-                record: replacement,
-            }
-            .expect_execute_err(
-                &ALICE_ID,
-                &mut stx,
-                "generic updates must not replace a Kagemusha release-circuit verifier",
-            );
-            assert_contains!(
-                smart_contract_instruction_error_message(err),
-                "owned by atomic release activation"
-            );
-            assert_eq!(
-                stx.world.verifying_keys.get(&ordinary_id),
-                Some(&legacy_release_record)
-            );
-
-            let legacy_reserved_id_record = record(TEST_HALO2_CIRCUIT_ID, 1);
-            stx.world.verifying_keys.insert(
-                reserved_id.clone(),
-                legacy_reserved_id_record.clone(),
-            );
-            let err = verifying_keys::UpdateVerifyingKey {
-                id: reserved_id.clone(),
-                record: record(TEST_HALO2_CIRCUIT_ID, 2),
-            }
-            .expect_execute_err(
-                &ALICE_ID,
-                &mut stx,
-                "generic updates must not replace a release-qualified Kagemusha id",
-            );
-            assert_contains!(
-                smart_contract_instruction_error_message(err),
-                "owned by atomic release activation"
-            );
-            assert_eq!(
-                stx.world.verifying_keys.get(&reserved_id),
-                Some(&legacy_reserved_id_record)
             );
         });
         world_test!(register_vk_accepts_canonical_soracloud_bootstrap_record {
@@ -40208,6 +40200,30 @@ seiyaku GovernanceLifecycle {
                 expected_revision: 1,
                 code_hash,
             };
+            let removed_subject = stx
+                .world
+                .accounts
+                .remove(contract_subject.clone())
+                .expect("remove contract subject for corruption regression");
+            let missing_subject_activation = activate
+                .clone()
+                .expect_execute_err(&ALICE_ID, &mut stx, "activation must reject a missing contract subject");
+            assert_contains!(
+                missing_subject_activation.to_string(),
+                &format!(
+                    "contract subject account `{contract_subject}` for `{contract_address}` does not exist"
+                )
+            );
+            assert!(
+                stx.world
+                    .contract_instances
+                    .get(&contract_address)
+                    .is_none(),
+                "missing-subject activation rejection must not mutate the instance registry"
+            );
+            stx.world
+                .accounts
+                .insert(contract_subject.clone(), removed_subject);
             let error = activate
                 .clone()
                 .expect_execute_err(&attacker, &mut stx, "an unprivileged account must not pre-bind another account's address");
@@ -40244,6 +40260,44 @@ seiyaku GovernanceLifecycle {
                 expected_revision: 2,
                 reason: Some("adversarial ABA attempt".to_owned()),
             };
+            let lifecycle_before_missing_subject = stx
+                .world
+                .contract_subject_bindings
+                .get(&contract_address)
+                .expect("active lifecycle")
+                .lifecycle
+                .clone();
+            let removed_subject = stx
+                .world
+                .accounts
+                .remove(contract_subject.clone())
+                .expect("remove active contract subject for corruption regression");
+            let missing_subject_deactivation = deactivate
+                .clone()
+                .expect_execute_err(&ALICE_ID, &mut stx, "deactivation must reject a missing contract subject");
+            assert_contains!(
+                missing_subject_deactivation.to_string(),
+                &format!(
+                    "contract subject account `{contract_subject}` for `{contract_address}` does not exist"
+                )
+            );
+            assert_eq!(
+                stx.world.contract_instances.get(&contract_address),
+                Some(&code_hash),
+                "missing-subject deactivation rejection must preserve the active instance"
+            );
+            assert_eq!(
+                stx.world
+                    .contract_subject_bindings
+                    .get(&contract_address)
+                    .expect("retained lifecycle")
+                    .lifecycle,
+                lifecycle_before_missing_subject,
+                "missing-subject deactivation rejection must preserve lifecycle state"
+            );
+            stx.world
+                .accounts
+                .insert(contract_subject.clone(), removed_subject);
             let error = deactivate
                 .clone()
                 .expect_execute_err(&attacker, &mut stx, "an unprivileged account must not begin an ABA rebind");
@@ -40390,6 +40444,25 @@ seiyaku GovernanceLifecycle {
                 manifest: manifest.signed(&ALICE_KEYPAIR),
             }
             .expect_execute(&ALICE_ID, &mut stx, "register verified manifest");
+            let artifact_permission: Permission =
+                iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                    .into();
+            assert!(
+                stx.world
+                    .remove_account_permission(&ALICE_ID, &artifact_permission),
+                "deployment fixture must revoke the artifact-only capability before address creation",
+            );
+            let unregistered_hash = Hash::new(b"artifact permission separation regression");
+            let error = scode::RegisterSmartContractBytes {
+                code_hash: unregistered_hash,
+                code: vec![0_u8],
+            }
+            .expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "revoked artifact capability must still deny bytecode registration",
+            );
+            assert_contains!(error.to_string(), "CanRegisterSmartContractCode");
             stx.apply();
             let mut stx = block.transaction();
             let network_id = *stx.network_id();
@@ -40488,7 +40561,11 @@ seiyaku GovernanceLifecycle {
                 lease_expiry_ms: None,
                 expected_previous_contract_address: None,
             }
-            .expect_execute(&ALICE_ID, &mut stx, "first atomic deployment");
+            .expect_execute(
+                &ALICE_ID,
+                &mut stx,
+                "first atomic deployment needs no artifact-registration capability",
+            );
             assert_eq!(
                 stx.world.contract_instances.get(&address_at_nonce_0),
                 Some(&code_hash)

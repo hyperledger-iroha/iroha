@@ -79,7 +79,8 @@ use super::{
     },
     v2_recovery::{
         DurableSuccessorActivationAuthority, DurableV2PredecessorIdentity,
-        RecoveredSuccessorActivationAuthority, SnapshotSuccessorActivationAuthority,
+        RecoveredSuccessorActivationAuthority, RecoveredV2Startup,
+        SnapshotSuccessorActivationAuthority, authenticate_terminal_complete_tip,
         build_verified_successor, recover_active_height_with_plan,
         successor_block_refinement_projection, successor_context_refinement_projection,
     },
@@ -896,6 +897,38 @@ impl Drop for V2IngressClearGuard {
         self.block_ingress.close();
     }
 }
+
+/// Explicit process-height result; chain termination is not operator shutdown.
+enum HeightRunOutcome<T> {
+    /// One authenticated immediate successor is ready to activate.
+    Successor(T),
+    /// The finalized `u64::MAX` height has no successor.
+    Terminal,
+    /// The operator requested shutdown before another height activated.
+    Shutdown,
+}
+
+fn wait_for_terminal_shutdown(
+    height: wire::Height,
+    context_id: wire::HeightContextId,
+    ingress_ready: &Arc<AtomicBool>,
+    block_rx: &Arc<FairV2Ingress>,
+    wake_rx: &std::sync::mpsc::Receiver<()>,
+    shutdown_signal: &iroha_futures::supervisor::ShutdownSignal,
+) {
+    debug_assert_eq!(height, u64::MAX);
+    ingress_ready.store(false, Ordering::Release);
+    block_rx.close();
+    super::status::clear_v2_status();
+    iroha_logger::info!(
+        height,
+        context_id = ?context_id,
+        "Sumeragi v2 reached its terminal height and remains consensus-inert"
+    );
+    while !shutdown_signal.is_sent() {
+        let _ = wake_rx.recv_timeout(IDLE_POLL);
+    }
+}
 include!("v2_runner/lifecycle_terminal_recovery.rs");
 #[allow(clippy::too_many_lines)]
 fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
@@ -909,6 +942,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         provider_ingest_finalized_archive,
         reputation_finalized_archive,
         global_beacon_partial_signer,
+        offline_cash_mint_finality_authority,
         startup_replay_plan,
         mut startup_replay_inventory_guard,
         network,
@@ -965,6 +999,33 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     )?;
     startup_replay_inventory_guard.finish();
     recovery.complete();
+    let recovered = match recovered {
+        RecoveredV2Startup::Active(recovered) => recovered,
+        RecoveredV2Startup::Terminal(terminal) => {
+            let terminal_context = terminal.verified_context().context();
+            if !terminal.matches_kura(kura.as_ref())
+                || terminal.predecessor().height() != u64::MAX
+                || terminal_context.height != u64::MAX
+            {
+                return Err(
+                    super::v2_recovery::V2RecoveryError::TerminalCompleteTipAuthentication(
+                        "recovered terminal authority changed before inert runner activation"
+                            .to_owned(),
+                    )
+                    .into(),
+                );
+            }
+            wait_for_terminal_shutdown(
+                terminal_context.height,
+                terminal_context.id(),
+                &ingress_ready,
+                &block_rx,
+                &wake_rx,
+                &shutdown_signal,
+            );
+            return Ok(());
+        }
+    };
     let pending_kura_apply = recovered.pending_kura_apply();
     let (
         verified_context,
@@ -1055,12 +1116,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         KuraReplicaAdvertRefreshOwner::from_kura(kura.as_ref(), Instant::now())
             .map_err(V2RunnerError::Service)?,
     );
-    if pending_kura_apply.is_none() {
-        state
-            .require_committed_kagemusha_runtime_effective_config()
-            .map_err(V2RunnerError::Service)?;
-    }
-
     match pending_kura_apply {
         None => lifecycle_run_inner::run_non_pending_lifecycle_loop(
             config,
@@ -1072,6 +1127,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             provider_ingest_finalized_archive,
             reputation_finalized_archive,
             global_beacon_partial_signer,
+            offline_cash_mint_finality_authority,
             network,
             block_rx,
             lane_relay_rx,
@@ -1114,6 +1170,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             provider_ingest_finalized_archive,
             reputation_finalized_archive,
             global_beacon_partial_signer,
+            offline_cash_mint_finality_authority,
             network,
             block_rx,
             lane_relay_rx,

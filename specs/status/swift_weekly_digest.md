@@ -68,7 +68,7 @@ python3 scripts/swift_status_export.py \
 |------|-------|--------|-------|
 | CR-1 - Connect codec now fails closed on missing bridge | Swift SDK Lead | **Medium** | `ConnectCodec` throws `ConnectCodecError.bridgeUnavailable` and tests cover the bridge-backed fixtures; remaining work is keeping the xcframework bundled across SPM/Carthage as outlined in `specs/sdk/swift/connect_risk_tracker.md`. |
 | CR-2 - No telemetry on queue depth / flow control | SDK Program Lead | **High** | Queue/back-pressure structs inside `ConnectClient` remain dark; the workshop closed with the NDJSON/manifest export path (`ConnectSessionDiagnostics`) and fixtures, but live OTLP wiring is still pending. |
-| CR-3 - Missing key custody & attestation plumbing | Swift SDK Lead | **Medium** | Secure Enclave-backed `ConnectKeyStore` work has not started and wallets still emit raw bridge keys, so attested approvals can't satisfy IOS3 acceptance yet. |
+| CR-3 - Key custody & attestation plumbing | Swift SDK Lead | **Low** | `ConnectKeyStore` now persists keypairs and an attestation bundle with file-backed storage by default, closing the raw-bridge gap for ordinary IOS3 acceptance. Secure Enclave storage and hardware attestation remain optional integrations that must be explicitly selected; they are not general release or governance gates. |
 
 ## Governance Watchers
 

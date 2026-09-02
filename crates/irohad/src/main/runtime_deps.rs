@@ -18,6 +18,11 @@ use mv::storage::StorageReadOnly as _;
 pub struct IrohaRuntimeDeps {
     sumeragi_global_beacon_partial_signer:
         Option<Arc<dyn iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1>>,
+    offline_cash_mint_finality_authority: Option<
+        Arc<
+            iroha_core::zk::offline_cash_v1_recursion::OfflineCashMintFinalityLocalAuthorityV1,
+        >,
+    >,
     parliament_tle_partial_release_signer:
         Option<Arc<dyn iroha_core::tle_release::TlePartialReleaseSignerV1>>,
     bootle_lantern_issuance_provider_registry: Option<
@@ -356,6 +361,7 @@ impl IrohaRuntimeDeps {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.sumeragi_global_beacon_partial_signer.is_none()
+            && self.offline_cash_mint_finality_authority.is_none()
             && self.parliament_tle_partial_release_signer.is_none()
             && self.bootle_lantern_issuance_provider_registry.is_none()
             && self.moderation_quarantine_key_wrapper.is_none()
@@ -444,6 +450,13 @@ impl IrohaRuntimeDeps {
         with_sumeragi_global_beacon_partial_signer(
             signer: Arc<dyn iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1>,
         ) => sumeragi_global_beacon_partial_signer;
+        /// Attach the separately provisioned Pasta authority for Offline Cash
+        /// V1 top-up finality. The seed remains inside this runtime-owned object.
+        with_offline_cash_mint_finality_authority(
+            authority: Arc<
+                iroha_core::zk::offline_cash_v1_recursion::OfflineCashMintFinalityLocalAuthorityV1,
+            >,
+        ) => offline_cash_mint_finality_authority;
         /// Attach the runtime-only adaptive Parliament TLE signing-share owner.
         ///
         /// Private DKG components remain inside this provider. They are never

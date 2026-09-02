@@ -2,6 +2,7 @@
 async fn execute_torii_fanout_json_payloads_resolved_routes(
     app: &SharedAppState,
     routes: Vec<RoutingDecision>,
+    route_scope: ToriiFanoutRouteScopeV1,
     endpoint: ToriiReadEndpointV1,
     path_args: Vec<String>,
     query_string: Option<String>,
@@ -37,6 +38,7 @@ async fn execute_torii_fanout_json_payloads_resolved_routes(
                 route,
                 torii_read_request(
                     endpoint,
+                    route_scope.clone(),
                     route,
                     path_args.clone(),
                     query_string.clone(),
@@ -77,6 +79,7 @@ fn space_directory_manifest_query_for_route(
 async fn execute_torii_fanout_space_directory_manifest_payloads_resolved_routes(
     app: &SharedAppState,
     mut routes: Vec<RoutingDecision>,
+    route_scope: ToriiFanoutRouteScopeV1,
     path_args: Vec<String>,
     query: routing::SpaceDirectoryManifestQuery,
     body: Vec<u8>,
@@ -135,6 +138,7 @@ async fn execute_torii_fanout_space_directory_manifest_payloads_resolved_routes(
             route,
             torii_read_request(
                 ToriiReadEndpointV1::SpaceDirectoryManifestsGet,
+                route_scope.clone(),
                 route,
                 path_args.clone(),
                 query_string,
@@ -186,6 +190,7 @@ async fn execute_torii_fanout_space_directory_manifest_payloads_resolved_routes(
 async fn execute_torii_accounts_list_fanout_for_resolved_routes(
     app: &SharedAppState,
     routes: Vec<RoutingDecision>,
+    route_scope: ToriiFanoutRouteScopeV1,
     query_string: Option<String>,
     proxy_memory: Option<ToriiProxyMemoryReservation>,
 ) -> Response {
@@ -241,6 +246,7 @@ async fn execute_torii_accounts_list_fanout_for_resolved_routes(
             page_params.offset = route_offset;
             page_params.limit = Some(route_limit);
             let proxy_memory = proxy_memory.clone();
+            let route_scope = route_scope.clone();
             async move {
                 let query_string = match encode_torii_proxy_query(&page_params) {
                     Ok(query_string) => query_string,
@@ -251,6 +257,7 @@ async fn execute_torii_accounts_list_fanout_for_resolved_routes(
                     route,
                     torii_read_request(
                         ToriiReadEndpointV1::AccountsList,
+                        route_scope.clone(),
                         route,
                         Vec::new(),
                         query_string,

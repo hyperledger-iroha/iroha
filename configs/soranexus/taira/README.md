@@ -362,23 +362,15 @@ It requires the exact two-field operator-signature `401` from
 topology and four-replica Inrou convergence belong to the signed Inrou canary,
 not the public route-posture probe.
 
-The maintained SDKs also carry opt-in, credential-free Kagemusha capability
-probes. They perform one bounded `GET /v1/offline/readiness`, reject redirects,
-and require `cash_handoff_v1`, native bridge ABI 23, eight hops, and
-`ready=true`:
-
-```bash
-npm --prefix javascript/iroha_js run test:taira-kagemusha-read-only
-IROHA_TAIRA_KAGEMUSHA_READ_ONLY=1 python3 -m pytest python/iroha_torii_client/tests/taira_kagemusha_live_test.py -q
-(cd kotlin && IROHA_TAIRA_KAGEMUSHA_READ_ONLY=1 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.TairaKagemushaReadOnlyPublicTest --console=plain)
-(cd java/iroha_android && IROHA_TAIRA_KAGEMUSHA_READ_ONLY=1 ./gradlew :core:test --tests org.hyperledger.iroha.android.offline.TairaKagemushaReadOnlyPublicTests --console=plain)
-(cd IrohaSwift && IROHA_TAIRA_KAGEMUSHA_READ_ONLY=1 swift test --filter TairaKagemushaReadOnlyPublicTests)
-IROHA_TAIRA_KAGEMUSHA_READ_ONLY=1 dotnet test csharp/tests/Hyperledger.Iroha.Sdk.IntegrationTests -- --filter-method '*LiveTairaKagemushaCapabilityIsExactAndReadOnly'
-```
+Maintained clients may perform one bounded, credential-free
+`GET /v1/offline/readiness` and must reject redirects. A ready deployment
+advertises only the sole `OfflineCashV1` aggregate-balance protocol and its
+authenticated proof and hardware profiles. The readiness schema has no hop,
+origin, ancestry, input-count, note-count, or proof-depth capability field.
 
 `ready=true` describes the universal peer-cash protocol surface; it does not
 assert that a particular asset has a promoted proof release or operational
-command authority. Use the signed Kagemusha rollout evidence before attempting
+command authority. Use the signed Offline Cash V1 rollout evidence before attempting
 top-up or redemption. Override the probe origin only with the credential-free
 HTTPS origin in `IROHA_TAIRA_PUBLIC_ROOT`.
 The Taira rollout asset is Digital Shekel `7ZepsJTHCVLKsrFFNZGSRGZgvBhv`

@@ -42,7 +42,6 @@ COMMON_KEYS = {
     "bridge_header_sha256",
     "privacy_production_enabled",
     "cargo_features",
-    "kagemusha_production_authorization_sha256",
     "build_environment",
 }
 BUILD_ENVIRONMENT_KEYS = {
@@ -232,18 +231,11 @@ def validate_common(common: dict[str, object]) -> None:
 
     production = common["privacy_production_enabled"]
     features = common["cargo_features"]
-    authorization = common["kagemusha_production_authorization_sha256"]
     if production is True:
         if features != ["privacy-production-enabled"]:
             fail("production Apple slice has a non-canonical Cargo feature set")
-        if authorization is not None:
-            authorization_digest = require_sha256(
-                authorization, "Kagemusha production authorization"
-            )
-            if authorization_digest == "0" * 64:
-                fail("Kagemusha production authorization must be non-zero")
     elif production is False:
-        if features != [] or authorization is not None:
+        if features != []:
             fail("default Apple slice carries production-only metadata")
     else:
         fail("Apple slice privacy production mode must be boolean")

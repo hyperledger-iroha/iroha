@@ -1396,10 +1396,6 @@ async fn snapshot_roundtrip_preserves_space_directory_manifests_and_rebuilds_bin
         snapshot_has_space_directory_manifest_section(&snapshot_value),
         "new snapshots must carry a Space Directory manifest section"
     );
-    assert!(
-        snapshot_world_has_field(&snapshot_value, "kagemusha_replay_keys"),
-        "new snapshots must carry Kagemusha replay keys"
-    );
     let snapshot_state = try_read_snapshot(
         &store_dir,
         &Kura::blank_kura_for_testing(),

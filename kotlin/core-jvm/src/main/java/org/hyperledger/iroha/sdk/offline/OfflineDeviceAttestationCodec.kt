@@ -132,7 +132,7 @@ internal object OfflineDeviceAttestationCodec {
             assetDefinitionId,
             androidPackageName,
             androidSigningCertificateSha256,
-            KagemushaP256Codec.requireUncompressedPublicKey(publicKey),
+            OfflineCashP256Codec.requireUncompressedPublicKey(publicKey),
             recentBlockHeight,
             recentBlockHash,
             expiresAtMs,
@@ -199,7 +199,7 @@ internal object OfflineDeviceAttestationCodec {
                 iosEnvironment = readField(decoder, ::readOptionString),
                 androidPackageName = readField(decoder, ::readOptionString),
                 androidSigningCertificateSha256 = readField(decoder, ::readOptionBytes),
-                publicKey = KagemushaDevicePublicKeyV2(readField(decoder, ::readP256PublicKey)),
+                publicKey = OfflineCashDevicePublicKeyV1(readField(decoder, ::readP256PublicKey)),
                 assertionScheme = readField(decoder, ::readString),
                 assertionKeyAlgorithm = readField(decoder, ::readString),
                 assertionPublicKey = readField(decoder, ::readBytes),
@@ -335,7 +335,7 @@ internal object OfflineDeviceAttestationCodec {
             require(this.androidSigningCertificateSha256.size == 32) {
                 "android_signing_certificate_sha256 must be 32 bytes"
             }
-            KagemushaP256Codec.requireUncompressedPublicKey(this.publicKey)
+            OfflineCashP256Codec.requireUncompressedPublicKey(this.publicKey)
             require(recentBlockHeight > 0 && expiresAtMs > 0) {
                 "challenge lifetime fields must be positive"
             }
@@ -384,16 +384,16 @@ internal object OfflineDeviceAttestationCodec {
         decoder.readBytes(checkedLength(decoder.readUInt(64), "byte vector"))
 
     private fun p256PublicKey(encoder: NoritoEncoder, value: ByteArray) {
-        val key = KagemushaP256Codec.requireUncompressedPublicKey(value)
+        val key = OfflineCashP256Codec.requireUncompressedPublicKey(value)
         encoder.writeBytes(key)
     }
 
     private fun readP256PublicKey(decoder: NoritoDecoder): ByteArray {
-        require(decoder.remaining() == KagemushaP256Codec.PUBLIC_KEY_BYTES) {
+        require(decoder.remaining() == OfflineCashP256Codec.PUBLIC_KEY_BYTES) {
             "P-256 public key must contain exactly 65 bytes"
         }
-        return KagemushaP256Codec.requireUncompressedPublicKey(
-            decoder.readBytes(KagemushaP256Codec.PUBLIC_KEY_BYTES),
+        return OfflineCashP256Codec.requireUncompressedPublicKey(
+            decoder.readBytes(OfflineCashP256Codec.PUBLIC_KEY_BYTES),
         )
     }
 

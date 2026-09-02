@@ -5,9 +5,9 @@ pub struct IdentityRequestSigningErrorV1;
 
 /// Deployment-owned signer for identity-bound Torii requests.
 ///
-/// Implementations may keep the private key in an HSM, KMS, enclave, or
-/// threshold service. The client constructs the exact canonical request
-/// message and independently verifies the returned signature before adding any
+/// Implementations may keep the private key behind a deployment-owned signing
+/// boundary. The client constructs the exact canonical request message and
+/// independently verifies the returned signature before adding any
 /// authentication headers.
 pub trait IdentityRequestSignerV1: Send + Sync {
     /// Exact public identity advertised in the authenticated request headers.

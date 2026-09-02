@@ -3097,8 +3097,8 @@ function parseSumeragiExecutionCommitment(value, context) {
     "parent_state_root",
     "post_state_root",
     "ordinary_writes_root",
-    "topup_anchor_root",
-    "topup_anchor_count",
+    "offline_cash_top_up_root",
+    "offline_cash_top_up_count",
     "native_amx_application_manifest_version",
     "native_amx_application_manifest_root",
     "native_amx_application_manifest_count",
@@ -3111,23 +3111,30 @@ function parseSumeragiExecutionCommitment(value, context) {
   if (unknown !== undefined) {
     throw new TypeError(`${context} contains unknown field ${unknown}`);
   }
-  for (const field of ["lane_finality_manifest", "merge_carrier"]) {
+  for (const field of [
+    "offline_cash_top_up_root",
+    "lane_finality_manifest",
+    "merge_carrier",
+  ]) {
     if (!Object.prototype.hasOwnProperty.call(record, field)) {
       throw new TypeError(`${context}.${field} is required`);
     }
   }
-  const topupAnchorCount = parseSumeragiUnsigned(
-    record.topup_anchor_count,
-    `${context}.topup_anchor_count`,
-    { max: 16 },
+  const offlineCashTopUpCount = parseSumeragiUnsigned(
+    record.offline_cash_top_up_count,
+    `${context}.offline_cash_top_up_count`,
+    { max: 0xffff_ffff },
   );
-  const topupAnchorRoot =
-    record.topup_anchor_root == null
+  const offlineCashTopUpRoot =
+    record.offline_cash_top_up_root == null
       ? null
-      : parseSumeragiHash(record.topup_anchor_root, `${context}.topup_anchor_root`);
-  if ((topupAnchorCount === 0) !== (topupAnchorRoot === null)) {
+      : parseSumeragiHash(
+          record.offline_cash_top_up_root,
+          `${context}.offline_cash_top_up_root`,
+        );
+  if ((offlineCashTopUpCount === 0) !== (offlineCashTopUpRoot === null)) {
     throw new TypeError(
-      `${context}.topup_anchor_root must be present exactly when topup_anchor_count is positive`,
+      `${context}.offline_cash_top_up_root must be present exactly when offline_cash_top_up_count is positive`,
     );
   }
   const nativeManifestVersion = parseSumeragiUnsigned(
@@ -3231,8 +3238,8 @@ function parseSumeragiExecutionCommitment(value, context) {
       record.ordinary_writes_root,
       `${context}.ordinary_writes_root`,
     ),
-    topup_anchor_root: topupAnchorRoot,
-    topup_anchor_count: topupAnchorCount,
+    offline_cash_top_up_root: offlineCashTopUpRoot,
+    offline_cash_top_up_count: offlineCashTopUpCount,
     native_amx_application_manifest_version: nativeManifestVersion,
     native_amx_application_manifest_root: nativeManifestRoot,
     native_amx_application_manifest_count: nativeManifestCount,

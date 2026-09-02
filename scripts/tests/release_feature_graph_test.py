@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import re
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 try:
     import tomllib
@@ -136,6 +140,132 @@ def test_trusted_release_surface_matches_reviewed_seal() -> None:
         checker.trusted_release_surface_digest(REPO)
         == checker.TRUSTED_RELEASE_SURFACE_SHA256
     )
+
+
+def test_trusted_release_surface_rejects_duplicate_or_dynamic_seal_assignment() -> None:
+    checker = load_checker()
+    source = SCRIPT.read_bytes()
+    duplicate = source + (
+        b"\nTRUSTED_RELEASE_SURFACE_SHA256 = "
+        b"hashlib.sha256(b'unreviewed').hexdigest()\n"
+    )
+    try:
+        checker._release_surface_contents(SCRIPT.relative_to(REPO), duplicate)
+    except RuntimeError as error:
+        assert "exactly one top-level literal assignment" in str(error)
+    else:  # pragma: no cover - failure branch
+        raise AssertionError("duplicate dynamic release seal assignment was accepted")
+
+    dynamic_only = re.sub(
+        rb'TRUSTED_RELEASE_SURFACE_SHA256\s*=\s*\(\s*"[0-9a-f]{64}"\s*\)',
+        b"TRUSTED_RELEASE_SURFACE_SHA256 = hashlib.sha256(b'unreviewed').hexdigest()",
+        source,
+        count=1,
+    )
+    try:
+        checker._release_surface_contents(SCRIPT.relative_to(REPO), dynamic_only)
+    except RuntimeError as error:
+        assert "exactly one top-level literal assignment" in str(error)
+    else:  # pragma: no cover - failure branch
+        raise AssertionError("dynamic release seal assignment was accepted")
+
+    digest_match = re.search(rb"[0-9a-f]{64}", source)
+    assert digest_match is not None
+    digest = digest_match.group(0)
+    annotated = re.sub(
+        rb'TRUSTED_RELEASE_SURFACE_SHA256\s*=\s*\(\s*"[0-9a-f]{64}"\s*\)',
+        b'TRUSTED_RELEASE_SURFACE_SHA256: str = "' + digest + b'"',
+        source,
+        count=1,
+    )
+    annotated = (
+        b'# TRUSTED_RELEASE_SURFACE_SHA256 = ("' + digest + b'")\n' + annotated
+    )
+    with pytest.raises(RuntimeError, match="exactly one top-level literal assignment"):
+        checker._release_surface_contents(SCRIPT.relative_to(REPO), annotated)
+
+    for rebinding in (
+        b"\nfrom hashlib import sha256 as TRUSTED_RELEASE_SURFACE_SHA256\n",
+        b"\nglobals()['TRUSTED_RELEASE_SURFACE_SHA256'] = "
+        b"hashlib.sha256(b'unreviewed').hexdigest()\n",
+    ):
+        try:
+            checker._release_surface_contents(
+                SCRIPT.relative_to(REPO), source + rebinding
+            )
+        except RuntimeError as error:
+            assert "exactly one top-level literal assignment" in str(error)
+        else:  # pragma: no cover - failure branch
+            raise AssertionError("alternate release seal rebinding was accepted")
+
+
+def test_trusted_release_surface_commit_rejects_dirty_or_uncommitted_inputs(
+    tmp_path: Path, monkeypatch
+) -> None:
+    checker = load_checker()
+    commit = "a" * 40
+    state = {"dirty": False, "tracked": b"tracked\0"}
+
+    monkeypatch.setattr(checker, "validate_trusted_release_surface", lambda *_: None)
+    monkeypatch.setattr(
+        checker, "_embedded_release_surface_sha256", lambda: "b" * 64
+    )
+    monkeypatch.setattr(
+        checker, "trusted_release_surface_paths", lambda _repo: (Path("tracked"),)
+    )
+    monkeypatch.setattr(
+        checker, "trusted_release_surface_digest", lambda _repo: "b" * 64
+    )
+
+    def fake_run(command, **_kwargs):
+        if command[1:3] == ["rev-parse", "HEAD"]:
+            return SimpleNamespace(returncode=0, stdout=commit + "\n")
+        if command[1:3] == ["diff", "--quiet"]:
+            return SimpleNamespace(returncode=1 if state["dirty"] else 0)
+        if command[1:3] == ["ls-files", "--cached"]:
+            return SimpleNamespace(returncode=0, stdout=state["tracked"])
+        raise AssertionError(command)
+
+    monkeypatch.setattr(checker.subprocess, "run", fake_run)
+    assert (
+        checker.validate_trusted_release_surface_commit(tmp_path, commit)
+        == "b" * 64
+    )
+    state["dirty"] = True
+    with pytest.raises(RuntimeError, match="tracked working-tree drift"):
+        checker.validate_trusted_release_surface_commit(tmp_path, commit)
+    state["dirty"] = False
+    state["tracked"] = b""
+    with pytest.raises(RuntimeError, match="uncommitted or ignored inputs"):
+        checker.validate_trusted_release_surface_commit(tmp_path, commit)
+
+
+def test_trusted_release_surface_commit_rejects_late_digest_drift(
+    tmp_path: Path, monkeypatch
+) -> None:
+    checker = load_checker()
+    commit = "a" * 40
+    digests = iter(("b" * 64, "c" * 64))
+    monkeypatch.setattr(
+        checker, "_embedded_release_surface_sha256", lambda: "b" * 64
+    )
+    monkeypatch.setattr(
+        checker, "trusted_release_surface_digest", lambda _repo: next(digests)
+    )
+    monkeypatch.setattr(checker, "trusted_release_surface_paths", lambda _repo: ())
+
+    def fake_run(command, **_kwargs):
+        if command[1:3] == ["rev-parse", "HEAD"]:
+            return SimpleNamespace(returncode=0, stdout=commit + "\n")
+        if command[1:3] == ["diff", "--quiet"]:
+            return SimpleNamespace(returncode=0)
+        if command[1:3] == ["ls-files", "--cached"]:
+            return SimpleNamespace(returncode=0, stdout=b"")
+        raise AssertionError(command)
+
+    monkeypatch.setattr(checker.subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError, match="changed during commit validation"):
+        checker.validate_trusted_release_surface_commit(tmp_path, commit)
 
 
 def test_trusted_release_surface_seal_rejects_drift_addition_and_removal(
@@ -435,6 +565,30 @@ def test_trusted_release_surface_seal_rejects_drift_addition_and_removal(
     assert_seal_rejects(checker, tmp_path, baseline)
 
 
+def test_trusted_release_surface_rejects_hardlinked_and_shared_writable_inputs(
+    tmp_path: Path,
+) -> None:
+    checker = load_checker()
+    initialize_tracked_release_surface(tmp_path)
+    dockerfile = tmp_path / "Dockerfile"
+    hardlink = tmp_path / "outside-dockerfile-link"
+    os.link(dockerfile, hardlink)
+    with pytest.raises(RuntimeError, match="exactly one hard link"):
+        checker.trusted_release_surface_digest(tmp_path)
+    hardlink.unlink()
+
+    dockerfile.chmod(0o664)
+    with pytest.raises(RuntimeError, match="group- or world-writable"):
+        checker.trusted_release_surface_digest(tmp_path)
+    dockerfile.chmod(0o644)
+
+    source_directory = tmp_path / "crates" / "demo"
+    source_directory.chmod(0o777)
+    with pytest.raises(RuntimeError, match="source parent.*world-writable"):
+        checker.trusted_release_surface_digest(tmp_path)
+    source_directory.chmod(0o755)
+
+
 def test_trusted_release_surface_covers_all_tracked_release_support() -> None:
     checker = load_checker()
     sealed = set(checker.trusted_release_surface_paths(REPO))
@@ -471,7 +625,11 @@ def test_trusted_release_surface_covers_all_tracked_release_support() -> None:
         capture_output=True,
     ).stdout
     support = {
-        Path(raw.decode("utf-8")) for raw in tracked.split(b"\0") if raw
+        relative
+        for raw in tracked.split(b"\0")
+        if raw
+        for relative in (Path(raw.decode("utf-8")),)
+        if os.path.lexists(REPO / relative)
     }
     assert support <= sealed
     build_scripts = subprocess.run(
@@ -483,7 +641,10 @@ def test_trusted_release_surface_covers_all_tracked_release_support() -> None:
     for raw in build_scripts.split(b"\0"):
         if not raw:
             continue
-        package_root = Path(raw.decode("utf-8")).parent
+        build_script = Path(raw.decode("utf-8"))
+        package_root = build_script.parent
+        if not os.path.lexists(REPO / build_script):
+            continue
         package_files = subprocess.run(
             ["git", "ls-files", "-z", "--", str(package_root)],
             cwd=REPO,
@@ -491,9 +652,11 @@ def test_trusted_release_surface_covers_all_tracked_release_support() -> None:
             capture_output=True,
         ).stdout
         assert {
-            Path(item.decode("utf-8"))
+            relative
             for item in package_files.split(b"\0")
             if item
+            for relative in (Path(item.decode("utf-8")),)
+            if os.path.lexists(REPO / relative)
         } <= sealed
     assert {
         Path(".cargo/config.toml"),
@@ -508,7 +671,6 @@ def test_trusted_release_surface_covers_all_tracked_release_support() -> None:
         Path("IrohaSwift/Package.swift"),
         Path("IrohaSwift/Package.resolved"),
         Path("crates/connect_norito_bridge/NoritoBridge.podspec.template"),
-        Path("crates/connect_norito_bridge/build.rs"),
         Path("crates/iroha_core/build.rs"),
         Path("crates/iroha_core/src/state.rs"),
         Path("crates/sorafs_manifest/include/sorafs_reference.h"),
@@ -748,9 +910,23 @@ def test_nix_named_outputs_are_bounded_shipping_profiles(tmp_path: Path) -> None
 def test_feature_graph_queries_all_targets(monkeypatch, tmp_path: Path) -> None:
     checker = load_checker()
     commands: list[list[str]] = []
+    hostile = {
+        "RUSTFLAGS": '--cfg feature="test-fixtures"',
+        "CARGO_ENCODED_RUSTFLAGS": '--cfg\x1ffeature="test-fixtures"',
+        "RUSTC_WRAPPER": "/tmp/unreviewed-wrapper",
+        "CARGO_HOME": "/tmp/unreviewed-cargo-home",
+        "CARGO_BUILD_RUSTC": "/tmp/unreviewed-rustc",
+        "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "/tmp/linker",
+    }
+    for name, value in hostile.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("CARGO_TARGET_DIR", "/tmp/reviewed-target-dir")
 
     def fake_run(command, **kwargs):
         commands.append(command)
+        environment = kwargs.pop("env")
+        assert not set(hostile).intersection(environment)
+        assert environment["CARGO_TARGET_DIR"] == "/tmp/reviewed-target-dir"
         assert kwargs == {
             "cwd": tmp_path,
             "check": False,
@@ -1248,18 +1424,11 @@ def test_native_library_roots_and_release_bundle_boundary_are_derived(
     monkeypatch,
 ) -> None:
     checker = load_checker()
-    try:
+    assert (
         checker.canonical_release_bundle_policy(REPO)
-    except RuntimeError as error:
-        assert "arbitrary prebuilt release inputs are unauthenticated" in str(error)
-    else:  # pragma: no cover - failure branch
-        raise AssertionError("unauthenticated canonical prebuilts were accepted")
-
-    monkeypatch.setattr(
-        checker,
-        "canonical_release_bundle_policy",
-        lambda _repo: "source-built-reviewed-profile",
+        == "authenticated-prebuilt-reviewed-profile"
     )
+    monkeypatch.setattr(checker, "validate_trusted_release_surface", lambda _repo: None)
     targets = checker.declared_shipping_targets(REPO)
     bridge_targets = [
         target
@@ -1304,41 +1473,265 @@ def test_canonical_release_prebuilt_boundary_fails_closed(tmp_path: Path) -> Non
     checker = load_checker()
     scripts = tmp_path / "scripts"
     scripts.mkdir()
-    (tmp_path / checker.RELEASE_BUNDLE_SCRIPT).write_text(
-        'case "$1" in\n  --features) ;;\nesac\n', encoding="utf-8"
+    (tmp_path / checker.ISOLATED_RELEASE_RUNNER).write_text(
+        "ALLOWED_TOOLS = frozenset(())\n"
+        '"generate_release_manifest.py"\n'
+        '"write_release_sha256sums.py"\n'
+        '"fastpq/rollout_manifest_summary.py"\n'
+        '"verify_release_prebuilt_provenance.py"\n'
+        "RELEASE_ARTIFACT_CONTRACT_SHA256\n"
+        "REVIEWED_TOOL_SHA256\n"
+        "hashlib.sha256(payload).hexdigest()\n"
+        "os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW\n"
+        "directory_flags = file_flags | os.O_DIRECTORY\n"
+        "before.st_nlink != 1\n"
+        "stat.S_IWGRP | stat.S_IWOTH\n"
+        "os.open(name, file_flags, dir_fd=directory_descriptor)\n"
+        "identity(before) != identity(after)\n"
+        'exec(compile(payload, str(path), "exec"), module.__dict__)\n'
+        'exec(compile(payload, str(path), "exec"), namespace)\n'
+        "contract.stable_read_relative(\n"
+        "_load_fastpq_summary_dependencies()\n",
+        encoding="utf-8",
     )
-    direct = """command = [
+    verifier_invocation = """prebuilt_provenance_sha256="$(
+  "${release_python[@]}" "$repo_root/scripts/verify_release_prebuilt_provenance.py" \\
+    --trusted-manifest-sha256 "$digest" \\
+    --source-commit "$commit" \\
+    --cargo-lock Cargo.lock \\
+    --target "$target" \\
+    --cargo-profile deploy \\
+    --features "$features" \\
+    "${provenance_binaries[@]}" \\
+    --output-directory "$snapshot"
+)"
+"""
+    isolated_builder_contract = """#!/usr/bin/env -S -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS -u PS4 -u BASH_XTRACEFD -u CDPATH -u GLOBIGNORE bash -p
+set -euo pipefail
+unset BASH_ENV ENV PYTHONHOME PYTHONPATH PS4 BASH_XTRACEFD CDPATH GLOBIGNORE \\
+  CARGO_ENCODED_RUSTFLAGS CARGO_ENCODED_RUSTDOCFLAGS CARGO_HOME \\
+  RUSTC RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER RUSTDOC RUSTDOCFLAGS RUSTFLAGS
+for release_environment_name in ${!CARGO_BUILD_@}; do
+  unset "$release_environment_name"
+done
+for release_environment_name in ${!CARGO_TARGET_@}; do
+  case "$release_environment_name" in
+    *_LINKER|*_RUNNER|*_RUSTFLAGS|*_RUSTDOCFLAGS) ;;
+  esac
+done
+export PYTHONNOUSERSITE=1
+release_python=(python3 -I -S "$repo_root/scripts/run_isolated_release_tool.py")
+validate_release_source
+validate_release_source
+"""
+    bundle_snapshot_contract = """printf '%s\\n' '--prebuilt-bin-dir is required for deterministic release bundles'
+binary_root=""
+binary_root="$stage_parent/prebuilt-bin"
+stage_release_file "$binary_root/daemon" out 0755
+stage_release_file "$binary_root/dag" out 0755
+stage_release_file "$binary_root/cli" out 0755
+stage_release_file "$binary_root/utility" out 0755
+stage_release_file "$binary_root/sanitizer" out 0755
+stage_release_file "$binary_root/signer" out 0755
+stage_release_file "$binary_root/signer" broker 0755
+"""
+    image_snapshot_contract = """prebuilt_bin_dir=""
+prebuilt_bin_dir="$2"
+prebuilt_snapshot="$temp_root/prebuilt-bin"
+prebuilt_bin_dir="$prebuilt_snapshot"
+copy_release_file --source "$prebuilt_bin_dir/$binary"
+"""
+    (tmp_path / checker.RELEASE_BUNDLE_SCRIPT).write_text(
+        isolated_builder_contract
+        + 'case "$1" in\n  --features) ;;\nesac\n'
+        + bundle_snapshot_contract
+        + verifier_invocation,
+        encoding="utf-8",
+    )
+    (tmp_path / checker.RELEASE_IMAGE_SCRIPT).write_text(
+        isolated_builder_contract + image_snapshot_contract + verifier_invocation,
+        encoding="utf-8",
+    )
+    pipeline = """_BOOTSTRAP_RELEASE_MODULE_SHA256 = {}
+os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW
+before.st_nlink != 1
+stat.S_IWGRP | stat.S_IWOTH
+_normalized_bootstrap_payload(name, bytes(payload))
+hashlib.sha256(normalized).hexdigest()
+exec(compile(payload, str(path), "exec"), module.__dict__)
+_stable_bootstrap_sources()
+_HOSTILE_CHILD_ENVIRONMENT = frozenset({"BASH_ENV", "BASHOPTS", "BASH_XTRACEFD", "CDPATH", "ENV", "GLOBIGNORE", "PS4", "PYTHONHOME", "PYTHONPATH", "CARGO_ENCODED_RUSTFLAGS", "CARGO_ENCODED_RUSTDOCFLAGS", "CARGO_HOME", "RUSTC", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "RUSTDOC", "RUSTDOCFLAGS", "RUSTFLAGS", "SHELLOPTS"})
+if name in _HOSTILE_CHILD_ENVIRONMENT or name.startswith(("BASH_FUNC_", "CARGO_BUILD_")):
+    environment.pop(name, None)
+if name.startswith("CARGO_TARGET_") and name.endswith(("_LINKER", "_RUNNER", "_RUSTFLAGS", "_RUSTDOCFLAGS")):
+    environment.pop(name, None)
+def validate_release_source(commit: str, action: str) -> None:
+    validate_trusted_release_surface_commit(REPO_ROOT, commit)
+validate_release_source(commit, "Release source preflight failed")
+run_trusted_release_action(commit, "Android Maven publication refused changed release source", lambda: run(publish_cmd, env=release_env))
+validate_release_source(commit, "Aggregate manifest signing refused changed release source")
+validate_release_source(commit, "Release source changed during pipeline execution")
+command = (sys.executable, "-I", "-S", "run_isolated_release_tool.py"),
+executable.resolve().is_relative_to(_SCRIPT_DIRECTORY)
+path, separator, provenance_sha256 = authenticated_path.rpartition(
+            "@sha256:"
+        )
+bundle_command = [
                     REPO_ROOT / "scripts" / "build_release_bundle.sh",
-                    "--target",
-                    target,
+                    "--prebuilt-bin-dir",
+                    bundle_path,
+                    "--trusted-prebuilt-provenance-sha256",
+                    bundle_digest,
+                ]
+image_command = [
+                    REPO_ROOT / "scripts" / "build_release_image.sh",
+                    "--prebuilt-bin-dir",
+                    image_path,
+                    "--trusted-prebuilt-provenance-sha256",
+                    image_digest,
                 ]
 """
     (tmp_path / checker.CANONICAL_RELEASE_PIPELINE).write_text(
-        direct, encoding="utf-8"
+        pipeline, encoding="utf-8"
     )
     assert (
         checker.canonical_release_bundle_policy(tmp_path)
-        == "source-built-reviewed-profile"
+        == "authenticated-prebuilt-reviewed-profile"
     )
 
-    for option in (
-        "--bundle-prebuilt-bin-dir",
-        "--image-prebuilt-bin-dir",
-        "--prebuilt-bin-dir",
-    ):
-        (tmp_path / checker.CANONICAL_RELEASE_PIPELINE).write_text(
-            direct.replace(
-                '"--target",',
-                f'"{option}",\n                    value,\n                    "--target",',
+    mutations = (
+        (
+            pipeline.replace(
+                'validate_release_source(commit, "Release source preflight failed")\n',
+                "",
+                1,
             ),
+            "source-commit preflight/recheck changed",
+        ),
+        (
+            pipeline.replace('"BASH_ENV", ', "", 1),
+            "hostile subprocess environment scrub changed",
+        ),
+        (
+            pipeline.replace(
+                '                    "--trusted-prebuilt-provenance-sha256",\n'
+                "                    bundle_digest,\n",
+                "",
+                1,
+            ),
+            "prebuilt provenance handoff changed",
+        ),
+        (
+            pipeline.replace('            "@sha256:"', '            "@digest:"'),
+            "not parsed as one authenticated identity",
+        ),
+        (
+            pipeline.replace(
+                '                    "--prebuilt-bin-dir",',
+                '                    "--features",\n'
+                "                    dynamic_features,\n"
+                '                    "--prebuilt-bin-dir",',
+                1,
+            ),
+            "official bundle may not accept a dynamic feature override",
+        ),
+        (
+            pipeline.replace(
+                '                    "--prebuilt-bin-dir",\n'
+                "                    image_path,\n",
+                '                    "--features",\n'
+                "                    dynamic_features,\n"
+                '                    "--prebuilt-bin-dir",\n'
+                "                    image_path,\n",
+                1,
+            ),
+            "official image may not accept a dynamic feature override",
+        ),
+    )
+    for mutated, message in mutations:
+        (tmp_path / checker.CANONICAL_RELEASE_PIPELINE).write_text(
+            mutated, encoding="utf-8"
+        )
+        try:
+            checker.canonical_release_bundle_policy(tmp_path)
+        except RuntimeError as error:
+            assert message in str(error)
+        else:  # pragma: no cover - failure branch
+            raise AssertionError("unauthenticated canonical prebuilt drift was accepted")
+
+    (tmp_path / checker.CANONICAL_RELEASE_PIPELINE).write_text(
+        pipeline, encoding="utf-8"
+    )
+    for script in (
+        checker.RELEASE_BUNDLE_SCRIPT,
+        checker.RELEASE_IMAGE_SCRIPT,
+    ):
+        source = (tmp_path / script).read_text(encoding="utf-8")
+        (tmp_path / script).write_text(
+            source.replace("verify_release_prebuilt_provenance.py", "unchecked.py"),
             encoding="utf-8",
         )
         try:
             checker.canonical_release_bundle_policy(tmp_path)
         except RuntimeError as error:
-            assert "arbitrary prebuilt release inputs are unauthenticated" in str(error)
+            assert "prebuilt provenance verifier contract changed" in str(error)
         else:  # pragma: no cover - failure branch
-            raise AssertionError(f"unauthenticated {option} was accepted")
+            raise AssertionError("missing prebuilt verifier was accepted")
+        (tmp_path / script).write_text(source, encoding="utf-8")
+
+    bundle_path = tmp_path / checker.RELEASE_BUNDLE_SCRIPT
+    bundle_source = bundle_path.read_text(encoding="utf-8")
+    bundle_path.write_text(
+        bundle_source.replace(
+            'binary_root="$stage_parent/prebuilt-bin"',
+            'binary_root="$prebuilt_bin_dir"',
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="private prebuilt snapshot consumption"):
+        checker.canonical_release_bundle_policy(tmp_path)
+    bundle_path.write_text(bundle_source, encoding="utf-8")
+
+    image_path = tmp_path / checker.RELEASE_IMAGE_SCRIPT
+    image_source = image_path.read_text(encoding="utf-8")
+    image_path.write_text(
+        image_source.replace(
+            'prebuilt_bin_dir="$prebuilt_snapshot"',
+            'prebuilt_bin_dir="$original_prebuilt_bin_dir"',
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="private prebuilt snapshot consumption"):
+        checker.canonical_release_bundle_policy(tmp_path)
+    image_path.write_text(image_source, encoding="utf-8")
+
+    for script in (checker.RELEASE_BUNDLE_SCRIPT, checker.RELEASE_IMAGE_SCRIPT):
+        path = tmp_path / script
+        source = path.read_text(encoding="utf-8")
+        path.write_text(
+            source.replace(
+                'release_python=(python3 -I -S "$repo_root/scripts/',
+                'release_python=(python3 "$repo_root/scripts/',
+                1,
+            ),
+            encoding="utf-8",
+        )
+        with pytest.raises(RuntimeError, match="isolated release helper launcher"):
+            checker.canonical_release_bundle_policy(tmp_path)
+        path.write_text(source, encoding="utf-8")
+
+        path.write_text(
+            source.replace(
+                '"${release_python[@]}" "$repo_root/scripts/'
+                'verify_release_prebuilt_provenance.py"',
+                'python3 "$repo_root/scripts/verify_release_prebuilt_provenance.py"',
+                1,
+            ),
+            encoding="utf-8",
+        )
+        with pytest.raises(RuntimeError, match="bypasses isolated launcher"):
+            checker.canonical_release_bundle_policy(tmp_path)
+        path.write_text(source, encoding="utf-8")
 
 
 def test_android_gradle_native_build_owner_rejects_feature_scope_drift(
@@ -1354,10 +1747,7 @@ def test_android_gradle_native_build_owner_rejects_feature_scope_drift(
         workspace_docker_bins=(),
     )
     targets = checker.android_native_artifact_targets(REPO, catalog)
-    assert {target.features for target in targets} == {
-        (),
-        ("privacy-production-enabled",),
-    }
+    assert {target.features for target in targets} == {()}
 
     for relative in (
         Path(".github/workflows/mobile_sdk_artifacts.yml"),
@@ -1451,9 +1841,6 @@ def test_positive_shipping_feature_policy_rejects_dev_and_test_roots() -> None:
         checker.ShippingProfile("irohad", ("test-network-message-control",)),
         checker.ShippingProfile("irohad", ("test-network-parliament-signers",)),
         checker.ShippingProfile("iroha_cli", ("cli_integration_harness",)),
-        checker.ShippingProfile(
-            "connect_norito_bridge", ("kagemusha-candidate-evidence-lab",)
-        ),
         checker.ShippingProfile("new_release_package"),
     )
     for profile in rejected_profiles:
@@ -1484,7 +1871,7 @@ def test_kagami_keeps_core_test_surface_out_of_normal_dependencies() -> None:
 def test_pr_workflow_runs_release_feature_graph_guard() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     assert "scripts/tests/release_feature_graph_test.py" in workflow
-    assert "python3 scripts/check_release_feature_graph.py" in workflow
+    assert "python3 -I -S scripts/check_release_feature_graph.py" in workflow
     pull_request_trigger = workflow.split("concurrency:", 1)[0]
     assert "paths-ignore:" not in pull_request_trigger
 
@@ -1501,7 +1888,10 @@ def test_release_publishers_depend_on_feature_graph_guard() -> None:
     }
     for relative, jobs in guarded_jobs.items():
         workflow = (REPO / relative).read_text(encoding="utf-8")
-        assert workflow.count("python3 scripts/check_release_feature_graph.py") == 1
+        assert (
+            workflow.count("python3 -I -S scripts/check_release_feature_graph.py")
+            == 1
+        )
         assert re.search(r"(?m)^  release-feature-graph:\s*$", workflow)
         for job in jobs:
             pattern = (
@@ -1515,4 +1905,4 @@ def test_release_publishers_depend_on_feature_graph_guard() -> None:
         Path(".github/workflows/mobile_sdk_artifacts.yml"),
     ):
         workflow = (REPO / relative).read_text(encoding="utf-8")
-        assert "python3 scripts/check_release_feature_graph.py" in workflow
+        assert "python3 -I -S scripts/check_release_feature_graph.py" in workflow

@@ -40,6 +40,7 @@ export {
 } from "./numericV1.js";
 
 export { NetworkId } from "./networkId.js";
+export { OfflineCashV1 } from "./offlineCashV1.js";
 export { OperatorSigningContext } from "./operatorRequest.browser.js";
 export {
   computeIvmArtifactHashes,
@@ -103,20 +104,6 @@ export {
   ToriiBrowserStreamGapError,
 } from "./toriiBrowserClient.js";
 
-export {
-  KAGEMUSHA_CASH_HANDOFF_CAPABILITY,
-  KAGEMUSHA_MANIFEST_VERSION,
-  KAGEMUSHA_MAX_HOPS,
-  KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES,
-  KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION,
-  KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES,
-  normalizeKagemushaOperationId,
-  normalizeKagemushaOperationReference,
-  normalizeKagemushaOperationStatus,
-  normalizeKagemushaRedeemRequestV4,
-  normalizeOfflineStatus,
-  normalizeKagemushaTopUpRequestV4,
-} from "./kagemushaOffline.js";
 
 export {
   assetReferencesMatch,

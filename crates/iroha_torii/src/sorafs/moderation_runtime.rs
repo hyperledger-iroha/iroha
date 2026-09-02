@@ -863,21 +863,20 @@ impl ModerationStrictTransactionIngressV1 for ToriiModerationStrictTransactionIn
                     Err(ModerationStrictIngressFailureV1::Ambiguous)
                 }
                 iroha_core::queue::Error::PlanJournalDurabilityRejected { .. }
-                | iroha_core::queue::Error::KagemushaOperationIndexInconsistent { .. }
+                | iroha_core::queue::Error::OfflineCashV1OperationIndexInconsistent { .. }
                 | iroha_core::queue::Error::UnresolvedRoute { .. } => {
                     Err(ModerationStrictIngressFailureV1::Unavailable)
                 }
                 iroha_core::queue::Error::Expired
-                | iroha_core::queue::Error::KagemushaOperationCarrierRejected { .. }
-                | iroha_core::queue::Error::KagemushaOperationIdConflict { .. }
+                | iroha_core::queue::Error::OfflineCashV1OperationCarrierRejected { .. }
+                | iroha_core::queue::Error::OfflineCashV1OperationIdConflict { .. }
                 | iroha_core::queue::Error::UnregisteredAuthority { .. }
                 | iroha_core::queue::Error::Governance(_)
                 | iroha_core::queue::Error::GovernanceNotPermitted { .. }
                 | iroha_core::queue::Error::LaneComplianceDenied { .. }
                 | iroha_core::queue::Error::LanePrivacyProofRejected { .. }
                 | iroha_core::queue::Error::NexusFeeAdmissionRejected { .. }
-                | iroha_core::queue::Error::NexusFeeAdmissionConfigInvalid { .. }
-                | iroha_core::queue::Error::ConfidentialPolicyAdmissionRejected { .. } => {
+                | iroha_core::queue::Error::NexusFeeAdmissionConfigInvalid { .. } => {
                     Err(ModerationStrictIngressFailureV1::PermanentRejection)
                 }
             },

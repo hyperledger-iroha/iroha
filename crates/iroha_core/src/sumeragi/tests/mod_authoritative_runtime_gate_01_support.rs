@@ -336,13 +336,14 @@ fn v2_vote(phase: wire::GlobalPhase) -> BlockMessage {
                 )),
                 payload_hash: Hash::new(b"fair-v2-ingress-vote-payload"),
             },
-            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
-                Hash::new(b"fair-v2-ingress-parent-state"),
-                Hash::new(b"fair-v2-ingress-post-state"),
-                Hash::new(b"fair-v2-ingress-writes"),
-                1,
-                Hash::new(b"fair-v2-ingress-executed-wire"),
-            ),
+            execution_commitment:
+                wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                    Hash::new(b"fair-v2-ingress-parent-state"),
+                    Hash::new(b"fair-v2-ingress-post-state"),
+                    Hash::new(b"fair-v2-ingress-writes"),
+                    1,
+                    Hash::new(b"fair-v2-ingress-executed-wire"),
+                ),
             signer: 0,
             signature: vec![0x5A],
         }),
@@ -475,12 +476,12 @@ fn v2_maximum_valid_timeout_vote_wire() -> BlockMessage {
         payload_hash: Hash::new(b"fair-v2-ingress-max-timeout-payload"),
     };
     let ordinary_writes_root = Hash::new(b"fair-v2-ingress-max-writes");
-    let topup_anchor_root = Hash::new(b"fair-v2-ingress-max-topup-root");
-    let topup_anchor_count = wire::MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK;
-    let post_state_root = wire::ExecutionCommitment::topup_post_state_root(
-        topup_anchor_count,
+    let offline_cash_top_up_root = Hash::new(b"fair-v2-ingress-max-topup-root");
+    let offline_cash_top_up_count = u32::MAX;
+    let post_state_root = wire::ExecutionCommitment::offline_cash_post_state_root_v1(
+        offline_cash_top_up_count,
         ordinary_writes_root,
-        topup_anchor_root,
+        offline_cash_top_up_root,
     );
     let highest_prepare_qc = wire::QuorumCertificate {
         round,
@@ -491,8 +492,8 @@ fn v2_maximum_valid_timeout_vote_wire() -> BlockMessage {
             Hash::new(b"fair-v2-ingress-max-parent-state"),
             post_state_root,
             ordinary_writes_root,
-            Some(topup_anchor_root),
-            topup_anchor_count,
+            Some(offline_cash_top_up_root),
+            offline_cash_top_up_count,
             1,
             Hash::new(b"fair-v2-ingress-max-executed-wire"),
         )
@@ -530,19 +531,19 @@ fn v2_maximum_structural_proposal_wire(
         payload_hash: Hash::new(b"fair-v2-ingress-max-proposal-payload"),
     };
     let ordinary_writes_root = Hash::new(b"fair-v2-ingress-max-proposal-writes");
-    let topup_anchor_root = Hash::new(b"fair-v2-ingress-max-proposal-topup-root");
-    let topup_anchor_count = wire::MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK;
-    let post_state_root = wire::ExecutionCommitment::topup_post_state_root(
-        topup_anchor_count,
+    let offline_cash_top_up_root = Hash::new(b"fair-v2-ingress-max-proposal-topup-root");
+    let offline_cash_top_up_count = u32::MAX;
+    let post_state_root = wire::ExecutionCommitment::offline_cash_post_state_root_v1(
+        offline_cash_top_up_count,
         ordinary_writes_root,
-        topup_anchor_root,
+        offline_cash_top_up_root,
     );
     let execution_commitment = wire::ExecutionCommitment::new_with_manifests(
         Hash::new(b"fair-v2-ingress-max-proposal-parent-state"),
         post_state_root,
         ordinary_writes_root,
-        Some(topup_anchor_root),
-        topup_anchor_count,
+        Some(offline_cash_top_up_root),
+        offline_cash_top_up_count,
         wire::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
         Hash::new(b"fair-v2-ingress-max-proposal-native-amx"),
         wire::MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES,
@@ -553,11 +554,11 @@ fn v2_maximum_structural_proposal_wire(
             NonZeroU64::new(u64::from(wire::MAX_LANE_FINALITY_STATEMENTS_PER_BLOCK))
                 .expect("lane-finality bound is non-zero"),
         )),
-        Some(wire::MergeCarrierCommitmentV1::new(
-            HashOf::<MergeLedgerEntry>::from_untyped_unchecked(Hash::new(
-                b"fair-v2-ingress-max-proposal-merge-carrier",
-            )),
-        )),
+        Some(wire::MergeCarrierCommitmentV1::new(HashOf::<
+            MergeLedgerEntry,
+        >::from_untyped_unchecked(
+            Hash::new(b"fair-v2-ingress-max-proposal-merge-carrier"),
+        ))),
         wire::MAX_EXECUTED_BLOCK_WIRE_BYTES,
         Hash::new(b"fair-v2-ingress-max-proposal-executed-wire"),
     )

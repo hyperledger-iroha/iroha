@@ -97,12 +97,6 @@ async fn handler_post_transactions_batch(
                     app.state.pipeline.signature_batch_max_ed25519,
                 );
                 for (transaction, precheck) in transactions.into_iter().zip(prechecks) {
-                    // Exact lifecycle multisig is intentionally outside generic transaction
-                    // admission, so preserve its dedicated-route error before that policy runs.
-                    routing::ensure_generic_transaction_batch_not_ordinary_kagemusha_lifecycle(
-                        app.queue.as_ref(),
-                        transaction.signed(),
-                    )?;
                     let accepted_tx =
                         routing::accept_decoded_signed_transaction_for_ingress_with_precheck(
                             app.state.clone(),
@@ -153,10 +147,9 @@ async fn handler_post_transactions_batch(
         .iter()
         .map(|(transaction, _)| transaction.authority().clone())
         .collect::<Vec<_>>();
-    if !allow_transaction_batch_rate_limit(&app.tx_rate_limiter, &verified_authorities).await {
-        drop(compute_permit);
-        return Err(transaction_rate_limit_error());
-    }
+    let rate_limit_reservation =
+        reserve_verified_transaction_authorities(&app.tx_rate_limiter, &verified_authorities)
+            .await?;
     let accepted_count = accepted_transactions.len();
     let app_for_push = app.clone();
     let (_, _compute_permit) = run_transaction_ingress_compute_job(
@@ -168,6 +161,7 @@ async fn handler_post_transactions_batch(
                 app_for_push.state.clone(),
                 accepted_transactions,
             )?;
+            rate_limit_reservation.commit();
             app_for_push
                 .state
                 .warm_stateless_validation_cache_for_torii_prechecked_batch(&stateless_cache_warm);
@@ -197,6 +191,9 @@ async fn handler_proof_record_get(
         enforce,
     )
     .await?;
+    // Proof records are immutable protocol-verification artifacts, not
+    // dataspace-owned ledger rows. They are intentionally public across the
+    // configured route set; entity and transaction reads use caller visibility.
     let routes = torii_all_dataspace_routes(app.as_ref());
     let (rec, diagnostics, routed_by, fanout_reservation) =
         match resolve_torii_proof_record_for_routes(&app, routes, id).await {
@@ -1430,7 +1427,7 @@ fn pipeline_status_terminal_or_state_entry(
     }
     Ok(None)
 }
-fn pipeline_status_local_entry_checked(
+pub(crate) fn pipeline_status_local_entry_checked(
     app: &SharedAppState,
     hash: &HashOf<SignedTransaction>,
 ) -> Result<Option<(PipelineStatusEntry, &'static str)>, Error> {
@@ -1843,14 +1840,7 @@ async fn handler_pipeline_transaction_status(
                 Err(response) => return Ok(response),
             }
         }
-        Ok(execute_torii_fanout_singleton_read(
-            &app,
-            ToriiReadEndpointV1::PipelineTransactionStatusGet,
-            Vec::new(),
-            query_string,
-            Vec::new(),
-        )
-        .await)
+        Ok(execute_torii_public_pipeline_status_fanout(&app, query_string).await)
     }
     #[cfg(not(feature = "app_api"))]
     {

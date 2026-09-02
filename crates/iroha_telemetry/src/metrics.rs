@@ -18,7 +18,6 @@ use iroha_data_model::{
     block::consensus_v2::PERMISSIONED_TAG,
     da::types::DaRentQuote,
     nexus::MAX_ACTIVE_EXECUTION_LANES,
-    offline::OfflineStatus,
     prelude::Quantity,
     soranet::privacy_metrics::{
         SoranetPrivacyBucketMetricsV1, SoranetPrivacyModeV1, SoranetPrivacySuppressionReasonV1,
@@ -1220,7 +1219,6 @@ mod serde_tests {
                 halo2: Halo2Status::default(),
             },
             stack: StackStatus::default(),
-            offline: None,
             sumeragi: Some(SumeragiConsensusStatus::default()),
             governance: GovernanceStatus::default(),
             teu_lane_commit: Vec::new(),
@@ -2485,12 +2483,6 @@ pub struct Status {
     pub crypto: CryptoStatus,
     /// Stack sizing/configuration snapshot.
     pub stack: StackStatus,
-    /// Universal offline-wallet protocol capability advertised by this build.
-    ///
-    /// This is never a node-health, startup, asset-enrollment, or dataspace readiness gate.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub offline: Option<OfflineStatus>,
     /// Summary of the consensus snapshot (leader, QCs, queue state).
     #[norito(skip_serializing_if = "Option::is_none")]
     pub sumeragi: Option<SumeragiConsensusStatus>,
@@ -3219,7 +3211,6 @@ impl From<&Metrics> for Status {
                     .clone(),
             },
             stack: stack_settings_snapshot().into(),
-            offline: None,
             sumeragi: Some(build_sumeragi_status(value)),
             governance: build_governance_status(value),
             teu_lane_commit: collect_teu_lane_commit(value),

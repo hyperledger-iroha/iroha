@@ -114,7 +114,7 @@ fn nonzero_view_proposal_intent_replays_through_production_services() {
     let durable = body_store
         .store(payload.manifest().clone(), canonical_wire)
         .expect("persist exact nonzero-view body");
-    let validation_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    let validation_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
         Hash::new(b"restart parent state"),
         Hash::new(b"restart post state"),
         Hash::new(b"restart ordinary writes"),

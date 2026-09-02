@@ -274,7 +274,7 @@ impl norito::json::JsonSerialize for TriggerCompletedSnapshot<'_> {
 }
 impl Default for Sandbox {
     fn default() -> Self {
-        let world = {
+        let mut world = {
             let domain = Domain::new(DOMAIN.clone()).build(&GENESIS_ACCOUNT.id);
             let asset_def = {
                 let __asset_definition_id = ASSET.clone();
@@ -297,6 +297,15 @@ impl Default for Sandbox {
                 .map(|(name, num)| Asset::new(asset(name), *num));
             World::with_assets([domain], accounts, [asset_def], assets, [])
         };
+        world.account_permissions.insert(
+            GENESIS_ACCOUNT.id.clone(),
+            std::collections::BTreeSet::from([
+                iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
+                    authority: GENESIS_ACCOUNT.id.clone(),
+                }
+                .into(),
+            ]),
+        );
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let state = State::new_with_chain_for_testing(world, kura, query_handle, CHAIN_ID.clone());
@@ -333,9 +342,10 @@ impl Sandbox {
         metadata.insert(key_height, Json::new(height));
         metadata.insert(key_time, Json::new(registered_ms));
         if data_scope {
-            for (key, value) in
-                crate::smartcontracts::isi::triggers::data_trigger_scope_metadata_for_testing(true)
-                    .iter()
+            for (key, value) in crate::smartcontracts::isi::triggers::global_data_trigger_scope_metadata_for_testing(
+                &GENESIS_ACCOUNT.id,
+            )
+            .iter()
             {
                 metadata.insert(key.clone(), value.clone());
             }

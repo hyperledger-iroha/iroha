@@ -65,7 +65,10 @@ const MAX_VALID_TIMEOUT_VOTE_WIRE_BYTES: usize = 4 * 1024;
 const MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES: usize = MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES;
 const MAX_LANE_COMPLETION_MESSAGE_WIRE_BYTES: usize = MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES;
 const _: () = assert!(TIMEOUT_VOTE_RESERVE_BYTES >= MAX_VALID_TIMEOUT_VOTE_WIRE_BYTES);
-const _: () = assert!(iroha_data_model::block::consensus_v2::MAX_CONSENSUS_SIGNATURE_BYTES == 256);
+// A maximal Offline Cash V1 CommitQC carries the ordinary BLS aggregate plus
+// the exact 2f + 1 paired-Pasta seal bundle for the bounded 128-validator roster.
+const _: () =
+    assert!(iroha_data_model::block::consensus_v2::MAX_CONSENSUS_SIGNATURE_BYTES == 16 * 1024);
 type SumeragiThreadWork = Box<dyn FnOnce() + Send + 'static>;
 type SumeragiThreadCompletion = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 type SumeragiThreadSpawner =
@@ -3625,8 +3628,8 @@ fn fair_v2_ingress_required_commit_certificate_response_bytes(roster_len: usize)
 /// compact lengths. `F(x)` is one compact length prefix plus `x` payload
 /// bytes. A `Vec<Hash>` is its eight-byte sequence count plus 33 bytes per
 /// element: one compact element-length byte and the 32-byte hash. The numeric
-/// constants are the exact maxima for the remaining bounded structural fields
-/// (including a 256-byte consensus signature) at each nesting layer. Overflow
+/// constants are the exact maxima for the remaining bounded structural fields;
+/// the current consensus-signature ceiling is charged explicitly below at each nesting layer. Overflow
 /// maps to `usize::MAX`, making height activation fail closed before ingress
 /// opens. `raw_key_bytes` excludes the compact public-key algorithm tag.
 fn fair_v2_ingress_required_transport_completion_bytes_for_key(
@@ -7046,6 +7049,11 @@ pub struct SumeragiStartArgs {
     /// serialized into configuration or World state.
     pub global_beacon_partial_signer:
         Option<Arc<dyn crate::beacon::GlobalThresholdBeaconPartialSignerV1>>,
+    /// Runtime-only separately provisioned Pasta authority for Offline Cash
+    /// V1 mint-finality Commit votes. Absence leaves ordinary consensus live
+    /// but makes every top-up-bearing vote fail closed.
+    pub offline_cash_mint_finality_authority:
+        Option<Arc<crate::zk::offline_cash_v1_recursion::OfflineCashMintFinalityLocalAuthorityV1>>,
     /// Exact startup replay boundary authenticated before Kura replay and
     /// moved into active-height recovery without a historical rescan.
     pub startup_replay_plan: V2StartupReplayPlan,
@@ -7128,6 +7136,7 @@ impl SumeragiStartArgs {
             provider_ingest_finalized_archive,
             reputation_finalized_archive,
             global_beacon_partial_signer,
+            offline_cash_mint_finality_authority,
             startup_replay_plan,
             startup_replay_inventory_guard,
             network,
@@ -7229,6 +7238,7 @@ impl SumeragiStartArgs {
             provider_ingest_finalized_archive,
             reputation_finalized_archive,
             global_beacon_partial_signer,
+            offline_cash_mint_finality_authority,
             startup_replay_plan,
             startup_replay_inventory_guard,
             network,
@@ -7449,6 +7459,8 @@ struct SumeragiWorker {
         Option<Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>>,
     global_beacon_partial_signer:
         Option<Arc<dyn crate::beacon::GlobalThresholdBeaconPartialSignerV1>>,
+    offline_cash_mint_finality_authority:
+        Option<Arc<crate::zk::offline_cash_v1_recursion::OfflineCashMintFinalityLocalAuthorityV1>>,
     startup_replay_plan: V2StartupReplayPlan,
     startup_replay_inventory_guard: V2StartupReplayInventoryGuard,
     network: IrohaNetwork,
@@ -8535,7 +8547,7 @@ mod authoritative_runtime_gate_tests {
     }
     #[test]
     fn fair_v2_ingress_recommended_context_fits_default_disjoint_byte_partitions() {
-        let layout = wire::SumeragiV2GenesisContextParameters::recommended().da_layout;
+        let layout = wire::recommended_data_availability_layout();
         assert_eq!(
             usize::try_from(layout.max_chunk_count).expect("recommended count fits usize"),
             iroha_config::parameters::defaults::sumeragi::RECOMMENDED_DA_MAX_CHUNK_COUNT,

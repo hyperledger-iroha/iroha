@@ -1,60 +1,47 @@
-//! Wire-contract guards for the first-release offline operation resource.
+//! Wire-contract guards for the sole Offline Cash V1 operation resource.
+
 use iroha_torii_shared::offline_api::{
-    OfflineOperationIdentity, OfflineOperationKind, OfflineOperationReference,
-    OfflineOperationState,
+    OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashOperationKindV1, OfflineCashOperationStateV1,
+    OfflineCashOperationStatusV1,
 };
-const KAGEMUSHA_COMMANDS_SOURCE: &str = include_str!("../src/offline_commands.rs");
+
+const COMMANDS_SOURCE: &str = include_str!("../src/offline_commands.rs");
 const TORII_SOURCE: &str = include_str!("../src/lib.rs");
-fn operation_reference() -> OfflineOperationReference {
-    OfflineOperationReference {
-        identity: OfflineOperationIdentity {
-            operation_id: "11".repeat(32),
-            request_authority_digest: "33".repeat(32),
-            canonical_request_digest: "55".repeat(32),
-            kind: OfflineOperationKind::TopUp,
-            issued_at_ms: 1_725_000_000_123,
-            expires_at_ms: 1_725_000_300_123,
-        },
-        state: OfflineOperationState::Pending,
-        transaction_hash: format!("{}23", "22".repeat(31)),
-        status_uri: format!("/v1/offline/operations/{}", "11".repeat(32)),
+
+fn pending_status() -> OfflineCashOperationStatusV1 {
+    OfflineCashOperationStatusV1 {
+        version: OFFLINE_CASH_CHAIN_VERSION_V1,
+        operation_id: [0x11; 32],
+        kind: OfflineCashOperationKindV1::TopUp,
+        state: OfflineCashOperationStateV1::Pending,
+        result: None,
+        rejection: None,
     }
 }
-fn assert_operation_reference(decoded: &OfflineOperationReference) {
-    assert_eq!(decoded.identity.operation_id, "11".repeat(32));
-    assert_eq!(decoded.identity.request_authority_digest, "33".repeat(32));
-    assert_eq!(decoded.identity.canonical_request_digest, "55".repeat(32));
-    assert_eq!(decoded.identity.kind, OfflineOperationKind::TopUp);
-    assert_eq!(decoded.state, OfflineOperationState::Pending);
-    assert_eq!(decoded.transaction_hash, format!("{}23", "22".repeat(31)));
-    assert_eq!(
-        decoded.status_uri,
-        format!("/v1/offline/operations/{}", "11".repeat(32))
-    );
-    assert_eq!(decoded.identity.issued_at_ms, 1_725_000_000_123);
-    assert_eq!(decoded.identity.expires_at_ms, 1_725_000_300_123);
-}
+
 #[test]
-fn operation_reference_has_direct_json_and_norito_representations() {
-    let reference = operation_reference();
-    let json = norito::json::to_vec(&reference).expect("encode operation reference as JSON");
-    let json_text = std::str::from_utf8(&json).expect("JSON is UTF-8");
-    assert!(!json_text.contains("base64"));
-    let decoded_json: OfflineOperationReference =
-        norito::json::from_slice(&json).expect("decode operation reference JSON");
-    assert_operation_reference(&decoded_json);
-    let archive = norito::to_bytes(&reference).expect("encode operation reference as Norito");
-    let decoded_norito: OfflineOperationReference =
-        norito::decode_from_bytes(&archive).expect("decode operation reference Norito");
-    assert_operation_reference(&decoded_norito);
+fn pending_status_has_direct_json_and_norito_representations() {
+    let status = pending_status();
+    status.validate().expect("valid pending status");
+    let json = norito::json::to_vec(&status).expect("encode operation status as JSON");
+    let decoded_json: OfflineCashOperationStatusV1 =
+        norito::json::from_slice(&json).expect("decode operation status JSON");
+    assert_eq!(decoded_json, status);
+    let archive = norito::encode_canonical(&status).expect("encode operation status as Norito");
+    let decoded_norito =
+        iroha_torii_shared::offline_api::decode_unverified_offline_cash_operation_status_v1(
+            &archive,
+        )
+        .expect("decode bounded operation status");
+    assert_eq!(decoded_norito.operation_id(), status.operation_id);
+    assert_eq!(decoded_norito.state(), OfflineCashOperationStateV1::Pending);
 }
+
 #[test]
-fn operation_status_is_a_pollable_final_route() {
+fn operation_status_is_the_only_pollable_v1_resource() {
     assert!(TORII_SOURCE.contains("&route_catalog::offline::OPERATION"));
-    assert!(TORII_SOURCE.contains("catalog_get(handler_offline_operation_status)"));
-    assert!(KAGEMUSHA_COMMANDS_SOURCE.contains("handle_operation_status"));
-    assert!(KAGEMUSHA_COMMANDS_SOURCE.contains("OfflineOperationStatus::Pending"));
-    assert!(KAGEMUSHA_COMMANDS_SOURCE.contains("OfflineOperationStatus::Applied"));
-    assert!(KAGEMUSHA_COMMANDS_SOURCE.contains("OfflineOperationStatus::Rejected"));
-    assert!(KAGEMUSHA_COMMANDS_SOURCE.contains("header::CACHE_CONTROL"));
+    assert!(TORII_SOURCE.contains("handler_offline_operation_status"));
+    assert!(COMMANDS_SOURCE.contains("handle_operation_status"));
+    assert!(COMMANDS_SOURCE.contains("OfflineCashOperationStatusV1"));
+    assert!(COMMANDS_SOURCE.contains("header::CACHE_CONTROL"));
 }

@@ -981,6 +981,27 @@ pub(crate) struct RecoveredV2Height {
     successor_activation: Option<RecoveredSuccessorActivationAuthority>,
     staged_genesis_nexus_amx_context: Option<StagedGenesisNexusAmxContext>,
 }
+/// Authenticated startup disposition selected before consensus ingress opens.
+///
+/// A terminal complete tip deliberately carries no active-height lifecycle
+/// storage or successor activation authority: height `u64::MAX` has no H+1.
+pub(crate) enum RecoveredV2Startup {
+    /// One executable height and all of its sealed runtime inputs.
+    Active(RecoveredV2Height),
+    /// A fully finalized terminal tip which must remain consensus-inert.
+    Terminal(RecoveredTerminalCompleteTipV1),
+}
+/// Exact complete-tip authority for the terminal wire height.
+///
+/// The verified context and complete durable predecessor identity are retained
+/// together with the Kura instance which authenticated them. No lifecycle
+/// storage target is projected because a terminal tip has no successor.
+#[must_use = "terminal complete-tip authority must enter the inert runner"]
+pub(crate) struct RecoveredTerminalCompleteTipV1 {
+    verified_context: VerifiedHeightContext,
+    predecessor: DurableV2PredecessorIdentity,
+    kura_identity: KuraInstanceIdentity,
+}
 /// Move-only permit proving recovery selected one exact Kura/context/policy tuple.
 ///
 /// Only this module can construct the permit. The lifecycle adapter may consume
@@ -1148,6 +1169,95 @@ impl DurableV2PredecessorIdentity {
             )),
         }
     }
+}
+
+const fn complete_tip_is_terminal(height: wire::Height) -> bool {
+    height.checked_add(1).is_none()
+}
+
+const fn state_is_immediate_predecessor(
+    state_height: wire::Height,
+    persisted_height: wire::Height,
+) -> bool {
+    match state_height.checked_add(1) {
+        Some(successor_height) => successor_height == persisted_height,
+        None => false,
+    }
+}
+
+fn authenticate_complete_tip_evidence(
+    expected_context: &wire::HeightContext,
+    expected_pops: &[Vec<u8>],
+    artifact: &wire::finality::V2FinalityArtifact,
+    receipt: &KuraV2CommitReceipt,
+) -> Result<DurableV2PredecessorIdentity, V2RecoveryError> {
+    artifact
+        .verify()
+        .map_err(|error| V2RecoveryError::TerminalCompleteTipAuthentication(error.to_string()))?;
+    if &artifact.height_context != expected_context
+        || artifact.validator_set_pops.as_slice() != expected_pops
+    {
+        return Err(V2RecoveryError::TerminalCompleteTipAuthentication(
+            "finality artifact differs from the verified terminal context".to_owned(),
+        ));
+    }
+    DurableV2PredecessorIdentity::authenticate(artifact, receipt)
+}
+
+fn authenticate_kura_predecessor(
+    kura: &Kura,
+    predecessor: DurableV2PredecessorIdentity,
+) -> Result<(), V2RecoveryError> {
+    let durable_index = NonZeroUsize::new(usize::try_from(predecessor.height)?)
+        .ok_or(V2RecoveryError::HeightOverflow)?;
+    let actual_block_hash = kura.get_durable_block_hash(durable_index);
+    if actual_block_hash != Some(predecessor.block_hash) {
+        return Err(V2RecoveryError::FinalizedKuraPredecessorMismatch {
+            expected_height: predecessor.height,
+            expected_block_hash: predecessor.block_hash,
+            actual_block_hash,
+        });
+    }
+    Ok(())
+}
+
+/// Authenticate a finalized terminal tip without deriving an impossible H+1.
+pub(crate) fn authenticate_terminal_complete_tip(
+    state: &State,
+    kura: &Kura,
+    expected_context: &wire::HeightContext,
+    expected_pops: &[Vec<u8>],
+    artifact: &wire::finality::V2FinalityArtifact,
+    receipt: &KuraV2CommitReceipt,
+) -> Result<DurableV2PredecessorIdentity, V2RecoveryError> {
+    if expected_context.height != u64::MAX || artifact.height != u64::MAX {
+        return Err(V2RecoveryError::TerminalCompleteTipAuthentication(
+            "terminal complete-tip authority requires height u64::MAX".to_owned(),
+        ));
+    }
+    if !state
+        .kura()
+        .instance_identity()
+        .same_instance(&kura.instance_identity())
+    {
+        return Err(V2RecoveryError::TerminalCompleteTipAuthentication(
+            "terminal complete-tip authority changed its live Kura instance".to_owned(),
+        ));
+    }
+    let predecessor =
+        authenticate_complete_tip_evidence(expected_context, expected_pops, artifact, receipt)?;
+    authenticate_kura_predecessor(kura, predecessor)?;
+    let state_height = u64::try_from(state.committed_height())?;
+    let state_block_hash = state.committed_block_hash_at_height(state_height);
+    if state_height != predecessor.height || state_block_hash != Some(predecessor.block_hash) {
+        return Err(V2RecoveryError::FinalizedStatePredecessorMismatch {
+            expected_height: predecessor.height,
+            actual_height: state_height,
+            expected_block_hash: predecessor.block_hash,
+            actual_block_hash: state_block_hash,
+        });
+    }
+    Ok(predecessor)
 }
 /// One-shot authority to publish a successor derived from a complete durable tip.
 #[derive(Debug)]
@@ -1630,6 +1740,10 @@ impl RecoveredCompleteTipActivationAuthority {
             artifact.height_context.clone(),
             artifact.validator_set_pops.clone(),
         )?;
+        let successor_height = artifact
+            .height
+            .checked_add(1)
+            .ok_or(V2RecoveryError::HeightOverflow)?;
         let lifecycle_storage = CanonicalCompleteTipLifecycleStorageV1 {
             predecessor: CanonicalLifecycleHeightStorageV1 {
                 context_id: artifact.context_id(),
@@ -1638,7 +1752,7 @@ impl RecoveredCompleteTipActivationAuthority {
             },
             successor: CanonicalLifecycleHeightStorageV1 {
                 context_id: successor_context_id,
-                height: artifact.height.saturating_add(1),
+                height: successor_height,
                 root: PathBuf::from("test-only-unbound-complete-tip-successor-root"),
             },
             body_store_root: PathBuf::from("test-only-unbound-complete-tip-body-root"),
@@ -1670,6 +1784,9 @@ impl RecoveredCompleteTipActivationAuthority {
         )?;
         let predecessor_context_id = artifact.context_id();
         let predecessor_height = artifact.height;
+        let successor_height = predecessor_height
+            .checked_add(1)
+            .ok_or(V2RecoveryError::HeightOverflow)?;
         Self::authenticate_exact(
             artifact,
             receipt,
@@ -1685,7 +1802,7 @@ impl RecoveredCompleteTipActivationAuthority {
                 },
                 successor: CanonicalLifecycleHeightStorageV1 {
                     context_id: successor_context_id,
-                    height: predecessor_height.saturating_add(1),
+                    height: successor_height,
                     root: predecessor_root.join("test-only-successor"),
                 },
                 body_store_root: predecessor_root.join("test-only-body-root"),
@@ -1705,12 +1822,16 @@ impl RecoveredCompleteTipActivationAuthority {
         activation: DurableSuccessorActivationAuthority,
         kura: &Kura,
     ) -> Result<Self, V2RecoveryError> {
+        let successor_height = artifact
+            .height
+            .checked_add(1)
+            .ok_or(V2RecoveryError::HeightOverflow)?;
         let lifecycle_storage = CanonicalCompleteTipLifecycleStorageV1::from_kura(
             kura,
             artifact.context_id(),
             artifact.height,
             successor_context_id,
-            artifact.height.saturating_add(1),
+            successor_height,
         );
         let mut authenticated = Self::authenticate_exact(
             artifact,
@@ -1955,21 +2076,48 @@ impl RecoveredV2Height {
         )
     }
 }
-/// Select and verify the only active v2 height after a fresh start or crash.
+impl RecoveredTerminalCompleteTipV1 {
+    /// Borrow the exact verified terminal context.
+    pub(in crate::sumeragi) const fn verified_context(&self) -> &VerifiedHeightContext {
+        &self.verified_context
+    }
+
+    /// Return the complete durable predecessor identity authenticated at startup.
+    pub(in crate::sumeragi) const fn predecessor(&self) -> DurableV2PredecessorIdentity {
+        self.predecessor
+    }
+
+    /// Confirm that the retained terminal authority belongs to this live Kura.
+    pub(in crate::sumeragi) fn matches_kura(&self, kura: &Kura) -> bool {
+        self.kura_identity.matches(kura)
+    }
+}
+/// Recover one non-terminal active height for ordinary-height unit fixtures.
 ///
-/// The caller must invoke this before opening consensus ingress. A context is
-/// never inferred from mutable local configuration: height one comes from
-/// signed genesis, and every successor is checked against the durable parent
-/// artifact and current finalized state.
+/// Production startup consumes [`RecoveredV2Startup`] directly. This helper
+/// keeps ordinary-height tests compact and treats a terminal fixture as a test
+/// construction error rather than misclassifying valid chain termination as
+/// height overflow.
 #[cfg(test)]
-pub(crate) fn recover_active_height(
+pub(crate) fn recover_non_terminal_active_height_for_test(
     kura: &Kura,
     state: &State,
     fresh_genesis: Option<GenesisV2Bootstrap>,
     genesis_public_key: PublicKey,
 ) -> Result<RecoveredV2Height, V2RecoveryError> {
     let replay_plan = plan_v2_startup_replay(kura)?;
-    recover_active_height_with_plan(kura, state, fresh_genesis, genesis_public_key, replay_plan)
+    match recover_active_height_with_plan(
+        kura,
+        state,
+        fresh_genesis,
+        genesis_public_key,
+        replay_plan,
+    )? {
+        RecoveredV2Startup::Active(recovered) => Ok(recovered),
+        RecoveredV2Startup::Terminal(_) => {
+            panic!("non-terminal recovery fixture unexpectedly reached the terminal wire height")
+        }
+    }
 }
 struct StartupFinalityInventoryCleanup<'a>(&'a Kura);
 impl Drop for StartupFinalityInventoryCleanup<'_> {
@@ -1985,7 +2133,7 @@ pub(crate) fn recover_active_height_with_plan(
     fresh_genesis: Option<GenesisV2Bootstrap>,
     genesis_public_key: PublicKey,
     replay_plan: V2StartupReplayPlan,
-) -> Result<RecoveredV2Height, V2RecoveryError> {
+) -> Result<RecoveredV2Startup, V2RecoveryError> {
     // Recovery consumes the O(H) startup-only inventory. Clear it on every
     // success and error exit; the fixed-size runtime LRU remains available.
     let _inventory_cleanup = StartupFinalityInventoryCleanup(kura);
@@ -2026,7 +2174,7 @@ pub(crate) fn recover_active_height_with_plan(
                 &genesis_account,
                 lifecycle_storage_mint,
             )?;
-        return Ok(RecoveredV2Height {
+        return Ok(RecoveredV2Startup::Active(RecoveredV2Height {
             verified_context,
             context_store,
             signature_policy,
@@ -2035,7 +2183,7 @@ pub(crate) fn recover_active_height_with_plan(
             pending_kura_apply: None,
             successor_activation: None,
             staged_genesis_nexus_amx_context: Some(staged_genesis_nexus_amx_context),
-        });
+        }));
     }
     if state_height > durable_height || durable_height.saturating_sub(state_height) > 1 {
         return Err(V2RecoveryError::StateKuraMismatch {
@@ -2089,7 +2237,7 @@ pub(crate) fn recover_active_height_with_plan(
                 &genesis_account,
                 lifecycle_storage_mint,
             )?;
-        return Ok(RecoveredV2Height {
+        return Ok(RecoveredV2Startup::Active(RecoveredV2Height {
             verified_context,
             context_store,
             signature_policy,
@@ -2098,7 +2246,7 @@ pub(crate) fn recover_active_height_with_plan(
             pending_kura_apply: None,
             successor_activation,
             staged_genesis_nexus_amx_context: None,
-        });
+        }));
     }
     if replay_plan.pending_tip_height().is_none() {
         if state_height != durable_height {
@@ -2125,6 +2273,23 @@ pub(crate) fn recover_active_height_with_plan(
         } else {
             BlockSignaturePolicy::RotatingLeader
         };
+        if complete_tip_is_terminal(durable_height) {
+            let predecessor = authenticate_terminal_complete_tip(
+                state,
+                kura,
+                verified_predecessor.context(),
+                verified_predecessor.proofs_of_possession(),
+                &parent_artifact,
+                &parent_receipt,
+            )?;
+            return Ok(RecoveredV2Startup::Terminal(
+                RecoveredTerminalCompleteTipV1 {
+                    verified_context: verified_predecessor,
+                    predecessor,
+                    kura_identity: kura.instance_identity(),
+                },
+            ));
+        }
         let successor =
             build_verified_successor(state, &context_store, &parent_artifact, &parent_receipt)?;
         let (verified_context, activation) = successor.into_parts();
@@ -2152,7 +2317,7 @@ pub(crate) fn recover_active_height_with_plan(
                 &genesis_account,
                 lifecycle_storage_mint,
             )?;
-        return Ok(RecoveredV2Height {
+        return Ok(RecoveredV2Startup::Active(RecoveredV2Height {
             verified_context,
             context_store,
             signature_policy,
@@ -2163,7 +2328,7 @@ pub(crate) fn recover_active_height_with_plan(
                 complete_tip_activation,
             )),
             staged_genesis_nexus_amx_context: None,
-        });
+        }));
     }
     if replay_plan.pending_tip_height() != Some(durable_height) {
         return Err(V2RecoveryError::MissingRecoverableTip(durable_height));
@@ -2220,7 +2385,7 @@ pub(crate) fn recover_active_height_with_plan(
             &genesis_account,
             lifecycle_storage_mint,
         )?;
-    Ok(RecoveredV2Height {
+    Ok(RecoveredV2Startup::Active(RecoveredV2Height {
         verified_context,
         context_store,
         signature_policy,
@@ -2229,7 +2394,7 @@ pub(crate) fn recover_active_height_with_plan(
         pending_kura_apply,
         successor_activation: None,
         staged_genesis_nexus_amx_context: None,
-    })
+    }))
 }
 fn verify_state_kura_prefix(
     kura: &Kura,
@@ -2424,7 +2589,7 @@ fn verify_persisted_height(
     // the record is the only pre-state snapshot; the matching WAL, body marker,
     // and canonical Kura block complete the crash-recovery binding.
     let state_height = u64::try_from(state.committed_height())?;
-    if state_height.saturating_add(1) == height {
+    if state_is_immediate_predecessor(state_height, height) {
         let state_view = state.view();
         let expected = build_successor_height_context_from_state(
             &parent_artifact,
@@ -2647,6 +2812,9 @@ pub(crate) enum V2RecoveryError {
     /// A Kura finality receipt does not bind every field of the supplied parent artifact.
     #[error("Sumeragi v2 durable predecessor authority mismatch at height {0}")]
     DurablePredecessorAuthorityMismatch(wire::Height),
+    /// Terminal complete-tip evidence does not authenticate one exact finalized MAX height.
+    #[error("Sumeragi v2 terminal complete-tip authentication failed: {0}")]
+    TerminalCompleteTipAuthentication(String),
     /// Complete-tip recovery's activation token does not name the verified successor context.
     #[error(
         "Sumeragi v2 recovered complete-tip successor authority mismatch after predecessor height {predecessor_height}"
@@ -2667,6 +2835,18 @@ pub(crate) enum V2RecoveryError {
         /// Block authenticated by the durable finality artifact and receipt.
         expected_block_hash: HashOf<BlockHeader>,
         /// Current committed WSV tip, if its hash journal is populated.
+        actual_block_hash: Option<HashOf<BlockHeader>>,
+    },
+    /// Canonical Kura does not end at the exact block authenticated by durable finality.
+    #[error(
+        "Sumeragi v2 finalized Kura does not match durable predecessor: expected height {expected_height} block {expected_block_hash}, actual block {actual_block_hash:?}"
+    )]
+    FinalizedKuraPredecessorMismatch {
+        /// Height authenticated by the durable finality artifact and receipt.
+        expected_height: wire::Height,
+        /// Block authenticated by the durable finality artifact and receipt.
+        expected_block_hash: HashOf<BlockHeader>,
+        /// Canonical Kura block at that height, if present.
         actual_block_hash: Option<HashOf<BlockHeader>>,
     },
     /// Persisted successor differs from the unique projection of finalized state.

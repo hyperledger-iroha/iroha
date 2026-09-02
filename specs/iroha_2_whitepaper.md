@@ -123,10 +123,10 @@ The `iroha_data_model` crate defines all ledger objects, instructions, queries, 
 - **Consensus artifacts**—such as commit certificates and witness lists—reside in the data model and
   round-trip through golden tests to guarantee compatibility between `iroha_core`, Torii, and SDKs.
 - **Confidential registries and events** capture asset policies, verifier keys,
-  commitments, nullifiers, and authenticated transfer events. Public settlement
-  is recorded by the specialized Kagemusha top-up/redemption anchor, drawdown,
-  escrow, and receipt state; V1 exposes no generic shield/transfer/unshield
-  event family.
+  commitments, nullifiers, and authenticated transfer events. Offline Cash V1
+  settles top-ups and redemptions against one consensus-accounted reserve per
+  asset while peer transfers update only hardware-bound recursive aggregate
+  state; V1 exposes no generic shield/transfer/unshield event family.
 
 ## 4. Transaction lifecycle
 

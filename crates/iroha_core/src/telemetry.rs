@@ -9560,13 +9560,14 @@ mod tests {
             block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH])),
             payload_hash: Hash::new(b"telemetry-v2-payload"),
         };
-        let execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
-            Hash::new(b"telemetry-parent-state"),
-            Hash::new(b"telemetry-post-state"),
-            Hash::new(b"telemetry-ordinary-writes"),
-            1,
-            Hash::new(b"telemetry-executed-wire"),
-        );
+        let execution_commitment =
+            wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                Hash::new(b"telemetry-parent-state"),
+                Hash::new(b"telemetry-post-state"),
+                Hash::new(b"telemetry-ordinary-writes"),
+                1,
+                Hash::new(b"telemetry-executed-wire"),
+            );
         let vote = wire::Vote {
             round,
             proposal_round: round,

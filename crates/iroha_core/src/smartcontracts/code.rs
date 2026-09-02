@@ -141,6 +141,12 @@ pub(crate) fn validate_contract_subject_bindings(
     let bindings = world.contract_subject_bindings.view();
     for (address, binding) in bindings.iter() {
         binding.validate_for(address)?;
+        if world.accounts.view().get(&binding.subject).is_none() {
+            return Err(format!(
+                "contract subject account `{}` for `{address}` does not exist",
+                binding.subject
+            ));
+        }
         let indexed_active_code_hash = world.contract_instances.view().get(address).copied();
         if binding.lifecycle.active_code_hash != indexed_active_code_hash {
             return Err(format!(
@@ -204,6 +210,12 @@ pub fn fetch_contract_lifecycle(
         return Ok(None);
     };
     binding.validate_for(address)?;
+    if world.accounts().get(&binding.subject).is_none() {
+        return Err(format!(
+            "contract subject account `{}` for `{address}` does not exist",
+            binding.subject
+        ));
+    }
     let indexed_active_code_hash = world.contract_instances().get(address).copied();
     if binding.lifecycle.active_code_hash != indexed_active_code_hash {
         return Err(format!(
@@ -212,12 +224,19 @@ pub fn fetch_contract_lifecycle(
     }
     Ok(Some((binding.subject.clone(), binding.lifecycle.clone())))
 }
+/// Return the retained contract whose irreversible subject is `subject`.
+pub(crate) fn historical_contract_for_subject(
+    world: &impl WorldReadOnly,
+    subject: &AccountId,
+) -> Option<ContractAddress> {
+    world.contract_subject_addresses().get(subject).cloned()
+}
 /// Return whether an account is an irreversible historical contract subject.
 pub(crate) fn is_historical_contract_subject(
     world: &impl WorldReadOnly,
     subject: &AccountId,
 ) -> bool {
-    world.contract_subject_addresses().get(subject).is_some()
+    historical_contract_for_subject(world, subject).is_some()
 }
 /// Return a contract that retains `account` as its current or pending lifecycle owner.
 pub(crate) fn contract_owned_or_pending_for_account(
@@ -838,6 +857,7 @@ pub fn borrow_bound_contract_subject_from_world<'a>(
     if binding.lifecycle.active_code_hash.as_ref() != Some(code_hash) {
         return None;
     }
+    world.accounts().get(&binding.subject)?;
     Some(&binding.subject)
 }
 /// Resolve a bound instance without cloning its manifest or bytecode.
@@ -890,14 +910,8 @@ pub fn fetch_bound_contract_record(
     contract_address: &ContractAddress,
 ) -> Option<BoundContractRecord> {
     let code_hash = fetch_instance_binding(state, contract_address)?;
-    let subject_binding = state
-        .world()
-        .contract_subject_bindings()
-        .get(contract_address)?;
-    subject_binding.validate_for(contract_address).ok()?;
-    if subject_binding.lifecycle.active_code_hash != Some(code_hash) {
-        return None;
-    }
+    let contract_subject =
+        borrow_bound_contract_subject_from_world(state.world(), contract_address)?;
     let manifest = fetch_manifest(state, &code_hash)?;
     let code_bytes = fetch_code_bytes(state, &code_hash)?;
     let contract_alias_binding = state
@@ -915,7 +929,7 @@ pub fn fetch_bound_contract_record(
     }
     Some(BoundContractRecord {
         contract_address: contract_address.clone(),
-        contract_subject: subject_binding.subject.clone(),
+        contract_subject: contract_subject.clone(),
         contract_alias,
         contract_alias_binding,
         code_hash,
@@ -1846,6 +1860,84 @@ seiyaku LifecycleAba {
         validate_contract_subject_bindings(&world).expect("validated subject ledger");
     }
     #[test]
+    fn subject_binding_initialization_rejects_missing_subject_account() {
+        let authority = AccountId::new(checked_keypair().public_key().clone());
+        let address = ContractAddress::derive(
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
+            &authority,
+            72,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let missing_subject = address.subject_id();
+        let mut world = World::default();
+        world.accounts.insert(
+            authority.clone(),
+            iroha_data_model::account::AccountValue::new(
+                iroha_data_model::account::AccountDetails::default(),
+            ),
+        );
+        world.contract_subject_bindings.insert(
+            address.clone(),
+            ContractSubjectBinding::new_direct(&address, authority),
+        );
+
+        let error = initialize_contract_subject_bindings(&mut world)
+            .expect_err("a retained binding cannot reference an absent subject account");
+        assert!(
+            error.contains(&format!(
+                "contract subject account `{missing_subject}` for `{address}` does not exist"
+            )),
+            "unexpected missing-subject validation error: {error}"
+        );
+    }
+    #[test]
+    fn active_contract_lookups_reject_missing_subject_account() {
+        let (state, authority, keypair) = test_state();
+        let mut block = state.block(default_header(1));
+        let mut transaction = block.transaction();
+        let (code, manifest) = minimal_contract_artifact(1);
+        let code_hash = register_code_bytes(&authority, code, &mut transaction)
+            .expect("register contract bytecode");
+        register_manifest(&authority, manifest.signed(&keypair), &mut transaction)
+            .expect("register contract manifest");
+        let address = ContractAddress::derive(
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
+            &authority,
+            73,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        transaction
+            .world
+            .bind_inactive_contract_subject_for_testing(address.clone(), authority.clone());
+        activate_instance(&authority, address.clone(), 1, code_hash, &mut transaction)
+            .expect("activate contract");
+        assert!(fetch_bound_contract_record(&transaction, &address).is_some());
+
+        let subject = address.subject_id();
+        assert!(transaction.world.accounts.remove(subject.clone()).is_some());
+        let lifecycle_error = fetch_contract_lifecycle(&transaction.world, &address)
+            .expect_err("lifecycle lookup must reject a missing subject account");
+        assert!(lifecycle_error.contains(&subject.to_string()));
+        assert!(
+            fetch_bound_contract_subject(&transaction, &address).is_none(),
+            "active subject lookup must fail closed"
+        );
+        assert!(
+            fetch_bound_contract_identity(&transaction, &address).is_none(),
+            "active identity lookup must fail closed"
+        );
+        assert!(
+            fetch_bound_contract_record(&transaction, &address).is_none(),
+            "active record lookup must fail closed"
+        );
+    }
+    #[test]
     fn emergency_hold_blocks_only_its_exact_interval_and_remains_auditable_after_expiry() {
         let authority = AccountId::new(checked_keypair().public_key().clone());
         let address = ContractAddress::derive(
@@ -1904,6 +1996,14 @@ seiyaku LifecycleAba {
         )
         .expect("contract address");
         let mut world = World::default();
+        for account in [authority.clone(), address.subject_id()] {
+            world.accounts.insert(
+                account,
+                iroha_data_model::account::AccountValue::new(
+                    iroha_data_model::account::AccountDetails::default(),
+                ),
+            );
+        }
         world.contract_subject_bindings.insert(
             address.clone(),
             ContractSubjectBinding::new_direct(&address, authority),

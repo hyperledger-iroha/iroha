@@ -1557,12 +1557,7 @@ fn merge_application_receipt_makes_autonomous_auxiliary_persistence_terminal() {
     let lane_entry = lane_config.primary();
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("initialize Kura");
-    let entrypoint = offline_top_up_entrypoint_for_index_with_outer_authority_and_admission_intent(
-        [0xD2; 32],
-        [0xD3; 32],
-        &SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
-        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
-    );
+    let entrypoint = indexed_log_entrypoint([0xD2; 32], [0xD3; 32]);
 
     let proposal = merge_entry_with_indexed_entrypoint(entrypoint.clone())
         .execution_batch
@@ -1761,6 +1756,10 @@ fn autonomous_lifecycle_live_carrier_hint_promotion_survives_restart() {
         }
     }
     roster.sort_by(|left, right| left.validator.cmp(&right.validator));
+    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+            network_id, epoch, &roster,
+        );
     let context = HeightContext {
         network_id,
         protocol_version: PROTOCOL_VERSION,
@@ -1782,6 +1781,8 @@ fn autonomous_lifecycle_live_carrier_hint_promotion_survives_restart() {
         ),
         quorum: DualQuorum::from_roster(&roster).expect("carrier-hint promotion quorum"),
         roster,
+        offline_cash_mint_finality_epoch_id,
+        offline_cash_mint_finality_epoch_roster,
         nexus_amx_context_hash: Hash::new(b"kura-carrier-hint-promotion-nexus"),
         execution_policy_hash: Hash::new(b"kura-carrier-hint-promotion-policy"),
         da_layout: DataAvailabilityLayout {

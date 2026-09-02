@@ -145,6 +145,23 @@ impl MatchedRouteMetadata {
             projections: descriptor.projections(),
         }
     }
+    /// Build bounded framework metadata for a method rejected by one selected
+    /// route descriptor.
+    ///
+    /// Host-selected routes are resolved outside Axum's path matcher, but a
+    /// rejected method must retain the same public surface and cache policy as
+    /// the selected route without pretending that its operation ran.
+    pub(crate) fn method_not_allowed_for(descriptor: RouteDescriptor) -> Self {
+        Self::framework(
+            "http.method_not_allowed",
+            descriptor.path(),
+            Some(descriptor.surface()),
+            Some(descriptor.listener()),
+            Some(descriptor.effect()),
+            Some(descriptor.admission()),
+            descriptor.requires_private_no_store(),
+        )
+    }
     fn framework(
         stable_route_id: &'static str,
         path_template: impl Into<Arc<str>>,
@@ -577,6 +594,33 @@ impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
         CatalogMethodRouter {
             method: self.method,
             authentication: SealedAuthentication(AuthenticationPolicy::CanonicalAccountSignature),
+            inner: self.inner.layer(layer),
+        }
+    }
+    /// Install optional canonical account authentication over the exact bounded body.
+    ///
+    /// Anonymous requests retain public-dataspace visibility. If any canonical
+    /// authentication material is supplied, the middleware verifies it before
+    /// body decoding and exposes the resulting visibility through extensions.
+    #[must_use]
+    pub(crate) fn optionally_authenticated_canonical_account_body(
+        self,
+        app_state: SharedAppState,
+        max_body_bytes: usize,
+    ) -> CatalogMethodRouter<SharedAppState, SealedAuthentication> {
+        let state = crate::OptionalCanonicalAccountBodyAuthState {
+            app: app_state,
+            max_body_bytes,
+        };
+        let layer = axum::middleware::from_fn_with_state(
+            state,
+            crate::enforce_optional_canonical_account_body_authentication,
+        );
+        CatalogMethodRouter {
+            method: self.method,
+            authentication: SealedAuthentication(
+                AuthenticationPolicy::OptionalCanonicalAccountSignature,
+            ),
             inner: self.inner.layer(layer),
         }
     }
@@ -1030,6 +1074,16 @@ mod tests {
         AdmissionPolicy::AuthenticatedAccount,
     )
     .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
+    const OPTIONAL_DATASPACE_AUTHENTICATED: RouteDescriptor = RouteDescriptor::new(
+        "test.optional_dataspace_authenticated",
+        HttpMethod::Post,
+        "/v1/tests/optional-dataspace-authenticated",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ExpensiveCompute,
+        AdmissionPolicy::DataspaceVisible,
+    )
+    .with_authentication(AuthenticationPolicy::OptionalCanonicalAccountSignature);
     const SIGNED_BODY_AUTHENTICATED: RouteDescriptor = RouteDescriptor::new(
         "test.signed_body_authenticated",
         HttpMethod::Post,
@@ -1064,10 +1118,6 @@ mod tests {
         builder.route(
             &offline::READINESS,
             catalog_get(|| async { StatusCode::NO_CONTENT }),
-        );
-        builder.route(
-            &offline::RECIPIENT_LINEAGE,
-            catalog_post(|| async { StatusCode::NO_CONTENT }),
         );
         builder.route(
             &offline::TOP_UP,
@@ -1495,6 +1545,25 @@ mod tests {
         let _ = builder
             .finish()
             .expect("proof-body authentication must satisfy the exact catalog policy");
+    }
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn optional_account_body_authentication_mounts_the_exact_catalog_witness() {
+        let app = crate::mk_app_state_for_tests();
+        let mut builder = RouterBuilder::new(
+            app.clone(),
+            RouteCatalog::new(&[OPTIONAL_DATASPACE_AUTHENTICATED]),
+            EnabledFeatures::none(),
+        )
+        .expect("valid optional dataspace catalog");
+        builder.route(
+            &OPTIONAL_DATASPACE_AUTHENTICATED,
+            catalog_post(|| async { StatusCode::NO_CONTENT })
+                .optionally_authenticated_canonical_account_body(app, 1024),
+        );
+        let _ = builder
+            .finish()
+            .expect("optional account-body authentication must satisfy the exact catalog policy");
     }
     #[test]
     fn wrong_handler_authentication_witness_is_rejected() {

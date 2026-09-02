@@ -444,31 +444,6 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256="${KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256:-}"
-REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION="${MOBILE_SDK_REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION:-0}"
-if [[ "$REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION" != "0" \
-    && "$REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION" != "1" ]]; then
-  echo "[-] MOBILE_SDK_REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION must be 0 or 1" >&2
-  exit 1
-fi
-if [[ -n "$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256" ]]; then
-  if [[ ! "$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256" =~ ^[0-9a-f]{64}$ \
-      || "$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256" == "$(printf '0%.0s' {1..64})" ]]; then
-    echo "[-] KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256 must be non-zero lowercase SHA-256" >&2
-    exit 1
-  fi
-  if [[ "$PRIVACY_PRODUCTION_ENABLED" != "1" ]]; then
-    echo "[-] a Kagemusha production authorization may bind only a production-enabled build" >&2
-    exit 1
-  fi
-fi
-if [[ "$REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION" == "1" \
-    && "$PRIVACY_PRODUCTION_ENABLED" == "1" \
-    && -z "$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256" ]]; then
-  echo "[-] official production build requires a verified Kagemusha authorization digest" >&2
-  exit 1
-fi
-
 CI_HANDOFF_DIR="$OUT_DIR/NoritoBridge.ci-handoff"
 CI_APPLE_SLICE_ARCHIVE="$OUT_DIR/NoritoBridge.apple-slice.tar"
 if [[ -n "$CI_APPLE_SLICE" ]]; then
@@ -504,11 +479,11 @@ if [[ -n "$CI_APPLE_SLICE" ]]; then
   esac
   if [[ "${CI:-}" != "true" \
       || "${GITHUB_ACTIONS:-}" != "true" \
-      || "${GITHUB_WORKFLOW:-}" != "Kagemusha first-release contract" \
+      || "${GITHUB_WORKFLOW:-}" != "Mobile SDK Artifacts" \
       || "${GITHUB_JOB:-}" != "$expected_slice_job" \
       || "${GITHUB_WORKSPACE:-}" != "$ROOT_DIR" \
       || "${MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT:-}" != "1" ]]; then
-    echo "[-] --ci-apple-slice is restricted to its authenticated Kagemusha producer" >&2
+    echo "[-] --ci-apple-slice is restricted to its authenticated mobile SDK producer" >&2
     exit 1
   fi
   case "${GITHUB_EVENT_NAME:-}" in
@@ -539,11 +514,11 @@ if [[ "$CI_HANDOFF_ONLY" == "1" ]]; then
   fi
   if [[ "${CI:-}" != "true" \
       || "${GITHUB_ACTIONS:-}" != "true" \
-      || "${GITHUB_WORKFLOW:-}" != "Kagemusha first-release contract" \
+      || "${GITHUB_WORKFLOW:-}" != "Mobile SDK Artifacts" \
       || "${GITHUB_JOB:-}" != "swift" \
       || "${GITHUB_WORKSPACE:-}" != "$ROOT_DIR" \
       || "${MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT:-}" != "1" ]]; then
-    echo "[-] --ci-handoff-only is restricted to the authenticated Kagemusha Swift producer" >&2
+    echo "[-] --ci-handoff-only is restricted to the authenticated Swift SDK producer" >&2
     exit 1
   fi
   case "${GITHUB_EVENT_NAME:-}" in
@@ -871,13 +846,9 @@ fi
 SOURCE_FINGERPRINT="$SOURCE_FINGERPRINT_START"
 PRIVACY_PRODUCTION_JSON=false
 CARGO_FEATURES_JSON='[]'
-KAGEMUSHA_PRODUCTION_AUTHORIZATION_JSON=null
 if [[ "$PRIVACY_PRODUCTION_ENABLED" == "1" ]]; then
   PRIVACY_PRODUCTION_JSON=true
   CARGO_FEATURES_JSON='["privacy-production-enabled"]'
-fi
-if [[ -n "$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256" ]]; then
-  KAGEMUSHA_PRODUCTION_AUTHORIZATION_JSON="\"$KAGEMUSHA_PRODUCTION_AUTHORIZATION_SHA256\""
 fi
 
 assert_bridge_source_seal() {
@@ -1135,7 +1106,6 @@ if [[ -n "$CI_APPLE_SLICE" || -n "$CI_ASSEMBLE_APPLE_SLICES" ]]; then
   "bridge_header_sha256": "$HEADER_HASH",
   "privacy_production_enabled": $PRIVACY_PRODUCTION_JSON,
   "cargo_features": $CARGO_FEATURES_JSON,
-  "kagemusha_production_authorization_sha256": $KAGEMUSHA_PRODUCTION_AUTHORIZATION_JSON,
   "build_environment": {
     "schema": "iroha.mobile-native-build-environment.v1",
     "hermetic_runner_schema": "iroha.mobile-hermetic-command.v1",
@@ -1527,9 +1497,6 @@ if protocol_abis != header_abis:
 print(header_abis[0])
 PY
 )" || exit 1
-# The mobile registry binds the Kagemusha ABI-21/V4 artifact family carried by
-# the independently versioned native bridge ABI above.
-KAGEMUSHA_ARTIFACT_ABI_VERSION=21
 
 cat > "$PUBLISH_MANIFEST" <<EOF
 {
@@ -1537,7 +1504,6 @@ cat > "$PUBLISH_MANIFEST" <<EOF
   "native_bridge_abi_version": $BRIDGE_ABI_VERSION,
   "privacy_production_enabled": $PRIVACY_PRODUCTION_JSON,
   "cargo_features": $CARGO_FEATURES_JSON,
-  "kagemusha_production_authorization_sha256": $KAGEMUSHA_PRODUCTION_AUTHORIZATION_JSON,
   "build_environment": {
     "schema": "iroha.mobile-native-build-environment.v1",
     "hermetic_runner_schema": "iroha.mobile-hermetic-command.v1",
@@ -1679,212 +1645,43 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "connect_norito_validation_fee_hijiri_quote_request_v1",
     "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
     "connect_norito_private_settlement_committee_proof_response_verify_v1",
-    "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
     "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
     "connect_norito_private_settlement_audit_approval_response_verify_v1",
     "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
-    "connect_norito_kagemusha_recursive_spend_capabilities_v4",
-    "connect_norito_kagemusha_native_contract_revision",
-    "connect_norito_kagemusha_offline_operation_status_validate_v2",
-    "connect_norito_kagemusha_offline_operation_status_json_validate_v2",
-    "connect_norito_kagemusha_topup_finality_verify_v4",
-    "connect_norito_kagemusha_topup_shield_build_unsigned_v4",
-    "connect_norito_kagemusha_recursive_spend_artifact_begin_v4",
-    "connect_norito_kagemusha_recursive_spend_artifact_write_v4",
-    "connect_norito_kagemusha_recursive_spend_artifact_finalize_v4",
-    "connect_norito_kagemusha_recursive_spend_artifact_cancel_v4",
-    "connect_norito_kagemusha_recursive_spend_artifact_set_install_v4",
-    "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v4",
-    "connect_norito_kagemusha_recursive_spend_installed_manifest_sha256_v4",
-    "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v4",
-    "connect_norito_kagemusha_output_membership_frontier_build_v4",
-    "connect_norito_kagemusha_output_membership_paths_derive_v4",
-    "connect_norito_kagemusha_recursive_spend_branch_validate_v4",
-    "connect_norito_kagemusha_recursive_spend_topup_provenance_build_v4",
-    "connect_norito_kagemusha_recursive_spend_topup_provenance_validate_v4",
-    "connect_norito_kagemusha_recursive_spend_init_v4",
-    "connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v4",
-    "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v4",
-    "connect_norito_kagemusha_recursive_spend_topup_v4",
-    "connect_norito_kagemusha_recursive_spend_append_v4",
-    "connect_norito_kagemusha_recursive_spend_verify_v4",
-    "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v4",
-    "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v4",
-    "connect_norito_kagemusha_recursive_spend_redeem_v4",
-    "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v5",
-    "connect_norito_kagemusha_secret_free_buffer",
-    "connect_norito_kagemusha_receiver_key_reference_v2",
-    "connect_norito_kagemusha_recipient_output_derive_v2",
-    "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
-    "connect_norito_kagemusha_recipient_payment_request_create_v2",
-    "connect_norito_kagemusha_recipient_payment_request_verify_v2",
-    "connect_norito_kagemusha_recipient_lineage_query_create_v2",
-    "connect_norito_kagemusha_recipient_registration_lineage_verify_v2",
-    "connect_norito_kagemusha_recipient_receive_offer_create_v2",
-    "connect_norito_kagemusha_recipient_receive_offer_project_v2",
-    "connect_norito_kagemusha_recipient_receive_offer_verify_v2",
-    "connect_norito_kagemusha_request_authorization_signing_bytes_v3",
-    "connect_norito_kagemusha_request_authorization_finalize_hardware_v3",
-    "connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v3",
-    "connect_norito_kagemusha_receiver_acknowledgement_payload_v2",
-    "connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2",
-    "connect_norito_kagemusha_receiver_acknowledgement_create_v2",
-    "connect_norito_kagemusha_receiver_acknowledgement_verify_v2",
-    "connect_norito_kagemusha_recursive_spend_peer_split_change_prepare_v4",
-    "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v4",
-    "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v4",
-    "connect_norito_kagemusha_recursive_spend_bundle_summary_v4"
+    "connect_norito_offline_cash_v1_payment_request_validate",
+    "connect_norito_offline_cash_v1_acceptance_intent_authorization_validate",
+    "connect_norito_offline_cash_v1_acceptance_ticket_validate",
+    "connect_norito_offline_cash_v1_no_commit_closure_validate",
+    "connect_norito_offline_cash_v1_payment_validate",
+    "connect_norito_offline_cash_v1_acknowledgement_validate",
+    "connect_norito_offline_cash_v1_complete_exchange_validate",
+    "connect_norito_offline_cash_v1_mint_authorization_validate",
+    "connect_norito_offline_cash_v1_mint_credit_validate",
+    "connect_norito_offline_cash_v1_mint_credit_against_authorization_validate",
+    "connect_norito_offline_cash_v1_redemption_voucher_validate",
+    "connect_norito_offline_cash_v1_payment_request_text_validate",
+    "connect_norito_offline_cash_v1_acceptance_intent_authorization_text_validate",
+    "connect_norito_offline_cash_v1_acceptance_ticket_text_validate",
+    "connect_norito_offline_cash_v1_no_commit_closure_text_validate",
+    "connect_norito_offline_cash_v1_payment_text_validate",
+    "connect_norito_offline_cash_v1_acknowledgement_text_validate",
+    "connect_norito_offline_cash_v1_complete_exchange_text_validate",
+    "connect_norito_offline_cash_v1_mint_authorization_text_validate",
+    "connect_norito_offline_cash_v1_mint_credit_text_validate",
+    "connect_norito_offline_cash_v1_mint_credit_against_authorization_text_validate",
+    "connect_norito_offline_cash_v1_redemption_voucher_text_validate",
+    "connect_norito_offline_cash_device_capabilities_v1",
+    "connect_norito_offline_cash_device_execute_v1"
   ],
   "forbidden_symbols": [
     "connect_norito_get_chain_discriminant",
     "connect_norito_set_chain_discriminant",
-    "connect_norito_kagemusha_recipient_registration_lineage_verify_v1",
-    "connect_norito_kagemusha_request_authorization_create_v2",
+    "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
     "iroha_privacy_capabilities_v1",
     "iroha_privacy_validate_capabilities_v1",
     "iroha_privacy_proof_request_v1",
     "iroha_privacy_build_proof_v1",
-    "iroha_privacy_verify_proof_v1",
-    "Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2",
-    "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeCreateAuthorizationV2"
-  ],
-  "kagemusha_mobile_artifact_roles": [
-    {
-      "role": "native_bridge",
-      "purpose": "typed Norito codecs and privacy proof execution",
-      "circuit_id": null,
-      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
-      "artifact_type": "xcframework",
-      "delivery": "bridge_embedded",
-      "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
-    },
-    {
-      "role": "transfer_proving_key",
-      "purpose": "prove exact confidential top-up and offline split transitions",
-      "circuit_id": "confidential-transfer-v2",
-      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
-      "artifact_type": "halo2_ipa_proving_key",
-      "delivery": "bridge_embedded",
-      "production_ready": $PRIVACY_PRODUCTION_JSON,
-      "required_by": ["topup", "peer_send"]
-    },
-    {
-      "role": "transfer_verifier_record",
-      "purpose": "verify top-up and offline split evidence at an active height",
-      "circuit_id": "confidential-transfer-v2",
-      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
-      "artifact_type": "norito_verifying_key_record",
-      "delivery": "torii_readiness_snapshot",
-      "required_by": ["topup", "peer_send", "peer_receive"]
-    },
-    {
-      "role": "unshield_proving_key",
-      "purpose": "prove full or partial offline-to-online redemption",
-      "circuit_id": "confidential-unshield-v3",
-      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
-      "artifact_type": "halo2_ipa_proving_key",
-      "delivery": "bridge_embedded",
-      "production_ready": $PRIVACY_PRODUCTION_JSON,
-      "required_by": ["redemption"]
-    },
-    {
-      "role": "unshield_verifier_record",
-      "purpose": "verify proof-bound public credit and optional offline change",
-      "circuit_id": "confidential-unshield-v3",
-      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
-      "artifact_type": "norito_verifying_key_record",
-      "delivery": "torii_readiness_snapshot",
-      "required_by": ["redemption"]
-    },
-    {
-      "role": "step_eq_params_ipa",
-      "purpose": "step_eq_params_ipa",
-      "file_name": "step-eq.params-ipa.krv4",
-      "circuit_id": "kagemusha-recursive-spend-step-eq-compact-layout-v5",
-      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
-      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
-      "delivery": "content_addressed_external",
-      "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
-    },
-    {
-      "role": "step_eq_proving_key",
-      "purpose": "step_eq_proving_key",
-      "file_name": "step-eq.proving-key.krv4",
-      "circuit_id": "kagemusha-recursive-spend-step-eq-compact-layout-v5",
-      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
-      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
-      "delivery": "content_addressed_external",
-      "required_by": ["topup", "peer_send", "redemption"]
-    },
-    {
-      "role": "step_eq_verifying_key",
-      "purpose": "step_eq_verifying_key",
-      "file_name": "step-eq.verifying-key.krv4",
-      "circuit_id": "kagemusha-recursive-spend-step-eq-compact-layout-v5",
-      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
-      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
-      "delivery": "content_addressed_external",
-      "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
-    },
-    {
-      "role": "step_eq_bootstrap_witness",
-      "purpose": "step_eq_bootstrap_witness",
-      "file_name": "step-eq.bootstrap-witness.krv4",
-      "circuit_id": "kagemusha-recursive-spend-step-eq-compact-layout-v5",
-      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
-      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
-      "delivery": "content_addressed_external",
-      "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
-    },
-    {
-      "role": "step_ep_params_ipa",
-      "purpose": "step_ep_params_ipa",
-      "file_name": "step-ep.params-ipa.krv4",
-      "circuit_id": "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
-      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
-      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
-      "delivery": "content_addressed_external",
-      "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
-    },
-    {
-      "role": "step_ep_proving_key",
-      "purpose": "step_ep_proving_key",
-      "file_name": "step-ep.proving-key.krv4",
-      "circuit_id": "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
-      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
-      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
-      "delivery": "content_addressed_external",
-      "required_by": ["topup", "peer_send", "redemption"]
-    },
-    {
-      "role": "step_ep_verifying_key",
-      "purpose": "step_ep_verifying_key",
-      "file_name": "step-ep.verifying-key.krv4",
-      "circuit_id": "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
-      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
-      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
-      "delivery": "content_addressed_external",
-      "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
-    },
-    {
-      "role": "step_ep_bootstrap_witness",
-      "purpose": "step_ep_bootstrap_witness",
-      "file_name": "step-ep.bootstrap-witness.krv4",
-      "circuit_id": "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
-      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
-      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
-      "delivery": "content_addressed_external",
-      "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
-    },
-    {
-      "role": "topup_finality_roster",
-      "purpose": "topup_finality_roster",
-      "circuit_id": "kagemusha-topup-finality-qc-merkle-v2",
-      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
-      "artifact_type": "iroha_data_model::offline::model::KagemushaTopUpFinalityRosterArtifactV2",
-      "delivery": "content_addressed_external",
-      "required_by": ["topup"]
-    }
+    "iroha_privacy_verify_proof_v1"
   ],
   "hashes": {
     "ios-arm64": "$IOS_HASH",

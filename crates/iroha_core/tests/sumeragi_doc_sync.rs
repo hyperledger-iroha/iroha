@@ -77,9 +77,9 @@ fn governance_api_doc_covers_joint_consensus_flow() {
     let lane_doc = std::fs::read_to_string(repo_root.join("specs/nexus_public_lanes.md"))
         .expect("read nexus_public_lanes.md");
     assert!(
-        lane_doc.contains(
-            "slashable_through_height + evidence_horizon_blocks + slashing_delay_blocks"
-        ) && lane_doc.contains("Consensus effects run before ordinary transactions"),
+        lane_doc
+            .contains("slashable_through_height + evidence_horizon_blocks + slashing_delay_blocks")
+            && lane_doc.contains("Consensus effects run before ordinary transactions"),
         "public-lane docs must pin the inclusive effects-first unbond liability formula"
     );
 }

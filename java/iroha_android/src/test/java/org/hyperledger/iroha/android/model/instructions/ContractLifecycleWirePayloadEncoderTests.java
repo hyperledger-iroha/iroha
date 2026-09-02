@@ -34,10 +34,15 @@ public final class ContractLifecycleWirePayloadEncoderTests {
   private static void allLifecycleInstructionsMatchRust()
       throws IOException, InterruptedException {
     final List<String> fixture = FixtureGeneratorRunner.run("contract-lifecycle");
-    assert fixture.size() == 7 : "unexpected Rust lifecycle fixture row count";
-    final String contractAddress = fixture.get(5);
-    final String accountId = fixture.get(6);
+    assert fixture.size() == 10 : "unexpected Rust lifecycle fixture row count";
+    final String contractAddress = fixture.get(7);
+    final String accountId = fixture.get(8);
+    final String codeHashHex = fixture.get(9);
     final InstructionBox[] instructions = {
+      ContractLifecycleWirePayloadEncoder.encodeDeactivateContractInstance(
+          contractAddress, BigInteger.valueOf(5), "planned rotation"),
+      ContractLifecycleWirePayloadEncoder.encodeActivateContractInstance(
+          contractAddress, BigInteger.valueOf(6), codeHashHex),
       ContractLifecycleWirePayloadEncoder.encodeSetContractParliamentDelegation(
           contractAddress, BigInteger.valueOf(7), true),
       ContractLifecycleWirePayloadEncoder.encodeOfferContractOwnershipToAccount(
@@ -56,6 +61,14 @@ public final class ContractLifecycleWirePayloadEncoderTests {
   }
 
   private static void allLifecycleInstructionsPreserveExpectedRevisionAndOwnerVariant() {
+    final String codeHashHex =
+        "abababababababababababababababababababababababababababababababab";
+    final InstructionBox deactivate =
+        ContractLifecycleWirePayloadEncoder.encodeDeactivateContractInstance(
+            CONTRACT_ADDRESS, BigInteger.valueOf(5), "planned rotation");
+    final InstructionBox activate =
+        ContractLifecycleWirePayloadEncoder.encodeActivateContractInstance(
+            CONTRACT_ADDRESS, BigInteger.valueOf(6), codeHashHex);
     final InstructionBox set =
         ContractLifecycleWirePayloadEncoder.encodeSetContractParliamentDelegation(
             CONTRACT_ADDRESS, BigInteger.valueOf(7), true);
@@ -72,6 +85,10 @@ public final class ContractLifecycleWirePayloadEncoderTests {
         ContractLifecycleWirePayloadEncoder.encodeCancelContractOwnershipOffer(
             CONTRACT_ADDRESS, BigInteger.valueOf(11));
 
+    assert ContractLifecycleWirePayloadEncoder.DEACTIVATE_INSTANCE_WIRE_NAME.equals(
+        deactivate.name()) : "deactivation wire id mismatch";
+    assert ContractLifecycleWirePayloadEncoder.ACTIVATE_INSTANCE_WIRE_NAME.equals(
+        activate.name()) : "activation wire id mismatch";
     assert ContractLifecycleWirePayloadEncoder.SET_PARLIAMENT_DELEGATION_WIRE_NAME.equals(
         set.name()) : "delegation wire id mismatch";
     assert ContractLifecycleWirePayloadEncoder.OFFER_OWNERSHIP_WIRE_NAME.equals(
@@ -82,8 +99,24 @@ public final class ContractLifecycleWirePayloadEncoderTests {
         accept.name()) : "ownership-acceptance wire id mismatch";
     assert ContractLifecycleWirePayloadEncoder.CANCEL_OWNERSHIP_OFFER_WIRE_NAME.equals(
         cancel.name()) : "ownership-offer cancellation wire id mismatch";
-    assert ContractLifecycleWirePayloadEncoder.WIRE_NAMES.size() == 4
+    assert ContractLifecycleWirePayloadEncoder.WIRE_NAMES.size() == 6
         : "lifecycle wire catalog must remain closed";
+
+    final ContractLifecycleWirePayloadEncoder.DecodedDeactivation decodedDeactivation =
+        ContractLifecycleWirePayloadEncoder.decodeDeactivateContractInstance(
+            wirePayload(deactivate));
+    assert BigInteger.valueOf(5).equals(decodedDeactivation.expectedRevision())
+        : "deactivation expected revision mismatch";
+    assert "planned rotation".equals(decodedDeactivation.reason())
+        : "deactivation reason mismatch";
+
+    final ContractLifecycleWirePayloadEncoder.DecodedActivation decodedActivation =
+        ContractLifecycleWirePayloadEncoder.decodeActivateContractInstance(
+            wirePayload(activate));
+    assert BigInteger.valueOf(6).equals(decodedActivation.expectedRevision())
+        : "activation expected revision mismatch";
+    assert codeHashHex.equals(decodedActivation.codeHashHex())
+        : "activation code hash mismatch";
 
     final ContractLifecycleWirePayloadEncoder.DecodedDelegation decodedSet =
         ContractLifecycleWirePayloadEncoder.decodeSetContractParliamentDelegation(
@@ -123,6 +156,32 @@ public final class ContractLifecycleWirePayloadEncoderTests {
   private static void lifecycleRevisionGuardsRejectZeroOverflowAndSchemaSubstitution() {
     expectIllegalArgument(
         () ->
+            ContractLifecycleWirePayloadEncoder.encodeDeactivateContractInstance(
+                CONTRACT_ADDRESS, BigInteger.ZERO, null));
+    expectIllegalArgument(
+        () ->
+            ContractLifecycleWirePayloadEncoder.encodeActivateContractInstance(
+                CONTRACT_ADDRESS, BigInteger.ONE, "00"));
+    expectIllegalArgument(
+        () ->
+            ContractLifecycleWirePayloadEncoder.encodeActivateContractInstance(
+                CONTRACT_ADDRESS,
+                BigInteger.ONE,
+                "abababababababababababababababababababababababababababababababaa"));
+    final byte[] invalidDecodedHash =
+        wirePayload(
+            ContractLifecycleWirePayloadEncoder.encodeActivateContractInstance(
+                CONTRACT_ADDRESS,
+                BigInteger.ONE,
+                "abababababababababababababababababababababababababababababababab"));
+    invalidDecodedHash[invalidDecodedHash.length - 1] =
+        (byte) (invalidDecodedHash[invalidDecodedHash.length - 1] & 0xfe);
+    expectIllegalArgument(
+        () ->
+            ContractLifecycleWirePayloadEncoder.decodeActivateContractInstance(
+                invalidDecodedHash));
+    expectIllegalArgument(
+        () ->
             ContractLifecycleWirePayloadEncoder.encodeAcceptContractOwnership(
                 CONTRACT_ADDRESS, BigInteger.ZERO));
     expectIllegalArgument(
@@ -142,6 +201,10 @@ public final class ContractLifecycleWirePayloadEncoderTests {
     expectIllegalArgument(
         () ->
             ContractLifecycleWirePayloadEncoder.decodeCancelContractOwnershipOffer(
+                wirePayload(accept)));
+    expectIllegalArgument(
+        () ->
+            ContractLifecycleWirePayloadEncoder.decodeDeactivateContractInstance(
                 wirePayload(accept)));
   }
 

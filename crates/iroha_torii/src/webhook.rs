@@ -4,6 +4,9 @@
 //! Feature-gated behind `app_api`:
 //! - Stores webhooks in-memory, persisted to `./storage/torii/webhooks.json` by default.
 //!   Base directory is configured via `torii.data_dir`; tests may use `data_dir::OverrideGuard`.
+//!   The versioned registry durably retains its ID high-water mark and an opaque
+//!   generation for each registration so deleted IDs and queued deliveries are
+//!   never inherited by a later registration.
 //! - Exposes CRUD endpoints to create/list/delete webhooks.
 //! - Background worker scans a disk-backed queue and delivers payloads with
 //!   optional HMAC-SHA256 signature and exponential backoff retries. Queue
@@ -43,7 +46,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     num::{NonZeroU32, NonZeroUsize},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock, Weak},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 #[cfg(any(test, target_vendor = "apple", target_os = "linux"))]
@@ -55,6 +58,8 @@ use url::{Host, Url};
 const WEBHOOK_REGISTRY_MAX_ENTRIES: usize = 1_024;
 const WEBHOOK_REGISTRY_MAX_BYTES: usize = 8 * 1024 * 1024;
 const WEBHOOK_ENTRY_MAX_BYTES: usize = 64 * 1024;
+const WEBHOOK_REGISTRY_FORMAT_VERSION: u64 = 1;
+const WEBHOOK_GENERATION_BYTES: usize = 16;
 const WEBHOOK_HTTP_RESPONSE_HEADER_MAX_BYTES: u64 = 64 * 1024;
 const WEBHOOK_DNS_MAX_ADDRESSES: usize = 64;
 // The configured capacity may be lowered, but never raises this process-level
@@ -104,10 +109,15 @@ pub struct WebhookEntry {
     pub secret: Option<String>,
     pub filter: Option<crate::filter::FilterExpr>,
 }
+#[derive(Clone)]
+struct RegisteredWebhook {
+    entry: WebhookEntry,
+    generation: [u8; WEBHOOK_GENERATION_BYTES],
+}
 #[derive(Clone, Default)]
 struct RegistryInner {
     next_id: u64,
-    items: HashMap<u64, WebhookEntry>,
+    items: HashMap<u64, RegisteredWebhook>,
 }
 fn registry() -> &'static Mutex<RegistryInner> {
     static REG: OnceLock<Mutex<RegistryInner>> = OnceLock::new();
@@ -120,6 +130,17 @@ fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 fn lock_registry() -> std::sync::MutexGuard<'static, RegistryInner> {
     lock_unpoisoned(registry())
+}
+fn webhook_delivery_attempt_lock(webhook_id: u64) -> Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<u64, Weak<tokio::sync::Mutex<()>>>>> = OnceLock::new();
+    let mut locks = lock_unpoisoned(LOCKS.get_or_init(|| Mutex::new(HashMap::new())));
+    locks.retain(|_, lock| lock.strong_count() != 0);
+    if let Some(lock) = locks.get(&webhook_id).and_then(Weak::upgrade) {
+        return lock;
+    }
+    let lock = Arc::new(tokio::sync::Mutex::new(()));
+    locks.insert(webhook_id, Arc::downgrade(&lock));
+    lock
 }
 fn data_dir() -> PathBuf {
     crate::data_dir::base_dir()
@@ -1165,6 +1186,10 @@ fn encode_pending_delivery(pd: &PendingDelivery) -> std::io::Result<String> {
         "webhook_id".into(),
         norito::json::Value::from(pd.webhook_id),
     );
+    payload.insert(
+        "webhook_generation".into(),
+        norito::json::Value::from(hex::encode(pd.webhook_generation)),
+    );
     payload.insert("url".into(), norito::json::Value::from(pd.url.clone()));
     payload.insert(
         "content_type".into(),
@@ -1397,17 +1422,45 @@ fn ensure_dirs() -> io::Result<()> {
     })?;
     Ok(())
 }
+fn webhook_generation_from_hex(value: &str) -> Option<[u8; WEBHOOK_GENERATION_BYTES]> {
+    let bytes = hex::decode(value).ok()?;
+    let generation: [u8; WEBHOOK_GENERATION_BYTES] = bytes.try_into().ok()?;
+    (hex::encode(generation) == value).then_some(generation)
+}
+fn new_webhook_generation() -> io::Result<[u8; WEBHOOK_GENERATION_BYTES]> {
+    use rand::TryRngCore as _;
+
+    let mut generation = [0_u8; WEBHOOK_GENERATION_BYTES];
+    let mut rng = rand::rngs::OsRng;
+    rng.try_fill_bytes(&mut generation).map_err(|error| {
+        io::Error::other(format!(
+            "failed to generate webhook registration generation: {error}"
+        ))
+    })?;
+    Ok(generation)
+}
 fn persist_registry(registry: &RegistryInner) -> io::Result<()> {
     ensure_dirs()?;
     let mut entries: Vec<_> = registry.items.values().collect();
-    entries.sort_by_key(|entry| entry.id);
+    entries.sort_by_key(|registered| registered.entry.id);
     let arr = entries
         .into_iter()
-        .map(webhook_entry_to_storage_json)
+        .map(registered_webhook_to_storage_json)
         .collect();
-    let body = norito::json::to_json_pretty(&norito::json::Value::Array(arr)).map_err(|error| {
-        invalid_webhook_storage(format!("failed to encode webhook registry: {error}"))
-    })?;
+    let mut document = norito::json::Map::new();
+    document.insert(
+        "version".into(),
+        norito::json::Value::from(WEBHOOK_REGISTRY_FORMAT_VERSION),
+    );
+    document.insert(
+        "next_id".into(),
+        norito::json::Value::from(registry.next_id),
+    );
+    document.insert("entries".into(), norito::json::Value::Array(arr));
+    let body =
+        norito::json::to_json_pretty(&norito::json::Value::Object(document)).map_err(|error| {
+            invalid_webhook_storage(format!("failed to encode webhook registry: {error}"))
+        })?;
     if body.len() > WEBHOOK_REGISTRY_MAX_BYTES {
         return Err(invalid_webhook_storage(format!(
             "webhook registry is {} bytes; maximum is {WEBHOOK_REGISTRY_MAX_BYTES}",
@@ -1431,12 +1484,14 @@ fn persist_registry(registry: &RegistryInner) -> io::Result<()> {
 }
 fn load_registry() -> io::Result<()> {
     let Some(directory) = open_webhook_data_directory(false)? else {
+        *lock_registry() = RegistryInner::default();
         return Ok(());
     };
     let path = directory.path.join("webhooks.json");
     let Some(file) =
         read_private_webhook_file_bounded(&directory, &path, WEBHOOK_REGISTRY_MAX_BYTES)?
     else {
+        *lock_registry() = RegistryInner::default();
         return Ok(());
     };
     let value = norito::json::from_slice::<norito::json::Value>(&file.bytes).map_err(|error| {
@@ -1445,9 +1500,39 @@ fn load_registry() -> io::Result<()> {
             path.display()
         ))
     })?;
-    let norito::json::Value::Array(arr) = value else {
+    let norito::json::Value::Object(mut document) = value else {
         return Err(invalid_webhook_storage(format!(
-            "webhook registry is not a JSON array: {}",
+            "webhook registry is not a JSON object: {}",
+            path.display()
+        )));
+    };
+    let version = document
+        .remove("version")
+        .and_then(|value| value.as_u64())
+        .ok_or_else(|| {
+            invalid_webhook_storage(format!(
+                "webhook registry has no valid format version: {}",
+                path.display()
+            ))
+        })?;
+    if version != WEBHOOK_REGISTRY_FORMAT_VERSION {
+        return Err(invalid_webhook_storage(format!(
+            "unsupported webhook registry format version {version}: {}",
+            path.display()
+        )));
+    }
+    let next_id = document
+        .remove("next_id")
+        .and_then(|value| value.as_u64())
+        .ok_or_else(|| {
+            invalid_webhook_storage(format!(
+                "webhook registry has no valid next identifier: {}",
+                path.display()
+            ))
+        })?;
+    let Some(norito::json::Value::Array(arr)) = document.remove("entries") else {
+        return Err(invalid_webhook_storage(format!(
+            "webhook registry has no valid entries array: {}",
             path.display()
         )));
     };
@@ -1459,16 +1544,27 @@ fn load_registry() -> io::Result<()> {
     }
     let policy = webhook_security_policy();
     let mut loaded = RegistryInner::default();
-    let mut max_id = 0u64;
     for v in arr {
         if let norito::json::Value::Object(m) = v {
             let Some(idv) = m.get("id").and_then(norito::json::Value::as_u64) else {
                 continue;
             };
-            // IDs are durable identities, including for entries quarantined
-            // below or ignored past the storage cap. Never recycle one merely
-            // because the rest of its persisted record is corrupt.
-            max_id = max_id.max(idv);
+            if idv > next_id {
+                return Err(invalid_webhook_storage(format!(
+                    "webhook identifier {idv} exceeds durable next identifier {next_id}"
+                )));
+            }
+            let Some(generation) = m
+                .get("generation")
+                .and_then(norito::json::Value::as_str)
+                .and_then(webhook_generation_from_hex)
+            else {
+                iroha_logger::warn!(
+                    webhook_id = idv,
+                    "skipping persisted webhook with an invalid generation"
+                );
+                continue;
+            };
             if let (Some(urlv), Some(activev)) = (
                 m.get("url")
                     .and_then(norito::json::Value::as_str)
@@ -1521,7 +1617,8 @@ fn load_registry() -> io::Result<()> {
                     secret,
                     filter,
                 };
-                if loaded.items.insert(idv, entry).is_some() {
+                let registered = RegisteredWebhook { entry, generation };
+                if loaded.items.insert(idv, registered).is_some() {
                     return Err(invalid_webhook_storage(format!(
                         "webhook registry contains duplicate identifier {idv}"
                     )));
@@ -1529,7 +1626,7 @@ fn load_registry() -> io::Result<()> {
             }
         }
     }
-    loaded.next_id = max_id;
+    loaded.next_id = next_id;
     *lock_registry() = loaded;
     Ok(())
 }
@@ -1554,21 +1651,34 @@ fn webhook_entry_to_storage_json(entry: &WebhookEntry) -> norito::json::Value {
     );
     norito::json::Value::Object(map)
 }
-fn webhook_entry_encoded_len(entry: &WebhookEntry) -> Result<usize, norito::json::Error> {
-    norito::json::to_vec(&webhook_entry_to_storage_json(entry)).map(|bytes| bytes.len())
+fn registered_webhook_to_storage_json(registered: &RegisteredWebhook) -> norito::json::Value {
+    let norito::json::Value::Object(mut map) = webhook_entry_to_storage_json(&registered.entry)
+    else {
+        unreachable!("webhook storage encoder always returns an object");
+    };
+    map.insert(
+        "generation".into(),
+        norito::json::Value::from(hex::encode(registered.generation)),
+    );
+    norito::json::Value::Object(map)
 }
-fn registry_can_retain(guard: &RegistryInner, candidate: &WebhookEntry) -> bool {
+fn registered_webhook_encoded_len(
+    registered: &RegisteredWebhook,
+) -> Result<usize, norito::json::Error> {
+    norito::json::to_vec(&registered_webhook_to_storage_json(registered)).map(|bytes| bytes.len())
+}
+fn registry_can_retain(guard: &RegistryInner, candidate: &RegisteredWebhook) -> bool {
     if guard.items.len() >= WEBHOOK_REGISTRY_MAX_ENTRIES {
         return false;
     }
-    let Ok(candidate_len) = webhook_entry_encoded_len(candidate) else {
+    let Ok(candidate_len) = registered_webhook_encoded_len(candidate) else {
         return false;
     };
     if candidate_len > WEBHOOK_ENTRY_MAX_BYTES {
         return false;
     }
     let retained = guard.items.values().try_fold(0_usize, |total, entry| {
-        webhook_entry_encoded_len(entry)
+        registered_webhook_encoded_len(entry)
             .ok()
             .and_then(|len| total.checked_add(len.saturating_add(1)))
     });
@@ -1780,7 +1890,22 @@ pub async fn handle_create_webhook(
         secret: req.secret,
         filter: req.filter,
     };
-    if !registry_can_retain(&guard, &entry) {
+    let generation = match new_webhook_generation() {
+        Ok(generation) => generation,
+        Err(error) => {
+            iroha_logger::error!(%error, "failed to create webhook registration generation");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "webhook registry persistence is unavailable",
+            )
+                .into_response();
+        }
+    };
+    let registered = RegisteredWebhook {
+        entry: entry.clone(),
+        generation,
+    };
+    if !registry_can_retain(&guard, &registered) {
         return (
             StatusCode::INSUFFICIENT_STORAGE,
             "webhook registry capacity exceeded",
@@ -1789,7 +1914,7 @@ pub async fn handle_create_webhook(
     }
     let mut candidate = guard.clone();
     candidate.next_id = id;
-    candidate.items.insert(id, entry.clone());
+    candidate.items.insert(id, registered);
     if let Err(error) = persist_registry(&candidate) {
         iroha_logger::error!(%error, "failed to commit webhook registry update");
         return (
@@ -1808,7 +1933,11 @@ pub async fn handle_create_webhook(
 /// GET /v1/webhooks – list current webhook entries.
 pub async fn handle_list_webhooks() -> impl IntoResponse {
     let guard = lock_registry();
-    let mut entries: Vec<_> = guard.items.values().cloned().collect();
+    let mut entries: Vec<_> = guard
+        .items
+        .values()
+        .map(|registered| registered.entry.clone())
+        .collect();
     entries.sort_by_key(|w| w.id);
     let mut arr = Vec::with_capacity(entries.len());
     for e in entries {
@@ -1823,6 +1952,10 @@ pub async fn handle_list_webhooks() -> impl IntoResponse {
 }
 /// DELETE /v1/webhooks/{id} – delete a webhook.
 pub async fn handle_delete_webhook(AxumPath(id): AxumPath<u64>) -> axum::response::Response {
+    // Serialize deletion with the final registration check and network attempt.
+    // Once DELETE returns, no delivery using the deleted generation can start.
+    let delivery_lock = webhook_delivery_attempt_lock(id);
+    let _delivery_guard = delivery_lock.lock().await;
     let mut guard = lock_registry();
     let mut candidate = guard.clone();
     if candidate.items.remove(&id).is_none() {
@@ -1876,6 +2009,7 @@ fn hmac_sha256_hex(secret: &[u8], body: &[u8]) -> String {
 struct PendingDelivery {
     id: String,
     webhook_id: u64,
+    webhook_generation: [u8; WEBHOOK_GENERATION_BYTES],
     url: String,
     content_type: String,
     signature: Option<String>,
@@ -1921,7 +2055,7 @@ pub fn enqueue_event_for_matching_webhooks(
         .unwrap_or_default()
         .as_millis() as u64;
     // Snapshot registry to minimize lock duration
-    let entries: Vec<(u64, WebhookEntry)> = lock_registry()
+    let entries: Vec<(u64, RegisteredWebhook)> = lock_registry()
         .items
         .iter()
         .map(|(k, v)| (*k, v.clone()))
@@ -1951,7 +2085,8 @@ pub fn enqueue_event_for_matching_webhooks(
             return;
         }
     };
-    for (id, w) in entries {
+    for (id, registered) in entries {
+        let w = registered.entry;
         if !w.active {
             continue;
         }
@@ -1985,6 +2120,7 @@ pub fn enqueue_event_for_matching_webhooks(
         let pd = PendingDelivery {
             id: delivery_id,
             webhook_id: id,
+            webhook_generation: registered.generation,
             url: w.url.clone(),
             content_type: content_type.to_string(),
             signature: w
@@ -3778,6 +3914,10 @@ fn decode_pending_delivery(bytes: &[u8]) -> Option<PendingDelivery> {
     };
     let id = map.get("id")?.as_str()?;
     let webhook_id = map.get("webhook_id")?.as_u64()?;
+    let webhook_generation = map
+        .get("webhook_generation")?
+        .as_str()
+        .and_then(webhook_generation_from_hex)?;
     let url = map.get("url")?.as_str()?;
     let content_type = map.get("content_type")?.as_str()?;
     if !delivery_metadata_is_bounded(id, url, content_type)
@@ -3811,6 +3951,7 @@ fn decode_pending_delivery(bytes: &[u8]) -> Option<PendingDelivery> {
     Some(PendingDelivery {
         id: id.to_string(),
         webhook_id,
+        webhook_generation,
         url: url.to_string(),
         content_type: content_type.to_string(),
         signature,
@@ -3818,6 +3959,14 @@ fn decode_pending_delivery(bytes: &[u8]) -> Option<PendingDelivery> {
         attempts,
         next_attempt_ms,
     })
+}
+fn pending_delivery_registration_is_current(pd: &PendingDelivery) -> bool {
+    lock_registry()
+        .items
+        .get(&pd.webhook_id)
+        .is_some_and(|registered| {
+            registered.entry.active && registered.generation == pd.webhook_generation
+        })
 }
 async fn process_queue_once() -> Duration {
     let policy = webhook_policy();
@@ -3875,6 +4024,22 @@ async fn process_queue_once() -> Duration {
                 continue;
             }
         };
+        if !pending_delivery_registration_is_current(&pd) {
+            iroha_logger::info!(
+                webhook_id = pd.webhook_id,
+                "dropping webhook payload for a deleted or replaced registration"
+            );
+            if let Err(error) =
+                remove_queue_file(Arc::clone(&directory), path.clone(), Some(file.identity)).await
+            {
+                iroha_logger::warn!(
+                    %error,
+                    ?path,
+                    "failed to remove invalidated webhook payload"
+                );
+            }
+            continue;
+        }
         // Wait until next_attempt
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -3898,7 +4063,27 @@ async fn process_queue_once() -> Duration {
             }
             continue;
         }
-        if try_deliver(&pd).await {
+        let delivery_lock = webhook_delivery_attempt_lock(pd.webhook_id);
+        let delivery_guard = delivery_lock.lock().await;
+        if !pending_delivery_registration_is_current(&pd) {
+            drop(delivery_guard);
+            iroha_logger::info!(
+                webhook_id = pd.webhook_id,
+                "dropping webhook payload for a deleted or replaced registration"
+            );
+            if let Err(error) =
+                remove_queue_file(Arc::clone(&directory), path.clone(), Some(file.identity)).await
+            {
+                iroha_logger::warn!(
+                    %error,
+                    ?path,
+                    "failed to remove invalidated webhook payload"
+                );
+            }
+            continue;
+        }
+        let delivered = try_deliver(&pd).await;
+        if delivered {
             if let Err(e) =
                 remove_queue_file(Arc::clone(&directory), path.clone(), Some(file.identity)).await
             {
@@ -3964,6 +4149,7 @@ async fn process_queue_once() -> Duration {
                 }
             }
         }
+        drop(delivery_guard);
     }
     if batch.sweep_complete {
         next_due
@@ -4027,6 +4213,32 @@ mod tests {
             filter: None,
         }
     }
+    fn test_webhook_generation(id: u64) -> [u8; WEBHOOK_GENERATION_BYTES] {
+        let mut generation = [0_u8; WEBHOOK_GENERATION_BYTES];
+        generation[WEBHOOK_GENERATION_BYTES - core::mem::size_of::<u64>()..]
+            .copy_from_slice(&id.to_be_bytes());
+        generation
+    }
+    fn registered_registry_entry(id: u64, url: String) -> RegisteredWebhook {
+        RegisteredWebhook {
+            entry: registry_entry(id, url),
+            generation: test_webhook_generation(id),
+        }
+    }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    fn persisted_registry_document(
+        next_id: u64,
+        entries: Vec<norito::json::Value>,
+    ) -> norito::json::Value {
+        let mut document = norito::json::Map::new();
+        document.insert(
+            "version".into(),
+            norito::json::Value::from(WEBHOOK_REGISTRY_FORMAT_VERSION),
+        );
+        document.insert("next_id".into(), norito::json::Value::from(next_id));
+        document.insert("entries".into(), norito::json::Value::Array(entries));
+        norito::json::Value::Object(document)
+    }
     fn proof_verified_event(backend: &str, call_hash: Option<[u8; 32]>) -> EventBox {
         use iroha_data_model::events::data::proof::{ProofEvent, ProofVerified};
 
@@ -4056,9 +4268,9 @@ mod tests {
     #[test]
     fn webhook_registry_rejects_entry_and_count_overflow() {
         let mut registry = RegistryInner::default();
-        let oversized = registry_entry(1, "x".repeat(WEBHOOK_ENTRY_MAX_BYTES));
+        let oversized = registered_registry_entry(1, "x".repeat(WEBHOOK_ENTRY_MAX_BYTES));
         assert!(!registry_can_retain(&registry, &oversized));
-        let compact = registry_entry(1, "http://example.com/hook".to_string());
+        let compact = registered_registry_entry(1, "http://example.com/hook".to_string());
         for id in 0..WEBHOOK_REGISTRY_MAX_ENTRIES {
             registry
                 .items
@@ -4075,7 +4287,7 @@ mod tests {
             registry.next_id = 0;
             registry.items.clear();
         }
-        let mut malformed = webhook_entry_to_storage_json(&registry_entry(
+        let mut malformed = registered_webhook_to_storage_json(&registered_registry_entry(
             7,
             "http://filtered.example/hook".to_owned(),
         ));
@@ -4086,19 +4298,22 @@ mod tests {
             "filter".into(),
             norito::json::Value::from("not-a-filter-expression"),
         );
-        let valid = webhook_entry_to_storage_json(&WebhookEntry {
-            id: 2,
-            url: "http://valid-filter.example/hook".to_owned(),
-            active: true,
-            secret: None,
-            filter: Some(crate::filter::FilterExpr::Eq(
-                crate::filter::FieldPath("tx_status".to_owned()),
-                norito::json::Value::from("Approved"),
-            )),
+        let valid = registered_webhook_to_storage_json(&RegisteredWebhook {
+            entry: WebhookEntry {
+                id: 2,
+                url: "http://valid-filter.example/hook".to_owned(),
+                active: true,
+                secret: None,
+                filter: Some(crate::filter::FilterExpr::Eq(
+                    crate::filter::FieldPath("tx_status".to_owned()),
+                    norito::json::Value::from("Approved"),
+                )),
+            },
+            generation: test_webhook_generation(2),
         });
         fs::create_dir_all(data_dir()).expect("create webhook data directory");
         let body =
-            norito::json::to_json_pretty(&norito::json::Value::Array(vec![malformed, valid]))
+            norito::json::to_json_pretty(&persisted_registry_document(7, vec![malformed, valid]))
                 .expect("encode persisted webhook registry");
         write_private_test_file(&registry_path(), body.as_bytes());
         load_registry().expect("load bounded webhook registry");
@@ -4115,7 +4330,7 @@ mod tests {
             registry
                 .items
                 .get(&2)
-                .is_some_and(|entry| entry.filter.is_some()),
+                .is_some_and(|registered| registered.entry.filter.is_some()),
             "the valid neighboring webhook must retain its filter"
         );
         assert_eq!(
@@ -4141,15 +4356,18 @@ mod tests {
                 norito::json::Value::from(hex::encode([0xCC; 32])),
             ),
         ]);
-        let stored = webhook_entry_to_storage_json(&WebhookEntry {
-            id: 3,
-            url: "http://boolean-filter.example/hook".to_owned(),
-            active: true,
-            secret: None,
-            filter: Some(expression.clone()),
+        let stored = registered_webhook_to_storage_json(&RegisteredWebhook {
+            entry: WebhookEntry {
+                id: 3,
+                url: "http://boolean-filter.example/hook".to_owned(),
+                active: true,
+                secret: None,
+                filter: Some(expression.clone()),
+            },
+            generation: test_webhook_generation(3),
         });
         fs::create_dir_all(data_dir()).expect("create webhook data directory");
-        let body = norito::json::to_json_pretty(&norito::json::Value::Array(vec![stored]))
+        let body = norito::json::to_json_pretty(&persisted_registry_document(3, vec![stored]))
             .expect("encode persisted webhook registry");
         write_private_test_file(&registry_path(), body.as_bytes());
 
@@ -4157,7 +4375,7 @@ mod tests {
         let loaded = lock_registry()
             .items
             .get(&3)
-            .and_then(|entry| entry.filter.clone())
+            .and_then(|registered| registered.entry.filter.clone())
             .expect("valid Boolean filter must reload");
         assert_eq!(loaded, expression);
         assert!(event_matches_filter(
@@ -4229,6 +4447,7 @@ mod tests {
         let mut pending = PendingDelivery {
             id: "body-boundary".to_string(),
             webhook_id: 1,
+            webhook_generation: test_webhook_generation(1),
             url: "http://example.test/webhook".to_string(),
             content_type: "application/octet-stream".to_string(),
             signature: None,
@@ -4240,6 +4459,11 @@ mod tests {
         let decoded =
             decode_pending_delivery(encoded.as_bytes()).expect("boundary body must decode");
         assert_eq!(decoded.body.len(), WEBHOOK_DELIVERY_MAX_BYTES);
+        assert_eq!(
+            decoded.webhook_generation,
+            test_webhook_generation(1),
+            "the durable registration generation must round-trip"
+        );
         pending.body.push(0);
         let error = encode_pending_delivery(&pending).expect_err("limit plus one must fail");
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
@@ -4253,6 +4477,7 @@ mod tests {
         let pending = PendingDelivery {
             id: "hostile-content-type".to_string(),
             webhook_id: 1,
+            webhook_generation: test_webhook_generation(1),
             url: "http://example.test/webhook".to_string(),
             content_type: "text/plain\r\nX-Evil: yes".to_string(),
             signature: None,
@@ -4780,16 +5005,8 @@ mod tests {
             let webhook_id = {
                 let mut g = registry().lock().unwrap();
                 g.next_id = 1;
-                g.items.insert(
-                    1,
-                    WebhookEntry {
-                        id: 1,
-                        url: target_url.to_string(),
-                        active: true,
-                        secret: None,
-                        filter: None,
-                    },
-                );
+                g.items
+                    .insert(1, registered_registry_entry(1, target_url.to_string()));
                 1
             };
             let queue_file = super::queue_dir().join("pending-delivery.json");
@@ -4800,6 +5017,10 @@ mod tests {
                 norito::json::Value::from(
                     u64::try_from(webhook_id).expect("webhook id should be non-negative"),
                 ),
+            );
+            payload.insert(
+                "webhook_generation".into(),
+                norito::json::Value::from(hex::encode(test_webhook_generation(1))),
             );
             payload.insert("url".into(), norito::json::Value::from(target_url));
             payload.insert(
@@ -4864,6 +5085,9 @@ mod tests {
                     admission.persist(&PendingDelivery {
                         id: format!("writer-{writer}"),
                         webhook_id: u64::try_from(writer).expect("writer id fits u64"),
+                        webhook_generation: test_webhook_generation(
+                            u64::try_from(writer).expect("writer id fits u64"),
+                        ),
                         url: "http://example.test/webhook".to_string(),
                         content_type: "text/plain".to_string(),
                         signature: None,
@@ -4907,19 +5131,17 @@ mod tests {
             g.items.clear();
             g.items.insert(
                 1,
-                WebhookEntry {
-                    id: 1,
-                    url: "http://local.test/webhook".to_string(),
-                    active: true,
-                    secret: None,
-                    filter: None,
-                },
+                registered_registry_entry(1, "http://local.test/webhook".to_string()),
             );
         }
         let pending_path = super::queue_dir().join("pending-drop.json");
         let mut payload = norito::json::Map::new();
         payload.insert("id".into(), norito::json::Value::from("pending-drop"));
         payload.insert("webhook_id".into(), norito::json::Value::from(1u64));
+        payload.insert(
+            "webhook_generation".into(),
+            norito::json::Value::from(hex::encode(test_webhook_generation(1))),
+        );
         payload.insert(
             "url".into(),
             norito::json::Value::from("http://local.test/webhook"),
@@ -4962,6 +5184,10 @@ mod tests {
             norito::json::Value::from("overflowing-attempts"),
         );
         payload.insert("webhook_id".into(), norito::json::Value::from(1u64));
+        payload.insert(
+            "webhook_generation".into(),
+            norito::json::Value::from(hex::encode(test_webhook_generation(1))),
+        );
         payload.insert(
             "url".into(),
             norito::json::Value::from("http://local.test/webhook"),
@@ -5044,26 +5270,10 @@ mod tests {
             {
                 let mut g = registry().lock().unwrap();
                 g.next_id = 2;
-                g.items.insert(
-                    1,
-                    WebhookEntry {
-                        id: 1,
-                        url: hung_url.clone(),
-                        active: true,
-                        secret: None,
-                        filter: None,
-                    },
-                );
-                g.items.insert(
-                    2,
-                    WebhookEntry {
-                        id: 2,
-                        url: success_url.clone(),
-                        active: true,
-                        secret: None,
-                        filter: None,
-                    },
-                );
+                g.items
+                    .insert(1, registered_registry_entry(1, hung_url.clone()));
+                g.items
+                    .insert(2, registered_registry_entry(2, success_url.clone()));
             }
             let queue_dir = super::queue_dir();
             let hung_file = queue_dir.join("0001-timeout.json");
@@ -5071,6 +5281,10 @@ mod tests {
             let mut hung_payload = norito::json::Map::new();
             hung_payload.insert("id".into(), norito::json::Value::from("timeout-job"));
             hung_payload.insert("webhook_id".into(), norito::json::Value::from(1u64));
+            hung_payload.insert(
+                "webhook_generation".into(),
+                norito::json::Value::from(hex::encode(test_webhook_generation(1))),
+            );
             hung_payload.insert("url".into(), norito::json::Value::from(hung_url.clone()));
             hung_payload.insert(
                 "content_type".into(),
@@ -5089,6 +5303,10 @@ mod tests {
             let mut success_payload = norito::json::Map::new();
             success_payload.insert("id".into(), norito::json::Value::from("success-job"));
             success_payload.insert("webhook_id".into(), norito::json::Value::from(2u64));
+            success_payload.insert(
+                "webhook_generation".into(),
+                norito::json::Value::from(hex::encode(test_webhook_generation(2))),
+            );
             success_payload.insert("url".into(), norito::json::Value::from(success_url.clone()));
             success_payload.insert(
                 "content_type".into(),
@@ -5165,6 +5383,75 @@ mod tests {
             norito::json::Value::Array(arr) => arr,
             _ => panic!("expected array for {context}", context = context),
         }
+    }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    #[test]
+    fn registry_next_id_survives_last_deletion_and_restart() {
+        let _env = TestDataDirGuard::new();
+        super::init_persistence().expect("initialize webhook persistence");
+        {
+            let mut registry = lock_registry();
+            registry.next_id = 1;
+            registry.items.clear();
+            registry.items.insert(
+                1,
+                registered_registry_entry(1, "http://first.example/hook".to_string()),
+            );
+            persist_registry(&registry).expect("persist original webhook registration");
+        }
+        let runtime = Runtime::new().expect("tokio runtime");
+        runtime.block_on(async {
+            let response = handle_delete_webhook(AxumPath(1)).await;
+            assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        });
+        {
+            let mut registry = lock_registry();
+            registry.next_id = 0;
+            registry.items.clear();
+        }
+
+        load_registry().expect("reload registry after simulated restart");
+        {
+            let registry = lock_registry();
+            assert_eq!(registry.next_id, 1);
+            assert!(registry.items.is_empty());
+        }
+        runtime.block_on(async {
+            let response =
+                handle_create_webhook(crate::utils::extractors::JsonOnly(WebhookCreate {
+                    url: "http://second.example/hook".to_string(),
+                    secret: None,
+                    active: true,
+                    filter: None,
+                }))
+                .await;
+            assert_eq!(response.status(), StatusCode::CREATED);
+        });
+        let mut registry = lock_registry();
+        assert_eq!(registry.next_id, 2);
+        assert!(registry.items.contains_key(&2));
+        assert!(!registry.items.contains_key(&1));
+        registry.next_id = 0;
+        registry.items.clear();
+    }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    #[test]
+    fn loading_an_empty_store_clears_stale_registry_state() {
+        let _env = TestDataDirGuard::new();
+        {
+            let mut registry = lock_registry();
+            registry.next_id = 7;
+            registry.items.clear();
+            registry.items.insert(
+                7,
+                registered_registry_entry(7, "http://stale.example/hook".to_string()),
+            );
+        }
+
+        load_registry().expect("load empty webhook store");
+        let registry = lock_registry();
+        assert_eq!(registry.next_id, 0);
+        assert!(registry.items.is_empty());
     }
     #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
@@ -5360,7 +5647,7 @@ mod tests {
     }
     #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
-    fn queued_delivery_keeps_its_signature_after_registration_deletion() {
+    fn queued_delivery_is_invalidated_by_durable_registration_deletion() {
         let _env = TestDataDirGuard::new();
         super::init_persistence().expect("initialize webhook persistence");
         {
@@ -5369,14 +5656,18 @@ mod tests {
             registry.items.clear();
             registry.items.insert(
                 1,
-                WebhookEntry {
-                    id: 1,
-                    url: "http://local.test/hook".to_string(),
-                    active: true,
-                    secret: Some("delivery-secret".to_string()),
-                    filter: None,
+                RegisteredWebhook {
+                    entry: WebhookEntry {
+                        id: 1,
+                        url: "http://local.test/hook".to_string(),
+                        active: true,
+                        secret: Some("delivery-secret".to_string()),
+                        filter: None,
+                    },
+                    generation: test_webhook_generation(1),
                 },
             );
+            persist_registry(&registry).expect("persist original webhook registration");
         }
         enqueue_event_for_matching_webhooks(
             &proof_verified_event("halo2/ipa", Some([0xA5; 32])),
@@ -5388,36 +5679,100 @@ mod tests {
             .expect("one queued delivery")
             .expect("queued delivery entry")
             .path();
-        let pending = decode_pending_delivery(&fs::read(&queue_path).expect("read delivery"))
+        let mut pending = decode_pending_delivery(&fs::read(&queue_path).expect("read delivery"))
             .expect("decode queued delivery");
-        let expected = format!(
-            "sha256={}",
-            hmac_sha256_hex(b"delivery-secret", &pending.body)
+        pending.next_attempt_ms = u64::MAX;
+        let encoded = encode_pending_delivery(&pending).expect("encode future-due delivery");
+        write_private_test_file(&queue_path, encoded.as_bytes());
+        let delivery_attempts = Arc::new(AtomicU32::new(0));
+        let recorded_attempts = Arc::clone(&delivery_attempts);
+        let _http_guard = super::install_http_post_override(move |_, _, _| {
+            recorded_attempts.fetch_add(1, Ordering::SeqCst);
+            Ok(204)
+        });
+        let runtime = Runtime::new().expect("tokio runtime");
+        runtime.block_on(async {
+            let response = handle_delete_webhook(AxumPath(1)).await;
+            assert_eq!(response.status(), StatusCode::NO_CONTENT);
+            *lock_registry() = RegistryInner::default();
+            load_registry().expect("reload durable deletion before delivery");
+            process_queue_once().await;
+        });
+        assert_eq!(
+            delivery_attempts.load(Ordering::SeqCst),
+            0,
+            "a deleted registration must never receive a queued delivery"
         );
-        assert_eq!(pending.signature.as_deref(), Some(expected.as_str()));
-
-        lock_registry().items.clear();
-        let captured = Arc::new(Mutex::new(None::<String>));
-        let captured_by_transport = Arc::clone(&captured);
-        let _http_guard = super::install_http_post_override(move |_, headers, _| {
-            let signature = headers.iter().find_map(|(name, value)| {
-                name.eq_ignore_ascii_case("X-Iroha-Webhook-Signature")
-                    .then(|| value.clone())
-            });
-            *captured_by_transport.lock().expect("capture signature") = signature;
+        assert!(
+            !queue_path.exists(),
+            "the invalidated spool record must be removed"
+        );
+        let mut registry = lock_registry();
+        registry.next_id = 0;
+        registry.items.clear();
+    }
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    #[test]
+    fn queued_delivery_is_invalidated_by_durable_registration_replacement() {
+        let _env = TestDataDirGuard::new();
+        super::init_persistence().expect("initialize webhook persistence");
+        {
+            let mut registry = lock_registry();
+            registry.next_id = 1;
+            registry.items.clear();
+            registry.items.insert(
+                1,
+                RegisteredWebhook {
+                    entry: registry_entry(1, "http://local.test/hook".to_string()),
+                    generation: test_webhook_generation(1),
+                },
+            );
+            persist_registry(&registry).expect("persist original webhook registration");
+        }
+        enqueue_event_for_matching_webhooks(
+            &proof_verified_event("halo2/ipa", Some([0xA5; 32])),
+            "application/json",
+        );
+        let queue_path = fs::read_dir(queue_dir())
+            .expect("read webhook queue")
+            .next()
+            .expect("one queued delivery")
+            .expect("queued delivery entry")
+            .path();
+        {
+            let mut registry = lock_registry();
+            let replacement = RegisteredWebhook {
+                entry: registry_entry(1, "http://local.test/hook".to_string()),
+                generation: test_webhook_generation(2),
+            };
+            let mut candidate = registry.clone();
+            candidate.items.insert(1, replacement);
+            persist_registry(&candidate).expect("persist replacement webhook registration");
+            *registry = candidate;
+        }
+        *lock_registry() = RegistryInner::default();
+        load_registry().expect("reload durable replacement before delivery");
+        let delivery_attempts = Arc::new(AtomicU32::new(0));
+        let recorded_attempts = Arc::clone(&delivery_attempts);
+        let _http_guard = super::install_http_post_override(move |_, _, _| {
+            recorded_attempts.fetch_add(1, Ordering::SeqCst);
             Ok(204)
         });
         Runtime::new()
             .expect("tokio runtime")
             .block_on(process_queue_once());
         assert_eq!(
-            captured.lock().expect("read captured signature").as_deref(),
-            Some(expected.as_str())
+            delivery_attempts.load(Ordering::SeqCst),
+            0,
+            "a replacement registration must not inherit queued deliveries"
         );
         assert!(
             !queue_path.exists(),
-            "delivered spool record must be removed"
+            "the invalidated spool record must be removed"
         );
+        let mut registry = lock_registry();
+        registry.next_id = 0;
+        registry.items.clear();
     }
     #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     #[test]
@@ -5433,30 +5788,36 @@ mod tests {
             let id1 = g.next_id;
             g.items.insert(
                 id1,
-                WebhookEntry {
-                    id: id1,
-                    url: "http://127.0.0.1:9/blackhole".into(),
-                    active: true,
-                    secret: None,
-                    filter: Some(crate::filter::FilterExpr::Eq(
-                        crate::filter::FieldPath("tx_status".into()),
-                        norito::json::Value::String("Queued".into()),
-                    )),
+                RegisteredWebhook {
+                    entry: WebhookEntry {
+                        id: id1,
+                        url: "http://127.0.0.1:9/blackhole".into(),
+                        active: true,
+                        secret: None,
+                        filter: Some(crate::filter::FilterExpr::Eq(
+                            crate::filter::FieldPath("tx_status".into()),
+                            norito::json::Value::String("Queued".into()),
+                        )),
+                    },
+                    generation: test_webhook_generation(id1),
                 },
             );
             g.next_id += 1;
             let id2 = g.next_id;
             g.items.insert(
                 id2,
-                WebhookEntry {
-                    id: id2,
-                    url: "http://127.0.0.1:9/blackhole".into(),
-                    active: true,
-                    secret: None,
-                    filter: Some(crate::filter::FilterExpr::Eq(
-                        crate::filter::FieldPath("tx_status".into()),
-                        norito::json::Value::String("Approved".into()),
-                    )),
+                RegisteredWebhook {
+                    entry: WebhookEntry {
+                        id: id2,
+                        url: "http://127.0.0.1:9/blackhole".into(),
+                        active: true,
+                        secret: None,
+                        filter: Some(crate::filter::FilterExpr::Eq(
+                            crate::filter::FieldPath("tx_status".into()),
+                            norito::json::Value::String("Approved".into()),
+                        )),
+                    },
+                    generation: test_webhook_generation(id2),
                 },
             );
         }
@@ -5506,15 +5867,18 @@ mod tests {
             match_id = id1;
             g.items.insert(
                 id1,
-                WebhookEntry {
-                    id: id1,
-                    url: "http://127.0.0.1:9/blackhole".into(),
-                    active: true,
-                    secret: None,
-                    filter: Some(FilterExpr::Eq(
-                        FieldPath("proof_envelope_hash".into()),
-                        norito::json::Value::String(hex::encode([0xCCu8; 32])),
-                    )),
+                RegisteredWebhook {
+                    entry: WebhookEntry {
+                        id: id1,
+                        url: "http://127.0.0.1:9/blackhole".into(),
+                        active: true,
+                        secret: None,
+                        filter: Some(FilterExpr::Eq(
+                            FieldPath("proof_envelope_hash".into()),
+                            norito::json::Value::String(hex::encode([0xCCu8; 32])),
+                        )),
+                    },
+                    generation: test_webhook_generation(id1),
                 },
             );
             // non-matching: proof_envelope_hash == 0xDD..DD
@@ -5522,15 +5886,18 @@ mod tests {
             let id2 = g.next_id;
             g.items.insert(
                 id2,
-                WebhookEntry {
-                    id: id2,
-                    url: "http://127.0.0.1:9/blackhole".into(),
-                    active: true,
-                    secret: None,
-                    filter: Some(FilterExpr::Eq(
-                        FieldPath("proof_envelope_hash".into()),
-                        norito::json::Value::String(hex::encode([0xDDu8; 32])),
-                    )),
+                RegisteredWebhook {
+                    entry: WebhookEntry {
+                        id: id2,
+                        url: "http://127.0.0.1:9/blackhole".into(),
+                        active: true,
+                        secret: None,
+                        filter: Some(FilterExpr::Eq(
+                            FieldPath("proof_envelope_hash".into()),
+                            norito::json::Value::String(hex::encode([0xDDu8; 32])),
+                        )),
+                    },
+                    generation: test_webhook_generation(id2),
                 },
             );
         }

@@ -59,13 +59,13 @@ public struct AtomicPrivateSettlementNativeResponseVerifierV1:
 
     public func requireAvailable() throws {
         #if canImport(Darwin)
-        guard let committeeProof = NoritoNativeBridge.shared.resolveKagemushaV2Symbol(
+        guard let committeeProof = NoritoNativeBridge.shared.resolveNativeSymbol(
             "connect_norito_private_settlement_committee_proof_response_verify_v1",
             as: CommitteeProofVerifierFn.self
-        ), let auditorCapsule = NoritoNativeBridge.shared.resolveKagemushaV2Symbol(
+        ), let auditorCapsule = NoritoNativeBridge.shared.resolveNativeSymbol(
             "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
             as: AuditorCapsuleVerifierFn.self
-        ), let auditApproval = NoritoNativeBridge.shared.resolveKagemushaV2Symbol(
+        ), let auditApproval = NoritoNativeBridge.shared.resolveNativeSymbol(
             "connect_norito_private_settlement_audit_approval_response_verify_v1",
             as: AuditApprovalVerifierFn.self
         ) else {
@@ -96,7 +96,7 @@ public struct AtomicPrivateSettlementNativeResponseVerifierV1:
         )
         try requireAvailable()
         #if canImport(Darwin)
-        guard let function = NoritoNativeBridge.shared.resolveKagemushaV2Symbol(
+        guard let function = NoritoNativeBridge.shared.resolveNativeSymbol(
             "connect_norito_private_settlement_committee_proof_response_verify_v1",
             as: CommitteeProofVerifierFn.self
         ) else {
@@ -141,7 +141,7 @@ public struct AtomicPrivateSettlementNativeResponseVerifierV1:
         let key = try Self.validatedPublicKeyBytes(auditorSigningKey)
         try requireAvailable()
         #if canImport(Darwin)
-        guard let function = NoritoNativeBridge.shared.resolveKagemushaV2Symbol(
+        guard let function = NoritoNativeBridge.shared.resolveNativeSymbol(
             "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
             as: AuditorCapsuleVerifierFn.self
         ) else {
@@ -194,7 +194,7 @@ public struct AtomicPrivateSettlementNativeResponseVerifierV1:
         let key = try Self.validatedPublicKeyBytes(auditorSigningKey)
         try requireAvailable()
         #if canImport(Darwin)
-        guard let function = NoritoNativeBridge.shared.resolveKagemushaV2Symbol(
+        guard let function = NoritoNativeBridge.shared.resolveNativeSymbol(
             "connect_norito_private_settlement_audit_approval_response_verify_v1",
             as: AuditApprovalVerifierFn.self
         ) else {

@@ -1,6 +1,6 @@
 // Source-bounded materialization for application-API routed reads.
-use std::marker::PhantomData;
 use norito::core::{DecodeFlagsGuard, DeriveSmallBuf, Encoder, NoritoDeserialize};
+use std::marker::PhantomData;
 /// Borrowed wire-equivalent of a derived struct in declaration order.
 ///
 /// App routes use this adapter when world state stores an identifier separately
@@ -402,6 +402,7 @@ fn resolve_torii_asset_definition_source_selector(
 fn execute_torii_asset_definition_local_source_read(
     app: &SharedAppState,
     asset_literal: &str,
+    visibility: &routing::DataspaceReadVisibility,
 ) -> Response {
     let state_view = app.state.view();
     let world = state_view.world();
@@ -422,6 +423,14 @@ fn execute_torii_asset_definition_local_source_read(
             ResponseFormat::Json,
         );
     };
+    if !visibility.allows_asset_definition(world, &definition_id) {
+        return error_response_with_format(
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound,
+            )),
+            ResponseFormat::Json,
+        );
+    }
     let source = ToriiAssetDefinitionJsonSource {
         definition,
         alias_binding: world.asset_definition_alias_bindings().get(&definition_id),
@@ -439,6 +448,7 @@ struct ToriiSpaceDirectoryBindingsJsonSource<'a> {
     uaid: &'a iroha_data_model::nexus::UniversalAccountId,
     bindings: Option<&'a iroha_core::nexus::space_directory::UaidDataspaceBindings>,
     catalog: &'a iroha_data_model::nexus::DataSpaceCatalog,
+    visibility: &'a routing::DataspaceReadVisibility,
 }
 impl norito::json::FastJsonWrite for ToriiSpaceDirectoryBindingsJsonSource<'_> {
     fn write_json(&self, output: &mut String) {
@@ -452,10 +462,15 @@ impl norito::json::FastJsonWrite for ToriiSpaceDirectoryBindingsJsonSource<'_> {
         output.begin_container()?;
         output.push_str("{\"dataspaces\":[")?;
         if let Some(bindings) = self.bindings {
-            for (index, (dataspace_id, accounts)) in bindings.iter().enumerate() {
-                if index != 0 {
+            let mut emitted = 0usize;
+            for (dataspace_id, accounts) in bindings.iter() {
+                if !self.visibility.allows_dataspace(*dataspace_id) {
+                    continue;
+                }
+                if emitted != 0 {
                     output.push(',')?;
                 }
+                emitted = emitted.saturating_add(1);
                 output.begin_container()?;
                 output.push_str("{\"accounts\":[")?;
                 for (account_index, account_id) in accounts.iter().enumerate() {
@@ -497,6 +512,7 @@ fn parse_torii_space_directory_uaid_literal(
 fn execute_torii_space_directory_bindings_local_source_read(
     app: &SharedAppState,
     uaid_literal: &str,
+    visibility: &routing::DataspaceReadVisibility,
 ) -> Response {
     let uaid = match parse_torii_space_directory_uaid_literal(uaid_literal) {
         Ok(uaid) => uaid,
@@ -508,6 +524,7 @@ fn execute_torii_space_directory_bindings_local_source_read(
         uaid: &uaid,
         bindings: world.uaid_dataspaces().get(&uaid),
         catalog: world.dataspace_catalog(),
+        visibility,
     };
     let budget = match torii_local_routed_read_budget(app) {
         Ok(budget) => budget,

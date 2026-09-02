@@ -185,10 +185,11 @@ framing instead of the finite HTTP envelope.
 `GET /v1/offline/readiness` is the canonical universal offline-wallet
 capability discovery route. It does not evaluate a validator, asset,
 domain, dataspace, escrow account, verifier catalog, or deployment profile.
-Every app-API build returns the same asset-neutral ABI-21/V4
-`cash_handoff_v1` contract. Its only fields are
-`cash_handoff_capability`, `required_bridge_abi_version`, `max_hops`, and
-`ready`; `ready` is always true. Clients must not use this response, `/health`,
+Every app-API build returns the same asset-neutral Offline Cash V1
+`cash_handoff_v1` contract. Its only fields are `cash_handoff_capability`,
+`wire_version`, `device_lifecycle_version`, and `ready`; both versions are
+exactly `1` and `ready` is always true. No hop, ancestry, input, or history
+limit is advertised. Clients must not use this response, `/health`,
 or `/readyz` as an offline-feature admission gate.
 
 Proof, authority, balance, release, and lineage errors belong to the specific
@@ -484,7 +485,7 @@ public response schema.
 
 Both Offline command routes use the configured Torii `max_content_len` request
 limit, the same operator-controlled ceiling used for transaction ingress. They
-do not inherit Axum's smaller framework default: a Kagemusha redemption that is
+do not inherit Axum's smaller framework default: an Offline Cash V1 redemption that is
 within the configured limit reaches typed decoding. A streamed or
 declared body that exceeds the configured limit fails with typed `413` code
 `request_payload_too_large` before command admission.
@@ -499,7 +500,7 @@ authorizes the client to recycle or change the operation id.
 
 Accepted request bindings and in-flight reservations share the configured
 positive `operation_registry_max_entries` and `operation_registry_max_bytes`
-budgets under `torii.kagemusha_commands`. They retain fixed-size canonical
+budgets under `torii.offline_cash_v1_commands`. They retain fixed-size canonical
 digests, not proof-bearing request DTOs. Each entry is charged exactly 145
 bytes; the default 4,096-entry registry therefore defaults to exactly 593,920
 bytes. Capacity never evicts an unexpired
@@ -507,8 +508,8 @@ binding: a new unique command receives typed
 `503 offline_operation_capacity_exhausted`, while an identical accepted replay
 or in-flight follower remains available.
 
-Every Torii replica allowed to accept Kagemusha commands for one deployment
-must use the same Kagemusha submission authority and behaviorally identical
+Every Torii replica allowed to accept Offline Cash V1 commands for one deployment
+must use the same Offline Cash V1 submission authority and behaviorally identical
 command policy. Given the same signed request, those replicas consequently
 construct the same signed transaction. A cross-instance race can still admit
 the same candidate more than once into independent local queues, so the
@@ -517,7 +518,7 @@ permits at most one economic effect. This is not a distributed
 idempotency-cache guarantee.
 
 Pre-commit ownership and rejected attempts are keyed by the configured
-Kagemusha submission authority together with the signed operation id. A
+Offline Cash V1 submission authority together with the signed operation id. A
 transaction under another outer authority therefore cannot shadow a
 Torii-submitted attempt merely by copying its signed request body into a
 transaction that rejects. A rejected attempt is retryable under the same

@@ -41,6 +41,37 @@ class SumeragiStatusModelsTest {
     }
 
     @Test
+    fun `execution commitment accepts one thousand Offline Cash top-ups and rejects legacy names`() {
+        val offlineCashTopUpRoot = hash(0x38)
+        val canonicalPayload = statusJson().replace(
+            "\"offline_cash_top_up_count\": 0,",
+            "\"offline_cash_top_up_root\": \"$offlineCashTopUpRoot\", " +
+                "\"offline_cash_top_up_count\": 1000,",
+        )
+        val commitment = SumeragiV2Status.parseJson(canonicalPayload)
+            .lastCommitQc?.certificate?.executionCommitment
+        assertEquals(BigInteger.valueOf(1_000), commitment?.offlineCashTopUpCount)
+        assertEquals(offlineCashTopUpRoot, commitment?.offlineCashTopUpRoot)
+
+        assertFails {
+            SumeragiV2Status.parseJson(
+                canonicalPayload.replace(
+                    "offline_cash_top_up_count",
+                    "topup_anchor_count",
+                ),
+            )
+        }
+        assertFails {
+            SumeragiV2Status.parseJson(
+                canonicalPayload.replace(
+                    "offline_cash_top_up_root",
+                    "topup_anchor_root",
+                ),
+            )
+        }
+    }
+
+    @Test
     fun `authoritative parser rejects unknown missing duplicate and noncanonical scalar fields`() {
         val payload = statusJson()
         assertFails {
@@ -342,7 +373,7 @@ class SumeragiStatusModelsTest {
           "parent_state_root": "${hash(0x34)}",
           "post_state_root": "${hash(0x35)}",
           "ordinary_writes_root": "${hash(0x36)}",
-          "topup_anchor_count": 0,
+          "offline_cash_top_up_count": 0,
           "native_amx_application_manifest_version": 1,
           "native_amx_application_manifest_root": "$EMPTY_MANIFEST_ROOT",
           "native_amx_application_manifest_count": 0,

@@ -12,36 +12,71 @@ public enum OfflineCashDeviceLifecycleBridgeErrorV1: Error, Equatable {
   case executionFailed
 }
 
-/// Exact operations in Core's sealed Offline Cash V1 journal and payment outbox.
+/// Exact operations in Core's sealed Offline Cash V1 reservation, transition, and recovery flow.
+///
+/// The service reserves bytes before accepting authority, prepares a deterministic candidate
+/// before consuming a predecessor, commits that candidate exactly once, and can recover every
+/// terminal certificate and installed envelope byte-identically.
 public enum OfflineCashDeviceLifecycleOperationV1: UInt8, CaseIterable, Sendable {
-  case reserveReceiveIntentAndSign = 1
-  case recoverReceiveIntentAndSignature = 2
-  case bindReceiveRequestDigest = 3
-  case publishSendPayment = 4
-  case recoverActiveIntent = 5
-  case cancelExpiredReceive = 6
-  case commitIntentExactNext = 7
-  case recoverTerminal = 8
-  case recoverReceiveTerminal = 9
-  case signReceiveAcknowledgement = 10
-  case stagePayment = 11
-  case recoverStagedPaymentDigest = 12
-  case publishStagedPayment = 13
-  case recoverPublishedPayment = 14
+  case readActiveHardwareCredential = 1
+  case prepareAcceptanceIntentAuthorization = 2
+  case recoverAcceptanceIntentAuthorization = 3
+  case verifyAuthorizationReserveInboxAndIssueAcceptanceTicket = 4
+  case recoverAcceptanceTicket = 5
+  case stageInboundPayment = 6
+  case recoverStagedInboundPayment = 7
+  case recoverInboundInboxPage = 8
+  case prepareExactNextTransition = 9
+  case recoverPreparedTransition = 10
+  case abandonUncommittedPreparedTransition = 11
+  case commitVerifiedCandidate = 12
+  case recoverTerminalCommitCertificate = 13
+  case installFinalCommitWrapper = 14
+  case recoverInstalledEnvelopeOrStateProof = 15
+  case signReceiveAcknowledgement = 16
+  case releaseOutboxEntry = 17
+  case readTrustedTimeOrLease = 18
+  case prepareMintAuthorization = 19
+  case recoverMintAuthorization = 20
+  case verifyAuthorizationAndStageMintCredit = 21
+  case foldReceive = 22
+  case readPendingCreditWatermark = 23
+  case rotateHardwareEpoch = 24
+}
+
+/// Exact secure-backend capabilities required by Offline Cash V1.
+public enum OfflineCashDeviceLifecycleCapabilityV1: UInt32, CaseIterable, Sendable {
+  case exactNextPredecessorConsumption = 0x0000_0001
+  case oneUseSuccessorAuthorization = 0x0000_0002
+  case rollbackResistantCounterAndJournal = 0x0000_0004
+  case sealedTransitionRecovery = 0x0000_0008
+  case oneUseAcceptanceTickets = 0x0000_0010
+  case durableInboxReservation = 0x0000_0020
+  case authenticatedInboundStaging = 0x0000_0040
+  case authoritativeReplayRootRecovery = 0x0000_0080
+  case senderOutboxReservation = 0x0000_0100
+  case authenticatedDurableRetryOutbox = 0x0000_0200
+  case atomicVerifiedCandidateCommit = 0x0000_0400
+  case recoverableTerminalCommitCertificate = 0x0000_0800
+  case trustedTimeOrLease = 0x0000_1000
+  case offlineHardwareEpochRotation = 0x0000_2000
+  case rollbackSafeCounterRollover = 0x0000_4000
+  case noSoftwareFallback = 0x0000_8000
 }
 
 /// Stable native result status. Only `success` may carry authoritative bytes.
-public enum OfflineCashDeviceLifecycleStatusV1: UInt8, Sendable {
+public enum OfflineCashDeviceLifecycleStatusV1: UInt8, CaseIterable, Sendable {
   case success = 0
   case unavailable = 1
   case staleOrConcurrent = 2
-  case intentMismatch = 3
+  case bindingMismatch = 3
   case trustedTimeRejected = 4
   case rejected = 5
   case missing = 6
   case conflict = 7
   case corrupt = 8
   case malformedRequest = 9
+  case recoveryRequired = 10
 }
 
 /// Accepted identity of the complete rollback-resistant secure backend.
@@ -67,10 +102,11 @@ protocol OfflineCashDeviceLifecycleEndpointV1 {
 /// Fail-closed iOS entry point for Offline Cash V1 device state.
 ///
 /// App Attest assertions authenticate online challenges, but do not expose a local atomic journal,
-/// trusted clock, exact-next monetary counter, or authenticated payment outbox. This bridge is
-/// therefore available only when the loaded native image provides the complete optional secure
-/// backend contract. Missing symbols, partial capability frames, malformed replies, and execution
-/// failures keep the wallet online-only; no Keychain, App Attest-only, or software fallback exists.
+/// authenticated multi-credit inbox, trusted clock, exact-next monetary counter, hardware-epoch
+/// rotation, or authenticated payment outbox. This bridge is therefore available only when the
+/// loaded native image provides the complete optional secure backend contract. Missing symbols,
+/// partial capability frames, malformed replies, and execution failures keep the wallet
+/// online-only; no Keychain, App Attest-only, or software fallback exists.
 ///
 public final class OfflineCashDeviceLifecycleBridgeV1 {
   public enum Availability: Sendable {
@@ -122,7 +158,7 @@ public final class OfflineCashDeviceLifecycleBridgeV1 {
   /// Execute one exact canonical Core V1 command through the qualifying native backend.
   ///
   /// The native implementation must decode only the canonical Offline Cash V1 command for the
-  /// selected operation. Relabelled Kagemusha V4/V5 archives are invalid inputs.
+  /// selected operation. Any non-V1 aggregate-state archive is invalid input.
   public func execute(
     operation: OfflineCashDeviceLifecycleOperationV1,
     requestID: Data,
@@ -279,25 +315,9 @@ public final class OfflineCashDeviceLifecycleBridgeV1 {
     static let commandHeaderBytes = 80
     static let responseHeaderBytes = 116
 
-    private static let featureOneIntentSlot: UInt32 = 1 << 0
-    private static let featureExactNextCounter: UInt32 = 1 << 1
-    private static let featureAuthenticatedDurableJournal: UInt32 = 1 << 2
-    private static let featureAuthenticatedDurableOutbox: UInt32 = 1 << 3
-    private static let featureTrustedTime: UInt32 = 1 << 4
-    private static let featureAtomicReserveAndSign: UInt32 = 1 << 5
-    private static let featureAtomicCommitAndTerminalReceipt: UInt32 = 1 << 6
-    private static let featureTerminalRecovery: UInt32 = 1 << 7
-    private static let featureNoSoftwareFallback: UInt32 = 1 << 8
-    private static let requiredFeatures =
-      featureOneIntentSlot
-      | featureExactNextCounter
-      | featureAuthenticatedDurableJournal
-      | featureAuthenticatedDurableOutbox
-      | featureTrustedTime
-      | featureAtomicReserveAndSign
-      | featureAtomicCommitAndTerminalReceipt
-      | featureTerminalRecovery
-      | featureNoSoftwareFallback
+    private static let requiredFeatures = OfflineCashDeviceLifecycleCapabilityV1.allCases.reduce(
+      UInt32(0)
+    ) { $0 | $1.rawValue }
     private static let capabilityMagic = Data("IOCFJCP1".utf8)
     private static let commandMagic = Data("IOCFJCM1".utf8)
     private static let responseMagic = Data("IOCFJRS1".utf8)

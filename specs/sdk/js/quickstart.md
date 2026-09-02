@@ -438,16 +438,17 @@ for await (const nft of torii.iterateAccountNfts("<i105-account-id>", {
 // env-driven pagination/filters so you can smoke-test permissions against a live Torii.
 ```
 
-## Kagemusha offline cash
+## Offline Cash V1
 
-The JavaScript package exposes Kagemusha readiness, top-up, redemption, and
-operation polling through `getOfflineCapability`, `submitKagemushaTopUpV4`,
-`submitKagemushaRedeemV4`, and `getKagemushaOperationStatus`. Supply an
-externally produced canonical V4 Norito archive: the SDK derives its operation
-ID and signed authorization issuance time and requires the initial 202
-reference to repeat both. JavaScript does not derive witnesses, hold
-device-bound custody, or provide a native prover, so use a supported Swift or
-JVM wallet to create the archive rather than hand-encoding it.
+The JavaScript package exposes the universal readiness endpoint plus typed
+Offline Cash V1 top-up, redemption, and operation-status clients through
+`getOfflineCapability`, `submitOfflineCashTopUp`,
+`submitOfflineCashRedemption`, and `getOfflineCashOperation`. Submit only
+canonical V1 Norito requests. The client derives the idempotency key from the
+request, validates the returned operation identity and kind, and withholds an
+applied result until the caller verifies it against an authenticated release
+anchor. JavaScript does not hold hardware-bound monetary state or produce
+recursive proofs; a qualified hardware wallet must create those artifacts.
 
 ## Torii Queries & Streaming
 

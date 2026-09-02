@@ -4,7 +4,8 @@ use super::{
     V2StartupReplayError, authenticate_v2_snapshot_replay_boundary,
     authenticate_v2_snapshot_startup, authenticated_v2_snapshot_startup_mode,
     build_verified_successor, committed_execution_policy_hash, committed_nexus_amx_context_hash,
-    plan_v2_startup_replay, recover_active_height, recover_active_height_with_plan,
+    plan_v2_startup_replay, recover_active_height_with_plan,
+    recover_non_terminal_active_height_for_test as recover_active_height,
     successor_proofs_of_possession,
 };
 use crate::{
@@ -71,6 +72,8 @@ fn verified_context_for_policy_state(
             power: 1,
         })
         .collect::<Vec<_>>();
+    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
     let context = wire::HeightContext {
         network_id,
         protocol_version: wire::PROTOCOL_VERSION,
@@ -83,6 +86,8 @@ fn verified_context_for_policy_state(
         snapshot_bootstrap: None,
         quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
         roster,
+        offline_cash_mint_finality_epoch_id,
+        offline_cash_mint_finality_epoch_roster,
         nexus_amx_context_hash: Hash::new(b"recovery fixture Nexus/AMX"),
         execution_policy_hash: committed_execution_policy_hash(policy_state)
             .expect("derive fixture execution policy"),
@@ -409,7 +414,7 @@ fn commit_to_state(state: &State, block: &CommittedBlock, context: &wire::Height
     state_block.commit().expect("commit synthetic state block");
 }
 fn execution_commitment(seed: u8) -> wire::ExecutionCommitment {
-    wire::ExecutionCommitment::without_topups_or_merge_carrier(
+    wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
         Hash::new([seed, 1]),
         Hash::new([seed, 2]),
         Hash::new([seed, 3]),
@@ -1030,8 +1035,16 @@ fn startup_plan_rejects_poisoned_height_two_that_ignores_npos_transition() {
     let mut parent_context = verified.context().clone();
     parent_context.mode = wire::ConsensusMode::Npos;
     parent_context.epoch_end_height = 1;
+    let (transitioned_mint_finality_epoch_id, transitioned_mint_finality_epoch_roster) =
+        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+            parent_context.network_id,
+            1,
+            &transitioned_roster,
+        );
     parent_context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
         epoch: 1,
+        offline_cash_mint_finality_epoch_id: transitioned_mint_finality_epoch_id,
+        offline_cash_mint_finality_epoch_roster: transitioned_mint_finality_epoch_roster,
         epoch_end_height: 10,
         mode: wire::ConsensusMode::Npos,
         roster: transitioned_roster,
@@ -1061,6 +1074,12 @@ fn startup_plan_rejects_poisoned_height_two_that_ignores_npos_transition() {
         })
         .collect::<Vec<_>>();
     let attacker_quorum = wire::DualQuorum::from_roster(&attacker_roster).expect("attacker quorum");
+    let (attacker_mint_finality_epoch_id, attacker_mint_finality_epoch_roster) =
+        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+            parent_context.network_id,
+            1,
+            &attacker_roster,
+        );
     let child_context = wire::HeightContext {
         network_id: parent_context.network_id,
         protocol_version: parent_context.protocol_version,
@@ -1073,6 +1092,8 @@ fn startup_plan_rejects_poisoned_height_two_that_ignores_npos_transition() {
         snapshot_bootstrap: None,
         quorum: attacker_quorum,
         roster: attacker_roster,
+        offline_cash_mint_finality_epoch_id: attacker_mint_finality_epoch_id,
+        offline_cash_mint_finality_epoch_roster: attacker_mint_finality_epoch_roster,
         nexus_amx_context_hash: parent_context.nexus_amx_context_hash,
         execution_policy_hash: parent_context.execution_policy_hash,
         da_layout: parent_context.da_layout,
@@ -1640,8 +1661,17 @@ fn successor_pops_are_copied_only_from_the_durable_parent_artifact() {
         .collect::<Vec<_>>();
     let mut boundary_context = current_context;
     boundary_context.epoch_end_height = boundary_context.height;
+    let next_epoch = boundary_context.epoch + 1;
+    let (next_mint_finality_epoch_id, next_mint_finality_epoch_roster) =
+        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+            boundary_context.network_id,
+            next_epoch,
+            &next_roster,
+        );
     boundary_context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
-        epoch: boundary_context.epoch + 1,
+        epoch: next_epoch,
+        offline_cash_mint_finality_epoch_id: next_mint_finality_epoch_id,
+        offline_cash_mint_finality_epoch_roster: next_mint_finality_epoch_roster,
         epoch_end_height: u64::MAX,
         mode: boundary_context.mode,
         quorum: wire::DualQuorum::from_roster(&next_roster).expect("valid next-epoch quorum"),
@@ -2439,6 +2469,95 @@ fn verified_successor_projects_only_its_exact_kura_lifecycle_storage() {
             .into_parts_with_lifecycle_storage_authority(foreign_kura.as_ref(), &genesis_account,),
         Err(V2RecoveryError::SuccessorLifecycleStorageKuraMismatch { height: 2 })
     ));
+}
+
+#[test]
+fn terminal_complete_tip_classification_and_evidence_authentication_are_exact() {
+    assert!(!super::complete_tip_is_terminal(u64::MAX - 1));
+    assert!(super::complete_tip_is_terminal(u64::MAX));
+    assert!(super::state_is_immediate_predecessor(
+        u64::MAX - 1,
+        u64::MAX
+    ));
+    assert!(!super::state_is_immediate_predecessor(u64::MAX, u64::MAX));
+
+    let (verified, keys) = verified_context();
+    let context = verified.context().clone();
+    let block = dummy_block(&keys[0], 1, None);
+    let kura = Kura::blank_kura_for_testing();
+    kura.store_block(block.clone())
+        .expect("persist exact complete-tip block for Kura binding");
+    let artifact = authenticated_artifact_for(context.clone(), block.as_ref(), &keys);
+    let receipt = crate::kura::KuraV2CommitReceipt::for_test(&artifact);
+    let predecessor = super::authenticate_complete_tip_evidence(
+        &context,
+        verified.proofs_of_possession(),
+        &artifact,
+        &receipt,
+    )
+    .expect("exact complete-tip evidence authenticates before terminal classification");
+    assert_eq!(predecessor.height(), 1);
+    super::authenticate_kura_predecessor(kura.as_ref(), predecessor)
+        .expect("complete-tip evidence binds to the exact canonical Kura block");
+    let foreign_kura = Kura::blank_kura_for_testing();
+    assert!(matches!(
+        super::authenticate_kura_predecessor(foreign_kura.as_ref(), predecessor),
+        Err(V2RecoveryError::FinalizedKuraPredecessorMismatch {
+            expected_height: 1,
+            actual_block_hash: None,
+            ..
+        })
+    ));
+
+    let mut foreign_context = context.clone();
+    foreign_context.leader_seed[0] ^= 1;
+    assert!(matches!(
+        super::authenticate_complete_tip_evidence(
+            &foreign_context,
+            verified.proofs_of_possession(),
+            &artifact,
+            &receipt,
+        ),
+        Err(V2RecoveryError::TerminalCompleteTipAuthentication(_))
+    ));
+
+    let mut foreign_pops = verified.proofs_of_possession().to_vec();
+    foreign_pops[0][0] ^= 1;
+    assert!(matches!(
+        super::authenticate_complete_tip_evidence(&context, &foreign_pops, &artifact, &receipt,),
+        Err(V2RecoveryError::TerminalCompleteTipAuthentication(_))
+    ));
+}
+
+#[test]
+fn complete_tip_recovery_authenticates_terminal_height_before_successor_construction() {
+    let source = include_str!("v2_recovery.rs");
+    let start = source
+        .find("if replay_plan.pending_tip_height().is_none()")
+        .expect("complete-tip startup branch remains source-bound");
+    let end = source[start..]
+        .find("if replay_plan.pending_tip_height() != Some(durable_height)")
+        .map(|offset| start + offset)
+        .expect("complete-tip startup branch remains independently bounded");
+    let complete_tip = &source[start..end];
+    let anchors = [
+        "verify_persisted_height(",
+        "if complete_tip_is_terminal(durable_height)",
+        "authenticate_terminal_complete_tip(",
+        "RecoveredV2Startup::Terminal(",
+        "build_verified_successor(",
+    ];
+    let mut remainder = complete_tip;
+    for anchor in anchors {
+        let offset = remainder
+            .find(anchor)
+            .unwrap_or_else(|| panic!("complete-tip recovery lost safety anchor: {anchor}"));
+        remainder = &remainder[offset + anchor.len()..];
+    }
+    assert!(
+        !complete_tip.contains("durable_height.saturating_add(1)"),
+        "complete-tip startup must not fabricate a successor at wire height MAX"
+    );
 }
 
 #[test]

@@ -99,7 +99,7 @@ final class IrohaPeerQRV1Tests: XCTestCase {
         XCTAssertEqual(Data(encoded[0..<4]), Data("IRQR".utf8))
         XCTAssertEqual(encoded[4], 1)
         XCTAssertEqual(encoded[5], 2)
-        XCTAssertEqual(readUInt16BE(encoded, 6), 2)
+        XCTAssertEqual(readUInt16BE(encoded, 6), 1)
         XCTAssertEqual(encoded[8], 2)
         XCTAssertEqual(encoded[9], 0)
         XCTAssertEqual(Data(encoded[10..<26]), message.streamID)
@@ -160,9 +160,9 @@ final class IrohaPeerQRV1Tests: XCTestCase {
             IrohaPeerQRCodecV1.maximumStaticTextBytes
         )
         let staticEvent = try IrohaPeerQRScanSessionV1(
-            expectedProfile: .kagemusha,
+            expectedProfile: .offlineCashV1,
             expectedKind: .payment,
-            expectedSchemaVersion: 0x0102
+            expectedSchemaVersion: 1
         ).ingest(staticText)
         guard case .completed(let staticDecoded) = staticEvent else {
             return XCTFail("Expected complete-frame decoding")
@@ -231,9 +231,9 @@ final class IrohaPeerQRV1Tests: XCTestCase {
         let message = try makeMessage(count: 600, seed: 12)
         let frames = try indexedFrames(message)
         let session = IrohaPeerQRScanSessionV1(
-            expectedProfile: .kagemusha,
+            expectedProfile: .offlineCashV1,
             expectedKind: .payment,
-            expectedSchemaVersion: 0x0102
+            expectedSchemaVersion: 1
         )
         _ = try session.ingest(try text(frames[.data, 0]))
         _ = try session.ingest(try text(frames[.parity, 0]))
@@ -273,7 +273,7 @@ final class IrohaPeerQRV1Tests: XCTestCase {
     }
 
     func testDecoderBoundsThreeStreams() throws {
-        let session = IrohaPeerQRScanSessionV1(expectedProfile: .kagemusha)
+        let session = IrohaPeerQRScanSessionV1(expectedProfile: .offlineCashV1)
         var firstTexts: [String] = []
         for seed in 1...4 {
             let message = try makeMessage(count: 600, seed: UInt8(seed))
@@ -584,15 +584,15 @@ final class IrohaPeerQRV1Tests: XCTestCase {
             IrohaPeerQRCodecV1.staticCompleteTextCandidate(for: staticMessage)
         )
         let staticSession = IrohaPeerQRScanSessionV1(
-            expectedProfile: .kagemusha,
+            expectedProfile: .offlineCashV1,
             expectedKind: .payment,
-            expectedSchemaVersion: 1,
+            expectedSchemaVersion: 2,
             scanLimits: limits
         )
         XCTAssertThrowsError(try staticSession.ingest(staticText, atUptime: 100)) { error in
             XCTAssertEqual(
                 error as? IrohaPeerQRErrorV1,
-                .unexpectedSchemaVersion(expected: 1, actual: 0x0102)
+                .unexpectedSchemaVersion(expected: 2, actual: 1)
             )
         }
         XCTAssertThrowsError(try staticSession.ingest(staticText, atUptime: 102.999)) { error in
@@ -601,7 +601,7 @@ final class IrohaPeerQRV1Tests: XCTestCase {
         XCTAssertThrowsError(try staticSession.ingest(staticText, atUptime: 103)) { error in
             XCTAssertEqual(
                 error as? IrohaPeerQRErrorV1,
-                .unexpectedSchemaVersion(expected: 1, actual: 0x0102)
+                .unexpectedSchemaVersion(expected: 2, actual: 1)
             )
         }
 
@@ -615,15 +615,15 @@ final class IrohaPeerQRV1Tests: XCTestCase {
         })
         XCTAssertGreaterThanOrEqual(headerTexts.count, 2)
         let animatedSession = IrohaPeerQRScanSessionV1(
-            expectedProfile: .kagemusha,
+            expectedProfile: .offlineCashV1,
             expectedKind: .payment,
-            expectedSchemaVersion: 1,
+            expectedSchemaVersion: 2,
             scanLimits: limits
         )
         XCTAssertThrowsError(try animatedSession.ingest(headerTexts[0], atUptime: 200)) { error in
             XCTAssertEqual(
                 error as? IrohaPeerQRErrorV1,
-                .unexpectedSchemaVersion(expected: 1, actual: 0x0102)
+                .unexpectedSchemaVersion(expected: 2, actual: 1)
             )
         }
         XCTAssertThrowsError(try animatedSession.ingest(parityText, atUptime: 201)) { error in
@@ -635,31 +635,31 @@ final class IrohaPeerQRV1Tests: XCTestCase {
         XCTAssertThrowsError(try animatedSession.ingest(headerTexts[1], atUptime: 203)) { error in
             XCTAssertEqual(
                 error as? IrohaPeerQRErrorV1,
-                .unexpectedSchemaVersion(expected: 1, actual: 0x0102)
+                .unexpectedSchemaVersion(expected: 2, actual: 1)
             )
         }
 
-        let kagemusha = try IrohaPeerWireMessageV1(
-            profile: .kagemusha,
+        let offlineCashV1 = try IrohaPeerWireMessageV1(
+            profile: .offlineCashV1,
             kind: .payment,
-            schemaVersion: 0x0102,
-            canonicalPayload: irohaPeerKagemushaStructuralArchiveV1(
+            schemaVersion: 1,
+            canonicalPayload: irohaPeerOfflineCashStructuralArchiveV1(
                 kind: .payment,
                 payload: deterministicBytes(count: 20, seed: 73)
             )
         )
-        let kagemushaText = try XCTUnwrap(
-            IrohaPeerQRCodecV1.staticCompleteTextCandidate(for: kagemusha)
+        let offlineCashV1Text = try XCTUnwrap(
+            IrohaPeerQRCodecV1.staticCompleteTextCandidate(for: offlineCashV1)
         )
         let accepted = try IrohaPeerQRScanSessionV1(
-            expectedProfile: .kagemusha,
+            expectedProfile: .offlineCashV1,
             expectedKind: .payment,
-            expectedSchemaVersion: 0x0102
-        ).ingest(kagemushaText)
+            expectedSchemaVersion: 1
+        ).ingest(offlineCashV1Text)
         guard case .completed(let decoded) = accepted else {
-            return XCTFail("Expected configurable Kagemusha schema completion")
+            return XCTFail("Expected configurable OfflineCashV1 schema completion")
         }
-        XCTAssertEqual(decoded, kagemusha)
+        XCTAssertEqual(decoded, offlineCashV1)
     }
 
     fileprivate struct FrameLookup: Hashable {
@@ -685,13 +685,13 @@ final class IrohaPeerQRV1Tests: XCTestCase {
     private func makeMessage(
         count: Int,
         seed: UInt8,
-        schemaVersion: UInt16 = 0x0102
+        schemaVersion: UInt16 = 1
     ) throws -> IrohaPeerWireMessageV1 {
         try IrohaPeerWireMessageV1(
-            profile: .kagemusha,
+            profile: .offlineCashV1,
             kind: .payment,
             schemaVersion: schemaVersion,
-            canonicalPayload: irohaPeerKagemushaStructuralArchiveV1(
+            canonicalPayload: irohaPeerOfflineCashStructuralArchiveV1(
                 kind: .payment,
                 payload: deterministicBytes(count: count, seed: seed)
             )

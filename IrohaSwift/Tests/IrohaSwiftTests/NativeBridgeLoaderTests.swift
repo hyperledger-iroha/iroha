@@ -15,19 +15,6 @@ final class NativeBridgeLoaderTests: XCTestCase {
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(21, for: "macos-arm64_x86_64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(22, for: "macos-arm64_x86_64"))
         XCTAssertTrue(NoritoBridgeLoader.isSupportedBridgeAbiVersion(23, for: "macos-arm64_x86_64"))
-        XCTAssertTrue(KagemushaRecursiveSpend.requiredProtocolSymbols.contains(
-            "connect_norito_kagemusha_recursive_spend_artifact_begin_v4"
-        ))
-        XCTAssertTrue(KagemushaRecursiveSpend.requiredProtocolSymbols.contains(
-            "connect_norito_kagemusha_recursive_spend_artifact_set_install_v4"
-        ))
-        XCTAssertTrue(KagemushaRecursiveSpend.requiredProtocolSymbols.contains(
-            "connect_norito_kagemusha_offline_operation_status_validate_v2"
-        ))
-        XCTAssertEqual(KagemushaRecursiveSpend.nativeContractRevision, 1)
-        XCTAssertTrue(KagemushaRecursiveSpend.requiredProtocolSymbols.contains(
-            "connect_norito_kagemusha_native_contract_revision"
-        ))
         XCTAssertEqual(
             NoritoBridgeLoader.parliamentTimedOvnWalletRequiredSymbols,
             [

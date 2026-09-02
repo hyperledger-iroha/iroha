@@ -23,6 +23,7 @@ export {
 } from "./address.js";
 export { normalizeIdentifierInput } from "./normalizers.js";
 export { NetworkId } from "./networkId.js";
+export { OfflineCashV1 } from "./offlineCashV1.js";
 export {
   TAIRA_TESTNET_PROFILE,
   createTairaLocalSigningContext,
@@ -177,21 +178,6 @@ export {
   ToriiBrowserHttpError,
   ToriiBrowserStreamGapError,
 } from "./toriiBrowserClient.js";
-export {
-  KAGEMUSHA_CASH_HANDOFF_CAPABILITY,
-  KAGEMUSHA_MANIFEST_VERSION,
-  KAGEMUSHA_MAX_HOPS,
-  KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES,
-  KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION,
-  KAGEMUSHA_REQUIRED_NATIVE_CONTRACT_REVISION,
-  KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES,
-  normalizeKagemushaOperationId,
-  normalizeKagemushaOperationReference,
-  normalizeKagemushaOperationStatus,
-  normalizeKagemushaRedeemRequestV4,
-  normalizeOfflineStatus,
-  normalizeKagemushaTopUpRequestV4,
-} from "./kagemushaOffline.js";
 export {
   AtomicPrivateSettlementAuthV1,
   AtomicPrivateSettlementIdentifierV1,

@@ -3268,7 +3268,6 @@ def _lifecycle_turn_driver_pending_kura_runner_source_fidelity_errors(
             "pending.with_runner_setup(",
             "reconcile_executor_locked_body(executor, services)",
             "pending.drive_apply_recovery_turn(&mut setup_runner, control_queue_capacity)?",
-            "require_committed_kagemusha_runtime_effective_config()",
             "reconcile_pending_lane_startup(",
             "pending.prepare_lane_recovery(",
             "prepared.activate_no_clock(activation)?",

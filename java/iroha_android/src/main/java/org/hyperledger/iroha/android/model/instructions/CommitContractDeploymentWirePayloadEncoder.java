@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.model.instructions;
 
 import java.math.BigInteger;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Optional;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.norito.NoritoAdapters;
@@ -70,7 +71,27 @@ public final class CommitContractDeploymentWirePayloadEncoder {
     for (int index = 0; index < bytes.length; index++) {
       bytes[index] = (byte) Integer.parseInt(normalized.substring(index * 2, index * 2 + 2), 16);
     }
+    requireCanonicalHashBytes(bytes);
     return bytes;
+  }
+
+  static byte[] decodeCanonicalCodeHashBytes(final byte[] value) {
+    final NoritoDecoder decoder = new NoritoDecoder(Objects.requireNonNull(value, "value"), 0);
+    final byte[] decoded = FixedHashAdapter.INSTANCE.decode(decoder);
+    if (decoder.remaining() != 0) {
+      throw new IllegalArgumentException("code_hash must contain exactly 32 bytes");
+    }
+    return decoded;
+  }
+
+  private static void requireCanonicalHashBytes(final byte[] value) {
+    if (Objects.requireNonNull(value, "code_hash").length != 32) {
+      throw new IllegalArgumentException("code_hash must contain exactly 32 bytes");
+    }
+    if ((value[value.length - 1] & 1) == 0) {
+      throw new IllegalArgumentException(
+          "code_hash must carry the canonical iroha_crypto::Hash marker bit");
+    }
   }
 
   private static final class Payload {
@@ -102,7 +123,7 @@ public final class CommitContractDeploymentWirePayloadEncoder {
     @Override public void encode(final NoritoEncoder encoder, final Payload value) {
       field(encoder, U64, value.nonce);
       field(encoder, STRING, value.address);
-      field(encoder, new FixedHashAdapter(), value.hash);
+      field(encoder, FixedHashAdapter.INSTANCE, value.hash);
       field(encoder, STRING, value.alias);
       field(encoder, OPTIONAL_U64, value.expiry);
       field(encoder, OPTIONAL_STRING, value.previous);
@@ -113,8 +134,20 @@ public final class CommitContractDeploymentWirePayloadEncoder {
   }
 
   private static final class FixedHashAdapter implements TypeAdapter<byte[]> {
-    @Override public void encode(final NoritoEncoder encoder, final byte[] value) { encoder.writeBytes(value); }
-    @Override public byte[] decode(final NoritoDecoder decoder) { return decoder.readBytes(32); }
+    private static final FixedHashAdapter INSTANCE = new FixedHashAdapter();
+
+    @Override
+    public void encode(final NoritoEncoder encoder, final byte[] value) {
+      requireCanonicalHashBytes(value);
+      encoder.writeBytes(value);
+    }
+
+    @Override
+    public byte[] decode(final NoritoDecoder decoder) {
+      final byte[] value = decoder.readBytes(32);
+      requireCanonicalHashBytes(value);
+      return value;
+    }
   }
 
   private static <T> void field(

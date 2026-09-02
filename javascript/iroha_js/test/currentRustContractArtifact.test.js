@@ -67,7 +67,7 @@ test("real current compiler artifact is source-bound and passes the browser stru
 });
 
 test("canonical provenance is platform-independent and contains no build-machine identity", () => {
-  assert.equal(FIXTURE.fixture_version, 2);
+  assert.equal(FIXTURE.fixture_version, 1);
   assert.deepEqual(Object.keys(FIXTURE.source_provenance).sort(), [
     "artifact_generator_git_blob",
     "closure_algorithm",

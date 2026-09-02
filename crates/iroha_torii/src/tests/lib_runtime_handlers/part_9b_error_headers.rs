@@ -53,9 +53,13 @@ fn accept_transaction_nts_unhealthy_sets_header_code() {
 }
 #[test]
 fn offline_reason_query_error_sets_reject_code_header() {
-    use iroha_data_model::{offline::OFFLINE_REJECTION_REASON_PREFIX, query::error::QueryExecutionFail};
-    let message =
-        format!("{OFFLINE_REJECTION_REASON_PREFIX}certificate_expired:certificate expired");
+    use iroha_data_model::{
+        offline::OFFLINE_CASH_V1_REJECTION_REASON_PREFIX,
+        query::error::QueryExecutionFail,
+    };
+    let message = format!(
+        "{OFFLINE_CASH_V1_REJECTION_REASON_PREFIX}invalid_proof:recursive proof is invalid"
+    );
     let err = super::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         QueryExecutionFail::Conversion(message),
     ));
@@ -65,6 +69,6 @@ fn offline_reason_query_error_sets_reject_code_header() {
             .headers()
             .get("x-iroha-reject-code")
             .and_then(|v| v.to_str().ok()),
-        Some("certificate_expired")
+        Some("invalid_proof")
     );
 }

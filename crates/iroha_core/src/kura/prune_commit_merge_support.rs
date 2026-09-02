@@ -777,120 +777,62 @@ fn v2_commit_authority_hash(artifact: &V2FinalityArtifact) -> Hash {
         .encode(),
     )
 }
-/// Known immutable Kagemusha top-up finality sidecar formats.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
-pub enum KagemushaTopUpFinalitySidecarFormat {
-    /// Canonical bounded block-local top-up tree and Commit-QC binding.
-    #[codec(index = 1)]
-    Current,
-}
-/// One canonical Kagemusha top-up anchor and its block-local Merkle path.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub struct KagemushaTopUpFinalityLeaf {
-    /// Top-up operation identifier (the bytes following V4 witness key tag `0xD2`).
-    pub operation_id: [u8; 32],
-    /// Digest of the complete on-chain top-up anchor.
-    pub anchor_digest: [u8; 32],
-    /// Zero-based position in canonical operation-id order.
-    pub leaf_index: u32,
-    /// Number of real leaves in the block-local tree.
-    pub leaf_count: u32,
-    /// Merkle siblings from leaf level to root.
-    pub siblings: Vec<Hash>,
-}
-/// Immutable Kura record used to serve a finalized Kagemusha top-up proof.
-///
-/// The sidecar intentionally retains only the bounded top-up subtree, the
-/// ordinary-write root needed to reconstruct the consensus post-state root,
-/// and the hash of the exact durable Sumeragi-v2 finality artifact. Unrelated
-/// execution-witness values and duplicate certificates are not copied.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub struct KagemushaTopUpFinalitySidecar {
-    /// Schema/evolution discriminator.
-    pub format: KagemushaTopUpFinalitySidecarFormat,
-    /// Numeric format version, bound independently from the enum codec index.
-    pub version: u16,
-    /// Canonical block height.
-    pub height: u64,
-    /// Canonical block hash.
-    pub block_hash: HashOf<BlockHeader>,
-    /// Root of all non-Kagemusha writes in the execution witness.
-    pub ordinary_writes_root: Hash,
-    /// Root of the canonical bounded top-up tree.
-    pub topup_anchor_root: Hash,
-    /// Consensus post-state root certified by the bound finality artifact.
-    pub post_state_root: Hash,
-    /// Hash of the exact durably persisted Sumeragi-v2 finality artifact.
-    pub finality_artifact_hash: HashOf<V2FinalityArtifact>,
-    /// Canonically sorted top-up leaves and their exact paths.
-    pub leaves: Vec<KagemushaTopUpFinalityLeaf>,
-}
-impl KagemushaTopUpFinalitySidecar {
-    /// Current numeric sidecar version.
-    pub const VERSION: u16 = 1;
-    /// Return the proof leaf for an exact operation id.
-    #[must_use]
-    pub fn leaf_for_operation(
-        &self,
-        operation_id: &[u8; 32],
-    ) -> Option<&KagemushaTopUpFinalityLeaf> {
-        self.leaves
-            .binary_search_by_key(operation_id, |leaf| leaf.operation_id)
-            .ok()
-            .and_then(|index| self.leaves.get(index))
-    }
-}
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-struct StagedKagemushaTopUpFinalitySidecar {
-    format: KagemushaTopUpFinalitySidecarFormat,
-    version: u16,
-    height: u64,
-    block_hash: HashOf<BlockHeader>,
-    ordinary_writes_root: Hash,
-    topup_anchor_root: Hash,
-    post_state_root: Hash,
-    leaves: Vec<KagemushaTopUpFinalityLeaf>,
-}
-/// Immutable Kura proofs for one block's fixed receiver, validation-fee, and
+/// Immutable Kura proofs for one block's Offline Cash, validation-fee, and
 /// Parliament casting writes, authenticated by its exact finality artifact.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub struct KagemushaActiveReceiverFinalitySidecarV1 {
+pub struct OfflineCashFinalitySidecarV1 {
     /// Sidecar version.
     pub version: u16,
     /// Canonical block height.
     pub height: u64,
     /// Canonical block hash.
     pub block_hash: HashOf<BlockHeader>,
-    /// Root of all non-top-up execution writes.
+    /// Root of all canonical execution writes.
     pub ordinary_writes_root: Hash,
-    /// Final post-state root, including top-up composition when present.
+    /// Final post-state root.
     pub post_state_root: Hash,
     /// Hash of the exact durable finality artifact.
     pub finality_artifact_hash: HashOf<V2FinalityArtifact>,
-    /// Fixed-key sparse-SMT proof and exact encoded receiver commitment.
-    pub witness_proof: KagemushaActiveReceiverWitnessProofV1,
     /// Fixed-key sparse-SMT proof and exact encoded validation-fee commitment.
     pub validation_fee_policy_witness: ValidationFeePolicyWitnessProofV1,
     /// Fixed-key sparse-SMT proof and exact encoded Parliament casting commitment.
     pub parliament_timed_ovn_casting_witness: ParliamentTimedOvnCastingWitnessProofV1,
     /// Exact bounded compact leaves needed to build historical membership proofs.
     pub parliament_timed_ovn_casting_bindings: Vec<ParliamentTimedOvnCastingContextBindingV1>,
+    /// Canonically ordered Offline Cash V1 reserve-receipt inclusion proofs.
+    pub offline_cash_reserve_receipts: Vec<OfflineCashReserveReceiptWitnessV1>,
 }
-impl KagemushaActiveReceiverFinalitySidecarV1 {
+impl OfflineCashFinalitySidecarV1 {
     /// Current sidecar version.
     pub const VERSION: u16 = 1;
 }
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-struct StagedKagemushaActiveReceiverFinalitySidecarV1 {
+struct StagedOfflineCashFinalitySidecarV1 {
     version: u16,
     height: u64,
     block_hash: HashOf<BlockHeader>,
     ordinary_writes_root: Hash,
     post_state_root: Hash,
-    witness_proof: KagemushaActiveReceiverWitnessProofV1,
     validation_fee_policy_witness: ValidationFeePolicyWitnessProofV1,
     parliament_timed_ovn_casting_witness: ParliamentTimedOvnCastingWitnessProofV1,
     parliament_timed_ovn_casting_bindings: Vec<ParliamentTimedOvnCastingContextBindingV1>,
+    offline_cash_reserve_receipts: Vec<OfflineCashReserveReceiptWitnessV1>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+struct OfflineCashMintOutboxEntryV1 {
+    version: u16,
+    operation_id: [u8; 32],
+    result: OfflineCashTopUpResultV1,
+    result_wire_hash: Hash,
+    finality_artifact_hash: HashOf<V2FinalityArtifact>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+struct OfflineCashMintAuthorityCheckpointEntryV1 {
+    version: u16,
+    release_id: [u8; 32],
+    authority_head: [u8; 32],
+    checkpoint: crate::zk::offline_cash_v1_recursion::OfflineCashMintAuthorityCheckpointV1,
+    checkpoint_wire_hash: Hash,
 }
 impl CommitManifest {
     /// Construct a manifest for a committed height.

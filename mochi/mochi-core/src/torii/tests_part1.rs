@@ -483,6 +483,23 @@ fn composes_mcp_endpoint() {
         "http://127.0.0.1:8080/v1/mcp"
     );
 }
+#[test]
+fn local_mcp_probe_requires_native_protocol_discovery() {
+    let discovery = norito::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "resultType": "complete",
+            "supportedVersions": ["2025-06-18"]
+        }
+    });
+    let error = LocalMcpProbeResult::from_documents(&discovery, &norito::json!({}))
+        .expect_err("legacy-only discovery must not satisfy native MCP readiness");
+    assert!(
+        error.to_string().contains("2026-07-28"),
+        "unexpected error: {error}"
+    );
+}
 fn mock_json_body(value: norito::json::Value) -> String {
     norito::json::to_string(&value).expect("serialize mock json body")
 }
@@ -499,7 +516,7 @@ async fn local_mcp_rate_limit_preserves_retry_after() {
     let error = client
         .validate_local_mcp()
         .await
-        .expect_err("throttled MCP initialize probe must remain retryable");
+        .expect_err("throttled MCP discovery probe must remain retryable");
     assert!(matches!(
         error,
         ToriiError::RateLimited {
@@ -528,63 +545,69 @@ async fn validate_local_mcp_accepts_curated_iroha_tools() {
     let Some(server) = try_start_mock_server() else {
         return;
     };
-    let initialize = server.mock(|when, then| {
+    let discovery = server.mock(|when, then| {
         when.method(POST)
             .path("/v1/mcp")
+            .header("accept", "application/json, text/event-stream")
+            .header("mcp-protocol-version", "2026-07-28")
+            .header("mcp-method", "server/discover")
             .body(mock_json_body(norito::json!({
                 "jsonrpc": "2.0",
                 "id": 1,
-                "method": "initialize",
+                "method": "server/discover",
                 "params": {
-                    "protocolVersion": "2025-06-18",
-                    "capabilities": {},
-                    "clientInfo": {
-                        "name": "mochi-local-sandbox",
-                        "version": "1"
-                    }
-                }
-            })));
-        then.status(200)
-            .header("content-type", "application/json")
-            .body(mock_json_body(norito::json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "result": {
-                    "protocolVersion": "2025-06-18",
-                    "capabilities": {
-                        "tools": {
-                            "count": 4
+                    "_meta": {
+                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        "io.modelcontextprotocol/clientCapabilities": {},
+                        "io.modelcontextprotocol/clientInfo": {
+                            "name": "mochi-local-sandbox",
+                            "version": "1"
                         }
                     }
                 }
             })));
-    });
-    let initialized = server.mock(|when, then| {
-        when.method(POST)
-            .path("/v1/mcp")
-            .header("mcp-protocol-version", "2025-06-18")
-            .body(mock_json_body(norito::json!({
-                "jsonrpc": "2.0",
-                "method": "notifications/initialized"
-            })));
-        then.status(202);
-    });
-    let tools_list = server.mock(|when, then| {
-        when.method(POST)
-            .path("/v1/mcp")
-            .header("mcp-protocol-version", "2025-06-18")
-            .body(mock_json_body(norito::json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "tools/list",
-                "params": {}
-            })));
         then.status(200)
             .header("content-type", "application/json")
             .body(mock_json_body(norito::json!({
                 "jsonrpc": "2.0",
                 "id": 1,
                 "result": {
+                    "resultType": "complete",
+                    "supportedVersions": ["2026-07-28", "2025-06-18"],
+                    "capabilities": {
+                        "tools": { "listChanged": false }
+                    }
+                }
+            })));
+    });
+    let tools_list = server.mock(|when, then| {
+        when.method(POST)
+            .path("/v1/mcp")
+            .header("accept", "application/json, text/event-stream")
+            .header("mcp-protocol-version", "2026-07-28")
+            .header("mcp-method", "tools/list")
+            .body(mock_json_body(norito::json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list",
+                "params": {
+                    "_meta": {
+                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        "io.modelcontextprotocol/clientCapabilities": {},
+                        "io.modelcontextprotocol/clientInfo": {
+                            "name": "mochi-local-sandbox",
+                            "version": "1"
+                        }
+                    }
+                }
+            })));
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(mock_json_body(norito::json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {
+                    "resultType": "complete",
                     "_meta": {
                         "iroha": {
                             "toolsetVersion": "demo-v1"
@@ -601,7 +624,7 @@ async fn validate_local_mcp_accepts_curated_iroha_tools() {
     });
     let client = ToriiClient::new(server.url("/")).expect("client");
     let result = client.validate_local_mcp().await.expect("mcp probe");
-    assert_eq!(result.protocol_version, "2025-06-18");
+    assert_eq!(result.protocol_version, "2026-07-28");
     assert_eq!(result.toolset_version.as_deref(), Some("demo-v1"));
     assert_eq!(result.tool_count, 4);
     assert!(
@@ -610,8 +633,7 @@ async fn validate_local_mcp_accepts_curated_iroha_tools() {
             .iter()
             .all(|name| name.starts_with("iroha."))
     );
-    initialize.assert();
-    initialized.assert();
+    discovery.assert();
     tools_list.assert();
 }
 #[tokio::test(flavor = "current_thread")]
@@ -622,17 +644,21 @@ async fn validate_local_mcp_rejects_raw_torii_tools() {
     server.mock(|when, then| {
         when.method(POST)
             .path("/v1/mcp")
-            .header("mcp-protocol-version", "2025-06-18")
+            .header("accept", "application/json, text/event-stream")
+            .header("mcp-protocol-version", "2026-07-28")
+            .header("mcp-method", "server/discover")
             .body(mock_json_body(norito::json!({
                 "jsonrpc": "2.0",
                 "id": 1,
-                "method": "initialize",
+                "method": "server/discover",
                 "params": {
-                    "protocolVersion": "2025-06-18",
-                    "capabilities": {},
-                    "clientInfo": {
-                        "name": "mochi-local-sandbox",
-                        "version": "1"
+                    "_meta": {
+                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        "io.modelcontextprotocol/clientCapabilities": {},
+                        "io.modelcontextprotocol/clientInfo": {
+                            "name": "mochi-local-sandbox",
+                            "version": "1"
+                        }
                     }
                 }
             })));
@@ -641,35 +667,40 @@ async fn validate_local_mcp_rejects_raw_torii_tools() {
             .body(mock_json_body(norito::json!({
                 "jsonrpc": "2.0",
                 "id": 1,
-                "result": { "protocolVersion": "2025-06-18" }
+                "result": {
+                    "resultType": "complete",
+                    "supportedVersions": ["2026-07-28", "2025-06-18"]
+                }
             })));
     });
     server.mock(|when, then| {
         when.method(POST)
             .path("/v1/mcp")
-            .header("mcp-protocol-version", "2025-06-18")
+            .header("accept", "application/json, text/event-stream")
+            .header("mcp-protocol-version", "2026-07-28")
+            .header("mcp-method", "tools/list")
             .body(mock_json_body(norito::json!({
                 "jsonrpc": "2.0",
-                "method": "notifications/initialized"
-            })));
-        then.status(202);
-    });
-    server.mock(|when, then| {
-        when.method(POST)
-            .path("/v1/mcp")
-            .header("mcp-protocol-version", "2025-06-18")
-            .body(mock_json_body(norito::json!({
-                "jsonrpc": "2.0",
-                "id": 1,
+                "id": 2,
                 "method": "tools/list",
-                "params": {}
+                "params": {
+                    "_meta": {
+                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        "io.modelcontextprotocol/clientCapabilities": {},
+                        "io.modelcontextprotocol/clientInfo": {
+                            "name": "mochi-local-sandbox",
+                            "version": "1"
+                        }
+                    }
+                }
             })));
         then.status(200)
             .header("content-type", "application/json")
             .body(mock_json_body(norito::json!({
                 "jsonrpc": "2.0",
-                "id": 1,
+                "id": 2,
                 "result": {
+                    "resultType": "complete",
                     "tools": [
                         { "name": "iroha.health" },
                         { "name": "torii.get_v1_accounts" },
