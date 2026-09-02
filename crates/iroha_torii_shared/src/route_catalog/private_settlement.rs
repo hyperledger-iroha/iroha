@@ -23,7 +23,6 @@ const fn account_get(id: &'static str, path: &'static str) -> RouteDescriptor {
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_private_no_store()
-    .with_implicit_head(true)
     .with_cors_options(true)
 }
 
@@ -44,10 +43,10 @@ const fn account_post(id: &'static str, path: &'static str) -> RouteDescriptor {
     .with_cors_options(true)
 }
 
-const fn auditor_get(id: &'static str, path: &'static str) -> RouteDescriptor {
+const fn auditor_read_post(id: &'static str, path: &'static str) -> RouteDescriptor {
     RouteDescriptor::new(
         id,
-        HttpMethod::Get,
+        HttpMethod::Post,
         path,
         ApiSurface::Public,
         Listener::Torii,
@@ -58,7 +57,6 @@ const fn auditor_get(id: &'static str, path: &'static str) -> RouteDescriptor {
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_private_no_store()
-    .with_implicit_head(true)
 }
 
 const fn validator_get(id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -75,7 +73,6 @@ const fn validator_get(id: &'static str, path: &'static str) -> RouteDescriptor 
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_private_no_store()
-    .with_implicit_head(true)
 }
 
 const fn auditor_post(id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -106,7 +103,6 @@ const fn public_get(id: &'static str, path: &'static str) -> RouteDescriptor {
     )
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_implicit_head(true)
     .with_cors_options(true)
 }
 
@@ -126,7 +122,6 @@ const fn test_network_diagnostic_get(id: &'static str, path: &'static str) -> Ro
     ))
     .with_projections(RouteProjections::NONE)
     .with_private_no_store()
-    .with_implicit_head(true)
 }
 
 /// Upload one complete encrypted leg through restricted confidential DA.
@@ -170,7 +165,7 @@ pub const COMMITTEE_PROOF: RouteDescriptor = validator_get(
     "/v1/nexus/private-settlements/legs/{payload_digest}/committee-proof",
 );
 /// Fetch one padded encrypted audit capsule as an authorized local auditor.
-pub const AUDITOR_CAPSULE: RouteDescriptor = auditor_get(
+pub const AUDITOR_CAPSULE: RouteDescriptor = auditor_read_post(
     "private_settlement.auditor.capsule",
     "/v1/nexus/private-settlements/legs/{payload_digest}/audit-capsule",
 );
@@ -179,7 +174,8 @@ pub const AUDITOR_APPROVAL: RouteDescriptor = auditor_post(
     "private_settlement.auditor.approval",
     "/v1/nexus/private-settlements/legs/{payload_digest}/audit-approvals",
 );
-/// Submit a complete finalization or abort carrier as its public sponsor.
+/// Submit a complete Prepare-lock registration, finalization, or abort carrier
+/// as its public sponsor.
 pub const BUNDLE_SUBMIT: RouteDescriptor = account_post(
     "private_settlement.bundle.submit",
     "/v1/nexus/private-settlements/bundles",

@@ -10,10 +10,10 @@ use super::kagemusha_candidate_scenario::{
     validate_kagemusha_candidate_scenario_directory_v1,
 };
 use super::{
-    BridgeError, BridgeResult, KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4,
+    BridgeError, BridgeResult, KAGEMUSHA_RECURSIVE_SPEND_REDEEM_LOCAL_WITNESS_VERSION_V5,
     KagemushaNoteOpeningV2, KagemushaOutputMembershipPathsV4,
     KagemushaRecursiveSpendAppendLocalRequestV4, KagemushaRecursiveSpendInitLocalRequestV4,
-    KagemushaRecursiveSpendRedeemLocalRequestV4, KagemushaRecursiveSpendVerifyLocalRequestV4,
+    KagemushaRecursiveSpendRedeemLocalRequestV5, KagemushaRecursiveSpendVerifyLocalRequestV4,
     VerifyingKeyId, clear_bridge_output, connect_norito_free,
     connect_norito_kagemusha_recursive_spend_candidate_lab_append_v4,
     connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_begin_v4,
@@ -216,7 +216,7 @@ fn call_verify(
     take_ffi_archive(code, output, output_len)
 }
 fn call_redeem(
-    local: &KagemushaRecursiveSpendRedeemLocalRequestV4,
+    local: &KagemushaRecursiveSpendRedeemLocalRequestV5,
 ) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendRedeemBuildResultV4> {
     let request = encode(local)?;
     let mut output = ptr::null_mut();
@@ -727,11 +727,11 @@ fn redeem_request(
     opening: KagemushaNoteOpeningV2,
     recipient: &iroha_data_model::account::AccountId,
     verifier_commitment: [u8; 32],
-    operation_id: [u8; 32],
+    nonce: [u8; 32],
     block_height: u64,
-) -> KagemushaRecursiveSpendRedeemLocalRequestV4 {
-    KagemushaRecursiveSpendRedeemLocalRequestV4 {
-        version: KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4,
+) -> KagemushaRecursiveSpendRedeemLocalRequestV5 {
+    KagemushaRecursiveSpendRedeemLocalRequestV5 {
+        version: KAGEMUSHA_RECURSIVE_SPEND_REDEEM_LOCAL_WITNESS_VERSION_V5,
         bundle: branch.bundle.clone(),
         topup_provenance: branch.provenance.clone(),
         input_opening: opening,
@@ -745,7 +745,7 @@ fn redeem_request(
         ),
         unshield_verifier_commitment: verifier_commitment,
         block_height,
-        operation_id,
+        nonce,
         change_output_membership: None,
     }
 }
@@ -1134,7 +1134,7 @@ fn restart_phase(
         opening_one,
         &recipient,
         unshield,
-        scenario_digest32(&files, "redeem-hop-01-operation-id.bin")
+        scenario_digest32(&files, "redeem-hop-01-nonce.bin")
             .map_err(|_| BridgeError::KagemushaProve)?,
         positive_decimal(&files, "redeem-hop-01-block-height.txt")
             .map_err(|_| BridgeError::KagemushaProve)?,
@@ -1147,7 +1147,7 @@ fn restart_phase(
         opening_two,
         &recipient,
         unshield,
-        scenario_digest32(&files, "redeem-hop-02-operation-id.bin")
+        scenario_digest32(&files, "redeem-hop-02-nonce.bin")
             .map_err(|_| BridgeError::KagemushaProve)?,
         positive_decimal(&files, "redeem-hop-02-block-height.txt")
             .map_err(|_| BridgeError::KagemushaProve)?,
@@ -1160,7 +1160,7 @@ fn restart_phase(
         opening_change,
         &recipient,
         unshield,
-        scenario_digest32(&files, "redeem-sender-change-operation-id.bin")
+        scenario_digest32(&files, "redeem-sender-change-nonce.bin")
             .map_err(|_| BridgeError::KagemushaProve)?,
         positive_decimal(&files, "redeem-sender-change-block-height.txt")
             .map_err(|_| BridgeError::KagemushaProve)?,

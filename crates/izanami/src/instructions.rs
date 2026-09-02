@@ -2434,6 +2434,7 @@ impl ChaosState {
                 instructions: vec![InstructionBox::from(SlashPublicLaneValidator {
                     lane_id: LaneId::SINGLE,
                     validator: staker.id.clone(),
+                    offence_height: 1,
                     slash_id,
                     amount: 1u32.into(),
                     reason_code: "validator_missing".to_string(),
@@ -2451,6 +2452,7 @@ impl ChaosState {
             instructions: vec![InstructionBox::from(SlashPublicLaneValidator {
                 lane_id: lane,
                 validator: validator.id.clone(),
+                offence_height: 1,
                 slash_id,
                 amount,
                 reason_code: "chaos_injected".to_string(),

@@ -139,7 +139,7 @@ from .governance_ballot_client import create_governance_ballot_client_mixin
 from .governance_proposals import GovernanceProposalResult
 from .governance_proposals import _contract_address as _canonical_contract_address
 from .kagemusha_native import (
-    validate_offline_operation_status_json_v1 as _validate_kagemusha_operation_status_json_v1,
+    validate_offline_operation_status_json_v2 as _validate_kagemusha_operation_status_json_v2,
 )
 from .kaigi_relay_client import create_kaigi_relay_client_mixin
 from .native_amx import (
@@ -154,6 +154,7 @@ from .native_amx import (
 )
 from .norito_frame import (
     decode_norito_frame_payload,
+    encode_norito_frame,
     schema_hash_for_type_name,
     validate_norito_frame,
 )
@@ -953,6 +954,7 @@ __all__ = [
     "KagemushaTopUpRequestV4",
     "KagemushaRedeemRequestV4",
     "OfflineOperationKind",
+    "OfflineOperationIdentity",
     "OfflinePendingState",
     "OfflineOperationReference",
     "OfflineScaledAmount",
@@ -1914,15 +1916,71 @@ class RuntimeUpgradeTxResponse:
 
 
 @dataclass(frozen=True)
-class KagemushaTopUpRequestV4:
-    """Canonical ABI-21/V4 top-up with archive-derived operation id and issue time."""
+class OfflineOperationKind:
+    """Tagged Offline command kind from the public JSON contract."""
 
-    norito: bytes
-    operation_id: str = dataclass_field(init=False)
-    issued_at_ms: int = dataclass_field(init=False)
+    kind: Literal["top_up", "redeem"]
+    value: None = None
+
+
+@dataclass(frozen=True)
+class OfflineOperationIdentity:
+    """Complete immutable identity of one authorized Kagemusha operation."""
+
+    operation_id: str
+    request_authority_digest: str
+    canonical_request_digest: str
+    kind: OfflineOperationKind
+    issued_at_ms: int
+    expires_at_ms: int
 
     def __post_init__(self) -> None:
-        operation_id, issued_at_ms = _validate_kagemusha_norito_request(
+        _require_offline_operation_id(
+            self.operation_id, "OfflineOperationIdentity.operation_id"
+        )
+        _offline_transaction_hash(
+            self.request_authority_digest,
+            "OfflineOperationIdentity.request_authority_digest",
+        )
+        _offline_transaction_hash(
+            self.canonical_request_digest,
+            "OfflineOperationIdentity.canonical_request_digest",
+        )
+        if (
+            type(self.kind) is not OfflineOperationKind
+            or self.kind.kind not in ("top_up", "redeem")
+            or self.kind.value is not None
+        ):
+            raise ValueError(
+                "OfflineOperationIdentity.kind must be an exact top_up or redeem unit tag"
+            )
+        issued = _offline_unsigned(
+            self.issued_at_ms,
+            "OfflineOperationIdentity.issued_at_ms",
+            _OFFLINE_MAX_U64,
+            positive=True,
+        )
+        expires = _offline_unsigned(
+            self.expires_at_ms,
+            "OfflineOperationIdentity.expires_at_ms",
+            _OFFLINE_MAX_U64,
+            positive=True,
+        )
+        if expires <= issued or expires - issued > 300_000:
+            raise ValueError(
+                "OfflineOperationIdentity expiry must follow issue time by at most 300000ms"
+            )
+
+
+@dataclass(frozen=True)
+class KagemushaTopUpRequestV4:
+    """Canonical ABI-23/V4 top-up with archive-derived operation identity."""
+
+    norito: bytes
+    identity: OfflineOperationIdentity = dataclass_field(init=False)
+
+    def __post_init__(self) -> None:
+        identity = _validate_kagemusha_norito_request(
             self.norito,
             _KAGEMUSHA_TOP_UP_MAX_NORITO_REQUEST_BYTES,
             "KagemushaTopUpRequestV4.norito",
@@ -1931,20 +1989,18 @@ class KagemushaTopUpRequestV4:
             operation_id_field_index=6,
         )
         object.__setattr__(self, "norito", bytes(self.norito))
-        object.__setattr__(self, "operation_id", operation_id)
-        object.__setattr__(self, "issued_at_ms", issued_at_ms)
+        object.__setattr__(self, "identity", identity)
 
 
 @dataclass(frozen=True)
 class KagemushaRedeemRequestV4:
-    """Canonical ABI-21/V4 redeem with archive-derived operation id and issue time."""
+    """Canonical ABI-23/V4 redeem with archive-derived operation identity."""
 
     norito: bytes
-    operation_id: str = dataclass_field(init=False)
-    issued_at_ms: int = dataclass_field(init=False)
+    identity: OfflineOperationIdentity = dataclass_field(init=False)
 
     def __post_init__(self) -> None:
-        operation_id, issued_at_ms = _validate_kagemusha_norito_request(
+        identity = _validate_kagemusha_norito_request(
             self.norito,
             _KAGEMUSHA_REDEEM_MAX_NORITO_REQUEST_BYTES,
             "KagemushaRedeemRequestV4.norito",
@@ -1953,15 +2009,14 @@ class KagemushaRedeemRequestV4:
             operation_id_field_index=8,
         )
         object.__setattr__(self, "norito", bytes(self.norito))
-        object.__setattr__(self, "operation_id", operation_id)
-        object.__setattr__(self, "issued_at_ms", issued_at_ms)
+        object.__setattr__(self, "identity", identity)
 
 
 _OFFLINE_CAPABILITY_PATH = "/v1/offline/readiness"
 _OFFLINE_TOP_UP_PATH = "/v1/offline/top-up"
 _OFFLINE_REDEEM_PATH = "/v1/offline/redeem"
 _OFFLINE_OPERATIONS_PATH = "/v1/offline/operations"
-_OFFLINE_OPERATION_ID_RE = re.compile(r"^(?!0{64}$)[0-9a-f]{64}$")
+_OFFLINE_OPERATION_ID_RE = re.compile(r"^[0-9a-f]{63}[13579bdf]$")
 _OFFLINE_TRANSACTION_HASH_RE = re.compile(r"^[0-9a-f]{63}[13579bdf]$")
 _OFFLINE_ERROR_CODE_RE = re.compile(r"^[a-z0-9][a-z0-9_]{0,63}$")
 _OFFLINE_ASSET_DEFINITION_ID_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{28}$")
@@ -2026,7 +2081,7 @@ def _validate_kagemusha_norito_request(
     *,
     field_count: int,
     operation_id_field_index: int,
-) -> Tuple[str, int]:
+) -> OfflineOperationIdentity:
     if type(value) is not bytes:
         raise TypeError(f"{context} must be immutable bytes")
     if not value:
@@ -2063,9 +2118,37 @@ def _validate_kagemusha_norito_request(
         authorization_context,
     )
     authorization_operation_id = authorization_fields[3]
-    if authorization_operation_id != operation_id:
+    authority_archive = encode_norito_frame(
+        authorization_fields[0],
+        type_name="iroha_data_model::account::model::AccountId",
+        flags=0x02,
+        payload_alignment=1,
+    )
+    validate_norito_frame(
+        authority_archive,
+        context=f"{authorization_context} authority",
+        expected_type_name="iroha_data_model::account::model::AccountId",
+        expected_padding_length=0,
+        expected_flags=0x02,
+    )
+    nonce = authorization_fields[6]
+    if len(nonce) != 32 or not any(nonce):
         raise ValueError(
-            f"{authorization_context} operation_id must equal the outer operation_id"
+            f"{authorization_context} nonce must be exactly 32 non-zero bytes"
+        )
+    derived_operation_id = _offline_iroha_blake2b_hash(
+        b"iroha:offline:kagemusha:operation-id:v4\0",
+        len(authority_archive).to_bytes(8, "little"),
+        authority_archive,
+        nonce,
+    )
+    if (
+        authorization_operation_id != operation_id
+        or derived_operation_id != operation_id
+    ):
+        raise ValueError(
+            f"{authorization_context} operation_id must equal the canonical "
+            "authority-and-nonce derivation"
         )
     issued_at_ms_bytes = authorization_fields[4]
     if len(issued_at_ms_bytes) != 8:
@@ -2073,7 +2156,34 @@ def _validate_kagemusha_norito_request(
     issued_at_ms = int.from_bytes(issued_at_ms_bytes, "little")
     if issued_at_ms == 0:
         raise ValueError(f"{authorization_context} issued_at_ms must be positive")
-    return operation_id.hex(), issued_at_ms
+    expires_at_ms_bytes = authorization_fields[5]
+    if len(expires_at_ms_bytes) != 8:
+        raise ValueError(f"{authorization_context} expires_at_ms must be exactly 8 bytes")
+    expires_at_ms = int.from_bytes(expires_at_ms_bytes, "little")
+    request_kind: Literal["top_up", "redeem"] = (
+        "top_up"
+        if expected_type_name == _OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME
+        else "redeem"
+    )
+    request_authority_digest = _offline_iroha_blake2b_hash(
+        b"iroha:offline:kagemusha:operation-outcome-authority:v4\0",
+        len(authority_archive).to_bytes(8, "little"),
+        authority_archive,
+    )
+    canonical_request_digest = _offline_iroha_blake2b_hash(
+        b"iroha:offline:kagemusha:operation-request:v4\0",
+        request_kind.encode("ascii"),
+        len(value).to_bytes(8, "little"),
+        value,
+    )
+    return OfflineOperationIdentity(
+        operation_id=derived_operation_id.hex(),
+        request_authority_digest=request_authority_digest.hex(),
+        canonical_request_digest=canonical_request_digest.hex(),
+        kind=OfflineOperationKind(kind=request_kind),
+        issued_at_ms=issued_at_ms,
+        expires_at_ms=expires_at_ms,
+    )
 
 
 def _decode_kagemusha_compact_fields(
@@ -2348,7 +2458,7 @@ def _offline_byte_array(value: Any, context: str, exact_length: Optional[int] = 
 def _require_offline_operation_id(value: Any, context: str = "operation_id") -> str:
     if not isinstance(value, str) or _OFFLINE_OPERATION_ID_RE.fullmatch(value) is None:
         raise RuntimeError(
-            f"{context} must be a non-zero lowercase 64-character hexadecimal string"
+            f"{context} must be marker-bearing lowercase 64-character hexadecimal"
         )
     return value
 
@@ -2539,14 +2649,6 @@ class OfflineStatus:
 
 
 @dataclass(frozen=True)
-class OfflineOperationKind:
-    """Tagged Offline command kind from the public JSON contract."""
-
-    kind: Literal["top_up", "redeem"]
-    value: None = None
-
-
-@dataclass(frozen=True)
 class OfflinePendingState:
     """Tagged initial state returned by a successful command submission."""
 
@@ -2558,12 +2660,10 @@ class OfflinePendingState:
 class OfflineOperationReference:
     """Reference returned by an accepted asynchronous Offline command."""
 
-    operation_id: str
-    kind: OfflineOperationKind
+    identity: OfflineOperationIdentity
     state: OfflinePendingState
     transaction_hash: str
     status_uri: str
-    submitted_at_ms: int
 
 
 @dataclass(frozen=True)
@@ -2913,10 +3013,8 @@ class OfflineErrorEnvelope:
 class OfflinePendingOperation:
     """Non-terminal Offline operation state."""
 
-    operation_id: str
-    kind: OfflineOperationKind
+    identity: OfflineOperationIdentity
     transaction_hash: str
-    submitted_at_ms: int
     state: Literal["pending"] = "pending"
 
 
@@ -2924,7 +3022,7 @@ class OfflinePendingOperation:
 class OfflineAppliedOperation:
     """Applied terminal Offline operation state."""
 
-    operation_id: str
+    identity: OfflineOperationIdentity
     result: OfflineAppliedResult
     state: Literal["applied"] = "applied"
 
@@ -2933,8 +3031,7 @@ class OfflineAppliedOperation:
 class OfflineRejectedOperation:
     """One rejected carrier attempt for a still-retryable Offline operation."""
 
-    operation_id: str
-    kind: OfflineOperationKind
+    identity: OfflineOperationIdentity
     transaction_hash: str
     error: OfflineErrorEnvelope
     state: Literal["rejected"] = "rejected"
@@ -2958,6 +3055,51 @@ def _offline_operation_kind(value: Any, context: str) -> OfflineOperationKind:
     return OfflineOperationKind(kind=kind)
 
 
+def _offline_operation_identity(value: Any, context: str) -> OfflineOperationIdentity:
+    record = _offline_mapping(value, context)
+    _offline_exact_object_fields(
+        record,
+        context,
+        required=(
+            "operation_id",
+            "request_authority_digest",
+            "canonical_request_digest",
+            "kind",
+            "issued_at_ms",
+            "expires_at_ms",
+        ),
+    )
+    return OfflineOperationIdentity(
+        operation_id=_require_offline_operation_id(
+            _offline_required(record, "operation_id", context),
+            f"{context}.operation_id",
+        ),
+        request_authority_digest=_offline_transaction_hash(
+            _offline_required(record, "request_authority_digest", context),
+            f"{context}.request_authority_digest",
+        ),
+        canonical_request_digest=_offline_transaction_hash(
+            _offline_required(record, "canonical_request_digest", context),
+            f"{context}.canonical_request_digest",
+        ),
+        kind=_offline_operation_kind(
+            _offline_required(record, "kind", context), f"{context}.kind"
+        ),
+        issued_at_ms=_offline_unsigned(
+            _offline_required(record, "issued_at_ms", context),
+            f"{context}.issued_at_ms",
+            _OFFLINE_MAX_U64,
+            positive=True,
+        ),
+        expires_at_ms=_offline_unsigned(
+            _offline_required(record, "expires_at_ms", context),
+            f"{context}.expires_at_ms",
+            _OFFLINE_MAX_U64,
+            positive=True,
+        ),
+    )
+
+
 def _offline_status_uri(operation_id: str) -> str:
     return f"{_OFFLINE_OPERATIONS_PATH}/{operation_id}"
 
@@ -2978,9 +3120,7 @@ def _offline_retry_after(value: Any, context: str) -> int:
 def _offline_operation_reference(
     payload: Mapping[str, Any],
     *,
-    expected_operation_id: str,
-    expected_kind: Literal["top_up", "redeem"],
-    expected_submitted_at_ms: int,
+    expected_identity: OfflineOperationIdentity,
     location: Optional[str],
     retry_after: Optional[str],
 ) -> OfflineOperationReference:
@@ -2990,22 +3130,17 @@ def _offline_operation_reference(
         record,
         context,
         required=(
-            "operation_id",
-            "kind",
+            "identity",
             "state",
             "transaction_hash",
             "status_uri",
-            "submitted_at_ms",
         ),
     )
-    operation_id = _require_offline_operation_id(
-        _offline_required(record, "operation_id", context), f"{context}.operation_id"
+    identity = _offline_operation_identity(
+        _offline_required(record, "identity", context), f"{context}.identity"
     )
-    if operation_id != expected_operation_id:
-        raise RuntimeError(f"{context}.operation_id does not match the submitted request")
-    kind = _offline_operation_kind(_offline_required(record, "kind", context), f"{context}.kind")
-    if kind.kind != expected_kind:
-        raise RuntimeError(f"{context}.kind does not match the submitted command")
+    if identity != expected_identity:
+        raise RuntimeError(f"{context}.identity does not match the submitted request")
     raw_state = _offline_mapping(_offline_required(record, "state", context), f"{context}.state")
     _offline_exact_object_fields(
         raw_state, f"{context}.state", required=("state", "value")
@@ -3015,32 +3150,20 @@ def _offline_operation_reference(
     if raw_state["value"] is not None:
         raise RuntimeError(f"{context}.state.value must be null")
     status_uri = _offline_required(record, "status_uri", context)
-    expected_uri = _offline_status_uri(operation_id)
+    expected_uri = _offline_status_uri(identity.operation_id)
     if status_uri != expected_uri:
         raise RuntimeError(f"{context}.status_uri must equal {expected_uri}")
     if location != expected_uri:
         raise RuntimeError(f"Location header must equal {expected_uri}")
     _offline_retry_after(retry_after, "Retry-After header")
-    submitted_at_ms = _offline_unsigned(
-        _offline_required(record, "submitted_at_ms", context),
-        f"{context}.submitted_at_ms",
-        _OFFLINE_MAX_U64,
-        positive=True,
-    )
-    if submitted_at_ms != expected_submitted_at_ms:
-        raise RuntimeError(
-            f"{context}.submitted_at_ms does not match the signed request issued_at_ms"
-        )
     return OfflineOperationReference(
-        operation_id=operation_id,
-        kind=kind,
+        identity=identity,
         state=OfflinePendingState(),
         transaction_hash=_offline_transaction_hash(
             _offline_required(record, "transaction_hash", context),
             f"{context}.transaction_hash",
         ),
         status_uri=status_uri,
-        submitted_at_ms=submitted_at_ms,
     )
 
 
@@ -3050,15 +3173,10 @@ def _validated_offline_operation_reference(
 ) -> OfflineOperationReference:
     if type(value) is not OfflineOperationReference:
         raise TypeError(f"{context} must be an OfflineOperationReference")
-    operation_id = _require_offline_operation_id(
-        value.operation_id, f"{context}.operation_id"
-    )
-    if (
-        type(value.kind) is not OfflineOperationKind
-        or value.kind.kind not in ("top_up", "redeem")
-        or value.kind.value is not None
-    ):
-        raise RuntimeError(f"{context}.kind must be an exact top_up or redeem unit tag")
+    if type(value.identity) is not OfflineOperationIdentity:
+        raise RuntimeError(f"{context}.identity must be an OfflineOperationIdentity")
+    identity = value.identity
+    identity.__post_init__()
     if (
         type(value.state) is not OfflinePendingState
         or value.state.state != "pending"
@@ -3066,15 +3184,9 @@ def _validated_offline_operation_reference(
     ):
         raise RuntimeError(f"{context}.state must be the exact pending unit tag")
     _offline_transaction_hash(value.transaction_hash, f"{context}.transaction_hash")
-    expected_uri = _offline_status_uri(operation_id)
+    expected_uri = _offline_status_uri(identity.operation_id)
     if value.status_uri != expected_uri:
         raise RuntimeError(f"{context}.status_uri must equal {expected_uri}")
-    _offline_unsigned(
-        value.submitted_at_ms,
-        f"{context}.submitted_at_ms",
-        _OFFLINE_MAX_U64,
-        positive=True,
-    )
     return value
 
 
@@ -4502,71 +4614,52 @@ def _offline_operation_status(
         _offline_exact_object_fields(
             value,
             value_context,
-            required=("operation_id", "kind", "transaction_hash", "submitted_at_ms"),
+            required=("identity", "transaction_hash"),
         )
     elif state == "applied":
         _offline_exact_object_fields(
-            value, value_context, required=("operation_id", "result")
+            value, value_context, required=("identity", "result")
         )
     else:
         _offline_exact_object_fields(
             value,
             value_context,
-            required=("operation_id", "kind", "transaction_hash", "error"),
+            required=("identity", "transaction_hash", "error"),
         )
-    operation_id = _require_offline_operation_id(
-        _offline_required(value, "operation_id", value_context),
-        f"{value_context}.operation_id",
+    # Establish the entire immutable identity before accepting any retry cursor
+    # or terminal payload from the response.
+    identity = _offline_operation_identity(
+        _offline_required(value, "identity", value_context),
+        f"{value_context}.identity",
     )
-    if operation_id != accepted.operation_id:
+    if identity != accepted.identity:
         raise RuntimeError(
-            f"{value_context}.operation_id does not match the accepted operation"
+            f"{value_context}.identity does not match the accepted operation"
         )
     if state == "pending":
-        status = OfflinePendingOperation(
-            operation_id=operation_id,
-            kind=_offline_operation_kind(
-                _offline_required(value, "kind", value_context), f"{value_context}.kind"
-            ),
+        return OfflinePendingOperation(
+            identity=identity,
             transaction_hash=_offline_transaction_hash(
                 _offline_required(value, "transaction_hash", value_context),
                 f"{value_context}.transaction_hash",
             ),
-            submitted_at_ms=_offline_unsigned(
-                _offline_required(value, "submitted_at_ms", value_context),
-                f"{value_context}.submitted_at_ms",
-                _OFFLINE_MAX_U64,
-                positive=True,
-            ),
         )
-        if (
-            status.kind != accepted.kind
-            or status.submitted_at_ms != accepted.submitted_at_ms
-        ):
-            raise RuntimeError(
-                f"{value_context} does not match the accepted kind or "
-                "immutable submission timestamp"
-            )
-        return status
     if state == "applied":
         status = OfflineAppliedOperation(
-            operation_id=operation_id,
+            identity=identity,
             result=_offline_applied_result(
                 _offline_required(value, "result", value_context),
                 f"{value_context}.result",
-                operation_id,
+                identity.operation_id,
             ),
         )
-        if status.result.kind != accepted.kind.kind:
+        if status.result.kind != identity.kind.kind:
             raise RuntimeError(
                 f"{value_context}.result does not match the accepted operation kind"
             )
         return status
-    status = OfflineRejectedOperation(
-        operation_id=operation_id,
-        kind=_offline_operation_kind(
-            _offline_required(value, "kind", value_context), f"{value_context}.kind"
-        ),
+    return OfflineRejectedOperation(
+        identity=identity,
         transaction_hash=_offline_transaction_hash(
             _offline_required(value, "transaction_hash", value_context),
             f"{value_context}.transaction_hash",
@@ -4575,11 +4668,6 @@ def _offline_operation_status(
             _offline_required(value, "error", value_context), f"{value_context}.error"
         ),
     )
-    if status.kind != accepted.kind:
-        raise RuntimeError(
-            f"{value_context} does not match the accepted operation kind"
-        )
-    return status
 
 
 def _multisig_norito_compact_length(value: int) -> bytes:
@@ -11674,10 +11762,8 @@ class ToriiClient(
             raise TypeError("request must be KagemushaTopUpRequestV4")
         return self._submit_kagemusha_command(
             _OFFLINE_TOP_UP_PATH,
-            "top_up",
             request.norito,
-            request.operation_id,
-            request.issued_at_ms,
+            request.identity,
             timeout=_kagemusha_request_timeout(timeout, "submit_kagemusha_top_up"),
         )
 
@@ -11693,10 +11779,8 @@ class ToriiClient(
             raise TypeError("request must be KagemushaRedeemRequestV4")
         return self._submit_kagemusha_command(
             _OFFLINE_REDEEM_PATH,
-            "redeem",
             request.norito,
-            request.operation_id,
-            request.issued_at_ms,
+            request.identity,
             timeout=_kagemusha_request_timeout(timeout, "submit_kagemusha_redeem"),
         )
 
@@ -11709,9 +11793,8 @@ class ToriiClient(
         """Fetch status bound to an accepted Kagemusha operation identity.
 
         Exact retries may advance the active transaction hash while the
-        operation id, kind, and submitted timestamp stay fixed. Persist the
-        returned Pending carrier hash without replacing the accepted
-        ``submitted_at_ms``.
+        complete nested identity stays fixed. Persist the returned Pending
+        carrier hash without replacing the accepted identity.
         """
 
         accepted = _validated_offline_operation_reference(accepted_reference)
@@ -11742,16 +11825,14 @@ class ToriiClient(
             isinstance(status, OfflineAppliedOperation)
             and isinstance(status.result, OfflineTopUpOperationResult)
         ):
-            _validate_kagemusha_operation_status_json_v1(status_json)
+            _validate_kagemusha_operation_status_json_v2(status_json)
         return status
 
     def _submit_kagemusha_command(
         self,
         path: str,
-        kind: Literal["top_up", "redeem"],
         body: bytes,
-        operation_id: str,
-        issued_at_ms: int,
+        identity: OfflineOperationIdentity,
         *,
         timeout: Optional[float],
     ) -> OfflineOperationReference:
@@ -11761,7 +11842,7 @@ class ToriiClient(
             headers={
                 "Accept": "application/json",
                 "Content-Type": "application/x-norito",
-                "Idempotency-Key": operation_id,
+                "Idempotency-Key": identity.operation_id,
             },
             data=body,
             stream=True,
@@ -11782,9 +11863,7 @@ class ToriiClient(
         )
         return _offline_operation_reference(
             payload,
-            expected_operation_id=operation_id,
-            expected_kind=kind,
-            expected_submitted_at_ms=issued_at_ms,
+            expected_identity=identity,
             location=response.headers.get("Location"),
             retry_after=response.headers.get("Retry-After"),
         )

@@ -14,14 +14,16 @@ use iroha_data_model::{
     asset::AssetDefinitionId,
     nexus::{
         ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, PRIVATE_SETTLEMENT_MAX_AUDIT_MEMO_BYTES_V1,
-        PRIVATE_SETTLEMENT_MAX_AUDIT_POLICY_REFERENCES_V1, PrivateSettlementCommitteeAuthorityV1,
-        PrivateSettlementPoolGovernanceV1, PrivateSettlementRouteV1,
+        PRIVATE_SETTLEMENT_MAX_AUDIT_POLICY_REFERENCES_V1, PrivateSettlementAuditPolicyV1,
+        PrivateSettlementCommitteeAuthorityV1, PrivateSettlementPoolGovernanceV1,
+        PrivateSettlementRouteV1,
     },
     privacy::PrivacyPoolIdV1,
 };
 use iroha_torii_shared::private_settlement_api::{
     PrivateSettlementAuditApprovalRequestV1, PrivateSettlementAuditApprovalResponseV1,
-    PrivateSettlementAuditorCapsuleResponseV1, PrivateSettlementLifecycleDtoV1,
+    PrivateSettlementAuditorCapsuleRequestV1, PrivateSettlementAuditorCapsuleResponseV1,
+    PrivateSettlementLifecycleDtoV1,
 };
 use std::{collections::BTreeSet, path::Path};
 use url::Url;
@@ -31,6 +33,7 @@ const PRIVATE_SETTLEMENT_AUDITOR_COMMITTEE_SIZE_V1: usize = 4;
 const PRIVATE_SETTLEMENT_AUDITOR_SECRET_FILE_VERSION_V1: u8 = 1;
 const PRIVATE_SETTLEMENT_AUDITOR_BUSINESS_POLICY_MAX_IDENTITIES_V1: usize = 256;
 const PRIVATE_SETTLEMENT_AUDITOR_SECRET_FILE_MAX_BYTES_V1: u64 = 16 * 1024;
+const PRIVATE_SETTLEMENT_AUDIT_POLICY_FILE_MAX_BYTES_V1: u64 = 256 * 1024;
 const PRIVATE_SETTLEMENT_AUDITOR_BUSINESS_POLICY_FILE_MAX_BYTES_V1: u64 = 256 * 1024;
 
 /// Strict local business policy applied to one decrypted settlement leg.
@@ -255,6 +258,7 @@ trait PrivateSettlementOnlineAuditorTransportV1 {
         endpoints: &[Url],
         expected_authority: &PrivateSettlementCommitteeAuthorityV1,
         payload_digest: iroha_crypto::Hash,
+        request: &PrivateSettlementAuditorCapsuleRequestV1,
         signer: &dyn IdentityRequestSignerV1,
     ) -> Result<PrivateSettlementOnlineAuditorQuorumViewV1<Self::View>>;
 
@@ -278,12 +282,14 @@ impl PrivateSettlementOnlineAuditorTransportV1 for Client {
         endpoints: &[Url],
         expected_authority: &PrivateSettlementCommitteeAuthorityV1,
         payload_digest: iroha_crypto::Hash,
+        request: &PrivateSettlementAuditorCapsuleRequestV1,
         signer: &dyn IdentityRequestSignerV1,
     ) -> Result<PrivateSettlementOnlineAuditorQuorumViewV1<Self::View>> {
         let response = self.private_settlement_auditor_capsule_quorum_for_authority_v1(
             endpoints,
             expected_authority,
             payload_digest,
+            request,
             signer,
         )?;
         Ok(PrivateSettlementOnlineAuditorQuorumViewV1 {
@@ -375,6 +381,7 @@ fn coordinate_with_transport_v1<T, BuildApproval>(
     endpoints: &[Url],
     expected_authority: &PrivateSettlementCommitteeAuthorityV1,
     payload_digest: iroha_crypto::Hash,
+    capsule_request: &PrivateSettlementAuditorCapsuleRequestV1,
     signer: &dyn IdentityRequestSignerV1,
     build_approval: BuildApproval,
 ) -> Result<T::Acknowledgement>
@@ -385,7 +392,13 @@ where
     validate_committee_endpoints_v1(endpoints)?;
     validate_private_settlement_expected_authority_v1(expected_authority)?;
     let quorum = transport
-        .fetch_quorum(endpoints, expected_authority, payload_digest, signer)
+        .fetch_quorum(
+            endpoints,
+            expected_authority,
+            payload_digest,
+            capsule_request,
+            signer,
+        )
         .map_err(|_| eyre!("private-settlement online auditor quorum fetch failed"))?;
     validate_authoritative_height_v1(
         quorum.authoritative_height,
@@ -423,6 +436,7 @@ pub(crate) fn coordinate_private_settlement_online_auditor_v1<P, E>(
     endpoints: &[Url],
     expected_authority: &PrivateSettlementCommitteeAuthorityV1,
     payload_digest: iroha_crypto::Hash,
+    audit_policy: &PrivateSettlementAuditPolicyV1,
     pool_governance: &PrivateSettlementPoolGovernanceV1,
     credentials: &P,
     request_signer: &dyn IdentityRequestSignerV1,
@@ -432,20 +446,35 @@ where
     P: PrivateSettlementAuditorCredentialProviderV1 + ?Sized,
     E: PrivateSettlementAuditPolicyEvaluatorV1 + ?Sized,
 {
-    if credentials.approval_public_key() != request_signer.public_key() {
+    if credentials.approval_public_key() != request_signer.public_key()
+        || audit_policy.validate().is_err()
+        || pool_governance.body.audit_policy_digest != audit_policy.policy_digest
+        || pool_governance.body.audit_key_epoch != audit_policy.body.key_epoch
+        || pool_governance.body.route.dataspace_id != audit_policy.body.dataspace_id
+        || !audit_policy
+            .body
+            .auditors
+            .iter()
+            .any(|auditor| &auditor.signing_key == request_signer.public_key())
+    {
         return Err(eyre!(
             "private-settlement online auditor credential or policy operation failed"
         ));
     }
+    let capsule_request = PrivateSettlementAuditorCapsuleRequestV1 {
+        audit_policy: audit_policy.clone(),
+    };
     coordinate_with_transport_v1(
         client,
         endpoints,
         expected_authority,
         payload_digest,
+        &capsule_request,
         request_signer,
         |response| {
             build_approval_request_v1(
                 response,
+                audit_policy,
                 pool_governance,
                 credentials,
                 request_signer.public_key(),
@@ -457,6 +486,7 @@ where
 
 fn build_approval_request_v1<P, E>(
     response: PrivateSettlementAuditorCapsuleResponseV1,
+    audit_policy: &PrivateSettlementAuditPolicyV1,
     pool_governance: &PrivateSettlementPoolGovernanceV1,
     credentials: &P,
     transport_public_key: &PublicKey,
@@ -467,6 +497,8 @@ where
     E: PrivateSettlementAuditPolicyEvaluatorV1 + ?Sized,
 {
     if credentials.approval_public_key() != transport_public_key
+        || response.access_audit_policy != *audit_policy
+        || response.audit_policy != *audit_policy
         || !response
             .audit_policy
             .is_active_at(response.authoritative_height)
@@ -508,7 +540,10 @@ where
     .map_err(|_| {
         eyre!("private-settlement online auditor credential or policy operation failed")
     })?;
-    Ok(PrivateSettlementAuditApprovalRequestV1 { approval })
+    Ok(PrivateSettlementAuditApprovalRequestV1 {
+        audit_policy: audit_policy.clone(),
+        approval,
+    })
 }
 
 fn sidecar_lifecycle_v1(
@@ -619,6 +654,27 @@ pub(crate) fn load_private_settlement_pool_governance_v1(
         .validate()
         .map_err(|_| eyre!("private-settlement restricted pool governance is invalid"))?;
     Ok(ZeroizingPrivateSettlementPoolGovernanceV1(governance))
+}
+
+/// Load and validate the complete current governed auditor policy.
+///
+/// This owner-only input is sent as signed request evidence and is accepted by
+/// a validator only when its self-digest, epoch, lifecycle, and dataspace match
+/// the exact policy revision active in that validator's WSV.
+pub(crate) fn load_private_settlement_audit_policy_v1(
+    path: &Path,
+) -> Result<PrivateSettlementAuditPolicyV1> {
+    let bytes = read_owner_only_auditor_restricted_file_v1(
+        path,
+        PRIVATE_SETTLEMENT_AUDIT_POLICY_FILE_MAX_BYTES_V1,
+    )
+    .map_err(|_| eyre!("private-settlement auditor policy file is unavailable"))?;
+    let policy: PrivateSettlementAuditPolicyV1 = norito::json::from_slice(bytes.as_slice())
+        .map_err(|_| eyre!("private-settlement auditor policy is invalid"))?;
+    policy
+        .validate()
+        .map_err(|_| eyre!("private-settlement auditor policy is invalid"))?;
+    Ok(policy)
 }
 
 /// Load and validate one strict owner-only local business policy.
@@ -918,10 +974,13 @@ fn read_owner_only_auditor_secret_file_unix_v1(
 mod tests {
     use super::*;
     use iroha::client::BorrowedKeyPairIdentityRequestSignerV1;
-    use iroha_crypto::{Algorithm, HashOf, KeyPair};
+    use iroha_crypto::{Algorithm, HashOf, HybridKeyPair, KeyPair};
     use iroha_data_model::{
         block::BlockHeader,
-        nexus::{DataSpaceId, LaneId},
+        nexus::{
+            DataSpaceId, LaneId, PrivateSettlementAuditPolicyBodyV1, PrivateSettlementAuditorV1,
+            PrivateSettlementHybridPublicKeyV1,
+        },
     };
     use std::cell::Cell;
 
@@ -944,6 +1003,7 @@ mod tests {
             endpoints: &[Url],
             _expected_authority: &PrivateSettlementCommitteeAuthorityV1,
             _payload_digest: iroha_crypto::Hash,
+            _request: &PrivateSettlementAuditorCapsuleRequestV1,
             _signer: &dyn IdentityRequestSignerV1,
         ) -> Result<PrivateSettlementOnlineAuditorQuorumViewV1<Self::View>> {
             self.fetch_endpoint_attempts.set(endpoints.len());
@@ -1022,6 +1082,32 @@ mod tests {
 
     fn signer_v1() -> KeyPair {
         KeyPair::try_from_seed(vec![0xB9; 32], Algorithm::Ed25519).expect("checked signer fixture")
+    }
+
+    fn capsule_request_v1() -> PrivateSettlementAuditorCapsuleRequestV1 {
+        let signing = signer_v1();
+        let mut hybrid_rng = iroha_crypto::rng_from_seed_slice(b"online auditor request fixture");
+        let hybrid = HybridKeyPair::generate(&mut hybrid_rng).expect("hybrid fixture");
+        PrivateSettlementAuditorCapsuleRequestV1 {
+            audit_policy: PrivateSettlementAuditPolicyV1::new(PrivateSettlementAuditPolicyBodyV1 {
+                version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+                dataspace_id: authority_v1().route.dataspace_id,
+                policy_id: iroha_crypto::Hash::new(b"online auditor policy fixture"),
+                revision: 1,
+                key_epoch: 1,
+                activation_height: 1,
+                retirement_height: None,
+                min_approvals: 1,
+                auditors: vec![PrivateSettlementAuditorV1 {
+                    auditor_id: AccountId::new(signing.public_key().clone()),
+                    signing_key: signing.public_key().clone(),
+                    encryption_key: PrivateSettlementHybridPublicKeyV1::from_hybrid(
+                        hybrid.public(),
+                    ),
+                }],
+            })
+            .expect("audit policy fixture"),
+        }
     }
 
     fn account_v1(seed: u8) -> AccountId {
@@ -1154,6 +1240,7 @@ mod tests {
             &endpoints_v1(),
             &authority_v1(),
             iroha_crypto::Hash::new(b"online-auditor-one-failure"),
+            &capsule_request_v1(),
             &BorrowedKeyPairIdentityRequestSignerV1::new(&signer),
             |view| Ok(view.saturating_add(1)),
         )
@@ -1176,6 +1263,7 @@ mod tests {
             &endpoints_v1(),
             &authority_v1(),
             iroha_crypto::Hash::new(b"online-auditor-split-view"),
+            &capsule_request_v1(),
             &BorrowedKeyPairIdentityRequestSignerV1::new(&signer),
             |_| {
                 approval_called.set(true);
@@ -1210,6 +1298,7 @@ mod tests {
             &endpoints_v1(),
             &authority_v1(),
             iroha_crypto::Hash::new(b"online-auditor-stale-height"),
+            &capsule_request_v1(),
             &BorrowedKeyPairIdentityRequestSignerV1::new(&signer),
             |_| {
                 approval_called.set(true);
@@ -1234,6 +1323,7 @@ mod tests {
             &endpoints_v1(),
             &authority_v1(),
             iroha_crypto::Hash::new(b"online-auditor-provider-failure"),
+            &capsule_request_v1(),
             &BorrowedKeyPairIdentityRequestSignerV1::new(&signer),
             |_| Err(eyre!("PROVIDER_BACKEND_SECRET_CANARY")),
         )
@@ -1255,6 +1345,7 @@ mod tests {
             &endpoints_v1(),
             &authority_v1(),
             iroha_crypto::Hash::new(b"online-auditor-three-acks"),
+            &capsule_request_v1(),
             &BorrowedKeyPairIdentityRequestSignerV1::new(&signer),
             |_| Ok(11),
         )
@@ -1276,6 +1367,7 @@ mod tests {
                 &endpoints,
                 &authority_v1(),
                 iroha_crypto::Hash::new(b"online-auditor-duplicate-endpoint"),
+                &capsule_request_v1(),
                 &BorrowedKeyPairIdentityRequestSignerV1::new(&signer),
                 |_| Ok(11),
             )
@@ -1296,6 +1388,7 @@ mod tests {
             &endpoints_v1(),
             &authority,
             iroha_crypto::Hash::new(b"online-auditor-invalid-authority"),
+            &capsule_request_v1(),
             &BorrowedKeyPairIdentityRequestSignerV1::new(&signer),
             |_| Ok(11),
         )

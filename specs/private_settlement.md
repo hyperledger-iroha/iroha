@@ -77,6 +77,20 @@ V1 explicitly and are encoded with canonical Norito.
   deduplicated authority catalog and per-leg delta, Prepare-QC, and Commit-QC
   references. `PrivateSettlementAbortReceiptV1` carries only opaque identifiers
   and a public reason class.
+- `RegisterAtomicPrivateSettlementPrepareV1` is the sponsor-authorized direct
+  instruction carrying the exact complete all-Prepare barrier into the
+  replicated control-lock map. It is distinct from the later
+  `FinalizeAtomicPrivateSettlementV1` financial carrier.
+
+The Prepare barrier, commit bundle, and receipt share the same two-level
+`PrivateSettlementAuthorityCatalogV1`. Its `rosters` contain route-free
+validator identities and aligned BLS proofs of possession, deduplicated in
+canonical first-use order. `leg_roster_indices[i]` selects the roster for
+manifest leg `i`. A phase certificate's `authority_catalog_index` remains the
+logical manifest-leg ordinal, not the roster index. Before authority-digest or
+QC verification, validators combine that manifest leg's exact route and active
+lane incarnation with the selected roster to reconstruct the route-bound
+`PrivateSettlementCommitteeAuthorityV1`.
 
 Reserved all-zero values, duplicate routes or state keys, noncanonical order,
 wrong ordinals, wrong participant bounds, expiry before/at authority context,
@@ -98,8 +112,22 @@ directional public-balance bridge. It binds the network, manifest proof-binding
 digest, bundle and leg ordinal, exact route, salted opaque asset/pool binding,
 old/new root and epoch, fixed nullifiers and output ciphertexts, capsule and
 policy digests, key epoch, sponsor, public fee intent, and reimbursement terms.
-One-time recipient/view keys reduce account linkability. A proof is accepted
-only after native verification of the exact public statement.
+When honestly generated, one-time recipient/view keys reduce on-ledger account
+linkability. A proof is accepted only after native verification of the exact
+public statement.
+
+Every fixed encrypted output's public `recipient` identifier is derived from
+its authorized one-time output view key. The statement and delta require all
+three identifiers in one leg to be distinct. The complete Prepare barrier and
+receipt reject an identifier reused by any other leg. Before voting Prepare,
+each committee validator also rejects an identifier already present in
+finalized WSV. Global finalization checks a deterministic recipient index over
+all finalized bundle history. That derived index is excluded from snapshot
+payloads and rebuilt from canonical encrypted outputs during restore, so a
+duplicate in persisted canonical output state fails closed. These checks
+enforce one-time identifier use at protocol admission; they do not prevent a
+malicious sender or network observer from correlating traffic before
+publication.
 
 The Rust wallet owns witness material in an owner-only APWB V1 envelope, exposes
 only public inspection, and consumes the envelope on every terminal proof
@@ -138,6 +166,30 @@ signs through `crates/iroha_core/src/private_settlement/auditor.rs`. A
 deployment-owned credential-provider boundary permits encryption and signing
 keys to remain in an HSM, KMS, enclave, or threshold service; Iroha independently
 checks the provider's governed public keys and returned approval signature.
+Capsule access is a read-only authenticated `POST`, not a bearer read keyed only
+by the payload digest. Its strict `PrivateSettlementAuditorCapsuleRequestV1`
+body contains the complete access policy, and the canonical Norito JSON body is
+covered by the identity-bound request signature. The server treats that policy
+as evidence rather than authority: one committed `StateView` supplies the
+network, authoritative height, and exact route/pool governance projection. An
+O(log n) content-addressed lookup reads one durable sidecar, then core binds the
+sidecar policy to the governance revision effective at the manifest's
+`authority_context_height` and the requested access policy to the revision
+effective at the current height. Missing, expired, or unauthorized reads all
+return the same unavailable result.
+
+A same-revision read requires the exact historical policy. A successor-policy
+read requires a later pool-governance revision in the same `policy_id` lineage,
+strictly higher policy revision and key epoch, and an authenticated current
+signing key that maps to an auditor identity present in both the historical
+policy and the capsule's wrapped-DEK set. Consensus-key reuse is rejected.
+This stable-identity rule lets an authorized auditor inspect a retained capsule
+after rotation without letting a newly added auditor inherit old ciphertext.
+The response attestation binds both the historical `audit_policy` and the
+current `access_audit_policy`. Approval submission additionally requires those
+policies to be identical, so a successor-policy auditor may read retained
+evidence but cannot add an approval to an old-policy in-flight leg.
+
 The Rust production transport accepts a separately governed
 `PrivateSettlementCommitteeAuthorityV1` and contacts exactly four distinct
 endpoints in that authority's canonical validator order. Every auditor response
@@ -168,10 +220,12 @@ Missing, stale, unauthorized, split-view, or insufficient approvals prevent
 Prepare.
 
 The shipping online-auditor CLI uses only the authority-pinned transport. It
-requires the ordered committee authority as a separate absolute, owner-only,
-non-symlink governance trust-anchor file without unapproved xattrs or extended
-ACL entries and requires an owner-only strict business-policy file under the same descriptor-bound custody
-rules in addition to an explicit local `approve` decision. Restricted files
+requires the exact current governed policy through an explicit
+`--audit-policy` owner-only file, the ordered committee authority as a separate
+absolute, owner-only, non-symlink governance trust-anchor file without
+unapproved xattrs or extended ACL entries, and an owner-only strict
+business-policy file under the same descriptor-bound custody rules in addition
+to an explicit local `approve` decision. Restricted files
 are opened nonblocking so a checked-path replacement with a FIFO cannot stall
 admission before the post-open inode and file-type checks. That
 policy binds one exact network, route,
@@ -195,8 +249,13 @@ with and without SELinux labels, and rejects unqualified NFS/SMB custody rather
 than assuming mode `0600` fully represents remote ACL semantics.
 
 Retired decryption keys must be retained, or retained capsules must be rewrapped,
-for the applicable regulatory retention period. That is an operator/governance
-obligation and a release recovery test, not an implicit property of AEAD.
+for the applicable regulatory retention period. The software online-auditor
+path accepts repeatable `--auditor-retired-decryption-key-file` inputs and
+constructs a nonempty, duplicate-free current-plus-retired runtime keyring. It
+selects the exact historical hybrid key named by the governed sidecar policy;
+it never tries keys until authentication succeeds. Key files remain runtime
+only. Retention or rewrapping is still an operator/governance obligation and a
+release recovery test, not an implicit property of AEAD.
 
 ## Governed pool activation and policy rotation
 
@@ -217,8 +276,8 @@ The globally replicated projection retains a gap-free public lineage of every
 superseded policy digest, key epoch, lifecycle, and governance digest. Snapshot
 and restart validation resolve the revision effective at both a finalized
 receipt's `authority_context_height` and finalization height, so a receipt
-finalized before rotation remains valid and its exact replay remains
-idempotent. This history does not grandfather pending work: a bundle prepared
+finalized before rotation remains valid as historical evidence while its exact
+replay is rejected without mutation. This history does not grandfather pending work: a bundle prepared
 under the old policy that crosses the activation boundary fails closed before
 any global mutation. Operational recovery still requires retaining old
 decryption keys for retained capsules or governing and testing capsule
@@ -244,8 +303,10 @@ Access views are least privilege:
 
 - the exact four-validator authority may fetch proof, approvals, and opaque
   delta material;
-- a currently governed auditor may fetch the padded encrypted capsule addressed
-  to its policy identity/key;
+- a currently governed auditor may fetch the padded encrypted capsule through
+  the exact state-bound policy and stable-identity authorization described
+  above; decryption additionally requires the exact historical key retained by
+  that identity;
 - public and authenticated client status views expose only lifecycle metadata;
 - missing, unauthorized, and retention-expired restricted reads share one
   unavailable result class.
@@ -282,10 +343,35 @@ Collecting -> Audited -> Prepared -> CommitCertified -> Finalized
 4. The coordinator selects the canonical lowest exact three valid votes and
    persists the resulting Prepare QC on every successfully staged responder.
    Once every leg has a Prepare QC, the complete Prepare barrier is immutable.
-5. Every validator verifies that exact barrier and votes Commit. The canonical
+5. The sponsor submits that complete barrier in one exact
+   `RegisterAtomicPrivateSettlementPrepareV1` control carrier through the
+   ordinary bounded public-fee path. Global consensus atomically installs one
+   bundle row plus opaque pool-head, nullifier, output, and recipient resource
+   rows in WSV. Certified-body-equivalent barrier retries are
+   WSV-write-idempotent even when valid signer subsets differ (each accepted
+   transaction remains subject to ordinary fee admission); substituted,
+   conflicting, terminal, or expired barriers fail closed. Registration must
+   finalize strictly before expiry so at least one successor height remains for
+   the financial carrier. The Rust
+   `register_private_settlement_prepare_and_wait_v1` coordinator API waits for
+   the exact signed transaction to reach global, state-resolved `Applied`
+   finality; block-height advancement or cache-only status is not sufficient.
+   Registration and finalization are two separately admitted ordinary
+   transactions, so an enabled fee schedule may charge both. The designated
+   reimbursement leg's private amount and terms commitment binds the exact
+   public fee intent and the V1 constant of two successful fee-bearing
+   carriers, and local auditor policy must accept the agreed aggregate
+   sponsorship cost in that leg's CBDC. V1 does not introduce a fee-free
+   control transaction or silently infer a second reimbursement. Failures
+   before registration incur no settlement-carrier fee. If an already
+   registered bundle expires, the sponsor bears its one registration fee; if
+   the sponsor submits an abort carrier, it bears both registration and abort
+   fees. Neither failure path creates the private reimbursement output.
+6. Every validator verifies that the barrier's certified-body identity and its
+   complete replicated WSV lock set are live before voting Commit. The canonical
    Commit QC binds the exact complete-bundle digest and is persisted on every
    successful responder. Commit certification does not mutate WSV.
-6. The sponsor signs and submits one carrier containing exactly one
+7. The sponsor signs and submits one carrier containing exactly one
    `FinalizeAtomicPrivateSettlementV1` instruction. The carrier binds the
    sponsor and exact public fee intent and carries the complete certified
    bundle. Coordinator and WSV preflight measure the complete boxed
@@ -300,12 +386,14 @@ Collecting -> Audited -> Prepared -> CommitCertified -> Finalized
    `AbortAtomicPrivateSettlementV1` carrier that binds the complete public
    manifest and a stable public reason class; it never carries a delta or
    confidential sidecar material.
-7. Global receipt planning verifies every authority/QC/delta and every current
+8. Global receipt planning verifies every authority/QC/delta, the registered
+   certified-body identity and exact resource rows, and every current
    WSV invariant. Only after all fallible checks succeed are all pool heads,
    root provenance entries, nullifiers, encrypted outputs, replay receipt, and
-   public receipt inserted into one overlay. Dropping or rejecting the
-   transaction leaves the parent state byte-identical.
-8. Local stores reconcile the immutable public receipt or abort marker after
+   public receipt inserted and the complete replicated lock set removed in one
+   overlay. Dropping or rejecting the transaction leaves the parent state
+   byte-identical.
+9. Local stores reconcile the immutable public receipt or abort marker after
    finality and on restart. Only then do they mark the sidecar terminal and
    release its staged reservations.
 
@@ -323,10 +411,11 @@ The finalized carrier and receipt still retain the exact certificate bytes the
 sponsor presented; an authenticated coordinator transcript is the evidence for
 historical signer-subset collection when a deployment requires that provenance.
 
-Expiry or an authoritative abort releases local staged locks without applying
-any leg. Replaying a receipt is idempotent only when the exact stored receipt is
-identical; conflicting replay, finalized-after-abort, abort-after-finalized,
-or expired finalization is rejected deterministically.
+Height-based block-start expiry removes expired replicated WSV lock sets;
+expiry reconciliation or an authoritative abort also releases local staged
+locks without applying any leg. Exact terminal replay, conflicting replay, finalized-after-abort,
+abort-after-finalized, or expired finalization is rejected deterministically
+without changing any root, nullifier, output, receipt, or terminal marker.
 
 ## Torii interfaces
 
@@ -343,9 +432,9 @@ The canonical route catalog is
 | `GET .../legs/{payload_digest}/phase-certificates` | canonical sponsor signature | locally durable Prepare/Commit QCs for recovery |
 | `GET .../legs/{payload_digest}/status` | canonical account signature | redacted leg lifecycle |
 | `GET .../legs/{payload_digest}/committee-proof` | identity-bound exact validator | proof, approvals, opaque delta |
-| `GET .../legs/{payload_digest}/audit-capsule` | identity-bound governed auditor | padded encrypted capsule |
+| `POST .../legs/{payload_digest}/audit-capsule` | identity-bound governed auditor plus exact governed-policy body | padded encrypted capsule plus historical/access-policy bindings |
 | `POST .../legs/{payload_digest}/audit-approvals` | identity-bound governed auditor | record approval |
-| `POST /v1/nexus/private-settlements/bundles` | canonical sponsor signature | submit exact finalization or abort carrier |
+| `POST /v1/nexus/private-settlements/bundles` | canonical sponsor signature | submit exact Prepare-lock registration, finalization, or abort carrier |
 | `GET .../bundles/{bundle_id}` | public | redacted bundle status |
 | `GET .../bundles/{bundle_id}/receipt` | public | final receipt or abort marker |
 
@@ -431,14 +520,51 @@ protocol limits are configuration errors.
 - Expiry is height based, not wall-clock based.
 - A QC is never returned before the corresponding sidecar/delta/certificate is
   durably persisted.
-- Commit QCs are evidence only; global state changes only through one finalized
-  carrier transaction.
+- Commit votes require the complete all-Prepare certified-body identity to be
+  present in the globally replicated WSV lock map. Independently valid 3-of-4
+  aggregate encodings over the same bodies are accepted without rewriting the
+  original lock; transaction admission, height advancement, and local sidecars
+  alone do not satisfy this gate.
+- Commit QCs are evidence only and never mutate state. The separately finalized
+  registration carrier changes only opaque global control-lock state; every
+  confidential financial effect occurs together in the single finalization
+  `StateTransaction`.
 - Every global leg is validated before the first overlay write.
 - Replay markers and terminal receipts survive snapshots, Kura replay, and
   restart; ambiguous local state fails closed and reconciles from immutable WSV.
+- Snapshot restore accepts exactly the current 188-field `World` schema or the
+  frozen 180-field schema emitted by revision
+  `1bdec3b88c348a84776241839fb0e8ad71738b3e`. That upgrade boundary adds 13
+  serialized fields: the eight private-settlement maps,
+  `sccp_ton_breaker_observations`, `sccp_replay_forests`,
+  `privacy_exact12_qualification`, `consensus_evidence`, and
+  `tle_key_session_lifecycles`. It retires five historical stores:
+  `sccp_outbound_proofs`, `sccp_inbound_messages`,
+  `direct_lane_block_application_markers`, `council`, and
+  `parliament_bodies`. Restore decodes every retired store with its exact
+  historical key/value types, accepts only canonical empty `revert` and
+  `blocks` maps, and synthesizes only canonical empty/default values for all 13
+  successors. The same exact predecessor `State` boundary carries the retired
+  `SumeragiParameters.key_require_hsm = false` and ordered
+  `key_allowed_hsm_providers = ["pkcs11", "softkey", "yubihsm"]` fields.
+  Restore accepts only those canonical predecessor defaults before removing the
+  fields from the current typed state. Canonical hashing makes one root-level
+  compatibility decision and reinstates both HSM defaults together with the
+  complete 13/5 `World` bridge; neither half may normalize independently.
+  Retained governed parameters, including any canonical valid predecessor
+  `sumeragi_npos_parameters.slashing_delay_blocks`, are preserved byte-for-byte
+  and are not mistaken for migration markers. Literal field order, checked-in
+  full-State and `World` bytes,
+  artifact SHA-256 values, and schema-order SHA-256 are frozen to that exact
+  revision. Partial omission, reordering, renaming, extra fields, hybrid
+  predecessor/current schemas, or any retired state is rejected. Canonical WSV
+  hashing normalizes only this complete 13-empty/5-absent boundary, preserving
+  the complete predecessor State commitment and its exact Kura
+  block/checkpoint/manifest binding; no selected-field projection or APS-only
+  hybrid is accepted.
 - Governed pool projections retain exact policy-revision lineage so historical
-  finalized receipts remain restart-valid and exact-replay idempotent after a
-  rotation, while old-policy in-flight bundles remain inadmissible.
+  finalized receipts remain restart-valid after a rotation while exact replay
+  is rejected byte-silently and old-policy in-flight bundles remain inadmissible.
 - Mandatory signed RS16 DA/RBC remains enabled in every deployment and fault
   test; there is no private-settlement bypass.
 
@@ -461,11 +587,35 @@ protocol limits are configuration errors.
   committee-indexed refinement covers independent exact four-validator
   committees, static `f=1` Byzantine/unavailable identities, local auditors,
   authenticated channel faults, global quorum, and every named durability
-  boundary. Fault budgets are independent per committee rather than shared
-  across the bundle. The release runner requires the N=2 validator-focused and
-  full bounded-fault configurations, paper-primary N=3 fault configuration,
-  N=4 clean path, and N=3 expiry/replay configuration. The corrected full N=2
-  and paper-primary N=3 runs remain unclaimed in repository evidence.
+  boundary. The indexed model uses a canonical representative for exchangeable
+  validator identities. Concrete Hold, Drop, and Delay controller modes refine
+  to one common delivery-blocking formal state; kind-specific delay delivery,
+  retry timing, and hold release remain real-process obligations. This quotient
+  is part of the specification rather than TLC `SYMMETRY` or `VIEW`, preserving
+  sound liveness checking with the pinned tool while the real-process matrix
+  retains every concrete controller mode. Durability is a temporal action
+  property over every transition, with abort/expiry as the sole staged-lock
+  release. A dedicated indexed mutation must violate that property by losing a
+  staged record on crash. Exact signer sets are retained until certification;
+  a second temporal action property checks every new sidecar, Prepare QC, and
+  Commit QC against its authenticated pre-state quorum before that no-longer-
+  observable vote history is discarded. Durable QCs are opaque markers rather
+  than retained signer bitmaps, and recovered-state initialization would need
+  an explicit provenance witness. Faults are injected at the first clock-free
+  phase where they can affect voting or delivery, and future-inert local state
+  is canonicalized after Commit. Aggregate weak fairness is justified by
+  finite fault budgets, state-changing recovery, and monotonic progress; any
+  future unbounded retry cycle requires per-instance fairness. Fault budgets
+  are independent per committee rather than shared across the bundle. The
+  indexed expiry action abstracts crossing the configured height and does not
+  claim to model block-height passage or timing. The release runner requires the N=2
+  validator-focused and full bounded-fault configurations, paper-primary N=3
+  fault configuration, N=4 clean path, and N=3 expiry/replay configuration.
+  Current mutable-checkout runs pass all five indexed positive rows, including
+  58,085 distinct states for full N=2 and 8,898,534 for paper-primary N=3, and
+  the staged-loss mutation produces the required action-property violation at
+  status 13. These are frozen-input development results, not clean-candidate
+  release evidence.
 - Complete formal-release evidence is fail-closed over one exact ordered
   `(configuration, expected outcome, model)` matrix. Its source-sealed digest
   binds both TLA+ models, every configuration, and a separate evidence-code
@@ -489,13 +639,14 @@ N=3 as the paper's primary configuration. Stop/restart one validator in every
 committee plus coordinator/global nodes. Use only the authenticated consensus
 message controller, acknowledge each hold/drop, and exercise 5%, 10%, and 20%
 loss, phase-cut partitions, delayed delivery, healing, and crashes after
-sidecar, staged delta, Prepare QC, Commit QC, Kura append, WSV apply, and receipt
-publication. Continuously assert that no strict subset becomes visible or
-spendable and that every node converges after healing. Keep signed RS16 DA/RBC
-enabled.
+sidecar, staged delta, Prepare QC, Commit QC, receipt publication, and both the
+Kura-append and WSV-application boundaries of the all-Prepare registration and
+finalization carriers. Continuously assert that no strict subset becomes
+visible or spendable and that every node converges after healing. Keep signed
+RS16 DA/RBC enabled.
 
 The feature-isolated adversarial daemon exposes one-shot process cuts for the
-seven durability boundaries above. Each command binds the exact public bundle
+distinct durability boundaries above. Each command binds the exact public bundle
 id, is stored in the peer's owner-only control directory, and is acknowledged
 with an fsynced canonical record before the process aborts. The sidecar,
 staged-delta, and committee-certificate cuts occur only after the corresponding
@@ -504,6 +655,17 @@ finality append; the WSV cut follows atomic state publication; and the receipt
 cut follows durable committee reconciliation. Shipping binaries do not compile
 these abort hooks. Presence of a hook is not evidence: the release harness must
 retain its exact command/acknowledgement and demonstrate restart convergence.
+For every trial whose nonfinalized checkpoint is after Prepare registration
+(all route-loss/phase-cut trials, Commit-QC cuts, both registration cuts, and
+all finalization cuts), the retained snapshot must show the complete `1 + 9N`
+replicated reservation rows with one identical commitment on every validator.
+Global validators must have an empty committee-local lock plane; every one of
+the four validators in each participant committee must expose exactly one pool
+head, two nullifiers, and three output reservations with an identical
+committee-local commitment. Sidecar, staged-delta, and Prepare-QC cuts occur
+before global registration and therefore retain the empty replicated plane.
+Every terminal snapshot must restore both lock planes to their exact empty
+commitments.
 
 Each real-process run emits one strict JSONL record for
 `scripts/private_settlement_fault_report.py`. The reporter requires the exact
@@ -516,8 +678,18 @@ Every run binds the same full source commit and archived hardware-description
 SHA-256, plus the archived N-specific configuration SHA-256. A canonical
 configuration manifest covers N=2,3,4,8,16 in order and binds every exact
 configuration file while asserting four validators, 3-of-4 quorum, and
-mandatory signed RS16 DA/RBC. The summary binds every raw JSONL file by length
-and SHA-256. Every individual loss, phase-cut, and crash row also identifies
+mandatory signed RS16 DA/RBC. It also binds the exact bounded coordinator/
+prover Rayon width and validator scheduler, Rayon, and pipeline worker width.
+The real-process launcher must override any ambient `RAYON_NUM_THREADS` value
+with the recorded coordinator/prover width; the localnet builder must write the
+recorded validator width into every peer configuration; and the Rust harness
+must reject either mismatch before starting a validator. The execution record
+also fixes Cargo build jobs, release codegen units, and incremental compilation.
+The launcher removes caller-provided Rust flags, compiler wrappers, build
+targets, target-specific flags, and profile overrides before applying those
+canonical build settings. The summary binds
+every raw JSONL file by length and SHA-256. Every individual loss, phase-cut,
+and crash row also identifies
 one globally non-reusable record reference inside a SHA-256-bound archived
 authenticated-controller transcript and one inside an archived atomicity
 observation capture. The final DOI verifier resolves both digests to unique
@@ -546,6 +718,16 @@ V1 traffic-count manifests covering Torii requests/responses,
 public/restricted P2P packets, blocks, queries, events, logs, and telemetry.
 Its report binds the canary manifest, every scanned artifact, and both
 traffic-count manifests by byte length and SHA-256.
+The restricted source archive also carries a separately raw-bound registration
+checkpoint for every validator, captured only after the exact registration
+transaction reaches state-resolved finality. Independent replay requires the
+checkpoint height to lie within that validator's retained observation interval,
+the financial ledger to remain byte-identical to baseline, the same complete
+`1 + 9N` replicated lock on all validators, no local locks on global validators,
+and one exact six-row local leg lock on every member of each participant
+committee. State responses must be canonical compact JSON and every Iroha hash
+literal must have a valid checksum; syntactically shaped but noncanonical or
+checksum-corrupted evidence is rejected.
 Canonical account and asset canaries are expanded into their protocol-native
 I105-controller and asset-UUID byte encodings as well as ordinary text, integer,
 hex, Base64, URL, and JSON representations. The real loopback capture is split
@@ -593,9 +775,10 @@ rewriting summary reports and their digests.
 For each real N, run at least five warmups and thirty measured bundles across
 multiple seeds on pinned hardware. Report p50/p95/p99 with confidence intervals
 for proof, upload/availability, auditor response, committee verification,
-Prepare, Commit, finality, and end-to-end latency, plus throughput, CPU, RSS,
-network bytes, proof/receipt size, and storage growth. Transparent AMX is the
-control. The first release publishes its measured envelope; later releases fail
+Prepare QC aggregation, all-Prepare registration finality, Commit QC
+aggregation, financial finalization, and end-to-end latency, plus throughput,
+CPU, RSS, network bytes, proof/receipt size, and storage growth. Transparent AMX
+is the control. The first release publishes its measured envelope; later releases fail
 when p95 regresses by more than `max(10%, 3 MAD)` or p99 by more than 20% against
 the signed baseline.
 

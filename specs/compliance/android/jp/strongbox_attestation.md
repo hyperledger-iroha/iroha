@@ -4,6 +4,11 @@
 
 # StrongBox Attestation Evidence — Japan Deployments
 
+This evidence packet qualifies the optional StrongBox integration for a
+deployment that explicitly selects it. Its strict capture and verification
+steps do not apply to software-backed custody and do not gate ordinary SDK
+builds, governance signing, deployments, or releases.
+
 | Field | Value |
 |-------|-------|
 | Assessment Window | 2026-02-10 – 2026-02-12 |

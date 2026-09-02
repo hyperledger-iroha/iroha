@@ -267,7 +267,7 @@ def test_xcframework_smoke_emits_all_lanes_through_separate_data_fd(
         "ci/xcframework-smoke:ipad-sim",
         "ci/xcframework-smoke:strongbox",
     ]
-    assert [lane["status"] for lane in lanes] == ["pass", "pass", "pass"]
+    assert [lane["status"] for lane in lanes] == ["pass", "pass", "skip"]
     assert [lane["device_tag"] for lane in lanes] == [
         "iphone-sim",
         "ipad-sim",
@@ -275,13 +275,44 @@ def test_xcframework_smoke_emits_all_lanes_through_separate_data_fd(
     ]
     assert telemetry["devices"] == {
         "emulators": {"passes": 2, "failures": 0},
-        "strongbox_capable": {"passes": 1, "failures": 0},
+        "strongbox_capable": {"passes": 0, "failures": 0},
     }
     assert telemetry["alert_state"] == {
         "consecutive_failures": 0,
         "open_incidents": [],
     }
     assert anomaly_path.exists()
+
+    hardware_result_path = tmp_path / "hardware-result.json"
+    hardware_anomaly_path = tmp_path / "hardware-anomalies.json"
+    env.update(
+        {
+            "IOS6_SMOKE_ENABLE_HARDWARE": "true",
+            "IOS6_SMOKE_RESULTS_PATH": str(hardware_result_path),
+            "IOS6_SMOKE_ANOMALY_PATH": str(hardware_anomaly_path),
+        }
+    )
+    hardware = subprocess.run(
+        ["/bin/bash", str(harness)],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=harness_root,
+        env=env,
+        timeout=30,
+    )
+    assert hardware.returncode == 0, hardware.stderr
+    hardware_telemetry = json.loads(hardware_result_path.read_text(encoding="utf-8"))
+    assert [lane["status"] for lane in hardware_telemetry["buildkite"]["lanes"]] == [
+        "pass",
+        "pass",
+        "pass",
+    ]
+    assert hardware_telemetry["devices"]["strongbox_capable"] == {
+        "passes": 1,
+        "failures": 0,
+    }
+    assert hardware_anomaly_path.exists()
 
     failed_result_path = tmp_path / "failed-result.json"
     failed_anomaly_path = tmp_path / "failed-anomalies.json"

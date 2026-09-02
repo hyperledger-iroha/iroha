@@ -15,6 +15,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import org.bouncycastle.crypto.digests.Blake2bDigest;
 import org.hyperledger.iroha.android.client.JsonNumbers;
 import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.android.client.LocalSigningContext;
@@ -25,6 +26,7 @@ import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.client.ZkMerklePathResponse;
 import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.norito.NoritoHeader;
+import org.hyperledger.iroha.norito.CRC64;
 import org.hyperledger.iroha.norito.SchemaHash;
 
 /**
@@ -65,6 +67,7 @@ public final class KagemushaRecursiveSpendProver {
 
   public static final int V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 23;
   public static final int REQUIRED_NATIVE_BRIDGE_ABI_VERSION = V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
+  public static final int REQUIRED_KAGEMUSHA_NATIVE_CONTRACT_REVISION = 1;
   /** Mandatory sender-final peer-cash handoff/finality contract. */
   public static final String CASH_HANDOFF_CAPABILITY_V1 = "cash_handoff_v1";
   public static final String V4_ARTIFACT_MANIFEST_SCHEMA =
@@ -115,6 +118,15 @@ public final class KagemushaRecursiveSpendProver {
   public static final int MAX_TORII_REDEEM_REQUEST_BYTES_V4 = 48 * 1024 * 1024;
 
   private static final int MAX_REQUEST_AUTHORIZATION_BYTES = 512 * 1024;
+  private static final int KAGEMUSHA_REQUEST_WIRE_VERSION_V4 = 4;
+  private static final long KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2 = 300_000L;
+  private static final byte[] KAGEMUSHA_OPERATION_ID_DOMAIN_V4 =
+      "iroha:offline:kagemusha:operation-id:v4\0".getBytes(StandardCharsets.UTF_8);
+  private static final byte[] KAGEMUSHA_OPERATION_AUTHORITY_DIGEST_DOMAIN_V4 =
+      "iroha:offline:kagemusha:operation-outcome-authority:v4\0"
+          .getBytes(StandardCharsets.UTF_8);
+  private static final byte[] KAGEMUSHA_OPERATION_REQUEST_DIGEST_DOMAIN_V4 =
+      "iroha:offline:kagemusha:operation-request:v4\0".getBytes(StandardCharsets.UTF_8);
   private static final int IOS_APP_ATTEST_ASSERTION_OBJECT_MAX_BYTES = 8 * 1024;
   private static final int IOS_APP_ATTEST_AUTHENTICATOR_DATA_FIXED_HEADER_BYTES = 37;
   private static final int IOS_APP_ATTEST_AUTHENTICATOR_DATA_MIN_BYTES =
@@ -135,7 +147,10 @@ public final class KagemushaRecursiveSpendProver {
   public static final int MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS = MAXIMUM_INPUTS_PER_TRANSITION;
   public static final int MAXIMUM_BRANCH_CLAIMS = 2;
   public static final int MAXIMUM_PEER_HOPS = 8;
-  public static final int MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4 = 384 * 1024;
+  /** Exact recursive proof-pair maximum selected by the sole first-release profile. */
+  public static final int RELEASE_MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4 = 191_862;
+  /** Defensive raw archive ceiling; this is not an accepted release-profile maximum. */
+  public static final int ABSOLUTE_MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4 = 384 * 1024;
   public static final int CONFIDENTIAL_TREE_DEPTH = 16;
   /**
    * Exclusive top-up insertion capacity. The tail reserves 64 branch-depth outputs, eight optional
@@ -550,10 +565,10 @@ public final class KagemushaRecursiveSpendProver {
         });
   }
 
-  public static RedeemRequestV4 decodeRedeemRequestV4(
+  public static RedeemRequestV5 decodeRedeemRequestV5(
       final byte[] archive, final NoteOpening changeOpening) {
     return SecretArchiveWiper.transferChangeOpeningOwnership(
-        changeOpening, opening -> new RedeemRequestV4(archive, opening));
+        changeOpening, opening -> new RedeemRequestV5(archive, opening));
   }
 
   public static InitResultV4 decodeInitResultV4(final byte[] archive) {
@@ -591,28 +606,51 @@ public final class KagemushaRecursiveSpendProver {
     return new RedeemSubmissionRequest(archive);
   }
 
-  public static OperationRequestIdentity projectTopUpRequestIdentity(final TopUpRequest request) {
+  public static OperationIdentity projectTopUpRequestIdentity(final TopUpRequest request) {
     requireArtifactBridge();
-    return operationRequestIdentityFromNativeProjection(
-        nativeProjectTopUpRequestIdentityV4(
-            Objects.requireNonNull(request, "request").noritoEncoded()));
+    final byte[] archive = Objects.requireNonNull(request, "request").noritoEncoded();
+    try {
+      final OperationIdentity parsed = operationIdentityFromCanonicalRequest(
+          archive, "iroha.torii.v1.offline.top_up.request", OperationKind.TOP_UP, 8, 6);
+      final OperationIdentity projected = operationRequestIdentityFromNativeProjection(
+          nativeProjectTopUpRequestIdentityV4(archive));
+      if (!projected.equals(parsed)) {
+        throw new IllegalStateException(
+            "native top-up request identity does not match the canonical request");
+      }
+      return parsed;
+    } finally {
+      Arrays.fill(archive, (byte) 0);
+    }
   }
 
-  public static OperationRequestIdentity projectRedeemRequestIdentity(
+  public static OperationIdentity projectRedeemRequestIdentity(
       final RedeemSubmissionRequest request) {
     requireArtifactBridge();
-    return operationRequestIdentityFromNativeProjection(
-        nativeProjectRedeemRequestIdentityV4(
-            Objects.requireNonNull(request, "request").noritoEncoded()));
+    final byte[] archive = Objects.requireNonNull(request, "request").noritoEncoded();
+    try {
+      final OperationIdentity parsed = operationIdentityFromCanonicalRequest(
+          archive, "iroha.torii.v1.offline.redeem.request", OperationKind.REDEEM, 10, 8);
+      final OperationIdentity projected = operationRequestIdentityFromNativeProjection(
+          nativeProjectRedeemRequestIdentityV4(archive));
+      if (!projected.equals(parsed)) {
+        throw new IllegalStateException(
+            "native redemption request identity does not match the canonical request");
+      }
+      return parsed;
+    } finally {
+      Arrays.fill(archive, (byte) 0);
+    }
   }
 
-  private static OperationRequestIdentity operationRequestIdentityFromNativeProjection(
+  private static OperationIdentity operationRequestIdentityFromNativeProjection(
       final byte[][] fields) {
-    requireFieldCount(fields, 3, "operation request identity projection");
-    return new OperationRequestIdentity(
-        operationKind(canonicalText(fields[0], "operationKind")),
-        requireDigest(fields[1], "operationId"),
-        longInteger(fields[2], "authorizationIssuedAtMilliseconds"));
+    requireFieldCount(fields, 6, "operation request identity projection");
+    try {
+      return operationIdentityFromProjection(fields, 0);
+    } finally {
+      wipeFields(fields);
+    }
   }
 
   private static OperationKind operationKind(final String value) {
@@ -624,62 +662,71 @@ public final class KagemushaRecursiveSpendProver {
   public static OperationReferenceProjection projectOperationReference(
       final OperationReference reference) {
     requireArtifactBridge();
-    final byte[][] fields = nativeProjectOperationReferenceV4(
+    final byte[][] fields = nativeProjectOperationReferenceV2(
         Objects.requireNonNull(reference, "reference").noritoEncoded());
-    requireFieldCount(fields, 5, "operation reference projection");
-    final OperationKind kind = operationKind(canonicalText(fields[0], "operationKind"));
-    return new OperationReferenceProjection(
-        kind,
-        requireDigest(fields[1], "operationId"),
-        requireTransactionHash(fields[2], "transactionHash"),
-        canonicalText(fields[3], "statusUri"),
-        longInteger(fields[4], "submittedAtMilliseconds"));
+    requireFieldCount(fields, 9, "operation reference projection");
+    try {
+      if (!"pending".equals(canonicalText(fields[6], "operationState"))) {
+        throw new IllegalStateException("native Kagemusha operation reference state is invalid");
+      }
+      return new OperationReferenceProjection(
+          operationIdentityFromProjection(fields, 0),
+          OperationState.PENDING,
+          requireTransactionHash(fields[7], "transactionHash"),
+          canonicalText(fields[8], "statusUri"));
+    } finally {
+      wipeFields(fields);
+    }
   }
 
   public static OperationStatusProjection projectOperationStatus(final OperationStatus status) {
     requireArtifactBridge();
-    final byte[][] fields = nativeProjectOperationStatusV4(
+    final byte[][] fields = nativeProjectOperationStatusV2(
         Objects.requireNonNull(status, "status").noritoEncoded());
-    requireFieldCount(fields, 9, "operation status projection");
-    final String stateText = canonicalText(fields[0], "operationState");
-    final OperationState state;
-    if ("pending".equals(stateText)) state = OperationState.PENDING;
-    else if ("applied".equals(stateText)) state = OperationState.APPLIED;
-    else if ("rejected".equals(stateText)) state = OperationState.REJECTED;
-    else throw new IllegalStateException("native Kagemusha operation state is invalid");
-    final OperationKind kind = operationKind(canonicalText(fields[1], "operationKind"));
-    final Long heightOrSubmittedAt = fields[4].length == 0
-        ? null : longInteger(fields[4], "operationHeightOrSubmittedAt");
-    final FinalizedTopUp finalizedTopUp;
-    if (fields[5].length != 0 || fields[6].length != 0) {
-      if (state != OperationState.APPLIED || kind != OperationKind.TOP_UP
-          || fields[5].length == 0 || fields[6].length == 0
-          || heightOrSubmittedAt == null) {
-        throw new IllegalStateException("native Kagemusha finalized top-up fields are invalid");
+    requireFieldCount(fields, 13, "operation status projection");
+    try {
+      final OperationIdentity identity = operationIdentityFromProjection(fields, 0);
+      final String stateText = canonicalText(fields[6], "operationState");
+      final OperationState state;
+      if ("pending".equals(stateText)) state = OperationState.PENDING;
+      else if ("applied".equals(stateText)) state = OperationState.APPLIED;
+      else if ("rejected".equals(stateText)) state = OperationState.REJECTED;
+      else throw new IllegalStateException("native Kagemusha operation state is invalid");
+      final Long finalizedHeight = fields[8].length == 0
+          ? null : longInteger(fields[8], "finalizedBlockHeight");
+      final FinalizedTopUp finalizedTopUp;
+      if (fields[9].length != 0 || fields[10].length != 0) {
+        if (state != OperationState.APPLIED || identity.kind() != OperationKind.TOP_UP
+            || fields[9].length == 0 || fields[10].length == 0 || finalizedHeight == null) {
+          throw new IllegalStateException("native Kagemusha finalized top-up fields are invalid");
+        }
+        finalizedTopUp = new FinalizedTopUp(
+            new TopUpAnchorV4(fields[9]), new TopUpFinalityProof(fields[10]), finalizedHeight);
+      } else {
+        finalizedTopUp = null;
       }
-      finalizedTopUp = new FinalizedTopUp(
-          new TopUpAnchorV4(fields[5]), new TopUpFinalityProof(fields[6]),
-          heightOrSubmittedAt);
-    } else {
-      finalizedTopUp = null;
-    }
-    final OperationRejection rejection;
-    if (fields[7].length != 0 || fields[8].length != 0) {
-      if (state != OperationState.REJECTED || fields[7].length == 0 || fields[8].length == 0) {
-        throw new IllegalStateException("native Kagemusha rejection fields are invalid");
+      final OperationRejection rejection;
+      if (fields[11].length != 0 || fields[12].length != 0) {
+        if (state != OperationState.REJECTED
+            || fields[11].length == 0 || fields[12].length == 0) {
+          throw new IllegalStateException("native Kagemusha rejection fields are invalid");
+        }
+        rejection = new OperationRejection(
+            canonicalText(fields[11], "rejectionCode"),
+            canonicalText(fields[12], "rejectionMessage"));
+      } else {
+        rejection = null;
       }
-      rejection = new OperationRejection(
-          canonicalText(fields[7], "rejectionCode"),
-          canonicalText(fields[8], "rejectionMessage"));
-    } else {
-      rejection = null;
+      return new OperationStatusProjection(
+          state,
+          identity,
+          requireTransactionHash(fields[7], "transactionHash"),
+          finalizedHeight,
+          finalizedTopUp,
+          rejection);
+    } finally {
+      wipeFields(fields);
     }
-    return new OperationStatusProjection(
-        state, kind, requireDigest(fields[2], "operationId"),
-        requireTransactionHash(fields[3], "transactionHash"),
-        state == OperationState.PENDING ? heightOrSubmittedAt : null,
-        state == OperationState.APPLIED ? heightOrSubmittedAt : null,
-        finalizedTopUp, rejection);
   }
 
   public static RequestAuthorizationPreparation prepareRequestAuthorization(
@@ -687,7 +734,6 @@ public final class KagemushaRecursiveSpendProver {
       final int chainDiscriminant,
       final String deviceId,
       final String assetDefinitionId,
-      final byte[] operationId,
       final long issuedAtMilliseconds,
       final long expiresAtMilliseconds,
       final byte[] nonce,
@@ -695,12 +741,11 @@ public final class KagemushaRecursiveSpendProver {
       final byte[] registrationHash,
       final OnlineHardwareAssertionPlatform platform) {
     requireArtifactBridge();
-    final byte[][] fields = nativePrepareAuthorizationV2(
+    final byte[][] fields = nativePrepareAuthorizationV3(
         utf8(authority, "authority"),
         requireChainDiscriminant(chainDiscriminant),
         utf8(deviceId, "deviceId"),
         utf8(assetDefinitionId, "assetDefinitionId"),
-        requireDigest(operationId, "operationId"),
         issuedAtMilliseconds,
         expiresAtMilliseconds,
         requireDigest(nonce, "nonce"),
@@ -725,7 +770,7 @@ public final class KagemushaRecursiveSpendProver {
     requireArtifactBridge();
     final byte[] der = copyRequired(platformSignatureDer, "platformSignatureDer");
     final byte[] expectedRaw = KagemushaP256Codec.rawLowSFromStrictDer(der);
-    final byte[][] fields = nativeFinalizeHardwareAuthorizationV2(
+    final byte[][] fields = nativeFinalizeHardwareAuthorizationV3(
         Objects.requireNonNull(preparation, "preparation").archive.noritoEncoded(),
         authenticatorData == null
             ? new byte[0]
@@ -747,7 +792,7 @@ public final class KagemushaRecursiveSpendProver {
     if (boundedAssertionObject.length > IOS_APP_ATTEST_ASSERTION_OBJECT_MAX_BYTES) {
       throw new IllegalArgumentException("assertionObject exceeds the App Attest response bound");
     }
-    final byte[][] fields = nativeFinalizeIosAppAttestAuthorizationV2(
+    final byte[][] fields = nativeFinalizeIosAppAttestAuthorizationV3(
         Objects.requireNonNull(preparation, "preparation").archive.noritoEncoded(),
         boundedAssertionObject);
     return requestAuthorizationFromIosAppAttestNativeProjection(fields);
@@ -769,7 +814,7 @@ public final class KagemushaRecursiveSpendProver {
   public static TopUpRequest finalizeTopUp(
       final TopUpUnsigned unsigned, final RequestAuthorization authorization) {
     requireArtifactBridge();
-    return new TopUpRequest(nativeFinalizeTopUpV4(
+    return new TopUpRequest(nativeFinalizeTopUpV5(
         Objects.requireNonNull(unsigned, "unsigned").noritoEncoded(),
         Objects.requireNonNull(authorization, "authorization").noritoEncoded()));
   }
@@ -785,7 +830,7 @@ public final class KagemushaRecursiveSpendProver {
       final String assetDefinitionId,
       final String payerAccountId,
       final KagemushaScaledAmount amount,
-      final byte[] operationId,
+      final byte[] nonce,
       final byte[] openingSpendKey,
       final byte[] openingRho,
       final byte[] openingDiversifier,
@@ -807,14 +852,14 @@ public final class KagemushaRecursiveSpendProver {
           byte[][] fields = null;
           NoteOpening locallyOwnedOpening = null;
           try {
-            fields = nativePrepareTopUpV4(
+            fields = nativePrepareTopUpV5(
                 Objects.requireNonNull(networkId, "networkId").bytes(),
                 requireChainDiscriminant(chainDiscriminant),
                 utf8(assetDefinitionId, "assetDefinitionId"),
                 utf8(payerAccountId, "payerAccountId"),
                 utf8(amount.atomicUnits(), "atomicUnits"),
                 amount.scale(),
-                requireDigest(operationId, "operationId"),
+                requireDigest(nonce, "nonce"),
                 spendKeyCopy,
                 rhoCopy,
                 diversifierCopy,
@@ -851,7 +896,7 @@ public final class KagemushaRecursiveSpendProver {
     Objects.requireNonNull(buildResult, "buildResult");
     Objects.requireNonNull(authorization, "authorization");
     requireArtifactBridge();
-    final byte[][] fields = nativeFinalizeRedeemV4(
+    final byte[][] fields = nativeFinalizeRedeemV5(
         buildResult.noritoEncoded(), authorization.noritoEncoded());
     requireFieldCount(fields, 2, "V4 redeem finalization");
     return new RedeemFinalization(
@@ -957,18 +1002,22 @@ public final class KagemushaRecursiveSpendProver {
    * Prepares partial-redemption change inside the native secret boundary.
    *
    * <p>Native revalidates the exact input note/opening and derives a fresh opening from a
-   * domain-separated binding over that input, the change amount, operation id, and caller entropy.
-   * The authoritative confidential diversifier is selected natively.</p>
+   * domain-separated binding over that input, the change amount, canonical recipient, fresh nonce,
+   * and caller entropy. The operation id and authoritative confidential diversifier are derived
+   * natively.</p>
    */
-  public static RedemptionChangePreparationV4 prepareRedemptionChangeV4(
+  public static RedemptionChangePreparationV4 prepareRedemptionChangeV5(
       final SpendableBranchV4 input,
       final KagemushaScaledAmount changeAmount,
-      final byte[] operationId,
+      final String recipientAccountId,
+      final int chainDiscriminant,
+      final byte[] nonce,
       final byte[] entropy) {
     requireArtifactBridge();
     Objects.requireNonNull(input, "input");
     Objects.requireNonNull(changeAmount, "changeAmount");
-    byte[] operation = null;
+    byte[] recipient = null;
+    byte[] freshNonce = null;
     byte[] freshEntropy = null;
     byte[] bundleArchive = null;
     byte[] openingArchive = null;
@@ -976,22 +1025,25 @@ public final class KagemushaRecursiveSpendProver {
     byte[][] fields = null;
     NoteOpening opening = null;
     try {
-      operation = requireDigest(operationId, "operationId");
+      recipient = utf8(recipientAccountId, "recipientAccountId");
+      freshNonce = requireDigest(nonce, "nonce");
       freshEntropy = requireDigest(entropy, "entropy");
-      if (Arrays.equals(operation, freshEntropy)) {
-        throw new IllegalArgumentException("entropy must be distinct from operationId");
+      if (Arrays.equals(freshNonce, freshEntropy)) {
+        throw new IllegalArgumentException("entropy must be distinct from nonce");
       }
       bundleArchive = input.bundle().noritoEncoded();
       openingArchive = input.opening().noritoEncoded();
       atomicUnits = utf8(changeAmount.atomicUnits(), "atomicUnits");
-      fields = nativePrepareRedemptionChangeV4(
+      fields = nativePrepareRedemptionChangeV5(
           bundleArchive,
           openingArchive,
           atomicUnits,
           changeAmount.scale(),
-          operation,
+          recipient,
+          requireChainDiscriminant(chainDiscriminant),
+          freshNonce,
           freshEntropy);
-      requireFieldCount(fields, 7, "V4 redemption change preparation");
+      requireFieldCount(fields, 7, "V5 redemption change preparation");
       final String[] digestNames = {"rho", "diversifier", "commitment", "spendNullifier"};
       for (int index = 1; index <= 4; index++) {
         final byte[] checked = requireDigest(fields[index], digestNames[index - 1]);
@@ -1027,7 +1079,8 @@ public final class KagemushaRecursiveSpendProver {
       if (openingArchive != null) Arrays.fill(openingArchive, (byte) 0);
       if (bundleArchive != null) Arrays.fill(bundleArchive, (byte) 0);
       if (freshEntropy != null) Arrays.fill(freshEntropy, (byte) 0);
-      if (operation != null) Arrays.fill(operation, (byte) 0);
+      if (freshNonce != null) Arrays.fill(freshNonce, (byte) 0);
+      if (recipient != null) Arrays.fill(recipient, (byte) 0);
     }
   }
 
@@ -1590,7 +1643,7 @@ public final class KagemushaRecursiveSpendProver {
         verifiedAtMilliseconds));
   }
 
-  public static RedeemRequestV4 buildRedeemRequestV4(
+  public static RedeemRequestV5 buildRedeemRequestV5(
       final SpendableBranchV4 input,
       final String recipientAccountId,
       final int chainDiscriminant,
@@ -1598,11 +1651,11 @@ public final class KagemushaRecursiveSpendProver {
       final NoteOpening changeOpening,
       final OutputMembershipPaths changeOutputMembershipPaths,
       final byte[] unshieldVerifierCommitment,
-      final byte[] operationId,
+      final byte[] nonce,
       final long blockHeight) {
     return SecretArchiveWiper.transferChangeOpeningOwnership(
         changeOpening,
-        ownedChangeOpening -> buildRedeemRequestV4Owned(
+        ownedChangeOpening -> buildRedeemRequestV5Owned(
             input,
             recipientAccountId,
             chainDiscriminant,
@@ -1610,11 +1663,11 @@ public final class KagemushaRecursiveSpendProver {
             ownedChangeOpening,
             changeOutputMembershipPaths,
             unshieldVerifierCommitment,
-            operationId,
+            nonce,
             blockHeight));
   }
 
-  private static RedeemRequestV4 buildRedeemRequestV4Owned(
+  private static RedeemRequestV5 buildRedeemRequestV5Owned(
       final SpendableBranchV4 input,
       final String recipientAccountId,
       final int chainDiscriminant,
@@ -1622,7 +1675,7 @@ public final class KagemushaRecursiveSpendProver {
       final NoteOpening changeOpening,
       final OutputMembershipPaths changeOutputMembershipPaths,
       final byte[] unshieldVerifierCommitment,
-      final byte[] operationId,
+      final byte[] nonce,
       final long blockHeight) {
     requireArtifactBridge();
     requireV4ProofBackend();
@@ -1641,7 +1694,7 @@ public final class KagemushaRecursiveSpendProver {
     byte[] change = null;
     byte[] outputMembership = null;
     byte[] verifier = null;
-    byte[] operation = null;
+    byte[] nonceBytes = null;
     byte[] bundleArchive = null;
     byte[] topUpProvenanceArchive = null;
     byte[] openingArchive = null;
@@ -1654,23 +1707,23 @@ public final class KagemushaRecursiveSpendProver {
       outputMembership = changeOutputMembershipPaths == null
           ? new byte[0] : changeOutputMembershipPaths.nativeArchive();
       verifier = requireDigest(unshieldVerifierCommitment, "unshieldVerifierCommitment");
-      operation = requireDigest(operationId, "operationId");
+      nonceBytes = requireDigest(nonce, "nonce");
       bundleArchive = input.bundle().noritoEncoded();
       topUpProvenanceArchive = input.topUpProvenance().noritoEncoded();
       openingArchive = input.opening().noritoEncoded();
       witnessArchive = input.membershipWitness().noritoEncoded();
       recipient = utf8(recipientAccountId, "recipientAccountId");
       atomicUnits = utf8(amount.atomicUnits(), "atomicUnits");
-      archive = nativeBuildRedeemRequestV4(
+      archive = nativeBuildRedeemRequestV5(
           bundleArchive, topUpProvenanceArchive, openingArchive, witnessArchive, recipient,
           requireChainDiscriminant(chainDiscriminant), atomicUnits, amount.scale(), change,
-          outputMembership, verifier, operation, blockHeight);
-      return new RedeemRequestV4(archive, changeOpening);
+          outputMembership, verifier, nonceBytes, blockHeight);
+      return new RedeemRequestV5(archive, changeOpening);
     } finally {
       SecretArchiveWiper.wipe(change);
       SecretArchiveWiper.wipe(outputMembership);
       SecretArchiveWiper.wipe(verifier);
-      SecretArchiveWiper.wipe(operation);
+      SecretArchiveWiper.wipe(nonceBytes);
       SecretArchiveWiper.wipe(bundleArchive);
       SecretArchiveWiper.wipe(topUpProvenanceArchive);
       SecretArchiveWiper.wipe(openingArchive);
@@ -1796,8 +1849,8 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   /** Build a full or partial redemption and its optional proof-bound offline change. */
-  public static RedeemBuildResultV4 buildRedeemV4(final RedeemRequestV4 request) {
-    final RedeemRequestV4 requiredRequest = Objects.requireNonNull(request, "request");
+  public static RedeemBuildResultV4 buildRedeemV4(final RedeemRequestV5 request) {
+    final RedeemRequestV5 requiredRequest = Objects.requireNonNull(request, "request");
     return withHeavyProofPermit("build redeem", () -> {
       byte[] secretArchive = null;
       boolean terminal = true;
@@ -1839,16 +1892,24 @@ public final class KagemushaRecursiveSpendProver {
     return abiVersion == REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
   }
 
+  static boolean isExactKagemushaContractRevision(final int revision) {
+    return revision == REQUIRED_KAGEMUSHA_NATIVE_CONTRACT_REVISION;
+  }
+
   static boolean detectExactNativeAvailability(
       final NativeProbe loadLibrary,
       final NativeAbiVersionProbe abiVersion,
+      final NativeAbiVersionProbe contractRevision,
       final NativeSymbolProbe symbolProbe) {
     Objects.requireNonNull(loadLibrary, "loadLibrary");
     Objects.requireNonNull(abiVersion, "abiVersion");
+    Objects.requireNonNull(contractRevision, "contractRevision");
     Objects.requireNonNull(symbolProbe, "symbolProbe");
     try {
       loadLibrary.run();
-      return isExactBridgeAbi(abiVersion.run()) && symbolProbe.run();
+      return isExactBridgeAbi(abiVersion.run())
+          && isExactKagemushaContractRevision(contractRevision.run())
+          && symbolProbe.run();
     } catch (final UnsatisfiedLinkError | RuntimeException error) {
       return false;
     }
@@ -1858,6 +1919,7 @@ public final class KagemushaRecursiveSpendProver {
     return detectExactNativeAvailability(
         () -> System.loadLibrary(LIBRARY_NAME),
         KagemushaRecursiveSpendProver::nativeBridgeAbiVersion,
+        KagemushaRecursiveSpendProver::nativeKagemushaContractRevision,
         () ->
             expectRejectedSymbolProbe(
                 () -> nativeArtifactBeginV4(new byte[] {0}, new byte[32], new byte[32])));
@@ -1895,6 +1957,8 @@ public final class KagemushaRecursiveSpendProver {
     if (!ARTIFACT_BRIDGE_AVAILABLE) {
       throw new IllegalStateException(
           LIBRARY_NAME + " ABI " + REQUIRED_NATIVE_BRIDGE_ABI_VERSION
+              + ", Kagemusha contract revision "
+              + REQUIRED_KAGEMUSHA_NATIVE_CONTRACT_REVISION
               + " artifact streaming is unavailable");
     }
   }
@@ -2246,6 +2310,323 @@ public final class KagemushaRecursiveSpendProver {
       throw new IllegalArgumentException(name + " must be non-zero");
     }
     return Arrays.copyOf(value, value.length);
+  }
+
+  private static byte[] requireMarkedDigest(final byte[] value, final String name) {
+    final byte[] digest = requireDigest(value, name);
+    if ((digest[digest.length - 1] & 1) == 0) {
+      Arrays.fill(digest, (byte) 0);
+      throw new IllegalArgumentException(name + " must preserve the Iroha hash marker");
+    }
+    return digest;
+  }
+
+  private static final class CompactFieldRange {
+    private final int start;
+    private final int end;
+
+    private CompactFieldRange(final int start, final int end) {
+      this.start = start;
+      this.end = end;
+    }
+
+    private int size() {
+      return end - start;
+    }
+  }
+
+  private static OperationIdentity operationIdentityFromProjection(
+      final byte[][] fields, final int offset) {
+    return new OperationIdentity(
+        requireMarkedDigest(fields[offset], "operationId"),
+        requireMarkedDigest(fields[offset + 1], "requestAuthorityDigest"),
+        requireMarkedDigest(fields[offset + 2], "canonicalRequestDigest"),
+        operationKind(canonicalText(fields[offset + 3], "operationKind")),
+        longInteger(fields[offset + 4], "issuedAtMilliseconds"),
+        longInteger(fields[offset + 5], "expiresAtMilliseconds"));
+  }
+
+  private static OperationIdentity operationIdentityFromCanonicalRequest(
+      final byte[] archive,
+      final String schema,
+      final OperationKind kind,
+      final int fieldCount,
+      final int operationIdFieldIndex) {
+    final NoritoHeader.DecodeResult decoded =
+        NoritoHeader.decode(archive, SchemaHash.hash16(schema));
+    final byte[] payload = decoded.payload();
+    byte[] canonicalAuthorityArchive = null;
+    byte[] operationId = null;
+    byte[] authorityDigest = null;
+    byte[] requestDigest = null;
+    byte[] nonce = null;
+    try {
+      final List<CompactFieldRange> requestFields =
+          compactFields(payload, 0, payload.length, fieldCount, schema + " request");
+      final CompactFieldRange version = requestFields.get(0);
+      if (version.size() != 2
+          || (payload[version.start] & 0xff) != KAGEMUSHA_REQUEST_WIRE_VERSION_V4
+          || payload[version.start + 1] != 0) {
+        throw new IllegalArgumentException(
+            schema + " must carry wire version " + KAGEMUSHA_REQUEST_WIRE_VERSION_V4);
+      }
+      final CompactFieldRange authorization = requestFields.get(requestFields.size() - 1);
+      final List<CompactFieldRange> authorizationFields = compactFields(
+          payload, authorization.start, authorization.end, 10, schema + " authorization");
+      final CompactFieldRange authority = authorizationFields.get(0);
+      if (authority.size() == 0) {
+        throw new IllegalArgumentException(
+            schema + " authorization authority must not be empty");
+      }
+      requireCanonicalAuthorizationText(
+          payload, authorizationFields.get(1), "device_id", 128);
+      if (authorizationFields.get(2).size() == 0) {
+        throw new IllegalArgumentException(
+            schema + " authorization asset_definition_id must not be empty");
+      }
+
+      final byte[] outerOperation = copyField(payload, requestFields.get(operationIdFieldIndex));
+      try {
+        operationId = requireMarkedDigest(
+            copyField(payload, authorizationFields.get(3)), "operationId");
+        if (!Arrays.equals(outerOperation, operationId)) {
+          throw new IllegalArgumentException(
+              schema + " authorization operation_id must equal the outer operation_id");
+        }
+      } finally {
+        Arrays.fill(outerOperation, (byte) 0);
+      }
+
+      final long issuedAt = unsignedLong(payload, authorizationFields.get(4), "issued_at_ms");
+      final long expiresAt = unsignedLong(payload, authorizationFields.get(5), "expires_at_ms");
+      if (issuedAt <= 0) {
+        throw new IllegalArgumentException(
+            schema + " authorization issued_at_ms must be positive");
+      }
+      if (expiresAt <= issuedAt
+          || expiresAt - issuedAt > KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2) {
+        throw new IllegalArgumentException(schema + " authorization lifetime is invalid");
+      }
+
+      nonce = copyField(payload, authorizationFields.get(6));
+      if (nonce.length != 32 || isAllZero(nonce)) {
+        throw new IllegalArgumentException(
+            schema + " authorization nonce must be exactly 32 non-zero bytes");
+      }
+      if (authorizationFields.get(7).size() != 32) {
+        throw new IllegalArgumentException(
+            schema + " authorization payload_digest must be exactly 32 bytes");
+      }
+      final byte[] registrationHash = copyField(payload, authorizationFields.get(8));
+      try {
+        final byte[] checkedRegistration = requireMarkedDigest(
+            registrationHash, "registrationHash");
+        Arrays.fill(checkedRegistration, (byte) 0);
+      } finally {
+        Arrays.fill(registrationHash, (byte) 0);
+      }
+      if (authorizationFields.get(9).size() == 0) {
+        throw new IllegalArgumentException(
+            schema + " authorization hardware_assertion must not be empty");
+      }
+
+      canonicalAuthorityArchive = canonicalAccountIdArchive(payload, authority);
+      final byte[] expectedOperation = deriveOperationIdV4(canonicalAuthorityArchive, nonce);
+      try {
+        if (!Arrays.equals(operationId, expectedOperation)) {
+          throw new IllegalArgumentException(
+              schema + " authorization operation_id is not derived from authority and nonce");
+        }
+      } finally {
+        Arrays.fill(expectedOperation, (byte) 0);
+      }
+      authorityDigest = markedBlake2b256(
+          KAGEMUSHA_OPERATION_AUTHORITY_DIGEST_DOMAIN_V4,
+          littleEndianLength(canonicalAuthorityArchive.length),
+          canonicalAuthorityArchive);
+      requestDigest = markedBlake2b256(
+          KAGEMUSHA_OPERATION_REQUEST_DIGEST_DOMAIN_V4,
+          (kind == OperationKind.TOP_UP ? "top_up" : "redeem").getBytes(StandardCharsets.UTF_8),
+          littleEndianLength(archive.length),
+          archive);
+      return new OperationIdentity(
+          operationId, authorityDigest, requestDigest, kind, issuedAt, expiresAt);
+    } finally {
+      wipe(nonce);
+      wipe(requestDigest);
+      wipe(authorityDigest);
+      wipe(operationId);
+      wipe(canonicalAuthorityArchive);
+      Arrays.fill(payload, (byte) 0);
+    }
+  }
+
+  static OperationIdentity operationIdentityFromCanonicalRequestForTest(
+      final byte[] archive, final OperationKind kind) {
+    if (kind == OperationKind.TOP_UP) {
+      return operationIdentityFromCanonicalRequest(
+          archive, "iroha.torii.v1.offline.top_up.request", kind, 8, 6);
+    }
+    return operationIdentityFromCanonicalRequest(
+        archive, "iroha.torii.v1.offline.redeem.request", kind, 10, 8);
+  }
+
+  private static byte[] deriveOperationIdV4(
+      final byte[] canonicalAuthorityArchive, final byte[] nonce) {
+    if (nonce == null || nonce.length != 32 || isAllZero(nonce)) {
+      throw new IllegalArgumentException("nonce must be exactly 32 non-zero bytes");
+    }
+    return markedBlake2b256(
+        KAGEMUSHA_OPERATION_ID_DOMAIN_V4,
+        littleEndianLength(canonicalAuthorityArchive.length),
+        canonicalAuthorityArchive,
+        nonce);
+  }
+
+  private static byte[] canonicalAccountIdArchive(
+      final byte[] source, final CompactFieldRange field) {
+    final byte[] payload = copyField(source, field);
+    try {
+      final NoritoHeader header = new NoritoHeader(
+          SchemaHash.hash16("iroha_data_model::account::model::AccountId"),
+          payload.length,
+          CRC64.compute(payload),
+          NoritoHeader.COMPACT_LEN,
+          NoritoHeader.COMPRESSION_NONE);
+      final byte[] headerBytes = header.encode();
+      final byte[] archive = Arrays.copyOf(headerBytes, headerBytes.length + payload.length);
+      System.arraycopy(payload, 0, archive, headerBytes.length, payload.length);
+      return archive;
+    } finally {
+      Arrays.fill(payload, (byte) 0);
+    }
+  }
+
+  private static byte[] markedBlake2b256(final byte[]... chunks) {
+    final Blake2bDigest digest = new Blake2bDigest(256);
+    for (final byte[] chunk : chunks) {
+      digest.update(chunk, 0, chunk.length);
+    }
+    final byte[] output = new byte[32];
+    digest.doFinal(output, 0);
+    output[output.length - 1] |= 1;
+    return output;
+  }
+
+  private static byte[] littleEndianLength(final int value) {
+    final byte[] encoded = new byte[Long.BYTES];
+    long remaining = value;
+    for (int index = 0; index < encoded.length; index++) {
+      encoded[index] = (byte) remaining;
+      remaining >>>= 8;
+    }
+    return encoded;
+  }
+
+  private static List<CompactFieldRange> compactFields(
+      final byte[] source,
+      final int start,
+      final int end,
+      final int count,
+      final String context) {
+    if (start < 0 || start > end || end > source.length) {
+      throw new IllegalArgumentException(context + " bounds are invalid");
+    }
+    final List<CompactFieldRange> fields = new ArrayList<>(count);
+    int cursor = start;
+    for (int index = 0; index < count; index++) {
+      long length = 0;
+      int shift = 0;
+      int octets = 0;
+      while (true) {
+        if (cursor >= end || octets >= 10) {
+          throw new IllegalArgumentException(
+              context + " field " + index + " compact length is truncated or overflows u64");
+        }
+        final int octet = source[cursor++] & 0xff;
+        final int chunk = octet & 0x7f;
+        if (shift >= 63 && chunk > 1) {
+          throw new IllegalArgumentException(
+              context + " field " + index + " compact length overflows u64");
+        }
+        length |= ((long) chunk) << shift;
+        octets++;
+        if ((octet & 0x80) == 0) {
+          if (octets > 1 && chunk == 0) {
+            throw new IllegalArgumentException(
+                context + " field " + index + " compact length is non-canonical");
+          }
+          break;
+        }
+        shift += 7;
+      }
+      if (length > Integer.MAX_VALUE || length > end - cursor) {
+        throw new IllegalArgumentException(context + " field " + index + " is truncated");
+      }
+      final int fieldEnd = cursor + (int) length;
+      fields.add(new CompactFieldRange(cursor, fieldEnd));
+      cursor = fieldEnd;
+    }
+    if (cursor != end) {
+      throw new IllegalArgumentException(context + " must contain exactly " + count + " fields");
+    }
+    return fields;
+  }
+
+  private static byte[] copyField(final byte[] source, final CompactFieldRange field) {
+    return Arrays.copyOfRange(source, field.start, field.end);
+  }
+
+  private static long unsignedLong(
+      final byte[] source, final CompactFieldRange field, final String name) {
+    if (field.size() != Long.BYTES || (source[field.end - 1] & 0x80) != 0) {
+      throw new IllegalArgumentException(name + " must be one positive signed-range u64");
+    }
+    long value = 0;
+    for (int index = 0; index < Long.BYTES; index++) {
+      value |= (source[field.start + index] & 0xffL) << (index * 8);
+    }
+    return value;
+  }
+
+  private static void requireCanonicalAuthorizationText(
+      final byte[] source,
+      final CompactFieldRange field,
+      final String name,
+      final int maximumBytes) {
+    if (field.size() < 1 || field.size() > maximumBytes) {
+      throw new IllegalArgumentException(name + " has an invalid byte length");
+    }
+    final byte[] bytes = copyField(source, field);
+    try {
+      final String text = new String(bytes, StandardCharsets.UTF_8);
+      if (!Arrays.equals(bytes, text.getBytes(StandardCharsets.UTF_8))
+          || !text.equals(text.trim())) {
+        throw new IllegalArgumentException(name + " must be canonical UTF-8 text");
+      }
+      for (int index = 0; index < text.length(); index++) {
+        if (Character.isISOControl(text.charAt(index))) {
+          throw new IllegalArgumentException(name + " must be canonical UTF-8 text");
+        }
+      }
+    } finally {
+      Arrays.fill(bytes, (byte) 0);
+    }
+  }
+
+  private static boolean isAllZero(final byte[] value) {
+    int accumulator = 0;
+    for (final byte octet : value) accumulator |= octet;
+    return accumulator == 0;
+  }
+
+  private static void wipe(final byte[] value) {
+    if (value != null) Arrays.fill(value, (byte) 0);
+  }
+
+  private static void wipeFields(final byte[][] fields) {
+    if (fields == null) return;
+    for (final byte[] field : fields) wipe(field);
   }
 
   private static byte[] requireFinalityCheckpointContext(
@@ -2838,7 +3219,7 @@ public final class KagemushaRecursiveSpendProver {
     private RequestAuthorizationPreparationArchive(final byte[] archive) {
       super(
           archive,
-          "KagemushaRequestAuthorizationPreparationV2",
+          "KagemushaRequestAuthorizationPreparationV3",
           "requestAuthorizationPreparation",
           MAX_REQUEST_AUTHORIZATION_BYTES);
     }
@@ -3226,13 +3607,13 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   /** Local secret-bearing redemption input. Native code consumes and wipes its openings. */
-  public static final class RedeemRequestV4 extends CanonicalArchive implements AutoCloseable {
+  public static final class RedeemRequestV5 extends CanonicalArchive implements AutoCloseable {
     private final SecretArchiveWiper.ChangeOpeningOwner changeOpeningOwner;
 
-    private RedeemRequestV4(final byte[] archive, final NoteOpening changeOpening) {
+    private RedeemRequestV5(final byte[] archive, final NoteOpening changeOpening) {
       super(
           archive,
-          "KagemushaRecursiveSpendRedeemLocalRequestV4",
+          "KagemushaRecursiveSpendRedeemLocalRequestV5",
           "redeemRequest",
           MAX_LOCAL_REQUEST_ARCHIVE_BYTES);
       this.changeOpeningOwner = new SecretArchiveWiper.ChangeOpeningOwner(changeOpening);
@@ -4133,102 +4514,143 @@ public final class KagemushaRecursiveSpendProver {
 
   public enum OperationKind { TOP_UP, REDEEM }
 
-  /** Native-authenticated identity of one signed Kagemusha command. */
-  public static final class OperationRequestIdentity {
-    private final OperationKind kind;
+  /** Immutable identity of one canonical signed Kagemusha command. */
+  public static final class OperationIdentity {
     private final byte[] operationId;
-    private final long authorizationIssuedAtMilliseconds;
+    private final byte[] requestAuthorityDigest;
+    private final byte[] canonicalRequestDigest;
+    private final OperationKind kind;
+    private final long issuedAtMilliseconds;
+    private final long expiresAtMilliseconds;
 
-    private OperationRequestIdentity(
-        final OperationKind kind,
+    private OperationIdentity(
         final byte[] operationId,
-        final long authorizationIssuedAtMilliseconds) {
+        final byte[] requestAuthorityDigest,
+        final byte[] canonicalRequestDigest,
+        final OperationKind kind,
+        final long issuedAtMilliseconds,
+        final long expiresAtMilliseconds) {
+      this.operationId = requireMarkedDigest(operationId, "operationId");
+      this.requestAuthorityDigest =
+          requireMarkedDigest(requestAuthorityDigest, "requestAuthorityDigest");
+      this.canonicalRequestDigest =
+          requireMarkedDigest(canonicalRequestDigest, "canonicalRequestDigest");
       this.kind = Objects.requireNonNull(kind, "kind");
-      this.operationId = requireDigest(operationId, "operationId");
-      if (authorizationIssuedAtMilliseconds <= 0) {
-        throw new IllegalArgumentException(
-            "authorizationIssuedAtMilliseconds must be positive");
+      if (issuedAtMilliseconds <= 0) {
+        throw new IllegalArgumentException("issuedAtMilliseconds must be positive");
       }
-      this.authorizationIssuedAtMilliseconds = authorizationIssuedAtMilliseconds;
+      if (expiresAtMilliseconds <= issuedAtMilliseconds
+          || expiresAtMilliseconds - issuedAtMilliseconds
+              > KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2) {
+        throw new IllegalArgumentException("operation identity lifetime is invalid");
+      }
+      this.issuedAtMilliseconds = issuedAtMilliseconds;
+      this.expiresAtMilliseconds = expiresAtMilliseconds;
     }
 
-    public OperationKind kind() { return kind; }
     public byte[] operationId() { return Arrays.copyOf(operationId, operationId.length); }
+    public byte[] requestAuthorityDigest() {
+      return Arrays.copyOf(requestAuthorityDigest, requestAuthorityDigest.length);
+    }
+    public byte[] canonicalRequestDigest() {
+      return Arrays.copyOf(canonicalRequestDigest, canonicalRequestDigest.length);
+    }
+    public OperationKind kind() { return kind; }
     public String operationIdHex() { return hex(operationId); }
-    public long authorizationIssuedAtMilliseconds() {
-      return authorizationIssuedAtMilliseconds;
+    public long issuedAtMilliseconds() { return issuedAtMilliseconds; }
+    public long expiresAtMilliseconds() { return expiresAtMilliseconds; }
+
+    @Override
+    public boolean equals(final Object other) {
+      if (this == other) return true;
+      if (!(other instanceof OperationIdentity that)) return false;
+      return Arrays.equals(operationId, that.operationId)
+          && Arrays.equals(requestAuthorityDigest, that.requestAuthorityDigest)
+          && Arrays.equals(canonicalRequestDigest, that.canonicalRequestDigest)
+          && kind == that.kind
+          && issuedAtMilliseconds == that.issuedAtMilliseconds
+          && expiresAtMilliseconds == that.expiresAtMilliseconds;
+    }
+
+    @Override
+    public int hashCode() {
+      int result = Arrays.hashCode(operationId);
+      result = 31 * result + Arrays.hashCode(requestAuthorityDigest);
+      result = 31 * result + Arrays.hashCode(canonicalRequestDigest);
+      result = 31 * result + kind.hashCode();
+      result = 31 * result + Long.hashCode(issuedAtMilliseconds);
+      return 31 * result + Long.hashCode(expiresAtMilliseconds);
     }
   }
 
   /**
    * Durable status-polling reference bound to the signed command.
    *
-   * <p>The operation ID, kind, and submitted-at value (the signed authorization issuance time)
-   * remain fixed. An exact retry or global Applied winner may carry another transaction hash.
+   * <p>The complete signed identity remains fixed. Only a validated Pending response may advance
+   * the transaction-hash cursor to a retry carrier.
    */
   public static final class OperationHandle {
-    private final byte[] operationId;
-    private final OperationKind kind;
-    private final byte[] transactionHash;
-    private final long submittedAtMilliseconds;
+    private final OperationIdentity identity;
+    private byte[] transactionHash;
+    private OperationState terminalState;
 
     public OperationHandle(
-        final byte[] operationId,
-        final OperationKind kind,
-        final byte[] transactionHash,
-        final long submittedAtMilliseconds) {
-      this.operationId = requireDigest(operationId, "operationId");
-      this.kind = Objects.requireNonNull(kind, "kind");
+        final OperationIdentity identity,
+        final byte[] transactionHash) {
+      this.identity = Objects.requireNonNull(identity, "identity");
       this.transactionHash = requireTransactionHash(transactionHash, "transactionHash");
-      if (submittedAtMilliseconds <= 0) {
-        throw new IllegalArgumentException("submittedAtMilliseconds must be positive");
-      }
-      this.submittedAtMilliseconds = submittedAtMilliseconds;
     }
 
-    public byte[] operationId() { return Arrays.copyOf(operationId, operationId.length); }
-    public String operationIdHex() { return hex(operationId); }
-    public OperationKind kind() { return kind; }
-    public byte[] transactionHash() {
+    public OperationIdentity identity() { return identity; }
+    public synchronized byte[] transactionHash() {
       return Arrays.copyOf(transactionHash, transactionHash.length);
     }
-    public long submittedAtMilliseconds() { return submittedAtMilliseconds; }
+
+    private synchronized void acceptValidatedStatus(final OperationStatusProjection status) {
+      if (terminalState != null && status.state() != terminalState) {
+        throw new IllegalStateException("Kagemusha Torii operation terminal state is immutable");
+      }
+      if (terminalState != null) return;
+      if (status.state() == OperationState.PENDING) {
+        final byte[] checked = requireTransactionHash(status.transactionHash(), "transactionHash");
+        Arrays.fill(transactionHash, (byte) 0);
+        transactionHash = checked;
+      } else {
+        terminalState = status.state();
+      }
+    }
   }
 
   public static final class OperationReferenceProjection {
-    private final OperationKind kind;
-    private final byte[] operationId;
+    private final OperationIdentity identity;
+    private final OperationState state;
     private final byte[] transactionHash;
     private final String statusUri;
-    private final long submittedAtMilliseconds;
 
     private OperationReferenceProjection(
-        final OperationKind kind,
-        final byte[] operationId,
+        final OperationIdentity identity,
+        final OperationState state,
         final byte[] transactionHash,
-        final String statusUri,
-        final long submittedAtMilliseconds) {
-      this.kind = Objects.requireNonNull(kind, "kind");
-      this.operationId = requireDigest(operationId, "operationId");
+        final String statusUri) {
+      this.identity = Objects.requireNonNull(identity, "identity");
+      this.state = Objects.requireNonNull(state, "state");
       this.transactionHash = requireTransactionHash(transactionHash, "transactionHash");
       this.statusUri = Objects.requireNonNull(statusUri, "statusUri");
-      if (!(ToriiClient.OPERATIONS_PATH + "/" + hex(this.operationId)).equals(statusUri)) {
+      if (state != OperationState.PENDING) {
+        throw new IllegalArgumentException("operation reference state must be pending");
+      }
+      if (!(ToriiClient.OPERATIONS_PATH + "/" + identity.operationIdHex()).equals(statusUri)) {
         throw new IllegalArgumentException(
             "statusUri must match the canonical operation resource");
       }
-      if (submittedAtMilliseconds <= 0) {
-        throw new IllegalArgumentException("submittedAtMilliseconds must be positive");
-      }
-      this.submittedAtMilliseconds = submittedAtMilliseconds;
     }
 
-    public OperationKind kind() { return kind; }
-    public byte[] operationId() { return Arrays.copyOf(operationId, operationId.length); }
+    public OperationIdentity identity() { return identity; }
+    public OperationState state() { return state; }
     public byte[] transactionHash() {
       return Arrays.copyOf(transactionHash, transactionHash.length);
     }
     public String statusUri() { return statusUri; }
-    public long submittedAtMilliseconds() { return submittedAtMilliseconds; }
   }
 
   public static final class OperationRejection {
@@ -4268,57 +4690,47 @@ public final class KagemushaRecursiveSpendProver {
 
   public static final class OperationStatusProjection {
     private final OperationState state;
-    private final OperationKind kind;
-    private final byte[] operationId;
+    private final OperationIdentity identity;
     private final byte[] transactionHash;
-    private final Long submittedAtMilliseconds;
     private final Long finalizedBlockHeight;
     private final FinalizedTopUp finalizedTopUp;
     private final OperationRejection rejection;
 
     private OperationStatusProjection(
         final OperationState state,
-        final OperationKind kind,
-        final byte[] operationId,
+        final OperationIdentity identity,
         final byte[] transactionHash,
-        final Long submittedAtMilliseconds,
         final Long finalizedBlockHeight,
         final FinalizedTopUp finalizedTopUp,
         final OperationRejection rejection) {
-      this.operationId = requireDigest(operationId, "operationId");
       this.transactionHash = requireTransactionHash(transactionHash, "transactionHash");
-      if (state == null || kind == null) {
-        throw new IllegalArgumentException("operation state and kind must be present");
+      if (state == null || identity == null) {
+        throw new IllegalArgumentException("operation state and identity must be present");
       }
       final boolean valid = switch (state) {
-        case PENDING -> submittedAtMilliseconds != null && submittedAtMilliseconds > 0
-            && finalizedBlockHeight == null
+        case PENDING -> finalizedBlockHeight == null
             && finalizedTopUp == null && rejection == null;
-        case APPLIED -> submittedAtMilliseconds == null
-            && finalizedBlockHeight != null && finalizedBlockHeight > 0
+        case APPLIED -> finalizedBlockHeight != null && finalizedBlockHeight > 0
             && rejection == null
-            && ((kind == OperationKind.TOP_UP && finalizedTopUp != null
+            && ((identity.kind() == OperationKind.TOP_UP && finalizedTopUp != null
                     && finalizedTopUp.finalizedBlockHeight == finalizedBlockHeight)
-                || (kind == OperationKind.REDEEM && finalizedTopUp == null));
-        case REJECTED -> submittedAtMilliseconds == null && finalizedBlockHeight == null
+                || (identity.kind() == OperationKind.REDEEM && finalizedTopUp == null));
+        case REJECTED -> finalizedBlockHeight == null
             && finalizedTopUp == null && rejection != null;
       };
       if (!valid) {
         throw new IllegalArgumentException("operation status fields are inconsistent");
       }
       this.state = state;
-      this.kind = kind;
-      this.submittedAtMilliseconds = submittedAtMilliseconds;
+      this.identity = identity;
       this.finalizedBlockHeight = finalizedBlockHeight;
       this.finalizedTopUp = finalizedTopUp;
       this.rejection = rejection;
     }
 
     public OperationState state() { return state; }
-    public OperationKind kind() { return kind; }
-    public byte[] operationId() { return Arrays.copyOf(operationId, operationId.length); }
+    public OperationIdentity identity() { return identity; }
     public byte[] transactionHash() { return Arrays.copyOf(transactionHash, transactionHash.length); }
-    public Long submittedAtMilliseconds() { return submittedAtMilliseconds; }
     public Long finalizedBlockHeight() { return finalizedBlockHeight; }
     public FinalizedTopUp finalizedTopUp() { return finalizedTopUp; }
     public OperationRejection rejection() { return rejection; }
@@ -4339,8 +4751,8 @@ public final class KagemushaRecursiveSpendProver {
     private final TransportExecutor transport;
     private final LocalSigningContext localSigningContext;
     private final Duration requestTimeout;
-    private final Function<TopUpRequest, OperationRequestIdentity> topUpRequestIdentityProjector;
-    private final Function<RedeemSubmissionRequest, OperationRequestIdentity>
+    private final Function<TopUpRequest, OperationIdentity> topUpRequestIdentityProjector;
+    private final Function<RedeemSubmissionRequest, OperationIdentity>
         redeemRequestIdentityProjector;
     private final Function<OperationReference, OperationReferenceProjection>
         operationReferenceProjector;
@@ -4372,8 +4784,8 @@ public final class KagemushaRecursiveSpendProver {
         final TransportExecutor transport,
         final LocalSigningContext localSigningContext,
         final Duration requestTimeout,
-        final Function<TopUpRequest, OperationRequestIdentity> topUpRequestIdentityProjector,
-        final Function<RedeemSubmissionRequest, OperationRequestIdentity>
+        final Function<TopUpRequest, OperationIdentity> topUpRequestIdentityProjector,
+        final Function<RedeemSubmissionRequest, OperationIdentity>
             redeemRequestIdentityProjector,
         final Function<OperationReference, OperationReferenceProjection> operationReferenceProjector,
         final Function<OperationStatus, OperationStatusProjection> operationStatusProjector) {
@@ -4433,7 +4845,7 @@ public final class KagemushaRecursiveSpendProver {
 
     public CompletableFuture<OperationHandle> submitTopUp(final TopUpRequest request) {
       final TopUpRequest checkedRequest = Objects.requireNonNull(request, "request");
-      final OperationRequestIdentity identity =
+      final OperationIdentity identity =
           topUpRequestIdentityProjector.apply(checkedRequest);
       if (identity.kind() != OperationKind.TOP_UP) {
         throw new IllegalStateException("native top-up request identity has the wrong operation kind");
@@ -4445,7 +4857,7 @@ public final class KagemushaRecursiveSpendProver {
     public CompletableFuture<OperationHandle> submitRedeem(
         final RedeemSubmissionRequest request) {
       final RedeemSubmissionRequest checkedRequest = Objects.requireNonNull(request, "request");
-      final OperationRequestIdentity identity =
+      final OperationIdentity identity =
           redeemRequestIdentityProjector.apply(checkedRequest);
       if (identity.kind() != OperationKind.REDEEM) {
         throw new IllegalStateException(
@@ -4457,7 +4869,7 @@ public final class KagemushaRecursiveSpendProver {
 
     public CompletableFuture<OperationStatus> getOperation(final OperationHandle handle) {
       final OperationHandle checkedHandle = Objects.requireNonNull(handle, "handle");
-      final String id = checkedHandle.operationIdHex();
+      final String id = checkedHandle.identity().operationIdHex();
       return execute(
               TransportRequest.builder()
                   .setMethod("GET")
@@ -4477,7 +4889,7 @@ public final class KagemushaRecursiveSpendProver {
     private CompletableFuture<OperationHandle> submitCommand(
         final String path,
         final byte[] request,
-        final OperationRequestIdentity identity) {
+        final OperationIdentity identity) {
       final String id = identity.operationIdHex();
       return execute(
               TransportRequest.builder()
@@ -4502,46 +4914,26 @@ public final class KagemushaRecursiveSpendProver {
 
     static OperationHandle requireOperationReferenceMatches(
         final OperationReferenceProjection reference,
-        final OperationRequestIdentity identity) {
-      if (!Arrays.equals(reference.operationId(), identity.operationId())) {
+        final OperationIdentity identity) {
+      if (!reference.identity().equals(identity)) {
         throw new IllegalStateException(
-            "Kagemusha Torii response operation ID must match the submitted operation");
-      }
-      if (reference.kind() != identity.kind()) {
-        throw new IllegalStateException(
-            "Kagemusha Torii response kind must match the submitted command");
+            "Kagemusha Torii response identity must match the submitted request");
       }
       if (!reference.statusUri().equals(OPERATIONS_PATH + "/" + identity.operationIdHex())) {
         throw new IllegalStateException(
             "Kagemusha Torii response status URI must match the submitted operation");
       }
-      if (reference.submittedAtMilliseconds()
-          != identity.authorizationIssuedAtMilliseconds()) {
-        throw new IllegalStateException(
-            "Kagemusha Torii response submitted_at must match signed authorization issued_at");
-      }
       return new OperationHandle(
-          reference.operationId(),
-          reference.kind(),
-          reference.transactionHash(),
-          reference.submittedAtMilliseconds());
+          reference.identity(), reference.transactionHash());
     }
 
     static void requireOperationStatusMatches(
         final OperationStatusProjection status, final OperationHandle handle) {
-      if (!Arrays.equals(status.operationId(), handle.operationId())) {
+      if (!status.identity().equals(handle.identity())) {
         throw new IllegalStateException(
-            "Kagemusha Torii status operation ID must match the requested operation");
+            "Kagemusha Torii status identity must match the accepted operation");
       }
-      if (status.kind() != handle.kind()) {
-        throw new IllegalStateException(
-            "Kagemusha Torii status kind must match the signed operation");
-      }
-      if (status.submittedAtMilliseconds() != null
-          && !status.submittedAtMilliseconds().equals(handle.submittedAtMilliseconds())) {
-        throw new IllegalStateException(
-            "Kagemusha Torii pending status submitted_at must match signed authorization issued_at");
-      }
+      handle.acceptValidatedStatus(status);
     }
 
     private static void requireCommandResponseHeaders(
@@ -4932,6 +5324,7 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   private static native int nativeBridgeAbiVersion();
+  private static native int nativeKagemushaContractRevision();
 
   private static native boolean nativePastaCycleV4BackendAvailable();
 
@@ -5027,11 +5420,11 @@ public final class KagemushaRecursiveSpendProver {
       byte[] bundle, byte[] recipientRequest, byte[] topUpProvenance,
       int maximumHops, long blockHeight, long verifiedAtMilliseconds);
   private static native byte[][] nativeProjectVerifyResultV4(byte[] result);
-  private static native byte[] nativeBuildRedeemRequestV4(
+  private static native byte[] nativeBuildRedeemRequestV5(
       byte[] bundle, byte[] topUpProvenance, byte[] opening, byte[] membershipWitness,
       byte[] recipient, int chainDiscriminant,
       byte[] atomicUnits, int scale, byte[] changeOpening, byte[] changeOutputMembership,
-      byte[] verifierCommitment, byte[] operationId, long blockHeight);
+      byte[] verifierCommitment, byte[] nonce, long blockHeight);
   private static native byte[][] nativeProjectRedeemBuildResultV4(byte[] result);
   private static native byte[][] nativePrepareAcknowledgementV2(
       byte[] request, byte[] payment, long acceptedAtMilliseconds);
@@ -5039,29 +5432,29 @@ public final class KagemushaRecursiveSpendProver {
       byte[] payload, byte[] signature, byte[] request, byte[] payment);
   private static native byte[][] nativeVerifyAcknowledgementV2(
       byte[] acknowledgement, byte[] request, byte[] payment);
-  private static native byte[][] nativePrepareAuthorizationV2(
-      byte[] authority, int chainDiscriminant, byte[] deviceId, byte[] assetDefinitionId, byte[] operationId,
+  private static native byte[][] nativePrepareAuthorizationV3(
+      byte[] authority, int chainDiscriminant, byte[] deviceId, byte[] assetDefinitionId,
       long issuedAtMilliseconds, long expiresAtMilliseconds, byte[] nonce, byte[] payloadDigest,
       byte[] registrationHash, byte[] hardwareAssertionPlatform);
-  private static native byte[][] nativeFinalizeHardwareAuthorizationV2(
+  private static native byte[][] nativeFinalizeHardwareAuthorizationV3(
       byte[] preparation, byte[] authenticatorData, byte[] signatureDer);
-  private static native byte[][] nativeFinalizeIosAppAttestAuthorizationV2(
+  private static native byte[][] nativeFinalizeIosAppAttestAuthorizationV3(
       byte[] preparation, byte[] assertionObject);
-  private static native byte[] nativeFinalizeTopUpV4(byte[] unsigned, byte[] authorization);
-  private static native byte[][] nativeFinalizeRedeemV4(byte[] buildResult, byte[] authorization);
-  private static native byte[][] nativePrepareTopUpV4(
+  private static native byte[] nativeFinalizeTopUpV5(byte[] unsigned, byte[] authorization);
+  private static native byte[][] nativeFinalizeRedeemV5(byte[] buildResult, byte[] authorization);
+  private static native byte[][] nativePrepareTopUpV5(
       byte[] networkId, int chainDiscriminant, byte[] assetDefinition, byte[] payer, byte[] atomicUnits, int scale,
-      byte[] operationId, byte[] spendKey, byte[] rho, byte[] diversifier, int leafIndex,
+      byte[] nonce, byte[] spendKey, byte[] rho, byte[] diversifier, int leafIndex,
       byte[] flattenedSiblings, byte[] directions, byte[] root,
       byte[] shieldVerifierCommitment, byte[] artifactBinding);
   private static native byte[][] nativeProjectTopUpRequestIdentityV4(byte[] request);
   private static native byte[][] nativeProjectRedeemRequestIdentityV4(byte[] request);
-  private static native byte[][] nativeProjectOperationReferenceV4(byte[] reference);
-  private static native byte[][] nativeProjectOperationStatusV4(byte[] status);
+  private static native byte[][] nativeProjectOperationReferenceV2(byte[] reference);
+  private static native byte[][] nativeProjectOperationStatusV2(byte[] status);
   private static native boolean nativeBranchClaimsConflictV2(byte[] left, byte[] right);
-  private static native byte[][] nativePrepareRedemptionChangeV4(
+  private static native byte[][] nativePrepareRedemptionChangeV5(
       byte[] bundle, byte[] inputOpening, byte[] atomicUnits, int scale,
-      byte[] operationId, byte[] entropy);
+      byte[] recipient, int chainDiscriminant, byte[] nonce, byte[] entropy);
   private static native byte[][] nativePreparePeerSplitChangeV4(
       byte[][] bundles,
       byte[][] inputOpenings,

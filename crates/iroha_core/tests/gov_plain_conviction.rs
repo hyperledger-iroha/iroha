@@ -35,13 +35,13 @@ fn plain_ballot_conviction_applies() {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
-    stx.world.governance_referenda_mut().insert(
+    stx.world.put_governance_referendum_for_testing(
         "ref-conviction".to_string(),
         iroha_core::state::GovernanceReferendumRecord {
-            h_start: 0,
+            h_start: 1,
             h_end: 200,
-            status: iroha_core::state::GovernanceReferendumStatus::Proposed,
-            mode: iroha_core::state::GovernanceReferendumMode::Plain,
+            status: iroha_core::state::GovernanceReferendumStatus::Open,
+            final_tally: None,
         },
     );
     let perm: Permission = CanSubmitGovernanceBallot {
@@ -56,10 +56,12 @@ fn plain_ballot_conviction_applies() {
     let duration_blocks: u64 = 250; // factor = 1 + floor(250/100) = 3
     let instr = CastPlainBallot {
         referendum_id: "ref-conviction".to_string(),
-        owner: ALICE_ID.clone(),
-        amount: amount.into(),
-        duration_blocks,
-        direction: 0,
+        direction: iroha_data_model::isi::governance::GovernancePlainBallotDirectionV1::Aye,
+        lock: iroha_data_model::isi::governance::GovernanceParticipationLockV1 {
+            amount: amount.into(),
+            duration_blocks: core::num::NonZeroU64::new(duration_blocks)
+                .expect("non-zero lock duration"),
+        },
     };
     instr
         .clone()
@@ -76,13 +78,13 @@ fn plain_ballot_conviction_applies() {
             event.as_data_event()
         {
             assert_eq!(ev.referendum_id, "ref-conviction");
-            assert_eq!(ev.weight, Some(expected_weight));
+            assert_eq!(ev.weight, expected_weight);
             saw_ok = true;
             break;
         }
     }
     assert!(
         saw_ok,
-        "expected a BallotAccepted(Plain) event with conviction weight"
+        "expected a BallotAccepted event with conviction weight"
     );
 }

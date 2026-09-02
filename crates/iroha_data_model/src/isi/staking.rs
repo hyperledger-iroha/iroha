@@ -217,6 +217,8 @@ isi! {
         pub lane_id: LaneId,
         /// Misbehaving validator account.
         pub validator: AccountId,
+        /// Exact consensus height at which the slashable offence occurred.
+        pub offence_height: u64,
         /// Unique identifier for the slash event.
         pub slash_id: Hash,
         /// Amount of stake to burn or seize.

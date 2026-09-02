@@ -354,40 +354,67 @@ test("orderbook deadline uses captured AbortSignal intrinsics and nonthrowing cl
   }
 });
 
-test("orderbook submit rechecks mutable effective headers immediately before dispatch", async () => {
+test("orderbook submit snapshots caller-owned fixed headers before validation", async () => {
   let releaseCapabilities;
-  let fetches = 0;
-  const sdk = client(async () => { fetches += 1; }, nativeBinding(), {
+  const dispatched = [];
+  const defaultHeaders = {};
+  const sdk = client(async (_url, init) => {
+    dispatched.push(init);
+    return acceptedResponse();
+  }, nativeBinding(), {
     validation: () => new Promise((resolve) => { releaseCapabilities = resolve; }),
+    defaultHeaders,
   });
   const pending = sdk.submitSorafsOrderbookOrder(Buffer.of(1), {
     expectedReceiptSigner: SIGNER,
   });
-  sdk._config.defaultHeaders.Prefer = "return=minimal";
+  defaultHeaders.Prefer = "return=minimal";
   releaseCapabilities();
-  await assert.rejects(pending, /forbids overriding Prefer/u);
-  assert.equal(fetches, 0);
+  await pending;
+  assert.equal(dispatched.length, 1);
+  assert.equal("Prefer" in dispatched[0].headers, false);
 });
 
-test("orderbook submit freezes all effective credentials and benign headers before validation", async () => {
-  for (const mutate of [
-    (sdk) => { sdk._config.defaultHeaders.Authorization = "Bearer replacement"; },
-    (sdk) => { sdk._config.apiToken = "replacement"; },
-    (sdk) => { sdk._config.defaultHeaders["X-Tenant"] = "replacement"; },
+test("orderbook submit snapshots caller-owned credentials and benign headers", async () => {
+  for (const { field, expected, mutate } of [
+    {
+      field: "Authorization",
+      expected: "Bearer original",
+      mutate: (options) => { options.defaultHeaders.Authorization = "Bearer replacement"; },
+    },
+    {
+      field: "X-API-Token",
+      expected: "original",
+      mutate: (options) => { options.apiToken = "replacement"; },
+    },
+    {
+      field: "X-Tenant",
+      expected: "original",
+      mutate: (options) => { options.defaultHeaders["X-Tenant"] = "replacement"; },
+    },
   ]) {
     let releaseCapabilities;
-    let fetches = 0;
-    const sdk = client(async () => { fetches += 1; }, nativeBinding(), {
+    const dispatched = [];
+    const callerOptions = {
       validation: () => new Promise((resolve) => { releaseCapabilities = resolve; }),
-      defaultHeaders: { "X-Tenant": "original" }, apiToken: "original",
-    });
+      defaultHeaders: {
+        Authorization: "Bearer original",
+        "X-Tenant": "original",
+      },
+      apiToken: "original",
+    };
+    const sdk = client(async (_url, init) => {
+      dispatched.push(init);
+      return acceptedResponse();
+    }, nativeBinding(), callerOptions);
     const pending = sdk.submitSorafsOrderbookOrder(Buffer.of(1), {
       expectedReceiptSigner: SIGNER,
     });
-    mutate(sdk);
+    mutate(callerOptions);
     releaseCapabilities();
-    await assert.rejects(pending, /effective request headers changed/u);
-    assert.equal(fetches, 0);
+    await pending;
+    assert.equal(dispatched.length, 1);
+    assert.equal(dispatched[0].headers[field], expected);
   }
 });
 

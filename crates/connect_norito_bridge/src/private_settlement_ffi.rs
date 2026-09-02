@@ -12,7 +12,8 @@ use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::{NetworkId, nexus::ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1};
 use iroha_torii_shared::private_settlement_api::{
     PrivateSettlementAuditApprovalRequestV1, PrivateSettlementAuditApprovalResponseV1,
-    PrivateSettlementAuditorCapsuleResponseV1, PrivateSettlementCommitteeProofResponseV1,
+    PrivateSettlementAuditorCapsuleRequestV1, PrivateSettlementAuditorCapsuleResponseV1,
+    PrivateSettlementCommitteeProofResponseV1,
     validate_private_settlement_audit_approval_response_v1,
     validate_private_settlement_auditor_capsule_response_v1,
     validate_private_settlement_auditor_identity_v1,
@@ -24,7 +25,7 @@ use super::{BridgeError, BridgeResult, bridge_result_to_code, read_fixed_array, 
 
 /// Maximum accepted JSON bytes for one private-settlement Torii response.
 pub const CONNECT_NORITO_PRIVATE_SETTLEMENT_RESPONSE_MAX_BYTES_V1: usize = 32 * 1024 * 1024;
-/// Maximum accepted JSON bytes for one exact auditor-approval request.
+/// Maximum accepted JSON bytes for one exact governed-auditor request.
 pub const CONNECT_NORITO_PRIVATE_SETTLEMENT_REQUEST_MAX_BYTES_V1: usize = 1024 * 1024;
 const PRIVATE_SETTLEMENT_PUBLIC_KEY_LITERAL_MAX_BYTES_V1: usize = 1024;
 
@@ -83,6 +84,12 @@ fn decode_auditor_capsule_response(
     response_json: &[u8],
 ) -> BridgeResult<PrivateSettlementAuditorCapsuleResponseV1> {
     norito::json::from_slice(response_json).map_err(|_| BridgeError::PrivateSettlementResponse)
+}
+
+fn decode_auditor_capsule_request(
+    request_json: &[u8],
+) -> BridgeResult<PrivateSettlementAuditorCapsuleRequestV1> {
+    norito::json::from_slice(request_json).map_err(|_| BridgeError::PrivateSettlementResponse)
 }
 
 fn decode_audit_approval_request(
@@ -153,12 +160,53 @@ pub unsafe extern "C" fn connect_norito_private_settlement_auditor_capsule_respo
     auditor_signing_key_ptr: *const c_char,
     auditor_signing_key_len: c_ulong,
 ) -> c_int {
+    // This legacy ABI cannot authenticate the policy-bearing POST request and
+    // therefore deliberately fails closed. Route clients must use the
+    // request-aware symbol below.
+    let _ = (
+        response_json_ptr,
+        response_json_len,
+        expected_network_id_ptr,
+        expected_network_id_len,
+        requested_payload_digest_ptr,
+        requested_payload_digest_len,
+        auditor_signing_key_ptr,
+        auditor_signing_key_len,
+    );
+    BridgeError::PrivateSettlementResponse.code()
+}
+
+/// Verify one exact auditor capsule request/response pair and governed identity.
+///
+/// The request bytes are the exact bounded JSON bytes signed and sent in the
+/// policy-bearing POST. The auditor key is a canonical public-key literal.
+/// Plaintext capsule contents and spending witnesses never cross this boundary.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1(
+    response_json_ptr: *const c_uchar,
+    response_json_len: c_ulong,
+    request_json_ptr: *const c_uchar,
+    request_json_len: c_ulong,
+    expected_network_id_ptr: *const c_uchar,
+    expected_network_id_len: c_ulong,
+    requested_payload_digest_ptr: *const c_uchar,
+    requested_payload_digest_len: c_ulong,
+    auditor_signing_key_ptr: *const c_char,
+    auditor_signing_key_len: c_ulong,
+) -> c_int {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let response_json = unsafe {
             read_bounded_public_bytes(
                 response_json_ptr,
                 response_json_len,
                 CONNECT_NORITO_PRIVATE_SETTLEMENT_RESPONSE_MAX_BYTES_V1,
+            )
+        }?;
+        let request_json = unsafe {
+            read_bounded_public_bytes(
+                request_json_ptr,
+                request_json_len,
+                CONNECT_NORITO_PRIVATE_SETTLEMENT_REQUEST_MAX_BYTES_V1,
             )
         }?;
         let expected_network =
@@ -168,10 +216,12 @@ pub unsafe extern "C" fn connect_norito_private_settlement_auditor_capsule_respo
         }?;
         let auditor_key =
             unsafe { auditor_signing_key(auditor_signing_key_ptr, auditor_signing_key_len) }?;
+        let request = decode_auditor_capsule_request(&request_json)?;
         let response = decode_auditor_capsule_response(&response_json)?;
         validate_private_settlement_auditor_capsule_response_v1(
             &expected_network,
             requested,
+            &request,
             &response,
         )
         .map_err(|_| BridgeError::PrivateSettlementResponse)?;
@@ -274,6 +324,28 @@ mod tests {
         let json = b"{}";
         let digest = [8_u8; 32];
         let key = b" not-a-key ";
+        let code = unsafe {
+            connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1(
+                json.as_ptr(),
+                json.len() as c_ulong,
+                json.as_ptr(),
+                json.len() as c_ulong,
+                digest.as_ptr(),
+                digest.len() as c_ulong,
+                digest.as_ptr(),
+                digest.len() as c_ulong,
+                key.as_ptr().cast(),
+                key.len() as c_ulong,
+            )
+        };
+        assert_eq!(code, EXPECTED_ERROR);
+    }
+
+    #[test]
+    fn legacy_auditor_capsule_bridge_fails_closed_without_request() {
+        let json = b"{}";
+        let digest = [8_u8; 32];
+        let key = b"not-a-key";
         let code = unsafe {
             connect_norito_private_settlement_auditor_capsule_response_verify_v1(
                 json.as_ptr(),

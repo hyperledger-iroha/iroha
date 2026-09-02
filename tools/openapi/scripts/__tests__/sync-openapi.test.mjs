@@ -31,6 +31,10 @@ function releaseSpec(marker) {
   );
 }
 
+function releaseSpecWithDuplicateResponse(marker) {
+  return `{"openapi":"3.1.0","info":{"title":"Torii ${marker}","version":"1.0.0"},"paths":{"/${marker}":{"get":{"responses":{"408":{"description":"first"},"4\\u00308":{"description":"second"}}}}},"components":{"schemas":{"Fixture":{"type":"object"}}}}`;
+}
+
 test('default repository root contains the Cargo workspace', async () => {
   await access(join(defaultRepoRoot, 'Cargo.toml'));
 });
@@ -212,10 +216,6 @@ test('syncOpenApi rejects duplicate generated spec members before tracked writes
   const outputDir = join(tempRoot, 'static', 'openapi');
   const versionsDir = join(outputDir, 'versions');
   const sentinelPath = join(outputDir, 'sentinel.txt');
-  const duplicateSpec = releaseSpec('duplicate-spec').replace(
-    '"description": "ok"',
-    '"description": "first", "description": "second"',
-  );
   await mkdir(outputDir, {recursive: true});
   await writeFile(sentinelPath, 'unchanged', 'utf8');
 
@@ -228,11 +228,15 @@ test('syncOpenApi rejects duplicate generated spec members before tracked writes
           outputDir,
           versionsDir,
           async generateSpec(_, outputFile) {
-            await writeFile(outputFile, duplicateSpec, 'utf8');
+            await writeFile(
+              outputFile,
+              releaseSpecWithDuplicateResponse('duplicate'),
+              'utf8',
+            );
           },
         },
       ),
-    /duplicate JSON member "description"/i,
+    /duplicate JSON member "408"/i,
   );
 
   assert.equal(await readFile(sentinelPath, 'utf8'), 'unchanged');

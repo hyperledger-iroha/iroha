@@ -7,8 +7,8 @@ use iroha::data_model::{
     governance::types::{
         BodyElectionAttemptStatusV1, GovernanceCertificateV1, GovernanceExpectedHeadPresentV1,
         GovernanceExpectedHeadV1, MAX_PARLIAMENT_SORTITION_RETRIES_V1,
-        ParliamentBallotFailureKindV1, RuntimeUpgradeProposal,
-        parliament_execution_failure_root_v1,
+        MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1, ParliamentBallotFailureKindV1,
+        RuntimeUpgradeProposal, parliament_execution_failure_root_v1,
     },
     isi::governance::{ProposeRuntimeUpgradeProposal, UnregisterCitizen},
     prelude::{AssetDefinitionId, AssetId, FindAssetById, Mint, Quantity},
@@ -22,18 +22,19 @@ use iroha_test_samples::BOB_ID;
 
 const CAPACITY_BOND_AMOUNT: u64 = 37;
 const CAPACITY_PUBLIC_SEATS: u32 = 1;
-const CAPACITY_HIDDEN_SEATS: u32 = 2;
+const CAPACITY_HIDDEN_SEATS: u32 = MIN_PARLIAMENT_HIDDEN_BALLOT_ANONYMITY_V1;
 const CAPACITY_SORTITION_DELAY_BLOCKS: u64 = 4;
 const CONFIRMATION_CITIZENS: usize = 22;
 const CONFIRMATION_POLICY_SEATS: u32 = 21;
-const CONFIRMATION_REGISTRATION_BLOCKS: u64 = 50;
+const CONFIRMATION_INVITATION_BLOCKS: u64 = 68;
+const CONFIRMATION_REGISTRATION_BLOCKS: u64 = 66;
 const CONFIRMATION_SURVIVOR_FREEZE_PHASE_BLOCKS: u64 = 32;
 const TERMINAL_SURVIVOR_FREEZE_PHASE_BLOCKS: u64 = 8;
 const BALLOT_COMMITMENT_PHASE_BLOCKS: u64 = 4;
 const CONFIRMATION_RELEASE_DELAY_BLOCKS: u64 = 4;
 const CONFIRMATION_OPENING_BLOCKS: u64 = 8;
 const TERMINAL_POLICY_SEATS: u32 = 3;
-const TERMINAL_REGISTRATION_BLOCKS: u64 = 10;
+const TERMINAL_REGISTRATION_BLOCKS: u64 = 12;
 const TERMINAL_ENACTMENT_DELAY: u64 = 4;
 
 struct ThresholdSessionsV1 {
@@ -264,7 +265,10 @@ fn confirmation_capacity_builder(
                 )
                 .write(["gov", "citizenship_bond_amount"], "0")
                 .write(["gov", "parliament_alternate_size"], 0_i64)
-                .write(["gov", "parliament_invitation_phase_blocks"], 60_i64)
+                .write(
+                    ["gov", "parliament_invitation_phase_blocks"],
+                    CONFIRMATION_INVITATION_BLOCKS as i64,
+                )
                 .write(["gov", "parliament_public_finding_phase_blocks"], 8_i64)
                 .write(
                     ["gov", "rules_committee_size"],

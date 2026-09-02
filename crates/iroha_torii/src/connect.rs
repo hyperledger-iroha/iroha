@@ -2235,15 +2235,45 @@ fn diff(req: &Vec<String>, acc: &Vec<String>) -> (Vec<String>, Vec<String>) {
 /// WS handler: receives frames from the client and forwards via Bus; delivers frames from Bus to WS.
 pub(crate) async fn handle_ws(
     bus: Bus,
+    reservation: RoleTokenReservation,
+    ws: WebSocket,
+    send_timeout: Duration,
+) -> Result<(), String> {
+    recover_ws_session(handle_ws_inner(bus, reservation, ws, send_timeout)).await
+}
+
+async fn recover_ws_session<F>(session: F) -> Result<(), String>
+where
+    F: Future<Output = Result<(), String>>,
+{
+    match crate::panic_recovery::catch_async_recoverable(session).await {
+        Ok(result) => result,
+        Err(_) => Err("connect websocket session panicked".to_owned()),
+    }
+}
+
+async fn drive_ws_halves<R, W>(reader: R, writer: W) -> Result<(), String>
+where
+    R: Future<Output = Result<(), String>>,
+    W: Future<Output = Result<(), String>>,
+{
+    tokio::pin!(reader);
+    tokio::pin!(writer);
+    tokio::select! {
+        result = &mut reader => result,
+        result = &mut writer => result,
+    }
+}
+
+async fn handle_ws_inner(
+    bus: Bus,
     mut reservation: RoleTokenReservation,
     ws: WebSocket,
     send_timeout: Duration,
 ) -> Result<(), String> {
-    use tokio::task::JoinSet;
     let (sid, role) = reservation.identity();
     let (mut inbox, mut endpoint_lease) = reservation.commit_and_attach().await?;
     let bound_session = endpoint_lease.session.clone();
-    let mut tasks = JoinSet::new();
     // Split WS into sender and receiver halves
     let (mut ws_sender, mut ws_receiver) = ws.split();
     // Writer: forward frames from Bus to WS
@@ -2370,9 +2400,9 @@ pub(crate) async fn handle_ws(
         }
         Ok::<(), String>(())
     };
-    tasks.spawn(writer);
-    // Reader: parse binary frames and forward. Run it in the current task so it can be
-    // cancelled immediately when the writer exits on TTL, heartbeat failure, or send error.
+    // Keep both request-owned halves in this task. The first completion drops the
+    // other future immediately, without a nested Tokio task that could escape the
+    // session panic boundary.
     let reader = async {
         while let Some(msg) = ws_receiver.next().await {
             match msg {
@@ -2421,19 +2451,8 @@ pub(crate) async fn handle_ws(
         }
         Ok(())
     };
-    tokio::pin!(reader);
-    let result = tokio::select! {
-        result = &mut reader => result,
-        writer = tasks.join_next() => match writer {
-            Some(Ok(result)) => result,
-            Some(Err(error)) => Err(format!("connect writer task failed: {error}")),
-            None => Err("connect writer task ended without a result".to_owned()),
-        },
-    };
+    let result = drive_ws_halves(reader, writer).await;
     endpoint_lease.release().await;
-    // Dropping a reader must also stop a writer blocked on its inbox, and vice versa.
-    tasks.abort_all();
-    while let Some(_r) = tasks.join_next().await {}
     result
 }
 fn expected_direction_for_role(role: proto::Role) -> proto::Dir {
@@ -2520,6 +2539,63 @@ mod tests {
             .expect("Connect cleaner must not panic");
         assert_eq!(exit, crate::ToriiCriticalWorkerExit::StoppedByShutdown);
         assert_eq!(std::sync::Arc::strong_count(&bus.inner), 1);
+    }
+
+    #[tokio::test]
+    async fn websocket_writer_panic_is_contained_and_disconnects_session() {
+        let bus = Bus::new();
+        let (sid, app_pk, nonce) = test_session_identity(0x6d);
+        bus.register_tokens(
+            sid,
+            app_pk,
+            nonce,
+            "app-token".into(),
+            "wallet-token".into(),
+            "management-token".into(),
+            "relay-token".into(),
+        )
+        .await
+        .expect("register session");
+        let mut reservation = bus
+            .reserve_token(sid, proto::Role::App, "app-token")
+            .await
+            .expect("reserve app endpoint");
+        let session = reservation.session.clone();
+        let (_inbox, endpoint_lease) = reservation
+            .commit_and_attach()
+            .await
+            .expect("attach app endpoint");
+
+        let outcome = recover_ws_session(async move {
+            let _endpoint_lease = endpoint_lease;
+            drive_ws_halves(std::future::pending::<Result<(), String>>(), async {
+                assert!(
+                    iroha_core::panic_hook::is_suppressed(),
+                    "the physical writer future must run inside the session recovery boundary"
+                );
+                panic!("injected Connect websocket writer panic");
+                #[allow(unreachable_code)]
+                Ok(())
+            })
+            .await
+        })
+        .await;
+
+        assert_eq!(
+            outcome,
+            Err("connect websocket session panicked".to_owned())
+        );
+        assert!(
+            !iroha_core::panic_hook::is_suppressed(),
+            "panic-hook suppression must not leak into the caller"
+        );
+        timeout(Duration::from_secs(1), async {
+            while bus.session_is_current(&sid, &session).await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("panicked writer releases and disconnects its endpoint");
     }
 
     fn test_claim(

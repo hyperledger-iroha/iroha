@@ -19,7 +19,7 @@ pub enum Command {
     Register(RegisterArgs),
     /// Rebind an existing validator to a replacement consensus peer
     Rebind(RebindArgs),
-    /// Activate a pending validator once its activation epoch is reached
+    /// Activate a pending validator once its scheduled activation height is reached
     Activate(ActivateArgs),
     /// Schedule or finalize a validator exit
     Exit(ExitArgs),

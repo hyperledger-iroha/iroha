@@ -132,9 +132,7 @@ object KagemushaPeerTextCodec {
         value: String,
         expectedKind: KagemushaPeerPayloadKind? = null,
     ): KagemushaPeerPayload {
-        require(value.toByteArray(Charsets.UTF_8).size <=
-            KagemushaPeerTransportContract.MAXIMUM_TEXT_ENVELOPE_BYTES
-        ) { "Kagemusha peer text exceeds its bound" }
+        requireTextEnvelopeBound(value)
         val kind = kindOf(value) ?: throw IllegalArgumentException("Kagemusha peer prefix is invalid")
         require(expectedKind == null || expectedKind == kind) {
             "Unexpected Kagemusha peer payload kind"
@@ -161,9 +159,7 @@ object KagemushaPeerTextCodec {
         value: String,
         expectedKind: KagemushaPeerPayloadKind? = null,
     ): KagemushaPeerPayload {
-        require(value.toByteArray(Charsets.UTF_8).size <=
-            KagemushaPeerTransportContract.MAXIMUM_TEXT_ENVELOPE_BYTES
-        ) { "Kagemusha peer text exceeds its bound" }
+        requireTextEnvelopeBound(value)
         return decode(canonicalizeUserPresented(value), expectedKind)
     }
 
@@ -180,7 +176,9 @@ object KagemushaPeerTextCodec {
 
     @JvmStatic
     fun base64UrlDecode(value: String): ByteArray? {
-        if (value.isEmpty() || value.length % 4 == 1 ||
+        if (value.isEmpty() ||
+            value.length > KagemushaPeerTransportContract.MAXIMUM_TEXT_ENVELOPE_BYTES ||
+            value.length % 4 == 1 ||
             !value.all { it in '0'..'9' || it in 'A'..'Z' || it in 'a'..'z' || it == '-' || it == '_' }
         ) return null
         val decoded = try {
@@ -193,5 +191,15 @@ object KagemushaPeerTextCodec {
             return null
         }
         return decoded
+    }
+
+    private fun requireTextEnvelopeBound(value: String) {
+        // Reject by UTF-16 length before materializing UTF-8. Every UTF-8
+        // representation is at least as large as the corresponding JVM
+        // string in code units, so the remaining exact conversion is bounded.
+        require(value.length <= KagemushaPeerTransportContract.MAXIMUM_TEXT_ENVELOPE_BYTES &&
+            value.toByteArray(Charsets.UTF_8).size <=
+                KagemushaPeerTransportContract.MAXIMUM_TEXT_ENVELOPE_BYTES
+        ) { "Kagemusha peer text exceeds its bound" }
     }
 }

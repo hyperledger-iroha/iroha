@@ -2,7 +2,6 @@
 //! Router-level regressions for the read-only Nexus lifecycle status surface.
 #![cfg(feature = "app_api")]
 use axum::{
-    Router,
     body::Body,
     http::{Request, StatusCode},
     response::Response,
@@ -22,9 +21,14 @@ use std::{collections::BTreeSet, sync::Arc};
 #[path = "fixtures.rs"]
 mod fixtures;
 struct NexusHarness {
-    app: Router,
+    app: iroha_torii::TestApiRouterRuntime,
     queue: Arc<Queue>,
     state: Arc<State>,
+}
+impl NexusHarness {
+    async fn shutdown(self) {
+        self.app.shutdown().await;
+    }
 }
 fn build_app() -> NexusHarness {
     build_app_with_api_token(None)
@@ -141,6 +145,7 @@ async fn lifecycle_get_returns_valid_exact_json_status() {
         status.validate().expect("validate status"),
         harness.state.nexus_snapshot().lane_catalog
     );
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn lifecycle_get_returns_valid_exact_norito_status() {
@@ -163,6 +168,7 @@ async fn lifecycle_get_returns_valid_exact_norito_status() {
         status.validate().expect("validate status"),
         harness.state.nexus_snapshot().lane_catalog
     );
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn lifecycle_get_honors_api_token_access_policy() {
@@ -193,6 +199,7 @@ async fn lifecycle_get_honors_api_token_access_policy() {
     .await
     .expect("response");
     assert_eq!(response.status(), StatusCode::OK);
+    harness.shutdown().await;
 }
 #[tokio::test]
 async fn lifecycle_post_and_normalization_variants_are_unregistered_without_mutation() {
@@ -234,4 +241,5 @@ async fn lifecycle_post_and_normalization_variants_are_unregistered_without_muta
         assert_eq!(harness.state.nexus_snapshot().lane_catalog, before_catalog);
         assert_eq!(harness.queue.queue_limits().for_lane(lane), before_limits);
     }
+    harness.shutdown().await;
 }

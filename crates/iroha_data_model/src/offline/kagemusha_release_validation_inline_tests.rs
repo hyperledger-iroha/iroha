@@ -17,8 +17,37 @@ fn compact_recursive_state_boundary_has_a_distinct_v5_protocol() {
 }
 
 #[test]
+fn v4_artifact_manifest_requires_exact_release_proof_pair_max() {
+    let candidate = unsigned_candidate(&manifest());
+    assert_eq!(
+        candidate.manifest.max_proof_bytes,
+        KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4
+    );
+    candidate
+        .validate()
+        .expect("exact release proof-pair maximum is valid");
+
+    for wrong_max in [
+        KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4 - 1,
+        KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4 + 1,
+        KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
+    ] {
+        let mut tampered = candidate.clone();
+        tampered.manifest.max_proof_bytes = wrong_max;
+        assert!(
+            tampered.validate().is_err(),
+            "non-release proof-pair maximum {wrong_max} must be rejected"
+        );
+    }
+}
+
+#[test]
 fn v4_promotion_record_is_distinct_and_fail_closed() {
     let record = promoted_release();
+    assert_eq!(
+        record.max_proof_bytes,
+        KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4
+    );
     record.validate().expect("valid V4 promotion record");
     macro_rules! rejects {
         ($($mutation:expr),+ $(,)?) => {$({
@@ -52,9 +81,11 @@ fn v4_promotion_record_is_distinct_and_fail_closed() {
         |value| value.artifact_inventory_verified = false,
         |value| value.bridge_abi_version = KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4 - 1,
         |value| value.artifact_roles.swap(0, 1),
-        |value| value.max_proof_bytes = 0,
         |value| value.max_proof_bytes =
-            KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 + 1,
+            KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4 - 1,
+        |value| value.max_proof_bytes =
+            KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4 + 1,
+        |value| value.max_proof_bytes = KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
     );
 }
 

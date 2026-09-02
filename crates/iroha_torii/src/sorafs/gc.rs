@@ -96,20 +96,42 @@ impl GcSweeperRuntime {
             iroha_logger::warn!(%err, "reconciliation snapshot failed");
         }
     }
-    /// Spawn the GC runtime loop until the supplied shutdown signal is received.
-    pub fn spawn(self: Arc<Self>, shutdown_signal: ShutdownSignal) {
+    /// Spawn the supervised GC runtime loop until the supplied shutdown signal is received.
+    pub(crate) fn spawn(
+        self: Arc<Self>,
+        shutdown_signal: ShutdownSignal,
+    ) -> tokio::task::JoinHandle<crate::ToriiCriticalWorkerExit> {
         tokio::spawn(async move {
             let mut ticker = interval(Duration::from_secs(self.tick_interval_secs));
             ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
             loop {
                 tokio::select! {
-                    _ = shutdown_signal.receive() => break,
+                    biased;
+                    _ = shutdown_signal.receive() => {
+                        return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                    }
                     _ = ticker.tick() => {
+                        if shutdown_signal.is_sent() {
+                            return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                        }
                         let now = unix_now_secs();
-                        self.run_once(now);
+                        let runtime = Arc::clone(&self);
+                        let result = crate::panic_recovery::join_recoverable(
+                            crate::panic_recovery::spawn_blocking_recoverable(move || {
+                                runtime.run_once(now);
+                            }),
+                        )
+                        .await;
+                        if let Err(error) = result {
+                            iroha_logger::error!(
+                                ?error,
+                                "SoraFS GC blocking worker failed"
+                            );
+                            return crate::ToriiCriticalWorkerExit::UnexpectedExit;
+                        }
                     }
                 }
             }
-        });
+        })
     }
 }

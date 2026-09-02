@@ -3216,7 +3216,12 @@ impl Iso20022BridgeRuntime {
             .get(original_id)
             .and_then(|record| record.transaction_hash.clone()))
     }
-    /// Apply an inbound lifecycle message to the referenced durable record when present.
+    /// Apply an inbound lifecycle message to its referenced durable record.
+    ///
+    /// Reference-bearing lifecycle messages fail closed if their original was
+    /// removed or crossed its retention boundary after participant authorization.
+    /// The liveness check and update share the runtime state lock, so retention
+    /// compaction cannot turn an authorized lifecycle update into an accepted orphan.
     pub(crate) fn apply_inbound_lifecycle_message(
         &self,
         message_id: &str,
@@ -3267,9 +3272,13 @@ impl Iso20022BridgeRuntime {
         }
         let reason_code = lifecycle_reason_code(parsed).map(ToOwned::to_owned);
         let detail = lifecycle_detail(message_type, parsed, status_code.as_deref());
+        let reference_time = SystemTime::now();
         let referenced_message_known = referenced_message_id
             .as_deref()
-            .is_some_and(|id| self.records.contains_key(id));
+            .is_some_and(|id| self.lifecycle_reference_is_live_at(id, reference_time));
+        if referenced_message_id.is_some() && !referenced_message_known {
+            return Err(MsgError::ValidationFailed);
+        }
         let mut action = "recorded";
         if let Some(original_id) = referenced_message_id.as_deref()
             && referenced_message_known
@@ -3314,6 +3323,22 @@ impl Iso20022BridgeRuntime {
             },
             status,
         ))
+    }
+    fn lifecycle_reference_is_live_at(&self, message_id: &str, now: SystemTime) -> bool {
+        self.records.get(message_id).is_some_and(|record| {
+            if record.retention_protected() {
+                return true;
+            }
+            if self.store_dir.is_some() {
+                self.store_retention.is_zero()
+                    || match now.duration_since(record.updated_at) {
+                        Ok(age) => age <= self.store_retention,
+                        Err(_) => true,
+                    }
+            } else {
+                now.duration_since(record.replay_expires_at).is_err()
+            }
+        })
     }
     /// Create the exact unsigned transfer payload for a validated pacs.008 message.
     pub fn build_pacs008_payload(

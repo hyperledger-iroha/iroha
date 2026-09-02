@@ -13,12 +13,13 @@ async fn connect_ws_handshake_fails_when_disabled() {
         Ok(listener) => listener,
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
             eprintln!("skipping connect_ws_handshake_fails_when_disabled: {err}");
+            app.shutdown().await;
             return;
         }
         Err(err) => panic!("failed to bind test listener: {err}"),
     };
     let addr = listener.local_addr().unwrap();
-    spawn_test_server(listener, app);
+    let server = spawn_test_server(listener, app);
     // Attempt WS connect directly; expect failure
     let url = format!(
         "ws://{}/v1/connect/ws?sid={}&role=app",
@@ -32,4 +33,5 @@ async fn connect_ws_handshake_fails_when_disabled() {
         other => panic!("unexpected WebSocket error: {other:?}"),
     };
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    server.shutdown().await;
 }

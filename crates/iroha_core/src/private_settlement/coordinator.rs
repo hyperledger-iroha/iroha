@@ -15,9 +15,9 @@ use iroha_crypto::Hash;
 use iroha_data_model::nexus::{
     ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, AtomicPrivateSettlementV1,
     PrivateSettlementAbortReasonV1, PrivateSettlementAbortReceiptV1,
-    PrivateSettlementCommitBundleV1, PrivateSettlementCommitteeAuthorityV1,
-    PrivateSettlementDeltaV1, PrivateSettlementLegReceiptV1, PrivateSettlementPhaseCertificateV1,
-    PrivateSettlementPhaseV1, PrivateSettlementReceiptV1,
+    PrivateSettlementAuthorityCatalogV1, PrivateSettlementCommitBundleV1,
+    PrivateSettlementCommitteeAuthorityV1, PrivateSettlementDeltaV1, PrivateSettlementLegReceiptV1,
+    PrivateSettlementPhaseCertificateV1, PrivateSettlementPhaseV1, PrivateSettlementReceiptV1,
 };
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
@@ -56,7 +56,7 @@ pub(crate) enum PrivateSettlementCoordinatorOutcomeV1 {
 #[derive(Clone, Debug)]
 pub(crate) struct PrivateSettlementBundleCoordinatorV1 {
     manifest: AtomicPrivateSettlementV1,
-    authority_catalog: Vec<PrivateSettlementCommitteeAuthorityV1>,
+    authority_catalog: PrivateSettlementAuthorityCatalogV1,
     audited_evidence: Vec<Option<Hash>>,
     deltas: Vec<Option<PrivateSettlementDeltaV1>>,
     prepare_certificates: Vec<Option<PrivateSettlementPhaseCertificateV1>>,
@@ -86,6 +86,11 @@ impl PrivateSettlementBundleCoordinatorV1 {
                 return Err(PrivateSettlementCoordinatorErrorV1::Authority);
             }
         }
+        let authority_catalog = PrivateSettlementAuthorityCatalogV1::from_leg_authorities(
+            &manifest,
+            &authority_catalog,
+        )
+        .map_err(|_| PrivateSettlementCoordinatorErrorV1::Authority)?;
         let leg_count = manifest.legs.len();
         Ok(Self {
             manifest,
@@ -246,12 +251,12 @@ impl PrivateSettlementBundleCoordinatorV1 {
         let ordinal = delta.leg_ordinal;
         let authority = self
             .authority_catalog
-            .get(usize::from(ordinal))
-            .ok_or(PrivateSettlementCoordinatorErrorV1::Binding)?;
+            .authority_for_leg(&self.manifest, usize::from(ordinal))
+            .map_err(|_| PrivateSettlementCoordinatorErrorV1::Binding)?;
         let expected = private_settlement_phase_body_v1(
             &self.manifest,
             &delta,
-            authority,
+            &authority,
             PrivateSettlementPhaseV1::Prepare,
             private_settlement_reserved_prepared_bundle_digest_v1(),
         )
@@ -259,7 +264,7 @@ impl PrivateSettlementBundleCoordinatorV1 {
         if certificate.body != expected {
             return Err(PrivateSettlementCoordinatorErrorV1::Binding);
         }
-        verify_private_settlement_phase_certificate_v1(&certificate, ordinal, authority)
+        verify_private_settlement_phase_certificate_v1(&certificate, ordinal, &authority)
             .map_err(PrivateSettlementCoordinatorErrorV1::from_protocol)?;
         if let Some(existing) = self.prepare_certificates[usize::from(ordinal)].as_ref() {
             return if existing.body == certificate.body
@@ -311,8 +316,8 @@ impl PrivateSettlementBundleCoordinatorV1 {
         let index = usize::from(ordinal);
         let authority = self
             .authority_catalog
-            .get(index)
-            .ok_or(PrivateSettlementCoordinatorErrorV1::Binding)?;
+            .authority_for_leg(&self.manifest, index)
+            .map_err(|_| PrivateSettlementCoordinatorErrorV1::Binding)?;
         let delta = self
             .deltas
             .get(index)
@@ -324,7 +329,7 @@ impl PrivateSettlementBundleCoordinatorV1 {
         let expected = private_settlement_phase_body_v1(
             &self.manifest,
             delta,
-            authority,
+            &authority,
             PrivateSettlementPhaseV1::Commit,
             prepared_bundle_digest,
         )
@@ -332,7 +337,7 @@ impl PrivateSettlementBundleCoordinatorV1 {
         if certificate.body != expected {
             return Err(PrivateSettlementCoordinatorErrorV1::Binding);
         }
-        verify_private_settlement_phase_certificate_v1(&certificate, ordinal, authority)
+        verify_private_settlement_phase_certificate_v1(&certificate, ordinal, &authority)
             .map_err(PrivateSettlementCoordinatorErrorV1::from_protocol)?;
         if let Some(existing) = self.commit_certificates[index].as_ref() {
             return if existing.body == certificate.body
@@ -540,14 +545,14 @@ pub(crate) mod tests {
         sidecar_store::tests::{SidecarFixtureV1, sidecar_fixture},
     };
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
-    use iroha_data_model::{account::AccountId, peer::PeerId};
+    use iroha_data_model::{account::AccountId, peer::PeerId, privacy::PrivacyRecipientIdV1};
 
     fn fixture_parts() -> (
         SidecarFixtureV1,
         Vec<PrivateSettlementDeltaV1>,
         Vec<PrivateSettlementCommitteeAuthorityV1>,
     ) {
-        let fixture = sidecar_fixture();
+        let mut fixture = sidecar_fixture();
         let first = fixture.sidecar.payload.delta.clone();
         let mut second = first.clone();
         second.leg_ordinal = 1;
@@ -555,6 +560,13 @@ pub(crate) mod tests {
         second.pool_id = fixture.sidecar.manifest.legs[1].pool_id;
         second.asset_binding_commitment = fixture.sidecar.manifest.legs[1].asset_binding_commitment;
         second.audit_policy_digest = fixture.sidecar.manifest.legs[1].audit_policy_digest;
+        for (index, output) in second.encrypted_outputs.iter_mut().enumerate() {
+            output.recipient = PrivacyRecipientIdV1::new(
+                [0xC0_u8 + u8::try_from(index).expect("fixed output ordinal fits u8"); 32],
+            );
+        }
+        fixture.sidecar.manifest.legs[1].delta_digest =
+            second.digest().expect("second delta digest");
         assert_eq!(
             second.digest().expect("second delta digest"),
             fixture.sidecar.manifest.legs[1].delta_digest
@@ -660,6 +672,17 @@ pub(crate) mod tests {
         let bundle = coordinator
             .carrier_bundle(manifest.authority_context_height, 4 * 1024 * 1024)
             .expect("certified carrier fixture");
+        assert_eq!(bundle.authority_catalog.rosters.len(), 1);
+        assert_eq!(bundle.authority_catalog.leg_roster_indices, vec![0, 0]);
+        for (index, authority) in authorities.iter().enumerate() {
+            assert_eq!(
+                bundle
+                    .authority_catalog
+                    .authority_for_leg(&bundle.manifest, index)
+                    .expect("compact authority resolves"),
+                *authority
+            );
+        }
         let sponsor_key = KeyPair::from_seed(vec![0x23; 32], Algorithm::Ed25519);
         assert_eq!(
             bundle.manifest.sponsor,

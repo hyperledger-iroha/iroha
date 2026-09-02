@@ -1078,6 +1078,50 @@ def _materialize_leakage_result(
     return result
 
 
+def rust_harness_environment(request: Mapping[str, Any]) -> dict[str, str]:
+    """Return a sanitized process environment with bound build/prover widths."""
+
+    environment = os.environ.copy()
+    forbidden_exact = {
+        "CARGO_BUILD_RUSTFLAGS",
+        "CARGO_BUILD_TARGET",
+        "CARGO_ENCODED_RUSTFLAGS",
+        "CARGO_TARGET_DIR",
+        "DEVELOPER_DIR",
+        "MACOSX_DEPLOYMENT_TARGET",
+        "RUSTC",
+        "RUSTC_BOOTSTRAP",
+        "RUSTC_WRAPPER",
+        "RUSTC_WORKSPACE_WRAPPER",
+        "RUSTFLAGS",
+        "SDKROOT",
+    }
+    for name in tuple(environment):
+        if (
+            name.startswith("IROHA_TEST_")
+            or name.startswith("APS_REAL_PROCESS_")
+            or name.startswith("CARGO_PROFILE_")
+            or name in forbidden_exact
+            or (name.startswith("CARGO_TARGET_") and name.endswith("_RUSTFLAGS"))
+        ):
+            environment.pop(name, None)
+    execution = request["configuration"]["execution"]
+    environment.update(
+        {
+            "CARGO_BUILD_JOBS": str(execution["cargo_build_jobs"]),
+            "CARGO_INCREMENTAL": "1" if execution["cargo_incremental"] else "0",
+            "CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_CODEGEN_UNITS": str(
+                execution["cargo_release_codegen_units"]
+            ),
+            "CARGO_PROFILE_RELEASE_CODEGEN_UNITS": str(
+                execution["cargo_release_codegen_units"]
+            ),
+            "RAYON_NUM_THREADS": str(execution["rayon_worker_threads"]),
+        }
+    )
+    return environment
+
+
 def run_rust_harness(
     request_path: Path,
     raw_request: bytes,
@@ -1093,10 +1137,7 @@ def run_rust_harness(
         raw_pcap = temporary_root / "leakage-loopback.pcap"
         port_manifest = temporary_root / "leakage-ports.json"
         tcpdump_stderr = temporary_root / "tcpdump.stderr"
-        environment = os.environ.copy()
-        for name in tuple(environment):
-            if name.startswith("IROHA_TEST_") or name.startswith("APS_REAL_PROCESS_"):
-                environment.pop(name, None)
+        environment = rust_harness_environment(request)
         environment.update(
             {
                 "IROHA_TEST_SKIP_BUILD": "1",

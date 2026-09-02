@@ -7,11 +7,15 @@
 
 use super::*;
 use iroha_data_model::{
-    isi::private_settlement::{AbortAtomicPrivateSettlementV1, FinalizeAtomicPrivateSettlementV1},
+    isi::private_settlement::{
+        AbortAtomicPrivateSettlementV1, FinalizeAtomicPrivateSettlementV1,
+        RegisterAtomicPrivateSettlementPrepareV1,
+    },
     nexus::{
         ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, AtomicPrivateSettlementV1,
         PRIVATE_SETTLEMENT_BLS_BYTES_V1, PRIVATE_SETTLEMENT_COMMITTEE_QUORUM_V1,
         PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1, PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1,
+        PrivateSettlementAbortReasonV1, PrivateSettlementAuthorityCatalogV1,
         PrivateSettlementAvailabilityShareV1, PrivateSettlementCommitBundleV1,
         PrivateSettlementCommitteeAuthorityV1, PrivateSettlementDeltaV1,
         PrivateSettlementLegReceiptV1, PrivateSettlementPhaseBodyV1,
@@ -25,16 +29,16 @@ use iroha_data_model::{
 };
 use iroha_torii_shared::private_settlement_api::{
     PrivateSettlementAuditApprovalRequestV1, PrivateSettlementAuditApprovalResponseV1,
-    PrivateSettlementAuditorCapsuleResponseV1, PrivateSettlementAvailabilityShareRequestV1,
-    PrivateSettlementAvailabilityShareResponseV1, PrivateSettlementBundleReceiptResponseV1,
-    PrivateSettlementBundleStatusResponseV1, PrivateSettlementBundleSubmitRequestV1,
-    PrivateSettlementBundleSubmitResponseV1, PrivateSettlementCommitVoteRequestV1,
-    PrivateSettlementCommitteeProofResponseV1, PrivateSettlementLegStatusResponseV1,
-    PrivateSettlementLegUploadRequestV1, PrivateSettlementLegUploadResponseV1,
-    PrivateSettlementLifecycleDtoV1, PrivateSettlementPhaseCertificateRequestV1,
-    PrivateSettlementPhaseCertificateResponseV1, PrivateSettlementPhaseCertificatesResponseV1,
-    PrivateSettlementPhaseVoteResponseV1, PrivateSettlementPrepareVoteRequestV1,
-    validate_private_settlement_audit_approval_response_v1,
+    PrivateSettlementAuditorCapsuleRequestV1, PrivateSettlementAuditorCapsuleResponseV1,
+    PrivateSettlementAvailabilityShareRequestV1, PrivateSettlementAvailabilityShareResponseV1,
+    PrivateSettlementBundleReceiptResponseV1, PrivateSettlementBundleStatusResponseV1,
+    PrivateSettlementBundleSubmitRequestV1, PrivateSettlementBundleSubmitResponseV1,
+    PrivateSettlementCommitVoteRequestV1, PrivateSettlementCommitteeProofResponseV1,
+    PrivateSettlementLegStatusResponseV1, PrivateSettlementLegUploadRequestV1,
+    PrivateSettlementLegUploadResponseV1, PrivateSettlementLifecycleDtoV1,
+    PrivateSettlementPhaseCertificateRequestV1, PrivateSettlementPhaseCertificateResponseV1,
+    PrivateSettlementPhaseCertificatesResponseV1, PrivateSettlementPhaseVoteResponseV1,
+    PrivateSettlementPrepareVoteRequestV1, validate_private_settlement_audit_approval_response_v1,
     validate_private_settlement_auditor_capsule_response_v1,
     validate_private_settlement_auditor_identity_v1,
     validate_private_settlement_committee_proof_response_v1,
@@ -42,6 +46,40 @@ use iroha_torii_shared::private_settlement_api::{
 use std::collections::{BTreeMap, BTreeSet};
 
 const PRIVATE_SETTLEMENT_RESPONSE_MAX_BYTES_V1: usize = 32 * 1024 * 1024;
+
+fn validate_private_settlement_audit_approval_request_identity_v1(
+    network_id: &NetworkId,
+    auditor_signing_key: &PublicKey,
+    request: &PrivateSettlementAuditApprovalRequestV1,
+) -> Result<()> {
+    request
+        .audit_policy
+        .validate()
+        .map_err(|_| eyre!("private-settlement auditor approval identity is invalid"))?;
+    let auditor = request
+        .audit_policy
+        .body
+        .auditors
+        .iter()
+        .find(|auditor| auditor.auditor_id == request.approval.body.auditor_id)
+        .ok_or_else(|| eyre!("private-settlement auditor approval identity is invalid"))?;
+    if request.approval.body.version != ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1
+        || &request.approval.body.network_id != network_id
+        || request.approval.body.dataspace_id != request.audit_policy.body.dataspace_id
+        || request.approval.body.audit_policy_digest != request.audit_policy.policy_digest
+        || request.approval.body.audit_key_epoch != request.audit_policy.body.key_epoch
+        || &auditor.signing_key != auditor_signing_key
+    {
+        return Err(eyre!(
+            "private-settlement auditor approval identity is invalid"
+        ));
+    }
+    request
+        .approval
+        .signature
+        .verify(auditor_signing_key, &request.approval.body)
+        .map_err(|_| eyre!("private-settlement auditor approval identity is invalid"))
+}
 
 fn private_settlement_resource_path_v1(kind: &str, identifier: &Hash, suffix: &str) -> String {
     format!("v1/nexus/private-settlements/{kind}/{identifier}{suffix}")
@@ -246,6 +284,9 @@ fn exact_private_settlement_carrier_v1(
         ));
     }
     let instruction = instructions[0].as_any();
+    if let Some(carrier) = instruction.downcast_ref::<RegisterAtomicPrivateSettlementPrepareV1>() {
+        return Ok(&carrier.barrier.manifest);
+    }
     if let Some(carrier) = instruction.downcast_ref::<FinalizeAtomicPrivateSettlementV1>() {
         return Ok(&carrier.commit_bundle.manifest);
     }
@@ -406,11 +447,11 @@ fn phase_signature_preimage_v1(body: &PrivateSettlementPhaseBodyV1) -> Result<Ve
 
 fn prepared_bundle_digest_v1(
     manifest: &AtomicPrivateSettlementV1,
-    authority_catalog: &[PrivateSettlementCommitteeAuthorityV1],
+    authority_catalog: &PrivateSettlementAuthorityCatalogV1,
     deltas: &[PrivateSettlementDeltaV1],
     prepare_certificates: &[PrivateSettlementPhaseCertificateV1],
 ) -> Result<Hash> {
-    if authority_catalog.len() != manifest.legs.len()
+    if authority_catalog.validate_for_manifest(manifest).is_err()
         || deltas.len() != manifest.legs.len()
         || prepare_certificates.len() != manifest.legs.len()
     {
@@ -419,7 +460,7 @@ fn prepared_bundle_digest_v1(
     PrivateSettlementPrepareBarrierV1 {
         version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
         manifest: manifest.clone(),
-        authority_catalog: authority_catalog.to_vec(),
+        authority_catalog: authority_catalog.clone(),
         deltas: deltas.to_vec(),
         prepare_certificates: prepare_certificates.to_vec(),
         prepared_bundle_digest: private_settlement_reserved_prepared_digest_v1(),
@@ -620,23 +661,26 @@ fn validate_prepare_barrier_v1(barrier: &PrivateSettlementPrepareBarrierV1) -> R
     barrier
         .validate_shape()
         .map_err(|_| eyre!("private-settlement Prepare barrier is invalid"))?;
-    for (index, ((authority, certificate), _delta)) in barrier
-        .authority_catalog
+    for (index, (certificate, _delta)) in barrier
+        .prepare_certificates
         .iter()
-        .zip(&barrier.prepare_certificates)
         .zip(&barrier.deltas)
         .enumerate()
     {
         let ordinal = u8::try_from(index)
             .map_err(|_| eyre!("private-settlement Prepare barrier is invalid"))?;
+        let authority = barrier
+            .authority_catalog
+            .authority_for_leg(&barrier.manifest, index)
+            .map_err(|_| eyre!("private-settlement Prepare barrier is invalid"))?;
         let expected = expected_phase_body_v1(
             &barrier.manifest,
             ordinal,
-            authority,
+            &authority,
             PrivateSettlementPhaseV1::Prepare,
             private_settlement_reserved_prepared_digest_v1(),
         )?;
-        validate_phase_certificate_v1(certificate, &expected, ordinal, authority)?;
+        validate_phase_certificate_v1(certificate, &expected, ordinal, &authority)?;
         if barrier.deltas[index]
             .digest()
             .map_err(|_| eyre!("private-settlement Prepare barrier is invalid"))?
@@ -915,6 +959,7 @@ impl Client {
         if decoded.format_version != 1
             || decoded.commitment == Hash::prehashed([0_u8; Hash::LENGTH])
             || decoded.ledger_commitment == Hash::prehashed([0_u8; Hash::LENGTH])
+            || decoded.replicated_staged_lock_commitment == Hash::prehashed([0_u8; Hash::LENGTH])
             || decoded.staged_lock_commitment == Hash::prehashed([0_u8; Hash::LENGTH])
         {
             return Err(eyre!(
@@ -1430,6 +1475,11 @@ impl Client {
         deltas: Vec<PrivateSettlementDeltaV1>,
         prepare_certificates: Vec<PrivateSettlementPhaseCertificateV1>,
     ) -> Result<PrivateSettlementPrepareBarrierV1> {
+        let authority_catalog = PrivateSettlementAuthorityCatalogV1::from_leg_authorities(
+            &manifest,
+            &authority_catalog,
+        )
+        .map_err(|_| eyre!("private-settlement authority catalog is invalid"))?;
         let prepared_bundle_digest = prepared_bundle_digest_v1(
             &manifest,
             &authority_catalog,
@@ -1750,14 +1800,17 @@ impl Client {
         }
         committee_endpoints
             .iter()
-            .zip(&barrier.authority_catalog)
             .enumerate()
-            .map(|(index, (endpoints, authority))| {
+            .map(|(index, endpoints)| {
+                let authority = barrier
+                    .authority_catalog
+                    .authority_for_leg(&barrier.manifest, index)
+                    .map_err(|_| eyre!("private-settlement authority catalog is invalid"))?;
                 self.certify_private_settlement_commit_v1(
                     endpoints,
                     barrier.manifest.legs[index].payload_digest,
                     barrier,
-                    authority,
+                    &authority,
                 )
             })
             .collect()
@@ -1783,17 +1836,211 @@ impl Client {
         }
         committee_endpoints
             .iter()
-            .zip(&barrier.authority_catalog)
             .enumerate()
-            .map(|(index, (endpoints, authority))| {
+            .map(|(index, endpoints)| {
+                let authority = barrier
+                    .authority_catalog
+                    .authority_for_leg(&barrier.manifest, index)
+                    .map_err(|_| eyre!("private-settlement authority catalog is invalid"))?;
                 self.recover_or_certify_private_settlement_commit_v1(
                     endpoints,
                     barrier.manifest.legs[index].payload_digest,
                     barrier,
-                    authority,
+                    &authority,
                 )
             })
             .collect()
+    }
+
+    /// Construct the exact sponsor-signed global all-Prepare registration request.
+    ///
+    /// This control carrier must reach global finality before any participant
+    /// committee is asked for a Commit vote. It uses the manifest's bounded
+    /// public fee intent through the ordinary transaction admission path; no
+    /// fee-free control-plane exception is constructed.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an invalid or incomplete barrier, sponsor/network/fee
+    /// substitution, signing or canonical encoding failure, and both direct
+    /// instruction and complete signed-wire size overflow.
+    pub fn build_private_settlement_prepare_registration_request_v1(
+        &self,
+        barrier: &PrivateSettlementPrepareBarrierV1,
+        max_carrier_bytes: u64,
+    ) -> Result<PrivateSettlementBundleSubmitRequestV1> {
+        let hard_max = u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
+            .expect("private-settlement V1 carrier ceiling fits u64");
+        if !(1..=hard_max).contains(&max_carrier_bytes) {
+            return Err(eyre!(
+                "private-settlement governed carrier byte limit is invalid"
+            ));
+        }
+        validate_prepare_barrier_v1(barrier)?;
+        if barrier.manifest.network_id != self.network_id
+            || barrier.manifest.sponsor != self.account
+        {
+            return Err(eyre!(
+                "private-settlement Prepare registration sponsor or network binding is invalid"
+            ));
+        }
+        let instruction = RegisterAtomicPrivateSettlementPrepareV1::new(barrier.clone());
+        let instruction_bytes = u64::try_from(
+            norito::encode_canonical(&instruction)
+                .map_err(|_| eyre!("private-settlement Prepare registration encoding failed"))?
+                .len(),
+        )
+        .map_err(|_| eyre!("private-settlement Prepare registration is too large"))?;
+        if instruction_bytes > max_carrier_bytes {
+            return Err(eyre!(
+                "private-settlement Prepare registration exceeds the governed byte limit"
+            ));
+        }
+        let expected_manifest = barrier.manifest.clone();
+        let transaction = self.try_build_transaction(
+            [InstructionBox::from(instruction)],
+            expected_manifest.public_fee_intent.clone(),
+            Metadata::default(),
+        )?;
+        let signed_manifest = exact_private_settlement_carrier_v1(&transaction)?;
+        if signed_manifest != &expected_manifest
+            || transaction.network_id() != Some(&expected_manifest.network_id)
+            || transaction.authority() != &expected_manifest.sponsor
+            || transaction.fee_payment_intent() != &expected_manifest.public_fee_intent
+        {
+            return Err(eyre!(
+                "private-settlement Prepare registration signed carrier binding is invalid"
+            ));
+        }
+        let signed_bytes = u64::try_from(
+            transaction
+                .encode_wire_v1()
+                .map_err(|_| {
+                    eyre!("private-settlement Prepare registration transaction encoding failed")
+                })?
+                .len(),
+        )
+        .map_err(|_| eyre!("private-settlement Prepare registration transaction is too large"))?;
+        if signed_bytes > max_carrier_bytes {
+            return Err(eyre!(
+                "private-settlement Prepare registration signed carrier exceeds the governed byte limit"
+            ));
+        }
+        Ok(PrivateSettlementBundleSubmitRequestV1 { transaction })
+    }
+
+    /// Submit the exact all-Prepare control-lock carrier and wait for global
+    /// state-resolved `Applied` finality.
+    ///
+    /// Commit fanout must start only after this method returns successfully;
+    /// committee Commit voters consult the replicated lock and therefore
+    /// reject an admission-only or cache-only registration.
+    ///
+    /// # Errors
+    ///
+    /// Fails under the same conditions as
+    /// [`Self::build_private_settlement_prepare_registration_request_v1`] and
+    /// [`Self::submit_private_settlement_bundle_v1`], or when the exact signed
+    /// registration transaction is rejected, expires, or does not reach
+    /// state-resolved `Applied` finality within `wait_options`.
+    pub fn register_private_settlement_prepare_and_wait_v1(
+        &self,
+        barrier: &PrivateSettlementPrepareBarrierV1,
+        max_carrier_bytes: u64,
+        wait_options: TransactionWaitOptions,
+    ) -> Result<PrivateSettlementBundleSubmitResponseV1> {
+        let request = self
+            .build_private_settlement_prepare_registration_request_v1(barrier, max_carrier_bytes)?;
+        let transaction_hash = request.transaction.hash();
+        let accepted = self.submit_private_settlement_bundle_v1(&request)?;
+        self.wait_for_transaction_applied(transaction_hash, wait_options)?;
+        Ok(accepted)
+    }
+
+    /// Construct one exact sponsor-signed public abort-marker request.
+    ///
+    /// The returned request contains only the immutable public manifest and
+    /// non-sensitive reason class. Submit it through
+    /// [`Self::submit_private_settlement_bundle_v1`]. Torii and consensus apply
+    /// the authoritative-height rule: `Expired` is admissible only after the
+    /// manifest expiry, while the other reason classes are admissible only
+    /// through expiry.
+    ///
+    /// `max_carrier_bytes` must be the active governed limit obtained for the
+    /// target deployment. Both the canonical boxed abort instruction and the
+    /// complete signed transaction wire are measured before the request is
+    /// returned.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an invalid governed limit or manifest, sponsor/network/fee
+    /// substitution, signing or canonical encoding failure, or a carrier that
+    /// exceeds the governed byte limit.
+    pub fn build_private_settlement_abort_request_v1(
+        &self,
+        manifest: &AtomicPrivateSettlementV1,
+        reason: PrivateSettlementAbortReasonV1,
+        max_carrier_bytes: u64,
+    ) -> Result<PrivateSettlementBundleSubmitRequestV1> {
+        let hard_max = u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
+            .expect("private-settlement V1 carrier ceiling fits u64");
+        if !(1..=hard_max).contains(&max_carrier_bytes) {
+            return Err(eyre!(
+                "private-settlement governed carrier byte limit is invalid"
+            ));
+        }
+        manifest
+            .validate()
+            .map_err(|_| eyre!("private-settlement abort manifest is invalid"))?;
+        if manifest.network_id != self.network_id || manifest.sponsor != self.account {
+            return Err(eyre!(
+                "private-settlement abort sponsor or network binding is invalid"
+            ));
+        }
+
+        let instruction = AbortAtomicPrivateSettlementV1::new(manifest.clone(), reason);
+        let boxed_instruction = InstructionBox::from(instruction);
+        let instruction_bytes = u64::try_from(
+            norito::encode_canonical(&boxed_instruction)
+                .map_err(|_| eyre!("private-settlement abort carrier encoding failed"))?
+                .len(),
+        )
+        .map_err(|_| eyre!("private-settlement abort carrier is too large"))?;
+        if instruction_bytes > max_carrier_bytes {
+            return Err(eyre!(
+                "private-settlement abort carrier exceeds the governed byte limit"
+            ));
+        }
+
+        let expected_manifest = manifest.clone();
+        let transaction = self.try_build_transaction(
+            [boxed_instruction],
+            expected_manifest.public_fee_intent.clone(),
+            Metadata::default(),
+        )?;
+        let signed_manifest = exact_private_settlement_carrier_v1(&transaction)?;
+        if signed_manifest != &expected_manifest
+            || transaction.network_id() != Some(&expected_manifest.network_id)
+            || transaction.authority() != &expected_manifest.sponsor
+            || transaction.fee_payment_intent() != &expected_manifest.public_fee_intent
+        {
+            return Err(eyre!(
+                "private-settlement abort signed carrier binding is invalid"
+            ));
+        }
+        let signed_bytes = u64::try_from(
+            transaction
+                .encode_wire_v1()
+                .map_err(|_| eyre!("private-settlement abort transaction encoding failed"))?
+                .len(),
+        )
+        .map_err(|_| eyre!("private-settlement abort transaction is too large"))?;
+        if signed_bytes > max_carrier_bytes {
+            return Err(eyre!(
+                "private-settlement abort signed carrier exceeds the governed byte limit"
+            ));
+        }
+        Ok(PrivateSettlementBundleSubmitRequestV1 { transaction })
     }
 
     /// Construct the exact sponsor-signed global finalization request for one complete barrier.
@@ -1838,24 +2085,27 @@ impl Client {
         }
 
         let mut legs = Vec::with_capacity(barrier.manifest.legs.len());
-        for (index, (((authority, delta), prepare), commit)) in barrier
-            .authority_catalog
+        for (index, ((delta, prepare), commit)) in barrier
+            .deltas
             .iter()
-            .zip(&barrier.deltas)
             .zip(&barrier.prepare_certificates)
             .zip(commit_certificates)
             .enumerate()
         {
             let ordinal = u8::try_from(index)
                 .map_err(|_| eyre!("private-settlement finalization ordinal is invalid"))?;
+            let authority = barrier
+                .authority_catalog
+                .authority_for_leg(&barrier.manifest, index)
+                .map_err(|_| eyre!("private-settlement authority catalog is invalid"))?;
             let expected = expected_phase_body_v1(
                 &barrier.manifest,
                 ordinal,
-                authority,
+                &authority,
                 PrivateSettlementPhaseV1::Commit,
                 barrier.prepared_bundle_digest,
             )?;
-            validate_phase_certificate_v1(commit, &expected, ordinal, authority)?;
+            validate_phase_certificate_v1(commit, &expected, ordinal, &authority)?;
             legs.push(PrivateSettlementLegReceiptV1 {
                 delta: delta.clone(),
                 prepare: prepare.clone(),
@@ -2187,6 +2437,7 @@ impl Client {
         &self,
         endpoint: &Url,
         payload_digest: Hash,
+        request: &PrivateSettlementAuditorCapsuleRequestV1,
         auditor_signer: &S,
     ) -> Result<PrivateSettlementAuditorCapsuleResponseV1>
     where
@@ -2194,16 +2445,18 @@ impl Client {
     {
         let auditor_signing_key = auditor_signer.public_key().clone();
         validate_private_settlement_endpoint_v1(endpoint)?;
+        request
+            .audit_policy
+            .validate()
+            .map_err(|_| eyre!("private-settlement auditor access policy is invalid"))?;
+        let body = norito::json::to_vec(request)
+            .wrap_err("failed to encode private-settlement auditor capsule request")?;
         let path = private_settlement_resource_path_v1("legs", &payload_digest, "/audit-capsule");
         let url = join_torii_url(endpoint, &path);
         let response = self.send_private_settlement_builder_v1(
-            self.identity_signed_request_with_signer(
-                auditor_signer,
-                HttpMethod::GET,
-                url,
-                Vec::new(),
-            )?
-            .header("Accept", APPLICATION_JSON),
+            self.identity_signed_request_with_signer(auditor_signer, HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
         )?;
         let decoded = Self::decode_private_settlement_response_v1(
             response,
@@ -2212,6 +2465,7 @@ impl Client {
         validate_private_settlement_auditor_capsule_response_v1(
             &self.network_id,
             payload_digest,
+            request,
             &decoded,
         )
         .map_err(|_| eyre!("private-settlement auditor response is invalid or substituted"))?;
@@ -2225,6 +2479,7 @@ impl Client {
         committee_endpoints: &[Url],
         expected_authority: Option<&PrivateSettlementCommitteeAuthorityV1>,
         payload_digest: Hash,
+        request: &PrivateSettlementAuditorCapsuleRequestV1,
         auditor_signer: &S,
     ) -> Result<PrivateSettlementAuditorCapsuleResponseV1>
     where
@@ -2256,21 +2511,21 @@ impl Client {
             let Ok(response) = self.private_settlement_auditor_capsule_from_v1(
                 endpoint,
                 payload_digest,
+                request,
                 auditor_signer,
             ) else {
                 continue;
             };
-            if !matches!(
+            let mut canonical_view = response.view_digest_material();
+            canonical_view.authoritative_height = 0;
+            if matches!(
                 response.lifecycle,
                 PrivateSettlementLifecycleDtoV1::Collecting
                     | PrivateSettlementLifecycleDtoV1::Audited
             ) {
-                continue;
+                canonical_view.lifecycle_code =
+                    PrivateSettlementLifecycleDtoV1::Collecting.attestation_code();
             }
-            let mut canonical_view = response.view_digest_material();
-            canonical_view.authoritative_height = 0;
-            canonical_view.lifecycle_code =
-                PrivateSettlementLifecycleDtoV1::Collecting.attestation_code();
             let encoded = norito::encode_canonical(&canonical_view)
                 .map_err(|_| eyre!("private-settlement auditor quorum response is invalid"))?;
             candidates.push(PrivateSettlementAuthenticatedQuorumCandidateV1 {
@@ -2305,6 +2560,7 @@ impl Client {
         committee_endpoints: &[Url],
         expected_authority: &PrivateSettlementCommitteeAuthorityV1,
         payload_digest: Hash,
+        request: &PrivateSettlementAuditorCapsuleRequestV1,
         auditor_signer: &S,
     ) -> Result<PrivateSettlementAuditorCapsuleResponseV1>
     where
@@ -2314,6 +2570,7 @@ impl Client {
             committee_endpoints,
             Some(expected_authority),
             payload_digest,
+            request,
             auditor_signer,
         )
     }
@@ -2334,6 +2591,7 @@ impl Client {
         &self,
         committee_endpoints: &[Url],
         payload_digest: Hash,
+        request: &PrivateSettlementAuditorCapsuleRequestV1,
         auditor_signer: &S,
     ) -> Result<PrivateSettlementAuditorCapsuleResponseV1>
     where
@@ -2343,6 +2601,7 @@ impl Client {
             committee_endpoints,
             None,
             payload_digest,
+            request,
             auditor_signer,
         )
     }
@@ -2358,11 +2617,13 @@ impl Client {
     pub fn private_settlement_auditor_capsule_v1(
         &self,
         payload_digest: Hash,
+        request: &PrivateSettlementAuditorCapsuleRequestV1,
         auditor_signing_key: &KeyPair,
     ) -> Result<PrivateSettlementAuditorCapsuleResponseV1> {
         self.private_settlement_auditor_capsule_from_v1(
             &self.torii_url,
             payload_digest,
+            request,
             &BorrowedKeyPairIdentityRequestSignerV1::new(auditor_signing_key),
         )
     }
@@ -2392,18 +2653,11 @@ impl Client {
     {
         let auditor_signing_key = auditor_signer.public_key().clone();
         validate_private_settlement_endpoint_v1(endpoint)?;
-        if request.approval.body.version != ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1
-            || request.approval.body.network_id != self.network_id
-        {
-            return Err(eyre!(
-                "private-settlement auditor approval identity is invalid"
-            ));
-        }
-        request
-            .approval
-            .signature
-            .verify(&auditor_signing_key, &request.approval.body)
-            .map_err(|_| eyre!("private-settlement auditor approval identity is invalid"))?;
+        validate_private_settlement_audit_approval_request_identity_v1(
+            &self.network_id,
+            &auditor_signing_key,
+            request,
+        )?;
         let body = norito::json::to_vec(request)
             .wrap_err("failed to encode private-settlement auditor approval")?;
         let path = private_settlement_resource_path_v1("legs", &payload_digest, "/audit-approvals");
@@ -2455,18 +2709,11 @@ impl Client {
             }
         }
         let auditor_signing_key = auditor_signer.public_key().clone();
-        if request.approval.body.version != ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1
-            || request.approval.body.network_id != self.network_id
-            || request
-                .approval
-                .signature
-                .verify(&auditor_signing_key, &request.approval.body)
-                .is_err()
-        {
-            return Err(eyre!(
-                "private-settlement auditor approval identity is invalid"
-            ));
-        }
+        validate_private_settlement_audit_approval_request_identity_v1(
+            &self.network_id,
+            &auditor_signing_key,
+            request,
+        )?;
         let mut candidates = Vec::with_capacity(committee_endpoints.len());
         for (endpoint_index, endpoint) in committee_endpoints.iter().enumerate() {
             let Ok(response) = self.submit_private_settlement_audit_approval_to_v1(
@@ -2583,7 +2830,7 @@ impl Client {
         )
     }
 
-    /// Submit one exact sponsor-signed global finalization or abort carrier.
+    /// Submit one exact sponsor-signed global Prepare-lock, finalization, or abort carrier.
     ///
     /// # Errors
     ///
@@ -3599,6 +3846,255 @@ mod tests {
             recovered.as_ref().expect("canonical recovery"),
             &different_statement,
         ));
+    }
+
+    #[test]
+    fn prepare_registration_builder_constructs_one_exact_fee_bound_carrier() {
+        let client = client_with_base_url(base_url());
+        let (barrier, _) = finalization_fixture_v1(&client);
+        let request = client
+            .build_private_settlement_prepare_registration_request_v1(
+                &barrier,
+                u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
+                    .expect("hard carrier ceiling fits u64"),
+            )
+            .expect("complete Prepare barrier builds a registration request");
+
+        assert_eq!(
+            exact_private_settlement_carrier_v1(&request.transaction)
+                .expect("registration is an exact direct carrier"),
+            &barrier.manifest
+        );
+        assert_eq!(request.transaction.authority(), &barrier.manifest.sponsor);
+        assert_eq!(
+            request.transaction.fee_payment_intent(),
+            &barrier.manifest.public_fee_intent
+        );
+        let Executable::Instructions(instructions) = request.transaction.instructions() else {
+            panic!("registration builder emitted a non-instruction executable");
+        };
+        let [instruction] = instructions.as_ref() else {
+            panic!("registration builder did not emit exactly one instruction");
+        };
+        let registration = instruction
+            .as_any()
+            .downcast_ref::<RegisterAtomicPrivateSettlementPrepareV1>()
+            .expect("sole instruction is the Prepare registration carrier");
+        assert_eq!(registration.barrier, barrier);
+    }
+
+    #[test]
+    fn abort_builder_constructs_one_exact_fee_bound_carrier() {
+        let client = client_with_base_url(base_url());
+        let (barrier, _) = finalization_fixture_v1(&client);
+        let reason = PrivateSettlementAbortReasonV1::ParticipantRejected;
+        let request = client
+            .build_private_settlement_abort_request_v1(
+                &barrier.manifest,
+                reason,
+                u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
+                    .expect("hard carrier ceiling fits u64"),
+            )
+            .expect("valid manifest builds an abort request");
+
+        assert_eq!(
+            exact_private_settlement_carrier_v1(&request.transaction)
+                .expect("abort is an exact direct carrier"),
+            &barrier.manifest
+        );
+        assert_eq!(
+            request.transaction.network_id(),
+            Some(&barrier.manifest.network_id)
+        );
+        assert_eq!(request.transaction.authority(), &barrier.manifest.sponsor);
+        assert_eq!(
+            request.transaction.fee_payment_intent(),
+            &barrier.manifest.public_fee_intent
+        );
+        let Executable::Instructions(instructions) = request.transaction.instructions() else {
+            panic!("abort builder emitted a non-instruction executable");
+        };
+        let [instruction] = instructions.as_ref() else {
+            panic!("abort builder did not emit exactly one instruction");
+        };
+        let abort = instruction
+            .as_any()
+            .downcast_ref::<AbortAtomicPrivateSettlementV1>()
+            .expect("sole instruction is the abort carrier");
+        assert_eq!(abort.manifest, barrier.manifest);
+        assert_eq!(abort.reason, reason);
+    }
+
+    #[test]
+    fn abort_builder_rejects_invalid_manifest_sponsor_and_wire_bounds() {
+        let client = client_with_base_url(base_url());
+        let (barrier, _) = finalization_fixture_v1(&client);
+        let reason = PrivateSettlementAbortReasonV1::SidecarUnavailable;
+        let hard_max = u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
+            .expect("hard carrier ceiling fits u64");
+
+        assert!(
+            client
+                .build_private_settlement_abort_request_v1(&barrier.manifest, reason, 0)
+                .is_err()
+        );
+        assert!(
+            client
+                .build_private_settlement_abort_request_v1(&barrier.manifest, reason, hard_max + 1,)
+                .is_err()
+        );
+
+        let request = client
+            .build_private_settlement_abort_request_v1(&barrier.manifest, reason, hard_max)
+            .expect("hard ceiling admits fixture");
+        let exact_signed_bytes = u64::try_from(
+            request
+                .transaction
+                .encode_wire_v1()
+                .expect("fixture signed abort transaction encodes")
+                .len(),
+        )
+        .expect("fixture signed abort length fits u64");
+        client
+            .build_private_settlement_abort_request_v1(
+                &barrier.manifest,
+                reason,
+                exact_signed_bytes,
+            )
+            .expect("an exact signed-wire bound is inclusive");
+        assert!(
+            client
+                .build_private_settlement_abort_request_v1(
+                    &barrier.manifest,
+                    reason,
+                    exact_signed_bytes - 1,
+                )
+                .is_err()
+        );
+
+        let mut malformed = barrier.manifest.clone();
+        malformed.bundle_id = Hash::new(b"substituted-client-abort-bundle");
+        assert!(
+            client
+                .build_private_settlement_abort_request_v1(&malformed, reason, hard_max)
+                .is_err()
+        );
+
+        let mut substituted_sponsor = barrier.manifest.clone();
+        let (outsider, _) = iroha_test_samples::gen_account_in("client-abort-outsider");
+        substituted_sponsor.sponsor = outsider;
+        substituted_sponsor.bundle_id = substituted_sponsor
+            .computed_bundle_id()
+            .expect("substituted sponsor manifest hashes");
+        substituted_sponsor
+            .validate()
+            .expect("substituted sponsor manifest remains structurally valid");
+        assert!(
+            client
+                .build_private_settlement_abort_request_v1(&substituted_sponsor, reason, hard_max,)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn blocking_prepare_registration_retries_until_state_applied() {
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let admitted: Arc<Mutex<Option<(String, Hash, Hash)>>> = Arc::new(Mutex::new(None));
+        let status_polls = Arc::new(Mutex::new(0_u64));
+        let client = client_with_base_url(base_url());
+        let (barrier, _) = finalization_fixture_v1(&client);
+        let responder = {
+            let snapshots = Arc::clone(&snapshots);
+            let admitted = Arc::clone(&admitted);
+            let status_polls = Arc::clone(&status_polls);
+            move |snapshot: crate::http_default::RequestSnapshot| {
+                let path = snapshot.url.path().to_owned();
+                snapshots
+                    .lock()
+                    .expect("snapshot lock")
+                    .push(snapshot.clone());
+                if path == "/v1/nexus/private-settlements/bundles" {
+                    let request: PrivateSettlementBundleSubmitRequestV1 =
+                        norito::json::from_slice(&snapshot.body)
+                            .expect("decode submitted Prepare registration");
+                    let manifest = exact_private_settlement_carrier_v1(&request.transaction)
+                        .expect("submitted registration is exact");
+                    let signed_hash = request.transaction.hash();
+                    let signed_hash_literal = signed_hash.to_string();
+                    let carrier_id = Hash::from(signed_hash);
+                    *admitted.lock().expect("admission lock") =
+                        Some((signed_hash_literal, carrier_id, manifest.bundle_id));
+                    let response = PrivateSettlementBundleSubmitResponseV1 {
+                        bundle_id: manifest.bundle_id,
+                        accepted_at_height: 9,
+                        carrier_id,
+                    };
+                    return Ok(Response::builder()
+                        .status(StatusCode::ACCEPTED)
+                        .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+                        .body(norito::json::to_vec(&response).expect("encode admission response"))
+                        .expect("admission response"));
+                }
+                assert_eq!(path, "/v1/pipeline/transactions/status");
+                let (hash, _, _) = admitted
+                    .lock()
+                    .expect("admission lock")
+                    .clone()
+                    .expect("status cannot precede admission");
+                let mut polls = status_polls.lock().expect("status poll lock");
+                *polls += 1;
+                let resolved_from = if *polls == 1 { "cache" } else { "state" };
+                let response = norito::json!({
+                    "hash": hash,
+                    "status": { "kind": "Applied", "block_height": 10 },
+                    "scope": "global",
+                    "resolved_from": resolved_from,
+                });
+                Ok(Response::builder()
+                    .status(StatusCode::OK)
+                    .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+                    .body(
+                        norito::json::to_vec(&response)
+                            .expect("encode transaction status response"),
+                    )
+                    .expect("transaction status response"))
+            }
+        };
+
+        let accepted = with_mock_http(responder, || {
+            client.register_private_settlement_prepare_and_wait_v1(
+                &barrier,
+                u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
+                    .expect("hard carrier ceiling fits u64"),
+                TransactionWaitOptions {
+                    timeout: Duration::from_millis(50),
+                    poll_interval: Duration::from_millis(1),
+                },
+            )
+        })
+        .expect("registration waits through cache-only status until state finality");
+        let (_, carrier_id, bundle_id) = admitted
+            .lock()
+            .expect("admission lock")
+            .clone()
+            .expect("registration was submitted");
+        assert_eq!(accepted.carrier_id, carrier_id);
+        assert_eq!(accepted.bundle_id, bundle_id);
+        assert_eq!(*status_polls.lock().expect("status poll lock"), 2);
+        let paths = snapshots
+            .lock()
+            .expect("snapshot lock")
+            .iter()
+            .map(|snapshot| snapshot.url.path().to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paths,
+            [
+                "/v1/nexus/private-settlements/bundles",
+                "/v1/pipeline/transactions/status",
+                "/v1/pipeline/transactions/status",
+            ]
+        );
     }
 
     #[test]

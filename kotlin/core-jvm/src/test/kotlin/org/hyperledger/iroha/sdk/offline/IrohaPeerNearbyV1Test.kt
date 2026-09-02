@@ -3,6 +3,7 @@ package org.hyperledger.iroha.sdk.offline
 import org.junit.jupiter.api.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
@@ -208,6 +209,8 @@ class IrohaPeerNearbyV1Test {
         val acceptAll = IrohaPeerNearbySignatureVerifierV1 { _, _, _, _ -> true }
         sender.acceptPeerAuthentication(receiverAuthentication, acceptAll)
         receiver.acceptPeerAuthentication(senderAuthentication, acceptAll)
+        assertTrue(senderKey.isDestroyed)
+        assertTrue(receiverKey.isDestroyed)
 
         val payment = "IPM1-payment-fixture".toByteArray()
         val record = sender.seal(payment)
@@ -388,6 +391,132 @@ class IrohaPeerNearbyV1Test {
         val mutated = key.publicKey
         mutated.fill(0)
         assertContentEquals(expected, key.publicKey)
+    }
+
+    @Test
+    fun `destroy is alias-wide idempotent and rejects every later session operation`() {
+        val pair = authenticatedPair(13)
+        val alias = pair.sender
+        val peerHello = pair.receiver.localHello
+        val peerAuthentication = pair.receiver.makeAuthentication(byteArrayOf(0x51))
+        val peerRecord = pair.receiver.seal("late message".toByteArray())
+
+        pair.sender.destroy()
+        pair.sender.close()
+
+        assertTrue(alias.isDestroyed)
+        assertFalse(alias.isAuthenticated)
+        assertFailsWith<IllegalStateException> { alias.localHello }
+        assertFailsWith<IllegalStateException> { alias.acceptPeerHello(peerHello) }
+        assertFailsWith<IllegalStateException> { alias.authenticationPreimage() }
+        assertFailsWith<IllegalStateException> { alias.makeAuthentication(byteArrayOf(1)) }
+        var verifierCalls = 0
+        assertFailsWith<IllegalStateException> {
+            alias.acceptPeerAuthentication(peerAuthentication) { _, _, _, _ ->
+                verifierCalls += 1
+                true
+            }
+        }
+        assertEquals(0, verifierCalls)
+        assertFailsWith<IllegalStateException> { alias.seal(byteArrayOf(1)) }
+        assertFailsWith<IllegalStateException> { alias.open(peerRecord) }
+    }
+
+    @Test
+    fun `verifier cannot install keys after concurrent session destruction`() {
+        val session = ByteArray(16) { 0x61 }
+        val request = ByteArray(32) { 0x62 }
+        val sender = IrohaPeerNearbySessionV1(
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
+            IrohaPeerNearbyRoleV1.SENDER,
+            session,
+            request,
+            byteArrayOf(1),
+            ByteArray(32) { 0x63 },
+            IrohaPeerNearbyP256V1.fromPrivateBytes(ByteArray(31) + byteArrayOf(13)),
+        )
+        val receiver = IrohaPeerNearbySessionV1(
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
+            IrohaPeerNearbyRoleV1.RECEIVER,
+            session,
+            request,
+            byteArrayOf(2),
+            ByteArray(32) { 0x64 },
+            IrohaPeerNearbyP256V1.fromPrivateBytes(ByteArray(31) + byteArrayOf(14)),
+        )
+        sender.acceptPeerHello(receiver.localHello)
+        receiver.acceptPeerHello(sender.localHello)
+        val receiverAuthentication = receiver.makeAuthentication(byteArrayOf(0x65))
+        var verifierCalls = 0
+
+        assertFailsWith<IllegalStateException> {
+            sender.acceptPeerAuthentication(receiverAuthentication) { _, _, _, _ ->
+                verifierCalls += 1
+                val closer = Thread(sender::close)
+                closer.start()
+                closer.join(2_000)
+                assertFalse(closer.isAlive, "Session close deadlocked behind verifier callback")
+                true
+            }
+        }
+
+        assertEquals(1, verifierCalls)
+        assertTrue(sender.isDestroyed)
+        assertFalse(sender.isAuthenticated)
+        assertFailsWith<IllegalStateException> { sender.seal(byteArrayOf(1)) }
+        receiver.close()
+    }
+
+    @Test
+    fun `session owns supplied P256 lifecycle and direct close is idempotent`() {
+        val key = IrohaPeerNearbyP256V1.fromPrivateBytes(ByteArray(31) + byteArrayOf(15))
+        val peer = IrohaPeerNearbyP256V1.fromPrivateBytes(ByteArray(31) + byteArrayOf(16))
+        val peerPublicKey = peer.publicKey
+        val session = IrohaPeerNearbySessionV1(
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
+            IrohaPeerNearbyRoleV1.SENDER,
+            ByteArray(16) { 0x66 },
+            ByteArray(32) { 0x67 },
+            byteArrayOf(1),
+            ByteArray(32) { 0x68 },
+            key,
+        )
+
+        session.close()
+        session.destroy()
+        peer.close()
+        peer.close()
+
+        assertTrue(key.isDestroyed)
+        assertTrue(peer.isDestroyed)
+        assertFailsWith<IllegalStateException> { key.publicKey }
+        assertFailsWith<IllegalStateException> { key.sharedSecret(peerPublicKey) }
+        assertFailsWith<IllegalStateException> { peer.publicKey }
+
+        val rejectedKey = IrohaPeerNearbyP256V1.fromPrivateBytes(ByteArray(31) + byteArrayOf(17))
+        assertFailsWith<IllegalArgumentException> {
+            IrohaPeerNearbySessionV1(
+                IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
+                IrohaPeerNearbyRoleV1.SENDER,
+                ByteArray(17),
+                ByteArray(32) { 1 },
+                byteArrayOf(1),
+                ByteArray(32) { 2 },
+                rejectedKey,
+            )
+        }
+        assertTrue(rejectedKey.isDestroyed)
+    }
+
+    @Test
+    fun `P256 private input is bounded and caller ownership is preserved`() {
+        val privateBytes = ByteArray(31) + byteArrayOf(12)
+        val expected = privateBytes.copyOf()
+        IrohaPeerNearbyP256V1.fromPrivateBytes(privateBytes)
+        assertContentEquals(expected, privateBytes)
+        assertFailsWith<IllegalArgumentException> {
+            IrohaPeerNearbyP256V1.fromPrivateBytes(ByteArray(33))
+        }
     }
 
     private class AuthenticatedPair(

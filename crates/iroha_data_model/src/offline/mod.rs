@@ -223,6 +223,11 @@ pub const KAGEMUSHA_VERIFIER_PURPOSE_STEP_V4: &str = "kagemusha_recursive_spend_
 /// Domain separator for the self-contained V2 request authorization signature.
 pub const KAGEMUSHA_REQUEST_AUTHORIZATION_DOMAIN_V2: &str =
     "iroha:kagemusha:v2:request-authorization";
+/// Domain separator for the canonical first-release chain-operation identifier.
+pub const KAGEMUSHA_OPERATION_ID_DOMAIN_V4: &[u8] = b"iroha:offline:kagemusha:operation-id:v4\0";
+/// Domain separator for fixed-size canonical account identities in operation state.
+pub const KAGEMUSHA_OPERATION_AUTHORITY_DIGEST_DOMAIN_V4: &[u8] =
+    b"iroha:offline:kagemusha:operation-outcome-authority:v4\0";
 /// Domain separator for the hardware assertion authorizing one exact online operation.
 pub const KAGEMUSHA_ONLINE_HARDWARE_ASSERTION_DOMAIN_V1: &str =
     "iroha:kagemusha:v1:online-hardware-assertion";
@@ -736,6 +741,69 @@ fn validate_kagemusha_root(
         return Err(KagemushaValidationError::InvalidRecursiveSpendProof { field });
     }
     Ok(())
+}
+fn canonical_kagemusha_account_archive(
+    authority: &AccountId,
+) -> Result<(Vec<u8>, u64), KagemushaValidationError> {
+    let archive = norito::encode_canonical(authority)?;
+    let archive_len = u64::try_from(archive.len()).map_err(|_| {
+        KagemushaValidationError::InvalidRecursiveSpendProof {
+            field: "authorization.authority",
+        }
+    })?;
+    Ok((archive, archive_len))
+}
+/// Return whether bytes preserve Iroha's exact least-significant-bit hash marker.
+#[must_use]
+pub const fn is_kagemusha_marked_hash_v4(hash: &[u8; Hash::LENGTH]) -> bool {
+    hash[Hash::LENGTH - 1] & 1 == 1
+}
+/// Derive the one canonical global chain-operation identifier from authority and nonce.
+///
+/// The authority is hashed as its complete standalone canonical Norito archive rather
+/// than as a display string or an inline field. Top-up and redemption intentionally
+/// share this namespace, so reusing a nonce for the same authority is always a conflict.
+///
+/// # Errors
+///
+/// Returns [`KagemushaValidationError`] for a zero nonce or an authority that cannot be
+/// encoded as one canonical archive.
+pub fn derive_kagemusha_operation_id_v4(
+    authority: &AccountId,
+    nonce: [u8; Hash::LENGTH],
+) -> Result<[u8; Hash::LENGTH], KagemushaValidationError> {
+    if nonce == [0; Hash::LENGTH] {
+        return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+            field: "authorization.nonce",
+        });
+    }
+    let (authority_archive, authority_archive_len) =
+        canonical_kagemusha_account_archive(authority)?;
+    Ok(Hash::new_from_chunks(&[
+        KAGEMUSHA_OPERATION_ID_DOMAIN_V4,
+        &authority_archive_len.to_le_bytes(),
+        &authority_archive,
+        &nonce,
+    ])
+    .into())
+}
+/// Hash one complete canonical account identity for fixed-size operation state.
+///
+/// # Errors
+///
+/// Returns [`KagemushaValidationError`] when the authority cannot be encoded as one
+/// canonical standalone Norito archive.
+pub fn kagemusha_operation_authority_digest_v4(
+    authority: &AccountId,
+) -> Result<[u8; Hash::LENGTH], KagemushaValidationError> {
+    let (authority_archive, authority_archive_len) =
+        canonical_kagemusha_account_archive(authority)?;
+    Ok(Hash::new_from_chunks(&[
+        KAGEMUSHA_OPERATION_AUTHORITY_DIGEST_DOMAIN_V4,
+        &authority_archive_len.to_le_bytes(),
+        &authority_archive,
+    ])
+    .into())
 }
 /// Derive the deterministic Kagemusha escrow account for an asset definition.
 #[must_use]
@@ -2040,7 +2108,6 @@ impl KagemushaRequestAuthorizationV2 {
         authority: &AccountId,
         device_id: &str,
         asset_definition_id: &AssetDefinitionId,
-        operation_id: [u8; 32],
         issued_at_ms: u64,
         expires_at_ms: u64,
         nonce: [u8; 32],
@@ -2052,10 +2119,8 @@ impl KagemushaRequestAuthorizationV2 {
             || device_id.len() > 128
             || device_id.trim() != device_id
             || device_id.chars().any(char::is_control)
-            || operation_id == [0; 32]
-            || nonce == [0; 32]
             || registration_hash == [0; 32]
-            || registration_hash[Hash::LENGTH - 1] & 1 == 0
+            || !is_kagemusha_marked_hash_v4(&registration_hash)
             || issued_at_ms == 0
             || expires_at_ms <= issued_at_ms
             || expires_at_ms - issued_at_ms > KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2
@@ -2064,6 +2129,7 @@ impl KagemushaRequestAuthorizationV2 {
                 field: "authorization",
             });
         }
+        let operation_id = derive_kagemusha_operation_id_v4(authority, nonce)?;
         let preimage = Self::hardware_assertion_preimage_bytes_for_fields(
             authority,
             device_id,
@@ -2096,11 +2162,16 @@ impl KagemushaRequestAuthorizationV2 {
     ///
     /// Returns [`KagemushaValidationError`] when the signing subject is invalid or cannot be encoded canonically.
     pub fn signing_bytes(&self) -> Result<Vec<u8>, KagemushaValidationError> {
+        let expected_operation_id = derive_kagemusha_operation_id_v4(&self.authority, self.nonce)?;
+        if self.operation_id != expected_operation_id {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "authorization.operation_id",
+            });
+        }
         Self::signing_bytes_for_fields(
             &self.authority,
             &self.device_id,
             &self.asset_definition_id,
-            self.operation_id,
             self.issued_at_ms,
             self.expires_at_ms,
             self.nonce,
@@ -2162,14 +2233,14 @@ impl KagemushaRequestAuthorizationV2 {
         &self,
         expected_payload_digest: [u8; 32],
     ) -> Result<(), KagemushaValidationError> {
+        let expected_operation_id = derive_kagemusha_operation_id_v4(&self.authority, self.nonce)?;
         if self.device_id.is_empty()
             || self.device_id.len() > 128
             || self.device_id.trim() != self.device_id
             || self.device_id.chars().any(char::is_control)
-            || self.operation_id == [0; 32]
-            || self.nonce == [0; 32]
+            || self.operation_id != expected_operation_id
             || self.registration_hash == [0; 32]
-            || self.registration_hash[Hash::LENGTH - 1] & 1 == 0
+            || !is_kagemusha_marked_hash_v4(&self.registration_hash)
             || self.payload_digest != expected_payload_digest
             || self.issued_at_ms == 0
             || self.expires_at_ms <= self.issued_at_ms
@@ -3119,8 +3190,8 @@ impl KagemushaRecursiveSpendArtifactBindingV4 {
 impl KagemushaRecursiveSpendNativeCapabilitiesV4 {
     /// Validate an installed ABI-21 backend capability record.
     ///
-    /// `max_proof_bytes` is deliberately release-specific: it must come from the authenticated V4
-    /// manifest selected by the installed artifact handle, rather than from a compile-time default.
+    /// `max_proof_bytes` is pinned to the reviewed first-release profile; the authenticated V4
+    /// manifest selected by the installed artifact handle must advertise that same exact value.
     ///
     /// # Errors
     ///
@@ -3144,8 +3215,7 @@ impl KagemushaRecursiveSpendNativeCapabilitiesV4 {
             || self.step_eq_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4
             || self.step_ep_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4
             || self.artifact_roles != expected_roles
-            || self.max_proof_bytes == 0
-            || self.max_proof_bytes > KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4
+            || self.max_proof_bytes != KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4
             || (self.proof_backend_available && !self.missing_gates.is_empty())
             || (!self.proof_backend_available && !missing_gates_are_canonical)
         {
@@ -4036,7 +4106,7 @@ mod kagemusha_v4_artifact_contract_tests {
             asset_scale: 9,
             activation_height: 1,
             withdrawal_height: 100,
-            max_proof_bytes: KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
+            max_proof_bytes: KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4,
             generation_memory_limit_bytes:
                 KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ABSOLUTE_MAX_BYTES_V4,
             generation_memory_enforcement_profile:
@@ -4314,9 +4384,60 @@ mod kagemusha_v4_artifact_contract_tests {
             assert_eq!(role_digests[2 * index], descriptor.sha256);
             assert_eq!(role_digests[2 * index + 1], descriptor.payload_sha256);
         }
-        let receipt =
-            KagemushaRecursiveSpendQualificationReceiptV4::new(&candidate, vec![0x41], vec![0x42])
-                .expect("structurally valid qualification receipt");
+        let initialization_pair_bytes =
+            usize::try_from(KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_INITIALIZATION_BYTES_V4)
+                .expect("initialization pair length fits usize");
+        let append_pair_bytes =
+            usize::try_from(KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4)
+                .expect("append pair length fits usize");
+        let receipt = KagemushaRecursiveSpendQualificationReceiptV4::new(
+            &candidate,
+            vec![0x41; initialization_pair_bytes],
+            vec![0x42; append_pair_bytes],
+        )
+        .expect("structurally valid qualification receipt");
+        assert_eq!(
+            receipt.initialization_pair().len(),
+            initialization_pair_bytes
+        );
+        assert_eq!(receipt.append_pair().len(), append_pair_bytes);
+        for (case, initialization_len, append_len) in [
+            (
+                "under-length initialization pair",
+                initialization_pair_bytes - 1,
+                append_pair_bytes,
+            ),
+            (
+                "over-length initialization pair",
+                initialization_pair_bytes + 1,
+                append_pair_bytes,
+            ),
+            (
+                "under-length append pair",
+                initialization_pair_bytes,
+                append_pair_bytes - 1,
+            ),
+            (
+                "over-length append pair",
+                initialization_pair_bytes,
+                append_pair_bytes + 1,
+            ),
+            (
+                "pair lengths assigned to the wrong fields",
+                append_pair_bytes,
+                initialization_pair_bytes,
+            ),
+        ] {
+            assert!(
+                KagemushaRecursiveSpendQualificationReceiptV4::new(
+                    &candidate,
+                    vec![0x41; initialization_len],
+                    vec![0x42; append_len],
+                )
+                .is_err(),
+                "{case} must not qualify a release candidate",
+            );
+        }
         let encoded = norito::encode_canonical(&receipt).expect("canonical receipt bytes");
         assert_eq!(
             KagemushaRecursiveSpendQualificationReceiptV4::decode_canonical_against_candidate(
@@ -4414,9 +4535,22 @@ mod kagemusha_v4_artifact_contract_tests {
     #[test]
     fn qualification_receipt_json_rejects_wrong_digest_cardinality_and_encoding() {
         let candidate = unsigned_candidate(&manifest());
-        let receipt =
-            KagemushaRecursiveSpendQualificationReceiptV4::new(&candidate, vec![0x41], vec![0x42])
-                .expect("structurally valid qualification receipt");
+        let receipt = KagemushaRecursiveSpendQualificationReceiptV4::new(
+            &candidate,
+            vec![
+                0x41;
+                usize::try_from(
+                    KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_INITIALIZATION_BYTES_V4
+                )
+                .expect("initialization pair length fits usize")
+            ],
+            vec![
+                0x42;
+                usize::try_from(KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4)
+                    .expect("append pair length fits usize")
+            ],
+        )
+        .expect("structurally valid qualification receipt");
         for malformed_len in [15_usize, 17] {
             let mut value =
                 norito::json::to_value(&receipt).expect("qualification receipt JSON value");
@@ -4498,7 +4632,7 @@ mod kagemusha_v4_artifact_contract_tests {
             artifact_roles: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4
                 .map(str::to_owned)
                 .to_vec(),
-            max_proof_bytes: KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
+            max_proof_bytes: KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4,
         }
     }
     fn release_activation_wire_fixture() -> KagemushaRecursiveSpendReleaseActivationV4 {
@@ -5298,6 +5432,18 @@ mod kagemusha_v4_artifact_contract_tests {
             missing_gates: Vec::new(),
         };
         capabilities.validate().expect("valid V4 capabilities");
+        for wrong_max in [
+            KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4 - 1,
+            KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4 + 1,
+            KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
+        ] {
+            let mut wrong_bound = capabilities.clone();
+            wrong_bound.max_proof_bytes = wrong_max;
+            assert!(
+                wrong_bound.validate().is_err(),
+                "non-release capability proof-pair maximum {wrong_max} must be rejected"
+            );
+        }
         capabilities.artifact_roles.swap(0, 1);
         assert!(capabilities.validate().is_err());
         capabilities.artifact_roles = KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4

@@ -163,8 +163,9 @@ export IROHA_CSHARP_PRIVATE_KEY_SEED_HEX='...'
 dotnet run --project samples/Hyperledger.Iroha.Sdk.Sample
 ```
 
-Treat seed environment variables as local-development inputs. Prefer an application
-secret provider or hardware-backed signing boundary in production.
+Treat seed environment variables as local-development inputs. In production,
+use an application secret provider; that software-backed custody path is valid.
+A hardware-backed signing boundary is an optional integration.
 
 ## Build and test
 

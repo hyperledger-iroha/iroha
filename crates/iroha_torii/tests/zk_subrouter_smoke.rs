@@ -86,11 +86,12 @@ async fn zk_verify_and_attachments_endpoints_exposed_by_default() {
         fixtures::get_request(&("/v1/zk/attachments/placeholder-id")),
         &[],
     );
-    let resp = app.oneshot(request).await.unwrap();
+    let resp = app.router().oneshot(request).await.unwrap();
     assert!(matches!(
         resp.status(),
         StatusCode::NOT_FOUND | StatusCode::BAD_REQUEST | StatusCode::TOO_MANY_REQUESTS
     ));
+    app.shutdown().await;
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
@@ -119,6 +120,7 @@ async fn zk_attachments_endpoints_report_unavailable_when_disabled() {
         let resp = fixtures::request(&app, request).await.unwrap();
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
+    app.shutdown().await;
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
@@ -158,11 +160,12 @@ async fn zk_attachments_count_and_delete_endpoints_exposed_for_signed_requests()
             .unwrap(),
         &[],
     );
-    let delete_resp = app.oneshot(delete_request).await.unwrap();
+    let delete_resp = app.router().oneshot(delete_request).await.unwrap();
     assert!(matches!(
         delete_resp.status(),
         StatusCode::NOT_FOUND | StatusCode::TOO_MANY_REQUESTS
     ));
+    app.shutdown().await;
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
@@ -261,8 +264,13 @@ async fn zk_attachments_create_roundtrip_and_replay_rejected_for_signed_requests
         fixtures::get_request(&(format!("/v1/zk/attachments/{id}"))),
         &[],
     );
-    let get_after_delete_resp = app.oneshot(get_after_delete_request).await.unwrap();
+    let get_after_delete_resp = app
+        .router()
+        .oneshot(get_after_delete_request)
+        .await
+        .unwrap();
     assert_eq!(get_after_delete_resp.status(), StatusCode::NOT_FOUND);
+    app.shutdown().await;
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
@@ -291,4 +299,5 @@ async fn zk_attachments_endpoints_require_signed_headers_when_enabled() {
             "canonical account request authentication is required",
         );
     }
+    app.shutdown().await;
 }

@@ -11946,6 +11946,15 @@ mod openapi_tests {
         );
     }
     #[test]
+    fn current_router_document_satisfies_release_validation() {
+        let bytes = require_release_router_openapi(try_generate_router_openapi())
+            .expect("the current Torii router must satisfy release OpenAPI validation");
+        let spec = norito::json::from_slice::<Value>(&bytes)
+            .expect("validated router OpenAPI remains canonical JSON");
+        openapi_validation::validate_release_openapi_spec(&spec)
+            .expect("the canonicalized router document remains release-valid");
+    }
+    #[test]
     fn router_generation_canonicalizes_json_without_losing_exact_integers() {
         let exact = br#"{
   "openapi": "3.1.0",
@@ -13628,10 +13637,12 @@ async fn generate_router_openapi_async() -> Result<Option<Vec<u8>>, Box<dyn Erro
         None,
         MaybeTelemetry::disabled(),
     )?;
-    let router = torii
+    let router_runtime = torii
         .api_router_for_tests()
         .map_err(|error| eyre!("failed to initialize Torii router: {error}"))?;
-    let spec = fetch_openapi_from_router(router, OPENAPI_ENDPOINT_CANDIDATES).await;
+    let spec =
+        fetch_openapi_from_router(router_runtime.router(), OPENAPI_ENDPOINT_CANDIDATES).await;
+    router_runtime.shutdown().await;
     Ok(spec)
 }
 fn openapi_router_state(

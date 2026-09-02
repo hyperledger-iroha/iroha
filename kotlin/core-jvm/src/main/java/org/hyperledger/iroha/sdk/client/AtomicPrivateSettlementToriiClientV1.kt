@@ -84,15 +84,25 @@ enum class AtomicPrivateSettlementOperationV1(
         32 * 1024 * 1024,
     ),
 
+    /** Fetch one restricted capsule using the exact current governed audit policy. */
+    AUDITOR_CAPSULE(
+        "/v1/nexus/private-settlements/legs/{payload_digest}/audit-capsule",
+        AtomicPrivateSettlementAuthV1.ROLE_IDENTITY,
+        setOf("audit_policy"),
+        1024 * 1024,
+    ),
+
     /** Submit one purpose-separated governed auditor approval. */
     AUDIT_APPROVAL(
         "/v1/nexus/private-settlements/legs/{payload_digest}/audit-approvals",
         AtomicPrivateSettlementAuthV1.ROLE_IDENTITY,
-        setOf("approval"),
+        setOf("audit_policy", "approval"),
         2 * 1024 * 1024,
     ),
 
-    /** Submit one sponsor-signed exact global finalization or abort carrier. */
+    /**
+     * Submit one sponsor-signed exact Prepare-lock registration, finalization, or abort carrier.
+     */
     BUNDLE_SUBMIT(
         "/v1/nexus/private-settlements/bundles",
         AtomicPrivateSettlementAuthV1.SPONSOR,
@@ -267,6 +277,7 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
 
         data class AuditorCapsule(
             override val payloadDigest: AtomicPrivateSettlementIdentifierV1,
+            val requestJson: ByteArray,
             val auditorPublicKey: String,
         ) : RestrictedResponseVerification()
 
@@ -366,7 +377,9 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
         )
     }
 
-    /** Submit one sponsor-signed finalization or abort carrier exactly once. */
+    /**
+     * Submit one sponsor-signed Prepare-lock registration, finalization, or abort carrier.
+     */
     fun submitBundle(
         request: AtomicPrivateSettlementPreparedRequestV1,
         sponsorAuth: ToriiCanonicalRequestAuth,
@@ -427,26 +440,31 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
     /** Fetch one padded encrypted capsule as one exact governed local auditor. */
     fun getAuditorCapsule(
         payloadDigest: AtomicPrivateSettlementIdentifierV1,
+        request: AtomicPrivateSettlementPreparedRequestV1,
         auditorSigningContext: OperatorSigningContext,
     ): CompletableFuture<AtomicPrivateSettlementJsonResponseV1> {
         require(auditorSigningContext.networkId() == localSigningContext.networkId()) {
             "auditor signing context must use the settlement client's exact network"
         }
-        return executeGet(
-            "/v1/nexus/private-settlements/legs/${payloadDigest.pathComponent()}/audit-capsule",
-            RESPONSE_RESTRICTED_MAX_BYTES,
-            identityHeaders = { target, body ->
+        requireOperation(request, AtomicPrivateSettlementOperationV1.AUDITOR_CAPSULE)
+        val path = operationPath(request.operation, payloadDigest)
+        val body = request.bytes()
+        return executeMutation(
+            path,
+            body,
+            identityHeaders = { target, signedBody ->
                 OperatorRequestSigner.buildHeaders(
                     auditorSigningContext,
-                    "GET",
+                    "POST",
                     target,
-                    body,
+                    signedBody,
                 )
             },
             expectedIdentifier = payloadDigest,
             expectedIdentifierField = null,
             restrictedVerification = RestrictedResponseVerification.AuditorCapsule(
                 payloadDigest,
+                body.copyOf(),
                 auditorSigningContext.publicKey(),
             ),
         )
@@ -688,6 +706,7 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
             is RestrictedResponseVerification.AuditorCapsule ->
                 verifier.verifyAuditorCapsuleResponse(
                     exactResponseJson.copyOf(),
+                    verification.requestJson.copyOf(),
                     network,
                     payload,
                     verification.auditorPublicKey,
@@ -953,7 +972,10 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
     @Suppress("UNCHECKED_CAST")
     private fun auditApprovalRequestContext(bodyBytes: ByteArray): AuditApprovalRequestContext {
         val request = parseExactJsonObject(bodyBytes, "prepared settlement audit approval")
-        require(request.keys == setOf("approval")) {
+        require(
+            request.keys == setOf("audit_policy", "approval") &&
+                request["audit_policy"] is Map<*, *>,
+        ) {
             "prepared settlement audit approval has invalid fields"
         }
         val approval = request["approval"]
@@ -1359,6 +1381,7 @@ class AtomicPrivateSettlementToriiClientV1 private constructor(builder: Builder)
                     "authoritative_height",
                     "manifest",
                     "audit_policy",
+                    "access_audit_policy",
                     "committee_authority",
                     "statement",
                     "delta",

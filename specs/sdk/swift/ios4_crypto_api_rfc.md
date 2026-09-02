@@ -166,11 +166,11 @@ transaction kind.
 
 | Backend | Usage | Notes |
 |---------|-------|-------|
-| Secure Enclave (`SecureEnclaveReference`) | Production wallets on iOS/macOS | Wraps `SecKey`, enforces access control, stores attestation certificate chain for governance reviews. |
-| Deterministic seed (`SeedDerivationConfig`) | CLI-style/offline tooling | HKDF(salt=`offline.allowance.seed_salt`) with Norito header to keep parity with Android’s AND2 plan. |
+| Secure Enclave (`SecureEnclaveReference`) | Optional hardware-backed wallets on iOS/macOS | Wraps `SecKey`, enforces access control, stores attestation certificate chain for governance reviews when this backend is selected. |
+| Deterministic seed (`SeedDerivationConfig`) | Software-backed production wallets, CLI, and offline tooling | HKDF(salt=`offline.allowance.seed_salt`) with Norito header to keep parity with Android’s AND2 plan. This is a valid custody path and requires no hardware. |
 | Bridge-backed (`NoritoNativeBridge`) | SM2 / ML-DSA | Adds `sm2Sign`, `sm2Verify`, `mldsa44_sign`, etc. Already partially available for SM2. |
 
-Secure Enclave providers must expose:
+When selected, Secure Enclave providers must expose:
 
 - `func attestationPayload() throws -> SecureEnclaveAttestation` so IOS4 can
   reuse Android AND2 governance artefacts.

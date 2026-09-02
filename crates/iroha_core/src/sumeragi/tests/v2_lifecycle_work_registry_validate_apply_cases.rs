@@ -579,6 +579,12 @@ fn assert_ready_validate_vote_sign_live_transaction(
                     .exactly_covers_finalization_work(&coordinator),
                 "the original live Validate-to-Sign-to-Broadcast lineage is finalization-exact"
             );
+            assert!(
+                holder
+                    .registry_for_test()
+                    .exactly_covers_all_live_work(&fixture.verified, &coordinator),
+                "a refanned Broadcast must not prevent fresh Certified-Serve admission"
+            );
 
             // Reproduce the durable-retry history observed in the network:
             // the same causal owner later acquires a fresh Validate ordinal,
@@ -666,6 +672,12 @@ fn assert_ready_validate_vote_sign_live_transaction(
                     .registry_for_test()
                     .exactly_covers_finalization_work(&coordinator),
                 "a later terminal same-owner Validate retry cannot invalidate the older refanned Broadcast"
+            );
+            assert!(
+                holder
+                    .registry_for_test()
+                    .exactly_covers_all_live_work(&fixture.verified, &coordinator),
+                "the refanned Broadcast remains compatible with Certified-Serve admission after a terminal retry"
             );
             return;
         }

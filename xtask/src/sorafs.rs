@@ -1,4 +1,4 @@
-use crate::{JsonTarget, normalize_path, workspace_root, write_json_output};
+use crate::{JsonTarget, write_json_output};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use blake3::hash as blake3_hash;
 use eyre::{WrapErr, eyre};

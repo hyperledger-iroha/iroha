@@ -70,7 +70,7 @@ paths = {
     ),
     "hardware_authorization_vector": Path(
         "crates/connect_norito_bridge/tests/fixtures/"
-        "kagemusha_request_authorization_v2_hardware.hex"
+        "kagemusha_request_authorization_v3_hardware.hex"
     ),
     "recipient_request_vector": Path(
         "crates/connect_norito_bridge/tests/fixtures/"
@@ -417,7 +417,7 @@ sdk_schema_types = {
     "InitRequestV4": "KagemushaRecursiveSpendInitLocalRequestV4",
     "AppendRequestV4": "KagemushaRecursiveSpendAppendLocalRequestV4",
     "VerifyRequestV4": "KagemushaRecursiveSpendVerifyLocalRequestV4",
-    "RedeemRequestV4": "KagemushaRecursiveSpendRedeemLocalRequestV4",
+    "RedeemRequestV5": "KagemushaRecursiveSpendRedeemLocalRequestV5",
     "InitResultV4": "KagemushaRecursiveSpendInitResultV4",
     "SplitResultV4": "KagemushaRecursiveSpendSplitResultV4",
     "VerifyResultV4": "KagemushaRecursiveSpendVerifyResultV4",
@@ -425,6 +425,7 @@ sdk_schema_types = {
 }
 
 native_methods = (
+    "nativeKagemushaContractRevision",
     "nativePastaCycleV4BackendAvailable",
     "nativeArtifactBeginV4",
     "nativeArtifactWriteV4",
@@ -440,7 +441,15 @@ native_methods = (
     "nativeBuildInitRequestV4",
     "nativeBuildAppendRequestV4",
     "nativeBuildVerifyRequestV4",
-    "nativeBuildRedeemRequestV4",
+    "nativeBuildRedeemRequestV5",
+    "nativePrepareAuthorizationV3",
+    "nativeFinalizeHardwareAuthorizationV3",
+    "nativeFinalizeIosAppAttestAuthorizationV3",
+    "nativeFinalizeTopUpV5",
+    "nativeFinalizeRedeemV5",
+    "nativePrepareTopUpV5",
+    "nativeProjectOperationReferenceV2",
+    "nativeProjectOperationStatusV2",
     "nativeInitSpendV4",
     "nativeAppendSpendV4",
     "nativeVerifySpendV4",
@@ -533,11 +542,12 @@ require(
 )
 require(
     "swift_hardware_test",
-    '.appendingPathComponent("kagemusha_request_authorization_v2_hardware.hex")',
+    '.appendingPathComponent("kagemusha_request_authorization_v3_hardware.hex")',
 )
 for vector_key in (
     "authority_public_key",
     "registration_hash",
+    "operation_id",
     "android_preparation",
     "android_signing_preimage",
     "ios_preparation",
@@ -567,6 +577,17 @@ require_regex(
     r'XCTAssertEqual\s*\(\s*try\s+hex\s*\(try\s+XCTUnwrap\s*\('
     r'values\["registration_hash"\]\s*\)\s*\)\s*,\s*try\s+registrationHash\s*\(\s*\)',
     "canonical registration_hash fixture binding",
+)
+require(
+    "hardware_authorization_vector",
+    "operation_id=f3e599fc0f07c3e748bbc75e7736961a5b289625a269f3494219bcc0ff200cbd",
+)
+require_regex(
+    "swift_hardware_test",
+    r'values\["operation_id"\][\s\S]{0,900}?KagemushaOperationIdentityDerivation\.operationID\s*\('
+    r'[\s\S]{0,700}?compactNoritoAccountControllerPayload\s*\(\s*\)'
+    r'[\s\S]{0,300}?nonce:\s*fixed32\(0x32\)',
+    "canonical derived operation_id fixture binding",
 )
 for needle in (
     "PackageManager.FEATURE_KEYSTORE_SINGLE_USE_KEY",
@@ -679,7 +700,7 @@ swift_v4_types = (
     "KagemushaRecursiveSpendAppendLocalRequestV4",
     "KagemushaRecursiveSpendVerifyRequestV4",
     "KagemushaRecursiveSpendVerifyLocalRequestV4",
-    "KagemushaRecursiveSpendRedeemLocalRequestV4",
+    "KagemushaRecursiveSpendRedeemLocalRequestV5",
     "KagemushaRecursiveSpendInitResultV4",
     "KagemushaRecursiveSpendSplitResultV4",
     "KagemushaRecursiveSpendVerifyResultV4",
@@ -694,20 +715,21 @@ for type_name in swift_v4_types:
     )
 
 for needle in (
-    "redemptionChangePrepareRequestWireNameV4",
-    "KagemushaRecursiveSpendRedemptionChangePrepareRequestV4",
+    "redemptionChangePrepareRequestWireNameV5",
+    "KagemushaRecursiveSpendRedemptionChangePrepareRequestV5",
     "redemptionChangePrepareResultWireNameV4",
     "KagemushaRecursiveSpendRedemptionChangePrepareResultV4",
 ):
     require("swift", needle)
 require_regex(
     "swift_v4",
-    r"static\s+func\s+prepareRedemptionChangeV4\s*\("
+    r"static\s+func\s+prepareRedemptionChangeV5\s*\("
     r"[\s\S]{0,700}?input:\s*KagemushaRecursiveSpendSpendableBranchV4,"
     r"[\s\S]{0,350}?changeAmount:\s*KagemushaScaledAmount,"
-    r"[\s\S]{0,350}?operationID:\s*Data,"
+    r"[\s\S]{0,350}?recipient:\s*String,"
+    r"[\s\S]{0,350}?nonce:\s*Data,"
     r"[\s\S]{0,350}?entropy:\s*Data"
-    r"[\s\S]{0,2600}?kagemushaRecursiveSpendRedemptionChangePrepareV4",
+    r"[\s\S]{0,3000}?kagemushaRecursiveSpendRedemptionChangePrepareV5",
     "native-derived Swift redemption-change workflow",
 )
 require_regex(
@@ -717,9 +739,10 @@ require_regex(
     r"[\s\S]{0,700}?request\.bundle\.noritoArchive"
     r"[\s\S]{0,700}?request\.inputOpening"
     r"[\s\S]{0,700}?request\.changeAmount"
-    r"[\s\S]{0,500}?request\.operationID"
+    r"[\s\S]{0,700}?request\.recipient"
+    r"[\s\S]{0,500}?request\.nonce"
     r"[\s\S]{0,500}?request\.entropy"
-    r"[\s\S]{0,500}?redemptionChangePrepareRequestWireNameV4",
+    r"[\s\S]{0,500}?redemptionChangePrepareRequestWireNameV5",
     "field-for-field Swift redemption-change request encoder",
 )
 require_regex(
@@ -732,7 +755,7 @@ require_regex(
 )
 require_regex(
     "swift_native",
-    r"kagemushaRecursiveSpendRedemptionChangePrepareV4\s*\("
+    r"kagemushaRecursiveSpendRedemptionChangePrepareV5\s*\("
     r"[\s\S]{0,1800}?connect_norito_kagemusha_secret_free_buffer"
     r"[\s\S]{0,1000}?NativeBridgeError\.fromStatus\(status\)"
     r"[\s\S]{0,500}?secureFree\(output\)"
@@ -740,12 +763,19 @@ require_regex(
     "Swift secret output secure-free on native error and success",
 )
 if re.search(
-    r"kagemushaRecursiveSpendRedemptionChangePrepareV4\s*\("
+    r"kagemushaRecursiveSpendRedemptionChangePrepareV5\s*\("
     r"[\s\S]{0,2800}?connect_norito_free",
     texts["swift_native"],
 ):
     errors.append(
         f"{paths['swift_native']}: secret redemption-change output must never use connect_norito_free"
+    )
+if "prepareRedemptionChangeV4" in texts["swift_v4"] or re.search(
+    r"KagemushaRecursiveSpendRedemptionChangePrepareRequestV5[\s\S]{0,900}?operationID",
+    texts["swift_v4"],
+):
+    errors.append(
+        f"{paths['swift_v4']}: redemption change must accept canonical recipient + nonce, never a caller operation id"
     )
 if "redemptionChange(spendKey:" in texts["swift"] or re.search(
     r"redemptionChange[\s\S]{0,300}?defaultDiversifier\(\)",
@@ -794,13 +824,18 @@ for encoder, wire_name in (
     ("encodeInitLocalRequest", "initLocalRequestWireNameV4"),
     ("encodeAppendLocalRequest", "appendLocalRequestWireNameV4"),
     ("encodeVerifyLocalRequest", "verifyLocalRequestWireNameV4"),
-    ("encodeRedeemLocalRequest", "redeemLocalRequestWireNameV4"),
 ):
     require_regex(
         "swift_v4_codecs",
         rf"static\s+func\s+{encoder}\s*\([\s\S]{{0,2600}}?localWitnessVersionV4[\s\S]{{0,2600}}?{wire_name}",
         f"field-for-field Swift V4 encoder {encoder}",
     )
+require_regex(
+    "swift_v4_codecs",
+    r"static\s+func\s+encodeRedeemLocalRequest\s*\([\s\S]{0,2600}?"
+    r"redeemLocalWitnessVersionV5[\s\S]{0,2600}?redeemLocalRequestWireNameV5",
+    "field-for-field Swift V5 redemption carrier encoder",
+)
 
 require_regex(
     "swift",
@@ -869,7 +904,7 @@ for label in ("kotlin", "java"):
     )
     require_regex(
         label,
-        r"nativeBuildRedeemRequestV4\s*\([\s\S]{0,350}?bundle[\s\S]{0,350}?opening[\s\S]{0,350}?(?:membershipWitness|membership_witness)",
+        r"nativeBuildRedeemRequestV5\s*\([\s\S]{0,350}?bundle[\s\S]{0,350}?opening[\s\S]{0,350}?(?:membershipWitness|membership_witness)",
         "genuine V4 redeem builder inputs",
     )
     require_regex(
@@ -898,6 +933,43 @@ require_regex(
     r"V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION\s*:\s*Int\s*=\s*23\b",
     "exact ABI23 Kotlin constant",
 )
+require_regex(
+    "data_model",
+    r"KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4:\s*u32\s*=\s*191_862\s*;",
+    "exact data-model release proof-pair maximum",
+)
+require_regex(
+    "data_model",
+    r"KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4:\s*u32\s*=\s*384\s*\*\s*1024\s*;",
+    "exact data-model defensive proof-pair ceiling",
+)
+require_regex(
+    "swift",
+    r"releaseMaximumProofPairBytesV4:\s*UInt32\s*=\s*191_862\b",
+    "exact Swift release proof-pair maximum",
+)
+require_regex(
+    "swift",
+    r"absoluteMaximumProofPairBytesV4:\s*UInt32\s*=\s*384\s*\*\s*1024\b",
+    "exact Swift defensive proof-pair ceiling",
+)
+require_regex(
+    "kotlin",
+    r"RELEASE_MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4:\s*Int\s*=\s*191_862\b",
+    "exact Kotlin release proof-pair maximum",
+)
+require_regex(
+    "kotlin",
+    r"ABSOLUTE_MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4:\s*Int\s*=\s*384\s*\*\s*1024\b",
+    "exact Kotlin defensive proof-pair ceiling",
+)
+if re.search(
+    r"const\s+val\s+MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4\b",
+    texts["kotlin"],
+):
+    errors.append(
+        f"{paths['kotlin']}: ambiguous recursive proof-pair maximum is forbidden"
+    )
 require_regex(
     "kotlin",
     r"MAX_TORII_TOP_UP_REQUEST_BYTES_V4\s*:\s*Int\s*=\s*512\s*\*\s*1024\b",
@@ -1105,6 +1177,23 @@ require_regex(
 )
 require_regex(
     "java",
+    r"RELEASE_MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4\s*=\s*191_862\s*;",
+    "exact Java release proof-pair maximum",
+)
+require_regex(
+    "java",
+    r"ABSOLUTE_MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4\s*=\s*384\s*\*\s*1024\s*;",
+    "exact Java defensive proof-pair ceiling",
+)
+if re.search(
+    r"static\s+final\s+int\s+MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4\b",
+    texts["java"],
+):
+    errors.append(
+        f"{paths['java']}: ambiguous recursive proof-pair maximum is forbidden"
+    )
+require_regex(
+    "java",
     r"MAX_TORII_TOP_UP_REQUEST_BYTES_V4\s*=\s*512\s*\*\s*1024\s*;",
     "exact Java V4 top-up request ceiling",
 )
@@ -1193,13 +1282,15 @@ base_bridge_symbols = (
     "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
     "connect_norito_private_settlement_committee_proof_response_verify_v1",
     "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
+    "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
     "connect_norito_private_settlement_audit_approval_response_verify_v1",
     "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
 )
 c_symbols = (
     "connect_norito_kagemusha_recursive_spend_capabilities_v4",
-    "connect_norito_kagemusha_offline_operation_status_validate_v1",
-    "connect_norito_kagemusha_offline_operation_status_json_validate_v1",
+    "connect_norito_kagemusha_native_contract_revision",
+    "connect_norito_kagemusha_offline_operation_status_validate_v2",
+    "connect_norito_kagemusha_offline_operation_status_json_validate_v2",
     "connect_norito_kagemusha_topup_finality_verify_v4",
     "connect_norito_kagemusha_topup_shield_build_unsigned_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_begin_v4",
@@ -1224,7 +1315,7 @@ c_symbols = (
     "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v4",
     "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v4",
     "connect_norito_kagemusha_recursive_spend_redeem_v4",
-    "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4",
+    "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v5",
     "connect_norito_kagemusha_secret_free_buffer",
     "connect_norito_kagemusha_receiver_key_reference_v2",
     "connect_norito_kagemusha_recipient_output_derive_v2",
@@ -1236,9 +1327,9 @@ c_symbols = (
     "connect_norito_kagemusha_recipient_receive_offer_create_v2",
     "connect_norito_kagemusha_recipient_receive_offer_project_v2",
     "connect_norito_kagemusha_recipient_receive_offer_verify_v2",
-    "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
-    "connect_norito_kagemusha_request_authorization_finalize_hardware_v2",
-    "connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2",
+    "connect_norito_kagemusha_request_authorization_signing_bytes_v3",
+    "connect_norito_kagemusha_request_authorization_finalize_hardware_v3",
+    "connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v3",
     "connect_norito_kagemusha_receiver_acknowledgement_payload_v2",
     "connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2",
     "connect_norito_kagemusha_receiver_acknowledgement_create_v2",
@@ -1332,7 +1423,7 @@ def parse_manifest_symbol_inventory(label: str) -> tuple[str, ...]:
 actual_kagemusha_symbols = parse_shell_symbol_array("mobile_check", "KAGEMUSHA_C_SYMBOLS")
 if actual_kagemusha_symbols != c_symbols:
     errors.append(
-        f"{paths['mobile_check']}: exact ordered 50-symbol Kagemusha C inventory mismatch "
+        f"{paths['mobile_check']}: exact ordered {len(c_symbols)}-symbol Kagemusha C inventory mismatch "
         f"(found {len(actual_kagemusha_symbols)})"
     )
 
@@ -1596,6 +1687,42 @@ if mode == "--self-test":
         "exact ABI23 Kotlin constant",
     )
     run_negative(
+        "data-model release proof-pair maximum cannot drift",
+        lambda fixture: replace_once(
+            fixture / paths["data_model"],
+            "KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4: u32 = 191_862;",
+            "KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4: u32 = 191_863;",
+        ),
+        "exact data-model release proof-pair maximum",
+    )
+    run_negative(
+        "Swift release proof-pair maximum cannot drift",
+        lambda fixture: replace_once(
+            fixture / paths["swift"],
+            "releaseMaximumProofPairBytesV4: UInt32 = 191_862",
+            "releaseMaximumProofPairBytesV4: UInt32 = 191_863",
+        ),
+        "exact Swift release proof-pair maximum",
+    )
+    run_negative(
+        "Kotlin release proof-pair maximum cannot drift",
+        lambda fixture: replace_once(
+            fixture / paths["kotlin"],
+            "RELEASE_MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4: Int = 191_862",
+            "RELEASE_MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4: Int = 191_863",
+        ),
+        "exact Kotlin release proof-pair maximum",
+    )
+    run_negative(
+        "Java release proof-pair maximum cannot drift",
+        lambda fixture: replace_once(
+            fixture / paths["java"],
+            "RELEASE_MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4 = 191_862;",
+            "RELEASE_MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4 = 191_863;",
+        ),
+        "exact Java release proof-pair maximum",
+    )
+    run_negative(
         "promotion record cannot be removed from SDK authentication",
         lambda fixture: replace_once(
             fixture / paths["kotlin"],
@@ -1629,10 +1756,10 @@ if mode == "--self-test":
         "Swift hardware parity cannot leave the shared fixture",
         lambda fixture: replace_once(
             fixture / paths["swift_hardware_test"],
-            '.appendingPathComponent("kagemusha_request_authorization_v2_hardware.hex")',
+            '.appendingPathComponent("kagemusha_request_authorization_v3_hardware.hex")',
             '.appendingPathComponent("dummy_hardware_authorization.hex")',
         ),
-        "kagemusha_request_authorization_v2_hardware.hex",
+        "kagemusha_request_authorization_v3_hardware.hex",
     )
     run_negative(
         "Swift peer-payment parity cannot leave the shared fixture",

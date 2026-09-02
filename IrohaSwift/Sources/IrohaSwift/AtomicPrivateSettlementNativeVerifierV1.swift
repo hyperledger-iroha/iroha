@@ -31,6 +31,7 @@ public protocol AtomicPrivateSettlementResponseVerifyingV1: Sendable {
 
     func verifyAuditorCapsule(
         responseJSON: Data,
+        requestJSON: Data,
         expectedNetworkID: Data,
         requestedPayloadDigest: Data,
         auditorSigningKey: String
@@ -62,7 +63,7 @@ public struct AtomicPrivateSettlementNativeResponseVerifierV1:
             "connect_norito_private_settlement_committee_proof_response_verify_v1",
             as: CommitteeProofVerifierFn.self
         ), let auditorCapsule = NoritoNativeBridge.shared.resolveKagemushaV2Symbol(
-            "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
+            "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
             as: AuditorCapsuleVerifierFn.self
         ), let auditApproval = NoritoNativeBridge.shared.resolveKagemushaV2Symbol(
             "connect_norito_private_settlement_audit_approval_response_verify_v1",
@@ -72,7 +73,7 @@ public struct AtomicPrivateSettlementNativeResponseVerifierV1:
         }
         let linkageProbeStatuses = [
             committeeProof(nil, 0, nil, 0, nil, 0),
-            auditorCapsule(nil, 0, nil, 0, nil, 0, nil, 0),
+            auditorCapsule(nil, 0, nil, 0, nil, 0, nil, 0, nil, 0),
             auditApproval(nil, 0, nil, 0, nil, 0, nil, 0, nil, 0),
         ]
         guard linkageProbeStatuses.allSatisfy({ $0 == Self.rejectedStatus }) else {
@@ -123,6 +124,7 @@ public struct AtomicPrivateSettlementNativeResponseVerifierV1:
 
     public func verifyAuditorCapsule(
         responseJSON: Data,
+        requestJSON: Data,
         expectedNetworkID: Data,
         requestedPayloadDigest: Data,
         auditorSigningKey: String
@@ -132,29 +134,37 @@ public struct AtomicPrivateSettlementNativeResponseVerifierV1:
             expectedNetworkID: expectedNetworkID,
             requestedPayloadDigest: requestedPayloadDigest
         )
+        guard !requestJSON.isEmpty,
+              requestJSON.count <= Self.maximumApprovalRequestBytes else {
+            throw AtomicPrivateSettlementNativeVerifierErrorV1.invalidInput
+        }
         let key = try Self.validatedPublicKeyBytes(auditorSigningKey)
         try requireAvailable()
         #if canImport(Darwin)
         guard let function = NoritoNativeBridge.shared.resolveKagemushaV2Symbol(
-            "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
+            "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
             as: AuditorCapsuleVerifierFn.self
         ) else {
             throw AtomicPrivateSettlementNativeVerifierErrorV1.bridgeUnavailable
         }
         let status = responseJSON.withUnsafeBytes { response in
-            expectedNetworkID.withUnsafeBytes { network in
-                requestedPayloadDigest.withUnsafeBytes { payload in
-                    key.withUnsafeBytes { signingKey in
-                        function(
-                            response.bindMemory(to: UInt8.self).baseAddress,
-                            CUnsignedLong(response.count),
-                            network.bindMemory(to: UInt8.self).baseAddress,
-                            CUnsignedLong(network.count),
-                            payload.bindMemory(to: UInt8.self).baseAddress,
-                            CUnsignedLong(payload.count),
-                            signingKey.bindMemory(to: CChar.self).baseAddress,
-                            CUnsignedLong(signingKey.count)
-                        )
+            requestJSON.withUnsafeBytes { request in
+                expectedNetworkID.withUnsafeBytes { network in
+                    requestedPayloadDigest.withUnsafeBytes { payload in
+                        key.withUnsafeBytes { signingKey in
+                            function(
+                                response.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(response.count),
+                                request.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(request.count),
+                                network.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(network.count),
+                                payload.bindMemory(to: UInt8.self).baseAddress,
+                                CUnsignedLong(payload.count),
+                                signingKey.bindMemory(to: CChar.self).baseAddress,
+                                CUnsignedLong(signingKey.count)
+                            )
+                        }
                     }
                 }
             }
@@ -256,6 +266,7 @@ public struct AtomicPrivateSettlementNativeResponseVerifierV1:
     ) -> Int32
 
     private typealias AuditorCapsuleVerifierFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,

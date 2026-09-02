@@ -27,6 +27,7 @@ interface AtomicPrivateSettlementResponseVerifierV1 {
     /** Verify an auditor capsule against the exact governed auditor signing key. */
     fun verifyAuditorCapsuleResponse(
         responseJson: ByteArray,
+        requestJson: ByteArray,
         expectedNetworkId: ByteArray,
         requestedPayloadDigest: ByteArray,
         auditorPublicKey: String,
@@ -73,7 +74,8 @@ object AtomicPrivateSettlementNativeResponseVerifierV1 :
                     invalid,
                     invalid,
                 ) == PRIVATE_SETTLEMENT_REJECTED_STATUS &&
-                    nativeVerifyAuditorCapsuleResponseV1(
+                    nativeVerifyAuditorCapsuleResponseWithRequestV1(
+                        invalid,
                         invalid,
                         invalid,
                         invalid,
@@ -116,15 +118,20 @@ object AtomicPrivateSettlementNativeResponseVerifierV1 :
 
     override fun verifyAuditorCapsuleResponse(
         responseJson: ByteArray,
+        requestJson: ByteArray,
         expectedNetworkId: ByteArray,
         requestedPayloadDigest: ByteArray,
         auditorPublicKey: String,
     ) {
         requireCommonInputs(responseJson, expectedNetworkId, requestedPayloadDigest)
+        require(requestJson.isNotEmpty() && requestJson.size <= APPROVAL_REQUEST_MAX_BYTES) {
+            "private settlement auditor capsule request is outside the native verification bound"
+        }
         val auditorKeyUtf8 = requireAuditorPublicKey(auditorPublicKey)
-        invokeRequiredNative("nativeVerifyAuditorCapsuleResponseV1") {
-            nativeVerifyAuditorCapsuleResponseV1(
+        invokeRequiredNative("nativeVerifyAuditorCapsuleResponseWithRequestV1") {
+            nativeVerifyAuditorCapsuleResponseWithRequestV1(
                 responseJson.copyOf(),
+                requestJson.copyOf(),
                 expectedNetworkId.copyOf(),
                 requestedPayloadDigest.copyOf(),
                 auditorKeyUtf8,
@@ -210,8 +217,9 @@ object AtomicPrivateSettlementNativeResponseVerifierV1 :
     ): Int
 
     @JvmStatic
-    private external fun nativeVerifyAuditorCapsuleResponseV1(
+    private external fun nativeVerifyAuditorCapsuleResponseWithRequestV1(
         responseJson: ByteArray,
+        requestJson: ByteArray,
         expectedNetworkId: ByteArray,
         requestedPayloadDigest: ByteArray,
         auditorPublicKeyUtf8: ByteArray,

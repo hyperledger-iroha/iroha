@@ -320,7 +320,7 @@ public final class AtomicPrivateSettlementToriiClientV1Tests {
             AtomicPrivateSettlementToriiClientV1Tests::nonZeroSignature);
     final CapturingExecutor executor = new CapturingExecutor(jsonResponse(valid));
 
-    client(executor).getAuditorCapsule(PAYLOAD, roleContext).join();
+    client(executor).getAuditorCapsule(PAYLOAD, auditorCapsuleRequest(), roleContext).join();
 
     assert executor.request.uri().getPath().equals(
             "/api/v1/nexus/private-settlements/legs/"
@@ -329,6 +329,10 @@ public final class AtomicPrivateSettlementToriiClientV1Tests {
         : "auditor capsule path must bind the payload digest";
     assert executor.request.replayPolicy() == RequestReplayPolicy.ONE_SHOT
         : "auditor capsule fetch must not retry an identity signature";
+    assert "POST".equals(executor.request.method())
+        : "auditor capsule must send a policy-bearing POST";
+    assert Arrays.equals(auditorCapsuleRequest().bytes(), executor.request.body())
+        : "auditor capsule must send exact prepared request bytes";
     assert executor.request.headers().containsKey(OperatorRequestSigner.HEADER_SIGNATURE)
         : "auditor role signature missing";
 
@@ -347,7 +351,7 @@ public final class AtomicPrivateSettlementToriiClientV1Tests {
               CompletionException.class,
               () ->
                   client(new CapturingExecutor(jsonResponse(invalid)))
-                      .getAuditorCapsule(PAYLOAD, roleContext)
+                      .getAuditorCapsule(PAYLOAD, auditorCapsuleRequest(), roleContext)
                       .join());
       assert error.getCause() instanceof AtomicPrivateSettlementToriiExceptionV1
           : "auditor capsule height case " + index + " must fail closed";
@@ -382,11 +386,14 @@ public final class AtomicPrivateSettlementToriiClientV1Tests {
 
     final TransportResponse capsuleResponse =
         jsonResponse(objectField(responses, "auditor_capsule"));
+    final AtomicPrivateSettlementPreparedRequestV1 capsuleRequest = auditorCapsuleRequest();
     client(new CapturingExecutor(capsuleResponse), verifier)
-        .getAuditorCapsule(PAYLOAD, auditor)
+        .getAuditorCapsule(PAYLOAD, capsuleRequest, auditor)
         .join();
     assert Arrays.equals(capsuleResponse.body(), verifier.capsuleResponse)
         : "capsule verifier must receive the exact response bytes";
+    assert Arrays.equals(capsuleRequest.bytes(), verifier.capsuleRequest)
+        : "capsule verifier must receive the exact sent request bytes";
     assert Arrays.equals(TestNetworkIds.canonical().bytes(), verifier.capsuleNetwork)
         : "capsule verifier network binding drift";
     assert Arrays.equals(PAYLOAD.bytes(), verifier.capsulePayload)
@@ -470,7 +477,7 @@ public final class AtomicPrivateSettlementToriiClientV1Tests {
               CompletionException.class,
               () ->
                   client(new CapturingExecutor(jsonResponse(candidate)))
-                      .getAuditorCapsule(PAYLOAD, roleContext)
+                      .getAuditorCapsule(PAYLOAD, auditorCapsuleRequest(), roleContext)
                       .join());
       assert error.getCause() instanceof AtomicPrivateSettlementToriiExceptionV1
           : "capsule attestation case " + index + " must fail closed";
@@ -533,7 +540,7 @@ public final class AtomicPrivateSettlementToriiClientV1Tests {
         IllegalArgumentException.class,
         () ->
             client(new CapturingExecutor(jsonResponse(capsule)))
-                .getAuditorCapsule(PAYLOAD, wrongNetworkContext));
+                .getAuditorCapsule(PAYLOAD, auditorCapsuleRequest(), wrongNetworkContext));
     assertThrows(
         IllegalArgumentException.class,
         () ->
@@ -805,6 +812,18 @@ public final class AtomicPrivateSettlementToriiClientV1Tests {
         "{\"transaction\":{}}".getBytes(StandardCharsets.UTF_8));
   }
 
+  private static AtomicPrivateSettlementPreparedRequestV1 auditorCapsuleRequest() {
+    final Map<String, Object> request = new LinkedHashMap<>();
+    request.put(
+        "audit_policy",
+        objectField(
+            objectField(objectField(FIXTURE, "responses"), "auditor_capsule"),
+            "access_audit_policy"));
+    return AtomicPrivateSettlementPreparedRequestV1.fromNativePreparedJson(
+        AtomicPrivateSettlementOperationV1.AUDITOR_CAPSULE,
+        JsonEncoder.encode(request).getBytes(StandardCharsets.UTF_8));
+  }
+
   private static AtomicPrivateSettlementPreparedRequestV1 auditApprovalRequest() {
     return auditApprovalRequest(TestNetworkIds.canonical().literal());
   }
@@ -830,6 +849,11 @@ public final class AtomicPrivateSettlementToriiClientV1Tests {
     approval.put("body", body);
     approval.put("signature", "opaque-native-signature");
     final Map<String, Object> request = new LinkedHashMap<>();
+    request.put(
+        "audit_policy",
+        objectField(
+            objectField(objectField(FIXTURE, "responses"), "auditor_capsule"),
+            "access_audit_policy"));
     request.put("approval", approval);
     return AtomicPrivateSettlementPreparedRequestV1.fromNativePreparedJson(
         AtomicPrivateSettlementOperationV1.AUDIT_APPROVAL,
@@ -971,6 +995,7 @@ public final class AtomicPrivateSettlementToriiClientV1Tests {
     private byte[] committeeNetwork;
     private byte[] committeePayload;
     private byte[] capsuleResponse;
+    private byte[] capsuleRequest;
     private byte[] capsuleNetwork;
     private byte[] capsulePayload;
     private String capsuleAuditorPublicKey;
@@ -1001,10 +1026,12 @@ public final class AtomicPrivateSettlementToriiClientV1Tests {
     @Override
     public void verifyAuditorCapsuleResponse(
         final byte[] responseJson,
+        final byte[] requestJson,
         final byte[] expectedNetworkId,
         final byte[] requestedPayloadDigest,
         final String auditorPublicKey) {
       capsuleResponse = responseJson.clone();
+      capsuleRequest = requestJson.clone();
       capsuleNetwork = expectedNetworkId.clone();
       capsulePayload = requestedPayloadDigest.clone();
       capsuleAuditorPublicKey = auditorPublicKey;

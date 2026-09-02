@@ -28,6 +28,7 @@ export function validateReleaseOpenApiDocumentBytes(
   return validateReleaseOpenApiDocument(document, {label});
 }
 
+
 export function validateReleaseOpenApiDocument(
   document,
   {label = 'OpenAPI document'} = {},

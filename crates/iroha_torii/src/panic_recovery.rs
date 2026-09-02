@@ -30,16 +30,23 @@ where
     tokio::task::spawn_blocking(move || iroha_core::panic_hook::catch_unwind_suppressed(operation))
 }
 
+/// Poll asynchronous request work in the current task with shutdown-hook
+/// suppression and convert a panic into an opaque error payload.
+pub(crate) async fn catch_async_recoverable<F, T>(future: F) -> std::thread::Result<T>
+where
+    F: Future<Output = T>,
+{
+    let guarded = iroha_core::panic_hook::with_hook_suppressed_async(future);
+    AssertUnwindSafe(guarded).catch_unwind().await
+}
+
 /// Run an asynchronous request task with task-local panic-hook suppression.
 pub(crate) fn spawn_joined_recoverable<F, T>(future: F) -> JoinHandle<std::thread::Result<T>>
 where
     F: Future<Output = T> + Send + 'static,
     T: Send + 'static,
 {
-    tokio::spawn(async move {
-        let guarded = iroha_core::panic_hook::with_hook_suppressed_async(future);
-        AssertUnwindSafe(guarded).catch_unwind().await
-    })
+    tokio::spawn(catch_async_recoverable(future))
 }
 
 /// Join an explicitly recoverable task without exposing its panic payload.

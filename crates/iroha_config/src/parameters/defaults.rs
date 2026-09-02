@@ -2535,10 +2535,13 @@ pub mod torii {
         }
         /// Maximum number of accepted bindings plus in-flight reservations retained in memory.
         pub const OPERATION_REGISTRY_MAX_ENTRIES: usize = 4_096;
-        /// Canonical bytes charged for each admitted binding or in-flight reservation.
-        pub const OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY: usize = 32 + 1 + 32 + 32 + 8 + 8;
+        /// Canonical bytes charged for operation id, request-authority digest, kind,
+        /// request digest, transaction hash, and issuance/expiry timestamps.
+        pub const OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY: usize =
+            32 + 32 + 32 + 1 + 8 + 8 + 32;
         /// Maximum canonical bytes reserved by accepted bindings and in-flight operations.
-        pub const OPERATION_REGISTRY_MAX_BYTES: usize = 512 * 1024;
+        pub const OPERATION_REGISTRY_MAX_BYTES: usize =
+            OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY * OPERATION_REGISTRY_MAX_ENTRIES;
     }
     /// Steady-state rate for pre-authorization attempts per IP.
     pub const PREAUTH_RATE_PER_IP_PER_SEC: Option<u32> = Some(20);
@@ -3321,10 +3324,12 @@ pub mod nexus {
         }
         /// Maximum number of validators allowed per lane.
         pub const MAX_VALIDATORS: NonZeroU32 = nonzero!(32_u32);
+        /// Maximum number of stake-share rows retained for one validator.
+        pub const MAX_STAKE_SHARES_PER_VALIDATOR: NonZeroU32 = nonzero!(256_u32);
+        /// Maximum number of pending unbond requests retained in one stake share.
+        pub const MAX_PENDING_UNBONDS_PER_SHARE: NonZeroU32 = nonzero!(8_u32);
         /// Minimum delay between scheduling and finalising unbonds.
         pub const UNBONDING_DELAY: Duration = Duration::from_secs(0);
-        /// Grace window after `release_at_ms` for finalising withdrawals.
-        pub const WITHDRAW_GRACE: Duration = Duration::from_secs(0);
         /// Maximum slash ratio (basis points, 10_000 = 100%).
         pub const MAX_SLASH_BPS: u16 = 10_000;
         /// Minimum reward amount (base units) that will be paid out; smaller amounts are skipped.
@@ -4140,7 +4145,7 @@ pub mod sumeragi {
         /// Delay between finalized election and roster activation.
         pub const RECONFIG_ACTIVATION_LAG_BLOCKS: u64 = 1;
         /// Delay before finalized slashing evidence is applied.
-        pub const SLASHING_DELAY_BLOCKS: u64 = 259_200;
+        pub const SLASHING_DELAY_BLOCKS: u64 = 3_600;
         /// Finality margin before a new epoch roster activates.
         pub const FINALITY_MARGIN_BLOCKS: u64 = 8;
     }

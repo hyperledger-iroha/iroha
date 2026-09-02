@@ -4864,8 +4864,8 @@ mod tests {
                 self_stake: iroha_primitives::numeric::Quantity::from(1_u32),
                 metadata: Metadata::default(),
                 status: active.clone(),
-                activation_epoch: Some(1),
-                activation_height: Some(1),
+                activation_height: 1,
+                deactivation_height: None,
                 last_reward_epoch: None,
             },
         );
@@ -4882,8 +4882,8 @@ mod tests {
                 self_stake: iroha_primitives::numeric::Quantity::from(2_u32),
                 metadata: Metadata::default(),
                 status: active,
-                activation_epoch: Some(1),
-                activation_height: Some(1),
+                activation_height: 1,
+                deactivation_height: None,
                 last_reward_epoch: None,
             },
         );

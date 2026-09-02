@@ -55,6 +55,7 @@ use iroha_data_model::{
         OfflineAndroidAppAttestationPolicy, OfflineAndroidAttestationStatusSnapshotV1,
         OfflineDeviceAttestationPolicy, OfflineDeviceAttestationRegistration,
         OfflineDeviceAttestationTrustedRoot, OfflineIosAppAttestationPolicy,
+        kagemusha_operation_authority_digest_v4,
     },
     proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyRecord},
     state_path::StatePath,
@@ -1966,22 +1967,28 @@ pub mod isi {
     fn kagemusha_v4_authorization_markers(
         authorization: &KagemushaRequestAuthorizationV2,
     ) -> Result<[Hash; 4], Error> {
-        let authority = authorization.authority.to_string();
+        let authority_digest = kagemusha_operation_authority_digest_v4(&authorization.authority)
+            .map_err(|err| {
+                labeled_invariant(
+                    "invalid_authorization",
+                    format!("failed to derive canonical Kagemusha authority identity: {err}"),
+                )
+            })?;
         // Top-up anchors are keyed by operation id alone. Keep the replay
         // marker equally global so a second authority cannot claim the same
         // operation id while nonce, payload, and exact-request replay remain
-        // scoped to their signing authority.
+        // scoped to the complete canonical identity of their signing authority.
         let operation = kagemusha_v2_marker(
             KAGEMUSHA_V4_OPERATION_DOMAIN,
             &[&authorization.operation_id],
         );
         let nonce = kagemusha_v2_marker(
             KAGEMUSHA_V4_NONCE_DOMAIN,
-            &[authority.as_bytes(), &authorization.nonce],
+            &[&authority_digest, &authorization.nonce],
         );
         let payload = kagemusha_v2_marker(
             KAGEMUSHA_V4_PAYLOAD_DOMAIN,
-            &[authority.as_bytes(), &authorization.payload_digest],
+            &[&authority_digest, &authorization.payload_digest],
         );
         let authorization_archive = norito::encode_canonical(authorization).map_err(|err| {
             labeled_invariant(
@@ -1992,7 +1999,7 @@ pub mod isi {
         let request = kagemusha_v2_marker(
             KAGEMUSHA_V4_REQUEST_DOMAIN,
             &[
-                authority.as_bytes(),
+                &authority_digest,
                 &authorization.operation_id,
                 &authorization.nonce,
                 &authorization.payload_digest,

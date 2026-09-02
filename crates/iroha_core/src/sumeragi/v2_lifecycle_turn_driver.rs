@@ -1055,11 +1055,12 @@ impl LaunchedProductionLifecycleV1 {
                 );
                 ProductionLifecycleCompletionSelectionV1::LifecycleValidateSidecarWoken { ordinal }
             }
-            LifecycleValidateSidecarDriveV1::Superseded { ordinal } => {
-                if let Err(error) = self.executor.release_live_lifecycle_validate_successor(
-                    ordinal,
-                    crate::sumeragi::v2_effects::LifecycleValidateRetryResolutionV1::Cancelled,
-                ) {
+            LifecycleValidateSidecarDriveV1::Superseded(cancellation) => {
+                let ordinal = cancellation.dispatch_key().lifecycle_ordinal();
+                if let Err(error) = self
+                    .executor
+                    .cancel_unwoken_lifecycle_validate_retry(cancellation)
+                {
                     iroha_logger::error!(
                         %error,
                         ordinal,

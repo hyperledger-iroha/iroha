@@ -42,9 +42,11 @@ REQUIRED_CRASH_BOUNDARIES = (
     "sidecar_fsync",
     "staged_delta_fsync",
     "prepare_qc",
+    "prepare_registration_kura_append",
+    "prepare_registration_wsv_application",
     "commit_qc",
-    "kura_append",
-    "wsv_application",
+    "finalization_kura_append",
+    "finalization_wsv_application",
     "receipt_publication",
 )
 FAULT_TRANSCRIPT_ARTIFACT_KINDS = frozenset({"operator_log"})
@@ -265,6 +267,16 @@ REQUIRED_FORMAL_CONFIGURATION_MODELS = (
         "safety_violation",
         "AtomicPrivateSettlementV1.tla",
     ),
+    (
+        "AtomicPrivateSettlementV1CommitteeFaults_commit_without_registration_bug.cfg",
+        "safety_violation",
+        "AtomicPrivateSettlementV1CommitteeFaults.tla",
+    ),
+    (
+        "AtomicPrivateSettlementV1CommitteeFaults_drop_stage_bug.cfg",
+        "action_property_violation",
+        "AtomicPrivateSettlementV1CommitteeFaults.tla",
+    ),
 )
 REQUIRED_FORMAL_CONFIGURATIONS = tuple(
     (name, outcome)
@@ -297,6 +309,11 @@ _FORMAL_REQUIRED_SOURCE_PATH_SET = (
 _FORMAL_EVIDENCE_CODE_DOMAIN = b"iroha-aps-formal-evidence-code-v1\0"
 _PINNED_FORMAL_TOOL_VERSION = "TLC 2.19 / TLA+ tools 1.7.4"
 _PINNED_FORMAL_TLC_VERSION = "2.19"
+_FORMAL_TLC_STATUS_BY_OUTCOME = {
+    "pass": 0,
+    "safety_violation": 12,
+    "action_property_violation": 13,
+}
 _PINNED_FORMAL_TOOL_SHA256 = (
     "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
 )
@@ -307,6 +324,7 @@ _BENCHMARK_PRIVATE_STAGES = (
     "auditor_response",
     "committee_verification",
     "prepare",
+    "prepare_registration",
     "commit",
     "global_finality",
     "end_to_end",
@@ -1759,7 +1777,7 @@ def _validate_formal_tlc_transcript(
             )
         )
     for name, outcome, model in REQUIRED_FORMAL_CONFIGURATION_MODELS:
-        status = 0 if outcome == "pass" else 12
+        status = _FORMAL_TLC_STATUS_BY_OUTCOME[outcome]
         headers.extend(
             (
                 f"===== {name} model {model} stdout (status {status}) =====",
@@ -1791,7 +1809,7 @@ def _validate_formal_tlc_transcript(
         stdout = sections[section_index]
         stderr = sections[section_index + 1]
         section_index += 2
-        status = 0 if expected_outcome == "pass" else 12
+        status = _FORMAL_TLC_STATUS_BY_OUTCOME[expected_outcome]
         try:
             summary = validator.parse_run(
                 name=name,

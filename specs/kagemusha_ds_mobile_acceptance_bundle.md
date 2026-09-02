@@ -118,7 +118,7 @@ metadata files are the inventory root and therefore are not self-listed.
 | `receiver_device_private_scalar_p256` | `receiver/device-private-scalar-p256.bin` | yes |
 | `receiver_device_public_key_sec1_uncompressed` | `receiver/device-public-key-sec1-uncompressed.bin` | no |
 | `receiver_fresh_note_opening_v2` | `receiver/fresh-note-opening-v2.norito` | yes |
-| `recursive_redeem_local_v4` | `receiver/redeem-local-v4.norito` | yes |
+| `recursive_redeem_local_v5` | `receiver/redeem-local-v5.norito` | yes |
 | `artifact_binding_v4` | `sender/artifact-binding-v4.norito` | no |
 | `sender_note_opening_v2` | `sender/topup-note-opening-v2.norito` | yes |
 | `topup_zero_frontier_v4` | `sender/topup-zero-frontier-v4.norito` | yes |
@@ -134,7 +134,7 @@ metadata files are the inventory root and therefore are not self-listed.
 | `sender_change_opening_v2` | `sender/change-note-opening-v2.norito` | yes |
 | `recursive_append_output_membership_v4` | `sender/append-output-membership-v4.norito` | yes |
 | `recursive_append_local_v4` | `sender/append-local-v4.norito` | yes |
-| `recursive_partial_redeem_local_v4` | `sender/partial-redeem-local-v4.norito` | yes |
+| `recursive_partial_redeem_local_v5` | `sender/partial-redeem-local-v5.norito` | yes |
 | `recursive_partial_redeem_result_v4` | `sender/partial-redeem-result-v4.norito` | yes |
 
 The host acceptance suites persist the exact init result and branch material,

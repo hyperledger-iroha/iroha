@@ -26,7 +26,7 @@ final class KagemushaPublicLifecycleAPITests: XCTestCase {
         ) throws -> KagemushaRecursiveSpendVerifyResultV4 =
             KagemushaRecursiveSpend.verifySpendV4
         let buildRedeem: (
-            KagemushaRecursiveSpendRedeemLocalRequestV4,
+            KagemushaRecursiveSpendRedeemLocalRequestV5,
             KagemushaRecursiveSpendInstalledArtifactSetV4
         ) throws -> KagemushaRecursiveSpendRedeemBuildResultV4 =
             KagemushaRecursiveSpend.buildRedeemV4

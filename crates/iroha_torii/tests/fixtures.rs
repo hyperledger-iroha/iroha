@@ -20,7 +20,7 @@ use iroha_crypto::{KeyPair, Signature};
 use iroha_data_model::{ChainId, NetworkId, account::AccountId, peer::PeerId};
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::ALICE_ID;
-use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii};
+use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, TestApiRouterRuntime, Torii};
 use std::sync::{
     Arc, LazyLock, Mutex,
     atomic::{AtomicU64, Ordering},
@@ -195,7 +195,7 @@ impl ToriiHarness {
         )
     }
     /// Build the complete test router while retaining the backing Kiso task.
-    pub fn router(&self) -> axum::Router {
+    pub fn router(&self) -> TestApiRouterRuntime {
         self.torii
             .api_router_for_tests()
             .expect("test Torii router initializes")
@@ -257,7 +257,7 @@ impl StandardToriiHarness {
         }
     }
     /// Build the endpoint router while retaining the ledger fixture.
-    pub fn router(&self) -> axum::Router {
+    pub fn router(&self) -> TestApiRouterRuntime {
         self.harness.router()
     }
 }

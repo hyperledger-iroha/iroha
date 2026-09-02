@@ -1794,6 +1794,7 @@ fn is_remote_block_sync_rejection(error: &V2BlockSyncError) -> bool {
             | V2BlockSyncError::Transport(_)
             | V2BlockSyncError::ConflictingServerRequest { .. }
             | V2BlockSyncError::ConflictingHistoricalBodyRequest { .. }
+            | V2BlockSyncError::HistoricalRequestSubjectMismatch { .. }
     )
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -23,7 +23,12 @@ profile that exposes Prometheus metrics (`telemetry_profile = "extended"` or
   Backend and circuit scope is governed by
   `torii.zk_prover_allowed_backends` and `torii.zk_prover_allowed_circuits`.
   When a registry entry omits embedded VK bytes, the prover loads key bytes from
-  `torii.zk_prover_keys_dir` using `<backend>__<name>.vk` naming.
+  `torii.zk_prover_keys_dir` using `zkid-v1-<id-hash>.vk` naming. The lowercase
+  hexadecimal `id-hash` is SHA-256 over `"iroha:torii:zk-key-id:v1" ||
+  u32_be(len(backend_utf8)) || backend_utf8 || u32_be(len(name_utf8)) ||
+  name_utf8`, using the exact unnormalised registry ID bytes. The matching
+  proving key uses the same stem with `.pk`; lossy sanitized filenames are not
+  read.
 - **Telemetry surface** – Metrics registered in
   `crates/iroha_telemetry::metrics` and exposed under `/metrics`.
 

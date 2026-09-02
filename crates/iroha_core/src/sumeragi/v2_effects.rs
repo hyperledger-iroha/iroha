@@ -108,8 +108,9 @@ use super::{
     },
     v2_lifecycle_coordinator::{
         AdmissionDecision, AttestedLifecycleDecisionApplySuccessorOutputsV1,
-        DurableStoreTerminalRetrySealV1, InstalledAuthenticatedGenesisReplayAuthorityV1,
-        LifecycleContext, LifecycleDecisionApplyDispatchKeyV1, LifecycleDecisionApplyLineageV1,
+        CancelledLifecycleValidateSidecarV1, DurableStoreTerminalRetrySealV1,
+        InstalledAuthenticatedGenesisReplayAuthorityV1, LifecycleContext,
+        LifecycleDecisionApplyDispatchKeyV1, LifecycleDecisionApplyLineageV1,
         LifecycleOutputAdmissionKeyV1, LifecycleOutputServiceDispositionV1,
         LifecycleValidateDispatchKeyV1, LiveLifecycleDecisionApplyReconciliationAuthorityV1,
         PendingDurableValidateAdmissionV1, PendingLifecycleOutputAdmissionV1,
@@ -3095,6 +3096,47 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             executor: self,
             owner: Some(owner),
         })
+    }
+
+    /// Retire the retry authority of an unwoken sidecar Validate after its
+    /// lifecycle row has durably terminalized as cancelled.
+    ///
+    /// A deferred sidecar wait precedes publication of a
+    /// `ReadyValidateSuccessorV1`, so it must not manufacture or release the
+    /// later preliminary retransmit owner. The move-only authority proves that
+    /// the exact coordinator row, registry carrier, and durable registration
+    /// have already crossed their cancellation boundary.
+    pub(in crate::sumeragi) fn cancel_unwoken_lifecycle_validate_retry(
+        &mut self,
+        cancellation: CancelledLifecycleValidateSidecarV1,
+    ) -> Result<(), EffectExecutorError> {
+        self.ensure_open()?;
+        let dispatch_key = cancellation.dispatch_key();
+        let ordinal = dispatch_key.lifecycle_ordinal();
+        let round = cancellation.round();
+        let subject = cancellation.subject();
+        let key = (round, subject);
+        if !dispatch_key.matches_height_context(&self.context)
+            || round.context_id != self.context.id()
+            || round.height != self.context.height
+            || self.live_lifecycle_validate_successor.is_some()
+            || self.live_lifecycle_decision_apply.is_some()
+            || !self.exactly_owns_validate_retry_lifecycle_ordinal(key, ordinal)
+        {
+            return Err(EffectExecutorError::Contract(
+                "cancelled unwoken Validate changed its exact retry authority".to_owned(),
+            ));
+        }
+        match self.resolve_validate_retry_lifecycle_ordinal(
+            key,
+            ordinal,
+            LifecycleValidateRetryResolutionV1::Cancelled,
+        )? {
+            true => Ok(()),
+            false => Err(EffectExecutorError::Contract(
+                "cancelled unwoken Validate lost its exact retry authority".to_owned(),
+            )),
+        }
     }
 }
 

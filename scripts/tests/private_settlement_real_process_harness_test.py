@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "private_settlement_real_process_harness.py"
@@ -409,10 +410,61 @@ class PrivateSettlementRealProcessHarnessTests(unittest.TestCase):
         configuration["configuration"]["participants"] = 4
         with self.assertRaisesRegex(MODULE.HarnessError, "not the canonical"):
             MODULE.validate_request(configuration)
+        rayon_width = request()
+        rayon_width["configuration"]["execution"]["rayon_worker_threads"] = 1
+        with self.assertRaisesRegex(MODULE.HarnessError, "not the canonical"):
+            MODULE.validate_request(rayon_width)
+        validator_width = request()
+        validator_width["configuration"]["execution"]["validator_worker_threads"] = 1
+        with self.assertRaisesRegex(MODULE.HarnessError, "not the canonical"):
+            MODULE.validate_request(validator_width)
+        cargo_jobs = request()
+        cargo_jobs["configuration"]["execution"]["cargo_build_jobs"] = 2
+        with self.assertRaisesRegex(MODULE.HarnessError, "not the canonical"):
+            MODULE.validate_request(cargo_jobs)
         job = request()
         job["request_id"] = "1" * 64
         with self.assertRaisesRegex(MODULE.HarnessError, "does not bind"):
             MODULE.validate_request(job)
+
+    def test_rust_environment_overrides_ambient_width_and_strips_control_inputs(
+        self,
+    ) -> None:
+        bound = request()
+        with mock.patch.dict(
+            MODULE.os.environ,
+            {
+                "RAYON_NUM_THREADS": "1",
+                "CARGO_BUILD_JOBS": "99",
+                "CARGO_INCREMENTAL": "1",
+                "CARGO_PROFILE_RELEASE_CODEGEN_UNITS": "99",
+                "RUSTFLAGS": "-C target-cpu=native",
+                "RUSTC_WRAPPER": "/tmp/substitute-rustc",
+                "IROHA_TEST_STALE": "must-not-survive",
+                "APS_REAL_PROCESS_STALE": "must-not-survive",
+                "APS_UNRELATED": "preserved",
+            },
+            clear=False,
+        ):
+            environment = MODULE.rust_harness_environment(bound)
+        self.assertEqual(
+            environment["RAYON_NUM_THREADS"],
+            str(MODULE.runner.RAYON_WORKER_THREADS),
+        )
+        self.assertEqual(
+            environment["CARGO_BUILD_JOBS"],
+            str(MODULE.runner.CARGO_BUILD_JOBS),
+        )
+        self.assertEqual(environment["CARGO_INCREMENTAL"], "0")
+        self.assertEqual(
+            environment["CARGO_PROFILE_RELEASE_CODEGEN_UNITS"],
+            str(MODULE.runner.CARGO_RELEASE_CODEGEN_UNITS),
+        )
+        self.assertNotIn("RUSTFLAGS", environment)
+        self.assertNotIn("RUSTC_WRAPPER", environment)
+        self.assertNotIn("IROHA_TEST_STALE", environment)
+        self.assertNotIn("APS_REAL_PROCESS_STALE", environment)
+        self.assertEqual(environment["APS_UNRELATED"], "preserved")
 
     def test_rust_result_cannot_be_reused_across_request_or_nonce(self) -> None:
         for profile in MODULE.runner.PROFILES:
@@ -527,6 +579,14 @@ class PrivateSettlementRealProcessHarnessTests(unittest.TestCase):
         self.assertIn('TCPDUMP = Path("/usr/sbin/tcpdump")', python_harness)
         self.assertIn("process.send_signal(signal.SIGINT)", python_harness)
         self.assertIn("capture_split.derive_split_packet_counts", python_harness)
+        self.assertIn("def rust_harness_environment(", python_harness)
+        self.assertIn('"RAYON_NUM_THREADS": str(', python_harness)
+        self.assertIn('"CARGO_BUILD_JOBS": str(', python_harness)
+        self.assertIn('"CARGO_INCREMENTAL": "1" if', python_harness)
+        self.assertIn('name.startswith("CARGO_PROFILE_")', python_harness)
+        self.assertIn("REAL_PROCESS_VALIDATOR_WORKER_THREADS", localnet)
+        self.assertIn('["concurrency", "rayon_global_threads"]', localnet)
+        self.assertIn("REAL_PROCESS_RAYON_WORKER_THREADS", harness)
         self.assertIn("exact {len(runner.SURFACE_FILES)}-file inventory", python_harness)
         self.assertIn("with_consensus_message_control", harness)
         self.assertIn("wait_until_ready", harness)

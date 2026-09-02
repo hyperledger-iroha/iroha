@@ -453,7 +453,7 @@ pub struct KagemushaV4ReleaseEnabledV1 {
     pub transition_id: [u8; 32],
     /// Exact canonical enable-witness identity.
     pub enable_witness_norito: KagemushaExactBytesDigestV1,
-    /// Payload-only intent of the governance enable transaction.
+    /// Payload-only intent of the governance enable transaction, distinct from stage and canary.
     pub enable_transaction_intent: HashOf<SignedTransaction>,
     /// Consensus height at which issuance became enabled.
     pub enabled_at_height: u64,
@@ -461,7 +461,7 @@ pub struct KagemushaV4ReleaseEnabledV1 {
     pub enabled_at_unix_ms: u64,
     /// Exact canonical four-validator liveness evidence identity.
     pub validator_liveness_evidence: KagemushaExactBytesDigestV1,
-    /// Authenticated payload-only canary transaction intent.
+    /// Authenticated payload-only canary transaction intent, distinct from stage and enable.
     pub canary_transaction_intent: HashOf<SignedTransaction>,
     /// Authenticated finalized canary carrier height.
     pub canary_finalized_height: u64,
@@ -499,6 +499,7 @@ impl KagemushaV4ReleaseEnabledV1 {
             || self.enabled_at_height <= self.canary_finalized_height
             || typed_hash_is_zero(&self.enable_transaction_intent)
             || typed_hash_is_zero(&self.canary_transaction_intent)
+            || self.enable_transaction_intent == self.canary_transaction_intent
             || typed_hash_is_zero(&self.canary_finalized_block_hash)
             || self.highest_observed_tip_height < self.canary_finalized_height
             || self
@@ -534,7 +535,7 @@ impl KagemushaV4ReleaseEnabledV1 {
 pub struct KagemushaV4ReleaseCancelledV1 {
     /// Exact governance cancellation input.
     pub cancellation: KagemushaV4ReleaseCancellationV1,
-    /// Payload-only intent of the cancellation transaction.
+    /// Payload-only intent of the cancellation transaction, distinct from stage.
     pub cancellation_transaction_intent: HashOf<SignedTransaction>,
     /// Consensus height at which cancellation became terminal.
     pub cancelled_at_height: u64,
@@ -568,7 +569,7 @@ pub struct KagemushaV4ReleaseDeactivatedV1 {
     pub enabled: KagemushaV4ReleaseEnabledV1,
     /// Exact governance deactivation input.
     pub deactivation: KagemushaV4ReleaseDeactivationV1,
-    /// Payload-only intent of the deactivation transaction.
+    /// Payload-only intent of the deactivation transaction, distinct from stage, canary, and enable.
     pub deactivation_transaction_intent: HashOf<SignedTransaction>,
     /// Consensus height at which deactivation became terminal.
     pub deactivated_at_height: u64,
@@ -581,8 +582,10 @@ impl KagemushaV4ReleaseDeactivatedV1 {
         self.enabled.validate()?;
         self.deactivation.validate()?;
         if self.deactivated_at_height <= self.enabled.enabled_at_height
-            || self.deactivated_at_unix_ms < self.enabled.enabled_at_unix_ms
+            || self.deactivated_at_unix_ms <= self.enabled.enabled_at_unix_ms
             || typed_hash_is_zero(&self.deactivation_transaction_intent)
+            || self.deactivation_transaction_intent == self.enabled.enable_transaction_intent
+            || self.deactivation_transaction_intent == self.enabled.canary_transaction_intent
             || self.deactivation.transition_id == self.enabled.transition_id
         {
             return Err(invalid("deactivated"));
@@ -634,7 +637,7 @@ pub struct KagemushaV4ReleaseLifecycleStateV1 {
     pub artifact_binding: KagemushaRecursiveSpendArtifactBindingV4,
     /// Exact multisignature account governing every lifecycle transition.
     pub governance_authority: AccountId,
-    /// Payload-only intent of the stage transaction.
+    /// Payload-only intent of the stage transaction, distinct from every retained successor intent.
     pub stage_transaction_intent: HashOf<SignedTransaction>,
     /// Consensus height at which the release entered `Staged`.
     pub staged_at_height: u64,
@@ -790,9 +793,11 @@ impl KagemushaV4ReleaseLifecycleStateV1 {
     ) -> Result<(), KagemushaV4ReleaseLifecycleValidationError> {
         enabled.validate()?;
         if enabled.expected_staged_lifecycle != staged_predecessor_id
+            || enabled.canary_finalized_height <= self.staged_at_height
             || enabled.enabled_at_height <= self.staged_at_height
-            || enabled.enabled_at_unix_ms < self.staged_at_unix_ms
+            || enabled.enabled_at_unix_ms <= self.staged_at_unix_ms
             || enabled.enable_transaction_intent == self.stage_transaction_intent
+            || enabled.canary_transaction_intent == self.stage_transaction_intent
         {
             return Err(invalid("lifecycle.enabled_transition"));
         }
@@ -809,7 +814,7 @@ impl KagemushaV4ReleaseLifecycleStateV1 {
             || cancelled.cancellation.manifest_sha256 != self.promotion_binding.manifest_sha256
             || cancelled.cancellation.expected_predecessor_lifecycle != staged_predecessor_id
             || cancelled.cancelled_at_height <= self.staged_at_height
-            || cancelled.cancelled_at_unix_ms < self.staged_at_unix_ms
+            || cancelled.cancelled_at_unix_ms <= self.staged_at_unix_ms
             || cancelled.cancellation_transaction_intent == self.stage_transaction_intent
         {
             return Err(invalid("lifecycle.cancelled_transition"));
@@ -826,9 +831,12 @@ impl KagemushaV4ReleaseLifecycleStateV1 {
         if deactivated.deactivation.promotion_id != self.promotion_binding.promotion_id
             || deactivated.deactivation.manifest_sha256 != self.promotion_binding.manifest_sha256
             || deactivated.enabled.expected_staged_lifecycle != staged_predecessor_id
+            || deactivated.enabled.canary_finalized_height <= self.staged_at_height
             || deactivated.enabled.enabled_at_height <= self.staged_at_height
-            || deactivated.enabled.enabled_at_unix_ms < self.staged_at_unix_ms
+            || deactivated.enabled.enabled_at_unix_ms <= self.staged_at_unix_ms
             || deactivated.enabled.enable_transaction_intent == self.stage_transaction_intent
+            || deactivated.enabled.canary_transaction_intent == self.stage_transaction_intent
+            || deactivated.deactivation_transaction_intent == self.stage_transaction_intent
         {
             return Err(invalid("lifecycle.deactivated_transition"));
         }

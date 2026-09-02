@@ -374,6 +374,7 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(privacy::SubmitPrivacyProofV1 => "iroha.privacy.submit_proof.v1"),
     built_in_wire_id!(crate::isi::private_settlement::ActivatePrivateSettlementPoolV1 => "iroha.private_settlement.activate_pool.v1", register),
     built_in_wire_id!(crate::isi::private_settlement::RotatePrivateSettlementPoolPolicyV1 => "iroha.private_settlement.rotate_pool_policy.v1", register),
+    built_in_wire_id!(crate::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1 => "iroha.private_settlement.register_atomic_prepare.v1", register),
     built_in_wire_id!(crate::isi::private_settlement::AbortAtomicPrivateSettlementV1 => "iroha.private_settlement.abort_atomic_bundle.v1", register),
     built_in_wire_id!(crate::isi::private_settlement::FinalizeAtomicPrivateSettlementV1 => "iroha.private_settlement.finalize_atomic_bundle.v1", register),
     built_in_wire_id!(kaigi::CreateKaigi => "iroha.instruction.v1::kaigi::CreateKaigi"),

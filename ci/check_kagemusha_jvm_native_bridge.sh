@@ -687,6 +687,7 @@ for namespace in ("sdk", "android"):
         "nativeBridgeAbiVersion",
         "nativeVerifyCommitteeProofResponseV1",
         "nativeVerifyAuditorCapsuleResponseV1",
+        "nativeVerifyAuditorCapsuleResponseWithRequestV1",
         "nativeVerifyAuditApprovalResponseV1",
     ):
         required.add(

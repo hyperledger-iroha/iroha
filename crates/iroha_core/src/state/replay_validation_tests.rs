@@ -1095,8 +1095,8 @@ fn replay_rotates_topology_for_npos_prf_leader_impl() {
                         self_stake: iroha_primitives::numeric::Quantity::from(1_000_u64),
                         metadata: iroha_data_model::metadata::Metadata::default(),
                         status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
-                        activation_epoch: None,
-                        activation_height: None,
+                        activation_height: 1,
+                        deactivation_height: None,
                         last_reward_epoch: None,
                     },
                 );

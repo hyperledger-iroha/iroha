@@ -130,6 +130,110 @@ pub struct PeerTelemetryService {
     network_id: NetworkId,
     operator_signer: Option<KeyPair>,
 }
+
+async fn drain_peer_monitor_workers(workers: &mut JoinSet<crate::ToriiCriticalWorkerExit>) -> bool {
+    let mut failed = false;
+    while let Some(result) = workers.join_next().await {
+        match result {
+            Ok(crate::ToriiCriticalWorkerExit::StoppedByShutdown) => {}
+            Ok(crate::ToriiCriticalWorkerExit::UnexpectedExit) => {
+                failed = true;
+            }
+            Err(error) => {
+                iroha_logger::error!(?error, "peer telemetry worker failed during shutdown");
+                failed = true;
+            }
+        }
+    }
+    failed
+}
+
+async fn abort_peer_monitor_workers(workers: &mut JoinSet<crate::ToriiCriticalWorkerExit>) {
+    workers.abort_all();
+    while let Some(result) = workers.join_next().await {
+        if let Err(error) = result
+            && !error.is_cancelled()
+        {
+            iroha_logger::error!(
+                ?error,
+                "peer telemetry worker failed while stopping its siblings"
+            );
+        }
+    }
+}
+
+fn classify_peer_monitor_exit(
+    url: &ToriiUrl,
+    shutdown_signal: &ShutdownSignal,
+    exit: crate::ToriiCriticalWorkerExit,
+) -> crate::ToriiCriticalWorkerExit {
+    match exit {
+        crate::ToriiCriticalWorkerExit::StoppedByShutdown if shutdown_signal.is_sent() => exit,
+        crate::ToriiCriticalWorkerExit::StoppedByShutdown => {
+            iroha_logger::error!(
+                %url,
+                "peer telemetry monitor reported shutdown before shutdown was sent"
+            );
+            crate::ToriiCriticalWorkerExit::UnexpectedExit
+        }
+        crate::ToriiCriticalWorkerExit::UnexpectedExit => {
+            iroha_logger::error!(%url, "peer telemetry monitor failed");
+            exit
+        }
+    }
+}
+
+async fn supervise_peer_monitor_workers(
+    shutdown_signal: &ShutdownSignal,
+    mut workers: JoinSet<crate::ToriiCriticalWorkerExit>,
+) -> crate::ToriiCriticalWorkerExit {
+    loop {
+        tokio::select! {
+            biased;
+            () = shutdown_signal.receive() => {
+                let failed = drain_peer_monitor_workers(&mut workers).await;
+                return if failed {
+                    crate::ToriiCriticalWorkerExit::UnexpectedExit
+                } else {
+                    crate::ToriiCriticalWorkerExit::StoppedByShutdown
+                };
+            }
+            result = workers.join_next() => match result {
+                Some(Ok(crate::ToriiCriticalWorkerExit::StoppedByShutdown))
+                    if shutdown_signal.is_sent() =>
+                {
+                    let failed = drain_peer_monitor_workers(&mut workers).await;
+                    return if failed {
+                        crate::ToriiCriticalWorkerExit::UnexpectedExit
+                    } else {
+                        crate::ToriiCriticalWorkerExit::StoppedByShutdown
+                    };
+                }
+                Some(Ok(crate::ToriiCriticalWorkerExit::StoppedByShutdown)) => {
+                    abort_peer_monitor_workers(&mut workers).await;
+                    return crate::ToriiCriticalWorkerExit::UnexpectedExit;
+                }
+                Some(Ok(crate::ToriiCriticalWorkerExit::UnexpectedExit)) => {
+                    abort_peer_monitor_workers(&mut workers).await;
+                    return crate::ToriiCriticalWorkerExit::UnexpectedExit;
+                }
+                Some(Err(error)) => {
+                    iroha_logger::error!(
+                        ?error,
+                        "peer telemetry worker failed before shutdown"
+                    );
+                    abort_peer_monitor_workers(&mut workers).await;
+                    return crate::ToriiCriticalWorkerExit::UnexpectedExit;
+                }
+                None if shutdown_signal.is_sent() => {
+                    return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                }
+                None => return crate::ToriiCriticalWorkerExit::UnexpectedExit,
+            },
+        }
+    }
+}
+
 impl PeerTelemetryService {
     pub fn new(
         peer_urls: Vec<ToriiUrl>,
@@ -165,47 +269,17 @@ impl PeerTelemetryService {
             for url in service.peer_urls.iter().cloned() {
                 let service = Arc::clone(&service);
                 let worker_shutdown = shutdown_signal.clone();
-                workers.spawn(async move {
-                    service.monitor_peer(url, worker_shutdown).await;
-                });
+                workers.spawn(async move { service.monitor_peer(url, worker_shutdown).await });
             }
 
-            loop {
-                tokio::select! {
-                    biased;
-                    () = shutdown_signal.receive() => {
-                        while let Some(result) = workers.join_next().await {
-                            if let Err(error) = result
-                                && !error.is_cancelled()
-                            {
-                                iroha_logger::error!(?error, "peer telemetry worker failed during shutdown");
-                            }
-                        }
-                        return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
-                    }
-                    result = workers.join_next() => match result {
-                        Some(Ok(())) if shutdown_signal.is_sent() => {}
-                        Some(Ok(())) => {
-                            return crate::ToriiCriticalWorkerExit::UnexpectedExit;
-                        }
-                        Some(Err(error)) if shutdown_signal.is_sent() && error.is_cancelled() => {}
-                        Some(Err(error)) => {
-                            iroha_logger::error!(
-                                ?error,
-                                "peer telemetry worker failed before shutdown"
-                            );
-                            return crate::ToriiCriticalWorkerExit::UnexpectedExit;
-                        }
-                        None if shutdown_signal.is_sent() => {
-                            return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
-                        }
-                        None => return crate::ToriiCriticalWorkerExit::UnexpectedExit,
-                    },
-                }
-            }
+            supervise_peer_monitor_workers(&shutdown_signal, workers).await
         }))
     }
-    async fn monitor_peer(self: &Arc<Self>, url: ToriiUrl, shutdown_signal: ShutdownSignal) {
+    async fn monitor_peer(
+        self: &Arc<Self>,
+        url: ToriiUrl,
+        shutdown_signal: ShutdownSignal,
+    ) -> crate::ToriiCriticalWorkerExit {
         let (mut rx, monitor) = monitor::run(
             url.clone(),
             self.geo_config.clone(),
@@ -217,26 +291,21 @@ impl PeerTelemetryService {
         loop {
             tokio::select! {
                 biased;
-                () = shutdown_signal.receive() => return,
-                () = &mut monitor => {
-                    if shutdown_signal.is_sent() {
-                        return;
-                    }
-                    iroha_logger::error!(
-                        %url,
-                        "peer telemetry monitor exited before shutdown"
-                    );
-                    return;
+                exit = &mut monitor => {
+                    return classify_peer_monitor_exit(&url, &shutdown_signal, exit);
                 }
                 update = rx.recv() => match update {
                     Some(update) => self.apply_update(url.clone(), update).await,
-                    None if shutdown_signal.is_sent() => return,
+                    None if shutdown_signal.is_sent() => {
+                        let exit = (&mut monitor).await;
+                        return classify_peer_monitor_exit(&url, &shutdown_signal, exit);
+                    }
                     None => {
                         iroha_logger::error!(
                             %url,
                             "peer telemetry update stream closed before shutdown"
                         );
-                        return;
+                        return crate::ToriiCriticalWorkerExit::UnexpectedExit;
                     }
                 },
             }
@@ -328,36 +397,108 @@ impl PeerTelemetryService {
         }
     }
 }
+/// Error returned when a peer telemetry URL is not a canonical Torii HTTP origin.
+#[derive(Debug, thiserror::Error)]
+#[error("invalid Torii peer telemetry URL: {reason}")]
+pub struct ToriiUrlError {
+    reason: String,
+}
+impl ToriiUrlError {
+    fn new(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+        }
+    }
+}
+/// Validated, credential-free Torii HTTP(S) origin with infallibly derived endpoints.
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub struct ToriiUrl(Url);
+pub struct ToriiUrl {
+    base: Url,
+    configuration_endpoint: Url,
+    peers_endpoint: Url,
+    status_endpoint: Url,
+}
 impl ToriiUrl {
     pub fn as_str(&self) -> &str {
-        self.0.as_str()
+        self.base.as_str()
     }
     pub fn host_str(&self) -> Option<&str> {
-        self.0.host_str()
+        self.base.host_str()
+    }
+    pub(super) fn configuration_endpoint(&self) -> &Url {
+        &self.configuration_endpoint
+    }
+    pub(super) fn peers_endpoint(&self) -> &Url {
+        &self.peers_endpoint
+    }
+    pub(super) fn status_endpoint(&self) -> &Url {
+        &self.status_endpoint
     }
 }
 impl fmt::Display for ToriiUrl {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+        write!(f, "{}", self.base)
     }
 }
 impl FromStr for ToriiUrl {
-    type Err = url::ParseError;
+    type Err = ToriiUrlError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Url::parse(s).map(Self)
+        let url = Url::parse(s)
+            .map_err(|error| ToriiUrlError::new(format!("failed to parse URL: {error}")))?;
+        Self::try_from(url)
     }
 }
-impl From<Url> for ToriiUrl {
-    fn from(url: Url) -> Self {
-        Self(url)
+impl TryFrom<Url> for ToriiUrl {
+    type Error = ToriiUrlError;
+    fn try_from(url: Url) -> Result<Self, Self::Error> {
+        if !matches!(url.scheme(), "http" | "https") {
+            return Err(ToriiUrlError::new(format!(
+                "scheme `{}` is not HTTP or HTTPS",
+                url.scheme()
+            )));
+        }
+        if url.cannot_be_a_base() {
+            return Err(ToriiUrlError::new("URL cannot be used as a base URL"));
+        }
+        if url.host_str().is_none() {
+            return Err(ToriiUrlError::new("URL does not contain a host"));
+        }
+        if !url.username().is_empty() || url.password().is_some() {
+            return Err(ToriiUrlError::new("URL must not contain user credentials"));
+        }
+        if url.path() != "/" {
+            return Err(ToriiUrlError::new("URL path must be exactly `/`"));
+        }
+        if url.query().is_some() {
+            return Err(ToriiUrlError::new("URL must not contain a query"));
+        }
+        if url.fragment().is_some() {
+            return Err(ToriiUrlError::new("URL must not contain a fragment"));
+        }
+        let canonical_origin = format!("{}/", url.origin().ascii_serialization());
+        if url.as_str() != canonical_origin {
+            return Err(ToriiUrlError::new("URL must be a canonical HTTP(S) origin"));
+        }
+        let derive_endpoint = |path: &'static str| {
+            url.join(path).map_err(|error| {
+                ToriiUrlError::new(format!("failed to derive endpoint `{path}`: {error}"))
+            })
+        };
+        let configuration_endpoint = derive_endpoint(iroha_torii_shared::uri::CONFIGURATION)?;
+        let peers_endpoint = derive_endpoint(iroha_torii_shared::uri::PEERS)?;
+        let status_endpoint = derive_endpoint("/status")?;
+        Ok(Self {
+            base: url,
+            configuration_endpoint,
+            peers_endpoint,
+            status_endpoint,
+        })
     }
 }
 impl TryFrom<SocketAddr> for ToriiUrl {
-    type Error = url::ParseError;
+    type Error = ToriiUrlError;
     fn try_from(addr: SocketAddr) -> Result<Self, Self::Error> {
-        Url::parse(&format!("http://{}", addr)).map(Self)
+        format!("http://{addr}").parse()
     }
 }
 struct PeerState {
@@ -559,6 +700,67 @@ mod tests {
         );
     }
     #[test]
+    fn torii_url_accepts_http_bases_and_prederives_exact_endpoints() {
+        let url: ToriiUrl = "https://peer.example:8443/"
+            .parse()
+            .expect("valid HTTPS Torii base URL");
+
+        assert_eq!(url.as_str(), "https://peer.example:8443/");
+        assert_eq!(
+            url.configuration_endpoint().as_str(),
+            "https://peer.example:8443/v1/configuration"
+        );
+        assert_eq!(
+            url.peers_endpoint().as_str(),
+            "https://peer.example:8443/v1/peers"
+        );
+        assert_eq!(
+            url.status_endpoint().as_str(),
+            "https://peer.example:8443/status"
+        );
+    }
+    #[test]
+    fn torii_url_rejects_non_http_and_non_base_urls() {
+        for candidate in [
+            "mailto:operator@example.com",
+            "data:text/plain,peer",
+            "file:///tmp/torii.sock",
+            "ftp://peer.example/",
+        ] {
+            let error = candidate
+                .parse::<ToriiUrl>()
+                .expect_err("non-HTTP Torii URL must be rejected");
+            assert!(
+                error.to_string().contains("is not HTTP or HTTPS"),
+                "unexpected error for {candidate}: {error}"
+            );
+        }
+    }
+    #[test]
+    fn torii_url_rejects_invalid_or_hostless_http_urls() {
+        for candidate in ["http://", "https://?query=only", "http://#fragment"] {
+            assert!(
+                candidate.parse::<ToriiUrl>().is_err(),
+                "hostless Torii URL must be rejected: {candidate}"
+            );
+        }
+    }
+    #[test]
+    fn torii_url_rejects_non_origin_http_urls() {
+        for candidate in [
+            "https://peer.example/base",
+            "https://peer.example/?source=config",
+            "https://peer.example/#fragment",
+            "https://operator:secret@peer.example/",
+            "https://@peer.example/",
+        ] {
+            assert!(
+                candidate.parse::<ToriiUrl>().is_err(),
+                "non-origin Torii URL must be rejected: {candidate}"
+            );
+        }
+    }
+    #[test]
     fn construction_is_inert() {
         let peer_url = "http://127.0.0.1:9".parse().expect("torii url");
         let service = PeerTelemetryService::new(
@@ -591,6 +793,37 @@ mod tests {
             .expect("peer telemetry worker stops cleanly");
         assert_eq!(exit, crate::ToriiCriticalWorkerExit::StoppedByShutdown);
         assert_eq!(Arc::strong_count(&service), 1);
+    }
+    #[tokio::test]
+    async fn service_supervisor_preserves_panicked_worker_failure_after_shutdown() {
+        let shutdown = ShutdownSignal::new();
+        let worker_shutdown = shutdown.clone();
+        let mut workers: JoinSet<crate::ToriiCriticalWorkerExit> = JoinSet::new();
+        workers.spawn(async move {
+            worker_shutdown.send();
+            assert!(!iroha_core::panic_hook::is_suppressed());
+            panic!("injected peer telemetry worker panic");
+        });
+
+        assert_eq!(
+            supervise_peer_monitor_workers(&shutdown, workers).await,
+            crate::ToriiCriticalWorkerExit::UnexpectedExit
+        );
+    }
+    #[tokio::test]
+    async fn service_supervisor_preserves_typed_failure_after_shutdown() {
+        let shutdown = ShutdownSignal::new();
+        let worker_shutdown = shutdown.clone();
+        let mut workers = JoinSet::new();
+        workers.spawn(async move {
+            worker_shutdown.send();
+            crate::ToriiCriticalWorkerExit::UnexpectedExit
+        });
+
+        assert_eq!(
+            supervise_peer_monitor_workers(&shutdown, workers).await,
+            crate::ToriiCriticalWorkerExit::UnexpectedExit
+        );
     }
     #[tokio::test]
     async fn peers_status_reflects_metrics_updates() {

@@ -348,32 +348,165 @@ fn attachments_root_dir() -> PathBuf {
 fn attachments_dir(tenant: &AttachmentTenant) -> PathBuf {
     attachments_root_dir().join(tenant.as_str())
 }
-fn metadata_is_direct_directory(metadata: &fs::Metadata) -> bool {
-    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
-        return false;
+fn direct_directory_type_error(path: &Path) -> std::io::Error {
+    invalid_attachment_file(format!(
+        "persistence path is not a direct directory: {}",
+        path.display()
+    ))
+}
+fn map_direct_directory_open_error(path: &Path, error: std::io::Error) -> std::io::Error {
+    #[cfg(unix)]
+    if error.raw_os_error() == Some(libc::ELOOP) {
+        return direct_directory_type_error(path);
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt as _;
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
-        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0;
-    }
-    #[cfg(not(windows))]
-    true
+    error
 }
 pub(super) fn verify_direct_directory(path: &Path) -> std::io::Result<()> {
-    let metadata = fs::symlink_metadata(path)?;
-    if !metadata_is_direct_directory(&metadata) {
-        return Err(invalid_attachment_file(format!(
-            "persistence path is not a direct directory: {}",
-            path.display()
-        )));
+    let named_before = fs::symlink_metadata(path)?;
+    if named_before.file_type().is_symlink() || !named_before.is_dir() {
+        return Err(direct_directory_type_error(path));
     }
+    let directory = open_pinned_direct_directory(path)
+        .map_err(|error| map_direct_directory_open_error(path, error))?
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("persistence directory is missing: {}", path.display()),
+            )
+        })?;
+    let metadata = crate::secure_file_metadata::from_file(&directory)?;
+    let named_after = crate::secure_file_metadata::from_path(path)
+        .map_err(|error| map_direct_directory_open_error(path, error))?;
+    if !crate::secure_file_metadata::is_direct_directory(&metadata)
+        || !crate::secure_file_metadata::is_direct_directory(&named_after)
+        || !crate::secure_file_metadata::same_file(&metadata, &named_after)
+    {
+        return Err(direct_directory_type_error(path));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+
+        if metadata.uid() != rustix::process::geteuid().as_raw() || metadata.mode() & 0o022 != 0 {
+            return Err(invalid_attachment_file(format!(
+                "persistence directory must be owned by the Torii process user and deny group/world writes: {}",
+                path.display()
+            )));
+        }
+    }
+    sorafs_node::validate_private_local_storage_acl(&directory, path)?;
     Ok(())
 }
 pub(super) fn ensure_direct_directory(path: &Path) -> std::io::Result<()> {
-    fs::create_dir_all(path)?;
+    match fs::symlink_metadata(path) {
+        Ok(_) => {
+            #[cfg(windows)]
+            if let Err(error) = verify_direct_directory(path)
+                && error.kind() == std::io::ErrorKind::PermissionDenied
+            {
+                protect_existing_windows_directory(path)?;
+            }
+            return verify_direct_directory(path);
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(path)?;
+    }
+    #[cfg(windows)]
+    create_private_windows_directories(path)?;
+    #[cfg(not(any(unix, windows)))]
+    return Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "secure attachment directory creation is unsupported on this platform",
+    ));
     verify_direct_directory(path)
+}
+#[cfg(windows)]
+fn protect_existing_windows_directory(path: &Path) -> std::io::Result<()> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    use crate::secure_file_metadata::{from_file, from_path, is_direct_directory, same_file};
+
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const FILE_SHARE_READ_WRITE: u32 = 0x0000_0001 | 0x0000_0002;
+    const GENERIC_READ: u32 = 0x8000_0000;
+    const WRITE_DAC: u32 = 0x0004_0000;
+
+    let before = from_path(path)?;
+    if !is_direct_directory(&before) {
+        return Err(direct_directory_type_error(path));
+    }
+    let directory = fs::OpenOptions::new()
+        .access_mode(GENERIC_READ | WRITE_DAC)
+        .share_mode(FILE_SHARE_READ_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)?;
+    let opened = from_file(&directory)?;
+    let named = from_path(path)?;
+    if !is_direct_directory(&opened)
+        || !is_direct_directory(&named)
+        || !same_file(&before, &opened)
+        || !same_file(&opened, &named)
+    {
+        return Err(invalid_attachment_file(
+            "persistence directory changed before ACL protection",
+        ));
+    }
+    sorafs_node::protect_private_local_storage_acl(&directory, path)?;
+    let protected = from_file(&directory)?;
+    let named_after = from_path(path)?;
+    if !same_file(&opened, &protected) || !same_file(&protected, &named_after) {
+        return Err(invalid_attachment_file(
+            "persistence directory changed during ACL protection",
+        ));
+    }
+    Ok(())
+}
+#[cfg(windows)]
+fn create_private_windows_directories(path: &Path) -> std::io::Result<()> {
+    if !path.is_absolute() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Windows attachment persistence path must be absolute",
+        ));
+    }
+    let mut missing = Vec::new();
+    let mut current = path;
+    loop {
+        match fs::symlink_metadata(current) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                    return Err(direct_directory_type_error(current));
+                }
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                missing.push(current.to_path_buf());
+                current = current.parent().ok_or_else(|| {
+                    invalid_attachment_file("Windows persistence path has no existing ancestor")
+                })?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    for directory in missing.into_iter().rev() {
+        match sorafs_node::create_private_local_storage_directory(&directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+        verify_direct_directory(&directory)?;
+    }
+    Ok(())
 }
 fn ensure_root_dir() -> std::io::Result<()> {
     let base = base_dir();
@@ -434,7 +567,7 @@ fn sync_directory(path: &Path) -> std::io::Result<()> {
     crate::durable_fs::sync_direct_directory(path)
 }
 #[cfg(unix)]
-fn sync_open_directory(directory: &fs::File) -> std::io::Result<()> {
+pub(super) fn sync_open_directory(directory: &fs::File) -> std::io::Result<()> {
     #[cfg(test)]
     {
         use std::os::unix::fs::MetadataExt as _;
@@ -505,15 +638,126 @@ pub(super) fn persist_bytes_atomically(
     let parent = path
         .parent()
         .ok_or_else(|| invalid_attachment_file("persisted path has no containing directory"))?;
-    fs::create_dir_all(parent)?;
-    let mut temporary = tempfile::Builder::new()
-        .prefix(prefix)
-        .tempfile_in(parent)?;
+    ensure_direct_directory(parent)?;
+    #[cfg(unix)]
+    {
+        let mut temporary = tempfile::Builder::new()
+            .prefix(prefix)
+            .tempfile_in(parent)?;
+        temporary.write_all(body)?;
+        temporary.flush()?;
+        temporary.as_file().sync_all()?;
+        temporary.persist(path).map_err(|error| error.error)?;
+        drop(open_attachment_regular_file(path)?);
+        return sync_directory(parent);
+    }
+    #[cfg(windows)]
+    {
+        return persist_bytes_atomically_windows(path, body, prefix, parent);
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (body, prefix);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "secure atomic attachment persistence is unsupported on this platform",
+        ))
+    }
+}
+#[cfg(windows)]
+fn persist_bytes_atomically_windows(
+    path: &Path,
+    body: &[u8],
+    prefix: &str,
+    parent: &Path,
+) -> std::io::Result<()> {
+    use crate::secure_file_metadata::{
+        from_file, from_path, is_direct_file, number_of_links, same_file, unchanged,
+    };
+
+    const RETRIES: usize = 32;
+    const ALPHANUMERIC: &[u8; 62] =
+        b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    if prefix != ".tmp" {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Windows attachment temporary prefix must be canonical",
+        ));
+    }
+    let (mut temporary, temporary_path) = (0..RETRIES)
+        .find_map(|_| {
+            let random: [u8; 6] = rand::random();
+            let suffix = random.map(|byte| ALPHANUMERIC[usize::from(byte) % ALPHANUMERIC.len()]);
+            let suffix = std::str::from_utf8(&suffix).expect("temporary alphabet is ASCII");
+            let temporary_path = parent.join(format!("{prefix}{suffix}"));
+            match sorafs_node::create_private_local_storage_file(
+                &temporary_path,
+                sorafs_node::PrivateLocalFileSharing::ReadDelete,
+            ) {
+                Ok(file) => Some(Ok((file, temporary_path))),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => None,
+                Err(error) => Some(Err(error)),
+            }
+        })
+        .transpose()?
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "could not allocate a unique attachment temporary file",
+            )
+        })?;
+    sorafs_node::validate_private_local_storage_acl(&temporary, &temporary_path)?;
+    let created = from_file(&temporary)?;
     temporary.write_all(body)?;
     temporary.flush()?;
-    temporary.as_file().sync_all()?;
-    temporary.persist(path).map_err(|error| error.error)?;
-    sync_directory(parent)
+    temporary.sync_all()?;
+    let written = from_file(&temporary)?;
+    let named_written = from_path(&temporary_path)?;
+    if !is_direct_file(&created)
+        || !is_direct_file(&written)
+        || !is_direct_file(&named_written)
+        || number_of_links(&created) != Some(1)
+        || number_of_links(&written) != Some(1)
+        || number_of_links(&named_written) != Some(1)
+        || !same_file(&created, &written)
+        || !unchanged(&written, &named_written)
+        || u64::try_from(body.len()).ok() != Some(written.len())
+    {
+        drop((created, written, named_written, temporary));
+        let _ = remove_direct_regular_file_if_present(&temporary_path);
+        return Err(invalid_attachment_file(
+            "attachment temporary file changed during atomic persistence",
+        ));
+    }
+    match open_attachment_regular_file(path) {
+        Ok(existing) => drop(existing),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            drop((created, written, named_written, temporary));
+            let _ = remove_direct_regular_file_if_present(&temporary_path);
+            return Err(error);
+        }
+    }
+    if let Err(error) = fs::rename(&temporary_path, path) {
+        drop((created, written, named_written, temporary));
+        let _ = remove_direct_regular_file_if_present(&temporary_path);
+        return Err(error);
+    }
+    // The rename is the commit point; make its namespace mutation durable before any
+    // postcondition can return an error.
+    sync_directory(parent)?;
+    let published = from_path(path)?;
+    if !is_direct_file(&published)
+        || number_of_links(&published) != Some(1)
+        || !same_file(&written, &published)
+    {
+        return Err(invalid_attachment_file(
+            "attachment destination changed during atomic publication",
+        ));
+    }
+    drop((created, written, named_written, published, temporary));
+    drop(open_attachment_regular_file(path)?);
+    Ok(())
 }
 fn ensure_attachment_dirs_durable(tenant: &AttachmentTenant) -> std::io::Result<()> {
     let root = attachments_root_dir();
@@ -681,7 +925,19 @@ pub(super) fn prover_processing_decision(id: &str, now_ms: u64) -> ProverProcess
     try_prover_processing_decision(id, now_ms).expect("resolve ZK prover processing decision")
 }
 #[cfg(unix)]
-fn open_pinned_direct_directory(path: &Path) -> std::io::Result<Option<fs::File>> {
+pub(super) fn open_pinned_direct_directory(path: &Path) -> std::io::Result<Option<fs::File>> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    use crate::secure_file_metadata::{from_file, from_path, is_direct_directory, same_file};
+
+    let named_before = match from_path(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(map_direct_directory_open_error(path, error)),
+    };
+    if !is_direct_directory(&named_before) {
+        return Err(direct_directory_type_error(path));
+    }
     let directory = match rustix::fs::open(
         path,
         rustix::fs::OFlags::RDONLY
@@ -695,18 +951,82 @@ fn open_pinned_direct_directory(path: &Path) -> std::io::Result<Option<fs::File>
         Err(rustix::io::Errno::NOENT) => return Ok(None),
         Err(error) => return Err(std::io::Error::from(error)),
     };
-    if !directory.metadata()?.is_dir() {
+    let opened = from_file(&directory)?;
+    let named_after =
+        from_path(path).map_err(|error| map_direct_directory_open_error(path, error))?;
+    if !is_direct_directory(&opened)
+        || !is_direct_directory(&named_after)
+        || !same_file(&named_before, &opened)
+        || !same_file(&opened, &named_after)
+    {
+        return Err(invalid_attachment_file(
+            "attachment persistence directory changed while it was pinned",
+        ));
+    }
+    if opened.uid() != rustix::process::geteuid().as_raw() || opened.mode() & 0o022 != 0 {
+        return Err(invalid_attachment_file(format!(
+            "persistence directory must be owned by the Torii process user and deny group/world writes: {}",
+            path.display()
+        )));
+    }
+    sorafs_node::validate_private_local_storage_acl(&directory, path)?;
+    Ok(Some(directory))
+}
+#[cfg(windows)]
+pub(super) fn open_pinned_direct_directory(path: &Path) -> std::io::Result<Option<fs::File>> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    use crate::secure_file_metadata::{from_file, from_path, is_direct_directory, same_file};
+
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const FILE_SHARE_READ_WRITE: u32 = 0x0000_0001 | 0x0000_0002;
+    const GENERIC_READ: u32 = 0x8000_0000;
+    let named_before = match from_path(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    if !is_direct_directory(&named_before) {
         return Err(invalid_attachment_file(
             "attachment persistence ancestor is not a direct directory",
         ));
     }
+    let directory = fs::OpenOptions::new()
+        .access_mode(GENERIC_READ)
+        // Retaining this handle prevents the directory pathname from being renamed or deleted
+        // while a Windows pathname-based iterator or unlink is in progress.
+        .share_mode(FILE_SHARE_READ_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)?;
+    let opened = from_file(&directory)?;
+    let named_after = from_path(path)?;
+    if !is_direct_directory(&opened)
+        || !is_direct_directory(&named_after)
+        || !same_file(&named_before, &opened)
+        || !same_file(&opened, &named_after)
+    {
+        return Err(invalid_attachment_file(
+            "attachment persistence directory changed while it was pinned",
+        ));
+    }
+    sorafs_node::validate_private_local_storage_acl(&directory, path)?;
     Ok(Some(directory))
+}
+#[cfg(not(any(unix, windows)))]
+pub(super) fn open_pinned_direct_directory(_path: &Path) -> std::io::Result<Option<fs::File>> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "pinned attachment directories are unsupported on this platform",
+    ))
 }
 #[cfg(unix)]
 fn open_pinned_direct_child_directory(
     parent: &fs::File,
     name: &str,
 ) -> std::io::Result<Option<fs::File>> {
+    use std::os::unix::fs::MetadataExt as _;
+
     let directory = match rustix::fs::openat(
         parent,
         name,
@@ -721,15 +1041,20 @@ fn open_pinned_direct_child_directory(
         Err(rustix::io::Errno::NOENT) => return Ok(None),
         Err(error) => return Err(std::io::Error::from(error)),
     };
-    if !directory.metadata()?.is_dir() {
+    let metadata = directory.metadata()?;
+    if !metadata.is_dir()
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.mode() & 0o022 != 0
+    {
         return Err(invalid_attachment_file(
-            "attachment persistence child is not a direct directory",
+            "attachment persistence child is not an owner-controlled direct directory",
         ));
     }
+    sorafs_node::validate_private_local_storage_acl(&directory, Path::new(name))?;
     Ok(Some(directory))
 }
 #[cfg(unix)]
-fn open_pinned_direct_regular_file(
+pub(super) fn open_pinned_direct_regular_file(
     parent: &fs::File,
     name: &str,
 ) -> std::io::Result<Option<fs::File>> {
@@ -750,15 +1075,23 @@ fn open_pinned_direct_regular_file(
         Err(error) => return Err(std::io::Error::from(error)),
     };
     let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.nlink() != 1 {
+    if !metadata.is_file()
+        || metadata.nlink() != 1
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.mode() & 0o022 != 0
+    {
         return Err(invalid_attachment_file(
-            "attachment persistence entry is not a direct single-link regular file",
+            "attachment persistence entry is not an owner-controlled direct single-link regular file",
         ));
     }
+    sorafs_node::validate_private_local_storage_acl(&file, Path::new(name))?;
     Ok(Some(file))
 }
 #[cfg(unix)]
-fn pinned_directory_names(directory: &fs::File, limit: u64) -> std::io::Result<Vec<String>> {
+pub(super) fn pinned_directory_names(
+    directory: &fs::File,
+    limit: u64,
+) -> std::io::Result<Vec<String>> {
     let mut names = Vec::new();
     let mut entries = rustix::fs::Dir::read_from(directory).map_err(std::io::Error::from)?;
     for entry in &mut entries {
@@ -783,6 +1116,165 @@ fn pinned_directory_names(directory: &fs::File, limit: u64) -> std::io::Result<V
         );
     }
     Ok(names)
+}
+#[cfg(unix)]
+pub(super) fn pinned_directory_names_at(
+    _path: &Path,
+    directory: &fs::File,
+    limit: u64,
+) -> std::io::Result<Vec<String>> {
+    pinned_directory_names(directory, limit)
+}
+#[cfg(windows)]
+pub(super) fn pinned_directory_names_at(
+    path: &Path,
+    _directory: &fs::File,
+    limit: u64,
+) -> std::io::Result<Vec<String>> {
+    let mut names = Vec::new();
+    let mut entries = crate::secure_file_metadata::DirectDirectoryEntryStream::open(path)?;
+    while let Some(name) = entries.next_name()? {
+        if u64::try_from(names.len()).unwrap_or(u64::MAX) >= limit {
+            return Err(invalid_attachment_file(format!(
+                "attachment persistence scan exceeds {limit} entries"
+            )));
+        }
+        names.push(name.into_string().map_err(|_| {
+            invalid_attachment_file("attachment persistence directory contains a non-UTF-8 entry")
+        })?);
+    }
+    Ok(names)
+}
+#[cfg(not(any(unix, windows)))]
+pub(super) fn pinned_directory_names_at(
+    _path: &Path,
+    _directory: &fs::File,
+    _limit: u64,
+) -> std::io::Result<Vec<String>> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "secure attachment directory enumeration is unsupported on this platform",
+    ))
+}
+fn open_pinned_directory_names(
+    path: &Path,
+    limit: u64,
+) -> std::io::Result<Option<(fs::File, Vec<String>)>> {
+    let Some(directory) = open_pinned_direct_directory(path)? else {
+        return Ok(None);
+    };
+    let names = pinned_directory_names_at(path, &directory, limit)?;
+    verify_pinned_direct_directory(path, &directory)?;
+    Ok(Some((directory, names)))
+}
+fn verify_pinned_direct_directory(path: &Path, directory: &fs::File) -> std::io::Result<()> {
+    use crate::secure_file_metadata::{from_file, from_path, is_direct_directory, same_file};
+
+    let opened = from_file(directory)?;
+    let named = from_path(path).map_err(|error| map_direct_directory_open_error(path, error))?;
+    if !is_direct_directory(&opened) || !is_direct_directory(&named) || !same_file(&opened, &named)
+    {
+        return Err(invalid_attachment_file(
+            "attachment persistence directory changed during retained-handle enumeration",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+
+        if opened.uid() != rustix::process::geteuid().as_raw() || opened.mode() & 0o022 != 0 {
+            return Err(invalid_attachment_file(format!(
+                "persistence directory must be owned by the Torii process user and deny group/world writes: {}",
+                path.display()
+            )));
+        }
+    }
+    sorafs_node::validate_private_local_storage_acl(directory, path)
+}
+#[cfg(unix)]
+pub(super) fn open_direct_regular_file_in_pinned_directory(
+    _directory_path: &Path,
+    directory: &fs::File,
+    name: &str,
+) -> std::io::Result<Option<fs::File>> {
+    open_pinned_direct_regular_file(directory, name)
+}
+#[cfg(windows)]
+pub(super) fn open_direct_regular_file_in_pinned_directory(
+    directory_path: &Path,
+    _directory: &fs::File,
+    name: &str,
+) -> std::io::Result<Option<fs::File>> {
+    match open_attachment_regular_file(&directory_path.join(name)) {
+        Ok((file, _)) => Ok(Some(file)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+#[cfg(not(any(unix, windows)))]
+pub(super) fn open_direct_regular_file_in_pinned_directory(
+    _directory_path: &Path,
+    _directory: &fs::File,
+    _name: &str,
+) -> std::io::Result<Option<fs::File>> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "secure attachment child-file opening is unsupported on this platform",
+    ))
+}
+#[cfg(unix)]
+fn open_direct_directory_in_pinned_directory(
+    _directory_path: &Path,
+    directory: &fs::File,
+    name: &str,
+) -> std::io::Result<Option<fs::File>> {
+    open_pinned_direct_child_directory(directory, name)
+}
+#[cfg(windows)]
+fn open_direct_directory_in_pinned_directory(
+    directory_path: &Path,
+    _directory: &fs::File,
+    name: &str,
+) -> std::io::Result<Option<fs::File>> {
+    open_pinned_direct_directory(&directory_path.join(name))
+}
+#[cfg(not(any(unix, windows)))]
+fn open_direct_directory_in_pinned_directory(
+    _directory_path: &Path,
+    _directory: &fs::File,
+    _name: &str,
+) -> std::io::Result<Option<fs::File>> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "secure attachment child-directory opening is unsupported on this platform",
+    ))
+}
+#[cfg(unix)]
+fn remove_direct_regular_file_in_pinned_directory(
+    _directory_path: &Path,
+    directory: &fs::File,
+    name: &str,
+) -> std::io::Result<bool> {
+    unlink_pinned_regular_file_if_present(directory, name)
+}
+#[cfg(windows)]
+fn remove_direct_regular_file_in_pinned_directory(
+    directory_path: &Path,
+    _directory: &fs::File,
+    name: &str,
+) -> std::io::Result<bool> {
+    remove_direct_regular_file_if_present(&directory_path.join(name))
+}
+#[cfg(not(any(unix, windows)))]
+fn remove_direct_regular_file_in_pinned_directory(
+    _directory_path: &Path,
+    _directory: &fs::File,
+    _name: &str,
+) -> std::io::Result<bool> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "secure attachment child-file removal is unsupported on this platform",
+    ))
 }
 #[cfg(unix)]
 fn processing_marker_exists_at(directory: &fs::File, name: &str) -> std::io::Result<bool> {
@@ -816,6 +1308,22 @@ fn processing_marker_exists_at(directory: &fs::File, name: &str) -> std::io::Res
         ));
     }
     Ok(true)
+}
+#[cfg(unix)]
+fn processing_marker_exists_in_pinned_directory(
+    _directory_path: &Path,
+    directory: &fs::File,
+    name: &str,
+) -> std::io::Result<bool> {
+    processing_marker_exists_at(directory, name)
+}
+#[cfg(not(unix))]
+fn processing_marker_exists_in_pinned_directory(
+    directory_path: &Path,
+    _directory: &fs::File,
+    name: &str,
+) -> std::io::Result<bool> {
+    processing_marker_exists(&directory_path.join(name))
 }
 #[cfg(unix)]
 fn pinned_attachment_tenant_directory(
@@ -969,33 +1477,23 @@ fn processing_reference_dir_has_shards_except(
     excluded_tenant: Option<&str>,
 ) -> std::io::Result<bool> {
     let reference_dir = prover_processing_reference_dir(id);
-    match verify_direct_directory(&reference_dir) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => return Err(error),
-    }
-    let entries = fs::read_dir(&reference_dir)?;
-    let mut scanned = 0_u64;
+    let Some((directory, names)) =
+        open_pinned_directory_names(&reference_dir, ATTACHMENT_ROOT_RECOVERY_MAX_ENTRIES)?
+    else {
+        return Ok(false);
+    };
     let mut has_shard = false;
-    for entry in entries {
-        let entry = entry?;
-        scanned = scanned.saturating_add(1);
-        if scanned > ATTACHMENT_ROOT_RECOVERY_MAX_ENTRIES {
+    for name in names {
+        let path = reference_dir.join(&name);
+        if open_direct_regular_file_in_pinned_directory(&reference_dir, &directory, &name)?
+            .is_none()
+        {
             return Err(invalid_attachment_file(format!(
-                "processing-reference scan exceeds {ATTACHMENT_ROOT_RECOVERY_MAX_ENTRIES} entries"
+                "processing-reference entry disappeared during validation: {}",
+                path.display()
             )));
         }
-        let file_name = entry.file_name();
-        let name = file_name.to_str().ok_or_else(|| {
-            invalid_attachment_file("processing-reference directory has a non-UTF-8 entry")
-        })?;
-        if is_attachment_writer_temp_name(name) {
-            if !entry.file_type()?.is_file() {
-                return Err(invalid_attachment_file(format!(
-                    "processing-reference temporary path is not a direct regular file: {}",
-                    entry.path().display()
-                )));
-            }
+        if is_attachment_writer_temp_name(&name) {
             continue;
         }
         let tenant_key = name
@@ -1007,13 +1505,7 @@ fn processing_reference_dir_has_shards_except(
                     "processing-reference directory has an unexpected entry: {name}"
                 ))
             })?;
-        if !entry.file_type()?.is_file() {
-            return Err(invalid_attachment_file(format!(
-                "processing-reference path is not a direct regular file: {}",
-                entry.path().display()
-            )));
-        }
-        if processing_marker_exists(&entry.path())? {
+        if processing_marker_exists(&path)? {
             if excluded_tenant != Some(tenant_key.as_str()) {
                 let tenant = AttachmentTenant(tenant_key);
                 drop(open_attachment_regular_file(&meta_path(&tenant, id))?);
@@ -1022,7 +1514,7 @@ fn processing_reference_dir_has_shards_except(
             has_shard = true;
         }
     }
-    verify_direct_directory(&reference_dir)?;
+    verify_pinned_direct_directory(&reference_dir, &directory)?;
     Ok(has_shard)
 }
 /// Persist a completed content-ID receipt only while at least one attachment copy is live.
@@ -1087,14 +1579,31 @@ pub(super) fn reconcile_prover_processing_receipt_if_referenced(
     }
     Ok(selected)
 }
+#[cfg(unix)]
 fn remove_file_if_present(path: &Path) -> std::io::Result<()> {
-    match fs::remove_file(path) {
-        Ok(()) => sync_parent_directory(path),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            sync_nearest_existing_parent(path)
-        }
-        Err(error) => Err(error),
-    }
+    let parent_path = path
+        .parent()
+        .ok_or_else(|| invalid_attachment_file("persisted path has no containing directory"))?;
+    let name = path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| invalid_attachment_file("persisted path has no UTF-8 file name"))?;
+    let Some(parent) = open_pinned_direct_directory(parent_path)? else {
+        return sync_nearest_existing_parent(path);
+    };
+    let _ = unlink_pinned_regular_file_if_present(&parent, name)?;
+    verify_pinned_direct_directory(parent_path, &parent)
+}
+#[cfg(windows)]
+fn remove_file_if_present(path: &Path) -> std::io::Result<()> {
+    remove_direct_regular_file_if_present(path).map(drop)
+}
+#[cfg(not(any(unix, windows)))]
+fn remove_file_if_present(_path: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "secure attachment file removal is unsupported on this platform",
+    ))
 }
 fn path_entry_exists(path: &Path) -> std::io::Result<bool> {
     match fs::symlink_metadata(path) {
@@ -1135,25 +1644,53 @@ pub(super) fn attachment_pair_exists(tenant_key: &str, id: &str) -> std::io::Res
         ))),
     }
 }
+#[cfg(unix)]
 fn remove_dir_if_present(path: &Path) -> std::io::Result<()> {
-    match fs::remove_dir(path) {
-        Ok(()) => sync_parent_directory(path),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            sync_nearest_existing_parent(path)
-        }
-        Err(error) => Err(error),
+    let parent_path = path.parent().ok_or_else(|| {
+        invalid_attachment_file("persisted directory has no containing directory")
+    })?;
+    let name = path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| invalid_attachment_file("persisted directory has no UTF-8 file name"))?;
+    let Some(parent) = open_pinned_direct_directory(parent_path)? else {
+        return sync_nearest_existing_parent(path);
+    };
+    let Some(directory) = open_pinned_direct_child_directory(&parent, name)? else {
+        sync_open_directory(&parent)?;
+        return verify_pinned_direct_directory(parent_path, &parent);
+    };
+    if !remove_pinned_directory_if_empty(&parent, name, &directory)? {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::DirectoryNotEmpty,
+            format!(
+                "attachment persistence directory is not empty: {}",
+                path.display()
+            ),
+        ));
     }
+    verify_pinned_direct_directory(parent_path, &parent)
+}
+#[cfg(windows)]
+fn remove_dir_if_present(path: &Path) -> std::io::Result<()> {
+    remove_direct_empty_directory_if_present(path).map(drop)
+}
+#[cfg(not(any(unix, windows)))]
+fn remove_dir_if_present(_path: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "secure attachment directory removal is unsupported on this platform",
+    ))
 }
 #[cfg(unix)]
 fn unlink_pinned_file_if_present(parent: &fs::File, name: &str) -> std::io::Result<()> {
-    match rustix::fs::unlinkat(parent, name, rustix::fs::AtFlags::empty()) {
-        Ok(()) => sync_open_directory(parent),
-        Err(rustix::io::Errno::NOENT) => sync_open_directory(parent),
-        Err(error) => Err(std::io::Error::from(error)),
-    }
+    unlink_pinned_regular_file_if_present(parent, name).map(drop)
 }
 #[cfg(unix)]
-fn unlink_pinned_regular_file_if_present(parent: &fs::File, name: &str) -> std::io::Result<bool> {
+pub(super) fn unlink_pinned_regular_file_if_present(
+    parent: &fs::File,
+    name: &str,
+) -> std::io::Result<bool> {
     let Some(file) = open_pinned_direct_regular_file(parent, name)? else {
         sync_open_directory(parent)?;
         return Ok(false);
@@ -1176,6 +1713,219 @@ fn unlink_pinned_regular_file_if_present(parent: &fs::File, name: &str) -> std::
             Ok(true)
         }
         Err(error) => Err(std::io::Error::from(error)),
+    }
+}
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod windows_exact_delete {
+    use std::{
+        ffi::c_void,
+        fs, io,
+        mem::{align_of, size_of},
+        os::windows::io::AsRawHandle as _,
+        ptr,
+    };
+
+    const FILE_DISPOSITION_INFO_EX_CLASS: u32 = 21;
+    const FILE_DISPOSITION_DELETE: u32 = 0x0000_0001;
+    const FILE_DISPOSITION_POSIX_SEMANTICS: u32 = 0x0000_0002;
+    const FILE_DISPOSITION_IGNORE_READONLY_ATTRIBUTE: u32 = 0x0000_0010;
+
+    #[repr(C)]
+    struct FileDispositionInfoEx {
+        flags: u32,
+    }
+
+    const _: () = assert!(size_of::<FileDispositionInfoEx>() == size_of::<u32>());
+    const _: () = assert!(align_of::<FileDispositionInfoEx>() == align_of::<u32>());
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        #[link_name = "SetFileInformationByHandle"]
+        fn set_file_information_by_handle(
+            file: *mut c_void,
+            information_class: u32,
+            information: *const c_void,
+            buffer_size: u32,
+        ) -> i32;
+    }
+
+    pub(super) fn remove(file: &fs::File) -> io::Result<()> {
+        let information = FileDispositionInfoEx {
+            flags: FILE_DISPOSITION_DELETE
+                | FILE_DISPOSITION_POSIX_SEMANTICS
+                | FILE_DISPOSITION_IGNORE_READONLY_ATTRIBUTE,
+        };
+        // SAFETY: `file` is a live DELETE-capable handle opened with delete sharing and
+        // `information` has the documented fixed-size `FILE_DISPOSITION_INFO_EX` layout for the
+        // duration of the call. POSIX semantics remove the name immediately even while other
+        // delete-sharing identity handles retain the underlying object.
+        let succeeded = unsafe {
+            set_file_information_by_handle(
+                file.as_raw_handle().cast(),
+                FILE_DISPOSITION_INFO_EX_CLASS,
+                ptr::from_ref(&information).cast(),
+                u32::try_from(size_of::<FileDispositionInfoEx>())
+                    .expect("FILE_DISPOSITION_INFO_EX size fits u32"),
+            )
+        };
+        if succeeded == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+}
+#[cfg(windows)]
+pub(super) fn remove_direct_regular_file_if_present(path: &Path) -> std::io::Result<bool> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    use crate::secure_file_metadata::{
+        from_file, from_path, is_direct_directory, is_direct_file, number_of_links, same_file,
+    };
+
+    const DELETE_ACCESS: u32 = 0x0001_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const FILE_SHARE_READ: u32 = 0x0000_0001;
+    const FILE_SHARE_DELETE: u32 = 0x0000_0004;
+    const GENERIC_READ: u32 = 0x8000_0000;
+
+    let parent_path = path
+        .parent()
+        .ok_or_else(|| invalid_attachment_file("persisted path has no containing directory"))?;
+    let Some(parent) = open_pinned_direct_directory(parent_path)? else {
+        sync_nearest_existing_parent(path)?;
+        return Ok(false);
+    };
+    let parent_identity = from_file(&parent)?;
+    let file = match fs::OpenOptions::new()
+        .access_mode(GENERIC_READ | DELETE_ACCESS)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            crate::durable_fs::sync_direct_directory(parent_path)?;
+            return Ok(false);
+        }
+        Err(error) => return Err(error),
+    };
+    sorafs_node::validate_private_local_storage_acl(&file, path)?;
+    let opened = from_file(&file)?;
+    let named = from_path(path)?;
+    if !is_direct_file(&opened)
+        || !is_direct_file(&named)
+        || number_of_links(&opened) != Some(1)
+        || number_of_links(&named) != Some(1)
+        || !same_file(&opened, &named)
+    {
+        return Err(invalid_attachment_file(
+            "persisted entry changed identity before exact removal",
+        ));
+    }
+    // Release transient metadata handles before mutating the namespace. Any independently
+    // retained identity handles share deletion and therefore do not delay POSIX name removal.
+    drop((opened, named));
+    let disposition = windows_exact_delete::remove(&file);
+    drop(file);
+    // A successful disposition is a namespace mutation even if a later postcondition fails.
+    // Always attempt the durability barrier before reporting either outcome.
+    let synced = crate::durable_fs::sync_direct_directory(parent_path);
+    disposition?;
+    synced?;
+
+    let parent_after = from_file(&parent)?;
+    let named_parent = from_path(parent_path)?;
+    if !is_direct_directory(&parent_identity)
+        || !is_direct_directory(&parent_after)
+        || !is_direct_directory(&named_parent)
+        || !same_file(&parent_identity, &parent_after)
+        || !same_file(&parent_after, &named_parent)
+    {
+        return Err(invalid_attachment_file(
+            "persistence directory changed during exact removal",
+        ));
+    }
+    match from_path(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Ok(_) => Err(invalid_attachment_file(
+            "a replacement appeared at the removed persistence path",
+        )),
+        Err(error) => Err(error),
+    }
+}
+#[cfg(windows)]
+fn remove_direct_empty_directory_if_present(path: &Path) -> std::io::Result<bool> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    use crate::secure_file_metadata::{from_file, from_path, is_direct_directory, same_file};
+
+    const DELETE_ACCESS: u32 = 0x0001_0000;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const FILE_SHARE_READ_WRITE_DELETE: u32 = 0x0000_0001 | 0x0000_0002 | 0x0000_0004;
+    const GENERIC_READ: u32 = 0x8000_0000;
+
+    let parent_path = path
+        .parent()
+        .ok_or_else(|| invalid_attachment_file("persisted path has no containing directory"))?;
+    let Some(parent) = open_pinned_direct_directory(parent_path)? else {
+        sync_nearest_existing_parent(path)?;
+        return Ok(false);
+    };
+    let parent_identity = from_file(&parent)?;
+    let directory = match fs::OpenOptions::new()
+        .access_mode(GENERIC_READ | DELETE_ACCESS)
+        .share_mode(FILE_SHARE_READ_WRITE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+    {
+        Ok(directory) => directory,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            crate::durable_fs::sync_direct_directory(parent_path)?;
+            return Ok(false);
+        }
+        Err(error) => return Err(error),
+    };
+    sorafs_node::validate_private_local_storage_acl(&directory, path)?;
+    let opened = from_file(&directory)?;
+    let named = from_path(path)?;
+    if !is_direct_directory(&opened) || !is_direct_directory(&named) || !same_file(&opened, &named)
+    {
+        return Err(invalid_attachment_file(
+            "persisted directory changed identity before exact removal",
+        ));
+    }
+    // Release transient metadata handles before mutating the namespace. Any independently
+    // retained identity handles share deletion and therefore do not delay POSIX name removal.
+    drop((opened, named));
+    let disposition = windows_exact_delete::remove(&directory);
+    drop(directory);
+    // A successful disposition is a namespace mutation even if a later postcondition fails.
+    // Always attempt the durability barrier before reporting either outcome.
+    let synced = crate::durable_fs::sync_direct_directory(parent_path);
+    disposition?;
+    synced?;
+
+    let parent_after = from_file(&parent)?;
+    let named_parent = from_path(parent_path)?;
+    if !is_direct_directory(&parent_identity)
+        || !is_direct_directory(&parent_after)
+        || !is_direct_directory(&named_parent)
+        || !same_file(&parent_identity, &parent_after)
+        || !same_file(&parent_after, &named_parent)
+    {
+        return Err(invalid_attachment_file(
+            "persistence parent directory changed during exact removal",
+        ));
+    }
+    match from_path(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Ok(_) => Err(invalid_attachment_file(
+            "a replacement appeared at the removed persistence directory path",
+        )),
+        Err(error) => Err(error),
     }
 }
 #[cfg(unix)]
@@ -1252,24 +2002,23 @@ fn remove_attachment_pair_pinned(tenant_key: &str, id: &str) -> std::io::Result<
 }
 #[cfg(not(unix))]
 fn remove_processing_temp_files(dir: &Path) -> std::io::Result<()> {
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error),
+    let Some((directory, names)) =
+        open_pinned_directory_names(dir, PROVER_PROCESSING_RECOVERY_MAX_ENTRIES)?
+    else {
+        return Ok(());
     };
-    for entry in entries {
-        let entry = entry?;
-        if entry.file_type()?.is_file()
-            && entry
-                .file_name()
-                .to_str()
-                .is_some_and(is_attachment_writer_temp_name)
-        {
-            drop(open_attachment_regular_file(&entry.path())?);
-            remove_file_if_present(&entry.path())?;
+    for name in names {
+        if !is_attachment_writer_temp_name(&name) {
+            continue;
         }
+        if open_direct_regular_file_in_pinned_directory(dir, &directory, &name)?.is_none() {
+            return Err(invalid_attachment_file(
+                "processing temporary entry disappeared during cleanup",
+            ));
+        }
+        remove_direct_regular_file_in_pinned_directory(dir, &directory, &name)?;
     }
-    Ok(())
+    verify_pinned_direct_directory(dir, &directory)
 }
 #[cfg(unix)]
 fn remove_prover_processing_reference_locked(tenant_key: &str, id: &str) -> std::io::Result<()> {
@@ -1350,17 +2099,12 @@ fn open_attachment_regular_file_platform(path: &Path) -> std::io::Result<(fs::Fi
     let file_name = path
         .file_name()
         .ok_or_else(|| invalid_attachment_file("attachment path has no file name"))?;
-    let parent = fs::File::from(
-        rustix::fs::open(
-            parent_path,
-            rustix::fs::OFlags::RDONLY
-                | rustix::fs::OFlags::DIRECTORY
-                | rustix::fs::OFlags::NOFOLLOW
-                | rustix::fs::OFlags::CLOEXEC,
-            rustix::fs::Mode::empty(),
+    let parent = open_pinned_direct_directory(parent_path)?.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "attachment containing directory is missing",
         )
-        .map_err(std::io::Error::from)?,
-    );
+    })?;
     let file = fs::File::from(
         rustix::fs::openat(
             &parent,
@@ -1375,11 +2119,16 @@ fn open_attachment_regular_file_platform(path: &Path) -> std::io::Result<(fs::Fi
         .map_err(std::io::Error::from)?,
     );
     let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.nlink() != 1 {
+    if !metadata.is_file()
+        || metadata.nlink() != 1
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.mode() & 0o022 != 0
+    {
         return Err(invalid_attachment_file(
-            "attachment entry is not a direct single-link regular file",
+            "attachment entry is not an owner-controlled direct single-link regular file",
         ));
     }
+    sorafs_node::validate_private_local_storage_acl(&file, path)?;
     Ok((file, metadata))
 }
 #[cfg(windows)]
@@ -1395,6 +2144,7 @@ fn open_attachment_regular_file_platform(path: &Path) -> std::io::Result<(fs::Fi
         ));
     }
     let file = open_direct_file(path)?;
+    sorafs_node::validate_private_local_storage_acl(&file, path)?;
     let opened = from_file(&file)?;
     let named = from_path(path)?;
     if !is_direct_file(&opened)
@@ -1462,202 +2212,229 @@ fn is_attachment_writer_temp_name(name: &str) -> bool {
 }
 fn remove_attachment_writer_temps_in(
     directory: &Path,
+    directory_handle: &fs::File,
     scanned: &mut u64,
     scan_limit: u64,
 ) -> std::io::Result<()> {
-    verify_direct_directory(directory)?;
-    for entry in fs::read_dir(directory)? {
-        let entry = entry?;
+    let names = pinned_directory_names_at(
+        directory,
+        directory_handle,
+        scan_limit.saturating_sub(*scanned),
+    )?;
+    for name in names {
         *scanned = (*scanned).saturating_add(1);
         if *scanned > scan_limit {
             return Err(invalid_attachment_file(format!(
                 "attachment temporary-file recovery exceeds {scan_limit} entries"
             )));
         }
-        let file_name = entry.file_name();
-        let name = file_name.to_str().ok_or_else(|| {
-            invalid_attachment_file("attachment store contains a non-UTF-8 entry name")
-        })?;
-        if !is_attachment_writer_temp_name(name) {
-            continue;
-        }
-        if !entry.file_type()?.is_file() {
+        if open_direct_regular_file_in_pinned_directory(directory, directory_handle, &name)?
+            .is_none()
+        {
             return Err(invalid_attachment_file(format!(
-                "attachment temporary path is not a direct regular file: {}",
-                entry.path().display()
+                "attachment entry disappeared during temporary-file recovery: {}",
+                directory.join(&name).display()
             )));
         }
-        drop(open_attachment_regular_file(&entry.path())?);
-        remove_file_if_present(&entry.path())?;
+        if !is_attachment_writer_temp_name(&name) {
+            continue;
+        }
+        remove_direct_regular_file_in_pinned_directory(directory, directory_handle, &name)?;
     }
-    verify_direct_directory(directory)
+    verify_pinned_direct_directory(directory, directory_handle)
 }
 fn recover_attachment_mutation_writer_temps() -> std::io::Result<()> {
     let directory = attachment_mutation_transaction_dir();
-    match verify_direct_directory(&directory) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error),
-    }
+    let Some((directory_handle, names)) =
+        open_pinned_directory_names(&directory, ATTACHMENT_TRANSACTION_RECOVERY_MAX_ENTRIES)?
+    else {
+        return Ok(());
+    };
     let mut scanned = 0_u64;
-    for entry in fs::read_dir(&directory)? {
-        let entry = entry?;
+    for name in names {
         scanned = scanned.saturating_add(1);
         if scanned > ATTACHMENT_TRANSACTION_RECOVERY_MAX_ENTRIES {
             return Err(invalid_attachment_file(format!(
                 "attachment mutation recovery exceeds {ATTACHMENT_TRANSACTION_RECOVERY_MAX_ENTRIES} entries"
             )));
         }
-        let file_name = entry.file_name();
-        let name = file_name.to_str().ok_or_else(|| {
-            invalid_attachment_file("attachment mutation directory contains a non-UTF-8 entry")
-        })?;
-        if name != ATTACHMENT_MUTATION_TRANSACTION_FILE && !is_attachment_writer_temp_name(name) {
+        if name != ATTACHMENT_MUTATION_TRANSACTION_FILE && !is_attachment_writer_temp_name(&name) {
             return Err(invalid_attachment_file(format!(
                 "attachment mutation directory contains an unexpected entry: {name}"
             )));
         }
-        if !entry.file_type()?.is_file() {
+        if open_direct_regular_file_in_pinned_directory(&directory, &directory_handle, &name)?
+            .is_none()
+        {
             return Err(invalid_attachment_file(format!(
-                "attachment mutation path is not a direct regular file: {}",
-                entry.path().display()
+                "attachment mutation entry disappeared during recovery: {}",
+                directory.join(&name).display()
             )));
         }
-        drop(open_attachment_regular_file(&entry.path())?);
-        if is_attachment_writer_temp_name(name) {
-            remove_file_if_present(&entry.path())?;
+        if is_attachment_writer_temp_name(&name) {
+            remove_direct_regular_file_in_pinned_directory(&directory, &directory_handle, &name)?;
         }
     }
-    verify_direct_directory(&directory)
+    verify_pinned_direct_directory(&directory, &directory_handle)
 }
 fn recover_attachment_writer_temps() -> std::io::Result<()> {
     let root = attachments_root_dir();
-    verify_direct_directory(&root)?;
+    let (root_handle, names) =
+        open_pinned_directory_names(&root, ATTACHMENT_ROOT_RECOVERY_MAX_ENTRIES)?.ok_or_else(
+            || {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "attachment persistence root directory is missing",
+                )
+            },
+        )?;
     let mut root_entries = 0_u64;
     let mut child_entries = 0_u64;
-    for entry in fs::read_dir(&root)? {
-        let entry = entry?;
+    for raw_tenant in names {
         root_entries = root_entries.saturating_add(1);
         if root_entries > ATTACHMENT_ROOT_RECOVERY_MAX_ENTRIES {
             return Err(invalid_attachment_file(format!(
                 "attachment temporary-file recovery exceeds {ATTACHMENT_ROOT_RECOVERY_MAX_ENTRIES} tenant entries"
             )));
         }
-        let file_name = entry.file_name();
-        let raw_tenant = file_name.to_str().ok_or_else(|| {
-            invalid_attachment_file("attachment root contains a non-UTF-8 entry name")
-        })?;
-        let tenant = sanitize_tenant_key(raw_tenant)
-            .filter(|tenant| tenant == raw_tenant)
+        let tenant = sanitize_tenant_key(&raw_tenant)
+            .filter(|tenant| tenant == &raw_tenant)
             .ok_or_else(|| {
                 invalid_attachment_file(format!(
                     "attachment root contains a non-canonical tenant entry: {raw_tenant}"
                 ))
             })?;
-        if !entry.file_type()?.is_dir() {
+        let tenant_path = attachments_dir(&AttachmentTenant(tenant));
+        let Some(tenant_handle) =
+            open_direct_directory_in_pinned_directory(&root, &root_handle, &raw_tenant)?
+        else {
             return Err(invalid_attachment_file(format!(
-                "attachment tenant path is not a direct directory: {}",
-                entry.path().display()
+                "attachment tenant directory disappeared during recovery: {}",
+                tenant_path.display()
             )));
-        }
+        };
         remove_attachment_writer_temps_in(
-            &attachments_dir(&AttachmentTenant(tenant)),
+            &tenant_path,
+            &tenant_handle,
             &mut child_entries,
             ATTACHMENT_CHILD_RECOVERY_MAX_ENTRIES,
         )?;
     }
-    verify_direct_directory(&root)?;
+    verify_pinned_direct_directory(&root, &root_handle)?;
     recover_attachment_mutation_writer_temps()
 }
 fn recover_prover_processing_writer_temps() -> std::io::Result<()> {
     let base = base_dir();
-    verify_direct_directory(&base)?;
+    let base_handle = open_pinned_direct_directory(&base)?.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "attachment persistence base directory is missing",
+        )
+    })?;
     let prover = base.join("zk_prover");
-    match fs::symlink_metadata(&prover) {
-        Ok(_) => verify_direct_directory(&prover)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error),
-    }
+    let Some(prover_handle) =
+        open_direct_directory_in_pinned_directory(&base, &base_handle, "zk_prover")?
+    else {
+        return Ok(());
+    };
     let state = prover_processing_state_dir();
-    match fs::symlink_metadata(&state) {
-        Ok(_) => verify_direct_directory(&state)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error),
-    }
+    let state_name = format!("processing_{ZK_PROVER_PROCESSING_STATE_VERSION}");
+    let Some(state_handle) =
+        open_direct_directory_in_pinned_directory(&prover, &prover_handle, &state_name)?
+    else {
+        return Ok(());
+    };
+    let state_names = pinned_directory_names_at(
+        &state,
+        &state_handle,
+        PROVER_PROCESSING_RECOVERY_MAX_ENTRIES,
+    )?;
     let mut scanned = 0_u64;
-    for entry in fs::read_dir(&state)? {
-        let entry = entry?;
+    for raw_id in state_names {
         scanned = scanned.saturating_add(1);
         if scanned > PROVER_PROCESSING_RECOVERY_MAX_ENTRIES {
             return Err(invalid_attachment_file(format!(
                 "ZK prover processing-state recovery exceeds {PROVER_PROCESSING_RECOVERY_MAX_ENTRIES} entries"
             )));
         }
-        let file_name = entry.file_name();
-        let raw_id = file_name.to_str().ok_or_else(|| {
-            invalid_attachment_file("ZK prover processing state contains a non-UTF-8 entry")
-        })?;
-        let id = sanitize_attachment_id(raw_id)
-            .filter(|id| id == raw_id)
+        let id = sanitize_attachment_id(&raw_id)
+            .filter(|id| id == &raw_id)
             .ok_or_else(|| {
                 invalid_attachment_file(format!(
                     "ZK prover processing state contains a non-canonical entry: {raw_id}"
                 ))
             })?;
-        if !entry.file_type()?.is_dir() {
+        let Some(state_entry_handle) =
+            open_direct_directory_in_pinned_directory(&state, &state_handle, &raw_id)?
+        else {
             return Err(invalid_attachment_file(format!(
-                "ZK prover processing-state path is not a direct directory: {}",
-                entry.path().display()
+                "ZK prover processing-state entry disappeared during recovery: {raw_id}"
             )));
-        }
+        };
         let state_entry = state.join(&id);
-        verify_direct_directory(&state_entry)?;
+        let child_names = pinned_directory_names_at(
+            &state_entry,
+            &state_entry_handle,
+            PROVER_PROCESSING_RECOVERY_MAX_ENTRIES.saturating_sub(scanned),
+        )?;
         let mut has_receipt = false;
-        let mut has_live_dir = false;
-        for child in fs::read_dir(&state_entry)? {
-            let child = child?;
+        let mut live_handle = None;
+        for name in child_names {
             scanned = scanned.saturating_add(1);
             if scanned > PROVER_PROCESSING_RECOVERY_MAX_ENTRIES {
                 return Err(invalid_attachment_file(format!(
                     "ZK prover processing-state recovery exceeds {PROVER_PROCESSING_RECOVERY_MAX_ENTRIES} entries"
                 )));
             }
-            let child_name = child.file_name();
-            let name = child_name.to_str().ok_or_else(|| {
-                invalid_attachment_file(
-                    "ZK prover processing-state entry contains a non-UTF-8 path",
-                )
-            })?;
-            if is_attachment_writer_temp_name(name) {
-                if !child.file_type()?.is_file() {
+            if is_attachment_writer_temp_name(&name) {
+                if open_direct_regular_file_in_pinned_directory(
+                    &state_entry,
+                    &state_entry_handle,
+                    &name,
+                )?
+                .is_none()
+                {
                     return Err(invalid_attachment_file(format!(
-                        "ZK prover processing temporary path is not a direct regular file: {}",
-                        child.path().display()
+                        "ZK prover processing temporary entry disappeared during recovery: {}",
+                        state_entry.join(&name).display()
                     )));
                 }
-                drop(open_attachment_regular_file(&child.path())?);
-                remove_file_if_present(&child.path())?;
+                remove_direct_regular_file_in_pinned_directory(
+                    &state_entry,
+                    &state_entry_handle,
+                    &name,
+                )?;
                 continue;
             }
-            match name {
+            match name.as_str() {
                 "receipt.json" => {
-                    if !child.file_type()?.is_file() {
+                    if open_direct_regular_file_in_pinned_directory(
+                        &state_entry,
+                        &state_entry_handle,
+                        &name,
+                    )?
+                    .is_none()
+                    {
                         return Err(invalid_attachment_file(format!(
-                            "ZK prover processing receipt is not a direct regular file: {}",
-                            child.path().display()
+                            "ZK prover processing receipt disappeared during recovery: {}",
+                            state_entry.join(&name).display()
                         )));
                     }
                     has_receipt = true;
                 }
                 "live" => {
-                    if !child.file_type()?.is_dir() {
+                    let Some(opened) = open_direct_directory_in_pinned_directory(
+                        &state_entry,
+                        &state_entry_handle,
+                        &name,
+                    )?
+                    else {
                         return Err(invalid_attachment_file(format!(
-                            "ZK prover live-reference path is not a direct directory: {}",
-                            child.path().display()
+                            "ZK prover live-reference directory disappeared during recovery: {}",
+                            state_entry.join(&name).display()
                         )));
-                    }
-                    verify_direct_directory(&child.path())?;
-                    has_live_dir = true;
+                    };
+                    live_handle = Some(opened);
                 }
                 _ => {
                     return Err(invalid_attachment_file(format!(
@@ -1666,7 +2443,7 @@ fn recover_prover_processing_writer_temps() -> std::io::Result<()> {
                 }
             }
         }
-        verify_direct_directory(&state_entry)?;
+        verify_pinned_direct_directory(&state_entry, &state_entry_handle)?;
         if has_receipt && try_load_prover_processing_receipt_locked(&id)?.is_none() {
             return Err(invalid_attachment_file(
                 "ZK prover processing receipt disappeared during startup recovery",
@@ -1674,30 +2451,39 @@ fn recover_prover_processing_writer_temps() -> std::io::Result<()> {
         }
         let live = prover_processing_reference_dir(&id);
         let mut has_live_reference = false;
-        if has_live_dir {
-            for reference in fs::read_dir(&live)? {
-                let reference = reference?;
+        let had_live_dir = live_handle.is_some();
+        if let Some(live_directory) = live_handle.as_ref() {
+            let reference_names = pinned_directory_names_at(
+                &live,
+                live_directory,
+                PROVER_PROCESSING_RECOVERY_MAX_ENTRIES.saturating_sub(scanned),
+            )?;
+            for name in reference_names {
                 scanned = scanned.saturating_add(1);
                 if scanned > PROVER_PROCESSING_RECOVERY_MAX_ENTRIES {
                     return Err(invalid_attachment_file(format!(
                         "ZK prover processing-state recovery exceeds {PROVER_PROCESSING_RECOVERY_MAX_ENTRIES} entries"
                     )));
                 }
-                let reference_name = reference.file_name();
-                let name = reference_name.to_str().ok_or_else(|| {
-                    invalid_attachment_file(
-                        "ZK prover live-reference directory contains a non-UTF-8 path",
-                    )
-                })?;
-                if is_attachment_writer_temp_name(name) {
-                    if !reference.file_type()?.is_file() {
+                if open_direct_regular_file_in_pinned_directory(&live, live_directory, &name)?
+                    .is_none()
+                {
+                    return Err(invalid_attachment_file(format!(
+                        "ZK prover live-reference entry disappeared during recovery: {}",
+                        live.join(&name).display()
+                    )));
+                }
+                if is_attachment_writer_temp_name(&name) {
+                    if !remove_direct_regular_file_in_pinned_directory(
+                        &live,
+                        live_directory,
+                        &name,
+                    )? {
                         return Err(invalid_attachment_file(format!(
-                            "ZK prover live-reference temporary path is not a direct regular file: {}",
-                            reference.path().display()
+                            "ZK prover live-reference temporary entry disappeared during cleanup: {}",
+                            live.join(&name).display()
                         )));
                     }
-                    drop(open_attachment_regular_file(&reference.path())?);
-                    remove_file_if_present(&reference.path())?;
                     continue;
                 }
                 let tenant_key = name
@@ -1709,12 +2495,10 @@ fn recover_prover_processing_writer_temps() -> std::io::Result<()> {
                             "ZK prover live-reference directory contains an unexpected path: {name}"
                         ))
                     })?;
-                if !reference.file_type()?.is_file()
-                    || !processing_marker_exists(&reference.path())?
-                {
+                if !processing_marker_exists_in_pinned_directory(&live, live_directory, &name)? {
                     return Err(invalid_attachment_file(format!(
                         "invalid ZK prover live-reference marker: {}",
-                        reference.path().display()
+                        live.join(&name).display()
                     )));
                 }
                 let tenant = AttachmentTenant(tenant_key);
@@ -1722,67 +2506,73 @@ fn recover_prover_processing_writer_temps() -> std::io::Result<()> {
                 drop(open_attachment_regular_file(&bin_path(&tenant, &id))?);
                 has_live_reference = true;
             }
-            verify_direct_directory(&live)?;
+            verify_pinned_direct_directory(&live, live_directory)?;
         }
+        drop(live_handle);
         if !has_live_reference {
-            if has_live_dir {
+            if had_live_dir {
                 remove_dir_if_present(&live)?;
             }
             remove_file_if_present(&prover_processing_receipt_path(&id))?;
+            drop(state_entry_handle);
             remove_dir_if_present(&state_entry)?;
         }
     }
-    verify_direct_directory(&state)?;
-    verify_direct_directory(&prover)?;
-    verify_direct_directory(&base)
+    verify_pinned_direct_directory(&state, &state_handle)?;
+    verify_pinned_direct_directory(&prover, &prover_handle)?;
+    verify_pinned_direct_directory(&base, &base_handle)
 }
 fn reconcile_attachment_entry_pairs() -> std::io::Result<()> {
     let root = attachments_root_dir();
-    verify_direct_directory(&root)?;
+    let (root_handle, root_names) =
+        open_pinned_directory_names(&root, ATTACHMENT_ROOT_RECOVERY_MAX_ENTRIES)?.ok_or_else(
+            || {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "attachment persistence root directory is missing",
+                )
+            },
+        )?;
     let mut root_entries = 0_u64;
     let mut child_entries = 0_u64;
-    for entry in fs::read_dir(&root)? {
-        let entry = entry?;
+    for raw_tenant in root_names {
         root_entries = root_entries.saturating_add(1);
         if root_entries > ATTACHMENT_ROOT_RECOVERY_MAX_ENTRIES {
             return Err(invalid_attachment_file(format!(
                 "attachment entry reconciliation exceeds {ATTACHMENT_ROOT_RECOVERY_MAX_ENTRIES} tenant entries"
             )));
         }
-        let file_name = entry.file_name();
-        let raw_tenant = file_name.to_str().ok_or_else(|| {
-            invalid_attachment_file("attachment root contains a non-UTF-8 entry name")
-        })?;
-        let tenant_key = sanitize_tenant_key(raw_tenant)
-            .filter(|tenant| tenant == raw_tenant)
+        let tenant_key = sanitize_tenant_key(&raw_tenant)
+            .filter(|tenant| tenant == &raw_tenant)
             .ok_or_else(|| {
                 invalid_attachment_file(format!(
                     "attachment root contains a non-canonical tenant entry: {raw_tenant}"
                 ))
             })?;
-        if !entry.file_type()?.is_dir() {
-            return Err(invalid_attachment_file(format!(
-                "attachment tenant path is not a direct directory: {}",
-                entry.path().display()
-            )));
-        }
         let tenant = AttachmentTenant(tenant_key);
         let directory = attachments_dir(&tenant);
-        verify_direct_directory(&directory)?;
+        let Some(directory_handle) =
+            open_direct_directory_in_pinned_directory(&root, &root_handle, &raw_tenant)?
+        else {
+            return Err(invalid_attachment_file(format!(
+                "attachment tenant directory disappeared during reconciliation: {}",
+                directory.display()
+            )));
+        };
+        let child_names = pinned_directory_names_at(
+            &directory,
+            &directory_handle,
+            ATTACHMENT_CHILD_RECOVERY_MAX_ENTRIES.saturating_sub(child_entries),
+        )?;
         let mut metadata_ids = BTreeSet::new();
         let mut body_ids = BTreeSet::new();
-        for child in fs::read_dir(&directory)? {
-            let child = child?;
+        for name in child_names {
             child_entries = child_entries.saturating_add(1);
             if child_entries > ATTACHMENT_CHILD_RECOVERY_MAX_ENTRIES {
                 return Err(invalid_attachment_file(format!(
                     "attachment entry reconciliation exceeds {ATTACHMENT_CHILD_RECOVERY_MAX_ENTRIES} child entries"
                 )));
             }
-            let child_name = child.file_name();
-            let name = child_name.to_str().ok_or_else(|| {
-                invalid_attachment_file("attachment store contains a non-UTF-8 entry name")
-            })?;
             let (raw_id, ids) = if let Some(raw_id) = name.strip_suffix(".json") {
                 (raw_id, &mut metadata_ids)
             } else if let Some(raw_id) = name.strip_suffix(".bin") {
@@ -1799,36 +2589,39 @@ fn reconcile_attachment_entry_pairs() -> std::io::Result<()> {
                         "attachment store contains a non-canonical entry: {name}"
                     ))
                 })?;
-            if !child.file_type()?.is_file() {
+            if open_direct_regular_file_in_pinned_directory(&directory, &directory_handle, &name)?
+                .is_none()
+            {
                 return Err(invalid_attachment_file(format!(
-                    "attachment path is not a direct regular file: {}",
-                    child.path().display()
+                    "attachment entry disappeared during reconciliation: {}",
+                    directory.join(&name).display()
                 )));
             }
-            drop(open_attachment_regular_file(&child.path())?);
             if !ids.insert(id) {
                 return Err(invalid_attachment_file(format!(
                     "attachment store contains a duplicate entry: {name}"
                 )));
             }
         }
-        verify_direct_directory(&directory)?;
+        verify_pinned_direct_directory(&directory, &directory_handle)?;
         if let Some(id) = metadata_ids.difference(&body_ids).next() {
             return Err(invalid_attachment_file(format!(
                 "attachment metadata has no body: {id}"
             )));
         }
         for id in body_ids.difference(&metadata_ids) {
-            remove_file_if_present(&bin_path(&tenant, id))?;
+            let name = format!("{id}.bin");
+            remove_direct_regular_file_in_pinned_directory(&directory, &directory_handle, &name)?;
         }
         for id in &metadata_ids {
             ensure_prover_processing_reference(tenant.as_str(), id)?;
         }
+        drop(directory_handle);
         if metadata_ids.is_empty() {
             remove_empty_tenant_dir_if_present(&tenant)?;
         }
     }
-    verify_direct_directory(&root)
+    verify_pinned_direct_directory(&root, &root_handle)
 }
 fn reconcile_attachment_entry_pairs_if_dirty() -> std::io::Result<()> {
     if !ATTACHMENT_ENTRY_PAIRS_DIRTY.load(AtomicOrdering::Acquire) {
@@ -1863,36 +2656,30 @@ fn now_ms() -> u64 {
 }
 fn try_list_all_ids(tenant: &AttachmentTenant) -> std::io::Result<Vec<String>> {
     let directory = attachments_dir(tenant);
-    match verify_direct_directory(&directory) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(error),
-    }
+    let Some((directory_handle, names)) =
+        open_pinned_directory_names(&directory, ATTACHMENT_TENANT_SCAN_MAX_ENTRIES)?
+    else {
+        return Ok(Vec::new());
+    };
     let mut metadata_ids = BTreeSet::new();
     let mut body_ids = BTreeSet::new();
     let mut scanned = 0_u64;
-    for entry in fs::read_dir(&directory)? {
-        let entry = entry?;
+    for name in names {
         scanned = scanned.saturating_add(1);
         if scanned > ATTACHMENT_TENANT_SCAN_MAX_ENTRIES {
             return Err(invalid_attachment_file(format!(
                 "attachment listing exceeds {ATTACHMENT_TENANT_SCAN_MAX_ENTRIES} tenant entries"
             )));
         }
-        let file_name = entry.file_name();
-        let Some(name) = file_name.to_str() else {
-            return Err(invalid_attachment_file(
-                "attachment store contains a non-UTF-8 entry name",
-            ));
-        };
-        if is_attachment_writer_temp_name(name) {
-            if !entry.file_type()?.is_file() {
+        if is_attachment_writer_temp_name(&name) {
+            if open_direct_regular_file_in_pinned_directory(&directory, &directory_handle, &name)?
+                .is_none()
+            {
                 return Err(invalid_attachment_file(format!(
-                    "attachment temporary path is not a direct regular file: {}",
-                    entry.path().display()
+                    "attachment temporary entry disappeared during listing: {}",
+                    directory.join(&name).display()
                 )));
             }
-            drop(open_attachment_regular_file(&entry.path())?);
             continue;
         }
         let (raw_id, ids) = if let Some(raw_id) = name.strip_suffix(".json") {
@@ -1911,20 +2698,21 @@ fn try_list_all_ids(tenant: &AttachmentTenant) -> std::io::Result<Vec<String>> {
                 "attachment store contains a non-canonical entry: {name}"
             )));
         };
-        if !entry.file_type()?.is_file() {
+        if open_direct_regular_file_in_pinned_directory(&directory, &directory_handle, &name)?
+            .is_none()
+        {
             return Err(invalid_attachment_file(format!(
-                "attachment entry is not a direct regular file: {}",
-                entry.path().display()
+                "attachment entry disappeared during listing: {}",
+                directory.join(&name).display()
             )));
         }
-        drop(open_attachment_regular_file(&entry.path())?);
         if !ids.insert(sanitized) {
             return Err(invalid_attachment_file(format!(
                 "attachment store contains a duplicate entry: {name}"
             )));
         }
     }
-    verify_direct_directory(&directory)?;
+    verify_pinned_direct_directory(&directory, &directory_handle)?;
     if let Some(id) = metadata_ids.difference(&body_ids).next() {
         return Err(invalid_attachment_file(format!(
             "attachment metadata has no body: {id}"
@@ -2022,15 +2810,28 @@ fn persist_body(tenant: &AttachmentTenant, id: &str, body: &[u8]) -> std::io::Re
     ensure_attachment_dirs_durable(tenant)?;
     persist_bytes_atomically(&path, body, ".tmp")
 }
+#[cfg(unix)]
 fn remove_empty_tenant_dir_if_present(tenant: &AttachmentTenant) -> std::io::Result<()> {
-    match fs::remove_dir(attachments_dir(tenant)) {
-        Ok(()) => sync_directory(&attachments_root_dir()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            sync_directory(&attachments_root_dir())
-        }
+    match remove_dir_if_present(&attachments_dir(tenant)) {
+        Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => Ok(()),
         Err(error) => Err(error),
     }
+}
+#[cfg(windows)]
+fn remove_empty_tenant_dir_if_present(tenant: &AttachmentTenant) -> std::io::Result<()> {
+    match remove_direct_empty_directory_if_present(&attachments_dir(tenant)) {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+#[cfg(not(any(unix, windows)))]
+fn remove_empty_tenant_dir_if_present(_tenant: &AttachmentTenant) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "secure attachment tenant-directory removal is unsupported on this platform",
+    ))
 }
 fn validate_attachment_delete_transaction(
     transaction: &AttachmentDeleteTransaction,
@@ -3075,7 +3876,12 @@ fn spawn_sanitizer_stdout_reader(
         // Keep physical admission for as long as this reader can remain blocked
         // so detached pipe readers cannot accumulate outside the semaphore.
         let admission = admission;
-        let result = read_sanitizer_stdout_limited(&mut stdout, max_output_bytes);
+        let result = match iroha_core::panic_hook::catch_unwind_suppressed(|| {
+            read_sanitizer_stdout_limited(&mut stdout, max_output_bytes)
+        }) {
+            Ok(result) => result,
+            Err(_) => Err("attachment sanitizer stdout reader panicked".to_owned()),
+        };
         drop(admission);
         let _ = tx.send(result);
     });
@@ -3393,29 +4199,38 @@ fn quota_metas_for_tenant(
     scan: &mut AttachmentQuotaScanBudget,
 ) -> std::io::Result<Vec<AttachmentMeta>> {
     let directory = attachments_dir(tenant);
-    match verify_direct_directory(&directory) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(error),
-    }
-    let entries = match fs::read_dir(&directory) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(error),
+    let Some(directory_handle) = open_pinned_direct_directory(&directory)? else {
+        return Ok(Vec::new());
     };
+    quota_metas_for_tenant_in(tenant, &directory, &directory_handle, scan)
+}
+fn quota_metas_for_tenant_in(
+    tenant: &AttachmentTenant,
+    directory: &Path,
+    directory_handle: &fs::File,
+    scan: &mut AttachmentQuotaScanBudget,
+) -> std::io::Result<Vec<AttachmentMeta>> {
+    let names = pinned_directory_names_at(
+        directory,
+        directory_handle,
+        scan.child_entry_limit.saturating_sub(scan.child_entries),
+    )?;
     let mut metas = Vec::new();
-    for entry in entries {
-        let entry = entry?;
+    for name in names {
         if !quota_scan_entry_within_limit(&mut scan.child_entries, scan.child_entry_limit) {
             return Err(invalid_attachment_file(format!(
                 "attachment quota scan exceeds {} aggregate tenant child entries",
                 scan.child_entry_limit
             )));
         }
-        let file_name = entry.file_name();
-        let name = file_name.to_str().ok_or_else(|| {
-            invalid_attachment_file("attachment store contains a non-UTF-8 entry name")
-        })?;
+        if open_direct_regular_file_in_pinned_directory(directory, directory_handle, &name)?
+            .is_none()
+        {
+            return Err(invalid_attachment_file(format!(
+                "attachment entry disappeared during quota scan: {}",
+                directory.join(&name).display()
+            )));
+        }
         let Some(raw_id) = name.strip_suffix(".json") else {
             continue;
         };
@@ -3426,12 +4241,6 @@ fn quota_metas_for_tenant(
                     "attachment quota scan found a non-canonical metadata entry: {name}"
                 ))
             })?;
-        if !entry.file_type()?.is_file() {
-            return Err(invalid_attachment_file(format!(
-                "attachment metadata path is not a direct regular file: {}",
-                entry.path().display()
-            )));
-        }
         scan.metadata_records = scan.metadata_records.saturating_add(1);
         if scan.metadata_records > ATTACHMENT_META_SCAN_MAX_FILES {
             return Err(invalid_attachment_file(format!(
@@ -3445,7 +4254,7 @@ fn quota_metas_for_tenant(
         })?;
         metas.push(meta);
     }
-    verify_direct_directory(&directory)?;
+    verify_pinned_direct_directory(directory, directory_handle)?;
     Ok(metas)
 }
 fn other_tenants_quota_usage(
@@ -3453,55 +4262,48 @@ fn other_tenants_quota_usage(
     scan: &mut AttachmentQuotaScanBudget,
 ) -> std::io::Result<(u64, u64)> {
     let root = attachments_root_dir();
-    match verify_direct_directory(&root) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((0, 0)),
-        Err(error) => return Err(error),
-    }
-    let entries = match fs::read_dir(&root) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((0, 0)),
-        Err(error) => return Err(error),
+    let Some((root_handle, root_names)) =
+        open_pinned_directory_names(&root, ATTACHMENT_META_SCAN_MAX_FILES)?
+    else {
+        return Ok((0, 0));
     };
     let mut count = 0_u64;
     let mut bytes = 0_u64;
     let mut root_entries_scanned = 0_u64;
-    for entry in entries {
-        let entry = entry?;
+    for raw_tenant in root_names {
         if !quota_scan_entry_within_limit(&mut root_entries_scanned, ATTACHMENT_META_SCAN_MAX_FILES)
         {
             return Err(invalid_attachment_file(format!(
                 "attachment quota root scan exceeds {ATTACHMENT_META_SCAN_MAX_FILES} entries"
             )));
         }
-        let file_name = entry.file_name();
-        let raw_tenant = file_name.to_str().ok_or_else(|| {
-            invalid_attachment_file("attachment root contains a non-UTF-8 entry name")
-        })?;
-        let tenant_key = sanitize_tenant_key(raw_tenant)
-            .filter(|tenant| tenant == raw_tenant)
+        let tenant_key = sanitize_tenant_key(&raw_tenant)
+            .filter(|tenant| tenant == &raw_tenant)
             .ok_or_else(|| {
                 invalid_attachment_file(format!(
                     "attachment root contains a non-canonical tenant entry: {raw_tenant}"
                 ))
             })?;
-        if !entry.file_type()?.is_dir() {
+        let tenant = AttachmentTenant(tenant_key);
+        let directory = attachments_dir(&tenant);
+        let Some(directory_handle) =
+            open_direct_directory_in_pinned_directory(&root, &root_handle, &raw_tenant)?
+        else {
             return Err(invalid_attachment_file(format!(
-                "attachment tenant path is not a direct directory: {}",
-                entry.path().display()
+                "attachment tenant directory disappeared during quota scan: {}",
+                directory.display()
             )));
-        }
-        verify_direct_directory(&entry.path())?;
-        if tenant_key == submitting_tenant.as_str() {
+        };
+        if tenant.as_str() == submitting_tenant.as_str() {
+            verify_pinned_direct_directory(&directory, &directory_handle)?;
             continue;
         }
-        let tenant = AttachmentTenant(tenant_key);
-        for meta in quota_metas_for_tenant(&tenant, scan)? {
+        for meta in quota_metas_for_tenant_in(&tenant, &directory, &directory_handle, scan)? {
             count = count.saturating_add(1);
             bytes = bytes.saturating_add(meta.size);
         }
     }
-    verify_direct_directory(&root)?;
+    verify_pinned_direct_directory(&root, &root_handle)?;
     Ok((count, bytes))
 }
 fn plan_attachment_quota_admission(
@@ -4411,27 +5213,30 @@ async fn collect_expired_attachments_once(
     let _store_guard = attachment_store_write_lock();
     prepare_attachment_mutation_locked()?;
     let root = attachments_root_dir();
-    verify_direct_directory(&root)?;
+    let (root_handle, root_names) =
+        open_pinned_directory_names(&root, ATTACHMENT_ROOT_RECOVERY_MAX_ENTRIES)?.ok_or_else(
+            || {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "attachment persistence root directory is missing",
+                )
+            },
+        )?;
     let mut root_entries = 0_u64;
     let mut child_entries = 0_u64;
-    for entry in fs::read_dir(&root)? {
+    for name in root_names {
         if shutdown.is_sent() {
-            verify_direct_directory(&root)?;
+            verify_pinned_direct_directory(&root, &root_handle)?;
             return Ok(());
         }
-        let entry = entry?;
         root_entries = root_entries.saturating_add(1);
         if root_entries > ATTACHMENT_ROOT_RECOVERY_MAX_ENTRIES {
             return Err(invalid_attachment_file(format!(
                 "attachment TTL scan exceeds {ATTACHMENT_ROOT_RECOVERY_MAX_ENTRIES} tenant entries"
             )));
         }
-        let file_name = entry.file_name();
-        let name = file_name.to_str().ok_or_else(|| {
-            invalid_attachment_file("attachment TTL scan found a non-UTF-8 tenant entry")
-        })?;
-        let tenant_key = sanitize_tenant_key(name)
-            .filter(|clean| clean == name)
+        let tenant_key = sanitize_tenant_key(&name)
+            .filter(|clean| clean == &name)
             .ok_or_else(|| {
                 invalid_attachment_file(format!(
                     "attachment TTL scan found a non-canonical tenant entry: {name}"
@@ -4439,40 +5244,42 @@ async fn collect_expired_attachments_once(
             })?;
         let tenant = AttachmentTenant(tenant_key);
         let tenant_dir = attachments_dir(&tenant);
-        if !entry.file_type()?.is_dir() {
+        let Some(tenant_handle) =
+            open_direct_directory_in_pinned_directory(&root, &root_handle, &name)?
+        else {
             return Err(invalid_attachment_file(format!(
-                "attachment tenant path is not a direct directory: {}",
+                "attachment tenant directory disappeared during TTL scan: {}",
                 tenant_dir.display()
             )));
-        }
-        verify_direct_directory(&tenant_dir)?;
+        };
+        let tenant_names = pinned_directory_names_at(
+            &tenant_dir,
+            &tenant_handle,
+            ATTACHMENT_CHILD_RECOVERY_MAX_ENTRIES.saturating_sub(child_entries),
+        )?;
         let mut metadata_ids = BTreeSet::new();
         let mut body_ids = BTreeSet::new();
-        for tenant_entry in fs::read_dir(&tenant_dir)? {
+        for name in tenant_names {
             if shutdown.is_sent() {
-                verify_direct_directory(&tenant_dir)?;
-                verify_direct_directory(&root)?;
+                verify_pinned_direct_directory(&tenant_dir, &tenant_handle)?;
+                verify_pinned_direct_directory(&root, &root_handle)?;
                 return Ok(());
             }
-            let tenant_entry = tenant_entry?;
             child_entries = child_entries.saturating_add(1);
             if child_entries > ATTACHMENT_CHILD_RECOVERY_MAX_ENTRIES {
                 return Err(invalid_attachment_file(format!(
                     "attachment TTL scan exceeds {ATTACHMENT_CHILD_RECOVERY_MAX_ENTRIES} child entries"
                 )));
             }
-            let tenant_file_name = tenant_entry.file_name();
-            let name = tenant_file_name.to_str().ok_or_else(|| {
-                invalid_attachment_file("attachment TTL scan found a non-UTF-8 child entry")
-            })?;
-            if is_attachment_writer_temp_name(name) {
-                if !tenant_entry.file_type()?.is_file() {
+            if is_attachment_writer_temp_name(&name) {
+                if open_direct_regular_file_in_pinned_directory(&tenant_dir, &tenant_handle, &name)?
+                    .is_none()
+                {
                     return Err(invalid_attachment_file(format!(
-                        "attachment TTL temporary path is not a direct regular file: {}",
-                        tenant_entry.path().display()
+                        "attachment TTL temporary entry disappeared during scan: {}",
+                        tenant_dir.join(&name).display()
                     )));
                 }
-                drop(open_attachment_regular_file(&tenant_entry.path())?);
                 continue;
             }
             let (raw_id, is_metadata) = if let Some(raw_id) = name.strip_suffix(".json") {
@@ -4491,37 +5298,39 @@ async fn collect_expired_attachments_once(
                         "attachment TTL scan found a non-canonical entry: {name}"
                     ))
                 })?;
-            if !tenant_entry.file_type()?.is_file() {
+            if open_direct_regular_file_in_pinned_directory(&tenant_dir, &tenant_handle, &name)?
+                .is_none()
+            {
                 return Err(invalid_attachment_file(format!(
-                    "attachment TTL path is not a direct regular file: {}",
-                    tenant_entry.path().display()
+                    "attachment entry disappeared during TTL scan: {}",
+                    tenant_dir.join(&name).display()
                 )));
             }
-            drop(open_attachment_regular_file(&tenant_entry.path())?);
             if is_metadata {
                 metadata_ids.insert(id);
             } else {
                 body_ids.insert(id);
             }
         }
-        verify_direct_directory(&tenant_dir)?;
+        verify_pinned_direct_directory(&tenant_dir, &tenant_handle)?;
         if let Some(id) = metadata_ids.difference(&body_ids).next() {
             return Err(invalid_attachment_file(format!(
                 "attachment metadata has no body during TTL scan: {id}"
             )));
         }
+        drop(tenant_handle);
         for id in body_ids.difference(&metadata_ids) {
             delete_attachment_files(&tenant, id)?;
         }
         for id in metadata_ids {
             if shutdown.is_sent() {
-                verify_direct_directory(&root)?;
+                verify_pinned_direct_directory(&root, &root_handle)?;
                 return Ok(());
             }
             delete_attachment_if_expired_locked(&tenant, &id, ttl)?;
         }
     }
-    verify_direct_directory(&root)
+    verify_pinned_direct_directory(&root, &root_handle)
 }
 /// Start a background GC worker that removes expired attachments.
 pub(crate) fn start_gc_worker(
@@ -4919,6 +5728,65 @@ mod tests {
         assert!(panic.is_err());
         let _guard = super::attach_cfg().read();
     }
+    #[cfg(windows)]
+    #[test]
+    fn exact_file_removal_unlinks_read_only_name_while_identity_handle_is_retained() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let path = tmp.path().join("retained-read-only.bin");
+        fs::write(&path, b"attachment").expect("write attachment");
+        let mut permissions = fs::metadata(&path)
+            .expect("attachment metadata")
+            .permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&path, permissions).expect("mark attachment read-only");
+        let retained = crate::secure_file_metadata::from_path(&path)
+            .expect("retain delete-sharing identity handle");
+
+        assert!(
+            super::remove_direct_regular_file_if_present(&path)
+                .expect("remove exact read-only attachment")
+        );
+        let error = crate::secure_file_metadata::from_path(&path)
+            .expect_err("POSIX disposition must immediately unlink the file name");
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+
+        drop(retained);
+    }
+    #[cfg(windows)]
+    #[test]
+    fn exact_directory_removal_unlinks_name_while_identity_handle_is_retained() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let path = tmp.path().join("retained-empty-directory");
+        fs::create_dir(&path).expect("create empty directory");
+        let retained = crate::secure_file_metadata::from_path(&path)
+            .expect("retain delete-sharing identity handle");
+
+        assert!(
+            super::remove_direct_empty_directory_if_present(&path)
+                .expect("remove exact empty directory")
+        );
+        let error = crate::secure_file_metadata::from_path(&path)
+            .expect_err("POSIX disposition must immediately unlink the directory name");
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+
+        drop(retained);
+    }
+    #[cfg(windows)]
+    #[test]
+    fn exact_directory_removal_preserves_nonempty_directory() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let path = tmp.path().join("nonempty-directory");
+        fs::create_dir(&path).expect("create directory");
+        fs::write(path.join("entry"), b"attachment").expect("write directory entry");
+
+        let error = super::remove_direct_empty_directory_if_present(&path)
+            .expect_err("nonempty directory must not be removed");
+        assert_eq!(error.kind(), io::ErrorKind::DirectoryNotEmpty);
+        assert_eq!(
+            fs::read(path.join("entry")).expect("nonempty directory remains readable"),
+            b"attachment"
+        );
+    }
     #[test]
     fn persistence_preflight_retries_after_directory_creation_failure() {
         let tmp = tempfile::tempdir().expect("temp dir");
@@ -5224,6 +6092,62 @@ mod tests {
         assert_eq!(semaphore.available_permits(), 1);
     }
     #[test]
+    fn attachment_sanitizer_stdout_reader_contains_panic_and_releases_admission() {
+        struct PanickingReader {
+            dropped: Option<std::sync::mpsc::Sender<bool>>,
+        }
+        impl std::io::Read for PanickingReader {
+            fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
+                assert!(
+                    iroha_core::panic_hook::is_suppressed(),
+                    "the physical stdout-reader thread must suppress the shutdown hook"
+                );
+                panic!("injected sanitizer stdout-reader panic");
+            }
+        }
+        impl Drop for PanickingReader {
+            fn drop(&mut self) {
+                if let Some(dropped) = self.dropped.take() {
+                    let _ = dropped.send(iroha_core::panic_hook::is_suppressed());
+                }
+            }
+        }
+
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
+        let permit = semaphore
+            .clone()
+            .try_acquire_owned()
+            .expect("acquire sanitizer admission");
+        let admission = crate::ProofBodyAdmissionLease::new(permit);
+        let (dropped_tx, dropped_rx) = std::sync::mpsc::channel();
+        let result = super::spawn_sanitizer_stdout_reader(
+            PanickingReader {
+                dropped: Some(dropped_tx),
+            },
+            16,
+            Some(admission),
+        );
+
+        assert_eq!(
+            result
+                .recv_timeout(Duration::from_secs(1))
+                .expect("panicking sanitizer reader must report a terminal result")
+                .expect_err("reader panic must become an opaque sanitizer error"),
+            "attachment sanitizer stdout reader panicked"
+        );
+        assert_eq!(
+            semaphore.available_permits(),
+            1,
+            "the physical reader must release admission after a panic"
+        );
+        assert!(
+            !dropped_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("panicking reader must be dropped on its physical thread"),
+            "thread-local shutdown-hook suppression must clear after recovery"
+        );
+    }
+    #[test]
     fn quota_child_entry_budget_is_aggregate_across_tenants() {
         let tmp = tempfile::tempdir().expect("temp dir");
         let _guard = crate::data_dir::OverrideGuard::new(tmp.path());
@@ -5250,7 +6174,10 @@ mod tests {
         let error = super::quota_metas_for_tenant(&second, &mut scan)
             .expect_err("second tenant must share the first tenant's scan budget");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-        assert_eq!(scan.child_entries, 4);
+        assert_eq!(
+            scan.child_entries, 2,
+            "the remaining aggregate budget must bound enumeration before a whole extra directory is admitted"
+        );
     }
     #[cfg(unix)]
     #[test]

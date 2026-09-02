@@ -28,11 +28,12 @@ public final class IrohaPeerCanonicalPayload {
             + profile.requiredSchemaVersion()
             + ", received "
             + schemaVersion);
-    this.bytes = Objects.requireNonNull(bytes, "bytes").clone();
-    require(this.bytes.length > 0, "Peer payload is empty");
+    final byte[] requiredBytes = Objects.requireNonNull(bytes, "bytes");
+    require(requiredBytes.length > 0, "Peer payload is empty");
     require(
-        this.bytes.length <= IrohaPeerWireMessageV1.MAXIMUM_CANONICAL_BYTES,
+        requiredBytes.length <= IrohaPeerWireMessageV1.MAXIMUM_CANONICAL_BYTES,
         "Peer payload exceeds its bound");
+    this.bytes = requiredBytes.clone();
     validateTypedCanonicalPayload(this.profile, this.kind, this.bytes);
     this.schemaVersion = schemaVersion;
   }

@@ -109,8 +109,7 @@ public struct KagemushaRecursiveSpendNativeCapabilitiesV4: Equatable, Sendable {
               stepEqCircuitID == KagemushaRecursiveSpend.stepEqCircuitIDV4,
               stepEpCircuitID == KagemushaRecursiveSpend.stepEpCircuitIDV4,
               artifactRoles == KagemushaRecursiveSpend.artifactRolesV4,
-              maxProofBytes > 0,
-              maxProofBytes <= KagemushaRecursiveSpend.absoluteMaximumProofPairBytesV4,
+              maxProofBytes == KagemushaRecursiveSpend.releaseMaximumProofPairBytesV4,
               gatesAreCanonical else {
             throw KagemushaRecursiveSpendError.invalidField("nativeCapabilitiesV4")
         }
@@ -174,9 +173,13 @@ public enum KagemushaRecursiveSpend {
     public static let requiredNativeBridgeAbiVersion: UInt32 = 23
     /// Sender-final peer-cash contract advertised by universal capability discovery.
     public static let cashHandoffCapabilityV1 = "cash_handoff_v1"
-    public static let authorizationPreparationVersionV2: UInt16 = 2
+    public static let nativeContractRevision: UInt32 = 1
+    public static let authorizationPreparationVersionV3: UInt16 = 3
     public static let wireVersionV4: UInt16 = 4
+    public static let redemptionChangePreparationVersionV5: UInt16 = 5
     public static let localWitnessVersionV4: UInt16 = 4
+    public static let topUpLocalWitnessVersionV5: UInt16 = 5
+    public static let redeemLocalWitnessVersionV5: UInt16 = 5
     /// Top-up insertion leaves the last Merkle position for the proof-bound successor.
     /// Exclusive insertion capacity after reserving 64 branch-depth outputs, eight optional
     /// peer-change outputs, and the final dummy leaf required by the proof circuit.
@@ -233,6 +236,9 @@ public enum KagemushaRecursiveSpend {
         "step-ep.verifying-key.krv4",
         "step-ep.bootstrap-witness.krv4",
     ]
+    /// Exact recursive proof-pair maximum selected by the sole first-release profile.
+    public static let releaseMaximumProofPairBytesV4: UInt32 = 191_862
+    /// Defensive raw archive ceiling; this is not an accepted release-profile maximum.
     public static let absoluteMaximumProofPairBytesV4: UInt32 = 384 * 1024
     public static let maximumProofSteps: UInt32 = 128
     /// Maximum size of one streamed `KRV4KEY` artifact.
@@ -268,10 +274,10 @@ public enum KagemushaRecursiveSpend {
         "connect_norito_bridge::KagemushaRecursiveSpendAppendLocalRequestV4"
     public static let verifyLocalRequestWireNameV4 =
         "connect_norito_bridge::KagemushaRecursiveSpendVerifyLocalRequestV4"
-    public static let redeemLocalRequestWireNameV4 =
-        "connect_norito_bridge::KagemushaRecursiveSpendRedeemLocalRequestV4"
-    public static let redemptionChangePrepareRequestWireNameV4 =
-        "connect_norito_bridge::KagemushaRecursiveSpendRedemptionChangePrepareRequestV4"
+    public static let redeemLocalRequestWireNameV5 =
+        "connect_norito_bridge::KagemushaRecursiveSpendRedeemLocalRequestV5"
+    public static let redemptionChangePrepareRequestWireNameV5 =
+        "connect_norito_bridge::KagemushaRecursiveSpendRedemptionChangePrepareRequestV5"
     public static let redemptionChangePrepareResultWireNameV4 =
         "connect_norito_bridge::KagemushaRecursiveSpendRedemptionChangePrepareResultV4"
     public static let peerSplitChangePrepareRequestWireNameV4 =
@@ -286,16 +292,16 @@ public enum KagemushaRecursiveSpend {
     public static let recipientReceiveOfferWireName =
         "iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2"
     public static let authorizationWireName = wire("KagemushaRequestAuthorizationV2")
-    public static let authorizationPreparationWireName =
-        "connect_norito_bridge::KagemushaRequestAuthorizationPreparationV2"
+    public static let authorizationPreparationWireNameV3 =
+        "connect_norito_bridge::KagemushaRequestAuthorizationPreparationV3"
     public static let artifactManifestWireName =
         wire("KagemushaRecursiveSpendArtifactManifestV4")
     public static let artifactBindingWireNameV4 =
         wire("KagemushaRecursiveSpendArtifactBindingV4")
     public static let nativeCapabilitiesWireNameV4 =
         wire("KagemushaRecursiveSpendNativeCapabilitiesV4")
-    public static let topUpShieldBuildRequestWireNameV4 =
-        "connect_norito_bridge::KagemushaTopUpShieldBuildRequestV4"
+    public static let topUpShieldBuildRequestWireNameV5 =
+        "connect_norito_bridge::KagemushaTopUpShieldBuildRequestV5"
     public static let topUpShieldEvidenceWireName = wire("KagemushaTopUpShieldEvidenceV2")
     public static let topUpUnsignedWireNameV4 = wire("KagemushaRecursiveSpendTopUpUnsignedV4")
     public static let topUpRequestWireName = "iroha.torii.v1.offline.top_up.request"
@@ -362,7 +368,7 @@ public enum KagemushaRecursiveSpend {
              initRequestWireNameV4,
              initLocalRequestWireNameV4,
              initResultWireNameV4,
-             topUpShieldBuildRequestWireNameV4,
+             topUpShieldBuildRequestWireNameV5,
              topUpUnsignedWireNameV4,
              appendInputWireNameV4,
              appendLocalRequestWireNameV4,
@@ -373,8 +379,8 @@ public enum KagemushaRecursiveSpend {
              verifyRequestWireNameV4,
              verifyLocalRequestWireNameV4,
              verifyResultWireNameV4,
-             redeemLocalRequestWireNameV4,
-             redemptionChangePrepareRequestWireNameV4,
+             redeemLocalRequestWireNameV5,
+             redemptionChangePrepareRequestWireNameV5,
              redemptionChangePrepareResultWireNameV4,
              redeemBuildResultWireNameV4,
              redeemUnsignedWireNameV4,
@@ -392,7 +398,7 @@ public enum KagemushaRecursiveSpend {
              outputMembershipPathsWireNameV4,
              outputMembershipFrontierWireNameV4,
              branchClaimWireName,
-             authorizationPreparationWireName,
+             authorizationPreparationWireNameV3,
              authorizationWireName,
              artifactBindingWireNameV4,
              artifactManifestWireName,
@@ -486,7 +492,8 @@ public enum KagemushaRecursiveSpend {
 
     public static let requiredProtocolSymbols = [
         "connect_norito_kagemusha_recursive_spend_capabilities_v4",
-        "connect_norito_kagemusha_offline_operation_status_validate_v1",
+        "connect_norito_kagemusha_native_contract_revision",
+        "connect_norito_kagemusha_offline_operation_status_validate_v2",
         "connect_norito_kagemusha_topup_finality_verify_v4",
         "connect_norito_kagemusha_topup_shield_build_unsigned_v4",
         "connect_norito_kagemusha_recursive_spend_topup_v4",
@@ -494,7 +501,7 @@ public enum KagemushaRecursiveSpend {
         "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v4",
         "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v4",
         "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v4",
-        "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4",
+        "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v5",
         "connect_norito_kagemusha_secret_free_buffer",
         "connect_norito_kagemusha_receiver_key_reference_v2",
         "connect_norito_kagemusha_recipient_output_derive_v2",
@@ -506,9 +513,9 @@ public enum KagemushaRecursiveSpend {
         "connect_norito_kagemusha_recipient_receive_offer_create_v2",
         "connect_norito_kagemusha_recipient_receive_offer_project_v2",
         "connect_norito_kagemusha_recipient_receive_offer_verify_v2",
-        "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
-        "connect_norito_kagemusha_request_authorization_finalize_hardware_v2",
-        "connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2",
+        "connect_norito_kagemusha_request_authorization_signing_bytes_v3",
+        "connect_norito_kagemusha_request_authorization_finalize_hardware_v3",
+        "connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v3",
         "connect_norito_kagemusha_receiver_acknowledgement_payload_v2",
         "connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2",
         "connect_norito_kagemusha_receiver_acknowledgement_create_v2",
@@ -1513,7 +1520,6 @@ public struct KagemushaRequestAuthorizationFields: Equatable, Sendable {
     public let authority: String
     public let deviceID: String
     public let assetDefinitionID: String
-    public let operationID: Data
     public let issuedAtMilliseconds: UInt64
     public let expiresAtMilliseconds: UInt64
     public let nonce: Data
@@ -1526,7 +1532,6 @@ public struct KagemushaRequestAuthorizationFields: Equatable, Sendable {
         authority: String,
         deviceID: String,
         assetDefinitionID: String,
-        operationID: Data,
         issuedAtMilliseconds: UInt64,
         expiresAtMilliseconds: UInt64,
         nonce: Data,
@@ -1542,7 +1547,6 @@ public struct KagemushaRequestAuthorizationFields: Equatable, Sendable {
         guard AssetDefinitionAddress.decode(assetDefinitionID) != nil else {
             throw KagemushaRecursiveSpendError.invalidField("assetDefinitionID")
         }
-        try KagemushaRecursiveSpend.requireNonzeroFixed32(operationID, field: "operationID")
         try KagemushaRecursiveSpend.requireNonzeroFixed32(nonce, field: "nonce")
         try KagemushaRecursiveSpend.requireNonzeroFixed32(payloadDigest, field: "payloadDigest")
         try KagemushaRecursiveSpend.requireNonzeroFixed32(
@@ -1558,7 +1562,6 @@ public struct KagemushaRequestAuthorizationFields: Equatable, Sendable {
         self.authority = authority
         self.deviceID = deviceID
         self.assetDefinitionID = assetDefinitionID
-        self.operationID = Data(operationID)
         self.issuedAtMilliseconds = issuedAtMilliseconds
         self.expiresAtMilliseconds = expiresAtMilliseconds
         self.nonce = Data(nonce)
@@ -1576,7 +1579,7 @@ public struct KagemushaRequestAuthorizationFields: Equatable, Sendable {
         let preparationArchive = try KagemushaRecursiveSpendCodecs
             .encodeAuthorizationPreparation(self)
         guard let signingBytes = try NoritoNativeBridge.shared
-            .kagemushaRequestAuthorizationSigningBytesV2(
+            .kagemushaRequestAuthorizationSigningBytesV3(
                 preparationArchive: preparationArchive
             ) else {
             throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
@@ -1604,7 +1607,7 @@ public struct KagemushaRequestAuthorizationPreparation: Equatable, Sendable {
     ) throws {
         try KagemushaRecursiveSpend.requireArchive(
             preparationArchive,
-            schema: KagemushaRecursiveSpend.authorizationPreparationWireName,
+            schema: KagemushaRecursiveSpend.authorizationPreparationWireNameV3,
             field: "authorizationPreparation"
         )
         guard !signingBytes.isEmpty,
@@ -1645,7 +1648,7 @@ public struct KagemushaRequestAuthorizationPreparation: Equatable, Sendable {
             )
         }
         guard let result = try NoritoNativeBridge.shared
-            .kagemushaRequestAuthorizationFinalizeIosAppAttestV2(
+            .kagemushaRequestAuthorizationFinalizeIosAppAttestV3(
                 preparationArchive: preparationArchive,
                 assertionObject: assertionObject
             ) else {
@@ -1737,7 +1740,7 @@ public struct KagemushaRequestAuthorizationPreparation: Equatable, Sendable {
         // the authority that constructs the on-wire assertion.
         let swiftSignature = try KagemushaDeviceSignatureV2(derBytes: derSignature)
         guard let result = try NoritoNativeBridge.shared
-            .kagemushaRequestAuthorizationFinalizeHardwareV2(
+            .kagemushaRequestAuthorizationFinalizeHardwareV3(
                 preparationArchive: preparationArchive,
                 authenticatorData: authenticatorData,
                 derSignature: derSignature

@@ -71,4 +71,5 @@ async fn configuration_endpoint_includes_transport_summary() {
         dto.consensus.role, expected_role,
         "the node-local consensus role should propagate"
     );
+    harness.shutdown().await;
 }

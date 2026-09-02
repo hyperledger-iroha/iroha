@@ -470,4 +470,5 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
             norito::json::from_slice(&body).expect("decode wrong-method error");
         assert_eq!(error.code(), "method_not_allowed");
     }
+    app.shutdown().await;
 }

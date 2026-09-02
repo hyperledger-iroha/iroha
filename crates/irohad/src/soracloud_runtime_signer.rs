@@ -583,7 +583,7 @@ mod tests {
         let key_pair = KeyPair::random();
         let authority = AccountId::new(key_pair.public_key().clone());
         let binding = SoracloudRuntimeSignerBindingV1::try_new(
-            "hsm://soracloud/runtime-primary",
+            "provider://soracloud/runtime-primary",
             authority.clone(),
             key_pair.public_key().clone(),
             QUALIFICATION,
@@ -659,7 +659,7 @@ mod tests {
         let (binding, mut provider, _) = fixture(false);
         Arc::get_mut(&mut provider)
             .expect("sole provider reference")
-            .handle = "hsm://soracloud/runtime-substituted".to_owned();
+            .handle = "provider://soracloud/runtime-substituted".to_owned();
         assert_eq!(
             qualify_soracloud_runtime_mutation_signer_v1(binding, provider).err(),
             Some(SoracloudRuntimeSignerQualificationErrorV1::HandleMismatch)

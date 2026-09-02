@@ -29,9 +29,11 @@ REQUIRED_CRASH_BOUNDARIES = (
     "sidecar_fsync",
     "staged_delta_fsync",
     "prepare_qc",
+    "prepare_registration_kura_append",
+    "prepare_registration_wsv_application",
     "commit_qc",
-    "kura_append",
-    "wsv_application",
+    "finalization_kura_append",
+    "finalization_wsv_application",
     "receipt_publication",
 )
 _GIT_COMMIT = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")

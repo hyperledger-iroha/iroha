@@ -33,10 +33,11 @@ fn plain_ballot_rejected_when_disabled() {
     let mut stx = sblock.transaction();
     let instr = CastPlainBallot {
         referendum_id: "rid-disabled".to_string(),
-        owner: ALICE_ID.clone(),
-        amount: 1000_u64.into(),
-        duration_blocks: 10,
-        direction: 0,
+        direction: iroha_data_model::isi::governance::GovernancePlainBallotDirectionV1::Aye,
+        lock: iroha_data_model::isi::governance::GovernanceParticipationLockV1 {
+            amount: 1000_u64.into(),
+            duration_blocks: core::num::NonZeroU64::new(10).expect("non-zero lock duration"),
+        },
     };
     let err = instr.execute(&ALICE_ID, &mut stx).unwrap_err();
     let s = format!("{err}");

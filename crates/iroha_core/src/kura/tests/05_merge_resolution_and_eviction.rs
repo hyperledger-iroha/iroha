@@ -532,6 +532,110 @@ fn startup_recovers_both_abrupt_da_rewrite_boundaries() {
         vec![replacement.hash()]
     );
 }
+
+#[test]
+fn carrier_pins_reject_da_rewrite_recovery_before_mutation() {
+    for new_marker_won in [false, true] {
+        let dir = tempfile::tempdir().expect("create pinned DA rewrite root");
+        let mut block_store = BlockStore::new(dir.path());
+        block_store
+            .create_files_if_they_do_not_exist()
+            .expect("create canonical files");
+        let leader = checked_keypair();
+        let block1: Arc<SignedBlock> = Arc::new(ValidBlock::new_dummy(leader.private_key()).into());
+        let block2: Arc<SignedBlock> = Arc::new(
+            ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
+                header.set_prev_block_hash(Some(block1.hash()));
+            })
+            .into(),
+        );
+        let replacement: Arc<SignedBlock> = Arc::new(
+            ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
+                header.set_prev_block_hash(Some(block1.hash()));
+                header.set_view_change_index(header.view_change_index().saturating_add(1));
+            })
+            .into(),
+        );
+        let (block1_frame, _) = block1
+            .canonical_wire()
+            .expect("block one wire")
+            .into_parts();
+        let inline_budget = u64::try_from(block1_frame.len())
+            .expect("block one length")
+            .saturating_add(2 * (BlockIndex::SIZE + SIZE_OF_BLOCK_HASH));
+        block_store
+            .append_block_batch_at(0, std::slice::from_ref(&block1), 0)
+            .expect("append first block");
+        block_store
+            .append_block_batch_at(1, std::slice::from_ref(&block2), inline_budget)
+            .expect("append original evicted block");
+        let sidecar_path = block_store.da_block_path(2);
+        let original_sidecar = std::fs::read(&sidecar_path).expect("read original sidecar");
+        if new_marker_won {
+            block_store
+                .crash_next_da_rewrite_after_marker
+                .store(true, Ordering::Release);
+        } else {
+            block_store
+                .crash_next_da_rewrite_before_marker
+                .store(true, Ordering::Release);
+        }
+        block_store
+            .append_block_batch_at(1, std::slice::from_ref(&replacement), inline_budget)
+            .expect_err("leave a durable DA rewrite stage at the selected crash boundary");
+        let selected_marker = block_store
+            .read_commit_marker()
+            .expect("read selected marker")
+            .expect("selected marker exists");
+        let stage_path = block_store.da_block_rewrite_stage_path();
+        let stage_bytes = std::fs::read(&stage_path).expect("read staged rewrite");
+        let hashes_before = block_store
+            .read_block_hashes(1, 1)
+            .expect("read staged hash journal");
+        let conflicting_pin = if new_marker_won {
+            block2.hash()
+        } else {
+            replacement.hash()
+        };
+        let pins = BTreeMap::from([(2_u64, conflicting_pin)]);
+
+        let error = block_store
+            .recover_canonical_storage_stages_with_carrier_pins(&pins)
+            .expect_err("a carrier pin must reject the conflicting selected rewrite state");
+        assert!(
+            error
+                .to_string()
+                .contains("pinned canonical replica terminal carrier"),
+            "unexpected pin-recovery error: {error}",
+        );
+        assert_eq!(
+            block_store
+                .read_commit_marker()
+                .expect("reread selected marker")
+                .expect("selected marker remains"),
+            selected_marker,
+            "pin rejection must not change the publication marker",
+        );
+        assert_eq!(
+            block_store
+                .read_block_hashes(1, 1)
+                .expect("reread staged hash journal"),
+            hashes_before,
+            "pin rejection must not rewrite the hash journal",
+        );
+        assert_eq!(
+            std::fs::read(&sidecar_path).expect("reread original sidecar"),
+            original_sidecar,
+            "pin rejection must not replace the selected carrier sidecar",
+        );
+        assert_eq!(
+            std::fs::read(&stage_path).expect("reread staged rewrite"),
+            stage_bytes,
+            "pin rejection must leave the recovery transaction available for diagnosis",
+        );
+    }
+}
+
 #[test]
 fn append_block_batch_at_rewrites_tail() {
     let dir = tempfile::tempdir().unwrap();

@@ -9741,7 +9741,7 @@ mod tests {
     #[test]
     fn runtime_handles_use_canonical_production_grammar() {
         for handle in [
-            "hsm://sorafs/reputation/threshold-primary",
+            "provider://sorafs/reputation/threshold-primary",
             "https-pinned-source-pool:reputation-finalized-primary",
         ] {
             assert_eq!(
@@ -9750,11 +9750,11 @@ mod tests {
             );
         }
         for handle in [
-            "hsm://sorafs/reputation/operator@threshold",
-            "hsm://sorafs/reputation/threshold?token",
-            "hsm://sorafs/reputation/threshold#fragment",
-            "hsm://sorafs/reputation/%74hreshold",
-            "hsm://sorafs/reputation/threshold\\primary",
+            "provider://sorafs/reputation/operator@threshold",
+            "provider://sorafs/reputation/threshold?token",
+            "provider://sorafs/reputation/threshold#fragment",
+            "provider://sorafs/reputation/%74hreshold",
+            "provider://sorafs/reputation/threshold\\primary",
         ] {
             assert_eq!(
                 validate_runtime_handle(handle.to_owned()),

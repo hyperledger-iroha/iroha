@@ -5,7 +5,7 @@ use iroha_config::parameters::actual::LaneValidatorMode;
 use iroha_data_model::{
     account::AccountId,
     consensus::MAX_LANE_CONSENSUS_VALIDATORS,
-    nexus::{DataSpaceId, LaneId, PublicLaneValidatorStatus},
+    nexus::{DataSpaceId, LaneId},
     peer::PeerId,
 };
 use iroha_primitives::numeric::Quantity;
@@ -131,7 +131,10 @@ pub(super) fn stake_elected_validator_accounts(
     for (key, record) in world.public_lane_validators().iter() {
         if !public_lane_validator_record_matches_key(key, record)
             || key.0 != lane_id
-            || !matches!(record.status, PublicLaneValidatorStatus::Active)
+            || !crate::smartcontracts::isi::staking::validator_election_eligible_at_height(
+                record,
+                block_height,
+            )
             || !crate::smartcontracts::isi::staking::meets_min_stake(
                 &record.self_stake,
                 minimum_stake,
@@ -173,7 +176,10 @@ pub(super) fn stake_elected_peer_ids(
     for (key, record) in world.public_lane_validators().iter() {
         if !public_lane_validator_record_matches_key(key, record)
             || key.0 != lane_id
-            || !matches!(record.status, PublicLaneValidatorStatus::Active)
+            || !crate::smartcontracts::isi::staking::validator_election_eligible_at_height(
+                record,
+                block_height,
+            )
             || !crate::smartcontracts::isi::staking::meets_min_stake(
                 &record.self_stake,
                 minimum_stake,

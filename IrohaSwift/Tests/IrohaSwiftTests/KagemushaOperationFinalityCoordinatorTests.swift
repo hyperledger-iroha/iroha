@@ -351,7 +351,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
             _ = try await harness.run()
             XCTFail("invalid operation id must fail")
         } catch KagemushaOperationError.invalidField(let field) {
-            XCTAssertEqual(field, "operation_id")
+            XCTAssertEqual(field, "identity.operation_id")
         }
         XCTAssertEqual(harness.trace, [])
     }
@@ -1504,26 +1504,32 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
     }
 
     func testTypedOperationBindsStatusAndSubmissionToEmbeddedRequestIdentity() async throws {
-        let operationBytes = Data(repeating: 0xe1, count: 32)
-        let operationId = id(0xe1)
         let transactionHash = id(0xe2)
         let request = try KagemushaRedeemRequest(
             noritoArchive: requestArchive(
                 schema: KagemushaRecursiveSpend.redeemRequestWireName,
                 fieldCount: 10,
                 operationIdFieldIndex: 8,
-                operationId: operationBytes
+                nonce: Data(repeating: 0xe1, count: 32)
             )
         )
+        let operationId = request.identity.operationID
         let operation = KagemushaOperationSubmission.redeem(request)
         let transport = TypedFinalityTransport(
             expectedOperation: operation,
-            reference: try reference(
-                operationId,
-                .redeem,
-                transactionHash
+            reference: try KagemushaOperationReference(
+                identity: request.identity,
+                state: .pending,
+                transactionHash: transactionHash,
+                statusUri: "/v1/offline/operations/\(operationId)"
             ),
-            terminalStatus: try appliedRedeem(operationId, transactionHash)
+            terminalStatus: .applied(try .init(
+                identity: request.identity,
+                result: .redeem(try .init(
+                    transactionHash: transactionHash,
+                    finalizedBlockHeight: 1
+                ))
+            ))
         )
 
         let resolution = try await KagemushaOperationFinalityCoordinator.resolve(
@@ -1549,7 +1555,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
             recordAcceptance: { reference, state in
                 var state = state
                 state.transactionHash = reference.transactionHash
-                state.submittedAtMs = reference.submittedAtMs
+                state.submittedAtMs = reference.identity.issuedAtMs
                 return state
             },
             recordObservation: { hash, timestamp, state in
@@ -1576,12 +1582,12 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
 
     func testConcurrentSameOperationFailsFastAndSubmitsOnlyOnce() async throws {
         let operation = try redeemOperation(0xe3)
-        let operationId = operation.operationId
+        let operationId = operation.identity.operationID
         let transactionHash = id(0xe4)
         let transport = LeaseFinalityTransport(
             expectedOperation: operation,
-            reference: try reference(operationId, .redeem, transactionHash),
-            terminalStatus: try appliedRedeem(operationId, transactionHash)
+            reference: try reference(operation.identity, transactionHash),
+            terminalStatus: try appliedRedeem(operation.identity, transactionHash)
         )
         let first = Task {
             try await self.resolveTyped(operation, transport: transport)
@@ -1628,7 +1634,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
             operation,
             transport: AppliedOnlyFinalityTransport(
                 status: try appliedRedeem(
-                    operation.operationId,
+                    operation.identity,
                     transactionHash
                 )
             ),
@@ -1645,24 +1651,22 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
         let firstTransport = LeaseFinalityTransport(
             expectedOperation: firstOperation,
             reference: try reference(
-                firstOperation.operationId,
-                .redeem,
+                firstOperation.identity,
                 id(0xe7)
             ),
             terminalStatus: try appliedRedeem(
-                firstOperation.operationId,
+                firstOperation.identity,
                 id(0xe7)
             )
         )
         let secondTransport = LeaseFinalityTransport(
             expectedOperation: secondOperation,
             reference: try reference(
-                secondOperation.operationId,
-                .redeem,
+                secondOperation.identity,
                 id(0xe8)
             ),
             terminalStatus: try appliedRedeem(
-                secondOperation.operationId,
+                secondOperation.identity,
                 id(0xe8)
             )
         )
@@ -1686,6 +1690,12 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
         _ = try await second.value
     }
 
+    private static let requestAuthorityPayload: Data = {
+        let keypair = try! Keypair(privateKeyBytes: Data(repeating: 0x42, count: 32))
+        let address = try! AccountAddress.fromAccount(publicKey: keypair.publicKey)
+        return try! address.compactNoritoAccountControllerPayload()
+    }()
+
     private var notFound: ToriiClientError {
         .httpStatus(
             code: 404,
@@ -1707,10 +1717,12 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
     ) throws -> KagemushaOperationStatus {
         .pending(
             try .init(
-                operationId: operationId,
-                kind: kind,
-                transactionHash: transactionHash,
-                submittedAtMs: submittedAtMs
+                identity: identity(
+                    operationId,
+                    kind,
+                    issuedAtMs: submittedAtMs
+                ),
+                transactionHash: transactionHash
             )
         )
     }
@@ -1721,7 +1733,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
     ) throws -> KagemushaOperationStatus {
         .applied(
             try .init(
-                operationId: operationId,
+                identity: identity(operationId, .redeem),
                 result: .redeem(
                     try .init(
                         transactionHash: transactionHash,
@@ -1732,6 +1744,19 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
         )
     }
 
+    private func appliedRedeem(
+        _ identity: KagemushaOperationIdentity,
+        _ transactionHash: String
+    ) throws -> KagemushaOperationStatus {
+        .applied(try .init(
+            identity: identity,
+            result: .redeem(try .init(
+                transactionHash: transactionHash,
+                finalizedBlockHeight: 1
+            ))
+        ))
+    }
+
     private func rejected(
         _ operationId: String,
         _ kind: KagemushaOperationKind,
@@ -1740,8 +1765,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
     ) throws -> KagemushaOperationStatus {
         .rejected(
             try .init(
-                operationId: operationId,
-                kind: kind,
+                identity: identity(operationId, kind),
                 transactionHash: transactionHash,
                 error: try .init(
                     code: "offline_operation_rejected",
@@ -1757,13 +1781,45 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
         _ transactionHash: String,
         submittedAtMs: UInt64 = 1
     ) throws -> KagemushaOperationReference {
-        try .init(
-            operationId: operationId,
-            kind: kind,
+        let identity = try identity(
+            operationId,
+            kind,
+            issuedAtMs: submittedAtMs
+        )
+        return try .init(
+            identity: identity,
             state: .pending,
             transactionHash: transactionHash,
-            statusUri: "/v1/offline/operations/\(operationId)",
-            submittedAtMs: submittedAtMs
+            statusUri: "/v1/offline/operations/\(identity.operationID)"
+        )
+    }
+
+    private func reference(
+        _ identity: KagemushaOperationIdentity,
+        _ transactionHash: String
+    ) throws -> KagemushaOperationReference {
+        try .init(
+            identity: identity,
+            state: .pending,
+            transactionHash: transactionHash,
+            statusUri: "/v1/offline/operations/\(identity.operationID)"
+        )
+    }
+
+    private func identity(
+        _ operationID: String,
+        _ kind: KagemushaOperationKind,
+        issuedAtMs: UInt64 = 1,
+        requestAuthorityDigest: String? = nil,
+        canonicalRequestDigest: String? = nil
+    ) throws -> KagemushaOperationIdentity {
+        try KagemushaOperationIdentity(
+            operationID: operationID,
+            requestAuthorityDigest: requestAuthorityDigest ?? id(0x91),
+            canonicalRequestDigest: canonicalRequestDigest ?? id(0x93),
+            kind: kind,
+            issuedAtMs: issuedAtMs,
+            expiresAtMs: issuedAtMs + 1
         )
     }
 
@@ -1771,17 +1827,35 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
         schema: String,
         fieldCount: Int,
         operationIdFieldIndex: Int,
-        operationId: Data,
+        nonce: Data,
         issuedAtMs: UInt64 = 1
     ) -> Data {
+        let authorityPayload = Self.requestAuthorityPayload
+        let operationId = Data(hexString: try! KagemushaOperationIdentityDerivation
+            .operationID(
+                compactAuthorityPayload: authorityPayload,
+                nonce: nonce
+            ))!
         var authorization = CompactNoritoWriter()
         for index in 0..<10 {
             let field: Data
             switch index {
+            case 0:
+                field = authorityPayload
+            case 1:
+                field = CompactNorito.encodeString("swift-finality-fixture")
             case 3:
                 field = operationId
             case 4:
                 field = CompactNorito.encodeUInt64(issuedAtMs)
+            case 5:
+                field = CompactNorito.encodeUInt64(issuedAtMs + 1)
+            case 6:
+                field = nonce
+            case 7:
+                field = Data(repeating: 0x77, count: 32)
+            case 8:
+                field = Data(repeating: 0x99, count: 32)
             default:
                 field = Data([UInt8(index + 1)])
             }
@@ -1813,7 +1887,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
                 schema: KagemushaRecursiveSpend.redeemRequestWireName,
                 fieldCount: 10,
                 operationIdFieldIndex: 8,
-                operationId: Data(repeating: byte, count: 32)
+                nonce: Data(repeating: byte, count: 32)
             )
         ))
     }
@@ -1847,7 +1921,7 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
             recordAcceptance: { reference, state in
                 var state = state
                 state.transactionHash = reference.transactionHash
-                state.submittedAtMs = reference.submittedAtMs
+                state.submittedAtMs = reference.identity.issuedAtMs
                 return state
             },
             recordObservation: { hash, timestamp, state in
@@ -1908,7 +1982,7 @@ private actor TypedFinalityTransport: KagemushaOperationFinalityTransport {
               acceptedReference == nil || acceptedReference == reference else {
             throw FinalityHarnessError.unexpectedSubmission
         }
-        requestedOperationIds.append(operation.operationId)
+        requestedOperationIds.append(operation.identity.operationID)
         if requestedOperationIds.count == 1 {
             throw ToriiClientError.httpStatus(
                 code: 404,
@@ -1949,8 +2023,7 @@ private struct AppliedOnlyFinalityTransport:
         chainDiscriminant: UInt16
     ) async throws -> KagemushaOperationStatus {
         guard chainDiscriminant == SccpV1.tairaI105DiscriminantV1,
-              status.operationId == operation.operationId,
-              status.kind == operation.kind,
+              status.identity == operation.identity,
               acceptedReference == nil else {
             throw FinalityHarnessError.unexpectedSubmission
         }
@@ -1975,7 +2048,7 @@ private struct DeadlineIgnoringFinalityTransport:
     ) async throws -> KagemushaOperationStatus {
         guard chainDiscriminant == SccpV1.tairaI105DiscriminantV1,
               acceptedReference == nil,
-              operation.kind == .redeem else {
+              operation.identity.kind == .redeem else {
             throw FinalityHarnessError.unexpectedSubmission
         }
         return try await withCheckedThrowingContinuation {
@@ -2116,10 +2189,16 @@ private final class Harness {
     }
 
     func run() async throws -> KagemushaOperationFinalityResolution<FinalityJournal> {
-        try await KagemushaOperationFinalityCoordinator.resolveForTesting(
-            operationId: operationId,
-            expectedKind: kind,
-            expectedSubmittedAtMs: expectedSubmittedAtMs,
+        let expectedIdentity = try KagemushaOperationIdentity(
+            operationID: operationId,
+            requestAuthorityDigest: String(repeating: "91", count: 32),
+            canonicalRequestDigest: String(repeating: "93", count: 32),
+            kind: kind,
+            issuedAtMs: expectedSubmittedAtMs,
+            expiresAtMs: expectedSubmittedAtMs + 1
+        )
+        return try await KagemushaOperationFinalityCoordinator.resolveForTesting(
+            expectedIdentity: expectedIdentity,
             initialState: journal,
             continuity: continuity,
             configuration: configuration,
@@ -2178,7 +2257,7 @@ private final class Harness {
                 }
                 let state = try self.record(
                     reference.transactionHash,
-                    submittedAtMs: reference.submittedAtMs,
+                    submittedAtMs: reference.identity.issuedAtMs,
                     in: state
                 )
                 self.journal = state

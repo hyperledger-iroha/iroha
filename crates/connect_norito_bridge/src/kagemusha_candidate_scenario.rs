@@ -50,11 +50,11 @@ pub(super) const SCENARIO_FILES: [&str; 33] = [
     "append-hop-02-verified-at-ms.txt",
     "redeem-recipient-account-id.txt",
     "unshield-verifier-commitment-v2.bin",
-    "redeem-hop-01-operation-id.bin",
+    "redeem-hop-01-nonce.bin",
     "redeem-hop-01-block-height.txt",
-    "redeem-hop-02-operation-id.bin",
+    "redeem-hop-02-nonce.bin",
     "redeem-hop-02-block-height.txt",
-    "redeem-sender-change-operation-id.bin",
+    "redeem-sender-change-nonce.bin",
     "redeem-sender-change-block-height.txt",
     "duplicate-input-recipient-request-v2.norito",
     "duplicate-input-output-membership-v4.norito",
@@ -656,15 +656,23 @@ pub fn validate_kagemusha_candidate_scenario_directory_v1(
         "append-hop-01-operation-id.bin",
         "append-hop-02-operation-id.bin",
         "duplicate-input-operation-id.bin",
-        "redeem-hop-01-operation-id.bin",
-        "redeem-hop-02-operation-id.bin",
-        "redeem-sender-change-operation-id.bin",
     ];
     let mut operation_ids = HashSet::from([anchor.topup_operation_id]);
     for name in operation_names {
         let operation_id = digest32(&files, name)?;
         if operation_id == [0; 32] || !operation_ids.insert(operation_id) {
             return Err(format!("{name} is zero or reuses another operation id"));
+        }
+    }
+    let mut nonces = HashSet::new();
+    for name in [
+        "redeem-hop-01-nonce.bin",
+        "redeem-hop-02-nonce.bin",
+        "redeem-sender-change-nonce.bin",
+    ] {
+        let nonce = digest32(&files, name)?;
+        if nonce == [0; 32] || !nonces.insert(nonce) {
+            return Err(format!("{name} is zero or reuses another nonce"));
         }
     }
     let hop_one_height = positive_decimal(&files, "append-hop-01-block-height.txt")?;

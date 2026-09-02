@@ -177,17 +177,29 @@ def fixture_formal_transcript() -> bytes:
             f"===== SANY {model} stderr =====\n"
         )
     for name, outcome, model in MODULE.REQUIRED_FORMAL_CONFIGURATION_MODELS:
-        status = 0 if outcome == "pass" else 12
-        result_body = (
-            "1 states generated, 1 distinct states found, 0 states left on queue.\n"
-            "The depth of the complete state graph search is 1.\n"
-            "Model checking completed. No error has been found.\n"
-            if outcome == "pass"
-            else "Error: Invariant Safety is violated.\n"
-            "Error: The behavior up to this point is:\n"
-            "1 states generated, 1 distinct states found, 0 states left on queue.\n"
-            "The depth of the complete state graph search is 1.\n"
-        )
+        status = MODULE._FORMAL_TLC_STATUS_BY_OUTCOME[outcome]
+        if outcome == "pass":
+            result_body = (
+                "1 states generated, 1 distinct states found, 0 states left on queue.\n"
+                "The depth of the complete state graph search is 1.\n"
+                "Model checking completed. No error has been found.\n"
+            )
+        elif outcome == "safety_violation":
+            result_body = (
+                "Error: Invariant Safety is violated.\n"
+                "Error: The behavior up to this point is:\n"
+                "1 states generated, 1 distinct states found, 0 states left on queue.\n"
+                "The depth of the complete state graph search is 1.\n"
+            )
+        else:
+            if outcome != "action_property_violation":
+                raise AssertionError(f"unsupported formal fixture outcome: {outcome}")
+            result_body = (
+                "Error: Action property APSDurabilityTemporal is violated.\n"
+                "Error: The behavior up to this point is:\n"
+                "1 states generated, 1 distinct states found, 0 states left on queue.\n"
+                "The depth of the complete state graph search is 1.\n"
+            )
         sections.append(
             f"===== {name} model {model} stdout (status {status}) =====\n"
             "TLC2 Version 2.19 of fixture\n"

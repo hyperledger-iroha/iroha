@@ -1040,7 +1040,15 @@ fn discovery_tolerates_completed_deletion_without_restarting_a_retained_cursor()
     fs::create_dir_all(&tenant_dir).expect("create tenant directory");
     fs::write(tenant_dir.join(format!("{:064x}.json", 1_u8)), b"{}")
         .expect("write retained-cursor fixture");
-    let stream = AttachmentDirectoryStream::open(root.clone()).expect("open retained cursor");
+    let mut stream = AttachmentDirectoryStream::open(root.clone()).expect("open retained cursor");
+    assert!(matches!(
+        stream.step().expect("enter tenant directory"),
+        AttachmentDirectoryStep::Advanced
+    ));
+    assert!(
+        stream.current_tenant.is_some(),
+        "fixture must park the retained cursor inside the tenant"
+    );
     *attachment_discovery_state().lock() = Some(AttachmentDiscoveryState {
         root: root.clone(),
         stream: Some(stream),

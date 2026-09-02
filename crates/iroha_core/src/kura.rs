@@ -320,8 +320,10 @@ const AUTONOMOUS_LIFECYCLE_CURSOR_HASH_DOMAIN: &[u8] =
     b"iroha:kura:autonomous-lifecycle-cursor:v1\0";
 const AUTONOMOUS_LIFECYCLE_CURSOR_SIGNATURE_DOMAIN: &[u8] =
     b"iroha:kura:autonomous-lifecycle-signature:v1\0";
-const AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN: &[u8] =
+const AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN_V1: &[u8] =
     b"iroha:kura:autonomous-lifecycle-terminal-outcome:v1\0";
+const AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN_V2: &[u8] =
+    b"iroha:kura:autonomous-lifecycle-terminal-outcome:v2\0";
 const AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_HASH_DOMAIN: &[u8] =
     b"iroha:kura:autonomous-lifecycle-process-generation:v1\0";
 const AUTONOMOUS_LIFECYCLE_BOOTSTRAP_HASH_DOMAIN: &[u8] =
@@ -2719,6 +2721,12 @@ impl Kura {
             Self::reject_retired_pipeline_artifacts(&blocks_root)?;
             Self::reject_retired_rollback_intents(&blocks_root)?;
         }
+        let canonical_replica_terminal_carrier_pins =
+            if config.init_mode == InitMode::Strict && !provisional_open {
+                Self::canonical_replica_terminal_carrier_pins_for_store(&store_root, &blocks_root)?
+            } else {
+                BTreeMap::new()
+            };
         let merge_cache_capacity =
             sanitize_merge_cache_capacity(config.merge_ledger_cache_capacity);
         if let Some(preflight) = configured_primary_preflight.as_mut() {
@@ -2793,7 +2801,9 @@ impl Kura {
                     durable_height_bound = height;
                 }
                 InitMode::Strict => {
-                    block_store.recover_canonical_storage_stages()?;
+                    block_store.recover_canonical_storage_stages_with_carrier_pins(
+                        &canonical_replica_terminal_carrier_pins,
+                    )?;
                     if journal_resolved_primary {
                         block_store.require_existing_journal_bound_canonical_files()?;
                     }
@@ -2888,6 +2898,7 @@ impl Kura {
             provisional_snapshot_bootstrap
                 .as_ref()
                 .map(|bootstrap| bootstrap.hash_only_prefix_height),
+            &canonical_replica_terminal_carrier_pins,
         )?;
         if let Some(preflight) = configured_primary_preflight.as_mut() {
             Self::reverify_configured_primary_blocks_open(preflight, &blocks_root, true)?;
@@ -12299,6 +12310,7 @@ impl Kura {
         mode: InitMode,
         v2_finality_floor: Option<u64>,
         provisional_hash_only_prefix: Option<usize>,
+        canonical_replica_terminal_carrier_pins: &BTreeMap<u64, HashOf<BlockHeader>>,
     ) -> Result<ChainValidation> {
         let block_index_count: usize = block_store
             .read_durable_index_count()?
@@ -12319,9 +12331,12 @@ impl Kura {
                     );
                     Kura::init_fast_mode(block_store, block_index_count, v2_finality_floor)
                 }
-                InitMode::Strict => {
-                    Kura::init_canonical_chain(block_store, block_index_count, v2_finality_floor)
-                }
+                InitMode::Strict => Kura::init_canonical_chain(
+                    block_store,
+                    block_index_count,
+                    v2_finality_floor,
+                    canonical_replica_terminal_carrier_pins,
+                ),
             }?
         };
         if chain_validation.truncated {
@@ -12488,6 +12503,7 @@ impl Kura {
         block_store: &mut BlockStore,
         block_index_count: usize,
         v2_finality_floor: Option<u64>,
+        canonical_replica_terminal_carrier_pins: &BTreeMap<u64, HashOf<BlockHeader>>,
     ) -> Result<ChainValidation, Error> {
         let mut block_indices = vec![BlockIndex::default(); block_index_count];
         block_store.read_block_indices(0, &mut block_indices)?;
@@ -12534,6 +12550,7 @@ impl Kura {
             expected_hashes.as_deref(),
             0,
             v2_finality_floor,
+            canonical_replica_terminal_carrier_pins,
         )?;
         if !hash_journal_is_exact || validation.truncated || validation.hash_mismatch {
             Self::rewrite_validated_block_hashes(
@@ -12551,8 +12568,22 @@ impl Kura {
         expected_hashes: Option<&[HashOf<BlockHeader>]>,
         mut hash_only_prefix: usize,
         v2_finality_floor: Option<u64>,
+        canonical_replica_terminal_carrier_pins: &BTreeMap<u64, HashOf<BlockHeader>>,
     ) -> Result<ChainValidation, Error> {
         let hashes_count = block_store.read_hashes_count()?;
+        let durable_height_bound = u64::try_from(block_indices.len())?;
+        if canonical_replica_terminal_carrier_pins
+            .keys()
+            .any(|height| *height == 0 || *height > durable_height_bound)
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "canonical replica terminal carrier pin is outside the durable block journal",
+                ),
+                block_store.path_to_blockchain.clone(),
+            ));
+        }
         let verified_snapshot_tail = block_store
             .validated_verified_snapshot_tail(u64::try_from(block_indices.len())?, hashes_count)?;
         if let Some(marker) = verified_snapshot_tail.as_ref()
@@ -12575,7 +12606,34 @@ impl Kura {
         let mut hash_mismatch = false;
         for (idx, block) in block_indices.iter().enumerate() {
             let height = idx.saturating_add(1) as u64;
+            let required_carrier_hash = canonical_replica_terminal_carrier_pins
+                .get(&height)
+                .copied();
+            if let Some(required_carrier_hash) = required_carrier_hash {
+                let expected_carrier_hash = expected_hashes
+                    .and_then(|hashes| hashes.get(idx))
+                    .copied()
+                    .ok_or(Error::HashesFileHeightMismatch)?;
+                if expected_carrier_hash != required_carrier_hash {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "canonical replica terminal carrier pin conflicts with the durable hash journal",
+                        ),
+                        block_store.da_block_path(height),
+                    ));
+                }
+            }
             if idx < hash_only_prefix {
+                if required_carrier_hash.is_some() {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "canonical replica terminal carrier cannot be hash-only",
+                        ),
+                        block_store.da_block_path(height),
+                    ));
+                }
                 let expected = expected_hashes
                     .and_then(|hashes| hashes.get(idx))
                     .copied()
@@ -12597,6 +12655,15 @@ impl Kura {
                     position >= marker_start && position < marker.snapshot_height
                 })
             {
+                if required_carrier_hash.is_some() {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "canonical replica terminal carrier has no complete local body",
+                        ),
+                        block_store.da_block_path(height),
+                    ));
+                }
                 let expected = expected_hashes
                     .and_then(|hashes| hashes.get(idx))
                     .copied()
@@ -12612,6 +12679,15 @@ impl Kura {
                 continue;
             }
             if block.length == 0 {
+                if required_carrier_hash.is_some() {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "canonical replica terminal carrier has a zero-length block entry",
+                        ),
+                        block_store.da_block_path(height),
+                    ));
+                }
                 truncated = Some(true);
                 error!(
                     length = block.length,
@@ -12621,6 +12697,15 @@ impl Kura {
                 break;
             }
             if block.length > STRICT_INIT_MAX_BLOCK_BYTES {
+                if required_carrier_hash.is_some() {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "canonical replica terminal carrier exceeds the strict block-size limit",
+                        ),
+                        block_store.da_block_path(height),
+                    ));
+                }
                 truncated = Some(true);
                 error!(
                     length = block.length,
@@ -12646,6 +12731,15 @@ impl Kura {
                     }
                 };
                 let Some(payload) = payload else {
+                    if required_carrier_hash.is_some() {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::NotFound,
+                                "canonical replica terminal carrier DA body is missing",
+                            ),
+                            block_store.da_block_path(height),
+                        ));
+                    }
                     debug!(
                         block_index = idx,
                         height,
@@ -12662,6 +12756,15 @@ impl Kura {
                     if u64::try_from(payload.len())? != block.length
                         || Hash::new(&payload) != retained_wire_hash
                     {
+                        if required_carrier_hash.is_some() {
+                            return Err(Error::IO(
+                                std::io::Error::new(
+                                    ErrorKind::InvalidData,
+                                    "canonical replica terminal carrier DA body differs from signed finality",
+                                ),
+                                block_store.da_block_path(height),
+                            ));
+                        }
                         warn!(
                             block_index = idx,
                             height,
@@ -12685,6 +12788,15 @@ impl Kura {
                             let expected = expected_evicted_hash;
                             let actual = decoded_block.hash();
                             if actual != expected {
+                                if required_carrier_hash.is_some() {
+                                    return Err(Error::IO(
+                                        std::io::Error::new(
+                                            ErrorKind::InvalidData,
+                                            "canonical replica terminal carrier DA body has the wrong block hash",
+                                        ),
+                                        block_store.da_block_path(height),
+                                    ));
+                                }
                                 warn!(
                                     expected = %expected,
                                     actual = %actual,
@@ -12708,6 +12820,17 @@ impl Kura {
                     }
                     Err(error) => {
                         let expected = expected_evicted_hash;
+                        if required_carrier_hash.is_some() {
+                            return Err(Error::IO(
+                                std::io::Error::new(
+                                    ErrorKind::InvalidData,
+                                    format!(
+                                        "canonical replica terminal carrier DA body is malformed: {error}"
+                                    ),
+                                ),
+                                block_store.da_block_path(height),
+                            ));
+                        }
                         warn!(
                             ?error,
                             block_index = idx,
@@ -12737,6 +12860,15 @@ impl Kura {
                             data_len: data_file_len,
                         })?;
                 if end > data_file_len {
+                    if required_carrier_hash.is_some() {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::InvalidData,
+                                "canonical replica terminal carrier points past the canonical data file",
+                            ),
+                            block_store.path_to_blockchain.clone(),
+                        ));
+                    }
                     truncated = Some(true);
                     error!(
                         start = block.start,
@@ -12756,6 +12888,17 @@ impl Kura {
                     Ok(()) => match decode_framed_signed_block(&block_data_buffer) {
                         Ok(decoded_block) => decoded_block,
                         Err(error) => {
+                            if required_carrier_hash.is_some() {
+                                return Err(Error::IO(
+                                    std::io::Error::new(
+                                        ErrorKind::InvalidData,
+                                        format!(
+                                            "canonical replica terminal carrier inline body is malformed: {error}"
+                                        ),
+                                    ),
+                                    block_store.path_to_blockchain.clone(),
+                                ));
+                            }
                             truncated = Some(true);
                             error!(
                                 ?error,
@@ -12766,6 +12909,20 @@ impl Kura {
                         }
                     },
                     Err(error) => {
+                        if required_carrier_hash.is_some() {
+                            let Error::IO(source, _) = error else {
+                                return Err(error);
+                            };
+                            return Err(Error::IO(
+                                std::io::Error::new(
+                                    source.kind(),
+                                    format!(
+                                        "failed to read canonical replica terminal carrier inline body: {source}"
+                                    ),
+                                ),
+                                block_store.path_to_blockchain.clone(),
+                            ));
+                        }
                         truncated = Some(true);
                         error!(
                             ?error,
@@ -12789,6 +12946,15 @@ impl Kura {
             let decoded_block_hash = decoded_block.hash();
             if let Some(expected) = expected_hashes.and_then(|hashes| hashes.get(idx)).copied() {
                 if expected != decoded_block_hash {
+                    if required_carrier_hash.is_some() {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::InvalidData,
+                                "canonical replica terminal carrier inline body has the wrong block hash",
+                            ),
+                            block_store.path_to_blockchain.clone(),
+                        ));
+                    }
                     Self::ensure_startup_rewrite_respects_v2_finality(v2_finality_floor, height)?;
                     hash_mismatch = true;
                     warn!(
@@ -12804,6 +12970,19 @@ impl Kura {
         }
         let truncated = truncated.unwrap_or(false);
         let validated_height = block_hashes.len() as u64;
+        if truncated
+            && canonical_replica_terminal_carrier_pins
+                .keys()
+                .any(|height| *height > validated_height)
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "canonical chain corruption precedes a pinned canonical replica terminal carrier",
+                ),
+                block_store.path_to_blockchain.clone(),
+            ));
+        }
         if truncated {
             Self::ensure_startup_rewrite_respects_v2_finality(
                 v2_finality_floor,
@@ -18790,6 +18969,22 @@ impl Kura {
         self.store_block_durable(&block, merge_entry.as_ref())?;
         self.note_committed_lane_status_change();
         Ok(())
+    }
+    /// Read the exact canonical framed block bytes persisted at `height`.
+    #[cfg(test)]
+    pub(crate) fn canonical_block_wire_bytes_for_testing(
+        &self,
+        height: NonZeroUsize,
+    ) -> Result<Vec<u8>> {
+        let mut block_store = self.block_store.lock();
+        let index_position = u64::try_from(height.get().saturating_sub(1))?;
+        let index = block_store.read_block_index(index_position)?;
+        if index.is_evicted() {
+            return block_store.read_da_block_bytes(u64::try_from(height.get())?, index.length);
+        }
+        let mut bytes = vec![0_u8; usize::try_from(index.length)?];
+        block_store.read_block_data(index.start, &mut bytes)?;
+        Ok(bytes)
     }
     /// Store a block durably in Kura and persist the merge-ledger entry sealing it.
     ///
@@ -27399,7 +27594,11 @@ impl Kura {
             || context.network_id != payload.network_id
             || locked_round.context_id != context.id()
             || locked_round.height != context.height
-            || locked_round.view != hint.proposal_view
+            // The same immutable carrier may be reproposed and certified in
+            // a later view without rewriting its signed header. The custody
+            // evidence binds both values, so only a lock older than the
+            // header-origin hint is invalid here.
+            || locked_round.view < hint.proposal_view
             || locked_subject.block_hash != hint.proposal_block_hash
             || locked_subject
                 .payload_hash
@@ -41360,11 +41559,19 @@ impl BlockStore {
     /// may change that marker, so the two stages must never be observed in the opposite
     /// order after a crash.
     fn recover_canonical_storage_stages(&mut self) -> Result<()> {
+        self.recover_canonical_storage_stages_with_carrier_pins(&BTreeMap::new())
+    }
+    fn recover_canonical_storage_stages_with_carrier_pins(
+        &mut self,
+        canonical_replica_terminal_carrier_pins: &BTreeMap<u64, HashOf<BlockHeader>>,
+    ) -> Result<()> {
         if self.path_to_blockchain.as_os_str().is_empty() {
             return Ok(());
         }
         self.recover_eviction_compaction_stage()?;
-        self.recover_da_block_rewrite_stage()
+        self.recover_da_block_rewrite_stage_with_carrier_pins(
+            canonical_replica_terminal_carrier_pins,
+        )
     }
     fn read_da_block_bytes(&self, height: u64, expected_len: u64) -> Result<Vec<u8>> {
         self.ensure_da_blocks_dir()?;
@@ -42037,7 +42244,54 @@ impl BlockStore {
         }
         Ok(())
     }
+    fn validate_da_block_rewrite_selection_for_carrier_pins(
+        &self,
+        stage: &DaBlockRewriteStageV1,
+        selected_marker: &BlockStoreCommitMarker,
+        selected_suffix: &[DaBlockRewriteImageV1],
+        canonical_replica_terminal_carrier_pins: &BTreeMap<u64, HashOf<BlockHeader>>,
+    ) -> Result<()> {
+        if canonical_replica_terminal_carrier_pins.is_empty() {
+            return Ok(());
+        }
+        let replacement_start = stage
+            .replacement
+            .first()
+            .expect("validated DA rewrite stage has a nonempty replacement")
+            .height;
+        for (&height, &required_hash) in canonical_replica_terminal_carrier_pins {
+            if height > selected_marker.count {
+                return Err(self.invalid_da_block_rewrite_stage(
+                    "selected DA rewrite state truncates a pinned canonical replica terminal carrier",
+                ));
+            }
+            if height < replacement_start {
+                continue;
+            }
+            let offset = usize::try_from(height.saturating_sub(replacement_start))?;
+            let Some(image) = selected_suffix.get(offset) else {
+                return Err(self.invalid_da_block_rewrite_stage(
+                    "selected DA rewrite state omits a pinned canonical replica terminal carrier",
+                ));
+            };
+            if image.height != height
+                || image.block_hash != required_hash
+                || image.body.as_ref().is_none_or(Vec::is_empty)
+            {
+                return Err(self.invalid_da_block_rewrite_stage(
+                    "selected DA rewrite state changes or body-strips a pinned canonical replica terminal carrier",
+                ));
+            }
+        }
+        Ok(())
+    }
     fn recover_da_block_rewrite_stage(&mut self) -> Result<()> {
+        self.recover_da_block_rewrite_stage_with_carrier_pins(&BTreeMap::new())
+    }
+    fn recover_da_block_rewrite_stage_with_carrier_pins(
+        &mut self,
+        canonical_replica_terminal_carrier_pins: &BTreeMap<u64, HashOf<BlockHeader>>,
+    ) -> Result<()> {
         let Some(stage) = self.read_da_block_rewrite_stage()? else {
             return Ok(());
         };
@@ -42057,8 +42311,20 @@ impl BlockStore {
             )
         })?;
         if marker == stage.old_marker {
+            self.validate_da_block_rewrite_selection_for_carrier_pins(
+                &stage,
+                &stage.old_marker,
+                &stage.old_suffix,
+                canonical_replica_terminal_carrier_pins,
+            )?;
             self.restore_old_da_block_rewrite_stage(&stage)?;
         } else if marker == stage.new_marker {
+            self.validate_da_block_rewrite_selection_for_carrier_pins(
+                &stage,
+                &stage.new_marker,
+                &stage.replacement,
+                canonical_replica_terminal_carrier_pins,
+            )?;
             self.promote_new_da_block_rewrite_stage(&stage)?;
             self.commit_marker_count = stage.new_marker.count;
             self.commit_marker_pending = None;

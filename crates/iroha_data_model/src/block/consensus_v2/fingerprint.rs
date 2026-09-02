@@ -112,7 +112,7 @@ mod tests {
                 finality_margin_blocks: 8,
                 evidence_horizon_blocks: 7_200,
                 activation_lag_blocks: 1,
-                slashing_delay_blocks: 259_200,
+                slashing_delay_blocks: 3_600,
             });
         params
     }

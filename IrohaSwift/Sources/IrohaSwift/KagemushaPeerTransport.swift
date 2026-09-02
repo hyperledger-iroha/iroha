@@ -196,7 +196,10 @@ public enum KagemushaPeerTransportError: Error, Equatable, LocalizedError, Senda
 /// Canonical `PKK2R.`, `PKK2P.`, and `PKK2A.` text envelopes.
 public enum KagemushaPeerTextCodec {
     public static func encode(_ payload: KagemushaPeerPayload) throws -> String {
-        let archive = payload.archive
+        var archive = payload.archive
+        // `Data` is copy-on-write: zeroing this local view cannot mutate the
+        // caller-owned archive retained by `payload`.
+        defer { archive.resetBytes(in: 0..<archive.count) }
         guard !archive.isEmpty else {
             throw KagemushaPeerTransportError.emptyPayload
         }
@@ -240,9 +243,12 @@ public enum KagemushaPeerTextCodec {
             )
         }
         let body = String(value.dropFirst(kind.textPrefix.count))
-        guard let archive = base64URLDecode(body) else {
+        guard var archive = base64URLDecode(body) else {
             throw KagemushaPeerTransportError.invalidBase64URL
         }
+        // A successfully decoded payload retains its own `Data` value. The
+        // deferred mutation detaches this temporary through copy-on-write.
+        defer { archive.resetBytes(in: 0..<archive.count) }
         guard kind.textPrefix + base64URLEncode(archive) == value else {
             throw KagemushaPeerTransportError.nonCanonicalEncoding
         }

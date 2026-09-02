@@ -541,7 +541,13 @@ pub(crate) fn start(
             tokio::select! {
                 _ = interval.tick() => {
                     let tick = worker.clone();
-                    match tokio::task::spawn_blocking(move || tick.reconcile_once()).await {
+                    match crate::panic_recovery::join_recoverable(
+                        crate::panic_recovery::spawn_blocking_recoverable(move || {
+                            tick.reconcile_once()
+                        }),
+                    )
+                    .await
+                    {
                         Ok(Ok(())) => {
                             record_tick_metric("success");
                         }
@@ -552,7 +558,7 @@ pub(crate) fn start(
                                 "committed SoraFS hedging/billing reconciliation failed"
                             );
                         }
-                        Err(error) => {
+                        Err(_panic) => {
                             worker
                                 .external_dependencies_healthy
                                 .store(false, Ordering::Release);
@@ -563,8 +569,6 @@ pub(crate) fn start(
                                 .fetch_add(1, Ordering::Relaxed);
                             record_tick_metric("panic");
                             iroha_logger::error!(
-                                cancelled = error.is_cancelled(),
-                                panicked = error.is_panic(),
                                 "committed SoraFS hedging/billing worker task failed"
                             );
                         }
@@ -1172,7 +1176,7 @@ mod tests {
     const GENESIS_SEED: &[u8] = b"sorafs-reference-production-genesis";
     const QUERY_HANDLE: &str = "ledger.billing.finalized.primary";
     const VERIFIER_HANDLE: &str = "consensus.billing.verifier.primary";
-    const SIGNER_HANDLE: &str = "hsm.billing.statement.primary";
+    const SIGNER_HANDLE: &str = "provider.billing.statement.primary";
     const PUBLISHER_HANDLE: &str = "billing.publisher.primary";
     const ACKNOWLEDGEMENT_HANDLE: &str = "billing.acknowledgement.primary";
     const WITNESS_HANDLE: &str = "sealed.billing.epoch.primary";
@@ -1723,7 +1727,7 @@ mod tests {
             "https://operator:secret@billing.example",
             "https://billing.example/query?token=secret",
             "https://billing.example/query#fragment",
-            "hsm://billing/dummy/signer",
+            "provider://billing/dummy/signer",
         ] {
             let temp = TempDir::new().expect("tempdir");
             let mut config = config(temp.path().join("state"), &policy);

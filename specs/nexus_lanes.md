@@ -370,8 +370,10 @@ LaneConfigEntry {
   embedded envelope lane as reset ownership. The same reset prunes AXT replay
   ledger entries keyed by a retired handle target lane while preserving
   cross-lane replay guards whose handles target surviving lanes. Public-lane
-  stake-share rows and reward records keyed by or carrying the reset lane, plus
-  reward-claim cursors keyed by the reset lane, are removed as live economic
+  cleanup reaches this point only after every owned tenure, custody balance,
+  pending unbond, and evidence lien passes the retirement preflight. It then
+  removes stake-share rows and reward records keyed by or carrying the reset
+  lane, plus reward-claim cursors keyed by the reset lane, as live economic
   indices so a fresh incarnation can start reward epochs and claim accounting
   from its own state. Operator staking status snapshots for reset lanes are
   cleared at the same time, so status surfaces cannot continue reporting stale
@@ -766,12 +768,17 @@ LaneConfigEntry {
   validator account, and bond/schedule-unbond/finalize-unbond operations must
   be submitted by the staker account whose balance or pending withdrawal is
   being changed.
-- Live NPoS lane-scope inference uses only `Active` public-lane validator
-  records. Jailed, exiting, exited, pending, or slashed historical records stay
-  available for audit and staking lifecycle queries but cannot pin recovery
-  elections or active topology selection to a stale lane after retirement,
-  rebinding, or autoscale scale-in. Live topology, stake-snapshot, election,
-  due-activation, released-exit sweeping, penalty-locator,
+- Exact-height NPoS election and validation use each public-lane validator's
+  retained half-open tenure `[activation_height, deactivation_height)` as the
+  sole authority. `activation_height` is required and is the first eligible
+  height; `deactivation_height`, when present, is the first ineligible height.
+  A lifecycle label cannot rewrite a committee that was already frozen:
+  pending records may enter the exact boundary for which they were scheduled,
+  and an `Exiting` or slashed record remains binding through the last height
+  before its deactivation boundary. Records whose tenure has ended remain
+  available for audit and offence attribution but cannot enter later recovery
+  elections or active topology selection. Live topology, stake-snapshot,
+  election, due-activation, released-exit sweeping, penalty-locator,
   staking-admission, direct staking mutations, reward bookkeeping, slash
   handling, peer/account cleanup guards, multisig account-rekey rewrites,
   Soracloud runtime-authority, and host-finance stake-accounting derivations
@@ -789,18 +796,21 @@ LaneConfigEntry {
   stake-share/reward app API paths likewise consume or serialize only rows whose
   storage keys exactly match the embedded `(lane_id, validator, staker)` or
   `(lane_id, epoch)` economic record fields.
-  When a lane reset retires or rebinds a lane, `set_nexus`, lifecycle plans,
-  and autoscale scale-in terminalize
-  revivable public-validator records (`PendingActivation`, `Active`, or
-  `Jailed`) for that lane as `Exited`, treating either the storage key lane or
-  the embedded record lane as reset ownership before later epoch promotion or
-  roster derivation can reuse them. World-backed NPoS quorum, coverage, and
+  A lane reset, rebind, or autoscale scale-in must not manufacture an early
+  terminal state. It waits until every reset-owned validator tenure has reached
+  its exact deactivation height, stake-share and pending-unbond custody is
+  drained, and no pending evidence lien can still debit that tenure. Only then
+  may reset cleanup remove the terminal records and economic indexes, treating
+  either the storage key lane or embedded record lane as reset ownership. This
+  prevents a recreated lane id from inheriting an old tenure without erasing a
+  committee or slash liability that is still live. World-backed NPoS quorum, coverage, and
   commit-root stake selection paths use the same active-lane filter whenever
   Nexus is enabled. Public-lane stake-share rows, reward records, and
-  reward-claim cursors are not audit records; lane reset paths delete
-  reset-owned rows (by storage key or embedded lane where present) and clear
-  operator staking status for reset lanes while preserving unchanged-lane
-  economic state and status. Lane-relay emergency overrides are pruned for
+  reward-claim cursors are not audit records; after the tenure, custody, and
+  evidence gates succeed, lane reset paths delete reset-owned rows (by storage
+  key or embedded lane where present) and clear operator staking status for
+  reset lanes while preserving unchanged-lane economic state and status.
+  Lane-relay emergency overrides are pruned for
   reset lanes and for lanes absent from the updated catalog; an override
   pre-staged for a newly created lane id is treated as stale prior-incarnation
   state and must be reinstalled after the lifecycle update. Failed

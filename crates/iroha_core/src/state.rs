@@ -8,8 +8,10 @@ use crate::private_settlement::{
         PrivateSettlementGlobalStateOutcomeV1, PrivateSettlementNullifierKeyV1,
         PrivateSettlementOutputKeyV1, PrivateSettlementOutputRecordV1, PrivateSettlementPoolKeyV1,
         PrivateSettlementRootKeyV1, PrivateSettlementRootProvenanceV1,
-        plan_private_settlement_abort_v1, plan_private_settlement_pool_bootstrap_v1,
-        plan_private_settlement_pool_rotation_v1, plan_private_settlement_receipt_v1,
+        PrivateSettlementStagedLockKeyV1, PrivateSettlementStagedLockRecordV1,
+        expired_private_settlement_staged_lock_keys_v1, plan_private_settlement_abort_v1,
+        plan_private_settlement_pool_bootstrap_v1, plan_private_settlement_pool_rotation_v1,
+        plan_private_settlement_prepare_locks_v1, plan_private_settlement_receipt_v1,
         validate_private_settlement_persisted_state_v1,
     },
     protocol::validate_private_settlement_committee_authority_v1,
@@ -473,10 +475,11 @@ use crate::{
         },
         triggers::{
             set::{
-                ExecutableRef, Set as TriggerSet, SetBlock as TriggerSetBlock,
-                SetReadOnly as TriggerSetReadOnly, SetTransaction as TriggerSetTransaction,
-                SetView as TriggerSetView, data_trigger_action_matches,
-                pipeline_trigger_action_matches, time_trigger_action_is_due,
+                DataTriggerMatchSnapshot, ExecutableRef, Set as TriggerSet,
+                SetBlock as TriggerSetBlock, SetReadOnly as TriggerSetReadOnly,
+                SetTransaction as TriggerSetTransaction, SetView as TriggerSetView,
+                data_trigger_action_matches, pipeline_trigger_action_matches,
+                time_trigger_action_is_due,
             },
             specialized::{LoadedAction, LoadedActionTrait, TimeTriggerRetryState},
         },
@@ -495,6 +498,15 @@ const DEFAULT_TRIGGER_GAS_LIMIT: u64 = 50_000_000;
 const MAX_DATA_TRIGGER_FIRINGS_PER_TRANSACTION: usize = 256;
 const TRIGGER_FILTER_CHECK_GAS: u64 = 1;
 const TRIGGER_FIRING_GAS: u64 = 1;
+
+struct PendingDataEventScan {
+    events: Vec<Arc<data_pre::DataEvent>>,
+    event_index: usize,
+    candidates: Vec<TriggerId>,
+    candidate_index: usize,
+    snapshot: DataTriggerMatchSnapshot,
+    depth: u16,
+}
 pub(crate) const GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY: u64 = 0;
 pub(crate) const TLE_KEY_SESSION_SINGLETON_KEY: u64 = 0;
 
@@ -1222,6 +1234,8 @@ macro_rules! with_world_overlay_fields {
             private_settlement_roots,
             private_settlement_nullifiers,
             private_settlement_outputs,
+            private_settlement_recipient_index,
+            private_settlement_staged_locks,
             private_settlement_receipts,
             private_settlement_aborts,
             ]
@@ -4552,6 +4566,15 @@ pub struct World {
     /// Fixed-shape encrypted private-settlement outputs.
     pub(crate) private_settlement_outputs:
         Storage<PrivateSettlementOutputKeyV1, PrivateSettlementOutputRecordV1>,
+    /// Derived global index enforcing one-time recipient/view keys across settlements.
+    #[norito(skip)]
+    pub(crate) private_settlement_recipient_index: Storage<
+        iroha_data_model::privacy::PrivacyRecipientIdV1,
+        PrivateSettlementFinalizationReferenceV1,
+    >,
+    /// Globally replicated complete-bundle and resource Prepare locks.
+    pub(crate) private_settlement_staged_locks:
+        Storage<PrivateSettlementStagedLockKeyV1, PrivateSettlementStagedLockRecordV1>,
     /// Public finalized private-settlement receipts keyed by opaque bundle id.
     pub(crate) private_settlement_receipts:
         Storage<Hash, iroha_data_model::nexus::PrivateSettlementReceiptV1>,
@@ -4603,9 +4626,8 @@ pub struct World {
     pub(crate) merge_hint_roots: Cell<Vec<Hash>>,
     /// Latest reduced global state root advertised by the merge ledger.
     pub(crate) merge_global_state_root: Cell<Option<Hash>>,
-    #[norito(skip)]
     /// Persisted consensus evidence records keyed by deterministic digest.
-    pub(crate) consensus_evidence: Storage<Vec<u8>, EvidenceRecord>,
+    pub(crate) consensus_evidence: Storage<Hash, EvidenceRecord>,
     /// Registry of contract manifests by code hash (on-chain).
     pub(crate) contract_manifests:
         Storage<iroha_crypto::Hash, iroha_data_model::smart_contract::manifest::ContractManifest>,
@@ -5290,6 +5312,16 @@ pub struct WorldBlock<'world> {
     /// Encrypted private-settlement outputs.
     pub(crate) private_settlement_outputs:
         StorageBlock<'world, PrivateSettlementOutputKeyV1, PrivateSettlementOutputRecordV1>,
+    /// Derived one-time private-settlement recipient index.
+    #[norito(skip)]
+    pub(crate) private_settlement_recipient_index: StorageBlock<
+        'world,
+        iroha_data_model::privacy::PrivacyRecipientIdV1,
+        PrivateSettlementFinalizationReferenceV1,
+    >,
+    /// Globally replicated complete-bundle and resource Prepare locks.
+    pub(crate) private_settlement_staged_locks:
+        StorageBlock<'world, PrivateSettlementStagedLockKeyV1, PrivateSettlementStagedLockRecordV1>,
     /// Public finalized private-settlement receipts.
     pub(crate) private_settlement_receipts:
         StorageBlock<'world, Hash, iroha_data_model::nexus::PrivateSettlementReceiptV1>,
@@ -5350,8 +5382,7 @@ pub struct WorldBlock<'world> {
     /// Inverted index from TLV tag to proof ids.
     pub(crate) proofs_by_tag: StorageBlock<'world, [u8; 4], Vec<iroha_data_model::proof::ProofId>>,
     /// Persisted consensus evidence records keyed by deterministic digest.
-    #[norito(skip)]
-    pub(crate) consensus_evidence: StorageBlock<'world, Vec<u8>, EvidenceRecord>,
+    pub(crate) consensus_evidence: StorageBlock<'world, Hash, EvidenceRecord>,
     /// Contract manifests
     pub(crate) contract_manifests: StorageBlock<
         'world,
@@ -5882,6 +5913,10 @@ impl WorldBlock<'_> {
             PrivateSettlementNullifier
         );
         collect_reverts!(self.private_settlement_outputs, PrivateSettlementOutput);
+        collect_reverts!(
+            self.private_settlement_staged_locks,
+            PrivateSettlementStagedLock
+        );
         collect_reverts!(self.private_settlement_receipts, PrivateSettlementReceipt);
         collect_reverts!(self.private_settlement_aborts, PrivateSettlementAbort);
         collect_reverts!(self.privacy_pgc_accounts, PrivacyPgcAccount);
@@ -5985,6 +6020,10 @@ impl WorldBlock<'_> {
             PrivateSettlementNullifier
         );
         collect_payload!(self.private_settlement_outputs, PrivateSettlementOutput);
+        collect_payload!(
+            self.private_settlement_staged_locks,
+            PrivateSettlementStagedLock
+        );
         collect_payload!(self.private_settlement_receipts, PrivateSettlementReceipt);
         collect_payload!(self.private_settlement_aborts, PrivateSettlementAbort);
         collect_payload!(self.privacy_pgc_accounts, PrivacyPgcAccount);
@@ -6173,6 +6212,8 @@ impl WorldBlock<'_> {
             private_settlement_roots,
             private_settlement_nullifiers,
             private_settlement_outputs,
+            private_settlement_recipient_index,
+            private_settlement_staged_locks,
             private_settlement_receipts,
             private_settlement_aborts,
             privacy_pgc_accounts,
@@ -6680,6 +6721,20 @@ pub struct WorldTransaction<'block, 'world> {
         PrivateSettlementOutputKeyV1,
         PrivateSettlementOutputRecordV1,
     >,
+    /// Derived one-time private-settlement recipient index.
+    pub(crate) private_settlement_recipient_index: StorageTransaction<
+        'block,
+        'world,
+        iroha_data_model::privacy::PrivacyRecipientIdV1,
+        PrivateSettlementFinalizationReferenceV1,
+    >,
+    /// Globally replicated complete-bundle and resource Prepare locks.
+    pub(crate) private_settlement_staged_locks: StorageTransaction<
+        'block,
+        'world,
+        PrivateSettlementStagedLockKeyV1,
+        PrivateSettlementStagedLockRecordV1,
+    >,
     /// Public finalized private-settlement receipts.
     pub(crate) private_settlement_receipts: StorageTransaction<
         'block,
@@ -6757,7 +6812,7 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) proofs_by_tag:
         StorageTransaction<'block, 'world, [u8; 4], Vec<iroha_data_model::proof::ProofId>>,
     /// Persisted consensus evidence records keyed by deterministic digest.
-    pub(crate) consensus_evidence: StorageTransaction<'block, 'world, Vec<u8>, EvidenceRecord>,
+    pub(crate) consensus_evidence: StorageTransaction<'block, 'world, Hash, EvidenceRecord>,
     /// Contract manifests
     pub(crate) contract_manifests: StorageTransaction<
         'block,
@@ -8806,6 +8861,15 @@ pub struct WorldView<'world> {
     /// Encrypted private-settlement output view.
     pub(crate) private_settlement_outputs:
         StorageView<'world, PrivateSettlementOutputKeyV1, PrivateSettlementOutputRecordV1>,
+    /// Derived one-time private-settlement recipient index view.
+    pub(crate) private_settlement_recipient_index: StorageView<
+        'world,
+        iroha_data_model::privacy::PrivacyRecipientIdV1,
+        PrivateSettlementFinalizationReferenceV1,
+    >,
+    /// Globally replicated complete-bundle and resource Prepare-lock view.
+    pub(crate) private_settlement_staged_locks:
+        StorageView<'world, PrivateSettlementStagedLockKeyV1, PrivateSettlementStagedLockRecordV1>,
     /// Public finalized private-settlement receipt view.
     pub(crate) private_settlement_receipts:
         StorageView<'world, Hash, iroha_data_model::nexus::PrivateSettlementReceiptV1>,
@@ -8836,7 +8900,7 @@ pub struct WorldView<'world> {
     /// Latest reduced global state root advertised by the merge ledger.
     pub(crate) merge_global_state_root: CellView<'world, Option<Hash>>,
     /// Persisted consensus evidence records keyed by deterministic digest.
-    pub(crate) consensus_evidence: StorageView<'world, Vec<u8>, EvidenceRecord>,
+    pub(crate) consensus_evidence: StorageView<'world, Hash, EvidenceRecord>,
     /// Contract manifests
     pub(crate) contract_manifests: StorageView<
         'world,
@@ -9209,7 +9273,7 @@ pub struct PrivateSettlementLedgerMapCountsV1 {
 }
 
 /// Evidence-only commitment to every globally replicated private-settlement
-/// map and its exact public count vector.
+/// financial/terminal map and its exact public count vector.
 ///
 /// The digest is intended only for test-network atomicity observations. It is
 /// not a production privacy API and is unavailable unless the dedicated
@@ -9223,9 +9287,39 @@ pub struct PrivateSettlementLedgerEvidenceV1 {
     pub counts: PrivateSettlementLedgerMapCountsV1,
 }
 
+/// Evidence-only commitment to the globally replicated all-Prepare lock map.
+///
+/// This is intentionally separate from [`PrivateSettlementLedgerEvidenceV1`]:
+/// registering a Prepare barrier changes control-plane state but must not look
+/// like a partially applied financial settlement.
+#[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrivateSettlementReplicatedStagedLockEvidenceV1 {
+    /// Domain-separated commitment to the canonical staged-lock map and count.
+    pub commitment: Hash,
+    /// Bundle and opaque resource-index rows in the replicated lock map.
+    pub count: u64,
+}
+
 #[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
 const PRIVATE_SETTLEMENT_LEDGER_EVIDENCE_DOMAIN_V1: &[u8] =
     b"iroha:test-network:private-settlement:ledger-evidence:v1\0";
+
+#[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
+const PRIVATE_SETTLEMENT_REPLICATED_STAGED_LOCK_EVIDENCE_DOMAIN_V1: &[u8] =
+    b"iroha:test-network:private-settlement:replicated-staged-lock-evidence:v1\0";
+
+#[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
+fn private_settlement_replicated_staged_lock_commitment_v1(
+    canonical_map: &[u8],
+    count: u64,
+) -> Hash {
+    Hash::new_from_chunks(&[
+        PRIVATE_SETTLEMENT_REPLICATED_STAGED_LOCK_EVIDENCE_DOMAIN_V1,
+        &count.to_le_bytes(),
+        canonical_map,
+    ])
+}
 
 #[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
 fn private_settlement_ledger_evidence_commitment_v1(
@@ -9257,8 +9351,8 @@ fn private_settlement_ledger_evidence_commitment_v1(
 }
 
 impl WorldView<'_> {
-    /// Commit every globally replicated private-settlement map for a
-    /// test-network atomicity observation.
+    /// Commit every globally replicated private-settlement financial/terminal
+    /// map for a test-network atomicity observation.
     ///
     /// # Errors
     ///
@@ -9348,6 +9442,34 @@ impl WorldView<'_> {
         Ok(PrivateSettlementLedgerEvidenceV1 { commitment, counts })
     }
 
+    /// Commit the globally replicated all-Prepare lock map for a test-network
+    /// atomicity observation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error only if canonical Norito encoding fails. Shipping
+    /// builds do not compile this method.
+    #[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
+    pub fn private_settlement_replicated_staged_lock_evidence_v1(
+        &self,
+    ) -> Result<PrivateSettlementReplicatedStagedLockEvidenceV1, norito::Error> {
+        let staged_locks: Vec<_> = self
+            .private_settlement_staged_locks
+            .iter()
+            .map(|(key, value)| (*key, value.clone()))
+            .collect();
+        let canonical_map = norito::encode_canonical(&staged_locks)?;
+        let count = u64::try_from(staged_locks.len())
+            .expect("private-settlement replicated staged-lock map length fits u64");
+        Ok(PrivateSettlementReplicatedStagedLockEvidenceV1 {
+            commitment: private_settlement_replicated_staged_lock_commitment_v1(
+                &canonical_map,
+                count,
+            ),
+            count,
+        })
+    }
+
     /// Read one public private-settlement receipt by opaque bundle id.
     #[must_use]
     pub fn private_settlement_receipt_v1(
@@ -9364,6 +9486,21 @@ impl WorldView<'_> {
         bundle_id: &Hash,
     ) -> Option<&iroha_data_model::nexus::PrivateSettlementAbortReceiptV1> {
         self.private_settlement_aborts.get(bundle_id)
+    }
+
+    /// Read the exact public all-Prepare barrier currently registered for a bundle.
+    #[must_use]
+    pub fn private_settlement_prepare_barrier_v1(
+        &self,
+        bundle_id: &Hash,
+    ) -> Option<&iroha_data_model::nexus::PrivateSettlementPrepareBarrierV1> {
+        match self
+            .private_settlement_staged_locks
+            .get(&PrivateSettlementStagedLockKeyV1::Bundle(*bundle_id))?
+        {
+            PrivateSettlementStagedLockRecordV1::Bundle { barrier, .. } => Some(barrier),
+            PrivateSettlementStagedLockRecordV1::Resource { .. } => None,
+        }
     }
 
     /// Read only the opaque pool epoch and current root.
@@ -9411,8 +9548,8 @@ mod private_settlement_ledger_evidence_tests {
             nullifiers: 4,
             commitments: 5,
             encrypted_outputs: 5,
-            replay_markers: 7,
-            receipts: 6,
+            replay_markers: 8,
+            receipts: 7,
             abort_markers: 1,
         }
     }
@@ -9468,6 +9605,19 @@ mod private_settlement_ledger_evidence_tests {
                 "count field {index} was not bound"
             );
         }
+    }
+
+    #[test]
+    fn replicated_staged_lock_commitment_is_separate_and_binds_map_and_count() {
+        let empty = private_settlement_replicated_staged_lock_commitment_v1(&[0], 0);
+        assert_ne!(
+            empty,
+            private_settlement_replicated_staged_lock_commitment_v1(&[1], 0)
+        );
+        assert_ne!(
+            empty,
+            private_settlement_replicated_staged_lock_commitment_v1(&[0], 1)
+        );
     }
 }
 
@@ -11238,7 +11388,7 @@ pub struct State {
     /// This cache is deliberately outside [`World`]: private gossip timing must
     /// never change consensus state or a snapshot/state-root projection.
     pub(crate) sumeragi_v2_pending_evidence:
-        parking_lot::Mutex<BTreeMap<Vec<u8>, crate::sumeragi::evidence::LocalV2EvidenceRecord>>,
+        parking_lot::Mutex<BTreeMap<Hash, crate::sumeragi::evidence::LocalV2EvidenceRecord>>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ReplayMergeCarrier {
@@ -11726,6 +11876,26 @@ enum ApplyTopologyAuthority {
     /// Exact Sumeragi-v2 finality remains authoritative.
     V2Finality,
 }
+fn validate_applied_npos_consensus_effects(
+    expected: Option<&iroha_data_model::consensus::NposConsensusEffects>,
+    applied_hash: Option<&HashOf<iroha_data_model::consensus::NposConsensusEffects>>,
+) -> Result<(), MergeLedgerCommitError> {
+    match (expected, applied_hash) {
+        (None, None) => Ok(()),
+        (Some(expected), Some(applied_hash)) if HashOf::new(expected) == *applied_hash => Ok(()),
+        (Some(_), None) => Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+            "committed NPoS consensus effects were not applied in the pristine pre-lifecycle stage"
+                .to_owned(),
+        )),
+        (None, Some(_)) => Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+            "the pristine pre-lifecycle stage applied NPoS consensus effects absent from the committed block"
+                .to_owned(),
+        )),
+        (Some(_), Some(_)) => Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+            "the pristine pre-lifecycle NPoS effects differ from the committed block".to_owned(),
+        )),
+    }
+}
 /// Immutable AXT authorization snapshot captured before block effects.
 /// Freezes policy and issuer/key state; accepted handles separately advance
 /// counters. Replay and budget records are hydrated on demand from the parent
@@ -12007,9 +12177,12 @@ pub(crate) trait StateBlockCommitAuthorization {
 /// Slash observability retained until the entire canonical block commits.
 struct PendingPublicLaneSlashObservability {
     lane_id: LaneId,
+    #[cfg(feature = "telemetry")]
     previous_status: iroha_data_model::nexus::PublicLaneValidatorStatus,
+    #[cfg(feature = "telemetry")]
     slashed_status: iroha_data_model::nexus::PublicLaneValidatorStatus,
-    amount: Quantity,
+    bonded_amount: Quantity,
+    pending_unbond_amount: Quantity,
 }
 /// Struct for block's aggregated changes
 pub struct StateBlock<'state> {
@@ -12191,8 +12364,9 @@ pub struct StateBlock<'state> {
     pending_nexus_fee_receipt_source_ids: BTreeSet<[u8; 32]>,
     /// Whether deterministic start-of-block effects have already been applied.
     start_of_block_effects_applied: bool,
-    /// Whether finality-owned NPoS effects were applied before ordinary execution.
-    npos_consensus_effects_applied: bool,
+    /// Exact finality-owned NPoS bundle applied before ordinary execution.
+    applied_npos_consensus_effects_hash:
+        Option<HashOf<iroha_data_model::consensus::NposConsensusEffects>>,
     /// Whether the permanent AXT counter ratchets reflect the final policy identity.
     axt_policy_transition_ratchets_finalized: bool,
     pub(crate) _curr_block: BlockHeader,
@@ -12211,6 +12385,41 @@ impl<'state> StateBlock<'state> {
     #[inline]
     pub fn world(&self) -> &WorldBlock<'state> {
         &self.world
+    }
+    /// Apply one exact NPoS finality bundle on the pristine pre-lifecycle overlay.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn apply_pristine_npos_consensus_effects(
+        &mut self,
+        effects: &iroha_data_model::consensus::NposConsensusEffects,
+        evidence_prune_keys: &[Hash],
+        expected_beacon_anchor: Option<
+            iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1,
+        >,
+        authenticated_roster: &[PeerId],
+        current_height: u64,
+        current_view: u64,
+        now_ms: u64,
+    ) -> eyre::Result<crate::sumeragi::penalties::PenaltyOutcome> {
+        if self.start_of_block_effects_applied || self.applied_npos_consensus_effects_hash.is_some()
+        {
+            return Err(eyre::eyre!(
+                "NPoS consensus effects must be applied exactly once before block lifecycle effects"
+            ));
+        }
+        let mut transaction = self.consensus_effects_transaction();
+        let outcome = crate::sumeragi::penalties::apply_npos_consensus_effects_to_transaction(
+            &mut transaction,
+            effects,
+            evidence_prune_keys,
+            expected_beacon_anchor,
+            authenticated_roster,
+            current_height,
+            current_view,
+            now_ms,
+        )?;
+        transaction.apply_consensus_effects();
+        self.applied_npos_consensus_effects_hash = Some(HashOf::new(effects));
+        Ok(outcome)
     }
     /// Read an exact pending QueuePlan binding from the immutable parent WSV.
     ///
@@ -12681,8 +12890,8 @@ impl<'state> StateBlock<'state> {
                 if !public_lane_validator_record_matches_key(key, record) {
                     return None;
                 }
-                if let PublicLaneValidatorStatus::PendingActivation(target_epoch) = record.status {
-                    if target_epoch <= current_epoch {
+                if let PublicLaneValidatorStatus::PendingActivation(target_height) = record.status {
+                    if target_height <= block_height {
                         return Some((key.clone(), record.status.clone()));
                     }
                 }
@@ -13224,11 +13433,6 @@ pub struct StateTransaction<'block, 'state> {
     /// State telemetry
     #[cfg(feature = "telemetry")]
     pub telemetry: &'state StateTelemetry,
-    /// Whether applying this transaction may publish process-local operational observability.
-    ///
-    /// Consensus-effect probes set this to `false`: they need sequential scratch-state
-    /// mutation without changing live status, metrics, fee counters, or slash reporting.
-    operational_observability: bool,
     /// Transaction-local operator-status updates, published only by [`Self::apply`].
     public_lane_staking_status_overlay: crate::sumeragi::status::PublicLaneStakingStatusOverlay,
     pub(crate) _curr_block: BlockHeader,
@@ -13572,20 +13776,26 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
         );
         self.pending_nexus_fee_event = Some(event);
     }
-    /// Stage one public-lane slash observability update for the block commit boundary.
+    /// Stage slash observability until both this transaction and its block commit.
     pub(crate) fn stage_public_lane_slash_observability(
         &mut self,
         lane_id: LaneId,
         previous_status: iroha_data_model::nexus::PublicLaneValidatorStatus,
         slashed_status: iroha_data_model::nexus::PublicLaneValidatorStatus,
-        amount: Quantity,
+        bonded_amount: Quantity,
+        pending_unbond_amount: Quantity,
     ) {
+        #[cfg(not(feature = "telemetry"))]
+        let _ = (previous_status, slashed_status);
         self.pending_public_lane_slash_observability
             .push(PendingPublicLaneSlashObservability {
                 lane_id,
+                #[cfg(feature = "telemetry")]
                 previous_status,
+                #[cfg(feature = "telemetry")]
                 slashed_status,
-                amount,
+                bonded_amount,
+                pending_unbond_amount,
             });
     }
     /// Stage block fee amount so telemetry only reflects committed transactions.
@@ -13927,6 +14137,7 @@ pub(crate) fn consensus_key_pop_for_public_key(
 pub(crate) fn validator_lane_ids_for_peers<I, P>(
     snapshot: &impl WorldReadOnly,
     peers: I,
+    block_height: u64,
 ) -> BTreeSet<LaneId>
 where
     I: IntoIterator<Item = P>,
@@ -13942,9 +14153,12 @@ where
     snapshot
         .public_lane_validators()
         .iter()
-        .filter(|(_, record)| matches!(record.status, PublicLaneValidatorStatus::Active))
         .filter_map(|(key, record)| {
             (public_lane_validator_record_matches_key(key, record)
+                && crate::smartcontracts::isi::staking::validator_election_eligible_at_height(
+                    record,
+                    block_height,
+                )
                 && peer_ids.contains(&record.peer_id))
             .then_some(record.lane_id)
         })
@@ -13973,38 +14187,9 @@ pub(crate) fn public_lane_reward_record_matches_key(
 pub(crate) fn validator_lane_ids_for_peer(
     snapshot: &impl WorldReadOnly,
     peer: &PeerId,
+    block_height: u64,
 ) -> BTreeSet<LaneId> {
-    validator_lane_ids_for_peers(snapshot, core::iter::once(peer))
-}
-/// Terminalize public validators that could otherwise re-enter live rosters after a lane reset.
-fn public_lane_validator_reset_updates(
-    validators: &impl StorageReadOnly<(LaneId, AccountId), PublicLaneValidatorRecord>,
-    lanes_to_reset: &BTreeSet<LaneId>,
-) -> Vec<((LaneId, AccountId), PublicLaneValidatorRecord)> {
-    if lanes_to_reset.is_empty() {
-        return Vec::new();
-    }
-    validators
-        .iter()
-        .filter_map(|(key, record)| {
-            let lane_is_reset =
-                lanes_to_reset.contains(&key.0) || lanes_to_reset.contains(&record.lane_id);
-            if !lane_is_reset {
-                return None;
-            }
-            if !matches!(
-                record.status,
-                PublicLaneValidatorStatus::PendingActivation(_)
-                    | PublicLaneValidatorStatus::Active
-                    | PublicLaneValidatorStatus::Jailed(_)
-            ) {
-                return None;
-            }
-            let mut updated = record.clone();
-            updated.status = PublicLaneValidatorStatus::Exited;
-            Some((key.clone(), updated))
-        })
-        .collect()
+    validator_lane_ids_for_peers(snapshot, core::iter::once(peer), block_height)
 }
 pub(crate) fn nexus_catalog_geometry_lane_dataspace(
     lane_id: LaneId,
@@ -14306,7 +14491,12 @@ where
         .filter(|(key, record)| public_lane_validator_record_matches_key(key, record))
         .filter(|(_, record)| checkpoint_lane_ids.contains(&record.lane_id))
         .filter(|(_, record)| active_lane_ids.contains(&record.lane_id))
-        .filter(|(_, record)| matches!(record.status, PublicLaneValidatorStatus::Active))
+        .filter(|(_, record)| {
+            crate::smartcontracts::isi::staking::validator_election_eligible_at_height(
+                record,
+                block_height,
+            )
+        })
         .filter(|(_, record)| {
             matches!(
                 nexus
@@ -14414,7 +14604,7 @@ where
     let active_lane_ids = nexus_active_lane_ids(nexus);
     let enforce_topology_membership = !topology_peers.is_empty();
     let topology_lane_ids = if enforce_topology_membership {
-        validator_lane_ids_for_peers(world, topology_peers.iter())
+        validator_lane_ids_for_peers(world, topology_peers.iter(), block_height)
             .into_iter()
             .filter(|lane_id| active_lane_ids.contains(lane_id))
             .collect()
@@ -14434,7 +14624,10 @@ where
             if !topology_lane_ids.is_empty() && !topology_lane_ids.contains(&record.lane_id) {
                 continue;
             }
-            if !matches!(record.status, PublicLaneValidatorStatus::Active) {
+            if !crate::smartcontracts::isi::staking::validator_election_eligible_at_height(
+                record,
+                block_height,
+            ) {
                 continue;
             }
             if !matches!(
@@ -14488,7 +14681,12 @@ where
         .filter(|(_, record)| {
             topology_lane_ids.is_empty() || topology_lane_ids.contains(&record.lane_id)
         })
-        .filter(|(_, record)| matches!(record.status, PublicLaneValidatorStatus::Active))
+        .filter(|(_, record)| {
+            crate::smartcontracts::isi::staking::validator_election_eligible_at_height(
+                record,
+                block_height,
+            )
+        })
         .filter(|(_, record)| {
             matches!(
                 nexus
@@ -14597,6 +14795,18 @@ mod stake_snapshot_tests {
         stake: u32,
         status: PublicLaneValidatorStatus,
     ) -> PublicLaneValidatorRecord {
+        let activation_height = match &status {
+            PublicLaneValidatorStatus::PendingActivation(height) => *height,
+            _ => 1,
+        };
+        let deactivation_height = match &status {
+            PublicLaneValidatorStatus::Exiting(_)
+            | PublicLaneValidatorStatus::Exited
+            | PublicLaneValidatorStatus::Slashed(_) => Some(2),
+            PublicLaneValidatorStatus::PendingActivation(_) | PublicLaneValidatorStatus::Active => {
+                None
+            }
+        };
         PublicLaneValidatorRecord {
             lane_id,
             validator: validator.clone(),
@@ -14606,8 +14816,8 @@ mod stake_snapshot_tests {
             self_stake: iroha_primitives::numeric::Quantity::from(stake),
             metadata: Metadata::default(),
             status,
-            activation_epoch: None,
-            activation_height: None,
+            activation_height,
+            deactivation_height,
             last_reward_epoch: None,
         }
     }
@@ -15006,15 +15216,15 @@ mod stake_snapshot_tests {
     fn validator_lane_ids_for_peers_ignore_inactive_public_lane_records() {
         let world = World::default();
         let active_kp = crate::state::checked_keypair();
-        let jailed_kp = crate::state::checked_keypair();
+        let slashed_kp = crate::state::checked_keypair();
         let exiting_kp = crate::state::checked_keypair();
         let mismatched_kp = crate::state::checked_keypair();
         let active_peer = PeerId::from(active_kp.public_key().clone());
-        let jailed_peer = PeerId::from(jailed_kp.public_key().clone());
+        let slashed_peer = PeerId::from(slashed_kp.public_key().clone());
         let exiting_peer = PeerId::from(exiting_kp.public_key().clone());
         let mismatched_peer = PeerId::from(mismatched_kp.public_key().clone());
         let active_validator = DMAccountId::of(active_kp.public_key().clone());
-        let jailed_validator = DMAccountId::of(jailed_kp.public_key().clone());
+        let slashed_validator = DMAccountId::of(slashed_kp.public_key().clone());
         let exiting_validator = DMAccountId::of(exiting_kp.public_key().clone());
         let mismatched_validator = DMAccountId::of(mismatched_kp.public_key().clone());
         {
@@ -15029,13 +15239,13 @@ mod stake_snapshot_tests {
                 ),
             );
             block.insert(
-                (LaneId::new(2), jailed_validator.clone()),
+                (LaneId::new(2), slashed_validator.clone()),
                 lane_validator_record(
                     LaneId::new(2),
-                    &jailed_validator,
-                    jailed_peer.clone(),
+                    &slashed_validator,
+                    slashed_peer.clone(),
                     20_u32,
-                    PublicLaneValidatorStatus::Jailed("downtime".to_string()),
+                    PublicLaneValidatorStatus::Slashed(Hash::new(b"test slash")),
                 ),
             );
             block.insert(
@@ -15063,17 +15273,18 @@ mod stake_snapshot_tests {
         assert_eq!(
             validator_lane_ids_for_peers(
                 &view,
-                [&active_peer, &jailed_peer, &exiting_peer, &mismatched_peer]
+                [&active_peer, &slashed_peer, &exiting_peer, &mismatched_peer],
+                2,
             ),
             BTreeSet::from([LaneId::new(1)]),
             "only active validator records with matching storage-key and embedded lanes should influence live lane scope"
         );
         assert!(
-            validator_lane_ids_for_peer(&view, &jailed_peer).is_empty(),
+            validator_lane_ids_for_peer(&view, &slashed_peer, 2).is_empty(),
             "inactive single-peer records must not retain stale lane scope"
         );
         assert!(
-            validator_lane_ids_for_peer(&view, &mismatched_peer).is_empty(),
+            validator_lane_ids_for_peer(&view, &mismatched_peer, 2).is_empty(),
             "mismatched key/record lane ids must not retain stale lane scope"
         );
     }
@@ -15096,7 +15307,7 @@ mod stake_snapshot_tests {
                     &valid_validator,
                     PeerId::from(valid_kp.public_key().clone()),
                     10_u32,
-                    PublicLaneValidatorStatus::PendingActivation(3),
+                    PublicLaneValidatorStatus::PendingActivation(9),
                 ),
             );
             block.insert(
@@ -15106,7 +15317,7 @@ mod stake_snapshot_tests {
                     &mismatched_validator,
                     PeerId::from(mismatched_kp.public_key().clone()),
                     20_u32,
-                    PublicLaneValidatorStatus::PendingActivation(3),
+                    PublicLaneValidatorStatus::PendingActivation(9),
                 ),
             );
             block.commit();
@@ -15130,8 +15341,8 @@ mod stake_snapshot_tests {
             .get(&(valid_lane, valid_validator))
             .expect("valid pending validator remains present");
         assert!(matches!(valid.status, PublicLaneValidatorStatus::Active));
-        assert_eq!(valid.activation_epoch, Some(3));
-        assert_eq!(valid.activation_height, Some(9));
+        assert_eq!(valid.activation_height, 9);
+        assert_eq!(valid.deactivation_height, None);
         let mismatched = state_block
             .world
             .public_lane_validators
@@ -15140,12 +15351,12 @@ mod stake_snapshot_tests {
         assert!(
             matches!(
                 mismatched.status,
-                PublicLaneValidatorStatus::PendingActivation(3)
+                PublicLaneValidatorStatus::PendingActivation(9)
             ),
             "mismatched key/record rows must not auto-promote to Active"
         );
-        assert_eq!(mismatched.activation_epoch, None);
-        assert_eq!(mismatched.activation_height, None);
+        assert_eq!(mismatched.activation_height, 9);
+        assert_eq!(mismatched.deactivation_height, None);
     }
     include!("state/restored_staking_owner_tests.rs");
     #[test]
@@ -15216,144 +15427,6 @@ mod stake_snapshot_tests {
         );
     }
     #[test]
-    fn public_lane_validator_reset_updates_treat_key_or_record_lane_as_reset_owner() {
-        let world = World::default();
-        let reset_lane = LaneId::new(41);
-        let retained_lane = LaneId::new(42);
-        let revivable_key_owned_kp = crate::state::checked_keypair();
-        let revivable_record_owned_kp = crate::state::checked_keypair();
-        let terminal_key_owned_kp = crate::state::checked_keypair();
-        let unrelated_kp = crate::state::checked_keypair();
-        let mismatched_key_owned_kp = crate::state::checked_keypair();
-        let mismatched_key_record_kp = crate::state::checked_keypair();
-        let mismatched_record_key_kp = crate::state::checked_keypair();
-        let mismatched_record_owned_kp = crate::state::checked_keypair();
-        let revivable_key_owned = DMAccountId::of(revivable_key_owned_kp.public_key().clone());
-        let revivable_record_owned =
-            DMAccountId::of(revivable_record_owned_kp.public_key().clone());
-        let terminal_key_owned = DMAccountId::of(terminal_key_owned_kp.public_key().clone());
-        let unrelated = DMAccountId::of(unrelated_kp.public_key().clone());
-        let mismatched_key_owned = DMAccountId::of(mismatched_key_owned_kp.public_key().clone());
-        let mismatched_key_record = DMAccountId::of(mismatched_key_record_kp.public_key().clone());
-        let mismatched_record_key = DMAccountId::of(mismatched_record_key_kp.public_key().clone());
-        let mismatched_record_owned =
-            DMAccountId::of(mismatched_record_owned_kp.public_key().clone());
-        let record_for = |lane_id: LaneId,
-                          validator: AccountId,
-                          peer_id: PeerId,
-                          status: PublicLaneValidatorStatus| {
-            lane_validator_record(lane_id, &validator, peer_id, 10_u32, status)
-        };
-        {
-            let mut block = world.public_lane_validators.block();
-            block.insert(
-                (reset_lane, revivable_key_owned.clone()),
-                record_for(
-                    retained_lane,
-                    revivable_key_owned.clone(),
-                    PeerId::from(revivable_key_owned_kp.public_key().clone()),
-                    PublicLaneValidatorStatus::Active,
-                ),
-            );
-            block.insert(
-                (retained_lane, revivable_record_owned.clone()),
-                record_for(
-                    reset_lane,
-                    revivable_record_owned.clone(),
-                    PeerId::from(revivable_record_owned_kp.public_key().clone()),
-                    PublicLaneValidatorStatus::Jailed("stale embedded lane".to_string()),
-                ),
-            );
-            block.insert(
-                (reset_lane, mismatched_key_owned.clone()),
-                record_for(
-                    retained_lane,
-                    mismatched_key_record.clone(),
-                    PeerId::from(mismatched_key_record_kp.public_key().clone()),
-                    PublicLaneValidatorStatus::Active,
-                ),
-            );
-            block.insert(
-                (retained_lane, mismatched_record_key.clone()),
-                record_for(
-                    reset_lane,
-                    mismatched_record_owned.clone(),
-                    PeerId::from(mismatched_record_owned_kp.public_key().clone()),
-                    PublicLaneValidatorStatus::Active,
-                ),
-            );
-            block.insert(
-                (reset_lane, terminal_key_owned.clone()),
-                record_for(
-                    reset_lane,
-                    terminal_key_owned.clone(),
-                    PeerId::from(terminal_key_owned_kp.public_key().clone()),
-                    PublicLaneValidatorStatus::Exiting(9),
-                ),
-            );
-            block.insert(
-                (retained_lane, unrelated.clone()),
-                record_for(
-                    retained_lane,
-                    unrelated.clone(),
-                    PeerId::from(unrelated_kp.public_key().clone()),
-                    PublicLaneValidatorStatus::Active,
-                ),
-            );
-            block.commit();
-        }
-        let view = world.public_lane_validators.view();
-        let updates =
-            super::public_lane_validator_reset_updates(&view, &BTreeSet::from([reset_lane]));
-        assert_eq!(
-            updates.len(),
-            4,
-            "only revivable records owned by the reset lane key or embedded lane should update, even when the embedded validator account is stale"
-        );
-        for (key, record) in &updates {
-            assert!(
-                matches!(record.status, PublicLaneValidatorStatus::Exited),
-                "reset-owned revivable validator {key:?} must be terminalized"
-            );
-        }
-        assert!(
-            updates
-                .iter()
-                .any(|(key, _)| key == &(reset_lane, revivable_key_owned.clone())),
-            "storage-key ownership must be treated as reset ownership"
-        );
-        assert!(
-            updates
-                .iter()
-                .any(|(key, _)| key == &(retained_lane, revivable_record_owned.clone())),
-            "embedded record-lane ownership must be treated as reset ownership"
-        );
-        assert!(
-            updates
-                .iter()
-                .any(|(key, _)| key == &(reset_lane, mismatched_key_owned.clone())),
-            "storage-key reset ownership must terminalize stale rows even when the embedded validator account differs"
-        );
-        assert!(
-            updates
-                .iter()
-                .any(|(key, _)| key == &(retained_lane, mismatched_record_key.clone())),
-            "embedded record-lane reset ownership must terminalize stale rows even when the storage-key validator differs"
-        );
-        assert!(
-            updates
-                .iter()
-                .all(|(key, _)| key != &(reset_lane, terminal_key_owned.clone())),
-            "terminal reset-lane validators must remain terminal audit records"
-        );
-        assert!(
-            updates
-                .iter()
-                .all(|(key, _)| key != &(retained_lane, unrelated.clone())),
-            "unrelated active validators must be preserved"
-        );
-    }
-    #[test]
     fn threshold_beacon_seat_score_binds_seed_epoch_and_peer() {
         let first = PeerId::from(crate::state::checked_keypair().public_key().clone());
         let second = PeerId::from(crate::state::checked_keypair().public_key().clone());
@@ -15374,16 +15447,16 @@ mod stake_snapshot_tests {
             nexus.staking.min_validator_stake = 500_u64.into();
         }
         let active_kp = crate::state::checked_keypair();
-        let jailed_kp = crate::state::checked_keypair();
+        let exited_kp = crate::state::checked_keypair();
         let extra_active_keypairs: Vec<_> =
             (0..3).map(|_| crate::state::checked_keypair()).collect();
         let active_validator = DMAccountId::of(active_kp.public_key().clone());
-        let jailed_validator = DMAccountId::of(jailed_kp.public_key().clone());
+        let exited_validator = DMAccountId::of(exited_kp.public_key().clone());
         let mut wb = state.world.block();
         {
             let peers = wb.peers.get_mut();
             let _ = peers.push(PeerId::from(active_kp.public_key().clone()));
-            let _ = peers.push(PeerId::from(jailed_kp.public_key().clone()));
+            let _ = peers.push(PeerId::from(exited_kp.public_key().clone()));
         }
         let peers: Vec<_> = wb.peers.clone().into_iter().collect();
         for peer in peers {
@@ -15398,16 +15471,16 @@ mod stake_snapshot_tests {
                 1_000_u32,
             ),
         );
-        wb.public_lane_validators.insert(
-            (LaneId::SINGLE, jailed_validator.clone()),
-            lane_validator_record(
-                LaneId::SINGLE,
-                &jailed_validator,
-                PeerId::from(jailed_validator.expect_single_signatory().clone()),
-                10_000_u32,
-                PublicLaneValidatorStatus::Jailed("downtime".to_string()),
-            ),
+        let mut exited_record = lane_validator_record(
+            LaneId::SINGLE,
+            &exited_validator,
+            PeerId::from(exited_validator.expect_single_signatory().clone()),
+            10_000_u32,
+            PublicLaneValidatorStatus::Exited,
         );
+        exited_record.deactivation_height = Some(exited_record.activation_height);
+        wb.public_lane_validators
+            .insert((LaneId::SINGLE, exited_validator.clone()), exited_record);
         for keypair in &extra_active_keypairs {
             seed_active_public_lane_validator(&mut wb, keypair, LaneId::SINGLE, 1_000);
         }
@@ -15416,7 +15489,7 @@ mod stake_snapshot_tests {
         let roster = sv.epoch_validator_peer_ids_for_testing(0).unwrap();
         assert_eq!(roster.len(), 4);
         assert!(roster.contains(&PeerId::from(active_kp.public_key().clone())));
-        assert!(!roster.contains(&PeerId::from(jailed_kp.public_key().clone())));
+        assert!(!roster.contains(&PeerId::from(exited_kp.public_key().clone())));
     }
     #[test]
     fn epoch_validator_peer_ids_ignore_active_public_validators_for_unknown_lanes() {
@@ -15741,6 +15814,7 @@ mod stake_snapshot_tests {
             sv.world(),
             &roster,
             Some(&active_lane_ids),
+            1,
         )
         .expect("strict voting powers");
         assert_eq!(powers.len(), 4);
@@ -17538,6 +17612,7 @@ impl World {
         }
         Ok(())
     }
+    #[allow(clippy::too_many_lines)]
     fn validate_quantity_ledger_invariants(&self) -> Result<(), String> {
         for (rwa_id, value) in self.rwas.view().iter() {
             let rwa = value.as_ref();
@@ -17581,10 +17656,179 @@ impl World {
                 }
             }
         }
-        for ((lane_id, validator_id), validator) in self.public_lane_validators.view().iter() {
-            if validator.self_stake > validator.total_stake {
+        let parameters = self.parameters.view();
+        let npos_penalty_window =
+            sumeragi_npos_parameters_from_parameters(&parameters).map(|parameters| {
+                (
+                    parameters.evidence_horizon_blocks(),
+                    parameters.slashing_delay_blocks(),
+                )
+            });
+        let validators = self.public_lane_validators.view();
+        let stake_shares = self.public_lane_stake_shares.view();
+        let mut bonded_totals = BTreeMap::<(LaneId, AccountId), (Quantity, Quantity)>::new();
+        for ((lane_id, validator_id), validator) in validators.iter() {
+            if validator.lane_id != *lane_id || &validator.validator != validator_id {
                 return Err(format!(
-                    "lane {lane_id} validator {validator_id} self stake exceeds total stake"
+                    "public-lane validator key ({lane_id}, {validator_id}) does not match embedded identity ({}, {})",
+                    validator.lane_id, validator.validator
+                ));
+            }
+            if validator.stake_account != *validator_id {
+                return Err(format!(
+                    "lane {lane_id} validator {validator_id} stake account {} must match the validator account",
+                    validator.stake_account
+                ));
+            }
+            if validator.activation_height == 0 {
+                return Err(format!(
+                    "lane {lane_id} validator {validator_id} activation height must be positive"
+                ));
+            }
+            if validator
+                .deactivation_height
+                .is_some_and(|height| height < validator.activation_height)
+            {
+                return Err(format!(
+                    "lane {lane_id} validator {validator_id} deactivation height precedes activation height {}",
+                    validator.activation_height
+                ));
+            }
+            match validator.status {
+                PublicLaneValidatorStatus::PendingActivation(height) => {
+                    if height != validator.activation_height {
+                        return Err(format!(
+                            "lane {lane_id} validator {validator_id} pending height {height} does not match activation height {}",
+                            validator.activation_height
+                        ));
+                    }
+                    if validator.deactivation_height.is_some() {
+                        return Err(format!(
+                            "lane {lane_id} validator {validator_id} pending tenure already has a deactivation height"
+                        ));
+                    }
+                }
+                PublicLaneValidatorStatus::Active => {
+                    if validator.deactivation_height.is_some() {
+                        return Err(format!(
+                            "lane {lane_id} validator {validator_id} active tenure already has a deactivation height"
+                        ));
+                    }
+                }
+                PublicLaneValidatorStatus::Exiting(_)
+                | PublicLaneValidatorStatus::Exited
+                | PublicLaneValidatorStatus::Slashed(_) => {
+                    if validator.deactivation_height.is_none() {
+                        return Err(format!(
+                            "lane {lane_id} validator {validator_id} terminal tenure has no deactivation height"
+                        ));
+                    }
+                }
+            }
+            bonded_totals.insert(
+                (*lane_id, validator_id.clone()),
+                (Quantity::zero(), Quantity::zero()),
+            );
+        }
+        for ((lane_id, validator_id, staker_id), share) in stake_shares.iter() {
+            if share.lane_id != *lane_id
+                || &share.validator != validator_id
+                || &share.staker != staker_id
+            {
+                return Err(format!(
+                    "public-lane stake-share key ({lane_id}, {validator_id}, {staker_id}) does not match embedded identity ({}, {}, {})",
+                    share.lane_id, share.validator, share.staker
+                ));
+            }
+            let validator_key = (*lane_id, validator_id.clone());
+            validators.get(&validator_key).ok_or_else(|| {
+                format!(
+                    "public-lane stake share ({lane_id}, {validator_id}, {staker_id}) references a missing canonical validator"
+                )
+            })?;
+
+            let mut pending_total = Quantity::zero();
+            for (request_id, pending) in &share.pending_unbonds {
+                if request_id != &pending.request_id {
+                    return Err(format!(
+                        "public-lane stake share ({lane_id}, {validator_id}, {staker_id}) pending-unbond key {request_id:?} does not match embedded request id {:?}",
+                        pending.request_id
+                    ));
+                }
+                if pending.amount.is_zero() {
+                    return Err(format!(
+                        "public-lane stake share ({lane_id}, {validator_id}, {staker_id}) pending unbond {request_id:?} amount must be positive"
+                    ));
+                }
+                if pending.slashable_through_height == 0 {
+                    return Err(format!(
+                        "public-lane stake share ({lane_id}, {validator_id}, {staker_id}) pending unbond {request_id:?} slashable-through height must be positive"
+                    ));
+                }
+                if pending.liability_release_height < pending.slashable_through_height {
+                    return Err(format!(
+                        "public-lane stake share ({lane_id}, {validator_id}, {staker_id}) pending unbond {request_id:?} liability release height {} precedes slashable-through height {}",
+                        pending.liability_release_height, pending.slashable_through_height
+                    ));
+                }
+                let (evidence_horizon, slashing_delay) = npos_penalty_window.ok_or_else(|| {
+                    format!(
+                        "public-lane stake share ({lane_id}, {validator_id}, {staker_id}) pending unbond {request_id:?} requires signed NPoS penalty parameters"
+                    )
+                })?;
+                let minimum_release_height = pending
+                    .slashable_through_height
+                    .checked_add(evidence_horizon)
+                    .and_then(|height| height.checked_add(slashing_delay))
+                    .ok_or_else(|| {
+                        format!(
+                            "public-lane stake share ({lane_id}, {validator_id}, {staker_id}) pending unbond {request_id:?} liability release height overflows u64"
+                        )
+                    })?;
+                if pending.liability_release_height < minimum_release_height {
+                    return Err(format!(
+                        "public-lane stake share ({lane_id}, {validator_id}, {staker_id}) pending unbond {request_id:?} liability release height {} does not cover the signed evidence-and-slashing window through {minimum_release_height}",
+                        pending.liability_release_height
+                    ));
+                }
+                pending_total = pending_total.checked_add(&pending.amount).map_err(|_| {
+                    format!(
+                        "public-lane stake share ({lane_id}, {validator_id}, {staker_id}) pending-unbond total overflowed"
+                    )
+                })?;
+            }
+            share.bonded.checked_add(&pending_total).map_err(|_| {
+                format!(
+                    "public-lane stake share ({lane_id}, {validator_id}, {staker_id}) bonded and pending exposure overflowed"
+                )
+            })?;
+
+            let totals = bonded_totals
+                .get_mut(&validator_key)
+                .expect("canonical validator initialized an aggregate row");
+            totals.0 = totals.0.checked_add(&share.bonded).map_err(|_| {
+                format!("lane {lane_id} validator {validator_id} bonded stake total overflowed")
+            })?;
+            if staker_id == validator_id {
+                totals.1 = totals.1.checked_add(&share.bonded).map_err(|_| {
+                    format!("lane {lane_id} validator {validator_id} self stake total overflowed")
+                })?;
+            }
+        }
+        for ((lane_id, validator_id), validator) in validators.iter() {
+            let (bonded, self_bonded) = bonded_totals
+                .get(&(*lane_id, validator_id.clone()))
+                .expect("canonical validator initialized an aggregate row");
+            if &validator.total_stake != bonded {
+                return Err(format!(
+                    "lane {lane_id} validator {validator_id} total stake {} does not match bonded share total {bonded}",
+                    validator.total_stake
+                ));
+            }
+            if &validator.self_stake != self_bonded {
+                return Err(format!(
+                    "lane {lane_id} validator {validator_id} self stake {} does not match self-supplied bonded share total {self_bonded}",
+                    validator.self_stake
                 ));
             }
         }
@@ -19758,7 +20002,7 @@ macro_rules! world_ro_accessors {
             /// Latest reduced global state root advertised by the merge ledger.
             ref merge_global_state_root: Option<Hash>;
             /// Persisted consensus evidence log (read-only).
-            storage consensus_evidence: Vec<u8> => EvidenceRecord;
+            storage consensus_evidence: Hash => EvidenceRecord;
             /// Proof verification records (read-only).
             storage proofs:
                 iroha_data_model::proof::ProofId => iroha_data_model::proof::ProofRecord;
@@ -21504,6 +21748,8 @@ impl<'world> WorldBlock<'world> {
             private_settlement_roots,
             private_settlement_nullifiers,
             private_settlement_outputs,
+            private_settlement_recipient_index,
+            private_settlement_staged_locks,
             private_settlement_receipts,
             private_settlement_aborts,
             privacy_pgc_accounts,
@@ -21674,6 +21920,8 @@ impl<'world> WorldBlock<'world> {
         private_settlement_roots.commit();
         private_settlement_nullifiers.commit();
         private_settlement_outputs.commit();
+        private_settlement_recipient_index.commit();
+        private_settlement_staged_locks.commit();
         private_settlement_receipts.commit();
         private_settlement_aborts.commit();
         privacy_pgc_accounts.commit();
@@ -22110,6 +22358,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     /// Update the executor data model, purge permissions it no longer declares, and synchronize
     /// derived parameter defaults.
     pub fn apply_executor_data_model(&mut self, mut executor_data_model: ExecutorDataModel) {
+        let npos_parameter_id = SumeragiNposParameters::parameter_id();
+        executor_data_model.parameters.remove(&npos_parameter_id);
         executor_data_model
             .parameters
             .retain(|_, parameter| !is_retired_sccp_registry_parameter(parameter));
@@ -22388,8 +22638,17 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         if prev_parameters == new_parameters {
             return;
         }
-        let prev_ids: BTreeSet<_> = prev_parameters.keys().cloned().collect();
-        let new_ids: BTreeSet<_> = new_parameters.keys().cloned().collect();
+        let consensus_owned_id = SumeragiNposParameters::parameter_id();
+        let prev_ids: BTreeSet<_> = prev_parameters
+            .keys()
+            .filter(|id| *id != &consensus_owned_id)
+            .cloned()
+            .collect();
+        let new_ids: BTreeSet<_> = new_parameters
+            .keys()
+            .filter(|id| *id != &consensus_owned_id)
+            .cloned()
+            .collect();
         let removed: Vec<_> = prev_ids.difference(&new_ids).cloned().collect();
         let added: Vec<_> = new_ids.difference(&prev_ids).cloned().collect();
         let shared: Vec<_> = prev_ids.intersection(&new_ids).cloned().collect();
@@ -24148,6 +24407,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             private_settlement_roots,
             private_settlement_nullifiers,
             private_settlement_outputs,
+            private_settlement_recipient_index,
+            private_settlement_staged_locks,
             private_settlement_receipts,
             private_settlement_aborts,
             privacy_pgc_accounts,
@@ -24329,6 +24590,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         private_settlement_roots.apply();
         private_settlement_nullifiers.apply();
         private_settlement_outputs.apply();
+        private_settlement_recipient_index.apply();
+        private_settlement_staged_locks.apply();
         private_settlement_receipts.apply();
         private_settlement_aborts.apply();
         privacy_pgc_accounts.apply();
@@ -27070,12 +27333,30 @@ impl State {
         world
             .validate_quantity_ledger_invariants()
             .expect("initial world contains invalid quantity ledger state");
+        let committed_height = u64::try_from(exact_durable_height).map_err(|_| {
+            MergeLedgerCommitError::ExecutionStatePublication(
+                "persisted block height exceeds u64 during startup".to_owned(),
+            )
+        })?;
+        crate::sumeragi::evidence::validate_persisted_v2_evidence_records(
+            &world.view(),
+            kura.as_ref(),
+            &network_id,
+            committed_height,
+        )
+        .map_err(|error| {
+            MergeLedgerCommitError::ExecutionStatePublication(format!(
+                "persisted Sumeragi v2 evidence state is invalid during startup: {error}"
+            ))
+        })?;
         validate_private_settlement_persisted_state_v1(
             &world.private_settlement_governance.view(),
             &world.private_settlement_pools.view(),
             &world.private_settlement_roots.view(),
             &world.private_settlement_nullifiers.view(),
             &world.private_settlement_outputs.view(),
+            &world.private_settlement_recipient_index.view(),
+            &world.private_settlement_staged_locks.view(),
             &world.private_settlement_receipts.view(),
             &world.private_settlement_aborts.view(),
         )
@@ -28223,7 +28504,7 @@ impl State {
             .expect("infallible pristine block stage"))
     }
     #[allow(clippy::too_many_lines)]
-    fn block_with_pristine_stage<E>(
+    pub(crate) fn block_with_pristine_stage<E>(
         &self,
         curr_block: BlockHeader,
         stage: impl FnOnce(&mut StateBlock<'_>) -> Result<(), E>,
@@ -28328,7 +28609,7 @@ impl State {
             canonical_carrier_commit_metadata_authorization: None,
             pending_nexus_fee_receipt_source_ids: BTreeSet::new(),
             start_of_block_effects_applied: false,
-            npos_consensus_effects_applied: false,
+            applied_npos_consensus_effects_hash: None,
             axt_policy_transition_ratchets_finalized: false,
             exec_witness: None,
             parliament_timed_ovn_casting_bindings: None,
@@ -28405,6 +28686,31 @@ impl State {
         sb.activate_due_public_lane_validators(current_epoch);
         // Height-trigger: open/close referenda at scheduled heights
         let now_h = sb._curr_block.height().get();
+        if sb
+            .world
+            .private_settlement_staged_locks
+            .iter()
+            .any(|(key, record)| {
+                matches!(
+                    (key, record),
+                    (
+                        PrivateSettlementStagedLockKeyV1::Bundle(bundle_id),
+                        PrivateSettlementStagedLockRecordV1::Bundle { barrier, .. },
+                    ) if bundle_id == &barrier.manifest.bundle_id
+                        && barrier.manifest.expiry_height < now_h
+                )
+            })
+        {
+            let mut expiry = sb.transaction();
+            expiry
+                .reconcile_expired_private_settlement_staged_locks_v1()
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "persisted private-settlement staged locks are invalid at block-start height {now_h}: {error}"
+                    )
+                });
+            expiry.apply();
+        }
         if let Some((enact_at_height, attempts)) =
             sb.world.parliament_certified_enactments.iter().next()
             && *enact_at_height < now_h
@@ -28952,7 +29258,7 @@ impl State {
             oracle: self.oracle.clone(),
             crypto: self.crypto(),
             nexus,
-            npos_consensus_effects_applied: false,
+            applied_npos_consensus_effects_hash: None,
             pending_public_lane_slash_observability: Vec::new(),
             lane_incarnations: self.lane_incarnations_snapshot(),
             lane_incarnation_lineage: self.lane_incarnation_lineage_snapshot(),
@@ -29037,6 +29343,17 @@ impl State {
     }
     /// Create structure to execute a block while reverting changes made in the latest block
     pub fn block_and_revert(&self, curr_block: BlockHeader) -> StateBlock<'_> {
+        self.block_and_revert_with_pristine_stage(curr_block, |_| {
+            Ok::<(), core::convert::Infallible>(())
+        })
+        .expect("infallible replacement-block pristine stage")
+    }
+    /// Create a replacement block with one pre-lifecycle deterministic stage.
+    pub(crate) fn block_and_revert_with_pristine_stage<E>(
+        &self,
+        curr_block: BlockHeader,
+        stage: impl FnOnce(&mut StateBlock<'_>) -> Result<(), E>,
+    ) -> Result<StateBlock<'_>, E> {
         let current_height = self.block_hashes.view().len() as u64;
         let target_height = curr_block.height().get().saturating_sub(1);
         if target_height < current_height {
@@ -29111,7 +29428,7 @@ impl State {
             pending_da_pin_intents: None,
             pending_autoscale_lifecycle: None,
             autoscale_sample_history,
-            npos_consensus_effects_applied: false,
+            applied_npos_consensus_effects_hash: None,
             pending_public_lane_slash_observability: Vec::new(),
             autoscale_sample_history_dirty: false,
             autoscale_evaluated_committed_fragment_count: None,
@@ -29152,6 +29469,7 @@ impl State {
             replay_prevalidation: false,
         };
         state_block.freeze_axt_block_start();
+        stage(&mut state_block)?;
         let pinned_sortition_anchors =
             crate::smartcontracts::isi::sorafs_moderation::pin_due_sortition_anchors_v1(
                 &mut state_block,
@@ -29168,7 +29486,7 @@ impl State {
                 "repinned first post-registration SoraFS moderation sortition anchors on replacement block"
             );
         }
-        state_block
+        Ok(state_block)
     }
     /// Create a point-in-time view of just the world state.
     ///
@@ -30602,11 +30920,6 @@ impl State {
         for key in stale_verified_relay_keys {
             world.smart_contract_state.remove(key);
         }
-        let validator_updates =
-            public_lane_validator_reset_updates(&world.public_lane_validators, lanes_to_reset);
-        for (key, record) in validator_updates {
-            world.public_lane_validators.insert(key, record);
-        }
     }
     fn da_pin_intent_index_prune_keys_for_lanes(
         by_ticket: &impl StorageReadOnly<StorageTicketId, DaPinIntentWithLocation>,
@@ -30917,20 +31230,6 @@ impl State {
         if publish_process_runtime && self.da_indexes_hydrated.read().is_some() {
             self.persist_da_shard_cursor_journal();
         }
-    }
-    fn deactivate_public_lane_validators_for_reset_lanes(&self, lanes_to_reset: &BTreeSet<LaneId>) {
-        let updates = {
-            let validators = self.world.public_lane_validators.view();
-            public_lane_validator_reset_updates(&validators, lanes_to_reset)
-        };
-        if updates.is_empty() {
-            return;
-        }
-        let mut tx = self.world.public_lane_validators.block();
-        for (key, record) in updates {
-            tx.insert(key, record);
-        }
-        tx.commit();
     }
     fn prune_lane_relay_emergency_validators_for_reset_or_inactive_lanes(
         &self,
@@ -42242,7 +42541,6 @@ impl State {
         self.prune_da_pin_intent_world_indexes_for_lanes(&lanes_to_reset);
         self.prune_public_lane_economic_state_for_lanes(&lanes_to_reset);
         self.prune_verified_lane_relay_contract_state_for_lanes(&lanes_to_reset);
-        self.deactivate_public_lane_validators_for_reset_lanes(&lanes_to_reset);
         self.prune_lane_relay_emergency_validators_for_reset_or_inactive_lanes(
             &lanes_to_reset,
             &active_lane_ids,
@@ -42723,7 +43021,6 @@ impl State {
             self.prune_da_pin_intent_world_indexes_for_lanes(&lanes_to_reset);
             self.prune_public_lane_economic_state_for_lanes(&lanes_to_reset);
             self.prune_verified_lane_relay_contract_state_for_lanes(&lanes_to_reset);
-            self.deactivate_public_lane_validators_for_reset_lanes(&lanes_to_reset);
         }
         self.prune_lane_relay_emergency_validators_for_reset_or_inactive_lanes(
             &lanes_to_reset,
@@ -43057,7 +43354,6 @@ impl State {
             self.prune_da_pin_intent_world_indexes_for_lanes(&update.lanes_to_reset);
             self.prune_public_lane_economic_state_for_lanes(&update.lanes_to_reset);
             self.prune_verified_lane_relay_contract_state_for_lanes(&update.lanes_to_reset);
-            self.deactivate_public_lane_validators_for_reset_lanes(&update.lanes_to_reset);
         }
         let active_lane_ids: BTreeSet<_> = update
             .updated_catalog
@@ -49312,20 +49608,18 @@ impl<'state> StateBlock<'state> {
     }
     /// Create struct to store changes during transaction or trigger execution
     pub fn transaction(&mut self) -> StateTransaction<'_, 'state> {
-        self.transaction_with_operational_observability(true)
+        self.transaction_with_event_telemetry(true)
     }
-    /// Create a transaction for deterministic consensus-effect simulation.
-    ///
-    /// The returned overlay preserves normal state semantics, including sequential
-    /// application into its parent block, but cannot publish process-local telemetry,
-    /// status, fee, or slash observability.
+    /// Create a finality-effects transaction that cannot publish speculative event telemetry.
     pub(crate) fn consensus_effects_transaction(&mut self) -> StateTransaction<'_, 'state> {
-        self.transaction_with_operational_observability(false)
+        self.transaction_with_event_telemetry(false)
     }
-    fn transaction_with_operational_observability(
+    fn transaction_with_event_telemetry(
         &mut self,
-        operational_observability: bool,
+        ingest_event_telemetry: bool,
     ) -> StateTransaction<'_, 'state> {
+        #[cfg(not(feature = "telemetry"))]
+        let _ = ingest_event_telemetry;
         let axt_current_slot =
             current_axt_slot_from_block(&self._curr_block, self.nexus.axt.slot_length_ms);
         let implicit_account_creations_in_block_so_far = self.implicit_account_creations_in_block;
@@ -49333,7 +49627,7 @@ impl<'state> StateBlock<'state> {
             axt_active_lane_map_at_height(&self.nexus, self._curr_block.height().get());
         let mut world = self.world.trasaction_with_axt_lane_map(
             #[cfg(feature = "telemetry")]
-            operational_observability.then_some(self.telemetry),
+            ingest_event_telemetry.then_some(self.telemetry),
             self.nexus.lane_config.clone(),
             axt_current_slot,
             axt_lane_map,
@@ -49371,7 +49665,6 @@ impl<'state> StateBlock<'state> {
             query_ledger_time_ms: self.query_ledger_time_ms,
             #[cfg(feature = "telemetry")]
             telemetry: self.telemetry,
-            operational_observability,
             public_lane_staking_status_overlay:
                 crate::sumeragi::status::begin_public_lane_staking_status_overlay(),
             _curr_block: self._curr_block,
@@ -51099,9 +51392,9 @@ impl<'state> StateBlock<'state> {
             mut canonical_wsv_merge_commit_authorization,
             mut canonical_carrier_commit_metadata_authorization,
             pending_nexus_fee_receipt_source_ids,
-            pending_public_lane_slash_observability,
             #[cfg(feature = "telemetry")]
             pending_parliament_telemetry_events,
+            pending_public_lane_slash_observability,
             merge_carrier_entrypoints,
             _curr_block,
             #[cfg(feature = "zk-preverify")]
@@ -51334,6 +51627,26 @@ impl<'state> StateBlock<'state> {
             } else {
                 None
             };
+        if let Some(pending) = &pending_autoscale_lifecycle {
+            let staking_validation_result = {
+                let nexus = state_ref.nexus.read();
+                ensure_pending_autoscale_lifecycle_staking_is_safe(
+                    &world,
+                    &nexus,
+                    pending,
+                    block_height,
+                )
+            };
+            if let Err(err) = staking_validation_result {
+                error!(
+                    block_height,
+                    block = %block_header_hash,
+                    ?err,
+                    "final block overlay makes the staged lane lifecycle unsafe"
+                );
+                return Err(TransactionsBlockError::AutoscaleLaneLifecycle);
+            }
+        }
         if !replay_prevalidation
             && let Some((lane_id, dataspace_id, lane_incarnation)) = exact_scale_in_binding
         {
@@ -51661,29 +51974,38 @@ impl<'state> StateBlock<'state> {
             }
         }
         drop(autoscale_lifecycle_guard);
-        if block_metadata_committed && !replay_prevalidation {
-            for observation in pending_public_lane_slash_observability {
-                let PendingPublicLaneSlashObservability {
-                    lane_id,
-                    previous_status,
-                    slashed_status,
-                    amount,
-                } = observation;
-                crate::sumeragi::status::record_public_lane_bonded_delta(lane_id, &amount, false);
-                crate::sumeragi::status::record_public_lane_slash(lane_id);
-                #[cfg(not(feature = "telemetry"))]
-                let _ = (previous_status, slashed_status);
+        if block_metadata_committed && !replay_prevalidation && !authenticated_replay_commit {
+            for slash in pending_public_lane_slash_observability {
+                crate::sumeragi::status::record_public_lane_bonded_delta(
+                    slash.lane_id,
+                    &slash.bonded_amount,
+                    false,
+                );
+                if !slash.pending_unbond_amount.is_zero() {
+                    crate::sumeragi::status::record_public_lane_pending_unbond_delta(
+                        slash.lane_id,
+                        &slash.pending_unbond_amount,
+                        false,
+                    );
+                }
+                crate::sumeragi::status::record_public_lane_slash(slash.lane_id);
                 #[cfg(feature = "telemetry")]
                 {
                     state_ref.telemetry.record_public_lane_validator_status(
-                        lane_id,
-                        Some(&previous_status),
-                        &slashed_status,
+                        slash.lane_id,
+                        Some(&slash.previous_status),
+                        &slash.slashed_status,
                     );
                     state_ref
                         .telemetry
-                        .decrease_public_lane_bonded(lane_id, &amount);
-                    state_ref.telemetry.record_public_lane_slash(lane_id);
+                        .decrease_public_lane_bonded(slash.lane_id, &slash.bonded_amount);
+                    if !slash.pending_unbond_amount.is_zero() {
+                        state_ref.telemetry.decrease_public_lane_pending_unbond(
+                            slash.lane_id,
+                            &slash.pending_unbond_amount,
+                        );
+                    }
+                    state_ref.telemetry.record_public_lane_slash(slash.lane_id);
                 }
             }
         }
@@ -52141,6 +52463,13 @@ impl<'state> StateBlock<'state> {
     ) -> (Vec<EventBox>, Result<(), MergeLedgerCommitError>) {
         let block_hash = block.as_ref().hash();
         trace!(%block_hash, "Applying block");
+        let signed_block = block.as_ref();
+        if let Err(error) = validate_applied_npos_consensus_effects(
+            signed_block.npos_consensus_effects(),
+            self.applied_npos_consensus_effects_hash.as_ref(),
+        ) {
+            return (Vec::new(), Err(error));
+        }
         crate::bridge::validate_sccp_commitment_root_for_signed_block(block.as_ref()).expect(
             "committed block failed SCCP commitment validation before apply_without_execution",
         );
@@ -52150,7 +52479,6 @@ impl<'state> StateBlock<'state> {
             .height()
             .try_into()
             .expect("INTERNAL BUG: Block height exceeds usize::MAX");
-        let signed_block = block.as_ref();
         if let Err(error) = self.stage_canonical_carrier_membership(
             crate::tx::canonical_carrier_membership_hashes(
                 self,
@@ -52192,35 +52520,6 @@ impl<'state> StateBlock<'state> {
         let committed_fragment_count = signed_block
             .committed_fragment_count()
             .expect("committed block must contain its required fragment count");
-        if let Some(effects) = signed_block.npos_consensus_effects() {
-            let evidence_prune_keys =
-                crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(
-                    self.state_ref,
-                    signed_block.header().height().get(),
-                    effects.v2_evidence_admissions.len(),
-                );
-            let now_ms = signed_block.header().creation_time_ms;
-            let expected_beacon_anchor =
-                signed_block.header().prev_block_hash().map(|block_hash| {
-                    iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1 {
-                        height: signed_block.header().height().get().saturating_sub(1),
-                        block_hash,
-                    }
-                });
-            let mut transaction = self.transaction();
-            crate::sumeragi::penalties::apply_npos_consensus_effects_to_transaction(
-                &mut transaction,
-                effects,
-                &evidence_prune_keys,
-                expected_beacon_anchor,
-                &topology,
-                signed_block.header().height().get(),
-                signed_block.header().view_change_index(),
-                now_ms,
-            )
-            .expect("committed NPoS consensus effects must be applicable");
-            transaction.apply();
-        }
         self.block_hashes.push(block_hash);
         self.stage_musubi_resolver_index_checkpoint(
             signed_block.header().height().get(),
@@ -52252,17 +52551,25 @@ impl<'state> StateBlock<'state> {
                 let checkpoint_lane_ids = if checkpoint_topology.is_empty() {
                     BTreeSet::new()
                 } else {
-                    validator_lane_ids_for_peers(&self.world, checkpoint_topology.iter())
-                        .into_iter()
-                        .filter(|lane_id| active_lane_ids.contains(lane_id))
-                        .collect()
+                    validator_lane_ids_for_peers(
+                        &self.world,
+                        checkpoint_topology.iter(),
+                        checkpoint_block_height,
+                    )
+                    .into_iter()
+                    .filter(|lane_id| active_lane_ids.contains(lane_id))
+                    .collect()
                 };
                 if !checkpoint_lane_ids.is_empty() {
                     let before = world_peers.len();
                     world_peers.retain(|peer| {
                         checkpoint_topology.contains(peer)
-                            || !validator_lane_ids_for_peer(&self.world, peer)
-                                .is_disjoint(&checkpoint_lane_ids)
+                            || !validator_lane_ids_for_peer(
+                                &self.world,
+                                peer,
+                                checkpoint_block_height,
+                            )
+                            .is_disjoint(&checkpoint_lane_ids)
                     });
                     let filtered = before.saturating_sub(world_peers.len());
                     if filtered > 0 {
@@ -54396,6 +54703,7 @@ mod public_lane_slash_observability_staging_tests {
                 PublicLaneValidatorStatus::Active,
                 PublicLaneValidatorStatus::Slashed(slash_id),
                 Quantity::from(5_u64),
+                Quantity::from(2_u64),
             );
             assert_eq!(transaction.pending_public_lane_slash_observability.len(), 1);
             transaction.apply();
@@ -54404,15 +54712,19 @@ mod public_lane_slash_observability_staging_tests {
         assert_eq!(block.pending_public_lane_slash_observability.len(), 1);
         let observation = &block.pending_public_lane_slash_observability[0];
         assert_eq!(observation.lane_id, lane_id);
-        assert_eq!(
-            observation.previous_status,
-            PublicLaneValidatorStatus::Active
-        );
-        assert_eq!(
-            observation.slashed_status,
-            PublicLaneValidatorStatus::Slashed(slash_id)
-        );
-        assert_eq!(observation.amount, Quantity::from(5_u64));
+        #[cfg(feature = "telemetry")]
+        {
+            assert_eq!(
+                observation.previous_status,
+                PublicLaneValidatorStatus::Active
+            );
+            assert_eq!(
+                observation.slashed_status,
+                PublicLaneValidatorStatus::Slashed(slash_id)
+            );
+        }
+        assert_eq!(observation.bonded_amount, Quantity::from(5_u64));
+        assert_eq!(observation.pending_unbond_amount, Quantity::from(2_u64));
     }
 
     #[test]
@@ -54427,6 +54739,7 @@ mod public_lane_slash_observability_staging_tests {
                 PublicLaneValidatorStatus::Active,
                 PublicLaneValidatorStatus::Slashed(Hash::new("discarded-slash")),
                 Quantity::from(3_u64),
+                Quantity::from(1_u64),
             );
         }
 
@@ -54434,7 +54747,7 @@ mod public_lane_slash_observability_staging_tests {
     }
 
     #[test]
-    fn consensus_effects_apply_sequential_state_without_operational_observability() {
+    fn consensus_effects_apply_only_world_and_block_observability() {
         let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
         crate::sumeragi::status::reset_nexus_economics_for_tests();
         let state = test_state();
@@ -54472,6 +54785,7 @@ mod public_lane_slash_observability_staging_tests {
                 PublicLaneValidatorStatus::Active,
                 PublicLaneValidatorStatus::Slashed(Hash::new("scratch-only slash")),
                 Quantity::from(7_u64),
+                Quantity::from(2_u64),
             );
             transaction.apply_consensus_effects();
         }
@@ -54489,8 +54803,12 @@ mod public_lane_slash_observability_staging_tests {
             transaction.apply_consensus_effects();
         }
         assert_eq!(*block.world.governance_last_unlock_sweep_height, 10);
-        assert_eq!(block.committed_fragments, 2);
-        assert!(block.pending_public_lane_slash_observability.is_empty());
+        assert_eq!(block.committed_fragments, 0);
+        assert_eq!(block.pending_public_lane_slash_observability.len(), 1);
+        let observation = &block.pending_public_lane_slash_observability[0];
+        assert_eq!(observation.lane_id, lane_id);
+        assert_eq!(observation.bonded_amount, Quantity::from(7_u64));
+        assert_eq!(observation.pending_unbond_amount, Quantity::from(2_u64));
         assert!(
             crate::sumeragi::status::nexus_staking_snapshot()
                 .lanes
@@ -59562,6 +59880,22 @@ impl StateTransaction<'_, '_> {
         let current_height = self.block_height();
         self.ensure_private_settlement_feature_active_v1(current_height)?;
         self.ensure_private_settlement_route_active_v1(replacement.route)?;
+        let replacement_key =
+            PrivateSettlementPoolKeyV1::new(replacement.route, replacement.pool_id)?;
+        if self
+            .world
+            .private_settlement_staged_locks
+            .iter()
+            .any(|(key, _)| {
+                matches!(
+                    key,
+                    PrivateSettlementStagedLockKeyV1::PoolHead { pool, .. }
+                        if *pool == replacement_key
+                )
+            })
+        {
+            return Err(PrivateSettlementGlobalStateErrorV1::Conflict);
+        }
         let plan = plan_private_settlement_pool_rotation_v1(
             &self.world.private_settlement_governance,
             &self.world.private_settlement_pools,
@@ -59579,6 +59913,79 @@ impl StateTransaction<'_, '_> {
         self.world
             .private_settlement_pools
             .insert(plan.key, plan.pool);
+        Ok(PrivateSettlementGlobalStateOutcomeV1::Applied)
+    }
+    /// Register one complete all-Prepare barrier as durable global control locks.
+    pub(crate) fn apply_private_settlement_prepare_locks_v1(
+        &mut self,
+        barrier: iroha_data_model::nexus::PrivateSettlementPrepareBarrierV1,
+    ) -> core::result::Result<
+        PrivateSettlementGlobalStateOutcomeV1,
+        PrivateSettlementGlobalStateErrorV1,
+    > {
+        let current_height = self.block_height();
+        self.ensure_private_settlement_feature_active_v1(
+            barrier.manifest.authority_context_height,
+        )?;
+        if barrier.manifest.network_id != self.network_id {
+            return Err(PrivateSettlementGlobalStateErrorV1::Network);
+        }
+        let participant_count = u16::try_from(barrier.manifest.legs.len())
+            .map_err(|_| PrivateSettlementGlobalStateErrorV1::Bounds)?;
+        let expiry_span = barrier
+            .manifest
+            .expiry_height
+            .checked_sub(barrier.manifest.authority_context_height)
+            .ok_or(PrivateSettlementGlobalStateErrorV1::Bounds)?;
+        let carrier = iroha_data_model::isi::InstructionBox::from(
+            iroha_data_model::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1::new(
+                barrier.clone(),
+            ),
+        );
+        let carrier_bytes = norito::encode_canonical(&carrier)
+            .map_err(|_| PrivateSettlementGlobalStateErrorV1::Encoding)?
+            .len();
+        if participant_count > self.nexus.atomic_private_settlement.max_participants.get()
+            || expiry_span > self.nexus.atomic_private_settlement.max_expiry_blocks.get()
+            || u64::try_from(carrier_bytes).unwrap_or(u64::MAX)
+                > self.nexus.atomic_private_settlement.max_carrier_bytes.get()
+        {
+            return Err(PrivateSettlementGlobalStateErrorV1::Bounds);
+        }
+        for (index, leg) in barrier.manifest.legs.iter().enumerate() {
+            self.ensure_private_settlement_route_active_v1(leg.route)?;
+            let authority = barrier
+                .authority_catalog
+                .authority_for_leg(&barrier.manifest, index)
+                .map_err(|_| PrivateSettlementGlobalStateErrorV1::PrepareBarrier)?;
+            validate_private_settlement_committee_authority_v1(
+                self,
+                barrier.manifest.authority_context_height,
+                &authority,
+            )
+            .map_err(|_| PrivateSettlementGlobalStateErrorV1::PrepareBarrier)?;
+        }
+        let plan = plan_private_settlement_prepare_locks_v1(
+            &self.world.private_settlement_governance,
+            &self.world.private_settlement_pools,
+            &self.world.private_settlement_roots,
+            &self.world.private_settlement_nullifiers,
+            &self.world.private_settlement_outputs,
+            &self.world.private_settlement_recipient_index,
+            &self.world.private_settlement_staged_locks,
+            &self.world.private_settlement_receipts,
+            &self.world.private_settlement_aborts,
+            &barrier,
+            current_height,
+        )?;
+        let Some(plan) = plan else {
+            return Ok(PrivateSettlementGlobalStateOutcomeV1::Idempotent);
+        };
+        for (key, record) in plan.records {
+            self.world
+                .private_settlement_staged_locks
+                .insert(key, record);
+        }
         Ok(PrivateSettlementGlobalStateOutcomeV1::Applied)
     }
     /// Atomically stage every certified leg and the public receipt in this transaction.
@@ -59616,12 +60023,16 @@ impl StateTransaction<'_, '_> {
         receipt
             .validate_shape()
             .map_err(|_| PrivateSettlementGlobalStateErrorV1::Receipt)?;
-        for (leg, authority) in receipt.manifest.legs.iter().zip(&receipt.authority_catalog) {
+        for (index, leg) in receipt.manifest.legs.iter().enumerate() {
             self.ensure_private_settlement_route_active_v1(leg.route)?;
+            let authority = receipt
+                .authority_catalog
+                .authority_for_leg(&receipt.manifest, index)
+                .map_err(|_| PrivateSettlementGlobalStateErrorV1::Receipt)?;
             validate_private_settlement_committee_authority_v1(
                 self,
                 receipt.manifest.authority_context_height,
-                authority,
+                &authority,
             )
             .map_err(|_| PrivateSettlementGlobalStateErrorV1::Receipt)?;
         }
@@ -59631,6 +60042,8 @@ impl StateTransaction<'_, '_> {
             &self.world.private_settlement_roots,
             &self.world.private_settlement_nullifiers,
             &self.world.private_settlement_outputs,
+            &self.world.private_settlement_recipient_index,
+            &self.world.private_settlement_staged_locks,
             &self.world.private_settlement_receipts,
             &self.world.private_settlement_aborts,
             &receipt,
@@ -59642,7 +60055,7 @@ impl StateTransaction<'_, '_> {
 
         // Every fallible check completed above. The remaining writes are an
         // infallible MV overlay update committed only by `StateTransaction::apply`.
-        for leg in plan {
+        for leg in plan.legs {
             self.world
                 .private_settlement_pools
                 .insert(leg.key, leg.next_pool);
@@ -59658,6 +60071,14 @@ impl StateTransaction<'_, '_> {
             for (key, output) in leg.outputs {
                 self.world.private_settlement_outputs.insert(key, output);
             }
+            for recipient in leg.recipients {
+                self.world
+                    .private_settlement_recipient_index
+                    .insert(recipient, leg.reference);
+            }
+        }
+        for key in plan.staged_lock_keys {
+            self.world.private_settlement_staged_locks.remove(key);
         }
         self.world
             .private_settlement_receipts
@@ -59677,18 +60098,34 @@ impl StateTransaction<'_, '_> {
         if receipt.network_id != self.network_id {
             return Err(PrivateSettlementGlobalStateErrorV1::Network);
         }
-        if !plan_private_settlement_abort_v1(
+        let staged_lock_keys = plan_private_settlement_abort_v1(
+            &self.world.private_settlement_staged_locks,
             &self.world.private_settlement_receipts,
             &self.world.private_settlement_aborts,
             &receipt,
             current_height,
-        )? {
-            return Ok(PrivateSettlementGlobalStateOutcomeV1::Idempotent);
+        )?;
+        for key in staged_lock_keys {
+            self.world.private_settlement_staged_locks.remove(key);
         }
         self.world
             .private_settlement_aborts
             .insert(receipt.bundle_id, receipt);
         Ok(PrivateSettlementGlobalStateOutcomeV1::Applied)
+    }
+    /// Deterministically release every staged bundle whose expiry precedes this block.
+    pub(crate) fn reconcile_expired_private_settlement_staged_locks_v1(
+        &mut self,
+    ) -> core::result::Result<usize, PrivateSettlementGlobalStateErrorV1> {
+        let keys = expired_private_settlement_staged_lock_keys_v1(
+            &self.world.private_settlement_staged_locks,
+            self.block_height(),
+        )?;
+        let removed = keys.len();
+        for key in keys {
+            self.world.private_settlement_staged_locks.remove(key);
+        }
+        Ok(removed)
     }
     /// Read one public receipt by opaque bundle id from this transaction overlay.
     #[must_use]
@@ -59705,6 +60142,21 @@ impl StateTransaction<'_, '_> {
         bundle_id: &Hash,
     ) -> Option<&iroha_data_model::nexus::PrivateSettlementAbortReceiptV1> {
         self.world.private_settlement_aborts.get(bundle_id)
+    }
+    /// Read the exact public all-Prepare barrier currently registered in this overlay.
+    #[must_use]
+    pub fn private_settlement_prepare_barrier_v1(
+        &self,
+        bundle_id: &Hash,
+    ) -> Option<&iroha_data_model::nexus::PrivateSettlementPrepareBarrierV1> {
+        match self
+            .world
+            .private_settlement_staged_locks
+            .get(&PrivateSettlementStagedLockKeyV1::Bundle(*bundle_id))?
+        {
+            PrivateSettlementStagedLockRecordV1::Bundle { barrier, .. } => Some(barrier),
+            PrivateSettlementStagedLockRecordV1::Resource { .. } => None,
+        }
     }
     /// Read only the opaque pool epoch and root from this transaction overlay.
     #[must_use]
@@ -60955,23 +61407,26 @@ impl StateTransaction<'_, '_> {
             .ok_or("authority lifecycle transition ordinal overflow")?;
         Ok((execution_identity, ordinal))
     }
-    /// Apply transaction making its changes visible.
-    pub fn apply(self) {
-        self.apply_inner();
-    }
-    /// Apply deterministic consensus effects into a disposable or canonical block overlay.
+    /// Apply finality-owned world changes without creating an execution fragment.
     ///
-    /// Consensus-effect transactions deliberately suppress process-local operational
-    /// observability while preserving every consensus-state write.
+    /// This path is intentionally narrower than [`Self::apply`]: NPoS effects
+    /// may update only WSV and their block-commit observability buffer. They do
+    /// not advance transaction identities, gas, settlement, FASTPQ, or any
+    /// other ordinary-execution accumulator.
     pub(crate) fn apply_consensus_effects(self) {
-        assert!(
-            !self.operational_observability,
-            "consensus effects must use an observability-suppressed transaction"
-        );
-        self.apply_inner();
+        let Self {
+            world,
+            block_pending_public_lane_slash_observability,
+            mut pending_public_lane_slash_observability,
+            ..
+        } = self;
+        block_pending_public_lane_slash_observability
+            .append(&mut pending_public_lane_slash_observability);
+        world.apply();
     }
+    /// Apply transaction making it's changes visible
     #[allow(clippy::too_many_lines)]
-    fn apply_inner(self) {
+    pub fn apply(self) {
         // NOTE: intentionally destruct self not to forget apply some fields
         let Self {
             committed_fragments,
@@ -61031,7 +61486,6 @@ impl StateTransaction<'_, '_> {
             current_lane_id,
             #[cfg(feature = "telemetry")]
             telemetry,
-            operational_observability,
             public_lane_staking_status_overlay,
             ..
         } = self;
@@ -61059,45 +61513,43 @@ impl StateTransaction<'_, '_> {
                 settlement_accumulator.record_nexus_fee(tx_hash, record);
             }
         }
-        if operational_observability {
-            if let Some(event) = pending_nexus_fee_event {
-                match event {
-                    crate::sumeragi::status::NexusFeeEvent::Charged {
-                        payer_kind,
-                        payer_id,
-                        amount,
-                        asset_id,
-                    } => {
-                        let payer_kind_label = match payer_kind {
-                            crate::sumeragi::status::NexusFeePayer::Payer => "payer",
-                            crate::sumeragi::status::NexusFeePayer::Sponsor => "sponsor",
-                        };
-                        debug!(
-                            target: "economics",
-                            payer_kind = payer_kind_label,
-                            payer = %payer_id,
-                            fee_amount = %amount,
-                            asset = %asset_id,
-                            sink = %nexus.fees.fee_sink_account_id,
-                            "nexus fee charged"
-                        );
-                        crate::sumeragi::status::record_nexus_fee_event(
-                            crate::sumeragi::status::NexusFeeEvent::Charged {
-                                payer_kind,
-                                payer_id,
-                                amount,
-                                asset_id,
-                            },
-                        );
-                    }
-                    other => {
-                        crate::sumeragi::status::record_nexus_fee_event(other);
-                    }
+        if let Some(event) = pending_nexus_fee_event {
+            match event {
+                crate::sumeragi::status::NexusFeeEvent::Charged {
+                    payer_kind,
+                    payer_id,
+                    amount,
+                    asset_id,
+                } => {
+                    let payer_kind_label = match payer_kind {
+                        crate::sumeragi::status::NexusFeePayer::Payer => "payer",
+                        crate::sumeragi::status::NexusFeePayer::Sponsor => "sponsor",
+                    };
+                    debug!(
+                        target: "economics",
+                        payer_kind = payer_kind_label,
+                        payer = %payer_id,
+                        fee_amount = %amount,
+                        asset = %asset_id,
+                        sink = %nexus.fees.fee_sink_account_id,
+                        "nexus fee charged"
+                    );
+                    crate::sumeragi::status::record_nexus_fee_event(
+                        crate::sumeragi::status::NexusFeeEvent::Charged {
+                            payer_kind,
+                            payer_id,
+                            amount,
+                            asset_id,
+                        },
+                    );
+                }
+                other => {
+                    crate::sumeragi::status::record_nexus_fee_event(other);
                 }
             }
         }
         #[cfg(feature = "telemetry")]
-        if operational_observability {
+        {
             let cumulative = gas_used_in_block_so_far.saturating_add(last_tx_gas_used);
             telemetry.set_block_gas_used(cumulative);
             if !pending_block_fee_amount.is_zero() {
@@ -61139,20 +61591,14 @@ impl StateTransaction<'_, '_> {
                 .saturating_add(implicit_account_creations_in_tx);
             *implicit_account_creations_in_block = new_total;
         }
+        block_pending_public_lane_slash_observability
+            .append(&mut pending_public_lane_slash_observability);
         *committed_fragments += 1;
         prev_committed_topology.apply();
         committed_topology.apply();
         block_hashes.apply();
         world.apply();
-        if operational_observability {
-            public_lane_staking_status_overlay.commit();
-            if !pending_public_lane_slash_observability.is_empty() {
-                block_pending_public_lane_slash_observability
-                    .append(&mut pending_public_lane_slash_observability);
-            }
-        } else {
-            drop(public_lane_staking_status_overlay);
-        }
+        public_lane_staking_status_overlay.commit();
     }
     /// Get and cache the `NumericSpec` for an asset definition within this transaction.
     /// Fetch the numeric specification for a given asset definition.
@@ -61411,15 +61857,25 @@ impl StateTransaction<'_, '_> {
         // Keeping the counter wider than the on-chain limit makes the boundary
         // deterministic in debug and release builds instead of relying on
         // wrapping or saturating arithmetic.
-        let mut stack: Vec<(EventBox, TriggerId, u64, u16)> = self
-            .capture_data_events()?
-            .into_iter()
-            // Preserve the order of the matched triggers
-            .rev()
-            .map(|(e, t, generation)| (e, t, generation, 1))
-            .collect();
+        let mut scans = Vec::new();
+        if let Some(scan) = self.capture_data_event_scan(1) {
+            scans.push(scan);
+        }
         let mut steps = Vec::new();
-        while let Some((event, trg_id, matched_generation, depth)) = stack.pop() {
+        while let Some(mut scan) = scans.pop() {
+            let Some((event, trg_id, matched_generation, depth)) =
+                self.next_data_trigger_match(&mut scan)?
+            else {
+                continue;
+            };
+            // Resume this frozen batch only after the matching trigger and all
+            // events it emits have completed, preserving depth-first order.
+            // Drop an exhausted scan before invoking the callback so deep
+            // cascades do not retain needless copies of the frozen index.
+            if scan.candidate_index < scan.candidates.len() || scan.event_index < scan.events.len()
+            {
+                scans.push(scan);
+            }
             let max_depth = u16::from(self.world.parameters.smart_contract().execution_depth());
             if max_depth < depth {
                 return Err(TriggerExecutionFail::MaxDepthExceeded.into());
@@ -61428,9 +61884,6 @@ impl StateTransaction<'_, '_> {
             if current_generation != matched_generation {
                 // A prior callback replaced this ID after the event was matched.
                 // Do not resolve, remove, execute, or debit the replacement.
-                stack.retain(|(_, pending_id, pending_generation, _)| {
-                    pending_id != &trg_id || *pending_generation != matched_generation
-                });
                 continue;
             }
             self.charge_trigger_work_gas(TRIGGER_FILTER_CHECK_GAS, "data trigger recheck")?;
@@ -61469,10 +61922,12 @@ impl StateTransaction<'_, '_> {
                     _ => false,
                 };
                 if !event_still_matches {
-                    // The current action no longer accepts the captured event.
-                    stack.retain(|(_, pending_id, pending_generation, _)| {
-                        pending_id != &trg_id || *pending_generation != matched_generation
-                    });
+                    continue;
+                }
+                if !crate::smartcontracts::isi::triggers::isi::data_trigger_scope_is_currently_authorized(
+                    self,
+                    action,
+                ) {
                     continue;
                 }
                 (action.executable().clone(), action.authority().clone())
@@ -61496,11 +61951,8 @@ impl StateTransaction<'_, '_> {
             )?;
             let same_incarnation =
                 self.world.triggers.registration_generation(&trg_id) == matched_generation;
-            let depleted = same_incarnation && self.decrease_trigger_repeats_and_cleanup(&trg_id);
-            if depleted || !same_incarnation {
-                stack.retain(|(_, pending_id, pending_generation, _)| {
-                    pending_id != &trg_id || *pending_generation != matched_generation
-                });
+            if same_incarnation {
+                self.decrease_trigger_repeats_and_cleanup(&trg_id);
             }
             let step = DataTriggerStep {
                 id: trg_id,
@@ -61510,49 +61962,62 @@ impl StateTransaction<'_, '_> {
             // The guard above proves `depth <= u8::MAX`, so the wider counter
             // can represent `depth + 1` even at the maximum configured limit.
             let next_depth = depth + 1;
-            let next_items = self
-                .capture_data_events()?
-                .into_iter()
-                .rev()
-                .map(|(e, t, generation)| (e, t, generation, next_depth));
-            stack.extend(next_items);
+            if let Some(next_scan) = self.capture_data_event_scan(next_depth) {
+                scans.push(next_scan);
+            }
         }
         Ok(steps)
     }
-    /// Flush the internal event buffer and materialise canonical trigger events alongside their IDs.
-    ///
-    /// Events are returned as [`EventBox`] values so downstream consumers observe the full
-    /// trigger union (not just data-event representatives).
-    fn capture_data_events(
-        &mut self,
-    ) -> Result<Vec<(EventBox, TriggerId, u64)>, TransactionRejectionReason> {
-        let drained = core::mem::take(&mut self.world.internal_event_buf);
-        let mut matches = Vec::new();
-        for event in &drained {
-            let candidates = self.world.triggers.data_trigger_candidates(event.as_ref());
-            let check_count = u64::try_from(candidates.len()).unwrap_or(u64::MAX);
-            self.charge_trigger_work_gas(
-                check_count.saturating_mul(TRIGGER_FILTER_CHECK_GAS),
-                "data trigger filter checks",
-            )?;
-            for trg_id in candidates {
-                let Some(action) = self.world.triggers.data_triggers().get(&trg_id) else {
-                    warn!(
-                        trigger_id = %trg_id,
-                        "data-trigger index referenced a missing trigger; skipping candidate"
-                    );
-                    continue;
-                };
-                if data_trigger_action_matches(action, event.as_ref()) {
-                    // Preserve emission order so every matching event in a batch
-                    // produces its own trigger execution.
-                    let shared = SharedDataEvent::from_arc(Arc::clone(event));
-                    let generation = self.world.triggers.registration_generation(&trg_id);
-                    matches.push((EventBox::Data(shared), trg_id, generation));
-                }
-            }
+    /// Drain buffered events into a lazy scan over one immutable trigger snapshot.
+    fn capture_data_event_scan(&mut self, depth: u16) -> Option<PendingDataEventScan> {
+        let events = core::mem::take(&mut self.world.internal_event_buf);
+        if events.is_empty() {
+            return None;
         }
-        Ok(matches)
+        Some(PendingDataEventScan {
+            events,
+            event_index: 0,
+            candidates: Vec::new(),
+            candidate_index: 0,
+            snapshot: self.world.triggers.data_trigger_match_snapshot(),
+            depth,
+        })
+    }
+    /// Yield the next canonical match without materialising the event×trigger product.
+    fn next_data_trigger_match(
+        &mut self,
+        scan: &mut PendingDataEventScan,
+    ) -> Result<Option<(EventBox, TriggerId, u64, u16)>, TransactionRejectionReason> {
+        loop {
+            if scan.candidate_index >= scan.candidates.len() {
+                let Some(event) = scan.events.get(scan.event_index) else {
+                    return Ok(None);
+                };
+                scan.candidates = scan.snapshot.candidates(event.as_ref());
+                scan.candidate_index = 0;
+                scan.event_index = scan.event_index.saturating_add(1);
+                continue;
+            }
+            let trg_id = scan.candidates[scan.candidate_index].clone();
+            scan.candidate_index = scan.candidate_index.saturating_add(1);
+            let event = Arc::clone(
+                scan.events
+                    .get(scan.event_index.saturating_sub(1))
+                    .expect("a candidate list always belongs to its preceding event"),
+            );
+            self.charge_trigger_work_gas(TRIGGER_FILTER_CHECK_GAS, "data trigger filter checks")?;
+            let Some(generation) = scan.snapshot.matching_generation(&trg_id, event.as_ref())
+            else {
+                continue;
+            };
+            let shared = SharedDataEvent::from_arc(event);
+            return Ok(Some((
+                EventBox::Data(shared),
+                trg_id,
+                generation,
+                scan.depth,
+            )));
+        }
     }
     fn charge_trigger_work_gas(
         &mut self,
@@ -62889,7 +63354,11 @@ pub(crate) struct SnapshotNexusRuntime {
     pub autoscale_sample_history: Vec<AutoscaleSampleRecord>,
 }
 impl SnapshotNexusRuntime {
-    /// Current snapshot layout version.
+    /// Current persisted-State compatibility generation.
+    ///
+    /// This version covers the complete manually serialized State JSON envelope, not only the
+    /// fields in [`SnapshotNexusRuntime`]. Any persisted State JSON shape change must advance it so
+    /// frozen predecessor hash bridges fail closed instead of normalizing an unreviewed schema.
     pub(crate) const VERSION: u8 = 3;
     /// Capture the stateful Nexus fields from a consistent state view.
     #[cfg(test)]
@@ -62968,6 +63437,56 @@ pub(crate) mod deserialize {
     include!("state/deserialize_world.rs");
 }
 include!("state/default_oracle.rs");
+#[cfg(test)]
+mod npos_effect_application_tests {
+    use super::*;
+
+    fn marker_effects(height: u64) -> iroha_data_model::consensus::NposConsensusEffects {
+        iroha_data_model::consensus::NposConsensusEffects {
+            penalty_actions: vec![
+                iroha_data_model::consensus::NposPenaltyAction::MarkConsensusEvidenceApplied(
+                    iroha_data_model::consensus::NposMarkConsensusEvidenceAppliedAction {
+                        evidence_key: Hash::new([0xA5]),
+                        height,
+                    },
+                ),
+            ],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn committed_npos_effects_require_the_exact_pristine_stage_hash() {
+        let expected = marker_effects(7);
+        let expected_hash = HashOf::new(&expected);
+        validate_applied_npos_consensus_effects(None, None)
+            .expect("a block without NPoS effects needs no pristine-stage hash");
+        validate_applied_npos_consensus_effects(Some(&expected), Some(&expected_hash))
+            .expect("the exact applied NPoS bundle is admissible");
+
+        let missing = validate_applied_npos_consensus_effects(Some(&expected), None)
+            .expect_err("a missing pristine-stage application must fail closed");
+        assert!(missing.to_string().contains("were not applied"));
+
+        let unexpected = validate_applied_npos_consensus_effects(None, Some(&expected_hash))
+            .expect_err("an uncommitted pristine-stage application must fail closed");
+        assert!(
+            unexpected
+                .to_string()
+                .contains("absent from the committed block")
+        );
+
+        let different_hash = HashOf::new(&marker_effects(8));
+        let mismatch =
+            validate_applied_npos_consensus_effects(Some(&expected), Some(&different_hash))
+                .expect_err("a different pristine-stage bundle must fail closed");
+        assert!(
+            mismatch
+                .to_string()
+                .contains("differ from the committed block")
+        );
+    }
+}
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

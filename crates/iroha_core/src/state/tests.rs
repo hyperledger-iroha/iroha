@@ -3580,6 +3580,331 @@ state_test! { sync negative_consensus_stake_cannot_enter_state_storage
         "the nominal stake type must reject negatives before state construction"
     );
 }
+struct PublicLaneStakingInvariantFixture {
+    world: World,
+    lane_id: LaneId,
+    validator: AccountId,
+    nominator: AccountId,
+    request_id: Hash,
+}
+fn public_lane_staking_invariant_fixture() -> PublicLaneStakingInvariantFixture {
+    let lane_id = LaneId::SINGLE;
+    let validator_keypair = crate::state::checked_keypair();
+    let validator = AccountId::new(validator_keypair.public_key().clone());
+    let nominator = AccountId::new(crate::state::checked_keypair().public_key().clone());
+    let request_id = Hash::new("staking-invariant-unbond");
+    let mut world = World::default();
+    {
+        let mut parameters = world.parameters.block();
+        parameters.set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            SumeragiNposParameters {
+                evidence_horizon_blocks: 2,
+                slashing_delay_blocks: 2,
+                ..SumeragiNposParameters::default()
+            }
+            .into_custom_parameter(),
+        ));
+        parameters.commit();
+    }
+    world.public_lane_validators.insert(
+        (lane_id, validator.clone()),
+        PublicLaneValidatorRecord {
+            lane_id,
+            validator: validator.clone(),
+            peer_id: PeerId::from(validator_keypair.public_key().clone()),
+            stake_account: validator.clone(),
+            total_stake: Quantity::from(30_u32),
+            self_stake: Quantity::from(20_u32),
+            metadata: Metadata::default(),
+            status: PublicLaneValidatorStatus::Active,
+            activation_height: 1,
+            deactivation_height: None,
+            last_reward_epoch: None,
+        },
+    );
+    world.public_lane_stake_shares.insert(
+        (lane_id, validator.clone(), validator.clone()),
+        PublicLaneStakeShare {
+            lane_id,
+            validator: validator.clone(),
+            staker: validator.clone(),
+            bonded: Quantity::from(20_u32),
+            pending_unbonds: BTreeMap::new(),
+            metadata: Metadata::default(),
+        },
+    );
+    world.public_lane_stake_shares.insert(
+        (lane_id, validator.clone(), nominator.clone()),
+        PublicLaneStakeShare {
+            lane_id,
+            validator: validator.clone(),
+            staker: nominator.clone(),
+            bonded: Quantity::from(10_u32),
+            pending_unbonds: BTreeMap::from([(
+                request_id,
+                PublicLaneUnbonding {
+                    request_id,
+                    amount: Quantity::from(4_u32),
+                    release_at_ms: 100,
+                    slashable_through_height: 3,
+                    liability_release_height: 7,
+                },
+            )]),
+            metadata: Metadata::default(),
+        },
+    );
+    PublicLaneStakingInvariantFixture {
+        world,
+        lane_id,
+        validator,
+        nominator,
+        request_id,
+    }
+}
+fn assert_public_lane_staking_invariant_error(world: &World, expected: &str) {
+    let error = world
+        .validate_quantity_ledger_invariants()
+        .expect_err("malformed public-lane staking state must fail closed");
+    assert!(
+        error.contains(expected),
+        "unexpected invariant error: {error}"
+    );
+}
+state_test! { sync public_lane_staking_quantity_invariant_accepts_exact_canonical_ledger
+    let fixture = public_lane_staking_invariant_fixture();
+    fixture
+        .world
+        .validate_quantity_ledger_invariants()
+        .expect("canonical validator, self-stake, and nominator totals must agree");
+}
+state_test! { sync public_lane_staking_quantity_invariant_rejects_mismatched_keys_and_orphans
+    let fixture = public_lane_staking_invariant_fixture();
+    let validator_key = (fixture.lane_id, fixture.validator.clone());
+    {
+        let mut validators = fixture.world.public_lane_validators.block();
+        let validator_record = validators
+            .remove(validator_key)
+            .expect("validator fixture");
+        validators.insert(
+            (LaneId::new(18), fixture.validator.clone()),
+            validator_record,
+        );
+        validators.commit();
+    }
+    assert_public_lane_staking_invariant_error(&fixture.world, "validator key");
+
+    let fixture = public_lane_staking_invariant_fixture();
+    {
+        let mut validators = fixture.world.public_lane_validators.block();
+        validators
+            .get_mut(&(fixture.lane_id, fixture.validator.clone()))
+            .expect("validator fixture")
+            .stake_account =
+            AccountId::new(crate::state::checked_keypair().public_key().clone());
+        validators.commit();
+    }
+    assert_public_lane_staking_invariant_error(
+        &fixture.world,
+        "stake account",
+    );
+
+    let fixture = public_lane_staking_invariant_fixture();
+    let share_key = (
+        fixture.lane_id,
+        fixture.validator.clone(),
+        fixture.nominator.clone(),
+    );
+    {
+        let mut stake_shares = fixture.world.public_lane_stake_shares.block();
+        let share = stake_shares
+            .remove(share_key)
+            .expect("nominator share fixture");
+        stake_shares.insert(
+            (
+                fixture.lane_id,
+                fixture.validator.clone(),
+                AccountId::new(crate::state::checked_keypair().public_key().clone()),
+            ),
+            share,
+        );
+        stake_shares.commit();
+    }
+    assert_public_lane_staking_invariant_error(&fixture.world, "stake-share key");
+
+    let fixture = public_lane_staking_invariant_fixture();
+    {
+        let mut validators = fixture.world.public_lane_validators.block();
+        validators.remove((fixture.lane_id, fixture.validator.clone()));
+        validators.commit();
+    }
+    assert_public_lane_staking_invariant_error(
+        &fixture.world,
+        "references a missing canonical validator",
+    );
+}
+state_test! { sync public_lane_staking_quantity_invariant_rejects_malformed_pending_unbonds
+    fn mutate_pending_and_reject(
+        mutate: impl FnOnce(&mut PublicLaneUnbonding),
+        expected: &str,
+    ) {
+        let fixture = public_lane_staking_invariant_fixture();
+        let share_key = (
+            fixture.lane_id,
+            fixture.validator.clone(),
+            fixture.nominator.clone(),
+        );
+        {
+            let mut stake_shares = fixture.world.public_lane_stake_shares.block();
+            let pending = stake_shares
+                .get_mut(&share_key)
+                .expect("nominator share fixture")
+                .pending_unbonds
+                .get_mut(&fixture.request_id)
+                .expect("pending unbond fixture");
+            mutate(pending);
+            stake_shares.commit();
+        }
+        assert_public_lane_staking_invariant_error(&fixture.world, expected);
+    }
+    mutate_pending_and_reject(
+        |pending| pending.request_id = Hash::new("different-request-id"),
+        "pending-unbond key",
+    );
+    mutate_pending_and_reject(
+        |pending| pending.amount = Quantity::zero(),
+        "amount must be positive",
+    );
+    mutate_pending_and_reject(
+        |pending| pending.slashable_through_height = 0,
+        "slashable-through height must be positive",
+    );
+    mutate_pending_and_reject(
+        |pending| {
+            pending.liability_release_height = pending.slashable_through_height - 1;
+        },
+        "liability release height",
+    );
+    mutate_pending_and_reject(
+        |pending| pending.liability_release_height = 6,
+        "does not cover the signed evidence-and-slashing window through 7",
+    );
+
+    let fixture = public_lane_staking_invariant_fixture();
+    let share_key = (
+        fixture.lane_id,
+        fixture.validator.clone(),
+        fixture.nominator.clone(),
+    );
+    {
+        let mut stake_shares = fixture.world.public_lane_stake_shares.block();
+        let pending_unbonds = &mut stake_shares
+            .get_mut(&share_key)
+            .expect("nominator share fixture")
+            .pending_unbonds;
+        pending_unbonds
+            .get_mut(&fixture.request_id)
+            .expect("pending unbond fixture")
+            .amount = Quantity::from(u128::MAX);
+        let second_request = Hash::new("staking-invariant-overflow");
+        pending_unbonds.insert(
+            second_request,
+            PublicLaneUnbonding {
+                request_id: second_request,
+                amount: Quantity::from(1_u32),
+                release_at_ms: 101,
+                slashable_through_height: 4,
+                liability_release_height: 8,
+            },
+        );
+        stake_shares.commit();
+    }
+    assert_public_lane_staking_invariant_error(&fixture.world, "pending-unbond total overflowed");
+}
+state_test! { sync public_lane_staking_quantity_invariant_rejects_exposure_and_aggregate_corruption
+    let fixture = public_lane_staking_invariant_fixture();
+    let nominator_key = (
+        fixture.lane_id,
+        fixture.validator.clone(),
+        fixture.nominator.clone(),
+    );
+    {
+        let mut stake_shares = fixture.world.public_lane_stake_shares.block();
+        stake_shares
+            .get_mut(&nominator_key)
+            .expect("nominator share fixture")
+            .bonded = Quantity::from(u128::MAX);
+        stake_shares.commit();
+    }
+    assert_public_lane_staking_invariant_error(
+        &fixture.world,
+        "bonded and pending exposure overflowed",
+    );
+
+    let fixture = public_lane_staking_invariant_fixture();
+    let validator_share_key = (
+        fixture.lane_id,
+        fixture.validator.clone(),
+        fixture.validator.clone(),
+    );
+    {
+        let mut stake_shares = fixture.world.public_lane_stake_shares.block();
+        stake_shares
+            .get_mut(&validator_share_key)
+            .expect("validator self-share fixture")
+            .bonded = Quantity::from(u128::MAX);
+        stake_shares.commit();
+    }
+    assert_public_lane_staking_invariant_error(&fixture.world, "bonded stake total overflowed");
+
+    let fixture = public_lane_staking_invariant_fixture();
+    {
+        let mut validators = fixture.world.public_lane_validators.block();
+        validators
+            .get_mut(&(fixture.lane_id, fixture.validator.clone()))
+            .expect("validator fixture")
+            .total_stake = Quantity::from(31_u32);
+        validators.commit();
+    }
+    assert_public_lane_staking_invariant_error(&fixture.world, "total stake 31");
+
+    let fixture = public_lane_staking_invariant_fixture();
+    {
+        let mut validators = fixture.world.public_lane_validators.block();
+        validators
+            .get_mut(&(fixture.lane_id, fixture.validator.clone()))
+            .expect("validator fixture")
+            .self_stake = Quantity::from(19_u32);
+        validators.commit();
+    }
+    assert_public_lane_staking_invariant_error(&fixture.world, "self stake 19");
+}
+state_test! { sync state_snapshot_rejects_committed_public_lane_staking_aggregate_corruption
+    let fixture = public_lane_staking_invariant_fixture();
+    let validator_key = (fixture.lane_id, fixture.validator.clone());
+    let state = State::new(
+        fixture.world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    block
+        .world
+        .public_lane_validators
+        .get_mut(&validator_key)
+        .expect("validator fixture")
+        .total_stake = Quantity::from(31_u32);
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit adversarial aggregate fixture");
+    let snapshot = norito::json::to_value(&state).expect("serialize adversarial stake snapshot");
+    let error = deserialize_state_snapshot_value(snapshot)
+        .err()
+        .expect("persisted staking aggregate corruption must fail closed");
+    let message = error.to_string();
+    assert!(message.contains("state.world.numeric_ledgers"), "{message}");
+    assert!(message.contains("total stake 31"), "{message}");
+}
 state_test! { sync world_snapshot_names_successful_settlement_receipts_explicitly
     let state = blank_state();
     let value = norito::json::to_value(&state).expect("serialize state");
@@ -4727,12 +5052,20 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let mut world = World::default();
+    {
+        let mut parameters = world.parameters.block();
+        parameters.set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            SumeragiNposParameters {
+                evidence_horizon_blocks: 5,
+                slashing_delay_blocks: 5,
+                ..SumeragiNposParameters::default()
+            }
+            .into_custom_parameter(),
+        ));
+        parameters.commit();
+    }
     let validator = ALICE_ID.clone();
     let staker = BOB_ID.clone();
-    let mismatched_validator_keypair = crate::state::checked_keypair();
-    let mismatched_validator = AccountId::new(mismatched_validator_keypair.public_key().clone());
-    let mismatched_staker_keypair = crate::state::checked_keypair();
-    let mismatched_staker = AccountId::new(mismatched_staker_keypair.public_key().clone());
     let mismatched_lane = LaneId::new(99);
     let_row! { stake_asset_definition = AssetDefinitionId::derive_from_components( DomainId::try_new("wonderland", "universal").expect("stake asset domain"), "stake".parse().expect("stake asset name"), ) };
     let reward_asset = AssetId::new(stake_asset_definition, validator.clone());
@@ -4744,28 +5077,12 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
             validator: validator.clone(),
             peer_id: PeerId::from(validator.expect_single_signatory().clone()),
             stake_account: validator.clone(),
-            total_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
-            self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
+            total_stake: iroha_primitives::numeric::Quantity::from(1_300_u32),
+            self_stake: iroha_primitives::numeric::Quantity::from(400_u32),
             metadata: Metadata::default(),
             status: PublicLaneValidatorStatus::Active,
-            activation_epoch: Some(0),
-            activation_height: Some(1),
-            last_reward_epoch: Some(7),
-        },
-    );
-    world.public_lane_validators.insert(
-        (LaneId::SINGLE, mismatched_validator.clone()),
-        PublicLaneValidatorRecord {
-            lane_id: mismatched_lane,
-            validator: mismatched_validator.clone(),
-            peer_id: PeerId::from(mismatched_validator.expect_single_signatory().clone()),
-            stake_account: mismatched_validator.clone(),
-            total_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
-            self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
-            metadata: Metadata::default(),
-            status: PublicLaneValidatorStatus::Active,
-            activation_epoch: Some(0),
-            activation_height: Some(1),
+            activation_height: 1,
+            deactivation_height: None,
             last_reward_epoch: Some(7),
         },
     );
@@ -4782,17 +5099,19 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
                     request_id,
                     amount: iroha_primitives::numeric::Quantity::from(100_u32),
                     release_at_ms: 12_345,
+                    slashable_through_height: 7,
+                    liability_release_height: 17,
                 },
             )]),
             metadata: Metadata::default(),
         },
     );
     world.public_lane_stake_shares.insert(
-        (LaneId::SINGLE, validator.clone(), mismatched_staker.clone()),
+        (LaneId::SINGLE, validator.clone(), validator.clone()),
         PublicLaneStakeShare {
-            lane_id: mismatched_lane,
+            lane_id: LaneId::SINGLE,
             validator: validator.clone(),
-            staker: mismatched_staker.clone(),
+            staker: validator.clone(),
             bonded: iroha_primitives::numeric::Quantity::from(400_u32),
             pending_unbonds: BTreeMap::new(),
             metadata: Metadata::default(),
@@ -4845,12 +5164,12 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
             validator: validator.clone(),
             peer_id: PeerId::from(validator.expect_single_signatory().clone()),
             stake_account: validator.clone(),
-            total_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
-            self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
+            total_stake: iroha_primitives::numeric::Quantity::from(1_300_u32),
+            self_stake: iroha_primitives::numeric::Quantity::from(400_u32),
             metadata: Metadata::default(),
             status: PublicLaneValidatorStatus::Active,
-            activation_epoch: Some(0),
-            activation_height: Some(1),
+            activation_height: 1,
+            deactivation_height: None,
             last_reward_epoch: Some(7),
         }
     );
@@ -4872,30 +5191,6 @@ state_test! { sync public_lane_staking_roundtrip_through_state_json
         view.public_lane_reward_claims()
             .get(&(LaneId::SINGLE, validator, reward_asset)),
         Some(&6)
-    );
-    assert!(
-        view.public_lane_validators()
-            .get(&(LaneId::SINGLE, mismatched_validator.clone()))
-            .is_none(),
-        "snapshot restore must not preserve stale validator storage key rows"
-    );
-    assert!(
-        view.public_lane_validators()
-            .get(&(mismatched_lane, mismatched_validator))
-            .is_none(),
-        "snapshot restore must not normalize mismatched validator rows to embedded keys"
-    );
-    assert!(
-        view.public_lane_stake_shares()
-            .get(&(LaneId::SINGLE, ALICE_ID.clone(), mismatched_staker.clone()))
-            .is_none(),
-        "snapshot restore must not preserve stale stake-share storage key rows"
-    );
-    assert!(
-        view.public_lane_stake_shares()
-            .get(&(mismatched_lane, ALICE_ID.clone(), mismatched_staker))
-            .is_none(),
-        "snapshot restore must not normalize mismatched stake-share rows to embedded keys"
     );
     assert!(
         view.public_lane_rewards()
@@ -6161,6 +6456,56 @@ fn executor_reconciliation_strips_retired_sccp_parameter_and_preserves_typed_reg
             .get(&retired_id)
             .is_none()
     );
+}
+#[test]
+fn executor_reconciliation_cannot_replace_signed_npos_parameters() {
+    let installed = SumeragiNposParameters {
+        evidence_horizon_blocks: 80,
+        slashing_delay_blocks: 40,
+        ..SumeragiNposParameters::default()
+    };
+    let attacker_value = SumeragiNposParameters {
+        evidence_horizon_blocks: 1,
+        slashing_delay_blocks: 1,
+        ..installed.clone()
+    };
+    let state = blank_test_state();
+    {
+        let mut parameters = state.world.parameters.block();
+        parameters.set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            installed.clone().into_custom_parameter(),
+        ));
+        parameters.commit();
+    }
+    let mut attacker_model = ExecutorDataModel::default();
+    attacker_model.parameters.insert(
+        SumeragiNposParameters::parameter_id(),
+        attacker_value.into_custom_parameter(),
+    );
+
+    let signed = empty_signed_block_after(None, 1);
+    let mut block = state.block(signed.header());
+    {
+        let mut transaction = block.transaction();
+        transaction.world.apply_executor_data_model(attacker_model);
+        assert_eq!(
+            transaction
+                .world
+                .sumeragi_npos_parameters()
+                .expect("signed NPoS parameters remain installed"),
+            installed
+        );
+        assert!(
+            transaction
+                .world
+                .executor_data_model
+                .get()
+                .parameters()
+                .get(&SumeragiNposParameters::parameter_id())
+                .is_none(),
+            "executor-owned schemas must not acquire the consensus-owned parameter"
+        );
+    }
 }
 state_test! { sync executor_data_model_reconciliation_purges_undeclared_permissions_statefully
     let_row! { retained: Permission = iroha_executor_data_model::permission::parameter::CanSetParameters.into() };
@@ -12989,8 +13334,6 @@ state_test! { sync certified_autoscale_scale_in_rechecks_late_unapplied_certifie
     );
 }
 state_test! { sync autoscale_scale_in_height_mismatch_does_not_publish_block_local_world_cleanup
-    let_row! { _status_guard = crate::sumeragi::status::nexus_fee_test_lock() .lock() .expect("nexus status test lock") };
-    crate::sumeragi::status::reset_nexus_economics_for_tests();
     let (mut state, kura, retired_lane_id) = autoscale_retirement_test_state();
     {
         let mut wb = state.world.block();
@@ -13004,14 +13347,6 @@ state_test! { sync autoscale_scale_in_height_mismatch_does_not_publish_block_loc
         );
         wb.commit();
     }
-    let_row! { (active_validator, active_peer) = seed_public_lane_validator_for_lifecycle_test( &state, retired_lane_id, PublicLaneValidatorStatus::Active, ) };
-    let_row! { (retained_validator, retained_peer) = seed_public_lane_validator_for_lifecycle_test( &state, LaneId::SINGLE, PublicLaneValidatorStatus::Active, ) };
-    let_row! { retired_economic_keys = seed_public_lane_economic_state_for_lifecycle_test(&state, retired_lane_id, 31) };
-    let_row! { retained_economic_keys = seed_public_lane_economic_state_for_lifecycle_test(&state, LaneId::SINGLE, 32) };
-    let retired_status_bonded = Quantity::from(631_u32);
-    let retained_status_bonded = Quantity::from(632_u32);
-    record_public_lane_staking_status_for_test(retired_lane_id, &retired_status_bonded);
-    record_public_lane_staking_status_for_test(LaneId::SINGLE, &retained_status_bonded);
     let retired_replay_key = AxtHandleReplayKey::from_parts(
         DataSpaceId::UNIVERSAL,
         axt_replay_incarnation_for_test(0xC1),
@@ -13066,44 +13401,6 @@ state_test! { sync autoscale_scale_in_height_mismatch_does_not_publish_block_loc
             .is_none(),
         "block-local scale-in should prune the retired-lane emergency override"
     );
-    let_row! { block_retired_validator = state_block .world .public_lane_validators .get(&(retired_lane_id, active_validator.clone())) .expect("retired validator record retained in block overlay") };
-    assert!(matches!(
-        block_retired_validator.status,
-        PublicLaneValidatorStatus::Exited
-    ));
-    let_row! { block_retained_validator = state_block .world .public_lane_validators .get(&(LaneId::SINGLE, retained_validator.clone())) .expect("retained validator record") };
-    assert!(matches!(
-        block_retained_validator.status,
-        PublicLaneValidatorStatus::Active
-    ));
-    assert!(
-        state_block
-            .world
-            .public_lane_stake_shares
-            .get(&retired_economic_keys.0)
-            .is_none()
-    );
-    assert!(
-        state_block
-            .world
-            .public_lane_rewards
-            .get(&retired_economic_keys.1)
-            .is_none()
-    );
-    assert!(
-        state_block
-            .world
-            .public_lane_reward_claims
-            .get(&retired_economic_keys.2)
-            .is_none()
-    );
-    assert!(
-        state_block
-            .world
-            .public_lane_stake_shares
-            .get(&retained_economic_keys.0)
-            .is_some()
-    );
     assert!(
         state_block
             .world
@@ -13151,45 +13448,6 @@ state_test! { sync autoscale_scale_in_height_mismatch_does_not_publish_block_loc
             .is_some(),
         "height mismatch must not publish emergency override pruning"
     );
-    let_row! { committed_retired_validator = view .public_lane_validators() .get(&(retired_lane_id, active_validator)) .expect("committed retired validator record") };
-    assert!(matches!(
-        committed_retired_validator.status,
-        PublicLaneValidatorStatus::Active
-    ));
-    let_row! { committed_retained_validator = view .public_lane_validators() .get(&(LaneId::SINGLE, retained_validator)) .expect("committed retained validator record") };
-    assert!(matches!(
-        committed_retained_validator.status,
-        PublicLaneValidatorStatus::Active
-    ));
-    assert_eq!(
-        validator_lane_ids_for_peers(&view, [&active_peer, &retained_peer]),
-        BTreeSet::from([retired_lane_id, LaneId::SINGLE]),
-        "height mismatch must not publish retired-lane validator scope changes"
-    );
-    assert!(
-        view.public_lane_stake_shares()
-            .get(&retired_economic_keys.0)
-            .is_some(),
-        "height mismatch must not prune retired-lane stake shares"
-    );
-    assert!(
-        view.public_lane_rewards()
-            .get(&retired_economic_keys.1)
-            .is_some(),
-        "height mismatch must not prune retired-lane rewards"
-    );
-    assert!(
-        view.public_lane_reward_claims()
-            .get(&retired_economic_keys.2)
-            .is_some(),
-        "height mismatch must not prune retired-lane reward claims"
-    );
-    assert!(
-        view.public_lane_stake_shares()
-            .get(&retained_economic_keys.0)
-            .is_some(),
-        "height mismatch must preserve surviving-lane stake shares"
-    );
     drop(view);
     let replay_view = state.world.axt_replay_ledger.view();
     assert!(
@@ -13209,20 +13467,7 @@ state_test! { sync autoscale_scale_in_height_mismatch_does_not_publish_block_loc
         contract_view.get(&retained_relay_key).is_some(),
         "height mismatch must preserve surviving-lane verified relay state"
     );
-    assert_public_lane_economic_state_presence(&state, &retired_economic_keys, true);
-    assert_public_lane_economic_state_presence(&state, &retained_economic_keys, true);
-    assert_public_lane_staking_status_bonded(
-        retired_lane_id,
-        &retired_status_bonded,
-        "height mismatch must preserve retired-lane operator staking status",
-    );
-    assert_public_lane_staking_status_bonded(
-        LaneId::SINGLE,
-        &retained_status_bonded,
-        "height mismatch must preserve surviving-lane operator staking status",
-    );
     assert_eq!(state.transactions.view().latest_height_for_tests(), 2);
-    crate::sumeragi::status::reset_nexus_economics_for_tests();
 }
 state_test! { sync autoscale_transition_drops_staged_verified_relay_for_retired_lane
     let (mut state, kura, retired_lane_id) = autoscale_retirement_test_state();
@@ -13394,7 +13639,7 @@ state_test! { sync autoscale_transition_drops_staged_verified_relay_for_retired_
     );
 }
 #[test]
-fn autoscale_transition_drops_same_block_emergency_and_economic_state_for_retired_lane() {
+fn autoscale_transition_rejects_same_block_economic_custody_for_retired_lane() {
     let (mut state, kura, retired_lane_id) = autoscale_retirement_test_state();
     let validator = AccountId::new(crate::state::checked_keypair().public_key().clone());
     let retired_staker = AccountId::new(crate::state::checked_keypair().public_key().clone());
@@ -13412,6 +13657,24 @@ fn autoscale_transition_drops_same_block_emergency_and_economic_state_for_retire
     let_row! { retirement = prepare_certified_autoscale_retirement_for_test(&mut state, &kura, retired_lane_id) };
     let mut state_block = state.block(retirement.header());
     insert_empty_transaction_block_for_state_commit(&mut state_block, &retirement);
+    for lane_id in [retired_lane_id, LaneId::SINGLE] {
+        state_block.world.public_lane_validators.insert(
+            (lane_id, validator.clone()),
+            PublicLaneValidatorRecord {
+                lane_id,
+                validator: validator.clone(),
+                peer_id: PeerId::from(validator.expect_single_signatory().clone()),
+                stake_account: validator.clone(),
+                total_stake: Quantity::from(1_000_u32),
+                self_stake: Quantity::zero(),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Exited,
+                activation_height: 1,
+                deactivation_height: Some(2),
+                last_reward_epoch: None,
+            },
+        );
+    }
     state_block.world.lane_relay_emergency_validators.insert(
         retired_lane_id,
         LaneRelayEmergencyValidatorSet {
@@ -13432,10 +13695,6 @@ fn autoscale_transition_drops_same_block_emergency_and_economic_state_for_retire
         .world
         .public_lane_reward_claims
         .insert(retired_keys.2.clone(), 6);
-    state_block.world.public_lane_stake_shares.insert(
-        embedded_retired_keys.0.clone(),
-        stake_record(retired_lane_id, embedded_retired_staker),
-    );
     state_block.world.public_lane_rewards.insert(
         embedded_retired_keys.1,
         reward_record(retired_lane_id, embedded_retired_keys.1.1),
@@ -13472,47 +13731,43 @@ fn autoscale_transition_drops_same_block_emergency_and_economic_state_for_retire
             .is_some(),
         "test setup must stage same-block retired-lane economics"
     );
-    assert!(
-        state_block
-            .world
-            .public_lane_stake_shares
-            .get(&embedded_retired_keys.0)
-            .is_some(),
-        "test setup must stage same-block economics with a surviving key and retired embedded lane"
-    );
     let_row! { committed_retirement = ValidBlock::new_unverified_for_tests(retirement) .commit_unchecked() .unpack(|_| {}) };
     state_block.maybe_apply_nexus_autoscale(&committed_retirement);
+    assert!(
+        state_block.pending_autoscale_lifecycle.is_none(),
+        "same-block bonded custody must veto autoscale scale-in"
+    );
     assert!(
         state_block
             .world
             .lane_relay_emergency_validators
             .get(&retired_lane_id)
-            .is_none(),
-        "autoscale scale-in must prune same-block retired-lane emergency overrides"
+            .is_some(),
+        "rejected autoscale scale-in must preserve same-block emergency overrides"
     );
     assert!(
         state_block
             .world
             .public_lane_stake_shares
             .get(&retired_keys.0)
-            .is_none(),
-        "autoscale scale-in must prune same-block retired-lane stake shares"
+            .is_some(),
+        "rejected autoscale scale-in must preserve same-block retired-lane stake custody"
     );
     assert!(
         state_block
             .world
             .public_lane_rewards
             .get(&retired_keys.1)
-            .is_none(),
-        "autoscale scale-in must prune same-block retired-lane rewards"
+            .is_some(),
+        "rejected autoscale scale-in must preserve same-block retired-lane rewards"
     );
     assert!(
         state_block
             .world
             .public_lane_reward_claims
             .get(&retired_keys.2)
-            .is_none(),
-        "autoscale scale-in must prune same-block retired-lane reward claims"
+            .is_some(),
+        "rejected autoscale scale-in must preserve same-block retired-lane reward claims"
     );
     assert!(
         state_block
@@ -13520,15 +13775,15 @@ fn autoscale_transition_drops_same_block_emergency_and_economic_state_for_retire
             .public_lane_stake_shares
             .get(&embedded_retired_keys.0)
             .is_none(),
-        "autoscale scale-in must prune same-block stake shares whose embedded lane is retired"
+        "the embedded-lane reward fixture must not introduce malformed stake custody"
     );
     assert!(
         state_block
             .world
             .public_lane_rewards
             .get(&embedded_retired_keys.1)
-            .is_none(),
-        "autoscale scale-in must prune same-block rewards whose embedded lane is retired"
+            .is_some(),
+        "rejected autoscale scale-in must preserve same-block rewards whose embedded lane is retired"
     );
     assert!(
         state_block
@@ -13548,26 +13803,26 @@ fn autoscale_transition_drops_same_block_emergency_and_economic_state_for_retire
     );
     insert_empty_transaction_block_for_test(&mut state_block);
     commit_state_block_with_empty_autoscale_queue(state_block)
-        .expect("autoscale scale-in commits same-block cleanup");
+        .expect("the block must commit without the rejected autoscale transition");
     let view = state.world.view();
     assert!(
         view.lane_relay_emergency_validators()
             .get(&retired_lane_id)
-            .is_none(),
-        "committed state must not retain same-block retired-lane emergency overrides"
+            .is_some(),
+        "rejected retirement must retain same-block retired-lane emergency overrides"
     );
-    assert_public_lane_economic_state_presence(&state, &retired_keys, false);
+    assert_public_lane_economic_state_presence(&state, &retired_keys, true);
     assert!(
         view.public_lane_stake_shares()
             .get(&embedded_retired_keys.0)
             .is_none(),
-        "committed state must not retain same-block stake shares whose embedded lane was retired"
+        "the rejected retirement must not synthesize an embedded-lane stake share"
     );
     assert!(
         view.public_lane_rewards()
             .get(&embedded_retired_keys.1)
-            .is_none(),
-        "committed state must not retain same-block rewards whose embedded lane was retired"
+            .is_some(),
+        "rejected retirement must retain same-block embedded-lane rewards"
     );
     assert!(
         view.public_lane_reward_claims()
@@ -13577,7 +13832,7 @@ fn autoscale_transition_drops_same_block_emergency_and_economic_state_for_retire
     );
     assert_public_lane_economic_state_presence(&state, &retained_keys, true);
 }
-state_test! { sync autoscale_transition_drops_same_block_validator_and_axt_state_for_retired_lane
+state_test! { sync autoscale_commit_rejects_live_validator_staged_after_lifecycle_revalidation
     let (mut state, kura, retired_lane_id) = autoscale_retirement_test_state();
     fn validator_record(
         lane_id: LaneId,
@@ -13589,12 +13844,12 @@ state_test! { sync autoscale_transition_drops_same_block_validator_and_axt_state
             validator: validator.clone(),
             peer_id: peer_id.clone(),
             stake_account: validator.clone(),
-            total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
-            self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
+            total_stake: iroha_primitives::numeric::Quantity::zero(),
+            self_stake: iroha_primitives::numeric::Quantity::zero(),
             metadata: Metadata::default(),
-            status: PublicLaneValidatorStatus::Active,
-            activation_epoch: Some(1),
-            activation_height: Some(1),
+            status: PublicLaneValidatorStatus::Exited,
+            activation_height: 1,
+            deactivation_height: Some(2),
             last_reward_epoch: None,
         }
     }
@@ -13668,9 +13923,9 @@ state_test! { sync autoscale_transition_drops_same_block_validator_and_axt_state
                 .get(&direct_validator_key)
                 .expect("same-block direct retired-lane validator")
                 .status,
-            PublicLaneValidatorStatus::Active
+            PublicLaneValidatorStatus::Exited
         ),
-        "test setup must stage an active direct retired-lane validator"
+        "test setup must stage a terminal direct retired-lane audit record"
     );
     assert!(
         matches!(
@@ -13680,9 +13935,9 @@ state_test! { sync autoscale_transition_drops_same_block_validator_and_axt_state
                 .get(&embedded_validator_key)
                 .expect("same-block embedded retired-lane validator")
                 .status,
-            PublicLaneValidatorStatus::Active
+            PublicLaneValidatorStatus::Exited
         ),
-        "test setup must stage an active validator whose embedded lane is retired"
+        "test setup must stage a terminal validator audit record whose embedded lane is retired"
     );
     assert!(
         state_block
@@ -13704,7 +13959,7 @@ state_test! { sync autoscale_transition_drops_same_block_validator_and_axt_state
                 .status,
             PublicLaneValidatorStatus::Exited
         ),
-        "autoscale scale-in must exit same-block validators keyed by a retired lane"
+        "autoscale scale-in must preserve terminal audit rows keyed by a retired lane"
     );
     assert!(
         matches!(
@@ -13716,7 +13971,7 @@ state_test! { sync autoscale_transition_drops_same_block_validator_and_axt_state
                 .status,
             PublicLaneValidatorStatus::Exited
         ),
-        "autoscale scale-in must exit same-block validators whose embedded lane is retired"
+        "autoscale scale-in must preserve terminal audit rows whose embedded lane is retired"
     );
     assert!(
         matches!(
@@ -13726,9 +13981,9 @@ state_test! { sync autoscale_transition_drops_same_block_validator_and_axt_state
                 .get(&retained_validator_key)
                 .expect("surviving-lane validator should remain")
                 .status,
-            PublicLaneValidatorStatus::Active
+            PublicLaneValidatorStatus::Exited
         ),
-        "autoscale scale-in must not exit validators scoped only to surviving lanes"
+        "autoscale scale-in must retain terminal audit records scoped only to surviving lanes"
     );
     assert!(
         state_block
@@ -13746,10 +14001,14 @@ state_test! { sync autoscale_transition_drops_same_block_validator_and_axt_state
             .is_some(),
         "autoscale scale-in must retain same-block replay entries for surviving lanes"
     );
-    state_block.world.public_lane_validators.insert(
-        late_retired_validator_key.clone(),
-        validator_record(retired_lane_id, &late_retired_validator, &late_retired_peer),
-    );
+    let mut late_retired_record =
+        validator_record(retired_lane_id, &late_retired_validator, &late_retired_peer);
+    late_retired_record.status = PublicLaneValidatorStatus::Active;
+    late_retired_record.deactivation_height = None;
+    state_block
+        .world
+        .public_lane_validators
+        .insert(late_retired_validator_key.clone(), late_retired_record);
     state_block.world.public_lane_validators.insert(
         late_retained_validator_key.clone(),
         validator_record(
@@ -13793,83 +14052,35 @@ state_test! { sync autoscale_transition_drops_same_block_validator_and_axt_state
         "test setup must stage a retired-lane replay entry after autoscale cleanup"
     );
     insert_empty_transaction_block_for_test(&mut state_block);
-    commit_state_block_with_empty_autoscale_queue(state_block)
-        .expect("autoscale scale-in commits same-block validator and replay cleanup");
-    let view = state.world.view();
+    let mut queue_veto_called = false;
+    let mut queue_veto = |_: LaneId, _: DataSpaceId, _: Hash| {
+        queue_veto_called = true;
+        Ok(())
+    };
+    let error = state_block
+        .commit_with_autoscale_retirement_queue_veto(&mut queue_veto)
+        .expect_err("final active validator state must veto autoscale scale-in");
+    assert_eq!(error, TransactionsBlockError::AutoscaleLaneLifecycle);
     assert!(
-        matches!(
-            view.public_lane_validators()
-                .get(&direct_validator_key)
-                .expect("committed direct retired-lane validator")
-                .status,
-            PublicLaneValidatorStatus::Exited
-        ),
-        "committed state must keep the direct retired-lane validator terminalized"
+        !queue_veto_called,
+        "final staking revalidation must run before the Queue retirement veto"
     );
+    let nexus = state.nexus_snapshot();
     assert!(
-        matches!(
-            view.public_lane_validators()
-                .get(&embedded_validator_key)
-                .expect("committed embedded retired-lane validator")
-                .status,
-            PublicLaneValidatorStatus::Exited
-        ),
-        "committed state must keep the embedded retired-lane validator terminalized"
+        nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .any(|lane| lane.id == retired_lane_id),
+        "failed retirement must leave the retired lane in the committed catalog"
     );
-    assert!(
-        matches!(
-            view.public_lane_validators()
-                .get(&retained_validator_key)
-                .expect("committed surviving-lane validator")
-                .status,
-            PublicLaneValidatorStatus::Active
-        ),
-        "committed state must retain surviving-lane validators as active"
-    );
-    assert!(
-        view.axt_replay_ledger().get(&retired_replay_key).is_some(),
-        "committed state must retain unexpired same-block retired-lane replay state"
-    );
-    assert!(
-        view.axt_replay_ledger().get(&retained_replay_key).is_some(),
-        "committed state must retain same-block surviving-lane replay state"
-    );
-    assert!(
-        view.axt_replay_ledger()
-            .get(&late_retired_replay_key)
-            .is_some(),
-        "committed state must retain unexpired retired-lane replay state inserted after block-local cleanup"
-    );
-    assert!(
-        view.axt_replay_ledger()
-            .get(&late_retained_replay_key)
-            .is_some(),
-        "committed state must retain surviving-lane replay state inserted after block-local cleanup"
-    );
-    assert!(
-        matches!(
-            view.public_lane_validators()
-                .get(&late_retired_validator_key)
-                .expect("late retired-lane validator should remain terminalized")
-                .status,
-            PublicLaneValidatorStatus::Exited
-        ),
-        "committed state must terminalize retired-lane validators inserted after block-local cleanup"
-    );
-    assert!(
-        matches!(
-            view.public_lane_validators()
-                .get(&late_retained_validator_key)
-                .expect("late surviving-lane validator should remain active")
-                .status,
-            PublicLaneValidatorStatus::Active
-        ),
-        "committed state must retain surviving-lane validators inserted after block-local cleanup"
+    assert_eq!(
+        state.transactions.view().latest_height_for_tests(),
+        2,
+        "failed retirement must not publish its carrier block"
     );
 }
 state_test! { sync committed_autoscale_lifecycle_prunes_persistent_reset_lane_state
-    let_row! { _status_guard = crate::sumeragi::status::nexus_fee_test_lock() .lock() .expect("nexus status test lock") };
-    crate::sumeragi::status::reset_nexus_economics_for_tests();
     let (mut state, kura, retired_lane_id) = autoscale_retirement_test_state();
     {
         let mut block = state.world.block();
@@ -13891,16 +14102,6 @@ state_test! { sync committed_autoscale_lifecycle_prunes_persistent_reset_lane_st
         );
         block.commit();
     }
-    let_row! { (retired_validator, retired_peer) = seed_public_lane_validator_for_lifecycle_test( &state, retired_lane_id, PublicLaneValidatorStatus::Active, ) };
-    let_row! { (retained_validator, retained_peer) = seed_public_lane_validator_for_lifecycle_test( &state, LaneId::SINGLE, PublicLaneValidatorStatus::Active, ) };
-    let_row! { (embedded_retired_validator, embedded_retired_peer) = seed_public_lane_validator_with_key_and_record_lanes_for_lifecycle_test( &state, LaneId::SINGLE, retired_lane_id, PublicLaneValidatorStatus::Active, ) };
-    let_row! { retired_economic_keys = seed_public_lane_economic_state_for_lifecycle_test(&state, retired_lane_id, 211) };
-    let_row! { retained_economic_keys = seed_public_lane_economic_state_for_lifecycle_test(&state, LaneId::SINGLE, 212) };
-    let_row! { embedded_retired_economic_keys = seed_public_lane_economic_state_with_key_and_record_lanes_for_lifecycle_test( &state, LaneId::SINGLE, retired_lane_id, 213, ) };
-    let retired_status_bonded = Quantity::from(811_u32);
-    let retained_status_bonded = Quantity::from(812_u32);
-    record_public_lane_staking_status_for_test(retired_lane_id, &retired_status_bonded);
-    record_public_lane_staking_status_for_test(LaneId::SINGLE, &retained_status_bonded);
     let retired_replay_key = AxtHandleReplayKey::from_parts(
         DataSpaceId::UNIVERSAL,
         axt_replay_incarnation_for_test(0xF1),
@@ -13991,62 +14192,6 @@ state_test! { sync committed_autoscale_lifecycle_prunes_persistent_reset_lane_st
             .is_some(),
         "committed autoscale lifecycle must preserve active-lane emergency overrides"
     );
-    let_row! { retired_record = view .public_lane_validators() .get(&(retired_lane_id, retired_validator)) .expect("retired validator audit record") };
-    assert!(matches!(
-        retired_record.status,
-        PublicLaneValidatorStatus::Exited
-    ));
-    let_row! { retained_record = view .public_lane_validators() .get(&(LaneId::SINGLE, retained_validator)) .expect("retained validator record") };
-    assert!(matches!(
-        retained_record.status,
-        PublicLaneValidatorStatus::Active
-    ));
-    let_row! { embedded_retired_record = view .public_lane_validators() .get(&(LaneId::SINGLE, embedded_retired_validator)) .expect("embedded retired-lane validator audit record") };
-    assert!(matches!(
-        embedded_retired_record.status,
-        PublicLaneValidatorStatus::Exited
-    ));
-    assert_eq!(
-        validator_lane_ids_for_peers(
-            &view,
-            [&retired_peer, &embedded_retired_peer, &retained_peer],
-        ),
-        BTreeSet::from([LaneId::SINGLE]),
-        "committed autoscale lifecycle must remove exact and embedded retired-lane validator scope"
-    );
-    drop(view);
-    assert_public_lane_economic_state_presence(&state, &retired_economic_keys, false);
-    let view = state.world.view();
-    assert!(
-        view.public_lane_stake_shares()
-            .get(&embedded_retired_economic_keys.0)
-            .is_none(),
-        "committed autoscale lifecycle must prune surviving-key stake shares whose embedded lane was reset"
-    );
-    assert!(
-        view.public_lane_rewards()
-            .get(&embedded_retired_economic_keys.1)
-            .is_none(),
-        "committed autoscale lifecycle must prune surviving-key rewards whose embedded lane was reset"
-    );
-    assert!(
-        view.public_lane_reward_claims()
-            .get(&embedded_retired_economic_keys.2)
-            .is_some(),
-        "committed autoscale lifecycle must retain surviving-key reward claims because they carry no embedded lane"
-    );
-    drop(view);
-    assert_public_lane_economic_state_presence(&state, &retained_economic_keys, true);
-    assert_public_lane_staking_status_absent(
-        retired_lane_id,
-        "committed autoscale lifecycle must clear retired-lane operator staking status",
-    );
-    assert_public_lane_staking_status_bonded(
-        LaneId::SINGLE,
-        &retained_status_bonded,
-        "committed autoscale lifecycle must preserve active-lane operator staking status",
-    );
-    let view = state.world.view();
     assert!(
         view.axt_replay_ledger().get(&retired_replay_key).is_some(),
         "committed autoscale lifecycle must preserve unexpired retired-lane AXT replay records"
@@ -14101,7 +14246,6 @@ state_test! { sync committed_autoscale_lifecycle_prunes_persistent_reset_lane_st
             .is_some(),
         "committed autoscale lifecycle must preserve active-lane verified relay state"
     );
-    crate::sumeragi::status::reset_nexus_economics_for_tests();
 }
 state_test! { sync verified_lane_relay_reset_filter_drops_ref_or_envelope_lane_matches
     let (_, validator_keypairs) = bls_accounts_in("validators", 4);
@@ -15067,7 +15211,7 @@ state_test! { sync autoscale_scale_in_hides_same_block_da_commitments_for_retire
     );
     assert_eq!(replayed_side_receipt.receipt.key_version.get(), 9);
 }
-state_test! { sync autoscale_transition_exits_retired_managed_lane_public_validators
+state_test! { sync autoscale_transition_rejects_live_retired_managed_lane_public_validators
     let (mut state, kura, retired_lane_id) = autoscale_retirement_test_state();
     let_row! { (active_validator, active_peer) = seed_public_lane_validator_for_lifecycle_test( &state, retired_lane_id, PublicLaneValidatorStatus::Active, ) };
     let_row! { (pending_validator, pending_peer) = seed_public_lane_validator_for_lifecycle_test( &state, retired_lane_id, PublicLaneValidatorStatus::PendingActivation(8), ) };
@@ -15077,30 +15221,41 @@ state_test! { sync autoscale_transition_exits_retired_managed_lane_public_valida
     insert_empty_transaction_block_for_state_commit(&mut state_block, &retirement);
     let_row! { committed_retirement = ValidBlock::new_unverified_for_tests(retirement) .commit_unchecked() .unpack(|_| {}) };
     state_block.maybe_apply_nexus_autoscale(&committed_retirement);
+    assert!(
+        state_block.pending_autoscale_lifecycle.is_none(),
+        "live validators must veto autoscale scale-in before it is staged"
+    );
     insert_empty_transaction_block_for_test(&mut state_block);
     commit_state_block_with_empty_autoscale_queue(state_block)
-        .expect("autoscale scale-in block scope commits validator cleanup");
+        .expect("the block must commit without the rejected autoscale transition");
     let view = state.world.view();
-    for validator in [active_validator, pending_validator] {
-        let_row! { record = view .public_lane_validators() .get(&(retired_lane_id, validator)) .expect("retired managed-lane validator record retained") };
-        assert!(matches!(record.status, PublicLaneValidatorStatus::Exited));
-    }
+    let_row! { active = view .public_lane_validators() .get(&(retired_lane_id, active_validator)) .expect("active managed-lane validator retained") };
+    assert!(matches!(active.status, PublicLaneValidatorStatus::Active));
+    let_row! { pending = view .public_lane_validators() .get(&(retired_lane_id, pending_validator)) .expect("pending managed-lane validator retained") };
+    assert!(matches!(
+        pending.status,
+        PublicLaneValidatorStatus::PendingActivation(8)
+    ));
     let_row! { retained = view .public_lane_validators() .get(&(LaneId::SINGLE, retained_validator)) .expect("default-lane validator record") };
     assert!(matches!(retained.status, PublicLaneValidatorStatus::Active));
     assert_eq!(
-        validator_lane_ids_for_peers(&view, [&active_peer, &pending_peer, &retained_peer]),
-        BTreeSet::from([LaneId::SINGLE]),
-        "autoscale scale-in must not leave retired managed-lane validators in live scope"
+        validator_lane_ids_for_peers(
+            &view,
+            [&active_peer, &pending_peer, &retained_peer],
+            8,
+        ),
+        BTreeSet::from([LaneId::SINGLE, retired_lane_id]),
+        "rejected autoscale scale-in must preserve every validator's live scope"
     );
 }
-state_test! { sync autoscale_transition_exits_public_validators_with_embedded_reset_lane
+state_test! { sync autoscale_transition_rejects_validator_with_embedded_reset_lane
     let (mut state, kura, retired_lane_id) = autoscale_retirement_test_state();
     let_row! { (embedded_reset_validator, embedded_reset_peer) = seed_public_lane_validator_with_key_and_record_lanes_for_lifecycle_test( &state, LaneId::SINGLE, retired_lane_id, PublicLaneValidatorStatus::Active, ) };
     let_row! { (retained_validator, retained_peer) = seed_public_lane_validator_for_lifecycle_test( &state, LaneId::SINGLE, PublicLaneValidatorStatus::Active, ) };
     {
         let view = state.world.view();
         assert!(
-            validator_lane_ids_for_peer(&view, &embedded_reset_peer).is_empty(),
+            validator_lane_ids_for_peer(&view, &embedded_reset_peer, 1).is_empty(),
             "mismatched key/record validator rows must be ignored before autoscale cleanup, \
              while still being reset-owned by embedded lane"
         );
@@ -15110,14 +15265,18 @@ state_test! { sync autoscale_transition_exits_public_validators_with_embedded_re
     insert_empty_transaction_block_for_state_commit(&mut state_block, &retirement);
     let_row! { committed_retirement = ValidBlock::new_unverified_for_tests(retirement) .commit_unchecked() .unpack(|_| {}) };
     state_block.maybe_apply_nexus_autoscale(&committed_retirement);
+    assert!(
+        state_block.pending_autoscale_lifecycle.is_none(),
+        "an active embedded reset-lane record must fail the retirement closed"
+    );
     insert_empty_transaction_block_for_test(&mut state_block);
     commit_state_block_with_empty_autoscale_queue(state_block)
-        .expect("autoscale scale-in block scope commits embedded validator cleanup");
+        .expect("the block must commit without the rejected autoscale transition");
     let view = state.world.view();
     let_row! { embedded_reset_record = view .public_lane_validators() .get(&(LaneId::SINGLE, embedded_reset_validator)) .expect("embedded reset-lane validator record retained for audit") };
     assert!(matches!(
         embedded_reset_record.status,
-        PublicLaneValidatorStatus::Exited
+        PublicLaneValidatorStatus::Active
     ));
     let_row! { retained_record = view .public_lane_validators() .get(&(LaneId::SINGLE, retained_validator)) .expect("default-lane validator record") };
     assert!(matches!(
@@ -15125,12 +15284,12 @@ state_test! { sync autoscale_transition_exits_public_validators_with_embedded_re
         PublicLaneValidatorStatus::Active
     ));
     assert_eq!(
-        validator_lane_ids_for_peers(&view, [&embedded_reset_peer, &retained_peer]),
+        validator_lane_ids_for_peers(&view, [&embedded_reset_peer, &retained_peer], 1),
         BTreeSet::from([LaneId::SINGLE]),
-        "autoscale scale-in must clear embedded reset-lane validator scope while preserving default-lane validators"
+        "rejected autoscale scale-in must preserve default-lane validator scope"
     );
 }
-state_test! { sync autoscale_transition_prunes_public_lane_economic_state_for_retired_lane
+state_test! { sync autoscale_transition_rejects_retired_lane_stake_custody
     let_row! { _status_guard = crate::sumeragi::status::nexus_fee_test_lock() .lock() .expect("nexus status test lock") };
     crate::sumeragi::status::reset_nexus_economics_for_tests();
     let (mut state, kura, retired_lane_id) = autoscale_retirement_test_state();
@@ -15150,24 +15309,24 @@ state_test! { sync autoscale_transition_prunes_public_lane_economic_state_for_re
             .world
             .public_lane_stake_shares
             .get(&retired_keys.0)
-            .is_none(),
-        "autoscale scale-in must prune retired-lane public stake shares"
+            .is_some(),
+        "rejected autoscale scale-in must preserve retired-lane stake custody"
     );
     assert!(
         state_block
             .world
             .public_lane_rewards
             .get(&retired_keys.1)
-            .is_none(),
-        "autoscale scale-in must prune retired-lane reward records"
+            .is_some(),
+        "rejected autoscale scale-in must preserve retired-lane reward records"
     );
     assert!(
         state_block
             .world
             .public_lane_reward_claims
             .get(&retired_keys.2)
-            .is_none(),
-        "autoscale scale-in must prune retired-lane reward claim cursors"
+            .is_some(),
+        "rejected autoscale scale-in must preserve retired-lane reward claim cursors"
     );
     assert!(
         state_block
@@ -15193,14 +15352,19 @@ state_test! { sync autoscale_transition_prunes_public_lane_economic_state_for_re
             .is_some(),
         "autoscale scale-in must preserve default-lane reward claim cursors"
     );
+    assert!(
+        state_block.pending_autoscale_lifecycle.is_none(),
+        "bonded custody must veto autoscale scale-in before it is staged"
+    );
     insert_empty_transaction_block_for_test(&mut state_block);
     commit_state_block_with_empty_autoscale_queue(state_block)
-        .expect("autoscale scale-in block scope commits public-lane economic cleanup");
-    assert_public_lane_economic_state_presence(&state, &retired_keys, false);
+        .expect("the block must commit without the rejected autoscale transition");
+    assert_public_lane_economic_state_presence(&state, &retired_keys, true);
     assert_public_lane_economic_state_presence(&state, &retained_keys, true);
-    assert_public_lane_staking_status_absent(
+    assert_public_lane_staking_status_bonded(
         retired_lane_id,
-        "autoscale scale-in commit must clear retired-lane operator staking status",
+        &retired_status_bonded,
+        "rejected autoscale scale-in must preserve retired-lane operator staking status",
     );
     assert_public_lane_staking_status_bonded(
         LaneId::SINGLE,
@@ -15209,7 +15373,7 @@ state_test! { sync autoscale_transition_prunes_public_lane_economic_state_for_re
     );
     crate::sumeragi::status::reset_nexus_economics_for_tests();
 }
-state_test! { sync autoscale_transition_prunes_public_lane_economic_records_with_embedded_reset_lane
+state_test! { sync autoscale_transition_rejects_economic_custody_with_embedded_reset_lane
     let_row! { _status_guard = crate::sumeragi::status::nexus_fee_test_lock() .lock() .expect("nexus status test lock") };
     crate::sumeragi::status::reset_nexus_economics_for_tests();
     let (mut state, kura, retired_lane_id) = autoscale_retirement_test_state();
@@ -15225,16 +15389,16 @@ state_test! { sync autoscale_transition_prunes_public_lane_economic_records_with
             .world
             .public_lane_stake_shares
             .get(&embedded_reset_keys.0)
-            .is_none(),
-        "autoscale scale-in must prune stake shares whose embedded record lane was reset"
+            .is_some(),
+        "rejected autoscale scale-in must preserve stake custody whose embedded lane was reset"
     );
     assert!(
         state_block
             .world
             .public_lane_rewards
             .get(&embedded_reset_keys.1)
-            .is_none(),
-        "autoscale scale-in must prune rewards whose embedded record lane was reset"
+            .is_some(),
+        "rejected autoscale scale-in must preserve rewards whose embedded lane was reset"
     );
     assert!(
         state_block
@@ -15260,21 +15424,25 @@ state_test! { sync autoscale_transition_prunes_public_lane_economic_records_with
             .is_some(),
         "autoscale scale-in must preserve unrelated rewards on the surviving lane"
     );
+    assert!(
+        state_block.pending_autoscale_lifecycle.is_none(),
+        "embedded bonded custody must fail retirement closed"
+    );
     insert_empty_transaction_block_for_test(&mut state_block);
     commit_state_block_with_empty_autoscale_queue(state_block)
-        .expect("autoscale scale-in block scope commits embedded public-lane economic cleanup");
+        .expect("the block must commit without the rejected autoscale transition");
     let view = state.world.view();
     assert!(
         view.public_lane_stake_shares()
             .get(&embedded_reset_keys.0)
-            .is_none(),
-        "committed state must not retain embedded-reset-lane stake shares"
+            .is_some(),
+        "rejected retirement must retain embedded-reset-lane stake custody"
     );
     assert!(
         view.public_lane_rewards()
             .get(&embedded_reset_keys.1)
-            .is_none(),
-        "committed state must not retain embedded-reset-lane rewards"
+            .is_some(),
+        "rejected retirement must retain embedded-reset-lane rewards"
     );
     assert!(
         view.public_lane_reward_claims()
@@ -16206,9 +16374,34 @@ fn seed_public_lane_validator_with_key_and_record_lanes_for_lifecycle_test(
     let keypair = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let peer_id = PeerId::from(keypair.public_key().clone());
     let validator = AccountId::new(keypair.public_key().clone());
-    let_row! { record = PublicLaneValidatorRecord { lane_id: record_lane_id, validator: validator.clone(), peer_id: peer_id.clone(), stake_account: validator.clone(), total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32), self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32), metadata: Metadata::default(), status, activation_epoch: Some(1), activation_height: Some(1), last_reward_epoch: None, } };
-    let mut block = state.world.public_lane_validators.block();
-    block.insert((key_lane_id, validator.clone()), record);
+    let activation_height = match &status {
+        PublicLaneValidatorStatus::PendingActivation(height) => *height,
+        _ => 1,
+    };
+    let deactivation_height = match &status {
+        PublicLaneValidatorStatus::Exiting(_)
+        | PublicLaneValidatorStatus::Exited
+        | PublicLaneValidatorStatus::Slashed(_) => Some(activation_height.saturating_add(1)),
+        PublicLaneValidatorStatus::PendingActivation(_) | PublicLaneValidatorStatus::Active => None,
+    };
+    let_row! { record = PublicLaneValidatorRecord { lane_id: record_lane_id, validator: validator.clone(), peer_id: peer_id.clone(), stake_account: validator.clone(), total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32), self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32), metadata: Metadata::default(), status, activation_height, deactivation_height, last_reward_epoch: None, } };
+    let mut block = state.world.block();
+    block
+        .public_lane_validators
+        .insert((key_lane_id, validator.clone()), record);
+    if key_lane_id == record_lane_id {
+        block.public_lane_stake_shares.insert(
+            (key_lane_id, validator.clone(), validator.clone()),
+            PublicLaneStakeShare {
+                lane_id: record_lane_id,
+                validator: validator.clone(),
+                staker: validator.clone(),
+                bonded: iroha_primitives::numeric::Quantity::from(1_000_u32),
+                pending_unbonds: BTreeMap::new(),
+                metadata: Metadata::default(),
+            },
+        );
+    }
     block.commit();
     (validator, peer_id)
 }
@@ -16242,6 +16435,24 @@ fn seed_public_lane_economic_state_with_key_and_record_lanes_for_lifecycle_test(
     let claim_key = (key_lane_id, validator.clone(), reward_asset.clone());
     let reward_amount = Quantity::from(epoch.saturating_add(1));
     let mut block = state.world.block();
+    if key_lane_id == record_lane_id {
+        block.public_lane_validators.insert(
+            (key_lane_id, validator.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: record_lane_id,
+                validator: validator.clone(),
+                peer_id: PeerId::from(validator.expect_single_signatory().clone()),
+                stake_account: validator.clone(),
+                total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
+                self_stake: iroha_primitives::numeric::Quantity::zero(),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Exited,
+                activation_height: 1,
+                deactivation_height: Some(2),
+                last_reward_epoch: None,
+            },
+        );
+    }
     block.public_lane_stake_shares.insert(
         stake_key.clone(),
         PublicLaneStakeShare {
@@ -16327,9 +16538,6 @@ fn assert_public_lane_staking_status_bonded(
     assert_eq!(lane.slash_total, 1, "{context}");
 }
 struct LaneScopedCleanupFixture {
-    validator: AccountId,
-    peer: PeerId,
-    economic_keys: PublicLaneEconomicKeys,
     replay_key: AxtHandleReplayKey,
     verified_relay_key: StatePath,
     verified_relay_map_key: StatePath,
@@ -16352,8 +16560,6 @@ fn seed_lane_scoped_cleanup_fixture_for_lifecycle_test(
         );
         wb.commit();
     }
-    let_row! { (validator, peer) = seed_public_lane_validator_for_lifecycle_test( state, lane_id, PublicLaneValidatorStatus::Active, ) };
-    let_row! { economic_keys = seed_public_lane_economic_state_for_lifecycle_test(state, lane_id, epoch.saturating_add(1)) };
     let replay_key = AxtHandleReplayKey::from_parts(
         DataSpaceId::UNIVERSAL,
         axt_replay_incarnation_for_test(seed),
@@ -16382,9 +16588,6 @@ fn seed_lane_scoped_cleanup_fixture_for_lifecycle_test(
         encode_verified_lane_relay_record_contract_map_state_for_test(&verified_relay_record),
     );
     LaneScopedCleanupFixture {
-        validator,
-        peer,
-        economic_keys,
         replay_key,
         verified_relay_key,
         verified_relay_map_key,
@@ -16403,18 +16606,7 @@ fn assert_lane_scoped_cleanup_fixture_present(
             .is_some(),
         "{context}: emergency override should remain"
     );
-    let_row! { validator_record = view .public_lane_validators() .get(&(lane_id, fixture.validator.clone())) .expect("lane-scoped validator record") };
-    assert!(
-        matches!(validator_record.status, PublicLaneValidatorStatus::Active),
-        "{context}: validator should remain active"
-    );
-    assert_eq!(
-        validator_lane_ids_for_peers(&view, [&fixture.peer]),
-        BTreeSet::from([lane_id]),
-        "{context}: validator scope should remain"
-    );
     drop(view);
-    assert_public_lane_economic_state_presence(state, &fixture.economic_keys, true);
     let replay_view = state.world.axt_replay_ledger.view();
     assert!(
         replay_view.get(&fixture.replay_key).is_some(),
@@ -16443,35 +16635,6 @@ fn assert_lane_scoped_cleanup_fixture_pruned_from_state_block(
             .get(&lane_id)
             .is_none(),
         "{context}: emergency override should be pruned in the block overlay"
-    );
-    let_row! { validator_record = state_block .world .public_lane_validators .get(&(lane_id, fixture.validator.clone())) .expect("lane-scoped validator record retained in block overlay") };
-    assert!(
-        matches!(validator_record.status, PublicLaneValidatorStatus::Exited),
-        "{context}: validator should be exited in the block overlay"
-    );
-    assert!(
-        state_block
-            .world
-            .public_lane_stake_shares
-            .get(&fixture.economic_keys.0)
-            .is_none(),
-        "{context}: stake shares should be pruned in the block overlay"
-    );
-    assert!(
-        state_block
-            .world
-            .public_lane_rewards
-            .get(&fixture.economic_keys.1)
-            .is_none(),
-        "{context}: reward rows should be pruned in the block overlay"
-    );
-    assert!(
-        state_block
-            .world
-            .public_lane_reward_claims
-            .get(&fixture.economic_keys.2)
-            .is_none(),
-        "{context}: reward claims should be pruned in the block overlay"
     );
     assert!(
         state_block
@@ -16517,7 +16680,7 @@ state_test! { sync apply_lane_lifecycle_updates_catalog
     assert_eq!(nexus.lane_catalog.lanes().len(), 1);
     assert!(nexus.lane_catalog.by_alias("beta").is_none());
 }
-state_test! { sync apply_lane_lifecycle_exits_reset_lane_public_validators
+state_test! { sync apply_lane_lifecycle_rejects_reset_lane_public_validators
     let state = blank_test_state();
 
     let retired_lane = LaneId::new(1);
@@ -16541,31 +16704,92 @@ state_test! { sync apply_lane_lifecycle_exits_reset_lane_public_validators
         .expect("seed lifecycle lanes");
     let_row! { (active_validator, active_peer) = seed_public_lane_validator_for_lifecycle_test( &state, retired_lane, PublicLaneValidatorStatus::Active, ) };
     let_row! { (pending_validator, pending_peer) = seed_public_lane_validator_for_lifecycle_test( &state, retired_lane, PublicLaneValidatorStatus::PendingActivation(7), ) };
-    let_row! { (jailed_validator, jailed_peer) = seed_public_lane_validator_for_lifecycle_test( &state, retired_lane, PublicLaneValidatorStatus::Jailed("stale-lane".to_string()), ) };
+    let_row! { (exiting_validator, exiting_peer) = seed_public_lane_validator_for_lifecycle_test( &state, retired_lane, PublicLaneValidatorStatus::Exiting(10), ) };
     let_row! { (retained_validator, retained_peer) = seed_public_lane_validator_for_lifecycle_test( &state, retained_lane, PublicLaneValidatorStatus::Active, ) };
-    state
+    let error = state
         .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
             additions: Vec::new(),
             retire: vec![retired_lane],
         })
-        .expect("retire lane with public validators");
+        .expect_err("live public validators must veto lane retirement");
+    assert!(matches!(
+        error,
+        LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == retired_lane && reason == LIVE_LANE_STAKING_CUSTODY_REASON
+    ));
     let view = state.world.view();
-    for validator in [active_validator, pending_validator, jailed_validator] {
+    for validator in [active_validator, pending_validator, exiting_validator] {
         let_row! { record = view .public_lane_validators() .get(&(retired_lane, validator)) .expect("retired-lane validator record retained for audit") };
-        assert!(matches!(record.status, PublicLaneValidatorStatus::Exited));
+        assert!(!matches!(record.status, PublicLaneValidatorStatus::Exited));
     }
     let_row! { retained = view .public_lane_validators() .get(&(retained_lane, retained_validator)) .expect("retained-lane validator record") };
     assert!(matches!(retained.status, PublicLaneValidatorStatus::Active));
     assert_eq!(
         validator_lane_ids_for_peers(
             &view,
-            [&active_peer, &pending_peer, &jailed_peer, &retained_peer]
+            [&active_peer, &pending_peer, &exiting_peer, &retained_peer],
+            7,
         ),
-        BTreeSet::from([retained_lane]),
-        "retired-lane validators must not retain live lane scope"
+        BTreeSet::from([retired_lane, retained_lane]),
+        "rejected retirement must preserve every validator's live lane scope"
     );
 }
-state_test! { sync apply_lane_lifecycle_exits_public_validators_with_embedded_reset_lane
+state_test! { sync apply_lane_lifecycle_rejects_exited_validator_before_deactivation_height
+    let state = blank_test_state();
+    let retired_lane = LaneId::new(1);
+    state
+        .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
+            additions: vec![LaneConfig {
+                id: retired_lane,
+                alias: "retired-before-deactivation".to_string(),
+                ..LaneConfig::default()
+            }],
+            retire: Vec::new(),
+        })
+        .expect("seed lifecycle lane");
+    let keypair = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    let validator = AccountId::new(keypair.public_key().clone());
+    let mut world_block = state.world.block();
+    world_block.public_lane_validators.insert(
+        (retired_lane, validator.clone()),
+        PublicLaneValidatorRecord {
+            lane_id: retired_lane,
+            validator: validator.clone(),
+            peer_id: PeerId::from(keypair.public_key().clone()),
+            stake_account: validator,
+            total_stake: Quantity::zero(),
+            self_stake: Quantity::zero(),
+            metadata: Metadata::default(),
+            status: PublicLaneValidatorStatus::Exited,
+            activation_height: 1,
+            deactivation_height: Some(100),
+            last_reward_epoch: None,
+        },
+    );
+    world_block.commit();
+
+    let error = state
+        .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
+            additions: Vec::new(),
+            retire: vec![retired_lane],
+        })
+        .expect_err("an exited validator remains authoritative until its exclusive deactivation height");
+
+    assert!(matches!(
+        error,
+        LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == retired_lane && reason == LIVE_LANE_STAKING_CUSTODY_REASON
+    ));
+    assert!(
+        state
+            .nexus_snapshot()
+            .lane_catalog
+            .lanes()
+            .iter()
+            .any(|lane| lane.id == retired_lane)
+    );
+}
+state_test! { sync apply_lane_lifecycle_rejects_public_validator_with_embedded_reset_lane
     let state = blank_test_state();
 
     let retired_lane = LaneId::new(1);
@@ -16592,22 +16816,27 @@ state_test! { sync apply_lane_lifecycle_exits_public_validators_with_embedded_re
     {
         let view = state.world.view();
         assert!(
-            validator_lane_ids_for_peer(&view, &embedded_reset_peer).is_empty(),
+            validator_lane_ids_for_peer(&view, &embedded_reset_peer, 1).is_empty(),
             "mismatched key/record validator rows must be ignored before cleanup, \
              while still being reset-owned by embedded lane"
         );
     }
-    state
+    let error = state
         .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
             additions: Vec::new(),
             retire: vec![retired_lane],
         })
-        .expect("retire lane with embedded reset-lane validator");
+        .expect_err("an embedded reset-lane validator must fail retirement closed");
+    assert!(matches!(
+        error,
+        LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == retired_lane && reason == LIVE_LANE_STAKING_CUSTODY_REASON
+    ));
     let view = state.world.view();
     let_row! { embedded_reset_record = view .public_lane_validators() .get(&(retained_lane, embedded_reset_validator)) .expect("embedded reset-lane validator record retained for audit") };
     assert!(matches!(
         embedded_reset_record.status,
-        PublicLaneValidatorStatus::Exited
+        PublicLaneValidatorStatus::Active
     ));
     let_row! { retained_record = view .public_lane_validators() .get(&(retained_lane, retained_validator)) .expect("retained-lane validator record") };
     assert!(matches!(
@@ -16615,12 +16844,12 @@ state_test! { sync apply_lane_lifecycle_exits_public_validators_with_embedded_re
         PublicLaneValidatorStatus::Active
     ));
     assert_eq!(
-        validator_lane_ids_for_peers(&view, [&embedded_reset_peer, &retained_peer]),
+        validator_lane_ids_for_peers(&view, [&embedded_reset_peer, &retained_peer], 1),
         BTreeSet::from([retained_lane]),
-        "lifecycle reset must clear embedded reset-lane validator scope while preserving retained lanes"
+        "rejected lifecycle reset must preserve retained-lane validator scope"
     );
 }
-state_test! { sync apply_lane_lifecycle_prunes_public_lane_economic_state_for_retired_lane
+state_test! { sync apply_lane_lifecycle_rejects_public_lane_economic_custody
     let_row! { _status_guard = crate::sumeragi::status::nexus_fee_test_lock() .lock() .expect("nexus status test lock") };
     crate::sumeragi::status::reset_nexus_economics_for_tests();
     let state = blank_test_state();
@@ -16657,27 +16886,32 @@ state_test! { sync apply_lane_lifecycle_prunes_public_lane_economic_state_for_re
         &retained_status_bonded,
         true,
     );
-    state
+    let error = state
         .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
             additions: Vec::new(),
             retire: vec![retired_lane],
         })
-        .expect("retire lane with public-lane economic state");
-    assert_public_lane_economic_state_presence(&state, &retired_keys, false);
+        .expect_err("bonded public-lane custody must veto retirement");
+    assert!(matches!(
+        error,
+        LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == retired_lane && reason == LIVE_LANE_STAKING_CUSTODY_REASON
+    ));
+    assert_public_lane_economic_state_presence(&state, &retired_keys, true);
     assert_public_lane_economic_state_presence(&state, &retained_keys, true);
     let staking_status = crate::sumeragi::status::nexus_staking_snapshot();
     assert!(
         staking_status
             .lanes
             .iter()
-            .all(|lane| lane.lane_id != retired_lane),
-        "lane reset must clear stale operator staking status for the retired lane"
+            .any(|lane| lane.lane_id == retired_lane),
+        "rejected retirement must preserve operator staking status for the retired lane"
     );
     let_row! { retained_status = staking_status .lanes .iter() .find(|lane| lane.lane_id == retained_lane) .expect("retained-lane staking status should remain") };
     assert_eq!(retained_status.bonded, retained_status_bonded);
     crate::sumeragi::status::reset_nexus_economics_for_tests();
 }
-state_test! { sync apply_lane_lifecycle_prunes_public_lane_economic_records_with_embedded_reset_lane
+state_test! { sync apply_lane_lifecycle_rejects_economic_custody_with_embedded_reset_lane
     let_row! { _status_guard = crate::sumeragi::status::nexus_fee_test_lock() .lock() .expect("nexus status test lock") };
     crate::sumeragi::status::reset_nexus_economics_for_tests();
     let state = blank_test_state();
@@ -16703,24 +16937,29 @@ state_test! { sync apply_lane_lifecycle_prunes_public_lane_economic_records_with
         .expect("seed lifecycle lanes");
     let_row! { embedded_reset_keys = seed_public_lane_economic_state_with_key_and_record_lanes_for_lifecycle_test( &state, retained_lane, retired_lane, 179, ) };
     let_row! { retained_keys = seed_public_lane_economic_state_for_lifecycle_test(&state, retained_lane, 180) };
-    state
+    let error = state
         .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
             additions: Vec::new(),
             retire: vec![retired_lane],
         })
-        .expect("retire lane with embedded reset-lane public economics");
+        .expect_err("embedded reset-lane custody must fail retirement closed");
+    assert!(matches!(
+        error,
+        LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == retired_lane && reason == LIVE_LANE_STAKING_CUSTODY_REASON
+    ));
     let view = state.world.view();
     assert!(
         view.public_lane_stake_shares()
             .get(&embedded_reset_keys.0)
-            .is_none(),
-        "lifecycle reset must prune stake shares whose embedded record lane was reset"
+            .is_some(),
+        "rejected lifecycle reset must preserve embedded-lane stake custody"
     );
     assert!(
         view.public_lane_rewards()
             .get(&embedded_reset_keys.1)
-            .is_none(),
-        "lifecycle reset must prune rewards whose embedded record lane was reset"
+            .is_some(),
+        "rejected lifecycle reset must preserve embedded-lane rewards"
     );
     assert!(
         view.public_lane_reward_claims()
@@ -16731,7 +16970,7 @@ state_test! { sync apply_lane_lifecycle_prunes_public_lane_economic_records_with
     assert_public_lane_economic_state_presence(&state, &retained_keys, true);
     crate::sumeragi::status::reset_nexus_economics_for_tests();
 }
-state_test! { sync set_nexus_exits_public_validators_for_removed_lanes
+state_test! { sync set_nexus_rejects_removed_lane_with_public_validator_custody
     let_row! { _status_guard = crate::sumeragi::status::nexus_fee_test_lock() .lock() .expect("nexus status test lock") };
     crate::sumeragi::status::reset_nexus_economics_for_tests();
     let mut state = blank_test_state();
@@ -16753,23 +16992,29 @@ state_test! { sync set_nexus_exits_public_validators_for_removed_lanes
     let mut nexus = state.nexus_snapshot();
     nexus.lane_catalog = LaneCatalog::default();
     nexus.routing_policy = LaneRoutingPolicy::default();
-    state
+    let error = state
         .set_nexus(nexus)
-        .expect("remove lane through set_nexus");
+        .expect_err("set_nexus must not remove a lane with live validator custody");
+    assert!(matches!(
+        error,
+        LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == retired_lane && reason == LIVE_LANE_STAKING_CUSTODY_REASON
+    ));
     let view = state.world.view();
     let_row! { record = view .public_lane_validators() .get(&(retired_lane, validator)) .expect("removed-lane validator record retained") };
-    assert!(matches!(record.status, PublicLaneValidatorStatus::Exited));
+    assert!(matches!(record.status, PublicLaneValidatorStatus::Active));
     assert!(
-        validator_lane_ids_for_peer(&view, &peer).is_empty(),
-        "set_nexus lane removal must clear live validator scope"
+        validator_lane_ids_for_peer(&view, &peer, 1).contains(&retired_lane),
+        "rejected set_nexus lane removal must preserve live validator scope"
     );
-    assert_public_lane_staking_status_absent(
+    assert_public_lane_staking_status_bonded(
         retired_lane,
-        "set_nexus lane removal must clear removed-lane operator staking status",
+        &retired_status_bonded,
+        "rejected set_nexus lane removal must preserve operator staking status",
     );
     crate::sumeragi::status::reset_nexus_economics_for_tests();
 }
-state_test! { sync set_nexus_exits_public_validators_with_embedded_reset_lane
+state_test! { sync set_nexus_rejects_public_validator_with_embedded_reset_lane
     let query_handle = LiveQueryStore::start_test();
     let rebound = DataSpaceId::new(28);
     let retained = DataSpaceId::new(29);
@@ -16784,21 +17029,26 @@ state_test! { sync set_nexus_exits_public_validators_with_embedded_reset_lane
     {
         let view = state.world.view();
         assert!(
-            validator_lane_ids_for_peer(&view, &embedded_reset_peer).is_empty(),
+            validator_lane_ids_for_peer(&view, &embedded_reset_peer, 1).is_empty(),
             "mismatched key/record validator rows must be ignored before config-swap cleanup, \
              while still being reset-owned by embedded lane"
         );
     }
     let_row! { updated_lane_catalog = LaneCatalog::new( nonzero!(3_u32), vec![ LaneConfig::default(), LaneConfig { id: reset_lane, dataspace_id: rebound, alias: "validator-reset".to_string(), ..LaneConfig::default() }, LaneConfig { id: retained_lane, dataspace_id: retained, alias: "validator-retained".to_string(), ..LaneConfig::default() }, ], ) .expect("updated lane catalog") };
     let_row! { updated_nexus = iroha_config::parameters::actual::Nexus { lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog( &updated_lane_catalog, ), lane_catalog: updated_lane_catalog, dataspace_catalog, ..Default::default() } };
-    state
+    let error = state
         .set_nexus(updated_nexus)
-        .expect("set updated nexus config");
+        .expect_err("set_nexus must fail closed on an embedded reset-lane validator");
+    assert!(matches!(
+        error,
+        LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == reset_lane && reason == LIVE_LANE_STAKING_CUSTODY_REASON
+    ));
     let view = state.world.view();
     let_row! { embedded_reset_record = view .public_lane_validators() .get(&(retained_lane, embedded_reset_validator)) .expect("embedded reset-lane validator record retained for audit") };
     assert!(matches!(
         embedded_reset_record.status,
-        PublicLaneValidatorStatus::Exited
+        PublicLaneValidatorStatus::Active
     ));
     let_row! { retained_record = view .public_lane_validators() .get(&(retained_lane, retained_validator)) .expect("retained-lane validator record") };
     assert!(matches!(
@@ -16806,9 +17056,9 @@ state_test! { sync set_nexus_exits_public_validators_with_embedded_reset_lane
         PublicLaneValidatorStatus::Active
     ));
     assert_eq!(
-        validator_lane_ids_for_peers(&view, [&embedded_reset_peer, &retained_peer]),
+        validator_lane_ids_for_peers(&view, [&embedded_reset_peer, &retained_peer], 1),
         BTreeSet::from([retained_lane]),
-        "set_nexus reset must clear embedded reset-lane validator scope while preserving retained lanes"
+        "rejected set_nexus reset must preserve retained-lane validator scope"
     );
 }
 state_test! { sync apply_lane_lifecycle_shared_updates_catalog
@@ -20022,7 +20272,7 @@ state_test! { sync set_nexus_preserves_axt_replay_entries_for_reset_target_lanes
         "replay entry keyed by unchanged lane must remain"
     );
 }
-state_test! { sync set_nexus_prunes_public_lane_economic_state_for_reset_lanes
+state_test! { sync set_nexus_rejects_reset_lane_with_public_economic_custody
     let_row! { _status_guard = crate::sumeragi::status::nexus_fee_test_lock() .lock() .expect("nexus status test lock") };
     crate::sumeragi::status::reset_nexus_economics_for_tests();
     let query_handle = LiveQueryStore::start_test();
@@ -20042,14 +20292,20 @@ state_test! { sync set_nexus_prunes_public_lane_economic_state_for_reset_lanes
     record_public_lane_staking_status_for_test(retained_lane, &retained_status_bonded);
     let_row! { updated_lane_catalog = LaneCatalog::new( nonzero!(3_u32), vec![ LaneConfig::default(), LaneConfig { id: reset_lane, dataspace_id: rebound, alias: "reset".to_string(), ..LaneConfig::default() }, LaneConfig { id: retained_lane, dataspace_id: retained, alias: "retained".to_string(), ..LaneConfig::default() }, ], ) .expect("updated lane catalog") };
     let_row! { updated_nexus = iroha_config::parameters::actual::Nexus { lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog( &updated_lane_catalog, ), lane_catalog: updated_lane_catalog, dataspace_catalog, ..Default::default() } };
-    state
+    let error = state
         .set_nexus(updated_nexus)
-        .expect("set updated nexus config");
-    assert_public_lane_economic_state_presence(&state, &reset_lane_keys, false);
+        .expect_err("set_nexus must not reset a lane with bonded custody");
+    assert!(matches!(
+        error,
+        LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == reset_lane && reason == LIVE_LANE_STAKING_CUSTODY_REASON
+    ));
+    assert_public_lane_economic_state_presence(&state, &reset_lane_keys, true);
     assert_public_lane_economic_state_presence(&state, &retained_lane_keys, true);
-    assert_public_lane_staking_status_absent(
+    assert_public_lane_staking_status_bonded(
         reset_lane,
-        "set_nexus lane rebind must clear reset-lane operator staking status",
+        &reset_status_bonded,
+        "rejected set_nexus lane rebind must preserve reset-lane operator staking status",
     );
     assert_public_lane_staking_status_bonded(
         retained_lane,
@@ -20058,7 +20314,7 @@ state_test! { sync set_nexus_prunes_public_lane_economic_state_for_reset_lanes
     );
     crate::sumeragi::status::reset_nexus_economics_for_tests();
 }
-state_test! { sync set_nexus_prunes_public_lane_economic_records_with_embedded_reset_lane
+state_test! { sync set_nexus_rejects_economic_custody_with_embedded_reset_lane
     let_row! { _status_guard = crate::sumeragi::status::nexus_fee_test_lock() .lock() .expect("nexus status test lock") };
     crate::sumeragi::status::reset_nexus_economics_for_tests();
     let query_handle = LiveQueryStore::start_test();
@@ -20074,21 +20330,26 @@ state_test! { sync set_nexus_prunes_public_lane_economic_records_with_embedded_r
     let_row! { retained_keys = seed_public_lane_economic_state_for_lifecycle_test(&state, retained_lane, 178) };
     let_row! { updated_lane_catalog = LaneCatalog::new( nonzero!(3_u32), vec![ LaneConfig::default(), LaneConfig { id: reset_lane, dataspace_id: rebound, alias: "embedded-reset".to_string(), ..LaneConfig::default() }, LaneConfig { id: retained_lane, dataspace_id: retained, alias: "embedded-retained".to_string(), ..LaneConfig::default() }, ], ) .expect("updated lane catalog") };
     let_row! { updated_nexus = iroha_config::parameters::actual::Nexus { lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog( &updated_lane_catalog, ), lane_catalog: updated_lane_catalog, dataspace_catalog, ..Default::default() } };
-    state
+    let error = state
         .set_nexus(updated_nexus)
-        .expect("set updated nexus config");
+        .expect_err("set_nexus must fail closed on embedded reset-lane custody");
+    assert!(matches!(
+        error,
+        LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == reset_lane && reason == LIVE_LANE_STAKING_CUSTODY_REASON
+    ));
     let view = state.world.view();
     assert!(
         view.public_lane_stake_shares()
             .get(&embedded_reset_keys.0)
-            .is_none(),
-        "set_nexus reset must prune stake shares whose embedded record lane was reset"
+            .is_some(),
+        "rejected set_nexus reset must preserve embedded-lane stake custody"
     );
     assert!(
         view.public_lane_rewards()
             .get(&embedded_reset_keys.1)
-            .is_none(),
-        "set_nexus reset must prune rewards whose embedded record lane was reset"
+            .is_some(),
+        "rejected set_nexus reset must preserve embedded-lane rewards"
     );
     assert!(
         view.public_lane_reward_claims()
@@ -23073,9 +23334,20 @@ fn insert_active_public_lane_validator_for_test(
             self_stake: Quantity::from(stake),
             metadata: Metadata::default(),
             status: PublicLaneValidatorStatus::Active,
-            activation_epoch: None,
-            activation_height: None,
+            activation_height: 1,
+            deactivation_height: None,
             last_reward_epoch: None,
+        },
+    );
+    world_block.public_lane_stake_shares.insert(
+        (lane_id, validator.clone(), validator.clone()),
+        PublicLaneStakeShare {
+            lane_id,
+            validator: validator.clone(),
+            staker: validator.clone(),
+            bonded: Quantity::from(stake),
+            pending_unbonds: BTreeMap::new(),
+            metadata: Metadata::default(),
         },
     );
     world_block.commit();
@@ -24790,8 +25062,8 @@ state_test! { sync lane_relay_validator_pool_uses_stake_when_no_manifest
             self_stake: iroha_primitives::numeric::Quantity::from(1_000_000_u32),
             metadata: Metadata::default(),
             status: PublicLaneValidatorStatus::Active,
-            activation_epoch: None,
-            activation_height: None,
+            activation_height: 1,
+            deactivation_height: None,
             last_reward_epoch: None,
         },
     );
@@ -25212,7 +25484,7 @@ state_test! { sync lifecycle_rejects_resetting_live_shared_dataspace_staking_own
             err,
             LaneLifecycleError::UnsafeRetirement { lane, reason }
                 if lane == owner_lane
-                    && reason == LIVE_SHARED_DATASPACE_STAKING_OWNER_CHANGE_REASON
+                    && reason == LIVE_LANE_STAKING_CUSTODY_REASON
         ));
     }
 
@@ -25225,7 +25497,7 @@ state_test! { sync lifecycle_rejects_resetting_live_shared_dataspace_staking_own
             err,
             LaneLifecycleError::UnsafeRetirement { lane, reason }
                 if lane == owner_lane
-                    && reason == LIVE_SHARED_DATASPACE_STAKING_OWNER_CHANGE_REASON
+                    && reason == LIVE_LANE_STAKING_CUSTODY_REASON
         ));
         assert_eq!(state.nexus_snapshot().lane_catalog, catalog_before);
         let world = state.world.view();
@@ -25237,6 +25509,115 @@ state_test! { sync lifecycle_rejects_resetting_live_shared_dataspace_staking_own
             "rejected {operation} must preserve the live owner row"
         );
     }
+}
+
+state_test! { sync lifecycle_rejects_full_dataspace_retirement_with_exited_pending_unbond_custody
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    let lane_id = LaneId::new(1);
+    let dataspace_id = DataSpaceId::new(9);
+    state
+        .set_nexus(iroha_config::parameters::actual::Nexus {
+            lane_catalog: LaneCatalog::new(
+                nonzero!(2_u32),
+                vec![
+                    LaneConfig::default(),
+                    LaneConfig {
+                        id: lane_id,
+                        alias: "retired-dataspace-owner".to_owned(),
+                        dataspace_id,
+                        visibility: LaneVisibility::Public,
+                        ..LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("two-dataspace lifecycle catalog"),
+            dataspace_catalog: DataSpaceCatalog::new(vec![
+                DataSpaceMetadata::default(),
+                DataSpaceMetadata {
+                    id: dataspace_id,
+                    alias: "retired-dataspace".to_owned(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("two-dataspace lifecycle dataspace catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        })
+        .expect("apply two-dataspace Nexus config");
+    let (validator, keypair) = bls_account_in("validators");
+    let request_id = Hash::new("retired-dataspace-pending-unbond");
+    {
+        let mut world = state.world.block();
+        world.public_lane_validators.insert(
+            (lane_id, validator.clone()),
+            PublicLaneValidatorRecord {
+                lane_id,
+                validator: validator.clone(),
+                peer_id: PeerId::new(keypair.public_key().clone()),
+                stake_account: validator.clone(),
+                total_stake: Quantity::zero(),
+                self_stake: Quantity::zero(),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Exited,
+                activation_height: 1,
+                deactivation_height: Some(2),
+                last_reward_epoch: None,
+            },
+        );
+        world.public_lane_stake_shares.insert(
+            (lane_id, validator.clone(), validator.clone()),
+            PublicLaneStakeShare {
+                lane_id,
+                validator: validator.clone(),
+                staker: validator.clone(),
+                bonded: Quantity::zero(),
+                pending_unbonds: BTreeMap::from([(
+                    request_id,
+                    PublicLaneUnbonding {
+                        request_id,
+                        amount: Quantity::from(1_000_000_u64),
+                        release_at_ms: 100,
+                        slashable_through_height: 2,
+                        liability_release_height: 3,
+                    },
+                )]),
+                metadata: Metadata::default(),
+            },
+        );
+        world.commit();
+    }
+    let catalog_before = state.nexus_snapshot().lane_catalog;
+    let plan = iroha_data_model::nexus::LaneLifecyclePlan {
+        additions: Vec::new(),
+        retire: vec![lane_id],
+    };
+
+    let err = state
+        .apply_lane_lifecycle(&plan)
+        .expect_err("full dataspace retirement must retain pending-unbond custody");
+    assert!(matches!(
+        err,
+        LaneLifecycleError::UnsafeRetirement { lane, reason }
+            if lane == lane_id && reason == LIVE_LANE_STAKING_CUSTODY_REASON
+    ));
+    assert_eq!(state.nexus_snapshot().lane_catalog, catalog_before);
+    let world = state.world.view();
+    assert!(
+        world
+            .public_lane_validators()
+            .get(&(lane_id, validator.clone()))
+            .is_some(),
+        "rejected retirement must preserve the exited validator audit row"
+    );
+    assert!(
+        world
+            .public_lane_stake_shares()
+            .get(&(lane_id, validator.clone(), validator))
+            .is_some_and(|share| share.pending_unbonds.contains_key(&request_id)),
+        "rejected retirement must preserve pending-unbond custody"
+    );
 }
 
 state_test! { sync lifecycle_rejects_lower_lane_takeover_of_live_shared_dataspace_staking_owner
@@ -25575,8 +25956,8 @@ state_test! { sync authoritative_lane_peers_for_stake_elected_lane_require_prese
                     self_stake: iroha_primitives::numeric::Quantity::from(total_stake),
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Active,
-                    activation_epoch: None,
-                    activation_height: None,
+                    activation_height: 1,
+                    deactivation_height: None,
                     last_reward_epoch: None,
                 },
             );
@@ -26934,8 +27315,8 @@ state_test! { sync authoritative_lane_validators_ignore_stale_stake_records_for_
             self_stake: iroha_primitives::numeric::Quantity::from(1_000_000_u32),
             metadata: Metadata::default(),
             status: PublicLaneValidatorStatus::Active,
-            activation_epoch: None,
-            activation_height: None,
+            activation_height: 1,
+            deactivation_height: None,
             last_reward_epoch: None,
         },
     );
@@ -37125,9 +37506,20 @@ state_test! { large_stack mailbox_and_receipt_restore_validates_consensus_execut
                 self_stake: Quantity::from(1_u64),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
-                activation_epoch: Some(0),
-                activation_height: Some(0),
+                activation_height: 1,
+                deactivation_height: None,
                 last_reward_epoch: None,
+            },
+        );
+        world.public_lane_stake_shares.insert(
+            (LaneId::SINGLE, ALICE_ID.clone(), ALICE_ID.clone()),
+            PublicLaneStakeShare {
+                lane_id: LaneId::SINGLE,
+                validator: ALICE_ID.clone(),
+                staker: ALICE_ID.clone(),
+                bonded: Quantity::from(1_u64),
+                pending_unbonds: BTreeMap::new(),
+                metadata: Metadata::default(),
             },
         );
         world
@@ -37153,6 +37545,8 @@ state_test! { large_stack mailbox_and_receipt_restore_validates_consensus_execut
         .cloned()
         .expect("receipt host validator record");
     exited_record.status = PublicLaneValidatorStatus::Exited;
+    exited_record.deactivation_height =
+        Some(exited_record.activation_height.saturating_add(1));
     exited_host_world
         .public_lane_validators
         .insert(validator_key.clone(), exited_record);
@@ -38978,7 +39372,12 @@ state_test! { sync data_trigger_fanout_rejects_the_two_hundred_fifty_seventh_fir
                 authority,
                 data_pre::DataEventFilter::Any,
             )
-            .expect("trigger action fixture satisfies validation invariants"),
+            .expect("trigger action fixture satisfies validation invariants")
+            .with_metadata(
+                crate::smartcontracts::isi::triggers::data_trigger_scope_metadata_for_testing(
+                    true,
+                ),
+            ),
         )
         .try_into()
         .expect("data trigger specializes");
@@ -39011,6 +39410,69 @@ state_test! { sync data_trigger_fanout_rejects_the_two_hundred_fifty_seventh_fir
         "unexpected fanout rejection: {error:?}"
     );
 }
+state_test! { sync data_trigger_matching_scans_large_event_batches_lazily
+    use iroha_data_model::prelude::DataEvent;
+    let state = blank_state();
+    let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut transaction = block.transaction();
+    for index in 0..64 {
+        let trigger = Trigger::new(
+            format!("lazy_scan_{index}").parse().expect("valid trigger id"),
+            Action::new(
+                Vec::<InstructionBox>::new(),
+                Repeats::Indefinitely,
+                ALICE_ID.clone(),
+                data_pre::DataEventFilter::Any,
+            )
+            .expect("trigger action fixture satisfies validation invariants")
+            .with_metadata(
+                crate::smartcontracts::isi::triggers::data_trigger_scope_metadata_for_testing(
+                    true,
+                ),
+            ),
+        )
+        .try_into()
+        .expect("data trigger specializes");
+        assert!(
+            transaction
+                .world
+                .triggers
+                .add_data_trigger(trigger)
+                .expect("seed data trigger")
+        );
+    }
+    let_row! { event = Arc::new(DataEvent::Domain(data_pre::DomainEvent::Created(
+        Domain::new(DomainId::try_new("lazy_seed", "universal").expect("valid domain"))
+            .build(&ALICE_ID),
+    ))) };
+    transaction
+        .world
+        .internal_event_buf
+        .extend((0..1_024).map(|_| Arc::clone(&event)));
+
+    let mut scan = transaction
+        .capture_data_event_scan(1)
+        .expect("buffered events create a scan");
+    assert_eq!(scan.events.len(), 1_024);
+    assert!(
+        scan.candidates.is_empty(),
+        "capturing a batch must not materialise any event×trigger matches"
+    );
+    transaction
+        .next_data_trigger_match(&mut scan)
+        .expect("first lazy match")
+        .expect("first trigger matches");
+    assert_eq!(scan.event_index, 1);
+    assert_eq!(scan.candidates.len(), 64);
+    assert_eq!(scan.candidate_index, 1);
+    transaction
+        .next_data_trigger_match(&mut scan)
+        .expect("second lazy match")
+        .expect("second trigger matches");
+    assert_eq!(scan.event_index, 1);
+    assert_eq!(scan.candidate_index, 2);
+}
 state_test! { sync data_trigger_filter_recheck_and_firing_share_the_block_gas_budget
     use iroha_data_model::prelude::DataEvent;
     let state = blank_state();
@@ -39028,7 +39490,10 @@ state_test! { sync data_trigger_filter_recheck_and_firing_share_the_block_gas_bu
             ALICE_ID.clone(),
             data_pre::DataEventFilter::Any,
         )
-        .expect("trigger action fixture satisfies validation invariants"),
+        .expect("trigger action fixture satisfies validation invariants")
+        .with_metadata(
+            crate::smartcontracts::isi::triggers::data_trigger_scope_metadata_for_testing(true),
+        ),
     )
     .try_into()
     .expect("data trigger specializes");
@@ -39084,7 +39549,10 @@ state_test! { sync native_trigger_instructions_are_not_an_unmetered_execution_pa
             ALICE_ID.clone(),
             data_pre::DataEventFilter::Any,
         )
-        .expect("trigger action fixture satisfies validation invariants"),
+        .expect("trigger action fixture satisfies validation invariants")
+        .with_metadata(
+            crate::smartcontracts::isi::triggers::data_trigger_scope_metadata_for_testing(true),
+        ),
     )
     .try_into()
     .expect("data trigger specializes");

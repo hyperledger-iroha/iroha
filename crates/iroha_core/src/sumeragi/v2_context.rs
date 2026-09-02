@@ -14,6 +14,7 @@ use crate::{
         validate_persisted_global_threshold_beacon_pulse_v1,
         verify_finalized_global_threshold_beacon_pulse_v1,
     },
+    smartcontracts::isi::staking::validator_election_eligible_at_height,
     state::{
         GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, StateBlock, StateReadOnly, WorldReadOnly,
         epoch_validator_peer_ids_from_world_with_seed, live_consensus_key_pop_for_peer,
@@ -25,7 +26,6 @@ use iroha_data_model::{
     NetworkId,
     block::{SignedBlock, consensus_v2 as wire},
     isi::RegisterBox,
-    nexus::PublicLaneValidatorStatus,
     peer::PeerId,
     transaction::Executable,
 };
@@ -260,7 +260,7 @@ pub fn freeze_staged_genesis_v2(
                 power: 1,
             })
             .collect(),
-        wire::ConsensusMode::Npos => strict_v2_voting_roster(staged_world, &voters, None)
+        wire::ConsensusMode::Npos => strict_v2_voting_roster(staged_world, &voters, None, 1)
             .map_err(|error| V2GenesisBootstrapError::Stake(error.to_string()))?,
     };
     let proofs_of_possession = roster
@@ -354,16 +354,18 @@ pub fn signed_genesis_validator_pops(
 /// Compute the canonical Nexus/AMX commitment from a validated genesis state
 /// block without committing that block. The projection binds every Nexus and
 /// deterministic AMX input used by proposal assembly or validation, plus the
-/// canonically ordered active public-lane validator records and the complete
-/// retained lane-incarnation lineage, including retired lane identifiers.
+/// canonically ordered public-lane validator records whose retained tenure
+/// contains height one, and the complete retained lane-incarnation lineage,
+/// including retired lane identifiers.
 #[must_use]
 pub fn staged_genesis_nexus_amx_context_hash(staged: &StateBlock<'_>) -> Hash {
-    let active_validators = staged
+    const GENESIS_CONTEXT_HEIGHT: wire::Height = 1;
+    let eligible_validators = staged
         .world()
         .public_lane_validators()
         .iter()
         .filter(|(key, record)| public_lane_validator_record_matches_key(key, record))
-        .filter(|(_, record)| matches!(record.status, PublicLaneValidatorStatus::Active))
+        .filter(|(_, record)| validator_election_eligible_at_height(record, GENESIS_CONTEXT_HEIGHT))
         .map(|(key, record)| (key.clone(), record.clone()))
         .collect::<Vec<_>>();
     let retained_lane_lineage = staged
@@ -381,7 +383,7 @@ pub fn staged_genesis_nexus_amx_context_hash(staged: &StateBlock<'_>) -> Hash {
     iroha_config::parameters::actual::sumeragi_v2_nexus_amx_context_hash(
         &staged.nexus,
         &staged.pipeline,
-        &active_validators,
+        &eligible_validators,
         &retained_lane_lineage,
     )
 }
@@ -812,7 +814,12 @@ pub(crate) fn finalized_next_epoch_snapshot(
             )
             .ok_or(V2ContextBuildError::MissingFinalizedEpochRoster)?;
             let active_lanes = nexus_active_lane_ids(state.nexus());
-            strict_v2_voting_roster(state.world(), &elected, Some(&active_lanes))?
+            strict_v2_voting_roster(
+                state.world(),
+                &elected,
+                Some(&active_lanes),
+                successor_height,
+            )?
         }
     };
     let quorum = wire::DualQuorum::from_roster(&roster)?;
@@ -1195,8 +1202,8 @@ mod tests {
             self_stake: Quantity::from(stake),
             metadata: Metadata::default(),
             status: PublicLaneValidatorStatus::Active,
-            activation_epoch: None,
-            activation_height: None,
+            activation_height: 1,
+            deactivation_height: None,
             last_reward_epoch: None,
         }
     }
@@ -1225,6 +1232,22 @@ mod tests {
             0,
             0,
         ));
+        staged_genesis_nexus_amx_context_hash(&block)
+    }
+    fn staged_context_hash_with_record(record: PublicLaneValidatorRecord) -> Hash {
+        let state = lane_hash_world(&[]);
+        let mut block = state.block(BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero test height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        block
+            .world
+            .public_lane_validators
+            .insert((record.lane_id, record.validator.clone()), record);
         staged_genesis_nexus_amx_context_hash(&block)
     }
     #[test]
@@ -1270,6 +1293,48 @@ mod tests {
             verify_staged_nexus_amx_context_hash(&staged, [0; 32]),
             Err(V2GenesisBootstrapError::NexusAmxContextHashMismatch { .. })
         ));
+    }
+    #[test]
+    fn staged_genesis_hash_uses_height_one_half_open_validator_tenure() {
+        let peer = PeerId::new(
+            KeyPair::try_from_seed(vec![0x64; 32], Algorithm::BlsNormal)
+                .expect("validator")
+                .public_key()
+                .clone(),
+        );
+        let lane = LaneId::new(3);
+        let empty_hash = staged_context_hash(&lane_hash_world(&[]));
+        let mut record = lane_record(&peer, lane, 7);
+
+        record.status = PublicLaneValidatorStatus::PendingActivation(1);
+        assert_ne!(
+            staged_context_hash_with_record(record.clone()),
+            empty_hash,
+            "a due pending label cannot suppress height-one tenure"
+        );
+
+        record.status = PublicLaneValidatorStatus::Exiting(u64::MAX);
+        record.deactivation_height = Some(2);
+        assert_ne!(
+            staged_context_hash_with_record(record.clone()),
+            empty_hash,
+            "an exiting label cannot suppress retained height-one tenure"
+        );
+
+        record.status = PublicLaneValidatorStatus::Slashed(Hash::new(b"height-one slash"));
+        assert_ne!(
+            staged_context_hash_with_record(record.clone()),
+            empty_hash,
+            "a slashed label cannot suppress retained height-one tenure"
+        );
+
+        record.status = PublicLaneValidatorStatus::Exiting(u64::MAX);
+        record.deactivation_height = Some(1);
+        assert_eq!(
+            staged_context_hash_with_record(record),
+            empty_hash,
+            "the deactivation boundary is exclusive"
+        );
     }
     #[test]
     fn staged_execution_policy_hash_rejects_process_local_drift() {
@@ -1585,6 +1650,8 @@ mod tests {
             let mut block = world.block();
             let mut params = SumeragiNposParameters::default();
             params.epoch_length_blocks = NonZeroU64::new(7).expect("non-zero epoch");
+            params.evidence_horizon_blocks = 14;
+            params.slashing_delay_blocks = 7;
             block.parameters.get_mut().custom.insert(
                 SumeragiNposParameters::parameter_id(),
                 params.into_custom_parameter(),
@@ -1641,25 +1708,35 @@ mod tests {
     }
     #[test]
     fn terminal_height_never_derives_an_unrepresentable_epoch_snapshot() {
-        let chain_id = ChainId::from("terminal-v2-context-builder-test");
-        let state = State::new_with_chain_for_testing(
-            World::default(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-            chain_id.clone(),
-        );
-        let view = state.view();
-        let election = FrozenElectionInputs {
-            epoch: u64::MAX,
-            epoch_end_height: u64::MAX,
-            mode: wire::ConsensusMode::Permissioned,
-            roster: Vec::new(),
-            leader_seed: [0x7A; 32],
-        };
-        assert_eq!(
-            finalized_next_epoch_snapshot(&view, view.network_id(), u64::MAX, &election),
-            Ok(None),
-            "terminal construction must not inspect or increment next-epoch state"
-        );
+        let mut parent_context =
+            genesis(wire::ConsensusMode::Permissioned, &[1, 1, 1, 1], u64::MAX);
+        parent_context.height = u64::MAX - 1;
+
+        let mut grandparent_commit_qc = artifact(
+            genesis(wire::ConsensusMode::Permissioned, &[1, 1, 1, 1], u64::MAX),
+            None,
+        )
+        .commit_qc;
+        grandparent_commit_qc.round.height = u64::MAX - 2;
+        grandparent_commit_qc.proposal_round = grandparent_commit_qc.round;
+        grandparent_commit_qc.signers = vec![0, 1, 2];
+        parent_context.parent_commit_qc = Some(grandparent_commit_qc);
+
+        let mut parent = artifact(parent_context, None);
+        parent.commit_qc.signers = vec![0, 1, 2];
+        assert_eq!(parent.height, u64::MAX - 1);
+        parent
+            .validate()
+            .expect("MAX-1 finality artifact must be structurally valid");
+
+        let terminal =
+            build_successor_height_context(&parent, Hash::new(b"terminal nexus AMX context"), None)
+                .expect("terminal successor context");
+        assert_eq!(terminal.height, u64::MAX);
+        assert_eq!(terminal.epoch_end_height, u64::MAX);
+        assert_eq!(terminal.next_epoch_snapshot, None);
+        terminal
+            .validate()
+            .expect("the full terminal height context must validate");
     }
 }

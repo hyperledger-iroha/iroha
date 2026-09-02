@@ -2397,6 +2397,173 @@ fn terminal_frontier_compaction_retains_every_later_pending_slot() {
     }
 }
 #[test]
+fn terminal_frontier_compaction_retains_sparse_required_evidence() {
+    let temp_dir = TempDir::new().expect("temporary sidecar directory");
+    let data_path = temp_dir.path().join("terminal-required.norito");
+    let index_path = temp_dir.path().join("terminal-required.index");
+    for height in 1_u64..=600 {
+        let payload =
+            norito::to_bytes(&DummySidecar { height }).expect("encode dummy lane history");
+        assert!(Kura::append_indexed_sidecar(
+            &data_path,
+            &index_path,
+            height,
+            &payload,
+            "dummy required terminal history",
+            FsyncMode::Always,
+            None,
+        ));
+    }
+    let required_heights = BTreeSet::from([7_u64, 400]);
+    assert!(
+        Kura::prune_indexed_sidecars_through_terminal_frontier_with_required_heights(
+            &data_path,
+            &index_path,
+            550,
+            NonZeroUsize::new(32).expect("non-zero terminal retention"),
+            &required_heights,
+            "dummy required terminal history",
+        )
+    );
+    let mut index = std::fs::File::open(&index_path).expect("open required terminal index");
+    let index_len = index
+        .metadata()
+        .expect("required terminal index metadata")
+        .len();
+    let layout = SidecarIndexLayout::read_from(&mut index, index_len)
+        .expect("decode required terminal index layout");
+    assert_eq!(layout.base_height, 7);
+    assert_eq!(layout.entry_count, 594);
+    for height in [7_u64, 400, 519, 550, 551, 600] {
+        assert_eq!(
+            Kura::read_indexed_sidecar_from_paths(
+                height,
+                &data_path,
+                &index_path,
+                norito::decode_from_bytes::<DummySidecar>,
+                "dummy required terminal history",
+            ),
+            Some(DummySidecar { height }),
+            "required evidence and the policy window must survive compaction",
+        );
+    }
+    for height in [6_u64, 8, 399, 401, 518] {
+        assert!(
+            Kura::read_indexed_sidecar_from_paths::<DummySidecar, _>(
+                height,
+                &data_path,
+                &index_path,
+                norito::decode_from_bytes::<DummySidecar>,
+                "dummy required terminal history",
+            )
+            .is_none(),
+            "an unrequired height outside the policy window must be pruned",
+        );
+    }
+}
+#[test]
+fn terminal_frontier_compaction_missing_required_evidence_is_byte_exact() {
+    let temp_dir = TempDir::new().expect("temporary sidecar directory");
+    let data_path = temp_dir.path().join("terminal-required-missing.norito");
+    let index_path = temp_dir.path().join("terminal-required-missing.index");
+    for height in 1_u64..=10 {
+        let payload =
+            norito::to_bytes(&DummySidecar { height }).expect("encode dummy lane history");
+        assert!(Kura::append_indexed_sidecar(
+            &data_path,
+            &index_path,
+            height,
+            &payload,
+            "dummy missing required terminal history",
+            FsyncMode::Always,
+            None,
+        ));
+    }
+    let original_data = fs::read(&data_path).expect("read original required data");
+    let original_index = fs::read(&index_path).expect("read original required index");
+    assert!(
+        !Kura::prune_indexed_sidecars_through_terminal_frontier_with_required_heights(
+            &data_path,
+            &index_path,
+            10,
+            NonZeroUsize::new(1).expect("non-zero terminal retention"),
+            &BTreeSet::from([11_u64]),
+            "dummy missing required terminal history",
+        ),
+        "compaction must fail before replacing a pair that lacks required evidence",
+    );
+    assert_eq!(
+        fs::read(&data_path).expect("read preserved required data"),
+        original_data,
+    );
+    assert_eq!(
+        fs::read(&index_path).expect("read preserved required index"),
+        original_index,
+    );
+    assert!(!data_path.with_extension("norito.tmp").exists());
+    assert!(!index_path.with_extension("index.tmp").exists());
+}
+#[test]
+fn terminal_evidence_recovery_rejects_temp_pair_that_omits_required_height() {
+    let temp_dir = TempDir::new().expect("temporary sidecar directory");
+    let data_path = temp_dir.path().join("terminal-required-recovery.norito");
+    let index_path = temp_dir.path().join("terminal-required-recovery.index");
+    for height in 1_u64..=3 {
+        let payload =
+            norito::to_bytes(&DummySidecar { height }).expect("encode dummy lane history");
+        assert!(Kura::append_indexed_sidecar(
+            &data_path,
+            &index_path,
+            height,
+            &payload,
+            "dummy required recovery history",
+            FsyncMode::Always,
+            None,
+        ));
+    }
+    let original_data = fs::read(&data_path).expect("read original recovery data");
+    let original_index = fs::read(&index_path).expect("read original recovery index");
+    let retained_payload =
+        norito::to_bytes(&DummySidecar { height: 3 }).expect("encode temp retained payload");
+    let temp_data_path = data_path.with_extension("norito.tmp");
+    let temp_index_path = index_path.with_extension("index.tmp");
+    fs::write(&temp_data_path, &retained_payload).expect("write compacted temp data");
+    let mut temp_index = std::fs::File::create(&temp_index_path).expect("create compacted index");
+    temp_index
+        .write_all(&SidecarIndexLayout::base_header(3))
+        .expect("write compacted index header");
+    temp_index
+        .write_all(
+            &SidecarIndexEntry {
+                offset: 0,
+                len: u64::try_from(retained_payload.len()).expect("payload length fits u64"),
+            }
+            .to_bytes(),
+        )
+        .expect("write compacted index entry");
+    temp_index.flush().expect("flush compacted index");
+    temp_index.sync_data().expect("sync compacted index");
+
+    assert!(
+        !Kura::recover_indexed_sidecar_artifacts_with_required_heights(
+            &data_path,
+            &index_path,
+            &BTreeSet::from([1_u64]),
+            "dummy required recovery history",
+        ),
+        "recovery must not promote a crash temp that omits required evidence",
+    );
+    assert_eq!(
+        fs::read(&data_path).expect("read unchanged recovery data"),
+        original_data,
+    );
+    assert_eq!(
+        fs::read(&index_path).expect("read unchanged recovery index"),
+        original_index,
+    );
+    assert!(temp_data_path.exists() && temp_index_path.exists());
+}
+#[test]
 fn terminal_frontier_compaction_fails_before_replacing_malformed_pending_slot() {
     let temp_dir = TempDir::new().expect("temporary sidecar directory");
     let data_path = temp_dir.path().join("terminal-malformed.norito");

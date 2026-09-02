@@ -181,7 +181,7 @@ impl TestMusubiAttestationSignerV1 {
     fn new(key: KeyPair, owner_authority: TestOwnerAuthorityV1) -> Self {
         let authority = AccountId::new(key.public_key().clone());
         Self {
-            handle: "hsm://sorafs/musubi/provider-attestation/primary".to_owned(),
+            handle: "provider://sorafs/musubi/provider-attestation/primary".to_owned(),
             controller_policy_digest: musubi_provider_attestation_controller_policy_digest_v1(
                 &authority,
             )
@@ -321,7 +321,7 @@ fn test_musubi_request_binding(
 }
 fn test_musubi_signer_binding() -> SorafsProviderAttestationRuntimeBinding {
     SorafsProviderAttestationRuntimeBinding {
-        handle: "hsm://sorafs/musubi/provider-attestation/primary".to_owned(),
+        handle: "provider://sorafs/musubi/provider-attestation/primary".to_owned(),
         revision: 7,
         policy_digest: [0xA7; 32],
     }
@@ -587,7 +587,7 @@ struct TestGovernedCompletionSignerV1 {
 }
 impl ProviderIngestCompletionSignerV1 for TestGovernedCompletionSignerV1 {
     fn runtime_handle(&self) -> &'static str {
-        "pkcs11:sorafs-provider-ingest-primary"
+        "provider:sorafs-provider-ingest-primary"
     }
     fn authority(&self) -> &AccountId {
         &self.authority
@@ -674,7 +674,7 @@ impl TestGovernedSignerResolverV1 {
 }
 impl ProviderIngestGovernedSignerResolverRuntimeV1 for TestGovernedSignerResolverV1 {
     fn runtime_handle(&self) -> &'static str {
-        "hsm:sorafs-provider-ingest-resolver"
+        "provider:sorafs-provider-ingest-resolver"
     }
     fn qualification(
         &self,
@@ -1020,7 +1020,7 @@ async fn governed_signer_resolver_rejects_invalid_initial_policy() {
     ));
 }
 #[tokio::test]
-async fn governed_signer_pins_assignment_revision_before_hsm_signing() {
+async fn governed_signer_pins_assignment_revision_before_runtime_signing() {
     let (signer, owner_authority, provider_id, exact_payload) =
         test_governed_signer(test_signer_policy(1), None);
     let provider_owner = signer.authority().clone();
@@ -1048,7 +1048,7 @@ async fn governed_signer_pins_assignment_revision_before_hsm_signing() {
     );
 }
 #[tokio::test]
-async fn governed_signer_rejects_provider_substitution_before_hsm_signing() {
+async fn governed_signer_rejects_provider_substitution_before_runtime_signing() {
     let (signer, owner_authority, provider_id, _exact_payload) =
         test_governed_signer(test_signer_policy(1), None);
     let provider_owner = signer.authority().clone();
@@ -1170,7 +1170,7 @@ async fn governed_signer_rechecks_owner_after_signing() {
 async fn governed_musubi_signer_rejects_each_configured_binding_mismatch() {
     let mut mismatches = Vec::new();
     let mut handle = test_musubi_signer_binding();
-    handle.handle = "hsm://sorafs/musubi/provider-attestation/secondary".to_owned();
+    handle.handle = "provider://sorafs/musubi/provider-attestation/secondary".to_owned();
     mismatches.push(handle);
     let mut revision = test_musubi_signer_binding();
     revision.revision += 1;
@@ -1646,7 +1646,7 @@ fn production_handle_validation_rejects_placeholders_and_whitespace() {
         assert!(!is_production_runtime_handle(handle), "{handle:?}");
     }
     assert!(is_production_runtime_handle(
-        "hsm://sorafs/provider-ingest/primary"
+        "provider://sorafs/provider-ingest/primary"
     ));
     assert!(is_production_runtime_handle(
         "https-pinned-source-pool:eu-1"
@@ -1825,7 +1825,7 @@ fn state_free_preflight_fixture() -> (
         authenticated_source_fetch_handle: "https-pinned-source-pool:region-a".to_owned(),
         authenticated_source_fetch_revision: 5,
         authenticated_source_fetch_policy_digest: [0xB1; 32],
-        completion_signer_resolver_handle: "hsm:sorafs-provider-ingest-resolver".to_owned(),
+        completion_signer_resolver_handle: "provider:sorafs-provider-ingest-resolver".to_owned(),
         completion_signer_resolver_revision: 6,
         completion_signer_resolver_policy_digest: [0xB2; 32],
         completion_signer_handle: signer.runtime_handle().to_owned(),
@@ -2676,12 +2676,12 @@ async fn panicked_readiness_probe_is_distinct_from_transient_timeout() {
 fn provider_attestation_journal_policy_maps_exactly_and_revalidates_actual_config() {
     let configured = SorafsProviderAttestationJournal {
         clock_seal: SorafsProviderAttestationRuntimeBinding {
-            handle: "hsm://musubi/provider-attestation/clock-seal".to_owned(),
+            handle: "provider://musubi/provider-attestation/clock-seal".to_owned(),
             revision: 1,
             policy_digest: [0xA1; 32],
         },
         approval_signer: SorafsProviderAttestationRuntimeBinding {
-            handle: "hsm://musubi/provider-attestation/approval-signer".to_owned(),
+            handle: "provider://musubi/provider-attestation/approval-signer".to_owned(),
             revision: 2,
             policy_digest: [0xA2; 32],
         },

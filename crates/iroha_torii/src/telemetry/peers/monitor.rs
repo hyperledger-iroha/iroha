@@ -114,20 +114,155 @@ pub enum Update {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum MonitorWorkerExit {
     Geo,
-    Polling,
+    Polling(crate::ToriiCriticalWorkerExit),
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PeerPollingWorkerExit {
     PeerList,
     Status,
 }
+
+async fn drain_peer_polling_workers(workers: &mut JoinSet<PeerPollingWorkerExit>) -> bool {
+    let mut failed = false;
+    while let Some(result) = workers.join_next().await {
+        if let Err(error) = result {
+            iroha_logger::error!(
+                ?error,
+                "peer telemetry polling worker failed during shutdown"
+            );
+            failed = true;
+        }
+    }
+    failed
+}
+
+async fn abort_peer_polling_workers(workers: &mut JoinSet<PeerPollingWorkerExit>) -> bool {
+    workers.abort_all();
+    let mut failed = false;
+    while let Some(result) = workers.join_next().await {
+        if let Err(error) = result
+            && !error.is_cancelled()
+        {
+            iroha_logger::error!(
+                ?error,
+                "peer telemetry polling worker failed while stopping its sibling"
+            );
+            failed = true;
+        }
+    }
+    failed
+}
+
+async fn drain_monitor_workers(workers: &mut JoinSet<MonitorWorkerExit>) -> bool {
+    let mut failed = false;
+    while let Some(result) = workers.join_next().await {
+        match result {
+            Ok(MonitorWorkerExit::Geo) => {}
+            Ok(MonitorWorkerExit::Polling(crate::ToriiCriticalWorkerExit::StoppedByShutdown)) => {}
+            Ok(MonitorWorkerExit::Polling(crate::ToriiCriticalWorkerExit::UnexpectedExit)) => {
+                failed = true;
+            }
+            Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    "peer telemetry monitor worker failed during shutdown"
+                );
+                failed = true;
+            }
+        }
+    }
+    failed
+}
+
+async fn abort_monitor_workers(workers: &mut JoinSet<MonitorWorkerExit>) {
+    workers.abort_all();
+    while let Some(result) = workers.join_next().await {
+        if let Err(error) = result
+            && !error.is_cancelled()
+        {
+            iroha_logger::error!(
+                ?error,
+                "peer telemetry monitor worker failed while stopping its sibling"
+            );
+        }
+    }
+}
+
+async fn supervise_monitor_workers(
+    shutdown_signal: &ShutdownSignal,
+    mut workers: JoinSet<MonitorWorkerExit>,
+) -> crate::ToriiCriticalWorkerExit {
+    loop {
+        tokio::select! {
+            biased;
+            () = shutdown_signal.receive() => {
+                let failed = drain_monitor_workers(&mut workers).await;
+                return if failed {
+                    crate::ToriiCriticalWorkerExit::UnexpectedExit
+                } else {
+                    crate::ToriiCriticalWorkerExit::StoppedByShutdown
+                };
+            }
+            result = workers.join_next() => match result {
+                Some(Ok(MonitorWorkerExit::Geo)) => {}
+                Some(Ok(MonitorWorkerExit::Polling(
+                    crate::ToriiCriticalWorkerExit::StoppedByShutdown,
+                ))) if shutdown_signal.is_sent() => {
+                    let failed = drain_monitor_workers(&mut workers).await;
+                    return if failed {
+                        crate::ToriiCriticalWorkerExit::UnexpectedExit
+                    } else {
+                        crate::ToriiCriticalWorkerExit::StoppedByShutdown
+                    };
+                }
+                Some(Ok(MonitorWorkerExit::Polling(
+                    crate::ToriiCriticalWorkerExit::StoppedByShutdown,
+                ))) => {
+                    iroha_logger::error!(
+                        "peer telemetry polling loop exited before shutdown"
+                    );
+                    abort_monitor_workers(&mut workers).await;
+                    return crate::ToriiCriticalWorkerExit::UnexpectedExit;
+                }
+                Some(Ok(MonitorWorkerExit::Polling(
+                    crate::ToriiCriticalWorkerExit::UnexpectedExit,
+                ))) => {
+                    iroha_logger::error!("peer telemetry polling loop failed");
+                    abort_monitor_workers(&mut workers).await;
+                    return crate::ToriiCriticalWorkerExit::UnexpectedExit;
+                }
+                Some(Err(error)) => {
+                    iroha_logger::error!(
+                        ?error,
+                        "peer telemetry monitor worker failed"
+                    );
+                    abort_monitor_workers(&mut workers).await;
+                    return crate::ToriiCriticalWorkerExit::UnexpectedExit;
+                }
+                None if shutdown_signal.is_sent() => {
+                    return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                }
+                None => {
+                    iroha_logger::error!(
+                        "peer telemetry monitor has no live polling worker"
+                    );
+                    return crate::ToriiCriticalWorkerExit::UnexpectedExit;
+                }
+            },
+        }
+    }
+}
+
 pub fn run(
     torii_url: ToriiUrl,
     geo_config: GeoLookupConfig,
     network_id: NetworkId,
     operator_signer: Option<KeyPair>,
     shutdown_signal: ShutdownSignal,
-) -> (mpsc::Receiver<Update>, impl Future<Output = ()> + Sized) {
+) -> (
+    mpsc::Receiver<Update>,
+    impl Future<Output = crate::ToriiCriticalWorkerExit> + Sized,
+) {
     let (tx, rx) = mpsc::channel(128);
     let url = Arc::new(torii_url);
     let fut = {
@@ -213,7 +348,12 @@ pub fn run(
                             )
                             .await
                             else {
-                                return MonitorWorkerExit::Polling;
+                                let exit = if monitor_shutdown.is_sent() {
+                                    crate::ToriiCriticalWorkerExit::StoppedByShutdown
+                                } else {
+                                    crate::ToriiCriticalWorkerExit::UnexpectedExit
+                                };
+                                return MonitorWorkerExit::Polling(exit);
                             };
                             iroha_logger::debug!(?cfg, "peer connected");
                             if !send_update(
@@ -223,7 +363,12 @@ pub fn run(
                             )
                             .await
                             {
-                                return MonitorWorkerExit::Polling;
+                                let exit = if monitor_shutdown.is_sent() {
+                                    crate::ToriiCriticalWorkerExit::StoppedByShutdown
+                                } else {
+                                    crate::ToriiCriticalWorkerExit::UnexpectedExit
+                                };
+                                return MonitorWorkerExit::Polling(exit);
                             }
                             let mut workers = JoinSet::new();
                             workers.spawn({
@@ -257,95 +402,88 @@ pub fn run(
                                 tokio::select! {
                                     biased;
                                     () = monitor_shutdown.receive() => {
-                                        workers.shutdown().await;
-                                        return MonitorWorkerExit::Polling;
+                                        let failed = drain_peer_polling_workers(&mut workers).await;
+                                        let exit = if failed {
+                                            crate::ToriiCriticalWorkerExit::UnexpectedExit
+                                        } else {
+                                            crate::ToriiCriticalWorkerExit::StoppedByShutdown
+                                        };
+                                        return MonitorWorkerExit::Polling(exit);
                                     }
                                     result = workers.join_next() => match result {
                                         Some(Ok(PeerPollingWorkerExit::Status)) => break,
                                         Some(Ok(PeerPollingWorkerExit::PeerList)) if monitor_shutdown.is_sent() => {
-                                            workers.shutdown().await;
-                                            return MonitorWorkerExit::Polling;
+                                            let failed = drain_peer_polling_workers(&mut workers).await;
+                                            let exit = if failed {
+                                                crate::ToriiCriticalWorkerExit::UnexpectedExit
+                                            } else {
+                                                crate::ToriiCriticalWorkerExit::StoppedByShutdown
+                                            };
+                                            return MonitorWorkerExit::Polling(exit);
                                         }
                                         Some(Ok(PeerPollingWorkerExit::PeerList)) => {
                                             iroha_logger::error!(
                                                 "peer-list telemetry worker exited before shutdown"
                                             );
-                                            workers.shutdown().await;
-                                            return MonitorWorkerExit::Polling;
+                                            let _ = abort_peer_polling_workers(&mut workers).await;
+                                            return MonitorWorkerExit::Polling(
+                                                crate::ToriiCriticalWorkerExit::UnexpectedExit,
+                                            );
                                         }
                                         Some(Err(error)) => {
                                             iroha_logger::error!(
                                                 ?error,
                                                 "peer telemetry polling worker failed"
                                             );
-                                            workers.shutdown().await;
-                                            return MonitorWorkerExit::Polling;
+                                            let _ = abort_peer_polling_workers(&mut workers).await;
+                                            return MonitorWorkerExit::Polling(
+                                                crate::ToriiCriticalWorkerExit::UnexpectedExit,
+                                            );
                                         }
                                         None if monitor_shutdown.is_sent() => {
-                                            return MonitorWorkerExit::Polling;
+                                            return MonitorWorkerExit::Polling(
+                                                crate::ToriiCriticalWorkerExit::StoppedByShutdown,
+                                            );
                                         }
                                         None => {
                                             iroha_logger::error!(
                                                 "all peer telemetry polling workers exited"
                                             );
-                                            return MonitorWorkerExit::Polling;
+                                            return MonitorWorkerExit::Polling(
+                                                crate::ToriiCriticalWorkerExit::UnexpectedExit,
+                                            );
                                         }
                                     },
                                 }
                             }
-                            workers.shutdown().await;
+                            let sibling_failed = abort_peer_polling_workers(&mut workers).await;
+                            if sibling_failed {
+                                return MonitorWorkerExit::Polling(
+                                    crate::ToriiCriticalWorkerExit::UnexpectedExit,
+                                );
+                            }
                             if monitor_shutdown.is_sent() {
-                                return MonitorWorkerExit::Polling;
+                                return MonitorWorkerExit::Polling(
+                                    crate::ToriiCriticalWorkerExit::StoppedByShutdown,
+                                );
                             }
                             iroha_logger::warn!(
                                 "peer stopped responding to /status; marking as disconnected"
                             );
                             if !send_update(&tx, Update::Disconnected, &monitor_shutdown).await {
-                                return MonitorWorkerExit::Polling;
+                                let exit = if monitor_shutdown.is_sent() {
+                                    crate::ToriiCriticalWorkerExit::StoppedByShutdown
+                                } else {
+                                    crate::ToriiCriticalWorkerExit::UnexpectedExit
+                                };
+                                return MonitorWorkerExit::Polling(exit);
                             }
                         }
                     }
                 }
                 .instrument(info_span!("peer_monitor", torii_url = %monitor_span_url.as_ref())),
             );
-            loop {
-                tokio::select! {
-                    biased;
-                    () = shutdown_signal.receive() => {
-                        set.shutdown().await;
-                        return;
-                    }
-                    result = set.join_next() => match result {
-                        Some(Ok(MonitorWorkerExit::Geo)) => {}
-                        Some(Ok(MonitorWorkerExit::Polling)) if shutdown_signal.is_sent() => {
-                            set.shutdown().await;
-                            return;
-                        }
-                        Some(Ok(MonitorWorkerExit::Polling)) => {
-                            iroha_logger::error!(
-                                "peer telemetry polling loop exited before shutdown"
-                            );
-                            set.shutdown().await;
-                            return;
-                        }
-                        Some(Err(error)) => {
-                            iroha_logger::error!(
-                                ?error,
-                                "peer telemetry monitor worker failed"
-                            );
-                            set.shutdown().await;
-                            return;
-                        }
-                        None if shutdown_signal.is_sent() => return,
-                        None => {
-                            iroha_logger::error!(
-                                "peer telemetry monitor has no live polling worker"
-                            );
-                            return;
-                        }
-                    },
-                }
-            }
+            supervise_monitor_workers(&shutdown_signal, set).await
         }
     };
     (rx, fut)
@@ -664,10 +802,7 @@ async fn get_config_with_retry(
             }
         }
     };
-    let url = torii_url
-        .0
-        .join(iroha_torii_shared::uri::CONFIGURATION)
-        .expect("valid url");
+    let url = torii_url.configuration_endpoint().clone();
     let do_request = || async {
         let request = configuration_request(&client, url.clone(), network_id, operator_signer)?;
         let response = client.execute(request).await?;
@@ -742,10 +877,7 @@ async fn get_peers_periodic(
             }
         }
     };
-    let url = torii_url
-        .0
-        .join(iroha_torii_shared::uri::PEERS)
-        .expect("valid url");
+    let url = torii_url.peers_endpoint().clone();
     let get = || async {
         let request = signed_peers_request(&client, url.clone(), network_id, operator_signer)?;
         let response = client.execute(request).await?;
@@ -832,7 +964,7 @@ async fn get_metrics_periodic_timeout(
             return;
         }
     };
-    let url = torii_url.0.join("/status").expect("valid url");
+    let url = torii_url.status_endpoint().clone();
     let get_status = || async {
         let started_at = Instant::now();
         let resp = client
@@ -1098,6 +1230,70 @@ mod tests {
             "peer monitor must not connect to a redirect destination"
         );
         server.await.expect("redirect server task");
+    }
+    #[tokio::test]
+    async fn polling_shutdown_drain_preserves_panicked_worker_failure() {
+        let shutdown = ShutdownSignal::new();
+        let worker_shutdown = shutdown.clone();
+        let mut workers: JoinSet<PeerPollingWorkerExit> = JoinSet::new();
+        workers.spawn(async move {
+            worker_shutdown.send();
+            assert!(!iroha_core::panic_hook::is_suppressed());
+            panic!("injected peer polling worker panic");
+        });
+
+        shutdown.receive().await;
+        assert!(
+            drain_peer_polling_workers(&mut workers).await,
+            "an unsuppressed panic must remain a failure after shutdown is sent"
+        );
+    }
+    #[tokio::test]
+    async fn monitor_supervisor_preserves_panicked_worker_failure_after_shutdown() {
+        let shutdown = ShutdownSignal::new();
+        let worker_shutdown = shutdown.clone();
+        let mut workers: JoinSet<MonitorWorkerExit> = JoinSet::new();
+        workers.spawn(async move {
+            worker_shutdown.send();
+            assert!(!iroha_core::panic_hook::is_suppressed());
+            panic!("injected peer monitor worker panic");
+        });
+
+        assert_eq!(
+            supervise_monitor_workers(&shutdown, workers).await,
+            crate::ToriiCriticalWorkerExit::UnexpectedExit
+        );
+    }
+    #[tokio::test]
+    async fn monitor_supervisor_preserves_typed_failure_after_shutdown() {
+        let shutdown = ShutdownSignal::new();
+        let worker_shutdown = shutdown.clone();
+        let mut workers = JoinSet::new();
+        workers.spawn(async move {
+            worker_shutdown.send();
+            MonitorWorkerExit::Polling(crate::ToriiCriticalWorkerExit::UnexpectedExit)
+        });
+
+        assert_eq!(
+            supervise_monitor_workers(&shutdown, workers).await,
+            crate::ToriiCriticalWorkerExit::UnexpectedExit
+        );
+    }
+    #[tokio::test]
+    async fn monitor_supervisor_reports_signal_only_shutdown_cleanly() {
+        let shutdown = ShutdownSignal::new();
+        let worker_shutdown = shutdown.clone();
+        let mut workers = JoinSet::new();
+        workers.spawn(async move {
+            worker_shutdown.receive().await;
+            MonitorWorkerExit::Polling(crate::ToriiCriticalWorkerExit::StoppedByShutdown)
+        });
+
+        shutdown.send();
+        assert_eq!(
+            supervise_monitor_workers(&shutdown, workers).await,
+            crate::ToriiCriticalWorkerExit::StoppedByShutdown
+        );
     }
     #[tokio::test]
     async fn bounded_response_reader_rejects_declared_and_streamed_overflow() {

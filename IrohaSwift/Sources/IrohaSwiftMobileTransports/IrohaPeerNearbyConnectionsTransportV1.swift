@@ -1114,6 +1114,7 @@ public final class IrohaPeerNearbyConnectionsTransportV1: NSObject, @unchecked S
         selectedLocal: IrohaPeerNearbyDiscoveryContextV1
     )? {
         guard let localContext,
+              remote.count == 75,
               let representation = String(data: remote, encoding: .ascii),
               Data(representation.utf8) == remote,
               let decoded = try? IrohaPeerNearbyDiscoveryContextV1

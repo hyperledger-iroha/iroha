@@ -1466,8 +1466,8 @@ mod tests {
     };
     const GATEWAY_SIGNER_ID: [u8; 32] = [0xA1; 32];
     const PROVIDER_SIGNER_ID: [u8; 32] = [0xB2; 32];
-    const GATEWAY_HANDLE: &str = "hsm:potr:gateway-primary";
-    const PROVIDER_HANDLE: &str = "hsm:potr:provider-primary";
+    const GATEWAY_HANDLE: &str = "provider:potr:gateway-primary";
+    const PROVIDER_HANDLE: &str = "provider:potr:provider-primary";
     const GATEWAY_QUALIFICATION: PotrRuntimeProviderQualificationV1 =
         PotrRuntimeProviderQualificationV1::new(1, [0xA7; 32]);
     const PROVIDER_BASELINE_QUALIFICATION: PotrRuntimeProviderQualificationV1 =
@@ -2618,7 +2618,7 @@ mod tests {
     #[test]
     fn runtime_bindings_use_central_handle_grammar_and_reject_invalid_qualification() {
         PotrRuntimeProviderBindingV1::try_new(
-            "pkcs11:prod/potr.gateway-v1_slot-a",
+            "provider:prod/potr.gateway-v1_slot-a",
             GATEWAY_SIGNER_ID,
             GATEWAY_QUALIFICATION,
         )
@@ -2627,8 +2627,8 @@ mod tests {
             "https://operator:secret@potr-signer",
             "https://potr-signer/path?credential=secret",
             "https://potr-signer/path#fragment",
-            "pkcs11:prod/%70otr-signer",
-            "pkcs11:prod\\potr-signer",
+            "provider:prod/%70otr-signer",
+            "provider:prod\\potr-signer",
         ] {
             assert_eq!(
                 PotrRuntimeProviderBindingV1::try_new(
@@ -2642,7 +2642,7 @@ mod tests {
         }
         assert_eq!(
             PotrRuntimeProviderBindingV1::try_new(
-                "hsm:dummy:potr",
+                "provider:dummy:potr",
                 GATEWAY_SIGNER_ID,
                 GATEWAY_QUALIFICATION,
             )

@@ -487,7 +487,7 @@ KAGEMUSHA_CANDIDATE_LAB_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeBuildAppendRequestV4
   Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeBuildDuplicateInputAppendRequestV4
   Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeBuildVerifyRequestV4
-  Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeBuildRedeemRequestV4
+  Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeBuildRedeemRequestV5
   Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeAppendV4
   Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeProjectInitResultV4
   Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeProjectSplitResultV4
@@ -505,8 +505,9 @@ KAGEMUSHA_CANDIDATE_LAB_JNI_SYMBOLS=(
 # acknowledgement primitives reused by V4; all recursive V2/V3 aliases are retired.
 KAGEMUSHA_C_SYMBOLS=(
   connect_norito_kagemusha_recursive_spend_capabilities_v4
-  connect_norito_kagemusha_offline_operation_status_validate_v1
-  connect_norito_kagemusha_offline_operation_status_json_validate_v1
+  connect_norito_kagemusha_native_contract_revision
+  connect_norito_kagemusha_offline_operation_status_validate_v2
+  connect_norito_kagemusha_offline_operation_status_json_validate_v2
   connect_norito_kagemusha_topup_finality_verify_v4
   connect_norito_kagemusha_topup_shield_build_unsigned_v4
   connect_norito_kagemusha_recursive_spend_artifact_begin_v4
@@ -531,7 +532,7 @@ KAGEMUSHA_C_SYMBOLS=(
   connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v4
   connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v4
   connect_norito_kagemusha_recursive_spend_redeem_v4
-  connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4
+  connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v5
   connect_norito_kagemusha_secret_free_buffer
   connect_norito_kagemusha_receiver_key_reference_v2
   connect_norito_kagemusha_recipient_output_derive_v2
@@ -543,9 +544,9 @@ KAGEMUSHA_C_SYMBOLS=(
   connect_norito_kagemusha_recipient_receive_offer_create_v2
   connect_norito_kagemusha_recipient_receive_offer_project_v2
   connect_norito_kagemusha_recipient_receive_offer_verify_v2
-  connect_norito_kagemusha_request_authorization_signing_bytes_v2
-  connect_norito_kagemusha_request_authorization_finalize_hardware_v2
-  connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2
+  connect_norito_kagemusha_request_authorization_signing_bytes_v3
+  connect_norito_kagemusha_request_authorization_finalize_hardware_v3
+  connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v3
   connect_norito_kagemusha_receiver_acknowledgement_payload_v2
   connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2
   connect_norito_kagemusha_receiver_acknowledgement_create_v2
@@ -599,6 +600,7 @@ REQUIRED_BRIDGE_SYMBOLS=(
   connect_norito_validation_fee_hijiri_quote_response_verify_v1
   connect_norito_private_settlement_committee_proof_response_verify_v1
   connect_norito_private_settlement_auditor_capsule_response_verify_v1
+  connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1
   connect_norito_private_settlement_audit_approval_response_verify_v1
   "${SORAFS_APPEAL_FINANCE_C_SYMBOLS[@]}"
   "${KAGEMUSHA_C_SYMBOLS[@]}"
@@ -634,12 +636,13 @@ KAGEMUSHA_JNI_METHODS=(
   nativeArtifactWriteV4
   nativeBranchClaimsConflictV2
   nativeBridgeAbiVersion
+  nativeKagemushaContractRevision
   nativeBuildAppendRequestV4
   nativeBuildArtifactBindingV4
   nativeBuildInitRequestV4
   nativeBuildOutputMembershipFrontierV4
   nativeBuildOutputMembershipPathsV4
-  nativeBuildRedeemRequestV4
+  nativeBuildRedeemRequestV5
   nativeBuildRedeemV4
   nativeBuildTopUpProvenanceV4
   nativeBuildVerifyRequestV4
@@ -648,22 +651,23 @@ KAGEMUSHA_JNI_METHODS=(
   nativeCreateRecipientReceiveOfferV2
   nativeCreateRecipientRequestV2
   nativeDeriveOutputMembershipPathsV4
-  nativeFinalizeHardwareAuthorizationV2
-  nativeFinalizeIosAppAttestAuthorizationV2
-  nativeFinalizeRedeemV4
-  nativeFinalizeTopUpV4
+  nativeFinalizeHardwareAuthorizationV3
+  nativeFinalizeIosAppAttestAuthorizationV3
+  nativeFinalizeRedeemV5
+  nativeFinalizeTopUpV5
   nativeInitSpendV4
   nativeInstalledManifestSha256V4
   nativePastaCycleV4BackendAvailable
   nativePrepareAcknowledgementV2
-  nativePrepareAuthorizationV2
+  nativePrepareAuthorizationV3
   nativePrepareNoteOpeningV2
   nativePreparePeerSplitChangeV4
-  nativePrepareRedemptionChangeV4
+  nativePrepareRedemptionChangeV5
   nativePrepareRecipientRequestV2
-  nativePrepareTopUpV4
+  nativePrepareTopUpV5
   nativeProjectInitResultV4
-  nativeProjectOperationStatusV4
+  nativeProjectOperationReferenceV2
+  nativeProjectOperationStatusV2
   nativeProjectPeerPaymentV4
   nativeProjectRecipientRequestV2
   nativeProjectRecipientReceiveOfferV2
@@ -695,10 +699,12 @@ PRIVATE_SETTLEMENT_RESPONSE_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeBridgeAbiVersion
   Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyCommitteeProofResponseV1
   Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseV1
+  Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseWithRequestV1
   Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditApprovalResponseV1
   Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeBridgeAbiVersion
   Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyCommitteeProofResponseV1
   Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseV1
+  Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseWithRequestV1
   Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditApprovalResponseV1
 )
 
@@ -1904,7 +1910,7 @@ expected_wrappers = {
     "buildRedeemV4",
     "ensureProofBackendAvailableV4",
     "initSpendV4",
-    "prepareRedemptionChangeV4",
+    "prepareRedemptionChangeV5",
     "verifySpendV4",
 }
 expected_native_lifecycle = {
@@ -1919,7 +1925,7 @@ expected_native_lifecycle = {
     "kagemushaRecursiveSpendCapabilitiesV4",
     "kagemushaRecursiveSpendInitV4",
     "kagemushaRecursiveSpendRedeemV4",
-    "kagemushaRecursiveSpendRedemptionChangePrepareV4",
+    "kagemushaRecursiveSpendRedemptionChangePrepareV5",
     "kagemushaRecursiveSpendVerifyV4",
 }
 actual_symbols = set(re.findall(
@@ -1964,7 +1970,7 @@ if "redemptionChange(spendKey:" in text or re.search(
 ):
     errors.append("Swift SDK lets callers fabricate partial-redemption rho or diversifier")
 if not re.search(
-    r"kagemushaRecursiveSpendRedemptionChangePrepareV4[\s\S]{0,2200}?"
+    r"kagemushaRecursiveSpendRedemptionChangePrepareV5[\s\S]{0,2200}?"
     r"connect_norito_kagemusha_secret_free_buffer[\s\S]{0,1600}?"
     r"copyKagemushaNativeSecretArchiveOutput",
     text,

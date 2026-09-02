@@ -5827,7 +5827,7 @@ mod tests {
             assert!(!is_production_runtime_handle(rejected), "{rejected:?}");
         }
         assert!(is_production_runtime_handle(
-            "pkcs11://cluster-a/sorafs-primary"
+            "provider://cluster-a/sorafs-primary"
         ));
     }
     #[test]

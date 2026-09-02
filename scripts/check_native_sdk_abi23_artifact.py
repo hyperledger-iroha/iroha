@@ -90,27 +90,32 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
         "connect_norito_private_settlement_committee_proof_response_verify_v1",
         "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
+        "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
         "connect_norito_private_settlement_audit_approval_response_verify_v1",
         "Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeBridgeAbiVersion",
         "Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyCommitteeProofResponseV1",
         "Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseV1",
+        "Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseWithRequestV1",
         "Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditApprovalResponseV1",
         "Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeBridgeAbiVersion",
         "Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyCommitteeProofResponseV1",
         "Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseV1",
+        "Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseWithRequestV1",
         "Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditApprovalResponseV1",
         "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
     ),
     "csharp": (
         "connect_norito_bridge_abi_version",
+        "connect_norito_kagemusha_native_contract_revision",
         "connect_norito_free",
         "connect_norito_validation_fee_hijiri_quote_request_v1",
         "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
         "connect_norito_private_settlement_committee_proof_response_verify_v1",
         "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
+        "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
         "connect_norito_private_settlement_audit_approval_response_verify_v1",
         "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
-        "connect_norito_kagemusha_offline_operation_status_json_validate_v1",
+        "connect_norito_kagemusha_offline_operation_status_json_validate_v2",
         "iroha_privacy_compiled_profile_catalog_v1",
         "iroha_privacy_validate_compiled_profile_catalog_v1",
         "iroha_privacy_exact12_fixture_bundle_v1",
@@ -119,9 +124,12 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
     ),
     "node": (
         "connectNoritoBridgeAbiVersion",
+        "kagemushaNativeContractRevision",
+        "kagemushaOfflineOperationStatusJsonValidateV2",
         "inspectSorafsOrderbookSubmissionForDiscriminantV1",
         "privateSettlementVerifyAuditApprovalResponseV1",
         "privateSettlementVerifyAuditorCapsuleResponseV1",
+        "privateSettlementVerifyAuditorCapsuleResponseWithRequestV1",
         "privateSettlementVerifyCommitteeProofResponseV1",
         "sorafsValidateAppealFinanceCancelAssetLockJson",
         "validationFeeHijiriQuoteRequestV1",
@@ -133,6 +141,7 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         "inspect_sorafs_orderbook_submission_for_discriminant_v1",
         "private_settlement_verify_audit_approval_response_v1",
         "private_settlement_verify_auditor_capsule_response_v1",
+        "private_settlement_verify_auditor_capsule_response_with_request_v1",
         "private_settlement_verify_committee_proof_response_v1",
         "sorafs_validate_appeal_finance_cancel_asset_lock_json",
         "validation_fee_hijiri_quote_request_v1",
@@ -544,6 +553,18 @@ def probe_c_abi(path: Path, required_symbols: Sequence[str]) -> int:
     probe = getattr(library, "connect_norito_bridge_abi_version")
     probe.argtypes = []
     probe.restype = ctypes.c_uint32
+    if "connect_norito_kagemusha_native_contract_revision" in required_symbols:
+        revision_probe = getattr(
+            library, "connect_norito_kagemusha_native_contract_revision"
+        )
+        revision_probe.argtypes = []
+        revision_probe.restype = ctypes.c_uint32
+        revision = int(revision_probe())
+        if revision != 1:
+            fail(
+                "native C ABI artifact Kagemusha contract revision mismatch: "
+                f"expected 1, found {revision}"
+            )
     return int(probe())
 
 
@@ -596,6 +617,14 @@ const version = binding.connectNoritoBridgeAbiVersion();
 if (!Number.isSafeInteger(version) || version < 0) {
   process.stderr.write("ABI probe returned a non-integer");
   process.exit(3);
+}
+const kagemushaRevision = binding.kagemushaNativeContractRevision();
+if (!Number.isSafeInteger(kagemushaRevision) || kagemushaRevision !== 1) {
+  process.stderr.write(
+    "Kagemusha native contract revision mismatch: expected 1, found " +
+      String(kagemushaRevision),
+  );
+  process.exit(4);
 }
 process.stdout.write(String(version));
 """

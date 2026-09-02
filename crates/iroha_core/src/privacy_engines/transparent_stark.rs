@@ -19,6 +19,7 @@ use fastpq_prover::fastpq_isi_v1::{
 use fastpq_prover::fastpq_isi_v1::{GoldilocksDigestDomainV1, hash_bytes_384_v1};
 use iroha_data_model::privacy::{PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1, PrivacyProtocolIdV1};
 use rand::TryRngCore;
+use rayon::prelude::*;
 use sha2::{Digest as _, Sha256};
 use std::collections::BTreeMap;
 #[cfg(test)]
@@ -42,6 +43,12 @@ const TRANSCRIPT_FP4_CHALLENGE_DOMAIN_V1: &[u8] =
 const QUERY_INDEX_DOMAIN_V1: &[u8] = b"iroha:privacy:transparent-stark:query-index:v1";
 const GRINDING_DOMAIN_V1: &[u8] = b"iroha:privacy:transparent-stark:grinding:v1";
 const MERKLE_NODE_PHASE_V1: &[u8] = b"binary-merkle-node";
+/// Avoid Rayon dispatch overhead once a Merkle level becomes small.
+const MERKLE_PARALLEL_PARENT_THRESHOLD_V1: usize = 256;
+/// Avoid parallel dispatch for tiny development/test grinding targets.
+const GRINDING_PARALLEL_MIN_BITS_V1: u8 = 12;
+/// Search canonical nonce intervals in this fixed order while parallelizing within each interval.
+const GRINDING_PARALLEL_CHUNK_SIZE_V1: u64 = 4_096;
 const FRAME_PHASE_V1: &[u8] = b"framed-message";
 /// Fixed rejection budget for canonical field and transcript sampling.
 pub(crate) const MAX_FIELD_REJECTION_ATTEMPTS_V1: u64 = 16;
@@ -866,7 +873,7 @@ pub(crate) fn masked_trace_coefficients_with_mask_v1(
         return Err(TransparentStarkErrorV1::InvalidDomain);
     }
     let base_root = goldilocks_primitive_root_v1(base_log_size)?;
-    let mut coefficients = Vec::new();
+    let mut coefficients = ZeroizingGoldilocksValuesV1(Vec::new());
     coefficients
         .try_reserve_exact(coefficient_count)
         .map_err(|_| TransparentStarkErrorV1::AllocationFailure)?;
@@ -877,7 +884,7 @@ pub(crate) fn masked_trace_coefficients_with_mask_v1(
         coefficients[degree] = coefficients[degree].sub(random);
         coefficients[base_size + degree] = coefficients[base_size + degree].add(random);
     }
-    Ok(coefficients)
+    Ok(coefficients.into_inner())
 }
 /// Evaluate retained masked trace coefficients on one canonical generator coset.
 ///
@@ -920,8 +927,40 @@ pub(crate) fn masked_trace_lde_column_with_mask_v1(
     lde_log_size: u8,
     mask: &[GoldilocksFieldV1],
 ) -> Result<Vec<GoldilocksFieldV1>, TransparentStarkErrorV1> {
-    let coefficients = masked_trace_coefficients_with_mask_v1(base_column, base_log_size, mask)?;
+    let coefficients = ZeroizingGoldilocksValuesV1(masked_trace_coefficients_with_mask_v1(
+        base_column,
+        base_log_size,
+        mask,
+    )?);
+    // These coefficients interpolate the native witness. The guard wipes them on success,
+    // ordinary failure, and unwind before a Rayon worker can return allocator storage to a
+    // long-lived pool.
     masked_trace_coefficients_on_coset_v1(&coefficients, base_log_size, lde_log_size)
+}
+struct ZeroizingGoldilocksValuesV1(Vec<GoldilocksFieldV1>);
+impl ZeroizingGoldilocksValuesV1 {
+    fn into_inner(mut self) -> Vec<GoldilocksFieldV1> {
+        core::mem::take(&mut self.0)
+    }
+}
+impl core::ops::Deref for ZeroizingGoldilocksValuesV1 {
+    type Target = Vec<GoldilocksFieldV1>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl core::ops::DerefMut for ZeroizingGoldilocksValuesV1 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+impl Drop for ZeroizingGoldilocksValuesV1 {
+    fn drop(&mut self) {
+        for coefficient in &mut self.0 {
+            coefficient.zeroize_v1();
+        }
+    }
 }
 /// Replayable zero-knowledge mask for one streamed trace column.
 pub(crate) struct ReplayableTraceMaskV1 {
@@ -1129,19 +1168,40 @@ impl GoldilocksMerkleTreeV1 {
             let previous = levels
                 .last()
                 .ok_or(TransparentStarkErrorV1::InvalidMerkleShape)?;
+            let parent_count = previous.len() / 2;
             let mut next = Vec::new();
-            next.try_reserve_exact(previous.len() / 2)
+            next.try_reserve_exact(parent_count)
                 .map_err(|_| TransparentStarkErrorV1::AllocationFailure)?;
-            for (index, pair) in previous.chunks_exact(2).enumerate() {
-                next.push(goldilocks_merkle_node_v1(
-                    context,
-                    node_role,
-                    parent_level,
-                    u64::try_from(index)
-                        .map_err(|_| TransparentStarkErrorV1::InvalidMerkleShape)?,
-                    pair[0],
-                    pair[1],
-                )?);
+            next.resize(parent_count, GoldilocksDigest384V1::default());
+            // Every node is domain-separated by its canonical level and index. An indexed
+            // parallel write therefore changes only scheduling: the resulting vector and root
+            // are byte-identical for every Rayon pool width and hardware topology.
+            let hash_parent =
+                |index: usize| -> Result<GoldilocksDigest384V1, TransparentStarkErrorV1> {
+                    let child_index = index
+                        .checked_mul(2)
+                        .ok_or(TransparentStarkErrorV1::InvalidMerkleShape)?;
+                    goldilocks_merkle_node_v1(
+                        context,
+                        node_role,
+                        parent_level,
+                        u64::try_from(index)
+                            .map_err(|_| TransparentStarkErrorV1::InvalidMerkleShape)?,
+                        previous[child_index],
+                        previous[child_index + 1],
+                    )
+                };
+            if parent_count >= MERKLE_PARALLEL_PARENT_THRESHOLD_V1 {
+                next.par_iter_mut().enumerate().try_for_each(
+                    |(index, parent)| -> Result<(), TransparentStarkErrorV1> {
+                        *parent = hash_parent(index)?;
+                        Ok(())
+                    },
+                )?;
+            } else {
+                for (index, parent) in next.iter_mut().enumerate() {
+                    *parent = hash_parent(index)?;
+                }
             }
             levels.push(next);
         }
@@ -1652,6 +1712,39 @@ pub(crate) fn grind_nonce_v1(
     if grinding_bits > 63 {
         return Err(TransparentStarkErrorV1::InvalidGrinding);
     }
+    if grinding_bits < GRINDING_PARALLEL_MIN_BITS_V1 {
+        return grind_nonce_serial_v1(context, transcript_seed, grinding_bits);
+    }
+    first_nonce_in_ordered_parallel_chunks_v1(|nonce| {
+        verify_grinding_nonce_v1(context, transcript_seed, grinding_bits, nonce).is_ok()
+    })
+    .ok_or(TransparentStarkErrorV1::InvalidGrinding)
+}
+fn first_nonce_in_ordered_parallel_chunks_v1<Accept>(accept: Accept) -> Option<u64>
+where
+    Accept: Fn(u64) -> bool + Sync,
+{
+    let mut chunk_start = 0_u64;
+    loop {
+        let chunk_end = chunk_start.saturating_add(GRINDING_PARALLEL_CHUNK_SIZE_V1 - 1);
+        if let Some(nonce) = (chunk_start..=chunk_end)
+            .into_par_iter()
+            .filter(|nonce| accept(*nonce))
+            .min()
+        {
+            return Some(nonce);
+        }
+        if chunk_end == u64::MAX {
+            return None;
+        }
+        chunk_start = chunk_end + 1;
+    }
+}
+fn grind_nonce_serial_v1(
+    context: TransparentStarkDigestContextV1,
+    transcript_seed: &GoldilocksDigest384V1,
+    grinding_bits: u8,
+) -> Result<u64, TransparentStarkErrorV1> {
     for nonce in 0..=u64::MAX {
         if verify_grinding_nonce_v1(context, transcript_seed, grinding_bits, nonce).is_ok() {
             return Ok(nonce);
@@ -2449,6 +2542,71 @@ mod tests {
             Err(TransparentStarkErrorV1::InvalidMerkleShape)
         );
     }
+
+    #[test]
+    fn merkle_root_and_paths_are_identical_across_rayon_widths() {
+        let node_role = b"iroha:test:transparent-stark:parallel-node:v1";
+        let leaves = (0_u64..1_024)
+            .map(|index| {
+                goldilocks_digest384_frame_v1(
+                    TEST_DIGEST_CONTEXT_V1,
+                    b"iroha:test:transparent-stark:parallel-leaf:v1",
+                    b"parallel-determinism",
+                    0,
+                    index,
+                    0,
+                    &[&index.to_be_bytes()],
+                )
+                .expect("leaf hash")
+            })
+            .collect::<Vec<_>>();
+        let build = |threads| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("private test thread pool")
+                .install(|| {
+                    GoldilocksMerkleTreeV1::from_leaves(
+                        leaves.clone(),
+                        TEST_DIGEST_CONTEXT_V1,
+                        node_role,
+                    )
+                    .expect("parallel Merkle tree")
+                })
+        };
+        let serial = build(1);
+        let parallel = build(4);
+        let mut reference_levels = vec![leaves.clone()];
+        while reference_levels.last().map_or(0, Vec::len) > 1 {
+            let parent_level = u64::try_from(reference_levels.len()).expect("small tree depth");
+            let previous = reference_levels.last().expect("reference Merkle level");
+            let next = previous
+                .chunks_exact(2)
+                .enumerate()
+                .map(|(index, pair)| {
+                    goldilocks_merkle_node_v1(
+                        TEST_DIGEST_CONTEXT_V1,
+                        node_role,
+                        parent_level,
+                        u64::try_from(index).expect("small parent index"),
+                        pair[0],
+                        pair[1],
+                    )
+                    .expect("reference serial parent")
+                })
+                .collect::<Vec<_>>();
+            reference_levels.push(next);
+        }
+        let reference = GoldilocksMerkleTreeV1 {
+            levels: reference_levels,
+        };
+        assert_eq!(serial.root(), reference.root());
+        assert_eq!(serial.root(), parallel.root());
+        for index in [0, 1, 2, 511, 512, 1_022, 1_023] {
+            assert_eq!(serial.path(index), reference.path(index));
+            assert_eq!(serial.path(index), parallel.path(index));
+        }
+    }
     #[test]
     fn transcript_is_framed_ordered_and_deterministic() {
         let profile = GoldilocksDigest384V1::new([1; 6]).expect("profile digest");
@@ -2681,5 +2839,24 @@ mod tests {
             ExactProofReaderV1::new(&noncanonical).field(),
             Err(TransparentStarkErrorV1::NonCanonicalField)
         );
+    }
+    #[test]
+    fn grinding_scheduler_advances_chunks_and_is_identical_across_rayon_widths() {
+        let first_match = GRINDING_PARALLEL_CHUNK_SIZE_V1 + 17;
+        let later_match = GRINDING_PARALLEL_CHUNK_SIZE_V1 + 29;
+        assert!(first_match > GRINDING_PARALLEL_CHUNK_SIZE_V1 - 1);
+        let search = |threads| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("private grinding test pool")
+                .install(|| {
+                    first_nonce_in_ordered_parallel_chunks_v1(|nonce| {
+                        nonce == first_match || nonce == later_match
+                    })
+                })
+        };
+        assert_eq!(search(1), Some(first_match));
+        assert_eq!(search(4), Some(first_match));
     }
 }

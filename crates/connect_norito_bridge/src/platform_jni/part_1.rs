@@ -3,8 +3,8 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
     _env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jboolean {
-    use std::panic::catch_unwind;
     use jni::sys::{JNI_FALSE, JNI_TRUE};
+    use std::panic::catch_unwind;
     let available = catch_unwind(ivm::cuda_available).unwrap_or(false);
     if available { JNI_TRUE } else { JNI_FALSE }
 }
@@ -13,8 +13,8 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
     _env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jboolean {
-    use std::panic::catch_unwind;
     use jni::sys::{JNI_FALSE, JNI_TRUE};
+    use std::panic::catch_unwind;
     let disabled = catch_unwind(ivm::cuda_disabled).unwrap_or(false);
     if disabled { JNI_TRUE } else { JNI_FALSE }
 }
@@ -2081,8 +2081,9 @@ pub(super) fn java_native_kagemusha_artifact_set_install_v4(
                 attestation.as_ptr(),
                 attestation_len.map_err(|_| "V4 attestation exceeds native range".to_owned())?,
                 internal_validation_receipt.as_ptr(),
-                internal_validation_receipt_len
-                    .map_err(|_| "V4 internal-validation receipt exceeds native range".to_owned())?,
+                internal_validation_receipt_len.map_err(|_| {
+                    "V4 internal-validation receipt exceeds native range".to_owned()
+                })?,
                 benchmark.as_ptr(),
                 benchmark_len.map_err(|_| "V4 benchmark exceeds native range".to_owned())?,
                 review.as_ptr(),
@@ -3203,16 +3204,18 @@ pub(super) fn java_native_kagemusha_prepare_note_opening_v2(
     })
 }
 #[allow(clippy::too_many_arguments)]
-pub(super) fn java_native_kagemusha_prepare_redemption_change_v4(
+pub(super) fn java_native_kagemusha_prepare_redemption_change_v5(
     env: &mut jni::JNIEnv<'_>,
     bundle: jni::objects::JByteArray<'_>,
     input_opening: jni::objects::JByteArray<'_>,
     atomic_units: jni::objects::JByteArray<'_>,
     scale: jni::sys::jint,
-    operation_id: jni::objects::JByteArray<'_>,
+    recipient: jni::objects::JByteArray<'_>,
+    chain_discriminant: jni::sys::jint,
+    nonce: jni::objects::JByteArray<'_>,
     entropy: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jobjectArray {
-    java_kagemusha_archive_array_result(env, "V4 redemption change preparation", |env| {
+    java_kagemusha_archive_array_result(env, "V5 redemption change preparation", |env| {
         let bundle = java_kagemusha_decode_archive_bounded::<
             iroha_data_model::offline::KagemushaRecursiveSpendBundleV4,
         >(
@@ -3229,8 +3232,21 @@ pub(super) fn java_native_kagemusha_prepare_redemption_change_v4(
             )?,
         };
         let change_amount = java_kagemusha_amount(env, &atomic_units, scale)?;
-        let operation_id = java_kagemusha_fixed32_sensitive(env, &operation_id, "operationId")?;
+        let chain_discriminant = u16::try_from(chain_discriminant)
+            .map_err(|_| "chainDiscriminant must fit in u16".to_owned())?;
+        let recipient = parse_account_id_for_chain(
+            java_kagemusha_text(env, &recipient, "recipient")?,
+            chain_discriminant,
+        )
+        .map_err(|_| "recipient must be a canonical account address".to_owned())?;
+        let nonce = java_kagemusha_fixed32_sensitive(env, &nonce, "nonce")?;
         let entropy = java_kagemusha_fixed32_sensitive(env, &entropy, "entropy")?;
+        if nonce == entropy {
+            return Err("entropy must be distinct from nonce".to_owned());
+        }
+        let operation_id =
+            iroha_data_model::offline::derive_kagemusha_operation_id_v4(&recipient, nonce)
+                .map_err(|_| "failed to derive redemption operation id".to_owned())?;
         let preparation = prepare_kagemusha_redemption_change_opening_v4(
             &bundle,
             &input_opening.value,
@@ -3239,7 +3255,7 @@ pub(super) fn java_native_kagemusha_prepare_redemption_change_v4(
             &entropy,
         )
         .map_err(|_| {
-            "redemption change must bind a valid input note, smaller positive amount, operation id, and fresh entropy"
+            "redemption change must bind a valid input note, smaller positive amount, recipient, nonce, and fresh entropy"
                 .to_owned()
         })?;
         let opening_archive = Zeroizing::new(

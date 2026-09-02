@@ -452,6 +452,20 @@ mod model {
             {
                 return Err("NPoS finality and reconfiguration bounds must be greater than zero");
             }
+            let accountability_window = self
+                .evidence_horizon_blocks
+                .checked_add(self.slashing_delay_blocks)
+                .ok_or("NPoS evidence-and-slashing window overflows u64")?;
+            let retained_roster_window = self
+                .epoch_length_blocks
+                .get()
+                .checked_mul(3)
+                .ok_or("NPoS three-epoch evidence capacity window overflows u64")?;
+            if accountability_window > retained_roster_window {
+                return Err(
+                    "evidence_horizon_blocks + slashing_delay_blocks must not exceed three epoch lengths",
+                );
+            }
             Ok(())
         }
     }
@@ -1237,7 +1251,7 @@ mod defaults {
                 1
             }
             pub const fn slashing_delay_blocks() -> u64 {
-                259_200
+                3_600
             }
             pub const fn epoch_length_blocks() -> NonZeroU64 {
                 nonzero_ext::nonzero!(3_600_u64)
@@ -2496,7 +2510,7 @@ mod tests {
     }
     #[test]
     fn sumeragi_npos_from_custom_parameter_accepts_valid_payload() {
-        let payload = r#"{"activation_lag_blocks":1,"epoch_length_blocks":3600,"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","evidence_horizon_blocks":7200,"finality_margin_blocks":8,"max_entity_correlation_pct":25,"max_nominator_concentration_pct":25,"max_validators":31,"min_nomination_bond":"1","min_self_bond":"1000","seat_band_pct":5,"slashing_delay_blocks":259200}"#;
+        let payload = r#"{"activation_lag_blocks":1,"epoch_length_blocks":3600,"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","evidence_horizon_blocks":7200,"finality_margin_blocks":8,"max_entity_correlation_pct":25,"max_nominator_concentration_pct":25,"max_validators":31,"min_nomination_bond":"1","min_self_bond":"1000","seat_band_pct":5,"slashing_delay_blocks":3600}"#;
         let custom = CustomParameter::new(
             SumeragiNposParameters::parameter_id(),
             payload
@@ -2507,6 +2521,22 @@ mod tests {
             SumeragiNposParameters::from_custom_parameter(&custom).is_some(),
             "real chain payload should decode"
         );
+    }
+    #[test]
+    fn sumeragi_npos_rejects_accountability_window_beyond_committed_capacity() {
+        let mut parameters = SumeragiNposParameters::default();
+        parameters.slashing_delay_blocks = 3_601;
+        assert_eq!(
+            parameters.validate(),
+            Err(
+                "evidence_horizon_blocks + slashing_delay_blocks must not exceed three epoch lengths"
+            )
+        );
+
+        parameters.slashing_delay_blocks = 3_600;
+        parameters
+            .validate()
+            .expect("four complete validator rosters fit the committed evidence table");
     }
     #[test]
     fn sumeragi_npos_json_rejects_missing_and_zero_epoch_seed() {
@@ -2616,7 +2646,7 @@ mod tests {
     }
     #[test]
     fn sumeragi_npos_from_custom_parameter_rejects_trailing_comma_payload() {
-        let payload = r#"{"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","max_validators":31,"min_self_bond":"1","min_nomination_bond":"1","max_nominator_concentration_pct":25,"seat_band_pct":100,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":259200,"epoch_length_blocks":3600,}"#;
+        let payload = r#"{"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","max_validators":31,"min_self_bond":"1","min_nomination_bond":"1","max_nominator_concentration_pct":25,"seat_band_pct":100,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":3600,"epoch_length_blocks":3600,}"#;
         assert!(
             Json::from_raw_json(payload.to_owned()).is_err(),
             "invalid JSON must be rejected before it can enter a custom parameter"

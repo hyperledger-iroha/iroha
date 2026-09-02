@@ -458,10 +458,15 @@ impl QualifiedPopCredentialRuntimeProviderRegistryV1 {
         })
     }
     fn assert_qualification(&self) -> Result<(), PopCredentialServiceError> {
-        let qualification = self
-            .registry
-            .qualification()
-            .map_err(|_| PopCredentialServiceError::RuntimeProviderRegistryUnavailable)?;
+        let qualification = self.registry.qualification().map_err(|error| match error {
+            PopCredentialRuntimeProviderRegistryErrorV1::Unavailable => {
+                PopCredentialServiceError::RuntimeProviderRegistryUnavailable
+            }
+            PopCredentialRuntimeProviderRegistryErrorV1::StaleOrRevoked
+            | PopCredentialRuntimeProviderRegistryErrorV1::RejectedBindings => {
+                PopCredentialServiceError::RuntimeProviderRegistryDrift
+            }
+        })?;
         if self.registry.handle() != self.handle || qualification != self.qualification {
             return Err(PopCredentialServiceError::RuntimeProviderRegistryDrift);
         }
@@ -1135,52 +1140,103 @@ impl PopCredentialToriiRuntimeV1 {
             sample.finalized_epoch,
         )
     }
-    /// Run bounded retry-safe submission and finalized-chain reconciliation.
-    pub fn spawn(self: Arc<Self>, shutdown: iroha_futures::supervisor::ShutdownSignal) {
+    /// Run bounded retry-safe submission and finalized-chain reconciliation under Torii
+    /// supervision.
+    pub(crate) fn spawn(
+        self: Arc<Self>,
+        shutdown: iroha_futures::supervisor::ShutdownSignal,
+    ) -> tokio::task::JoinHandle<crate::ToriiCriticalWorkerExit> {
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(self.config.worker_interval);
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tokio::select! {
-                    _ = shutdown.receive() => break,
+                    biased;
+                    _ = shutdown.receive() => {
+                        return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                    }
                     _ = ticker.tick() => {
-                        if self.provider_registry.assert_qualification().is_err() {
-                            iroha_logger::warn!(
-                                "SoraFS PoP runtime provider qualification failed before worker access"
-                            );
-                            continue;
+                        if shutdown.is_sent() {
+                            return crate::ToriiCriticalWorkerExit::StoppedByShutdown;
+                        }
+                        match self.provider_registry.assert_qualification() {
+                            Ok(()) => {}
+                            Err(PopCredentialServiceError::RuntimeProviderRegistryUnavailable) => {
+                                iroha_logger::warn!(
+                                    "SoraFS PoP runtime provider registry is temporarily unavailable before worker access"
+                                );
+                                continue;
+                            }
+                            Err(error) => {
+                                iroha_logger::error!(
+                                    ?error,
+                                    "SoraFS PoP runtime provider identity or policy changed before worker access"
+                                );
+                                return crate::ToriiCriticalWorkerExit::UnexpectedExit;
+                            }
                         }
                         let mut service = self.service.lock().await;
                         let now_epoch = match self.current_epoch() {
                             Ok(now) => now,
-                            Err(_) => continue,
+                            Err(PopCredentialServiceError::RuntimeProviderRegistryUnavailable
+                                | PopCredentialServiceError::RuntimeProviderUnavailable) => {
+                                iroha_logger::warn!(
+                                    "SoraFS PoP finalized-time provider is temporarily unavailable"
+                                );
+                                continue;
+                            }
+                            Err(error) => {
+                                iroha_logger::error!(
+                                    ?error,
+                                    "SoraFS PoP finalized-time provider failed permanently"
+                                );
+                                return crate::ToriiCriticalWorkerExit::UnexpectedExit;
+                            }
                         };
-                        if service
+                        if let Err(error) = service
                             .submit_next(self.registry_submitter.as_ref(), now_epoch)
-                            .is_err()
                         {
-                            iroha_logger::warn!(
-                                "SoraFS PoP registry submission step failed; retained durable state"
+                            iroha_logger::error!(
+                                ?error,
+                                "SoraFS PoP registry submission state failed permanently"
                             );
+                            return crate::ToriiCriticalWorkerExit::UnexpectedExit;
                         }
-                        if service
-                            .reconcile_next(self.registry_reader.as_ref(), now_epoch)
-                            .is_err()
-                        {
-                            iroha_logger::warn!(
-                                "SoraFS PoP finalized-registry reconciliation step failed"
-                            );
+                        match service.reconcile_next(self.registry_reader.as_ref(), now_epoch) {
+                            Ok(_) => {}
+                            Err(PopCredentialServiceError::RegistryUnavailable) => {
+                                iroha_logger::warn!(
+                                    "SoraFS PoP finalized-registry reader is temporarily unavailable"
+                                );
+                            }
+                            Err(error) => {
+                                iroha_logger::error!(
+                                    ?error,
+                                    "SoraFS PoP finalized-registry reconciliation failed permanently"
+                                );
+                                return crate::ToriiCriticalWorkerExit::UnexpectedExit;
+                            }
                         }
                         drop(service);
-                        if self.provider_registry.assert_qualification().is_err() {
-                            iroha_logger::warn!(
-                                "SoraFS PoP runtime provider qualification changed during worker access"
-                            );
+                        match self.provider_registry.assert_qualification() {
+                            Ok(()) => {}
+                            Err(PopCredentialServiceError::RuntimeProviderRegistryUnavailable) => {
+                                iroha_logger::warn!(
+                                    "SoraFS PoP runtime provider registry became temporarily unavailable after worker access"
+                                );
+                            }
+                            Err(error) => {
+                                iroha_logger::error!(
+                                    ?error,
+                                    "SoraFS PoP runtime provider identity or policy changed during worker access"
+                                );
+                                return crate::ToriiCriticalWorkerExit::UnexpectedExit;
+                            }
                         }
                     }
                 }
             }
-        });
+        })
     }
     async fn submit_enrollment(
         &self,
@@ -3286,6 +3342,50 @@ mod tests {
         );
         assert_eq!(finalized_time.calls.load(Ordering::SeqCst), 0);
     }
+    #[tokio::test]
+    async fn supervised_worker_honors_preexisting_shutdown_before_provider_access() {
+        let temporary = tempfile::tempdir().expect("temporary runtime root");
+        let (config, registry, finalized_time) = runtime_fixture(
+            temporary.path(),
+            "runtime:pop:providers:primary",
+            "runtime:pop:providers:primary",
+        );
+        let runtime = Arc::new(
+            PopCredentialToriiRuntimeV1::open(config, Some(as_runtime_registry(&registry)))
+                .expect("exact provider registry must qualify"),
+        );
+        let shutdown = iroha_futures::supervisor::ShutdownSignal::new();
+        shutdown.send();
+        let exit = runtime
+            .spawn(shutdown)
+            .await
+            .expect("PoP worker must join after preexisting shutdown");
+        assert_eq!(exit, crate::ToriiCriticalWorkerExit::StoppedByShutdown);
+        assert_eq!(finalized_time.calls.load(Ordering::SeqCst), 0);
+    }
+    #[tokio::test]
+    async fn supervised_worker_exits_when_provider_registry_identity_drifts() {
+        let temporary = tempfile::tempdir().expect("temporary runtime root");
+        let (config, registry, finalized_time) = runtime_fixture(
+            temporary.path(),
+            "runtime:pop:providers:primary",
+            "runtime:pop:providers:primary",
+        );
+        let runtime = Arc::new(
+            PopCredentialToriiRuntimeV1::open(config, Some(as_runtime_registry(&registry)))
+                .expect("exact provider registry must qualify"),
+        );
+        registry.revision.store(8, Ordering::SeqCst);
+        let exit = tokio::time::timeout(
+            Duration::from_secs(1),
+            runtime.spawn(iroha_futures::supervisor::ShutdownSignal::new()),
+        )
+        .await
+        .expect("permanent registry drift must stop the worker")
+        .expect("PoP worker must join");
+        assert_eq!(exit, crate::ToriiCriticalWorkerExit::UnexpectedExit);
+        assert_eq!(finalized_time.calls.load(Ordering::SeqCst), 0);
+    }
     #[test]
     fn runtime_registry_failures_have_one_payload_free_unavailable_surface() {
         for error in [
@@ -3850,7 +3950,7 @@ mod tests {
         const FIELD: &str = "runtime_provider_registry_handle";
         for handle in [
             "runtime:pop/providers/primary",
-            "pkcs11:prod/pop.providers-v1_slot-a",
+            "provider:prod/pop.providers-v1_slot-a",
         ] {
             validate_pop_runtime_provider_handle(handle, FIELD)
                 .expect("canonical production provider handle");

@@ -135,7 +135,10 @@ use iroha_data_model::{
         },
     },
     name::Name,
-    offline::KagemushaOperationKindV4,
+    offline::{
+        KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2, KagemushaOperationKindV4,
+        is_kagemusha_marked_hash_v4, kagemusha_operation_authority_digest_v4,
+    },
     peer::PeerId,
     transaction::{
         Executable, ExecutableBatchItem, SignedTransaction, TransactionAdmissionIntent,
@@ -3622,11 +3625,13 @@ static CONTRACT_ADDRESS_METADATA_KEY: LazyLock<Name> =
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PendingKagemushaOperationBinding {
+    /// Outer transaction authority that owns the pending-attempt namespace.
     authority: AccountId,
     operation_id: [u8; 32],
+    request_authority_digest: [u8; 32],
     kind: KagemushaOperationKindV4,
     canonical_request_digest: [u8; 32],
-    submitted_at_ms: u64,
+    issued_at_ms: u64,
     expires_at_ms: u64,
     entrypoint_hash: EntrypointHash,
     signed_transaction_wire_hash: [u8; 32],
@@ -3665,6 +3670,27 @@ struct PendingKagemushaOperationIndex {
 }
 
 impl PendingKagemushaOperationIndex {
+    fn validate_binding_identity(
+        binding: &PendingKagemushaOperationBinding,
+    ) -> Result<(), PendingKagemushaOperationIndexError> {
+        if !is_kagemusha_marked_hash_v4(&binding.operation_id)
+            || !is_kagemusha_marked_hash_v4(&binding.request_authority_digest)
+            || !is_kagemusha_marked_hash_v4(&binding.canonical_request_digest)
+            || !is_kagemusha_marked_hash_v4(&binding.signed_transaction_wire_hash)
+            || binding.issued_at_ms == 0
+            || binding.expires_at_ms <= binding.issued_at_ms
+            || binding.expires_at_ms - binding.issued_at_ms
+                > KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2
+        {
+            return Err(PendingKagemushaOperationIndexError {
+                entrypoint_hash: binding.entrypoint_hash,
+                reason: "pending Kagemusha binding has a non-canonical immutable identity"
+                    .to_owned(),
+            });
+        }
+        Ok(())
+    }
+
     fn binding(
         &self,
         authority: &AccountId,
@@ -3713,6 +3739,7 @@ impl PendingKagemushaOperationIndex {
         key: &PendingKagemushaOperationKey,
         binding: &PendingKagemushaOperationBinding,
     ) -> Result<(), PendingKagemushaOperationIndexError> {
+        Self::validate_binding_identity(binding)?;
         if binding.key() != *key {
             return Err(PendingKagemushaOperationIndexError {
                 entrypoint_hash: binding.entrypoint_hash,
@@ -3810,6 +3837,7 @@ impl PendingKagemushaOperationIndex {
             }
         };
         self.validate_cardinality().map_err(&inconsistent)?;
+        Self::validate_binding_identity(binding).map_err(&inconsistent)?;
         let key = binding.key();
         if let Some(existing) = self.by_key.get(&key) {
             self.validate_forward_owner(&key, existing)
@@ -3884,6 +3912,12 @@ impl PendingKagemushaOperation {
         self.binding.operation_id
     }
 
+    /// Return the canonical digest of the authority that signed the request.
+    #[must_use]
+    pub const fn request_authority_digest(&self) -> [u8; 32] {
+        self.binding.request_authority_digest
+    }
+
     /// Return whether this is a top-up or redemption.
     #[must_use]
     pub const fn kind(&self) -> KagemushaOperationKindV4 {
@@ -3898,8 +3932,8 @@ impl PendingKagemushaOperation {
 
     /// Return the request's signed issue timestamp in milliseconds.
     #[must_use]
-    pub const fn submitted_at_ms(&self) -> u64 {
-        self.binding.submitted_at_ms
+    pub const fn issued_at_ms(&self) -> u64 {
+        self.binding.issued_at_ms
     }
 
     /// Return the request's signed expiry timestamp in milliseconds.
@@ -3937,6 +3971,9 @@ impl PendingKagemushaOperation {
 /// Failure to resolve one pending Kagemusha operation from a coherent Queue snapshot.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum PendingKagemushaOperationLookupError {
+    /// The supplied operation identifier is not a canonical marked hash.
+    #[error("Kagemusha pending-operation lookup requires a canonical operation id")]
+    InvalidOperationId,
     /// Queue ownership is not safe to inspect until startup or fault recovery completes.
     #[error("Kagemusha pending-operation lookup is unavailable: {reason}")]
     Unavailable {
@@ -5408,6 +5445,12 @@ impl Queue {
             unreachable!("the shared classifier only accepts an external Kagemusha carrier")
         };
         let authorization = carrier.request().authorization();
+        let request_authority_digest =
+            kagemusha_operation_authority_digest_v4(&authorization.authority).map_err(|error| {
+                Error::KagemushaOperationCarrierRejected {
+                    reason: error.to_string(),
+                }
+            })?;
         let signed_transaction_wire_hash =
             crate::kagemusha_operation::signed_transaction_wire_hash_v4(transaction).map_err(
                 |error| Error::KagemushaOperationCarrierRejected {
@@ -5417,9 +5460,10 @@ impl Queue {
         Ok(Some(PendingKagemushaOperationBinding {
             authority: transaction.authority().clone(),
             operation_id: carrier.operation_id(),
+            request_authority_digest,
             kind: carrier.kind(),
             canonical_request_digest: carrier.canonical_request_digest(),
-            submitted_at_ms: authorization.issued_at_ms,
+            issued_at_ms: authorization.issued_at_ms,
             expires_at_ms: authorization.expires_at_ms,
             entrypoint_hash: accepted.hash_as_entrypoint(),
             signed_transaction_wire_hash,
@@ -14187,8 +14231,8 @@ impl Queue {
         authority: &AccountId,
         operation_id: [u8; 32],
     ) -> Result<Option<PendingKagemushaOperation>, PendingKagemushaOperationLookupError> {
-        if operation_id == [0; 32] {
-            return Ok(None);
+        if !is_kagemusha_marked_hash_v4(&operation_id) {
+            return Err(PendingKagemushaOperationLookupError::InvalidOperationId);
         }
         let unavailable_reason = || {
             if self.lane_reservation_startup_reconciliation_pending() {
@@ -21651,21 +21695,23 @@ pub mod tests {
         hash_seed: u8,
     ) -> PendingKagemushaOperationBinding {
         PendingKagemushaOperationBinding {
+            request_authority_digest: kagemusha_operation_authority_digest_v4(&authority)
+                .expect("test authority digest"),
             authority,
             operation_id,
             kind: KagemushaOperationKindV4::TopUp,
-            canonical_request_digest: [hash_seed.wrapping_add(1); 32],
-            submitted_at_ms: u64::from(hash_seed),
+            canonical_request_digest: Hash::new([hash_seed, 1]).into(),
+            issued_at_ms: u64::from(hash_seed),
             expires_at_ms: u64::from(hash_seed).saturating_add(1),
             entrypoint_hash: HashOf::from_untyped_unchecked(Hash::new([hash_seed])),
-            signed_transaction_wire_hash: [hash_seed.wrapping_add(2); 32],
+            signed_transaction_wire_hash: Hash::new([hash_seed, 2]).into(),
         }
     }
     #[test]
     fn pending_kagemusha_index_uses_per_authority_attempts_and_exact_reverse_owner() {
         let (first_authority, _) = gen_account_in("pending-kagemusha-first");
         let (second_authority, _) = gen_account_in("pending-kagemusha-second");
-        let operation_id = [0xA5; 32];
+        let operation_id: [u8; 32] = Hash::new(b"pending operation A5").into();
         let first = pending_kagemusha_binding_for_test(first_authority.clone(), operation_id, 1);
         let conflicting =
             pending_kagemusha_binding_for_test(first_authority.clone(), operation_id, 2);
@@ -21705,7 +21751,7 @@ pub mod tests {
     #[test]
     fn pending_kagemusha_index_rejects_reverse_only_operation_owner() {
         let (authority, _) = gen_account_in("pending-kagemusha-reverse-only");
-        let operation_id = [0xA6; 32];
+        let operation_id: [u8; 32] = Hash::new(b"pending operation A6").into();
         let orphan = pending_kagemusha_binding_for_test(authority.clone(), operation_id, 4);
         let replacement = pending_kagemusha_binding_for_test(authority.clone(), operation_id, 5);
         let mut index = PendingKagemushaOperationIndex::default();
@@ -21731,7 +21777,7 @@ pub mod tests {
     #[test]
     fn pending_kagemusha_index_rejects_forward_only_owner_on_removal() {
         let (authority, _) = gen_account_in("pending-kagemusha-forward-only");
-        let operation_id = [0xA7; 32];
+        let operation_id: [u8; 32] = Hash::new(b"pending operation A7").into();
         let orphan = pending_kagemusha_binding_for_test(authority, operation_id, 6);
         let mut index = PendingKagemushaOperationIndex::default();
         index.by_key.insert(orphan.key(), orphan.clone());
@@ -21745,11 +21791,43 @@ pub mod tests {
         ));
     }
     #[test]
+    fn pending_kagemusha_index_rejects_unmarked_immutable_identity() {
+        let (authority, _) = gen_account_in("pending-kagemusha-unmarked");
+        let operation_id: [u8; 32] = Hash::new(b"pending marked identity").into();
+        let mut malformed = pending_kagemusha_binding_for_test(authority, operation_id, 9);
+        malformed.canonical_request_digest[Hash::LENGTH - 1] &= !1;
+        let index = PendingKagemushaOperationIndex::default();
+        assert!(matches!(
+            index.validate_claim(&malformed),
+            Err(PendingKagemushaOperationClaimError::Inconsistent { .. })
+        ));
+
+        let (authority, _) = gen_account_in("pending-kagemusha-overlong-ttl");
+        let operation_id: [u8; 32] = Hash::new(b"pending overlong ttl identity").into();
+        let mut malformed = pending_kagemusha_binding_for_test(authority, operation_id, 10);
+        malformed.expires_at_ms = malformed
+            .issued_at_ms
+            .saturating_add(KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2)
+            .saturating_add(1);
+        assert!(matches!(
+            index.validate_claim(&malformed),
+            Err(PendingKagemushaOperationClaimError::Inconsistent { .. })
+        ));
+    }
+    #[test]
     fn pending_kagemusha_cold_replay_validation_rejects_balanced_cross_wiring() {
         let (first_authority, _) = gen_account_in("pending-kagemusha-cross-first");
         let (second_authority, _) = gen_account_in("pending-kagemusha-cross-second");
-        let first = pending_kagemusha_binding_for_test(first_authority, [0xA8; 32], 7);
-        let second = pending_kagemusha_binding_for_test(second_authority, [0xA9; 32], 8);
+        let first = pending_kagemusha_binding_for_test(
+            first_authority,
+            Hash::new(b"pending operation A8").into(),
+            7,
+        );
+        let second = pending_kagemusha_binding_for_test(
+            second_authority,
+            Hash::new(b"pending operation A9").into(),
+            8,
+        );
         let mut index = PendingKagemushaOperationIndex::default();
         index.by_key.insert(first.key(), first.clone());
         index.by_key.insert(second.key(), second.clone());

@@ -11,12 +11,12 @@ use iroha::data_model::nexus::{
 };
 use iroha_core::private_settlement::{
     PrivateSettlementAuditEvaluationV1, PrivateSettlementAuditPolicyEvaluatorV1,
-    SoftwarePrivateSettlementAuditorCredentialsV1,
+    SoftwarePrivateSettlementAuditorKeyringCredentialsV1,
 };
 use iroha_crypto::{Hash, KeyPair};
 use iroha_torii_shared::private_settlement_api::{
-    PrivateSettlementAuditApprovalRequestV1, PrivateSettlementBundleSubmitRequestV1,
-    PrivateSettlementLegUploadRequestV1,
+    PrivateSettlementAuditApprovalRequestV1, PrivateSettlementAuditorCapsuleRequestV1,
+    PrivateSettlementBundleSubmitRequestV1, PrivateSettlementLegUploadRequestV1,
 };
 use norito::json::{Map, Value};
 use std::{
@@ -29,6 +29,7 @@ use url::Url;
 
 use self::private_settlement_online_auditor::{
     PrivateSettlementAuditorBusinessPolicyV1, coordinate_private_settlement_online_auditor_v1,
+    load_private_settlement_audit_policy_v1,
     load_private_settlement_auditor_business_policy_v1, load_private_settlement_auditor_secret_v1,
     load_private_settlement_committee_authority_v1, load_private_settlement_pool_governance_v1,
 };
@@ -83,7 +84,7 @@ pub enum PrivateSettlementCommand {
     /// Fetch the restricted proof view as an exact committee identity
     CommitteeProof(PrivateSettlementDigestArgs),
     /// Fetch the encrypted capsule as an exact governed auditor identity
-    AuditCapsule(PrivateSettlementDigestArgs),
+    AuditCapsule(PrivateSettlementAuditCapsuleArgs),
     /// Submit one purpose-separated auditor approval
     AuditApproval(PrivateSettlementAuditApprovalArgs),
     /// Fetch, decrypt, decide, sign, and quorum-submit one auditor approval
@@ -182,6 +183,16 @@ pub struct PrivateSettlementDigestArgs {
 }
 
 #[derive(clap::Args, Debug)]
+pub struct PrivateSettlementAuditCapsuleArgs {
+    /// Exact leg payload digest.
+    #[arg(long)]
+    pub payload_digest: String,
+    /// Absolute owner-only current governed auditor-policy file.
+    #[arg(long, value_name = "PATH")]
+    pub audit_policy: PathBuf,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct PrivateSettlementAuditApprovalArgs {
     /// Exact leg payload digest.
     #[arg(long)]
@@ -227,9 +238,15 @@ pub struct PrivateSettlementAuditOnlineArgs {
     /// Absolute owner-only restricted Norito JSON pool-governance file.
     #[arg(long, value_name = "PATH")]
     pub pool_governance: PathBuf,
+    /// Absolute owner-only current governed auditor-policy file.
+    #[arg(long, value_name = "PATH")]
+    pub audit_policy: PathBuf,
     /// Absolute owner-only Norito JSON hybrid decryption-key file.
     #[arg(long, value_name = "PATH")]
     pub auditor_decryption_key_file: PathBuf,
+    /// Retired owner-only hybrid decryption-key file retained for audit; repeat as needed.
+    #[arg(long = "auditor-retired-decryption-key-file", value_name = "PATH")]
+    pub auditor_retired_decryption_key_files: Vec<PathBuf>,
     /// Absolute owner-only strict Norito JSON business-policy file.
     #[arg(long, value_name = "PATH")]
     pub business_policy: PathBuf,
@@ -393,8 +410,11 @@ fn private_settlement<C: RunContext>(
         PrivateSettlementCommand::AuditCapsule(args) => {
             let role_key = private_settlement_operator_key(context)?;
             let payload_digest = private_settlement_digest(&args.payload_digest, "payload digest")?;
+            let request = PrivateSettlementAuditorCapsuleRequestV1 {
+                audit_policy: load_private_settlement_audit_policy_v1(&args.audit_policy)?,
+            };
             context.print_data(
-                &client.private_settlement_auditor_capsule_v1(payload_digest, &role_key)?,
+                &client.private_settlement_auditor_capsule_v1(payload_digest, &request, &role_key)?,
             )
         }
         PrivateSettlementCommand::AuditApproval(args) => {
@@ -415,12 +435,25 @@ fn private_settlement<C: RunContext>(
                 load_private_settlement_committee_authority_v1(&args.committee_authority)?;
             let pool_governance =
                 load_private_settlement_pool_governance_v1(&args.pool_governance)?;
-            let decryption_secret =
-                load_private_settlement_auditor_secret_v1(&args.auditor_decryption_key_file)?;
+            let audit_policy = load_private_settlement_audit_policy_v1(&args.audit_policy)?;
+            let mut decryption_secrets = Vec::with_capacity(
+                1_usize.saturating_add(args.auditor_retired_decryption_key_files.len()),
+            );
+            decryption_secrets.push(load_private_settlement_auditor_secret_v1(
+                &args.auditor_decryption_key_file,
+            )?);
+            for retired_path in &args.auditor_retired_decryption_key_files {
+                decryption_secrets.push(load_private_settlement_auditor_secret_v1(retired_path)?);
+            }
             let business_policy =
                 load_private_settlement_auditor_business_policy_v1(&args.business_policy)?;
-            let credentials =
-                SoftwarePrivateSettlementAuditorCredentialsV1::new(&decryption_secret, &role_key);
+            let credentials = SoftwarePrivateSettlementAuditorKeyringCredentialsV1::new(
+                &decryption_secrets,
+                &role_key,
+            )
+            .map_err(|_| {
+                eyre!("private-settlement auditor decryption-key keyring is invalid")
+            })?;
             let request_signer = BorrowedKeyPairIdentityRequestSignerV1::new(&role_key);
             let evaluator = PrivateSettlementAuditDecisionPolicyV1 {
                 decision: args.decision,
@@ -431,6 +464,7 @@ fn private_settlement<C: RunContext>(
                 &args.committee_endpoints,
                 &committee_authority,
                 payload_digest,
+                &audit_policy,
                 &pool_governance,
                 &credentials,
                 &request_signer,
@@ -690,7 +724,7 @@ fn format_validator_summary(payload: &Value) -> Result<String> {
     writeln!(
         &mut output,
         "{:<36}  {:<24}  {:<18}  {:<22}  {:<20}  {:<11}",
-        "VALIDATOR", "PEER_ID", "STATUS", "ACTIVATION", "STAKE", "LAST_REWARD"
+        "VALIDATOR", "PEER_ID", "STATUS", "TENURE", "STAKE", "LAST_REWARD"
     )?;
     for entry in entries {
         let row = build_validator_row(entry);
@@ -700,7 +734,7 @@ fn format_validator_summary(payload: &Value) -> Result<String> {
             truncate_field(&row.validator, 36),
             truncate_field(&row.peer_id, 24),
             truncate_field(&row.status, 18),
-            truncate_field(&row.activation, 22),
+            truncate_field(&row.tenure, 22),
             truncate_field(&row.stake, 20),
             truncate_field(&row.last_reward, 11),
         )?;
@@ -759,7 +793,7 @@ struct ValidatorRow {
     validator: String,
     peer_id: String,
     status: String,
-    activation: String,
+    tenure: String,
     stake: String,
     last_reward: String,
 }
@@ -775,7 +809,7 @@ fn build_validator_row(entry: &Map) -> ValidatorRow {
         .unwrap_or("-")
         .to_string();
     let status = validator_status_label(entry.get("status"));
-    let activation = activation_label(entry);
+    let tenure = tenure_label(entry);
     let total_stake = entry
         .get("total_stake")
         .map_or_else(|| "-".to_string(), stringify_value);
@@ -791,7 +825,7 @@ fn build_validator_row(entry: &Map) -> ValidatorRow {
         validator,
         peer_id,
         status,
-        activation,
+        tenure,
         stake,
         last_reward,
     }
@@ -805,21 +839,17 @@ fn validator_status_label(status: Option<&Value>) -> String {
     };
     match kind {
         "PendingActivation" => {
-            let epoch = map
-                .get("activates_at_epoch")
+            let height = map
+                .get("activates_at_height")
                 .and_then(Value::as_u64)
-                .map_or_else(String::new, |v| format!("epoch {v}"));
-            if epoch.is_empty() {
+                .map_or_else(String::new, |v| format!("height {v}"));
+            if height.is_empty() {
                 "Pending".to_string()
             } else {
-                format!("Pending({epoch})")
+                format!("Pending({height})")
             }
         }
         "Active" => "Active".to_string(),
-        "Jailed" => map.get("reason").and_then(Value::as_str).map_or_else(
-            || "Jailed".to_string(),
-            |reason| format!("Jailed({})", truncate_field(reason, 14)),
-        ),
         "Exiting" => map
             .get("releases_at_ms")
             .and_then(Value::as_u64)
@@ -832,19 +862,12 @@ fn validator_status_label(status: Option<&Value>) -> String {
         other => other.to_string(),
     }
 }
-fn activation_label(entry: &Map) -> String {
-    let epoch = entry
-        .get("activation_epoch")
-        .and_then(Value::as_u64)
-        .map(|v| v.to_string());
-    let height = entry
-        .get("activation_height")
-        .and_then(Value::as_u64)
-        .map(|v| v.to_string());
-    match (epoch, height) {
-        (Some(e), Some(h)) => format!("epoch {e} @ {h}"),
-        (Some(e), None) => format!("epoch {e}"),
-        (None, Some(h)) => format!("height {h}"),
+fn tenure_label(entry: &Map) -> String {
+    let activation = entry.get("activation_height").and_then(Value::as_u64);
+    let deactivation = entry.get("deactivation_height").and_then(Value::as_u64);
+    match (activation, deactivation) {
+        (Some(start), Some(end)) => format!("heights [{start}, {end})"),
+        (Some(start), None) => format!("height {start}+"),
         _ => "-".to_string(),
     }
 }
@@ -977,7 +1000,9 @@ mod tests {
             "committee_authority",
             "payload_digest",
             "pool_governance",
+            "audit_policy",
             "auditor_decryption_key_file",
+            "auditor_retired_decryption_key_files",
             "business_policy",
             "decision",
         ] {
@@ -1088,11 +1113,11 @@ mod tests {
                 "status".into(),
                 Value::Object(Map::from_iter([
                     ("type".into(), Value::from("PendingActivation")),
-                    ("activates_at_epoch".into(), Value::from(2u64)),
+                    ("activates_at_height".into(), Value::from(3601u64)),
                 ])),
             ),
-            ("activation_epoch".into(), Value::from(1u64)),
             ("activation_height".into(), Value::from(3601u64)),
+            ("deactivation_height".into(), Value::from(7201u64)),
             ("last_reward_epoch".into(), Value::Null),
         ]);
         let payload = Value::Object(Map::from_iter([
@@ -1102,8 +1127,8 @@ mod tests {
         ]));
         let summary = format_validator_summary(&payload).expect("format summary");
         assert!(summary.contains(&truncate_field(&validator, 36)));
-        assert!(summary.contains("Pending(epoch 2)"));
-        assert!(summary.contains("epoch 1 @ 3601"));
+        assert!(summary.contains("Pending(height 3601)"));
+        assert!(summary.contains("heights [3601, 7201)"));
         assert!(summary.contains("1000 (self 800)"));
     }
     #[test]

@@ -6547,7 +6547,7 @@ mod tests {
             .to_bytes(),
             compaction_interval_ms: 60_000,
             compaction_max_records: 256,
-            receipt_signer_handle: "pkcs11:prod-evidence-receipts".to_owned(),
+            receipt_signer_handle: "provider:prod-evidence-receipts".to_owned(),
             expected_receipt_signer_qualification:
                 EvidenceViewerRuntimeProviderQualificationV1::new(1, [0xA3; 32]),
             receipt_signer_public_key: public_key,
@@ -7587,7 +7587,7 @@ mod tests {
             let grants = Arc::new(MockGrantBoundary::new("kms:prod-evidence-grants"));
             let signing_key = SigningKey::from_bytes(&[0x51; 32]);
             let signer = Arc::new(MockReceiptSigner::new(
-                "pkcs11:prod-evidence-receipts",
+                "provider:prod-evidence-receipts",
                 signing_key,
             ));
             let erasure = Arc::new(MockErasureBoundary::new("kms:prod-evidence-erasure"));
@@ -7952,7 +7952,7 @@ mod tests {
         EvidenceViewerSignedReceiptV1 {
             body,
             receipt_digest,
-            signer_handle: "pkcs11:prod-evidence-receipts".to_owned(),
+            signer_handle: "provider:prod-evidence-receipts".to_owned(),
             signer_public_key: signing_key.verifying_key().to_bytes(),
             signature: signing_key
                 .sign(&receipt_signature_message(receipt_digest))
@@ -10480,7 +10480,7 @@ mod tests {
             EvidenceViewerErrorV1::InvalidConfig
         );
         let wrong_signer = Arc::new(MockReceiptSigner::new(
-            "pkcs11:unexpected-receipts",
+            "provider:unexpected-receipts",
             SigningKey::from_bytes(&[0x52; 32]),
         ));
         let drifted_signer = EvidenceViewerRuntimeDepsV1 {

@@ -12067,6 +12067,99 @@ fn lifecycle_roles_reject_cross_party_updates() {
 }
 
 #[test]
+fn lifecycle_apply_rejects_original_pruned_after_authorization() {
+    let store = TempDir::new().expect("tempdir");
+    let mut config = sample_config();
+    config.store_dir = Some(store.path().to_path_buf());
+    config.store_retention_secs = 3_600;
+    let runtime = Iso20022BridgeRuntime::from_config(&config)
+        .expect("valid participant config")
+        .expect("enabled runtime");
+    let originator = fixture_key_pair(0xAB);
+    let counterparty = fixture_key_pair(0xAC);
+    let profile = runtime.default_profile();
+
+    let original = participant_message(
+        "pacs.008",
+        "DEUTDEFF",
+        "MARKDEFF",
+        "MsgId=expiry-boundary-original",
+    );
+    let original_parties = runtime
+        .authorize_initial_submission(originator.public_key(), profile, &original)
+        .expect("originator owns original");
+    runtime
+        .admit_authenticated_inbound(
+            "expiry-boundary-original",
+            inbound_metadata("expiry-boundary-original", "pacs.008"),
+            original_parties,
+        )
+        .expect("original admitted");
+    runtime.mark_accepted("expiry-boundary-original", "tx-expiry-boundary");
+    assert!(runtime.mark_settled("expiry-boundary-original", SystemTime::now()));
+    assert!(runtime.lifecycle_reference_is_live_at("expiry-boundary-original", SystemTime::now(),));
+
+    let lifecycle = participant_message(
+        "pacs.004",
+        "MARKDEFF",
+        "DEUTDEFF",
+        "BizMsgIdr=expiry-boundary-return\n\
+         OrgnlGrpInf/OrgnlMsgId=expiry-boundary-original",
+    );
+    let lifecycle_parties = runtime
+        .authorize_lifecycle_submission(counterparty.public_key(), profile, "pacs.004", &lifecycle)
+        .expect("counterparty is authorized before the original expires");
+    runtime
+        .records
+        .get_mut("expiry-boundary-original")
+        .expect("original remains before retention pruning")
+        .updated_at = SystemTime::UNIX_EPOCH;
+    assert!(
+        !runtime.lifecycle_reference_is_live_at("expiry-boundary-original", SystemTime::now(),)
+    );
+
+    let lifecycle_metadata = inbound_metadata("expiry-boundary-return", "pacs.004");
+    runtime
+        .admit_authenticated_inbound(
+            "expiry-boundary-return",
+            lifecycle_metadata.clone(),
+            lifecycle_parties.clone(),
+        )
+        .expect("lifecycle identity admitted after retention pruning");
+    assert!(
+        runtime.message_status("expiry-boundary-original").is_none(),
+        "admission must reproduce the retention-pruning side of the race"
+    );
+
+    let error = runtime
+        .apply_inbound_lifecycle_message_with_evidence(
+            "expiry-boundary-return",
+            "pacs.004",
+            &lifecycle,
+            true,
+        )
+        .expect_err("a lifecycle message must not be accepted without its original");
+    assert!(matches!(error, MsgError::ValidationFailed));
+    assert_eq!(
+        runtime
+            .message_status("expiry-boundary-return")
+            .expect("failed lifecycle identity remains reserved")
+            .status_label(),
+        "Pending"
+    );
+    assert!(runtime.mark_rejected("expiry-boundary-return", Some(error.to_string()), None,));
+    assert_eq!(
+        runtime.admit_authenticated_inbound(
+            "expiry-boundary-return",
+            lifecycle_metadata,
+            lifecycle_parties,
+        ),
+        Err(IsoAdmissionError::Duplicate),
+        "rejection must retain lifecycle replay protection"
+    );
+}
+
+#[test]
 fn counterparty_owns_every_return_and_securities_lifecycle_message() {
     let store = TempDir::new().expect("tempdir");
     let mut config = sample_config();

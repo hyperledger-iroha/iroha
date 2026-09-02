@@ -1869,6 +1869,37 @@ impl DurableRecoveredLifecycleSignedBroadcastWork {
                 coordinator,
             )
     }
+    fn matches_current_parked_record(
+        &self,
+        address: ConcreteWorkAddress,
+        installed_digest: LifecycleDigest,
+        coordinator: &LifecycleCoordinator,
+        expected_active_lease: Option<&TurnLease>,
+    ) -> bool {
+        self.validates_at(address, installed_digest)
+            && self.broadcast.matches_current_parked_record(
+                coordinator.active_context,
+                address,
+                installed_digest,
+                coordinator,
+                expected_active_lease,
+            )
+    }
+    fn matches_current_live_census_record(
+        &self,
+        address: ConcreteWorkAddress,
+        installed_digest: LifecycleDigest,
+        coordinator: &LifecycleCoordinator,
+        expected_active_lease: Option<&TurnLease>,
+    ) -> bool {
+        self.matches_current_ready_record(address, installed_digest, coordinator)
+            || self.matches_current_parked_record(
+                address,
+                installed_digest,
+                coordinator,
+                expected_active_lease,
+            )
+    }
     fn exactly_matches_runtime_retransmit(
         &self,
         address: ConcreteWorkAddress,
@@ -4316,10 +4347,11 @@ impl PreparedCertifiedServeTerminalRegistryTransitionV1 {
     fn preflights_current(
         &self,
         registry: &ConcreteLifecycleWorkRegistry,
+        verified: &VerifiedHeightContext,
         coordinator: &LifecycleCoordinator,
         lease: &TurnLease,
     ) -> bool {
-        if !registry.exactly_covers_active_certified_serve_lease(coordinator, lease) {
+        if !registry.exactly_covers_active_certified_serve_lease(verified, coordinator, lease) {
             return false;
         }
         let (Some(serve), Some(producer)) = (

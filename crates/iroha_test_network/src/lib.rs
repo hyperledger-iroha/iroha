@@ -6398,6 +6398,24 @@ fn npos_params_from_genesis(
         .map(Some)
         .ok_or_else(|| "genesis contains invalid `sumeragi_npos_parameters`".to_owned())
 }
+fn authenticated_validator_capacity(
+    declared_capacity: usize,
+    consensus_mode: ConsensusMode,
+    genesis_isi: &[Vec<InstructionBox>],
+    genesis_post_topology_isi: &[Vec<InstructionBox>],
+) -> Result<usize, String> {
+    if consensus_mode == ConsensusMode::Permissioned {
+        return Ok(declared_capacity);
+    }
+    let npos =
+        npos_params_from_genesis(genesis_isi, genesis_post_topology_isi)?.unwrap_or_default();
+    npos.validate()
+        .map_err(|error| format!("invalid signed NPoS validator ceiling: {error}"))?;
+    let signed_capacity = usize::try_from(npos.max_validators()).map_err(|_| {
+        "signed NPoS maximum validator roster does not fit this platform".to_owned()
+    })?;
+    Ok(declared_capacity.max(signed_capacity))
+}
 fn resolve_npos_bootstrap_stake(
     genesis_isi: &[Vec<InstructionBox>],
     genesis_post_topology_isi: &[Vec<InstructionBox>],
@@ -7010,6 +7028,15 @@ impl NetworkBuilder {
             initial_consensus_message_control,
         } = self;
         let max_validator_capacity = max_validator_capacity.unwrap_or(n_peers);
+        let ingress_validator_capacity = authenticated_validator_capacity(
+            max_validator_capacity,
+            consensus_mode,
+            &genesis_isi,
+            &genesis_post_topology_isi,
+        )
+        .unwrap_or_else(|error| {
+            panic!("failed to derive authenticated test-network validator capacity: {error}")
+        });
         let observer_count = observer_p2p_bootstrap.map_or(0, |bootstrap| {
             bootstrap
                 .validate_for_validators(
@@ -7146,7 +7173,7 @@ impl NetworkBuilder {
             }
         }
         let generated_sumeragi_layer =
-            generated_sumeragi_capacity_layer(max_validator_capacity, &config_layers)
+            generated_sumeragi_capacity_layer(ingress_validator_capacity, &config_layers)
                 .unwrap_or_else(|error| {
                     panic!("failed to derive test-network Sumeragi capacity layer: {error:#}")
                 });
@@ -7590,11 +7617,11 @@ impl NetworkBuilder {
             resolved_genesis_config
                 .as_ref()
                 .expect("final test-network config was just resolved"),
-            max_validator_capacity,
+            ingress_validator_capacity,
         )
         .unwrap_or_else(|error| {
             panic!(
-                "final fully merged test-network config does not reserve the declared maximum validator capacity: {error:#}"
+                "final fully merged test-network config does not reserve the authenticated/planned maximum validator capacity: {error:#}"
             )
         });
         if let Some(bootstrap) = observer_p2p_bootstrap {
@@ -11743,6 +11770,16 @@ mod tests {
     }
     #[test]
     fn genesis_consensus_metadata_matches_shared_runtime_derivation_for_npos() {
+        let worker = std::thread::Builder::new()
+            .name("explicit-npos-ingress-capacity-regression".to_owned())
+            .stack_size(64 * 1024 * 1024)
+            .spawn(genesis_consensus_metadata_matches_shared_runtime_derivation_for_npos_impl)
+            .expect("spawn explicit NPoS ingress-capacity regression");
+        if let Err(panic) = worker.join() {
+            std::panic::resume_unwind(panic);
+        }
+    }
+    fn genesis_consensus_metadata_matches_shared_runtime_derivation_for_npos_impl() {
         init_instruction_registry();
         let mut npos = SumeragiNposParameters::default();
         npos.max_validators = 4;
@@ -11761,6 +11798,28 @@ mod tests {
                     npos.into_custom_parameter(),
                 ))),
         );
+        let config_layers = network
+            .config_layers()
+            .map(Cow::into_owned)
+            .collect::<Vec<_>>();
+        let actual = resolve_final_actual_config(&network.peers()[0], &config_layers);
+        let authenticated_non_validator_sources = actual
+            .sumeragi
+            .queues
+            .authenticated_non_validator_sources
+            .get();
+        let body_source_bytes = actual.sumeragi.queues.body_source_bytes.get();
+        assert_eq!(
+            actual.sumeragi.queues.body_bytes.get(),
+            (4 + authenticated_non_validator_sources) * body_source_bytes,
+            "an explicit signed four-validator ceiling must retain four validator source partitions"
+        );
+        actual
+            .sumeragi
+            .v2_config(Duration::from_millis(666), ConsensusMode::Npos)
+            .expect("explicit four-validator NPoS config is valid")
+            .validate_ingress_roster_capacity(4)
+            .expect("explicit four-validator NPoS ingress geometry is sufficient");
         let genesis = network.genesis();
         let profile = network.consensus_bootstrap_profile();
         let mut parameter_state = consensus_parameters_from_genesis(&genesis);
@@ -12195,10 +12254,61 @@ mod tests {
             .or_else(|| panic.downcast_ref::<String>().cloned())
             .unwrap_or_else(|| "<missing panic message>".to_owned());
         assert!(
-            panic_message.contains("declared maximum validator capacity")
+            panic_message.contains("authenticated/planned maximum validator capacity")
                 && panic_message.contains("planned-roster minimum"),
             "planned capacity failure should be localized, got: {panic_message}"
         );
+    }
+    #[test]
+    fn npos_signed_ceiling_fails_closed_on_bootstrap_only_body_bytes() {
+        let worker = std::thread::Builder::new()
+            .name("npos-signed-ceiling-underbudget-regression".to_owned())
+            .stack_size(64 * 1024 * 1024)
+            .spawn(|| {
+                let authenticated_non_validator_sources = iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
+                    .get();
+                let body_source_bytes =
+                    iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
+                let bootstrap_body_bytes = iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_byte_capacity(
+                    4,
+                    authenticated_non_validator_sources,
+                    body_source_bytes,
+                )
+                .expect("four-validator fixture byte geometry is representable");
+                let panic = std::panic::catch_unwind(|| {
+                    build_with_isolated_permit(
+                        NetworkBuilder::new()
+                            .with_peers(4)
+                            .with_npos_consensus()
+                            .with_base_seed(stringify!(
+                                npos_signed_ceiling_fails_closed_on_bootstrap_only_body_bytes
+                            ))
+                            .with_config_layer(move |layer| {
+                                layer.write(
+                                    ["sumeragi", "queues", "body_bytes"],
+                                    i64::try_from(bootstrap_body_bytes)
+                                        .expect("fixture capacity fits TOML"),
+                                );
+                            }),
+                    );
+                })
+                .expect_err("bootstrap-only bytes must not erase the signed NPoS ceiling");
+                let panic_message = panic
+                    .downcast_ref::<&str>()
+                    .map(std::string::ToString::to_string)
+                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "<missing panic message>".to_owned());
+                assert!(
+                    panic_message.contains("authenticated/planned maximum validator capacity")
+                        && panic_message.contains("planned-roster minimum")
+                        && panic_message.contains("31 validators"),
+                    "signed NPoS capacity failure should be localized, got: {panic_message}"
+                );
+            })
+            .expect("spawn signed NPoS ceiling underbudget regression");
+        if let Err(panic) = worker.join() {
+            std::panic::resume_unwind(panic);
+        }
     }
     #[test]
     fn max_validator_capacity_checks_planned_body_message_boundary() {
@@ -13029,6 +13139,16 @@ mod tests {
     }
     #[test]
     fn generated_network_configs_parse_for_legal_roster_scales() {
+        let worker = std::thread::Builder::new()
+            .name("generated-npos-ingress-capacity-regression".to_owned())
+            .stack_size(64 * 1024 * 1024)
+            .spawn(generated_network_configs_parse_for_legal_roster_scales_impl)
+            .expect("spawn generated NPoS ingress-capacity regression");
+        if let Err(panic) = worker.join() {
+            std::panic::resume_unwind(panic);
+        }
+    }
+    fn generated_network_configs_parse_for_legal_roster_scales_impl() {
         init_instruction_registry();
         let commands = iroha_config::parameters::defaults::sumeragi::QUEUE_COMMAND_CAPACITY.get();
         let bodies = iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_CAPACITY.get();
@@ -13084,16 +13204,27 @@ mod tests {
                 actual.sumeragi.queues.body_source_bytes.get(),
                 body_source_bytes
             );
+            let authenticated_validator_capacity =
+                usize::try_from(SumeragiNposParameters::default().max_validators())
+                    .expect("default signed NPoS validator ceiling fits this platform");
+            assert_eq!(network.max_validator_capacity, validator_count);
             assert_eq!(
                 actual.sumeragi.queues.body_bytes.get(),
-                (validator_count + authenticated_non_validator_sources) * body_source_bytes
+                (authenticated_validator_capacity + authenticated_non_validator_sources)
+                    * body_source_bytes
             );
+            actual
+                .sumeragi
+                .v2_config(network.block_cadence(), ConsensusMode::Npos)
+                .expect("default NPoS config is valid")
+                .validate_ingress_roster_capacity(authenticated_validator_capacity)
+                .expect("generated ingress geometry admits the signed NPoS ceiling");
             assert_eq!(
                 effective_network_reply_source_capacity(&actual.network),
                 max_total_connections
             );
             iroha_config::parameters::actual::sumeragi_v2_lifecycle_capacity_geometry(
-                validator_count,
+                authenticated_validator_capacity,
                 effect_work_capacity,
                 bodies,
                 authenticated_non_validator_sources,

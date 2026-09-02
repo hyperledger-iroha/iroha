@@ -1093,6 +1093,7 @@ fn is_time_sensitive_instruction_type(type_id: TypeId) -> bool {
         iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation,
         iroha_data_model::isi::offline::SetOfflineDeviceAttestationPolicy,
         iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1,
+        iroha_data_model::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1,
         iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1,
         iroha_data_model::isi::private_settlement::FinalizeAtomicPrivateSettlementV1,
         iroha_data_model::isi::oracle::RecordTwitterBinding,
@@ -8557,6 +8558,9 @@ pub mod tests {
             TypeId::of::<iroha_data_model::isi::offline::SetOfflineDeviceAttestationPolicy>(),
             TypeId::of::<iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1>(
             ),
+            TypeId::of::<
+                iroha_data_model::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1,
+            >(),
             TypeId::of::<iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1>(
             ),
             TypeId::of::<

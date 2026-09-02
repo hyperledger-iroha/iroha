@@ -144,6 +144,157 @@ struct AutonomousTerminalEvidenceReferences {
     replica_heights: BTreeSet<u64>,
 }
 impl Kura {
+    /// Collect exact global carrier identities referenced by every active or
+    /// archived canonical-replica terminal outcome.
+    ///
+    /// This is an early startup preservation guard, not the authorization
+    /// audit. It runs before canonical-storage recovery can classify or remove
+    /// a DA sidecar, so it deliberately trusts no route catalog and scans the
+    /// same bounded active/retired roots as the later peer-bound audit. The
+    /// complete authenticated validation still runs after Kura construction.
+    fn canonical_replica_terminal_carrier_pins_for_store(
+        store_root: &Path,
+        active_blocks_root: &Path,
+    ) -> Result<BTreeMap<u64, HashOf<BlockHeader>>> {
+        let mut candidate_roots = vec![
+            store_root.join("blocks"),
+            store_root.join("retired").join("blocks"),
+            store_root.join("retired").join("lane_geometry"),
+            active_blocks_root.to_path_buf(),
+        ];
+        candidate_roots.sort_by_key(|path| path.components().count());
+        let mut roots = Vec::<PathBuf>::new();
+        for root in candidate_roots {
+            if !roots.iter().any(|existing| root.starts_with(existing)) {
+                roots.push(root);
+            }
+        }
+        let mut pending = roots
+            .into_iter()
+            .map(|directory| (directory, 0_usize))
+            .collect::<Vec<_>>();
+        let mut entries_seen = 0_usize;
+        let mut pins = BTreeMap::new();
+        while let Some((directory, depth)) = pending.pop() {
+            if depth > AUTONOMOUS_LIFECYCLE_GENERATION_AUDIT_MAX_DEPTH {
+                return Err(Self::invalid_lane_artifact_error(
+                    directory,
+                    "canonical replica carrier-pin inventory exceeds its directory-depth bound",
+                ));
+            }
+            let directory_entries = match std::fs::read_dir(&directory) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == ErrorKind::NotFound => continue,
+                Err(error) => return Err(Error::IO(error, directory)),
+            };
+            for directory_entry in directory_entries {
+                let directory_entry =
+                    directory_entry.map_err(|error| Error::IO(error, directory.clone()))?;
+                entries_seen = entries_seen.checked_add(1).ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        directory.clone(),
+                        "canonical replica carrier-pin inventory count overflows",
+                    )
+                })?;
+                if entries_seen > AUTONOMOUS_LIFECYCLE_GENERATION_AUDIT_MAX_ENTRIES {
+                    return Err(Self::invalid_lane_artifact_error(
+                        directory,
+                        "canonical replica carrier-pin inventory exceeds its hard entry bound",
+                    ));
+                }
+                let path = directory_entry.path();
+                let file_type = directory_entry
+                    .file_type()
+                    .map_err(|error| Error::IO(error, path.clone()))?;
+                if file_type.is_symlink() {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "canonical replica carrier-pin inventory encountered a symlink",
+                    ));
+                }
+                if file_type.is_dir() {
+                    pending.push((path, depth.saturating_add(1)));
+                    continue;
+                }
+                let Some(name) = path.file_name().and_then(std::ffi::OsStr::to_str) else {
+                    continue;
+                };
+                let coordinates = Self::autonomous_lifecycle_terminal_outcome_coordinates(name);
+                if coordinates.is_none() {
+                    if name.starts_with(AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_PREFIX) {
+                        return Err(Self::invalid_lane_artifact_error(
+                            path,
+                            "canonical replica carrier-pin inventory found a malformed terminal outcome path",
+                        ));
+                    }
+                    continue;
+                }
+                if !file_type.is_file() {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "canonical replica carrier-pin outcome is not a regular file",
+                    ));
+                }
+                let parent = path.parent().ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        path.clone(),
+                        "canonical replica carrier-pin outcome has no parent",
+                    )
+                })?;
+                let bytes = Self::read_regular_sidecar_bytes_for(
+                    store_root,
+                    &path,
+                    parent,
+                    AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES,
+                )?
+                .ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        path.clone(),
+                        "canonical replica carrier-pin outcome disappeared during inventory",
+                    )
+                })?;
+                let outcome = Self::decode_autonomous_lifecycle_terminal_outcome(&path, &bytes)?;
+                if !matches!(
+                    outcome.basis(),
+                    AutonomousLifecycleTerminalOutcomeBasisV1::CanonicalReplica { .. }
+                ) {
+                    continue;
+                }
+                let (lane_block_height, proposal_height) =
+                    coordinates.expect("terminal coordinates were checked above");
+                if outcome.binding().lane_block_height != lane_block_height
+                    || outcome.binding().proposal_height != proposal_height
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "canonical replica carrier-pin outcome changed its path identity",
+                    ));
+                }
+                let AutonomousLifecycleTerminalOutcomeSourceV1::CanonicalCarrier {
+                    carrier_block_height,
+                    carrier_block_hash,
+                    ..
+                } = outcome.source()
+                else {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "canonical replica carrier-pin outcome has a noncanonical source",
+                    ));
+                };
+                if pins
+                    .insert(carrier_block_height, carrier_block_hash)
+                    .is_some_and(|existing| existing != carrier_block_hash)
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "canonical replica terminal outcomes conflict on a carrier height",
+                    ));
+                }
+            }
+        }
+        Ok(pins)
+    }
+
     fn active_autonomous_lifecycle_attempt_inventory_for_process_record(
         &self,
         process_record: &AutonomousLifecycleProcessGenerationRecordV1,
@@ -793,7 +944,7 @@ impl Kura {
                 "autonomous lifecycle terminal outcome exceeds its hard byte limit",
             ));
         }
-        let outcome = norito::decode_canonical::<AutonomousLifecycleTerminalOutcomeV1>(bytes)
+        let outcome = AutonomousLifecycleTerminalOutcomeV1::decode_framed_unvalidated(bytes)
             .map_err(|error| match error {
                 norito::Error::NonCanonicalEncoding => Self::invalid_lane_artifact_error(
                     path.to_path_buf(),
@@ -1111,6 +1262,62 @@ impl Kura {
         source.validate_structure()?;
         Ok(source)
     }
+    /// Require the exact canonical global carrier body while establishing or
+    /// revalidating non-owning replica terminal custody.
+    ///
+    /// Finality, merge-log, receipt, and lane-replica records authenticate
+    /// their own projections, but none alone proves that the complete global
+    /// carrier body remains locally available. Pending and Complete replica
+    /// outcomes therefore keep this body inline or in the exact DA sidecar;
+    /// RemoteOnly storage fails closed until authenticated rehydration.
+    fn require_exact_local_canonical_replica_carrier_body_locked(
+        &self,
+        source: AutonomousLifecycleTerminalOutcomeSourceV1,
+    ) -> Result<()> {
+        let AutonomousLifecycleTerminalOutcomeSourceV1::CanonicalCarrier {
+            merge_epoch_id,
+            merge_entry_hash,
+            carrier_block_height,
+            carrier_block_hash,
+            ..
+        } = source
+        else {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "canonical replica terminal custody has a noncanonical source",
+            ));
+        };
+        let height = usize::try_from(carrier_block_height)
+            .ok()
+            .and_then(NonZeroUsize::new)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "canonical replica terminal carrier height is not representable",
+                )
+            })?;
+        let block = self
+            .get_block_without_merge_sidecar(height)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "canonical replica terminal outcome requires its exact local carrier body",
+                )
+            })?;
+        if block.header().height().get() != carrier_block_height
+            || block.hash() != carrier_block_hash
+            || Self::block_merge_reference(&block).is_none_or(|reference| {
+                reference.entry_hash != merge_entry_hash || reference.epoch_id != merge_epoch_id
+            })
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "canonical replica terminal carrier body changed its source binding",
+            ));
+        }
+        Ok(())
+    }
+
     fn autonomous_lifecycle_terminal_source_matches_canonical_carrier_locked(
         &self,
         payload: &LaneExecutablePayloadV1,
@@ -1835,6 +2042,7 @@ impl Kura {
                 "canonical replica terminal outcome payload changed",
             ));
         }
+        self.require_exact_local_canonical_replica_carrier_body_locked(source)?;
         self.autonomous_lifecycle_terminal_source_matches_canonical_carrier_locked(
             payload, source,
         )?;
@@ -1980,6 +2188,7 @@ impl Kura {
                 "canonical replica validation received an owned lifecycle outcome",
             ));
         };
+        self.require_exact_local_canonical_replica_carrier_body_locked(outcome.source())?;
         let binding = outcome.binding();
         let replica = self
             .canonical_autonomous_lane_replica_record_locked(
@@ -2143,6 +2352,7 @@ impl Kura {
                 "archived canonical replica validation received an owned lifecycle outcome",
             ));
         };
+        self.require_exact_local_canonical_replica_carrier_body_locked(outcome.source())?;
         let binding = outcome.binding();
         let replica = self
             .canonical_autonomous_lane_replica_record_from_paths_locked(
@@ -2536,15 +2746,14 @@ impl Kura {
                     }
                     inventory.conceptual_files = next_files;
                     inventory.conceptual_bytes = next_bytes;
-                    additional_unreserved_stable_bytes =
-                        additional_unreserved_stable_bytes
-                            .checked_add(next_len)
-                            .ok_or_else(|| {
-                                Self::invalid_lane_artifact_error(
-                                    plan.path.clone(),
-                                    "canonical replica Pending stable-byte accounting overflows",
-                                )
-                            })?;
+                    additional_unreserved_stable_bytes = additional_unreserved_stable_bytes
+                        .checked_add(next_len)
+                        .ok_or_else(|| {
+                            Self::invalid_lane_artifact_error(
+                                plan.path.clone(),
+                                "canonical replica Pending stable-byte accounting overflows",
+                            )
+                        })?;
                     additional_replica_incomplete_identities =
                         additional_replica_incomplete_identities
                             .checked_add(1)

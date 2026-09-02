@@ -806,8 +806,8 @@ fn api_test_governance_ingress_qualification(
 }
 #[tokio::test]
 async fn running_governance_dag_service_installs_authenticated_mirror_for_torii() {
-    const IPFS_AUTH_HANDLE: &str = "hsm:governance-dag:torii-api-ipfs-ingress";
-    const HEAD_AUTH_HANDLE: &str = "hsm:governance-dag:torii-api-head-ingress";
+    const IPFS_AUTH_HANDLE: &str = "provider:governance-dag:torii-api-ipfs-ingress";
+    const HEAD_AUTH_HANDLE: &str = "provider:governance-dag:torii-api-head-ingress";
     const IPFS_AUTH_SEED: u8 = 0x61;
     const HEAD_AUTH_SEED: u8 = 0x62;
     let temp_dir = tempfile::tempdir().expect("create Governance DAG service temp dir");

@@ -1689,7 +1689,7 @@ mod tests {
         },
         thread,
     };
-    const TEST_SIGNER_HANDLE: &str = "moderation-hsm-primary";
+    const TEST_SIGNER_HANDLE: &str = "moderation-provider-primary";
     const TEST_INGRESS_HANDLE: &str = "moderation-ingress-primary";
     const TEST_HANDOFF_HANDLE: &str = "moderation-handoff-primary";
     const TEST_NOTIFICATION_HANDLE: &str = "moderation-notification-primary";

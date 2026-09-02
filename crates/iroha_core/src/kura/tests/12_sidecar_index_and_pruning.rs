@@ -185,10 +185,43 @@ fn strict_init_prunes_oversized_block_length() {
     let BlockIndex { start, .. } = store.read_block_index(0).unwrap();
     let huge_len = STRICT_INIT_MAX_BLOCK_BYTES + 1;
     store.write_block_index(0, start, huge_len).unwrap();
-    let validation = Kura::init_canonical_chain(&mut store, 1, None).unwrap();
+    let validation = Kura::init_canonical_chain(&mut store, 1, None, &BTreeMap::new()).unwrap();
     assert!(validation.truncated);
     assert!(validation.hashes.is_empty());
     assert_eq!(store.read_index_count().unwrap(), 0);
+}
+#[test]
+fn strict_init_does_not_prune_corruption_before_a_pinned_terminal_carrier() {
+    let dir = TempDir::new().unwrap();
+    let mut store = BlockStore::new(dir.path());
+    store.create_files_if_they_do_not_exist().unwrap();
+    let mut blocks = DummyBlocks::new();
+    let first = blocks.next();
+    let carrier = blocks.next();
+    store.append_block_to_chain(&first).unwrap();
+    store.append_block_to_chain(&carrier).unwrap();
+    let BlockIndex { start, .. } = store.read_block_index(0).unwrap();
+    store
+        .write_block_index(0, start, STRICT_INIT_MAX_BLOCK_BYTES + 1)
+        .unwrap();
+    let index_path = dir.path().join(INDEX_FILE_NAME);
+    let original_index = fs::read(&index_path).expect("read corrupt index before strict init");
+    let pins = BTreeMap::from([(2_u64, carrier.hash())]);
+
+    let error = Kura::init_canonical_chain(&mut store, 2, None, &pins)
+        .expect_err("a pinned carrier must prevent destructive prefix repair");
+    assert!(
+        error
+            .to_string()
+            .contains("corruption precedes a pinned canonical replica terminal carrier"),
+        "unexpected pinned-carrier rejection: {error:?}",
+    );
+    assert_eq!(store.read_index_count().unwrap(), 2);
+    assert_eq!(
+        fs::read(&index_path).expect("read preserved corrupt index after strict init"),
+        original_index,
+        "strict init must leave the canonical journal byte-exact when repair would erase a pinned carrier",
+    );
 }
 #[test]
 fn strict_init_repairs_only_the_hash_suffix_above_v2_finality() {
@@ -209,7 +242,7 @@ fn strict_init_repairs_only_the_hash_suffix_above_v2_finality() {
     store
         .write_block_hash(2, forged)
         .expect("corrupt only the unfinalized hash suffix");
-    let validation = Kura::init_canonical_chain(&mut store, 3, Some(2))
+    let validation = Kura::init_canonical_chain(&mut store, 3, Some(2), &BTreeMap::new())
         .expect("repair above finality must succeed");
     assert!(validation.hash_mismatch);
     assert!(!validation.truncated);
@@ -241,7 +274,7 @@ fn strict_init_reconstructs_a_missing_hash_suffix_above_v2_finality() {
     store
         .truncate_hashes_to_count(2)
         .expect("remove only the unfinalized hash suffix");
-    let validation = Kura::init_canonical_chain(&mut store, 3, Some(2))
+    let validation = Kura::init_canonical_chain(&mut store, 3, Some(2), &BTreeMap::new())
         .expect("reconstruct a missing suffix without rewriting finality");
     assert!(!validation.hash_mismatch);
     assert!(!validation.truncated);

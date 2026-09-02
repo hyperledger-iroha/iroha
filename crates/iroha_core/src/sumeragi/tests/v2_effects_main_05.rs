@@ -2900,6 +2900,108 @@ fn live_validate_successor_refines_only_the_same_attested_row() {
 }
 
 #[test]
+fn unwoken_validate_sidecar_cancellation_retires_only_its_exact_retry_authority() {
+    let fixture = Fixture::new();
+    let ordinal = 42_u128;
+    let cancellation_key = || {
+        LifecycleValidateDispatchKeyV1::for_test(
+            &fixture.context,
+            LifecycleDigest::new([0x42; 32]),
+            ordinal,
+            ordinal,
+            0,
+            LifecycleDigest::new([0x52; 32]),
+        )
+        .expect("construct the cancelled Validate dispatch key")
+    };
+
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let services = fixture.services();
+    let (key, _, _) =
+        install_recovered_validate_retry_seal(&mut executor, &fixture, tag(0), ordinal);
+    assert_eq!(
+        executor.validate_retry_lifecycle_ordinal_for_test(key),
+        Some(Some(ordinal))
+    );
+    assert_eq!(
+        executor.pending_kura_apply_owner_flags_for_test(),
+        (false, false, false, false, false),
+        "an unwoken sidecar wait must not own a preliminary successor"
+    );
+    let cancellation =
+        CancelledLifecycleValidateSidecarV1::for_test(cancellation_key(), key.0, key.1)
+            .expect("seal the exact unwoken sidecar cancellation");
+    executor
+        .cancel_unwoken_lifecycle_validate_retry(cancellation)
+        .expect("retire the exact cancelled sidecar retry authority");
+    assert_eq!(
+        executor.validate_retry_lifecycle_ordinal_for_test(key),
+        None
+    );
+    assert_eq!(
+        executor.pending_kura_apply_owner_flags_for_test(),
+        (false, false, false, false, false)
+    );
+    assert!(!executor.output_guard.restart_required());
+    assert!(services.apply_tasks.is_empty());
+
+    let mut mismatched = fixture.executor(EffectQueueConfig::default());
+    let mismatch_services = fixture.services();
+    let (mismatch_key, _, _) =
+        install_recovered_validate_retry_seal(&mut mismatched, &fixture, tag(0), ordinal);
+    let mut foreign_subject = mismatch_key.1;
+    foreign_subject.payload_hash = Hash::new(b"foreign unwoken sidecar cancellation");
+    let foreign = CancelledLifecycleValidateSidecarV1::for_test(
+        cancellation_key(),
+        mismatch_key.0,
+        foreign_subject,
+    )
+    .expect("seal an exact-shape foreign cancellation");
+    let before = mismatched.body_ownership_projection();
+    assert!(matches!(
+        mismatched.cancel_unwoken_lifecycle_validate_retry(foreign),
+        Err(EffectExecutorError::Contract(reason))
+            if reason == "cancelled unwoken Validate changed its exact retry authority"
+    ));
+    assert_eq!(mismatched.body_ownership_projection(), before);
+    assert_eq!(
+        mismatched.validate_retry_lifecycle_ordinal_for_test(mismatch_key),
+        Some(Some(ordinal)),
+        "a substituted subject must leave the retry authority live"
+    );
+    assert!(!mismatched.output_guard.restart_required());
+    assert!(mismatch_services.apply_tasks.is_empty());
+
+    mismatched.live_lifecycle_validate_successor = Some(LiveLifecycleValidateSuccessorOwnerV1 {
+        dispatch_key: cancellation_key(),
+        round: mismatch_key.0,
+        subject: mismatch_key.1,
+        apply_is_authorized: true,
+    });
+    let phase_mismatch = CancelledLifecycleValidateSidecarV1::for_test(
+        cancellation_key(),
+        mismatch_key.0,
+        mismatch_key.1,
+    )
+    .expect("seal the phase-mismatched cancellation");
+    assert!(matches!(
+        mismatched.cancel_unwoken_lifecycle_validate_retry(phase_mismatch),
+        Err(EffectExecutorError::Contract(reason))
+            if reason == "cancelled unwoken Validate changed its exact retry authority"
+    ));
+    assert_eq!(
+        mismatched.validate_retry_lifecycle_ordinal_for_test(mismatch_key),
+        Some(Some(ordinal)),
+        "an already-published successor must not enter the pre-wake cleanup path"
+    );
+    assert_eq!(
+        mismatched.pending_kura_apply_owner_flags_for_test(),
+        (false, true, false, false, false)
+    );
+    assert!(mismatch_services.apply_tasks.is_empty());
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn recovered_validate_retry_frontier_is_monotonic_and_keeps_its_physical_owner() {
     let fixture = Fixture::new();

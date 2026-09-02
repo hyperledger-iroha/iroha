@@ -123,6 +123,7 @@ enum NoritoBridgeLoader {
         "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
         "connect_norito_private_settlement_committee_proof_response_verify_v1",
         "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
+        "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
         "connect_norito_private_settlement_audit_approval_response_verify_v1"
     ] + parliamentTimedOvnWalletRequiredSymbols
 
@@ -3757,6 +3758,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
         return loadedBridgeAbiVersion == KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion
+            && kagemushaNativeContractRevision() == KagemushaRecursiveSpend.nativeContractRevision
             && hasKagemushaRecursiveSpendV4Symbols(
                 KagemushaRecursiveSpend.requiredNativeSymbols + ["connect_norito_free"]
             )

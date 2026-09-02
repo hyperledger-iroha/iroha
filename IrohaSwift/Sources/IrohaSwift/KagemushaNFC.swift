@@ -199,11 +199,16 @@ public enum KagemushaNFCProtocol {
     public static let rawTransportVersion: UInt8 = 4
     public static let minimumApplicationIdentifierBytes = 5
     public static let maximumApplicationIdentifierBytes = 16
+    static let maximumApplicationIdentifierPaddingBytes = 8
     public static let safeChunkBytes = 220
     public static let maximumExtendedReadChunkBytes = 1_024
     public static let maximumExtendedWriteChunkBytes = 16_384
     public static let maximumPayloadBytes =
         KagemushaPeerTransportContract.maximumArchiveBytes
+    static let sparseFragmentAllowance = 64
+    static let maximumSparseFragmentCount =
+        (maximumPayloadBytes + safeChunkBytes - 1) / safeChunkBytes
+            + sparseFragmentAllowance
 
     public static let statusSuccess = Data([0x90, 0x00])
     public static let statusWrongData = Data([0x6A, 0x80])
@@ -220,6 +225,15 @@ public enum KagemushaNFCProtocol {
     static let offsetBytes = 4
     static let readRequestBytes = offsetBytes + 2
 
+    static func sparseFragmentBudget(payloadLength: Int) -> Int {
+        let canonicalFragments =
+            (payloadLength + safeChunkBytes - 1) / safeChunkBytes
+        return min(
+            canonicalFragments + sparseFragmentAllowance,
+            maximumSparseFragmentCount
+        )
+    }
+
     public static var defaultApplicationIdentifier: Data {
         // The constant is compile-time controlled and tested below; force-free
         // parsing here would only make this otherwise infallible property optional.
@@ -229,9 +243,27 @@ public enum KagemushaNFCProtocol {
     }
 
     public static func applicationIdentifier(hex rawValue: String) throws -> Data {
-        let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty,
-              value.count.isMultiple(of: 2),
+        let minimumEncodedLength = minimumApplicationIdentifierBytes * 2
+        let maximumEncodedLength = maximumApplicationIdentifierBytes * 2
+        let rawEncodedLength = rawValue.utf8.count
+        guard rawEncodedLength <= maximumEncodedLength
+                + maximumApplicationIdentifierPaddingBytes,
+              rawValue.unicodeScalars.allSatisfy({ scalar in
+                  switch scalar.value {
+                  case 9, 10, 13, 32, 48...57, 65...70, 97...102: return true
+                  default: return false
+                  }
+              }) else {
+            throw KagemushaNFCError.invalidApplicationIdentifier
+        }
+        let value = rawValue.trimmingCharacters(
+            in: CharacterSet(charactersIn: " \t\r\n")
+        )
+        let encodedLength = value.utf8.count
+        let validEncodedLengths = minimumEncodedLength...maximumEncodedLength
+        guard validEncodedLengths.contains(encodedLength),
+              rawEncodedLength - encodedLength <= maximumApplicationIdentifierPaddingBytes,
+              encodedLength.isMultiple(of: 2),
               value.unicodeScalars.allSatisfy({ scalar in
                   switch scalar.value {
                   case 48...57, 65...70, 97...102: return true
@@ -241,7 +273,7 @@ public enum KagemushaNFCProtocol {
             throw KagemushaNFCError.invalidApplicationIdentifier
         }
         var output = Data()
-        output.reserveCapacity(value.count / 2)
+        output.reserveCapacity(encodedLength / 2)
         var index = value.startIndex
         while index < value.endIndex {
             let next = value.index(index, offsetBy: 2)
@@ -331,12 +363,17 @@ public enum KagemushaNFCProtocol {
         Data([instructionClass, instructionCommit, rawTransportVersion, 0, 0])
     }
 
+    /// Builds the canonical bulk-write sequence. Full chunks are never smaller
+    /// than 220 bytes; only the final chunk may be shorter.
     public static func writePayloadCommands(
         kind: KagemushaPeerPayloadKind,
         payloadBytes: Data,
         maximumChunkLength: Int = safeChunkBytes
     ) throws -> [Data] {
         try requirePayloadLength(payloadBytes.count)
+        guard maximumChunkLength >= safeChunkBytes else {
+            throw KagemushaNFCError.invalidChunkLength
+        }
         try requireChunkLength(
             maximumChunkLength,
             maximum: maximumExtendedWriteChunkBytes
@@ -714,19 +751,33 @@ public final class KagemushaNFCCardStateMachine: @unchecked Sendable {
         lock.withLock {
             guard !completed,
                   currentPayload.kind == .acknowledgement,
-                  let acknowledgementReadTracker,
-                  acknowledgementReadTracker.mark(
-                      offset: range.lowerBound,
-                      length: range.count
-                  ) else {
+                  let tracker = acknowledgementReadTracker else {
                 return false
             }
-            if acknowledgementReadTracker.isComplete {
+            guard range.lowerBound >= 0,
+                  range.upperBound > range.lowerBound,
+                  range.upperBound <= tracker.expectedLength else {
+                return false
+            }
+            guard tracker.mark(
+                offset: range.lowerBound,
+                length: range.upperBound - range.lowerBound
+            ) else {
+                if tracker.isCleared {
+                    acknowledgementReadTracker = nil
+                    readable = false
+                }
+                return false
+            }
+            let isComplete = tracker.isComplete
+            if isComplete {
+                tracker.clear()
+                acknowledgementReadTracker = nil
                 completed = true
                 readable = false
                 pendingWrite = nil
             }
-            return acknowledgementReadTracker.isComplete
+            return isComplete
         }
     }
 
@@ -793,6 +844,9 @@ public final class KagemushaNFCCardStateMachine: @unchecked Sendable {
                 return rejection(.conditionsNotSatisfied)
             }
             guard pendingWrite.write(offset: offset, bytes: bytes) else {
+                if pendingWrite.isCleared {
+                    self.pendingWrite = nil
+                }
                 return rejection(.wrongData)
             }
             return .init(response: KagemushaNFCProtocol.response())
@@ -804,10 +858,15 @@ public final class KagemushaNFCCardStateMachine: @unchecked Sendable {
             do {
                 bytes = try pendingWrite.commit()
             } catch KagemushaNFCError.incompletePayload {
+                if pendingWrite.isCleared {
+                    self.pendingWrite = nil
+                }
                 return rejection(.incompletePayload)
             } catch KagemushaNFCError.checksumMismatch {
+                self.pendingWrite = nil
                 return rejection(.checksumMismatch)
             } catch {
+                self.pendingWrite = nil
                 return rejection(.wrongData)
             }
             guard let payload = try? KagemushaPeerPayload.decode(
@@ -816,6 +875,7 @@ public final class KagemushaNFCCardStateMachine: @unchecked Sendable {
                       chainDiscriminant: chainDiscriminant
                   ),
                   case .payment = payload else {
+                self.pendingWrite = nil
                 return rejection(.invalidCommittedPayload)
             }
             self.pendingWrite = nil
@@ -851,10 +911,14 @@ public final class KagemushaNFCCardStateMachine: @unchecked Sendable {
 final class KagemushaNFCPayloadAssembler {
     let kind: KagemushaPeerPayloadKind
     let expectedLength: Int
-    let expectedSHA256: Data
-    private var bytes: Data
-    private var written: [Bool]
-    private var writtenCount = 0
+    private(set) var expectedSHA256: Data
+    private let sparseBytes = KagemushaNFCSparseByteStore()
+    private var covered = IndexSet()
+    // The canonical 220-byte writer needs ceil(length / 220) fragments. A
+    // fixed allowance admits modest overlap/out-of-order splitting without
+    // allowing attacker-selected one-byte writes to create unbounded nodes.
+    private let fragmentBudget: Int
+    private var cleared = false
 
     init(
         kind: KagemushaPeerPayloadKind,
@@ -868,71 +932,383 @@ final class KagemushaNFCPayloadAssembler {
         }
         self.kind = kind
         self.expectedLength = expectedLength
-        self.expectedSHA256 = expectedSHA256
-        bytes = Data(repeating: 0, count: expectedLength)
-        written = Array(repeating: false, count: expectedLength)
+        self.expectedSHA256 = Data(expectedSHA256)
+        fragmentBudget = KagemushaNFCProtocol.sparseFragmentBudget(
+            payloadLength: expectedLength
+        )
+    }
+
+    /// Unique payload bytes retained by this assembler.
+    ///
+    /// Metadata construction leaves this at zero even for the 32 MiB protocol
+    /// maximum. The complete payload is allocated only after exact coverage is
+    /// established by `commit()`.
+    var bufferedByteCount: Int { sparseBytes.bufferedByteCount }
+    var isCleared: Bool { cleared }
+
+    var isComplete: Bool {
+        !cleared
+            && bufferedByteCount == expectedLength
+            && covered.count == expectedLength
+            && covered.first == 0
+            && covered.last == expectedLength - 1
     }
 
     @discardableResult
     func write(offset: Int, bytes chunk: Data) -> Bool {
-        guard offset >= 0,
+        guard !cleared,
+              offset >= 0,
               offset < expectedLength,
               !chunk.isEmpty,
               chunk.count <= KagemushaNFCProtocol.maximumExtendedWriteChunkBytes,
               chunk.count <= expectedLength - offset else {
             return false
         }
-        for index in chunk.indices {
-            let destination = offset + index
-            if written[destination], bytes[destination] != chunk[index] {
-                return false
+
+        let end = offset + chunk.count
+        guard let overlaps = sparseBytes.matchingSegments(
+            overlapping: offset..<end,
+            incoming: chunk,
+            writeOffset: offset
+        ) else { return false }
+
+        var proposedFragmentCount = 0
+        var budgetCursor = offset
+        for segment in overlaps {
+            if budgetCursor < segment.offset {
+                proposedFragmentCount += 1
             }
+            budgetCursor = max(budgetCursor, min(segment.end, end))
         }
-        bytes.replaceSubrange(offset..<(offset + chunk.count), with: chunk)
-        for index in offset..<(offset + chunk.count) where !written[index] {
-            written[index] = true
-            writtenCount += 1
+        if budgetCursor < end {
+            proposedFragmentCount += 1
         }
+        if sparseBytes.fragmentCount + proposedFragmentCount > fragmentBudget {
+            clear()
+            return false
+        }
+
+        // Prepare every uncovered fragment before mutating the assembler. The
+        // ordered coverage set coalesces adjacency while the immutable byte
+        // fragments avoid repeatedly copying an ever-growing full segment.
+        var additions: [(offset: Int, bytes: Data)] = []
+        var cursor = offset
+        for segment in overlaps {
+            if cursor < segment.offset {
+                let gapEnd = min(segment.offset, end)
+                additions.append((
+                    cursor,
+                    copyChunkRange(chunk, absoluteRange: cursor..<gapEnd, writeOffset: offset)
+                ))
+            }
+            cursor = max(cursor, min(segment.end, end))
+        }
+        if cursor < end {
+            additions.append((
+                cursor,
+                copyChunkRange(chunk, absoluteRange: cursor..<end, writeOffset: offset)
+            ))
+        }
+        guard !additions.isEmpty else {
+            return true
+        }
+        for addition in additions {
+            sparseBytes.insert(offset: addition.offset, bytes: addition.bytes)
+        }
+        covered.insert(integersIn: offset..<end)
         return true
     }
 
     func commit() throws -> Data {
-        guard writtenCount == expectedLength else {
+        guard !cleared else {
+            throw KagemushaNFCError.invalidState
+        }
+        guard isComplete else {
+            throw KagemushaNFCError.incompletePayload
+        }
+        var bytes = Data()
+        var succeeded = false
+        defer {
+            if !succeeded {
+                bytes.resetBytes(in: bytes.startIndex..<bytes.endIndex)
+            }
+            // Exact coverage makes commit a one-shot operation. Both success
+            // and terminal validation failure consume and zeroize the state.
+            clear()
+        }
+        bytes.reserveCapacity(expectedLength)
+        sparseBytes.appendAll(to: &bytes)
+        guard bytes.count == expectedLength else {
             throw KagemushaNFCError.incompletePayload
         }
         guard KagemushaNFCProtocol.sha256(bytes) == expectedSHA256 else {
             throw KagemushaNFCError.checksumMismatch
         }
+        succeeded = true
         return bytes
+    }
+
+    /// Zeroizes all retained payload and digest bytes and makes the assembler empty.
+    func clear() {
+        sparseBytes.clear()
+        covered.removeAll()
+        expectedSHA256.resetBytes(in: expectedSHA256.startIndex..<expectedSHA256.endIndex)
+        cleared = true
+    }
+
+    deinit {
+        clear()
+    }
+
+    private func copyChunkRange(
+        _ chunk: Data,
+        absoluteRange: Range<Int>,
+        writeOffset: Int
+    ) -> Data {
+        let lower = chunk.index(
+            chunk.startIndex,
+            offsetBy: absoluteRange.lowerBound - writeOffset
+        )
+        let upper = chunk.index(
+            chunk.startIndex,
+            offsetBy: absoluteRange.upperBound - writeOffset
+        )
+        return chunk.subdata(in: lower..<upper)
     }
 }
 
 final class KagemushaNFCReadTracker {
     let expectedLength: Int
-    private var read: [Bool]
-    private var readCount = 0
+    private var read = IndexSet()
+    private let rangeBudget: Int
+    private(set) var isCleared = false
 
     init(expectedLength: Int) throws {
         guard (1...KagemushaNFCProtocol.maximumPayloadBytes).contains(expectedLength) else {
             throw KagemushaNFCError.invalidPayloadLength
         }
         self.expectedLength = expectedLength
-        read = Array(repeating: false, count: expectedLength)
+        rangeBudget = KagemushaNFCProtocol.sparseFragmentBudget(
+            payloadLength: expectedLength
+        )
     }
 
-    var isComplete: Bool { readCount == expectedLength }
+    var isComplete: Bool {
+        !isCleared
+            && read.count == expectedLength
+            && read.first == 0
+            && read.last == expectedLength - 1
+    }
 
     @discardableResult
     func mark(offset: Int, length: Int) -> Bool {
-        guard offset >= 0, offset < expectedLength,
+        guard !isCleared,
+              offset >= 0, offset < expectedLength,
               length > 0, length <= expectedLength - offset else {
             return false
         }
-        for index in offset..<(offset + length) where !read[index] {
-            read[index] = true
-            readCount += 1
+        read.insert(integersIn: offset..<(offset + length))
+        if read.rangeView.count > rangeBudget {
+            clear()
+            return false
         }
         return true
+    }
+
+    func clear() {
+        read = IndexSet()
+        isCleared = true
+    }
+}
+
+private struct KagemushaNFCStoredByteSegment {
+    let offset: Int
+    let end: Int
+}
+
+/// AVL-ordered sparse payload fragments. Coverage coalescing is kept separate
+/// so adjacent writes never require copying bytes already accepted.
+private final class KagemushaNFCSparseByteStore {
+    private final class Node {
+        let offset: Int
+        var bytes: Data
+        var left: Node?
+        var right: Node?
+        var height = 1
+        var maximumEnd: Int
+
+        init(offset: Int, bytes: Data) {
+            self.offset = offset
+            self.bytes = bytes
+            maximumEnd = offset + bytes.count
+        }
+
+        var end: Int { offset + bytes.count }
+    }
+
+    private var root: Node?
+    private(set) var bufferedByteCount = 0
+    private(set) var fragmentCount = 0
+
+    /// Returns non-owning segment metadata only after validating every
+    /// overlapping byte. Keeping all `Data` access inside this store ensures a
+    /// terminal `clear()` can uniquely zeroize each node buffer.
+    func matchingSegments(
+        overlapping range: Range<Int>,
+        incoming: Data,
+        writeOffset: Int
+    ) -> [KagemushaNFCStoredByteSegment]? {
+        var result: [KagemushaNFCStoredByteSegment] = []
+        return collect(
+            root,
+            overlapping: range,
+            incoming: incoming,
+            writeOffset: writeOffset,
+            into: &result
+        ) ? result : nil
+    }
+
+    func insert(offset: Int, bytes: Data) {
+        precondition(!bytes.isEmpty)
+        root = insert(root, offset: offset, bytes: bytes)
+        bufferedByteCount += bytes.count
+        fragmentCount += 1
+    }
+
+    func appendAll(to output: inout Data) {
+        append(root, to: &output)
+    }
+
+    func clear() {
+        zeroize(root)
+        root = nil
+        bufferedByteCount = 0
+        fragmentCount = 0
+    }
+
+    private func collect(
+        _ node: Node?,
+        overlapping range: Range<Int>,
+        incoming: Data,
+        writeOffset: Int,
+        into result: inout [KagemushaNFCStoredByteSegment]
+    ) -> Bool {
+        guard let node else { return true }
+        if let left = node.left, left.maximumEnd > range.lowerBound {
+            guard collect(
+                left,
+                overlapping: range,
+                incoming: incoming,
+                writeOffset: writeOffset,
+                into: &result
+            ) else { return false }
+        }
+        if node.offset < range.upperBound, node.end > range.lowerBound {
+            let overlapStart = max(range.lowerBound, node.offset)
+            let overlapEnd = min(range.upperBound, node.end)
+            for destination in overlapStart..<overlapEnd {
+                let existingIndex = node.bytes.index(
+                    node.bytes.startIndex,
+                    offsetBy: destination - node.offset
+                )
+                let incomingIndex = incoming.index(
+                    incoming.startIndex,
+                    offsetBy: destination - writeOffset
+                )
+                guard node.bytes[existingIndex] == incoming[incomingIndex] else {
+                    return false
+                }
+            }
+            result.append(.init(offset: node.offset, end: node.end))
+        }
+        if node.offset < range.upperBound {
+            guard collect(
+                node.right,
+                overlapping: range,
+                incoming: incoming,
+                writeOffset: writeOffset,
+                into: &result
+            ) else { return false }
+        }
+        return true
+    }
+
+    private func insert(_ node: Node?, offset: Int, bytes: Data) -> Node {
+        guard let node else { return Node(offset: offset, bytes: bytes) }
+        if offset < node.offset {
+            node.left = insert(node.left, offset: offset, bytes: bytes)
+        } else {
+            precondition(offset != node.offset)
+            node.right = insert(node.right, offset: offset, bytes: bytes)
+        }
+        refresh(node)
+        return rebalance(node)
+    }
+
+    private func append(_ node: Node?, to output: inout Data) {
+        guard let node else { return }
+        append(node.left, to: &output)
+        output.append(node.bytes)
+        append(node.right, to: &output)
+    }
+
+    private func zeroize(_ node: Node?) {
+        guard let node else { return }
+        zeroize(node.left)
+        zeroize(node.right)
+        node.bytes.resetBytes(in: node.bytes.startIndex..<node.bytes.endIndex)
+        node.left = nil
+        node.right = nil
+    }
+
+    private func refresh(_ node: Node) {
+        node.height = max(height(node.left), height(node.right)) + 1
+        node.maximumEnd = max(
+            node.end,
+            max(
+                node.left?.maximumEnd ?? node.end,
+                node.right?.maximumEnd ?? node.end
+            )
+        )
+    }
+
+    private func rebalance(_ node: Node) -> Node {
+        let balance = height(node.left) - height(node.right)
+        if balance > 1 {
+            if let left = node.left, height(left.left) < height(left.right) {
+                node.left = rotateLeft(left)
+            }
+            return rotateRight(node)
+        }
+        if balance < -1 {
+            if let right = node.right, height(right.right) < height(right.left) {
+                node.right = rotateRight(right)
+            }
+            return rotateLeft(node)
+        }
+        return node
+    }
+
+    private func rotateLeft(_ node: Node) -> Node {
+        guard let pivot = node.right else { return node }
+        node.right = pivot.left
+        pivot.left = node
+        refresh(node)
+        refresh(pivot)
+        return pivot
+    }
+
+    private func rotateRight(_ node: Node) -> Node {
+        guard let pivot = node.left else { return node }
+        node.left = pivot.right
+        pivot.right = node
+        refresh(node)
+        refresh(pivot)
+        return pivot
+    }
+
+    private func height(_ node: Node?) -> Int {
+        node?.height ?? 0
     }
 }
 

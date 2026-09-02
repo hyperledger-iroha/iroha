@@ -58,11 +58,11 @@ scenario/append-hop-02-block-height.txt
 scenario/append-hop-02-verified-at-ms.txt
 scenario/redeem-recipient-account-id.txt
 scenario/unshield-verifier-commitment-v2.bin
-scenario/redeem-hop-01-operation-id.bin
+scenario/redeem-hop-01-nonce.bin
 scenario/redeem-hop-01-block-height.txt
-scenario/redeem-hop-02-operation-id.bin
+scenario/redeem-hop-02-nonce.bin
 scenario/redeem-hop-02-block-height.txt
-scenario/redeem-sender-change-operation-id.bin
+scenario/redeem-sender-change-nonce.bin
 scenario/redeem-sender-change-block-height.txt
 scenario/duplicate-input-recipient-request-v2.norito
 scenario/duplicate-input-output-membership-v4.norito

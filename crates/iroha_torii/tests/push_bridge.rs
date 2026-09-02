@@ -49,7 +49,7 @@ fn build_torii(
     account_id: &AccountId,
 ) -> (
     Torii,
-    axum::Router,
+    iroha_torii::TestApiRouterRuntime,
     iroha_torii::test_utils::TestDataDirGuard,
 ) {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
@@ -127,13 +127,14 @@ async fn push_registration_rejected_when_disabled() {
         enabled: false,
         ..Default::default()
     };
-    let (_torii, router, _data_dir) = build_torii(push_cfg, &account_id);
+    let (_torii, runtime, _data_dir) = build_torii(push_cfg, &account_id);
     let (status, body) = status_and_body(
-        router,
+        runtime.router(),
         register_device_request(&account_id, &key_pair, "t0"),
     )
     .await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "body: {body}");
+    runtime.shutdown().await;
 }
 #[tokio::test]
 async fn push_registration_rejected_without_credentials() {
@@ -142,20 +143,21 @@ async fn push_registration_rejected_without_credentials() {
         enabled: true,
         ..Default::default()
     };
-    let (_torii, router, _data_dir) = build_torii(push_cfg, &account_id);
+    let (_torii, runtime, _data_dir) = build_torii(push_cfg, &account_id);
     let (status, body) = status_and_body(
-        router,
+        runtime.router(),
         register_device_request(&account_id, &key_pair, "t0"),
     )
     .await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "body: {body}");
+    runtime.shutdown().await;
 }
 #[tokio::test]
 async fn push_registration_succeeds_with_credentials() {
     let (key_pair, account_id) = push_identity(13);
-    let (torii, router, _data_dir) = build_torii(push_config(), &account_id);
+    let (torii, runtime, _data_dir) = build_torii(push_config(), &account_id);
     let (status, body) = status_and_body(
-        router,
+        runtime.router(),
         register_device_request(&account_id, &key_pair, "t0"),
     )
     .await;
@@ -165,4 +167,5 @@ async fn push_registration_succeeds_with_credentials() {
         .expect("push enabled")
         .device_count();
     assert_eq!(devices, 1);
+    runtime.shutdown().await;
 }

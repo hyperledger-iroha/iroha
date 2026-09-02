@@ -10,8 +10,14 @@ collects implementation details from `java/iroha_android`, operator runbooks,
 and readiness artifacts so application teams can configure deterministic key
 flows before enabling StrongBox-backed signing in production.
 
+Software-backed signing and custody are supported for ordinary production,
+governance, build, test, deployment, and release workflows. StrongBox and TEE
+providers are optional integrations. The `*_REQUIRED` preferences below are
+strict only when an application explicitly selects them; they are never a
+repository-wide prerequisite.
+
 > **Sample walkthroughs:**  
-> - [Operator console walkthrough](samples/operator_console.md#9-step-by-step-walkthrough) – Step 1 shows how StrongBox enrolment, alias policies, and attestation exports map to Sections 2–5 of this guide.  
+> - [Operator console walkthrough](samples/operator_console.md#9-step-by-step-walkthrough) – Step 1 uses software custody by default and shows how optional StrongBox enrolment, alias policies, and attestation exports map to Sections 2–5 of this guide.
 
 ## 1. Architecture Overview
 
@@ -29,8 +35,8 @@ coverage before choosing an alias policy.
 
 The default construction helpers cover the common cases:
 
-- `withSoftwareFallback()` – useful for CI, desktop tooling, or deterministic
-  regression tests that should avoid hardware dependencies.
+- `withSoftwareProvider()` – a supported software-custody path for production,
+  governance, CI, desktop tooling, and deterministic regression tests.
 - `withDefaultProviders(KeyGenParameters)` – prefers StrongBox when available,
   falls back to TEE or software depending on the provided preferences, and
   honours requirements such as user authentication, attestation freshness, and
@@ -48,11 +54,13 @@ lookup/generation.
 | `STRONGBOX_REQUIRED` | Rejects the call unless a StrongBox-backed provider exists and can satisfy the alias. | Production governance keys when StrongBox inventory is guaranteed. |
 | `STRONGBOX_PREFERRED` | Tries StrongBox first, then other hardware providers, ends with software only if downgrades are allowed. | Shared builds that must prefer StrongBox but continue functioning when devices lack it. |
 | `HARDWARE_REQUIRED` / `HARDWARE_PREFERRED` | Enforces/Prefers any hardware-backed provider (TEE or StrongBox) before falling back to software. | Standard device fleets where StrongBox coverage is mixed. |
-| `SOFTWARE_ONLY` | Bypasses hardware providers entirely; always uses the deterministic software implementation. | Emulator automation, offline recovery tools, CI fixtures. |
+| `SOFTWARE_ONLY` | Bypasses hardware providers entirely; always uses the deterministic software implementation. | Production software custody, emulator automation, offline recovery tools, and CI fixtures. |
 
 Applications can expose these settings as configuration knobs (`iroha_config`
 or feature flags) so operators decide whether to block or allow hardware
-downgrades per environment.
+downgrades per environment. Selecting `STRONGBOX_REQUIRED` or
+`HARDWARE_REQUIRED` is an explicit application policy decision, not an Iroha
+SDK, governance, deployment, or release requirement.
 
 ## 3. Alias Lifecycle
 
@@ -79,7 +87,8 @@ Recommended alias naming:
 
 ## 4. Deterministic Export & Recovery
 
-When software fallbacks are required (offline signing laptops, recovery drills),
+When software custody is selected (including production wallets, offline
+signing laptops, and recovery drills),
 use the deterministic export helpers wired into `IrohaKeyManager`
 (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/IrohaKeyManager.java:164`):
 
@@ -126,8 +135,8 @@ captured with provenance hashes.
 
 ## 5. Attestation Workflow
 
-To satisfy AND2 acceptance criteria, every hardware-backed alias must publish
-attestation artefacts:
+When an application explicitly selects AND2 hardware qualification, every
+hardware-backed alias in that profile must publish attestation artefacts:
 
 1. **Provision** a new, unique alias with
    `KeyGenParameters.Builder.setAttestationChallenge(challenge)` before calling
@@ -189,9 +198,10 @@ SignedTransaction tx = builder.encodeAndSign(payload, "governance-primary",
 
 ## 7. Policy & Configuration Hooks
 
-- Mirror StrongBox requirements into `iroha_config.android.key_policy` (new knob
-  to be threaded through AND2) so runtime components understand whether downgrades
-  are allowed.
+- Mirror caller-selected StrongBox policies into
+  `iroha_config.android.key_policy` (new knob to be threaded through AND2) so
+  runtime components understand whether downgrades are allowed. The default
+  software-custody path must not opt into a hardware-required policy.
 - Record alias ownership, attestation timestamps, and export status in
   `specs/android_support_playbook.md` Section 11 to keep support and
   compliance teams aligned.
@@ -204,7 +214,7 @@ SignedTransaction tx = builder.encodeAndSign(payload, "governance-primary",
 | Scenario | Checklist |
 |----------|-----------|
 | Emulator / Desktop regression | Run `make android-tests && ci/run_android_tests.sh`. Ensure `hasHardwareBackedProvider()` returns `false` and `SOFTWARE_ONLY` paths pass. |
-| Device lab StrongBox sweep | Execute `scripts/android_strongbox_attestation_bundle.sh` across the device matrix, update `android_strongbox_device_matrix.md`, and archive outputs per device. |
+| Optional device lab StrongBox sweep | When qualifying that integration, execute `scripts/android_strongbox_attestation_bundle.sh` across the device matrix, update `android_strongbox_device_matrix.md`, and archive outputs per device. |
 | Override / telemetry chaos | Follow `specs/sdk/android/telemetry_chaos_checklist.md` Scenario 2 to confirm attestation-dependent overrides propagate correctly. |
 | Sample app smoke | Once AND5 samples land, gate CI via `ci/check_android_samples.sh` so Managed Device runs fail when aliases or preferences regress. |
 

@@ -654,9 +654,11 @@ to the first start enforces exactly the original unsplit identity relation.
 The composite builder also checks exact SHA-job and dense-MSM row profiles
 before key generation, so an impossible auxiliary layout fails before
 expensive setup. A fresh guarded k17 probe must re-establish the final graph's
-shape and structure consistency. The 93,120-byte per-role transcript, 186,852-byte
-initialization pair, and 191,862-byte maximum pair remain expected values until
-that probe and authentic source-sealed candidate generation confirm them;
+shape and structure consistency. The current profile fixes the 93,120-byte
+per-role transcript, exact 186,852-byte initialization pair, and 191,862-byte
+released recursive-pair maximum. The broader 384 KiB pair bound is only a
+defensive decode ceiling, not an alternate released proof size. Authentic
+source-sealed candidate generation,
 release finalization, physical-device evidence, and live Taira rollout remain
 pending.
 

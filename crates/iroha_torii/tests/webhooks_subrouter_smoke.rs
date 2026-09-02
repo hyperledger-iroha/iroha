@@ -60,9 +60,10 @@ async fn webhooks_endpoints_exposed_by_default() {
         iroha_torii::OnlinePeersProvider::new(peers_rx),
     )
     .expect("valid Torii webhook fixture");
-    let app = torii
+    let runtime = torii
         .api_router_for_tests()
         .expect("test Torii router initializes");
+    let app = runtime.router();
     // Webhook registry routes reject requests before dispatch unless operator
     // authentication succeeds.
     let resp = app
@@ -112,6 +113,7 @@ async fn webhooks_endpoints_exposed_by_default() {
         resp.status(),
         StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
     ));
+    runtime.shutdown().await;
 }
 #[tokio::test]
 async fn webhooks_endpoints_hidden_when_disabled() {
@@ -158,9 +160,10 @@ async fn webhooks_endpoints_hidden_when_disabled() {
         iroha_torii::OnlinePeersProvider::new(peers_rx),
     )
     .expect("valid Torii webhook fixture");
-    let app = torii
+    let runtime = torii
         .api_router_for_tests()
         .expect("test Torii router initializes");
+    let app = runtime.router();
     let resp = app
         .clone()
         .oneshot(
@@ -186,4 +189,5 @@ async fn webhooks_endpoints_hidden_when_disabled() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    runtime.shutdown().await;
 }

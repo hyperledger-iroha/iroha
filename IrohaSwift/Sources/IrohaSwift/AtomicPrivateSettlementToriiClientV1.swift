@@ -33,10 +33,11 @@ public enum AtomicPrivateSettlementOperationV1: String, Sendable, CaseIterable {
     case commitVote = "COMMIT_VOTE"
     case phaseCertificate = "PHASE_CERTIFICATE"
     case legUpload = "LEG_UPLOAD"
+    case auditorCapsule = "AUDITOR_CAPSULE"
     case auditApproval = "AUDIT_APPROVAL"
     case bundleSubmit = "BUNDLE_SUBMIT"
 
-    /// Exact Torii path, with a payload placeholder only for auditor approval.
+    /// Exact Torii path, with a payload placeholder for governed-auditor operations.
     public var path: String {
         switch self {
         case .availabilityShare:
@@ -49,6 +50,8 @@ public enum AtomicPrivateSettlementOperationV1: String, Sendable, CaseIterable {
             return "/v1/nexus/private-settlements/phases/certificates"
         case .legUpload:
             return "/v1/nexus/private-settlements/legs"
+        case .auditorCapsule:
+            return "/v1/nexus/private-settlements/legs/{payload_digest}/audit-capsule"
         case .auditApproval:
             return "/v1/nexus/private-settlements/legs/{payload_digest}/audit-approvals"
         case .bundleSubmit:
@@ -58,7 +61,10 @@ public enum AtomicPrivateSettlementOperationV1: String, Sendable, CaseIterable {
 
     /// Exact identity class required by this operation.
     public var auth: AtomicPrivateSettlementAuthV1 {
-        self == .auditApproval ? .roleIdentity : .sponsor
+        switch self {
+        case .auditorCapsule, .auditApproval: return .roleIdentity
+        default: return .sponsor
+        }
     }
 
     fileprivate var topLevelFields: Set<String> {
@@ -69,7 +75,8 @@ public enum AtomicPrivateSettlementOperationV1: String, Sendable, CaseIterable {
         case .phaseCertificate: return ["manifest", "payload_digest", "certificate"]
         case .legUpload:
             return ["manifest", "audit_policy", "committee_authority", "payload"]
-        case .auditApproval: return ["approval"]
+        case .auditorCapsule: return ["audit_policy"]
+        case .auditApproval: return ["audit_policy", "approval"]
         case .bundleSubmit: return ["transaction"]
         }
     }
@@ -79,6 +86,7 @@ public enum AtomicPrivateSettlementOperationV1: String, Sendable, CaseIterable {
         case .availabilityShare, .legUpload: return 32 * 1024 * 1024
         case .prepareVote, .commitVote, .phaseCertificate, .bundleSubmit:
             return 8 * 1024 * 1024
+        case .auditorCapsule: return 1024 * 1024
         case .auditApproval: return 2 * 1024 * 1024
         }
     }
@@ -308,7 +316,11 @@ public final class AtomicPrivateSettlementJSONResponseV1: @unchecked Sendable,
 public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
     private enum NativeResponseVerificationV1 {
         case committeeProof(AtomicPrivateSettlementIdentifierV1)
-        case auditorCapsule(AtomicPrivateSettlementIdentifierV1, auditorSigningKey: String)
+        case auditorCapsule(
+            AtomicPrivateSettlementIdentifierV1,
+            requestJSON: Data,
+            auditorSigningKey: String
+        )
         case auditApproval(
             AtomicPrivateSettlementIdentifierV1,
             requestJSON: Data,
@@ -409,7 +421,7 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
         try await sponsorMutation(.legUpload, request: request, auth: sponsorAuth)
     }
 
-    /// Submit one exact sponsor-signed global finalization or abort carrier.
+    /// Submit one exact sponsor-signed Prepare-lock registration, finalization, or abort carrier.
     public func submitBundle(
         _ request: AtomicPrivateSettlementPreparedRequestV1,
         sponsorAuth: ToriiCanonicalRequestAuth
@@ -507,24 +519,32 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
 
     public func getAuditorCapsule(
         payloadDigest: AtomicPrivateSettlementIdentifierV1,
+        request: AtomicPrivateSettlementPreparedRequestV1,
         auditorSigningContext: ToriiOperatorSigningContext
     ) async throws -> AtomicPrivateSettlementJSONResponseV1 {
         guard auditorSigningContext.networkId == localSigningContext.networkId else {
             throw AtomicPrivateSettlementClientErrorV1.invalidPreparedRequest
         }
-        let path =
-            "/v1/nexus/private-settlements/legs/\(payloadDigest.pathComponent)/audit-capsule"
-        return try await get(
+        guard request.operation == .auditorCapsule else {
+            throw AtomicPrivateSettlementClientErrorV1.operationSubstitution
+        }
+        let path = request.operation.path.replacingOccurrences(
+            of: "{payload_digest}",
+            with: payloadDigest.pathComponent
+        )
+        let body = try request.bytes()
+        return try await mutation(
             path: path,
-            maximumBytes: Self.restrictedResponseMaximumBytes,
+            body: body,
             expectedIdentifier: payloadDigest,
             expectedIdentifierField: nil,
             nativeVerification: .auditorCapsule(
                 payloadDigest,
+                requestJSON: body,
                 auditorSigningKey: auditorSigningContext.publicKey
             )
         ) { target in
-            try auditorSigningContext.buildHeaders(method: "GET", url: target)
+            try auditorSigningContext.buildHeaders(method: "POST", url: target, body: body)
         }
     }
 
@@ -721,9 +741,10 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
                     expectedNetworkID: localSigningContext.networkId.bytes,
                     requestedPayloadDigest: payloadDigest.bytes
                 )
-            case let .auditorCapsule(payloadDigest, auditorSigningKey):
+            case let .auditorCapsule(payloadDigest, requestJSON, auditorSigningKey):
                 try responseVerifier.verifyAuditorCapsule(
                     responseJSON: data,
+                    requestJSON: requestJSON,
                     expectedNetworkID: localSigningContext.networkId.bytes,
                     requestedPayloadDigest: payloadDigest.bytes,
                     auditorSigningKey: auditorSigningKey
@@ -1014,7 +1035,8 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
         _ data: Data
     ) throws -> AuditApprovalRequestContextV1 {
         let request = try strictObject(data)
-        guard Set(request.keys) == ["approval"],
+        guard Set(request.keys) == ["audit_policy", "approval"],
+              request["audit_policy"] is [String: Any],
               let approval = request["approval"] as? [String: Any],
               Set(approval.keys) == ["body", "signature"],
               !(approval["signature"] is NSNull),
@@ -1104,7 +1126,7 @@ public final class AtomicPrivateSettlementToriiClientV1: @unchecked Sendable {
         if route.hasSuffix("/audit-capsule") {
             return [
                 "authoritative_height",
-                "manifest", "audit_policy", "committee_authority", "statement", "delta",
+                "manifest", "audit_policy", "access_audit_policy", "committee_authority", "statement", "delta",
                 "audit_capsule", "availability", "lifecycle", "responder_attestation",
             ]
         }

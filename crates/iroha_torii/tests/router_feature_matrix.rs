@@ -145,9 +145,10 @@ async fn router_builds_under_current_features() {
         iroha_torii::OnlinePeersProvider::new(peers_rx),
     )
     .expect("valid Torii route-matrix fixture");
-    let app = torii
+    let runtime = torii
         .api_router_for_tests()
         .expect("test Torii router initializes");
+    let app = runtime.router();
     diff_openapi_if_available(&app).await;
     let canonical_openapi = app
         .clone()
@@ -390,6 +391,7 @@ async fn router_builds_under_current_features() {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
+    runtime.shutdown().await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -449,9 +451,10 @@ async fn router_exposes_status_with_operator_telemetry_profile() {
         ),
     )
     .expect("valid Torii route-matrix fixture");
-    let app = torii
+    let runtime = torii
         .api_router_for_tests()
         .expect("test Torii router initializes");
+    let app = runtime.router();
     for path in [
         iroha_torii_shared::uri::STATUS,
         iroha_torii_shared::uri::STATUS_BLOCKS,
@@ -488,4 +491,5 @@ async fn router_exposes_status_with_operator_telemetry_profile() {
         .await
         .unwrap();
     assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+    runtime.shutdown().await;
 }

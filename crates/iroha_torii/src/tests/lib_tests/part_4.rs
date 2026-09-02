@@ -48,10 +48,7 @@ async fn configured_proof_body_layer_accepts_above_axum_default_and_rejects_limi
         .method("POST")
         .uri("/probe")
         .header(axum::http::header::CONTENT_TYPE, "application/octet-stream")
-        .body(Body::from(vec![
-            0_u8;
-            app.proof_limits.max_body_bytes + 1
-        ]))
+        .body(Body::from(vec![0_u8; app.proof_limits.max_body_bytes + 1]))
         .expect("request");
     let response = router
         .oneshot(over_configured_limit)
@@ -830,12 +827,14 @@ async fn zk_ivm_cancelled_started_worker_holds_permit_until_physical_exit() {
     let blocking = crate::panic_recovery::spawn_blocking_recoverable(move || {
         started_tx.send(()).expect("started");
         release_rx.recv().expect("release");
-        Err::<(), String>("discard me".to_owned())
+        Err::<(ZkIvmProveJobStatus, Bytes), String>("discard me".to_owned())
     });
+    let physical = Arc::new(ZkIvmProvePhysicalJob::default());
+    physical.install(blocking);
     let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
     let waiter = tokio::spawn(async move {
         let _permit = permit;
-        zk_ivm_await_started_prove_job::<()>(blocking, &mut cancel_rx).await
+        physical.await_started(&mut cancel_rx).await
     });
     started_rx
         .recv_timeout(std::time::Duration::from_secs(2))
@@ -851,6 +850,331 @@ async fn zk_ivm_cancelled_started_worker_holds_permit_until_physical_exit() {
     assert!(discarded);
     assert_eq!(outcome.expect_err("fixture errors"), "discard me");
     assert!(semaphore.try_acquire_owned().is_ok());
+}
+
+fn synthetic_zk_ivm_enqueue_job(app: &SharedAppState, job_id: &str) -> ZkIvmProveJob {
+    let retention = app
+        .zk_ivm_prove_job_budget
+        .try_reserve(64)
+        .expect("synthetic job reservation");
+    let slot_permit = app
+        .zk_ivm_prove_slots
+        .clone()
+        .try_acquire_owned()
+        .expect("synthetic job slot");
+    ZkIvmProveJob {
+        control: ZkIvmProveJobControl {
+            job_id: job_id.to_owned(),
+            jobs: app.zk_ivm_prove_jobs.clone(),
+            budget: app.zk_ivm_prove_job_budget.inner.clone(),
+            owner_max_bytes: usize::MAX,
+            retention,
+            physical: Arc::new(ZkIvmProvePhysicalJob::default()),
+            telemetry: app.telemetry.clone(),
+            slots: app.zk_ivm_prove_slots.clone(),
+            slots_total: app.zk_ivm_prove_slots_total,
+            slot_permit: Some(slot_permit),
+            inflight: app.zk_ivm_prove_inflight.clone(),
+            inflight_total: app.zk_ivm_prove_inflight_total,
+        },
+        future: Box::pin(async {}),
+    }
+}
+
+#[test]
+fn zk_ivm_enqueue_classifies_supervisor_state_without_leaking_capacity() {
+    let app = mk_ivm_prove_app_state_for_tests();
+    let baseline_slots = app.zk_ivm_prove_slots.available_permits();
+
+    let not_started = zk_ivm_prove_enqueue(&app, synthetic_zk_ivm_enqueue_job(&app, "not-started"))
+        .expect_err("an unstarted supervisor must reject work");
+    let ZkIvmProveEnqueueError::NotStarted(not_started) = not_started else {
+        panic!("missing supervisor must be classified as not started");
+    };
+    drop(not_started);
+    assert_eq!(app.zk_ivm_prove_job_budget.used_bytes(), 0);
+    assert_eq!(app.zk_ivm_prove_slots.available_permits(), baseline_slots);
+
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+    {
+        let mut registration = app
+            .zk_ivm_prove_job_budget
+            .supervisor
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        registration.sender = Some(sender);
+    }
+    zk_ivm_prove_enqueue(&app, synthetic_zk_ivm_enqueue_job(&app, "queued"))
+        .expect("first job fills the synthetic supervisor queue");
+    let full = zk_ivm_prove_enqueue(&app, synthetic_zk_ivm_enqueue_job(&app, "full"))
+        .expect_err("a saturated supervisor queue must reject work");
+    let ZkIvmProveEnqueueError::Full(full) = full else {
+        panic!("saturated supervisor queue must be classified as full");
+    };
+    drop(full);
+    drop(receiver.try_recv().expect("queued job remains recoverable"));
+    {
+        let mut registration = app
+            .zk_ivm_prove_job_budget
+            .supervisor
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        registration.sender = None;
+    }
+    drop(receiver);
+    assert_eq!(app.zk_ivm_prove_job_budget.used_bytes(), 0);
+    assert_eq!(app.zk_ivm_prove_slots.available_permits(), baseline_slots);
+
+    let (sender, receiver) = tokio::sync::mpsc::channel(1);
+    drop(receiver);
+    {
+        let mut registration = app
+            .zk_ivm_prove_job_budget
+            .supervisor
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        registration.sender = Some(sender);
+    }
+    let closed = zk_ivm_prove_enqueue(&app, synthetic_zk_ivm_enqueue_job(&app, "closed"))
+        .expect_err("a closed supervisor must reject work");
+    let ZkIvmProveEnqueueError::Closed(closed) = closed else {
+        panic!("closed supervisor queue must be classified as closed");
+    };
+    drop(closed);
+    {
+        let mut registration = app
+            .zk_ivm_prove_job_budget
+            .supervisor
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        registration.sender = None;
+    }
+    assert_eq!(app.zk_ivm_prove_job_budget.used_bytes(), 0);
+    assert_eq!(app.zk_ivm_prove_slots.available_permits(), baseline_slots);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zk_ivm_supervisor_shutdown_joins_non_preemptible_physical_work() {
+    let mut app = mk_ivm_prove_app_state_for_tests();
+    {
+        let state = Arc::get_mut(&mut app).expect("unique app state");
+        state.zk_ivm_prove_slots = Arc::new(tokio::sync::Semaphore::new(1));
+        state.zk_ivm_prove_inflight = Arc::new(tokio::sync::Semaphore::new(1));
+        state.zk_ivm_prove_slots_total = 1;
+        state.zk_ivm_prove_inflight_total = 1;
+    }
+    zk_ivm_prove_ensure_supervisor(&app);
+    let mut supervisor =
+        zk_ivm_prove_take_supervisor(app.as_ref()).expect("retained supervisor handle");
+    let shutdown = app.shutdown_signal.clone();
+    let job_id = "0123456789abcdef0123456789abcdef".to_owned();
+    let retention = app
+        .zk_ivm_prove_job_budget
+        .try_reserve(512)
+        .expect("test reservation");
+    let (cancel, mut cancel_rx) = tokio::sync::watch::channel(false);
+    app.zk_ivm_prove_jobs.insert(
+        job_id.clone(),
+        ZkIvmProveJobState {
+            owner: sample_ivm_prove_authority(),
+            created_ms: 1,
+            last_access_ms: 1,
+            status: ZkIvmProveJobStatus::Pending,
+            response_body: Bytes::from_static(b"{}"),
+            retention: retention.clone(),
+            cancel,
+        },
+    );
+    let slot_permit = app
+        .zk_ivm_prove_slots
+        .clone()
+        .try_acquire_owned()
+        .expect("slot permit");
+    let inflight_permit = app
+        .zk_ivm_prove_inflight
+        .clone()
+        .try_acquire_owned()
+        .expect("inflight permit");
+    let physical = Arc::new(ZkIvmProvePhysicalJob::default());
+    let control = ZkIvmProveJobControl {
+        job_id: job_id.clone(),
+        jobs: app.zk_ivm_prove_jobs.clone(),
+        budget: app.zk_ivm_prove_job_budget.inner.clone(),
+        owner_max_bytes: usize::MAX,
+        retention: retention.clone(),
+        physical: physical.clone(),
+        telemetry: app.telemetry.clone(),
+        slots: app.zk_ivm_prove_slots.clone(),
+        slots_total: 1,
+        slot_permit: Some(slot_permit),
+        inflight: app.zk_ivm_prove_inflight.clone(),
+        inflight_total: 1,
+    };
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let physical_for_task = physical.clone();
+    let retention_for_task = retention.clone();
+    let future: ZkIvmProveJobFuture = Box::pin(async move {
+        let task = crate::panic_recovery::spawn_blocking_recoverable(move || {
+            let _inflight_permit = inflight_permit;
+            started_tx.send(()).expect("report physical start");
+            release_rx.recv().expect("release physical work");
+            Ok((ZkIvmProveJobStatus::Done, Bytes::from_static(b"{}")))
+        });
+        physical_for_task.install(task);
+        let _ = physical_for_task.await_started(&mut cancel_rx).await;
+        drop(retention_for_task);
+    });
+    assert!(
+        zk_ivm_prove_enqueue(&app, ZkIvmProveJob { control, future }).is_ok(),
+        "synthetic job must enter the supervised queue"
+    );
+    drop(retention);
+    started_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("physical work started");
+
+    shutdown.send();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), &mut supervisor)
+            .await
+            .is_err(),
+        "shutdown must wait for physical work"
+    );
+    assert!(app.zk_ivm_prove_slots.clone().try_acquire_owned().is_err());
+    assert!(
+        app.zk_ivm_prove_inflight
+            .clone()
+            .try_acquire_owned()
+            .is_err()
+    );
+    release_tx.send(()).expect("release physical work");
+    assert_eq!(
+        supervisor.await.expect("supervisor joins"),
+        ToriiCriticalWorkerExit::StoppedByShutdown
+    );
+    assert!(app.zk_ivm_prove_jobs.is_empty());
+    assert_eq!(app.zk_ivm_prove_job_budget.used_bytes(), 0);
+    assert_eq!(app.zk_ivm_prove_slots.available_permits(), 1);
+    assert_eq!(app.zk_ivm_prove_inflight.available_permits(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zk_ivm_supervisor_terminalizes_wrapper_panic_without_leaking_resources() {
+    let mut app = mk_ivm_prove_app_state_for_tests();
+    {
+        let state = Arc::get_mut(&mut app).expect("unique app state");
+        state.zk_ivm_prove_slots = Arc::new(tokio::sync::Semaphore::new(1));
+        state.zk_ivm_prove_inflight = Arc::new(tokio::sync::Semaphore::new(1));
+        state.zk_ivm_prove_slots_total = 1;
+        state.zk_ivm_prove_inflight_total = 1;
+    }
+    zk_ivm_prove_ensure_supervisor(&app);
+    let supervisor =
+        zk_ivm_prove_take_supervisor(app.as_ref()).expect("retained supervisor handle");
+    let job_id = "fedcba9876543210fedcba9876543210".to_owned();
+    let retention = app
+        .zk_ivm_prove_job_budget
+        .try_reserve(512)
+        .expect("test reservation");
+    let (cancel, _cancel_rx) = tokio::sync::watch::channel(false);
+    app.zk_ivm_prove_jobs.insert(
+        job_id.clone(),
+        ZkIvmProveJobState {
+            owner: sample_ivm_prove_authority(),
+            created_ms: 1,
+            last_access_ms: 1,
+            status: ZkIvmProveJobStatus::Pending,
+            response_body: Bytes::from_static(b"{}"),
+            retention: retention.clone(),
+            cancel,
+        },
+    );
+    let slot_permit = app
+        .zk_ivm_prove_slots
+        .clone()
+        .try_acquire_owned()
+        .expect("slot permit");
+    let inflight_permit = app
+        .zk_ivm_prove_inflight
+        .clone()
+        .try_acquire_owned()
+        .expect("inflight permit");
+    let physical = Arc::new(ZkIvmProvePhysicalJob::default());
+    let control = ZkIvmProveJobControl {
+        job_id: job_id.clone(),
+        jobs: app.zk_ivm_prove_jobs.clone(),
+        budget: app.zk_ivm_prove_job_budget.inner.clone(),
+        owner_max_bytes: usize::MAX,
+        retention: retention.clone(),
+        physical: physical.clone(),
+        telemetry: app.telemetry.clone(),
+        slots: app.zk_ivm_prove_slots.clone(),
+        slots_total: 1,
+        slot_permit: Some(slot_permit),
+        inflight: app.zk_ivm_prove_inflight.clone(),
+        inflight_total: 1,
+    };
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let physical_for_task = physical.clone();
+    let retention_for_task = retention.clone();
+    let future: ZkIvmProveJobFuture = Box::pin(async move {
+        let _retention_for_task = retention_for_task;
+        let task = crate::panic_recovery::spawn_blocking_recoverable(move || {
+            let _inflight_permit = inflight_permit;
+            started_tx.send(()).expect("report physical start");
+            release_rx.recv().expect("release physical work");
+            Ok((ZkIvmProveJobStatus::Done, Bytes::from_static(b"{}")))
+        });
+        physical_for_task.install(task);
+        assert!(iroha_core::panic_hook::is_suppressed());
+        panic!("injected IVM prove wrapper panic");
+    });
+    assert!(
+        zk_ivm_prove_enqueue(&app, ZkIvmProveJob { control, future }).is_ok(),
+        "synthetic job must enter the supervised queue"
+    );
+    drop(retention);
+    started_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("physical work started");
+    release_tx.send(()).expect("release physical work");
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if app
+                .zk_ivm_prove_jobs
+                .get(&job_id)
+                .is_some_and(|entry| entry.status == ZkIvmProveJobStatus::Error)
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("wrapper panic becomes a terminal job error");
+    assert!(!iroha_core::panic_hook::is_suppressed());
+    {
+        let state = app.zk_ivm_prove_jobs.get(&job_id).expect("terminal job");
+        assert_eq!(Arc::strong_count(&state.retention), 1);
+        assert_eq!(
+            app.zk_ivm_prove_job_budget.used_bytes(),
+            state.retention.retained_bytes()
+        );
+        let body = std::str::from_utf8(&state.response_body).expect("terminal JSON");
+        assert!(body.contains("IVM proof generation failed"));
+    }
+    assert_eq!(app.zk_ivm_prove_slots.available_permits(), 1);
+    assert_eq!(app.zk_ivm_prove_inflight.available_permits(), 1);
+
+    app.shutdown_signal.send();
+    assert_eq!(
+        supervisor.await.expect("supervisor joins"),
+        ToriiCriticalWorkerExit::StoppedByShutdown
+    );
+    assert!(app.zk_ivm_prove_jobs.is_empty());
+    assert_eq!(app.zk_ivm_prove_job_budget.used_bytes(), 0);
 }
 #[tokio::test]
 async fn zk_ivm_prove_job_completes_and_does_not_expose_gas_used() {

@@ -230,17 +230,165 @@ fn autonomous_route_quota_for_test(
 }
 
 #[test]
-fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vote() {
+fn higher_same_subject_lock_authorizes_unchanged_autonomous_carrier_ready() {
     let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
-    let (block, proposal) = planned_autonomous_lane_candidate_block_at_view(&adapter, &keys, 0);
-    let entrypoint = block
+    let (source_block, mut unanchored_proposal) =
+        planned_autonomous_lane_candidate_block_at_view(&adapter, &keys, 0);
+    unanchored_proposal.payload_block_hint = None;
+    unanchored_proposal.proposal_hash = unanchored_proposal.computed_proposal_hash();
+    let entrypoint = source_block
         .external_entrypoints_cloned()
         .next()
         .expect("planned autonomous entrypoint");
     let (payload, producer) = signed_autonomous_payload_for_entrypoint(
         &adapter,
         &keys,
-        &proposal,
+        &unanchored_proposal,
+        entrypoint,
+        b"higher-lock-autonomous-ready-admission-binding",
+        b"higher-lock-autonomous-ready-reservation-owner",
+        "deterministic autonomous producer",
+        "producer key",
+        "signed autonomous payload",
+    );
+    assert_eq!(
+        accept_lane_message_from(
+            &mut adapter,
+            BlockMessage::LaneExecutablePayload(payload.clone()),
+            producer,
+            0,
+        ),
+        V2LaneIngressOutcome::Inserted
+    );
+    let block = autonomous_carrier_block_at_view(&adapter, &keys, &payload, 0)
+        .canonical_resultless_proposal();
+    let (original_round, subject) = global_lock_for_block(&adapter, &block);
+    let higher_round = wire::ConsensusRound {
+        view: original_round.view + 1,
+        ..original_round
+    };
+    assert_eq!(block.header().view_change_index(), 0);
+    assert_eq!(original_round.view, 0);
+    assert_eq!(higher_round.view, 1);
+    assert_eq!(
+        adapter.mark_global_body_locked(higher_round, subject),
+        Ok(GlobalBodyLockOutcome::Inserted)
+    );
+    assert_ne!(
+        adapter.bind_locked_global_body(&block),
+        V2LaneIngressOutcome::Rejected,
+        "a later-view same-subject lock must authorize READY for the immutable earlier-view autonomous carrier"
+    );
+    assert!(
+        !adapter.output_guard.restart_required(),
+        "a valid later-view lock must not force the autonomous carrier into fail-stop"
+    );
+    let anchored_payload = payload
+        .attach_global_hint_exact(
+            LaneBlockProposalPayloadHintV1 {
+                proposal_height: adapter.context.height,
+                proposal_view: block.header().view_change_index(),
+                proposal_block_hash: block.hash(),
+            },
+            adapter.native_network_id(),
+            adapter.context.epoch,
+        )
+        .expect("attach the immutable carrier's original header view");
+    assert_eq!(
+        anchored_payload
+            .origin_proposal
+            .payload_block_hint
+            .expect("anchored autonomous proposal")
+            .proposal_view,
+        0
+    );
+    assert_eq!(
+        autonomous_artifact(
+            &adapter,
+            &anchored_payload.origin_proposal,
+            adapter.context.epoch,
+        )
+            .expect("later-view protected payload is durable before READY")
+            .executable_payload,
+        anchored_payload
+    );
+}
+
+#[test]
+fn higher_view_different_subject_does_not_authorize_autonomous_carrier_ready() {
+    let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+    let (source_block, mut unanchored_proposal) =
+        planned_autonomous_lane_candidate_block_at_view(&adapter, &keys, 0);
+    unanchored_proposal.payload_block_hint = None;
+    unanchored_proposal.proposal_hash = unanchored_proposal.computed_proposal_hash();
+    let entrypoint = source_block
+        .external_entrypoints_cloned()
+        .next()
+        .expect("planned autonomous entrypoint");
+    let (payload, producer) = signed_autonomous_payload_for_entrypoint(
+        &adapter,
+        &keys,
+        &unanchored_proposal,
+        entrypoint,
+        b"different-subject-autonomous-ready-admission-binding",
+        b"different-subject-autonomous-ready-reservation-owner",
+        "deterministic autonomous producer",
+        "producer key",
+        "signed autonomous payload",
+    );
+    assert_eq!(
+        accept_lane_message_from(
+            &mut adapter,
+            BlockMessage::LaneExecutablePayload(payload.clone()),
+            producer,
+            0,
+        ),
+        V2LaneIngressOutcome::Inserted
+    );
+    let block = autonomous_carrier_block_at_view(&adapter, &keys, &payload, 0)
+        .canonical_resultless_proposal();
+    let (original_round, mut conflicting_subject) = global_lock_for_block(&adapter, &block);
+    conflicting_subject.payload_hash = Hash::new(b"different protected carrier subject");
+    let higher_round = wire::ConsensusRound {
+        view: original_round.view + 1,
+        ..original_round
+    };
+    assert_eq!(block.header().view_change_index(), 0);
+    assert_eq!(higher_round.view, 1);
+    assert_eq!(
+        adapter.mark_global_body_locked(higher_round, conflicting_subject),
+        Ok(GlobalBodyLockOutcome::Inserted)
+    );
+    assert_eq!(
+        adapter.bind_locked_global_body(&block),
+        V2LaneIngressOutcome::Rejected,
+        "a later-view lock must not authorize a carrier with a different full subject"
+    );
+    assert!(
+        !adapter.output_guard.restart_required(),
+        "rejecting an unprotected carrier must not force fail-stop"
+    );
+    assert!(
+        autonomous_artifact(&adapter, &unanchored_proposal, adapter.context.epoch).is_none(),
+        "a different-subject lock must not cross the durable READY boundary"
+    );
+}
+
+#[test]
+fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vote() {
+    let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+    let (source_block, mut unanchored_proposal) =
+        planned_autonomous_lane_candidate_block_at_view(&adapter, &keys, 0);
+    unanchored_proposal.payload_block_hint = None;
+    unanchored_proposal.proposal_hash = unanchored_proposal.computed_proposal_hash();
+    let entrypoint = source_block
+        .external_entrypoints_cloned()
+        .next()
+        .expect("planned autonomous entrypoint");
+    let (unanchored_payload, producer) = signed_autonomous_payload_for_entrypoint(
+        &adapter,
+        &keys,
+        &unanchored_proposal,
         entrypoint,
         b"autonomous-ready-queue-plan-admission-binding",
         b"autonomous-ready-reservation-owner",
@@ -255,34 +403,53 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
     assert_eq!(
         accept_lane_message_from(
             &mut adapter,
-            BlockMessage::LaneExecutablePayload(payload.clone()),
+            BlockMessage::LaneExecutablePayload(unanchored_payload.clone()),
             producer,
             0,
         ),
         V2LaneIngressOutcome::Inserted
     );
     assert!(
-        autonomous_artifact(&adapter, &proposal, adapter.context.epoch).is_none(),
+        autonomous_artifact(
+            &adapter,
+            &unanchored_proposal,
+            adapter.context.epoch,
+        )
+        .is_none(),
         "an unprotected global carrier must not make payload bytes durable"
     );
     let availability_body = lane_payload_availability_body(
-        &payload,
-        &proposal,
+        &unanchored_payload,
+        &unanchored_proposal,
         adapter.native_network_id(),
         adapter.context.epoch,
     )
     .expect("derive exact READY body");
     assert!(matches!(
         adapter.kura.mint_lane_ready_authorization(
-            &payload,
-            &proposal,
+            &unanchored_payload,
+            &unanchored_proposal,
             &availability_body,
             &adapter.local_peer,
             adapter.context.id(),
         ),
         Err("READY execution input is not durably readable")
     ));
+    let block = autonomous_carrier_block_at_view(&adapter, &keys, &unanchored_payload, 0)
+        .canonical_resultless_proposal();
     let (locked_round, _locked_subject) = mark_global_body_locked_for_block(&mut adapter, &block);
+    let payload = unanchored_payload
+        .attach_global_hint_exact(
+            LaneBlockProposalPayloadHintV1 {
+                proposal_height: adapter.context.height,
+                proposal_view: block.header().view_change_index(),
+                proposal_block_hash: block.hash(),
+            },
+            adapter.native_network_id(),
+            adapter.context.epoch,
+        )
+        .expect("attach the exact protected autonomous carrier hint");
+    let proposal = payload.origin_proposal.clone();
     let protected_hint = proposal
         .payload_block_hint
         .expect("autonomous proposal carries its candidate binding");
@@ -654,12 +821,12 @@ fn autonomous_ready_crosses_payload_and_certificate_durability_before_commit_vot
     );
     assert_eq!(
         adapter.bind_locked_global_body(&block),
-        V2LaneIngressOutcome::Rejected,
-        "a locked carrier that still names an already applied lane proposal is stale"
+        V2LaneIngressOutcome::Duplicate,
+        "an exact autonomous carrier replay is idempotent after its lane proposal is applied"
     );
     assert!(
         !adapter.output_guard.restart_required(),
-        "rejecting the stale locked carrier must not close consensus output"
+        "an idempotent terminal carrier replay must not close consensus output"
     );
     assert_eq!(
         adapter.persist_and_authorize_autonomous_payload(&payload, &proposal),

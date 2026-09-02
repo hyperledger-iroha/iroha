@@ -1948,7 +1948,7 @@ pub(super) fn java_native_kagemusha_build_verify_request_v4(
     })
 }
 #[allow(clippy::too_many_arguments)]
-pub(super) fn java_native_kagemusha_build_redeem_request_v4(
+pub(super) fn java_native_kagemusha_build_redeem_request_v5(
     env: &mut jni::JNIEnv<'_>,
     bundle: jni::objects::JByteArray<'_>,
     topup_provenance: jni::objects::JByteArray<'_>,
@@ -1961,7 +1961,7 @@ pub(super) fn java_native_kagemusha_build_redeem_request_v4(
     change_opening: jni::objects::JByteArray<'_>,
     change_output_membership: jni::objects::JByteArray<'_>,
     verifier_commitment: jni::objects::JByteArray<'_>,
-    operation_id: jni::objects::JByteArray<'_>,
+    nonce: jni::objects::JByteArray<'_>,
     block_height: jni::sys::jlong,
 ) -> jni::sys::jbyteArray {
     java_kagemusha_archive_array_result(env, "V4 redeem request construction", |env| {
@@ -2018,13 +2018,13 @@ pub(super) fn java_native_kagemusha_build_redeem_request_v4(
         };
         let verifier_commitment =
             java_kagemusha_fixed32(env, &verifier_commitment, "verifierCommitment")?;
-        let operation_id = java_kagemusha_fixed32(env, &operation_id, "operationId")?;
+        let nonce = java_kagemusha_fixed32(env, &nonce, "nonce")?;
         let block_height = u64::try_from(block_height)
             .ok()
             .filter(|value| *value != 0)
             .ok_or_else(|| "blockHeight must be positive".to_owned())?;
-        let mut local = KagemushaRecursiveSpendRedeemLocalRequestV4 {
-            version: KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4,
+        let mut local = KagemushaRecursiveSpendRedeemLocalRequestV5 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_REDEEM_LOCAL_WITNESS_VERSION_V5,
             bundle,
             topup_provenance,
             input_opening: opening.value.clone(),
@@ -2038,7 +2038,7 @@ pub(super) fn java_native_kagemusha_build_redeem_request_v4(
             ),
             unshield_verifier_commitment: verifier_commitment,
             block_height,
-            operation_id,
+            nonce,
             change_output_membership,
         };
         local
@@ -2075,13 +2075,12 @@ fn java_kagemusha_transaction_hash(value: &str) -> Result<Vec<u8>, String> {
     Ok(digest)
 }
 #[allow(clippy::too_many_arguments)]
-pub(super) fn java_native_kagemusha_prepare_authorization_v2(
+pub(super) fn java_native_kagemusha_prepare_authorization_v3(
     env: &mut jni::JNIEnv<'_>,
     authority: jni::objects::JByteArray<'_>,
     chain_discriminant: jni::sys::jint,
     device_id: jni::objects::JByteArray<'_>,
     asset_definition_id: jni::objects::JByteArray<'_>,
-    operation_id: jni::objects::JByteArray<'_>,
     issued_at_ms: jni::sys::jlong,
     expires_at_ms: jni::sys::jlong,
     nonce: jni::objects::JByteArray<'_>,
@@ -2107,7 +2106,6 @@ pub(super) fn java_native_kagemusha_prepare_authorization_v2(
             "assetDefinitionId",
         )?)
         .map_err(|_| "assetDefinitionId must be canonical".to_owned())?;
-        let operation_id = java_kagemusha_fixed32(env, &operation_id, "operationId")?;
         let issued_at_ms = u64::try_from(issued_at_ms)
             .ok()
             .filter(|value| *value != 0)
@@ -2131,12 +2129,11 @@ pub(super) fn java_native_kagemusha_prepare_authorization_v2(
         )?;
         let platform = KagemushaRequestAuthorizationPlatformV2::parse(&platform)
             .map_err(|_| "hardwareAssertionPlatform is unsupported".to_owned())?;
-        let preparation = KagemushaRequestAuthorizationPreparationV2 {
-            version: KAGEMUSHA_REQUEST_AUTHORIZATION_PREPARATION_VERSION_V2,
+        let preparation = KagemushaRequestAuthorizationPreparationV3 {
+            version: KAGEMUSHA_REQUEST_AUTHORIZATION_PREPARATION_VERSION_V3,
             authority,
             device_id,
             asset_definition_id,
-            operation_id,
             issued_at_ms,
             expires_at_ms,
             nonce,
@@ -2152,6 +2149,11 @@ pub(super) fn java_native_kagemusha_prepare_authorization_v2(
             .map_err(|_| "failed to derive authorization signing bytes".to_owned())?;
         let preparation_archive = norito::to_bytes(&preparation)
             .map_err(|error| format!("failed to encode authorization preparation: {error}"))?;
+        let operation_id = iroha_data_model::offline::derive_kagemusha_operation_id_v4(
+            &preparation.authority,
+            preparation.nonce,
+        )
+        .map_err(|_| "failed to derive authorization operation id".to_owned())?;
         java_kagemusha_byte_arrays(
             env,
             &[
@@ -2164,7 +2166,7 @@ pub(super) fn java_native_kagemusha_prepare_authorization_v2(
         )
     })
 }
-pub(super) fn java_native_kagemusha_finalize_hardware_authorization_v2(
+pub(super) fn java_native_kagemusha_finalize_hardware_authorization_v3(
     env: &mut jni::JNIEnv<'_>,
     preparation: jni::objects::JByteArray<'_>,
     authenticator_data: jni::objects::JByteArray<'_>,
@@ -2172,7 +2174,7 @@ pub(super) fn java_native_kagemusha_finalize_hardware_authorization_v2(
 ) -> jni::sys::jobjectArray {
     java_kagemusha_archive_array_result(env, "authorization signing", |env| {
         let preparation =
-            java_kagemusha_decode_archive_bounded::<KagemushaRequestAuthorizationPreparationV2>(
+            java_kagemusha_decode_archive_bounded::<KagemushaRequestAuthorizationPreparationV3>(
                 env,
                 &preparation,
                 "authorizationPreparation",
@@ -2201,7 +2203,7 @@ pub(super) fn java_native_kagemusha_finalize_hardware_authorization_v2(
         java_kagemusha_byte_arrays(env, &[archive, signature.as_raw_bytes().to_vec()])
     })
 }
-pub(super) fn java_native_kagemusha_finalize_ios_app_attest_authorization_v2(
+pub(super) fn java_native_kagemusha_finalize_ios_app_attest_authorization_v3(
     env: &mut jni::JNIEnv<'_>,
     preparation: jni::objects::JByteArray<'_>,
     assertion_object: jni::objects::JByteArray<'_>,
@@ -2222,7 +2224,7 @@ pub(super) fn java_native_kagemusha_finalize_ios_app_attest_authorization_v2(
         )
         .ok_or_else(|| "assertionObject must be bounded bytes".to_owned())?;
         let (archive, signature_raw, authenticator_data) =
-            kagemusha_finalize_ios_app_attest_authorization_archive_v2(
+            kagemusha_finalize_ios_app_attest_authorization_archive_v3(
                 &preparation,
                 &assertion_object,
             )
@@ -2233,7 +2235,7 @@ pub(super) fn java_native_kagemusha_finalize_ios_app_attest_authorization_v2(
         java_kagemusha_byte_arrays(env, &[archive, signature_raw, authenticator_data])
     })
 }
-pub(super) fn java_native_kagemusha_finalize_top_up_v4(
+pub(super) fn java_native_kagemusha_finalize_top_up_v5(
     env: &mut jni::JNIEnv<'_>,
     unsigned: jni::objects::JByteArray<'_>,
     authorization: jni::objects::JByteArray<'_>,
@@ -2268,7 +2270,7 @@ pub(super) fn java_native_kagemusha_finalize_top_up_v4(
             .map_err(|error| error.to_string())
     })
 }
-pub(super) fn java_native_kagemusha_finalize_redeem_v4(
+pub(super) fn java_native_kagemusha_finalize_redeem_v5(
     env: &mut jni::JNIEnv<'_>,
     build_result: jni::objects::JByteArray<'_>,
     authorization: jni::objects::JByteArray<'_>,
@@ -2336,7 +2338,7 @@ pub(super) fn java_kagemusha_bridge_failure(
     }
 }
 #[allow(clippy::too_many_arguments)]
-pub(super) fn java_native_kagemusha_prepare_top_up_v4(
+pub(super) fn java_native_kagemusha_prepare_top_up_v5(
     env: &mut jni::JNIEnv<'_>,
     network_id: jni::objects::JByteArray<'_>,
     chain_discriminant: jni::sys::jint,
@@ -2344,7 +2346,7 @@ pub(super) fn java_native_kagemusha_prepare_top_up_v4(
     payer: jni::objects::JByteArray<'_>,
     atomic_units: jni::objects::JByteArray<'_>,
     scale: jni::sys::jint,
-    operation_id: jni::objects::JByteArray<'_>,
+    nonce: jni::objects::JByteArray<'_>,
     spend_key: jni::objects::JByteArray<'_>,
     rho: jni::objects::JByteArray<'_>,
     diversifier: jni::objects::JByteArray<'_>,
@@ -2383,8 +2385,7 @@ pub(super) fn java_native_kagemusha_prepare_top_up_v4(
         })?;
         let asset = AssetId::with_scope(asset_definition, payer.clone(), balance_scope);
         let amount = java_kagemusha_amount(env, &atomic_units, scale).map_err(invalid)?;
-        let operation_id =
-            java_kagemusha_fixed32(env, &operation_id, "operationId").map_err(invalid)?;
+        let nonce = java_kagemusha_fixed32(env, &nonce, "nonce").map_err(invalid)?;
         let mut opening =
             java_kagemusha_note_opening_v2(env, &spend_key, &rho, &diversifier).map_err(invalid)?;
         let opening_archive = Zeroizing::new(norito::to_bytes(&opening).map_err(|error| {
@@ -2445,13 +2446,13 @@ pub(super) fn java_native_kagemusha_prepare_top_up_v4(
         artifact_binding.validate().map_err(|_| {
             JavaKagemushaLifecycleFailure::Invalid("artifact binding is invalid".to_owned())
         })?;
-        let mut request = KagemushaTopUpShieldBuildRequestV4 {
-            version: KAGEMUSHA_RECURSIVE_SPEND_LOCAL_WITNESS_VERSION_V4,
+        let mut request = KagemushaTopUpShieldBuildRequestV5 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_TOPUP_LOCAL_WITNESS_VERSION_V5,
             network_id,
             asset,
             amount,
             payer,
-            operation_id,
+            nonce,
             opening,
             leaf_index,
             zero_path: KagemushaTopUpZeroPathV2 {
@@ -2492,7 +2493,7 @@ pub(super) fn java_native_kagemusha_prepare_top_up_v4(
             unsigned.current_note.spend_nullifier.to_vec(),
             unsigned.shield_evidence.initial_root.to_vec(),
             unsigned.shield_evidence.finalized_root.to_vec(),
-            operation_id.to_vec(),
+            unsigned.operation_id.to_vec(),
             amount.atomic_units.to_string().into_bytes(),
             amount.scale.to_string().into_bytes(),
             leaf_index.to_string().into_bytes(),
@@ -2512,38 +2513,84 @@ pub(super) fn java_native_kagemusha_prepare_top_up_v4(
         }
     }
 }
-pub(super) fn java_native_kagemusha_project_operation_reference_v4(
+fn java_kagemusha_api_operation_identity_fields(
+    identity: &iroha_torii_shared::offline_api::OfflineOperationIdentity,
+) -> Result<[Vec<u8>; 6], String> {
+    use iroha_torii_shared::offline_api::OfflineOperationKind;
+
+    identity.validate_structure()?;
+    Ok([
+        java_kagemusha_lower_hex_32(&identity.operation_id, "operationId")?,
+        java_kagemusha_lower_hex_32(
+            &identity.request_authority_digest,
+            "requestAuthorityDigest",
+        )?,
+        java_kagemusha_lower_hex_32(
+            &identity.canonical_request_digest,
+            "canonicalRequestDigest",
+        )?,
+        match identity.kind {
+            OfflineOperationKind::TopUp => b"top_up".to_vec(),
+            OfflineOperationKind::Redeem => b"redeem".to_vec(),
+        },
+        identity.issued_at_ms.to_string().into_bytes(),
+        identity.expires_at_ms.to_string().into_bytes(),
+    ])
+}
+
+fn java_kagemusha_request_operation_identity_fields(
+    request: iroha_data_model::offline::KagemushaOperationRequestV4<'_>,
+) -> Result<[Vec<u8>; 6], String> {
+    use iroha_data_model::offline::KagemushaOperationKindV4;
+
+    let authorization = request.authorization();
+    let request_authority_digest =
+        iroha_data_model::offline::kagemusha_operation_authority_digest_v4(
+            &authorization.authority,
+        )
+        .map_err(|error| format!("failed to derive request authority digest: {error}"))?;
+    let canonical_request_digest = request
+        .canonical_request_digest()
+        .map_err(|error| format!("failed to derive canonical request digest: {error}"))?;
+    Ok([
+        authorization.operation_id.to_vec(),
+        request_authority_digest.to_vec(),
+        canonical_request_digest.to_vec(),
+        match request.kind() {
+            KagemushaOperationKindV4::TopUp => b"top_up".to_vec(),
+            KagemushaOperationKindV4::Redeem => b"redeem".to_vec(),
+        },
+        authorization.issued_at_ms.to_string().into_bytes(),
+        authorization.expires_at_ms.to_string().into_bytes(),
+    ])
+}
+
+pub(super) fn java_native_kagemusha_project_operation_reference_v2(
     env: &mut jni::JNIEnv<'_>,
     archive: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jobjectArray {
     java_kagemusha_archive_array_result(env, "operation reference projection", |env| {
-        use iroha_torii_shared::offline_api::{
-            OfflineOperationKind, OfflineOperationReference, OfflineOperationState,
-        };
+        use iroha_torii_shared::offline_api::{OfflineOperationReference, OfflineOperationState};
         let reference = java_kagemusha_decode_archive_bounded::<OfflineOperationReference>(
             env,
             &archive,
             "operationReference",
             iroha_torii_shared::offline_api::OFFLINE_OPERATION_REFERENCE_MAX_BYTES,
         )?;
-        let operation_id = java_kagemusha_lower_hex_32(&reference.operation_id, "operationId")?;
-        let expected_status_uri = format!("/v1/offline/operations/{}", reference.operation_id);
+        reference.validate_structure()?;
+        let identity = reference.identity;
+        let expected_status_uri = format!("/v1/offline/operations/{}", identity.operation_id);
         if reference.state != OfflineOperationState::Pending
             || reference.status_uri != expected_status_uri
-            || reference.submitted_at_ms == 0
         {
             return Err("operation reference fields are not canonically bound".to_owned());
         }
-        let fields = vec![
-            match reference.kind {
-                OfflineOperationKind::TopUp => b"top_up".to_vec(),
-                OfflineOperationKind::Redeem => b"redeem".to_vec(),
-            },
-            operation_id,
+        let mut fields = java_kagemusha_api_operation_identity_fields(&identity)?.to_vec();
+        fields.extend([
+            b"pending".to_vec(),
             java_kagemusha_transaction_hash(&reference.transaction_hash)?,
             reference.status_uri.into_bytes(),
-            reference.submitted_at_ms.to_string().into_bytes(),
-        ];
+        ]);
         java_kagemusha_byte_arrays(env, &fields)
     })
 }
@@ -2560,14 +2607,9 @@ pub(super) fn java_native_kagemusha_project_top_up_request_identity_v4(
             "topUpRequest",
             KAGEMUSHA_RECURSIVE_SPEND_TOPUP_MAX_BYTES_V4,
         )?;
-        request
-            .validate_public_binding()
-            .map_err(|_| "topUpRequest binding is invalid".to_owned())?;
-        let fields = vec![
-            b"top_up".to_vec(),
-            request.operation_id.to_vec(),
-            request.authorization.issued_at_ms.to_string().into_bytes(),
-        ];
+        let fields = java_kagemusha_request_operation_identity_fields(
+            iroha_data_model::offline::KagemushaOperationRequestV4::TopUp(&request),
+        )?;
         java_kagemusha_byte_arrays(env, &fields)
     })
 }
@@ -2584,25 +2626,18 @@ pub(super) fn java_native_kagemusha_project_redeem_request_identity_v4(
             "redeemRequest",
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4,
         )?;
-        request
-            .validate_public_binding()
-            .map_err(|_| "redeemRequest binding is invalid".to_owned())?;
-        let fields = vec![
-            b"redeem".to_vec(),
-            request.operation_id.to_vec(),
-            request.authorization.issued_at_ms.to_string().into_bytes(),
-        ];
+        let fields = java_kagemusha_request_operation_identity_fields(
+            iroha_data_model::offline::KagemushaOperationRequestV4::Redeem(&request),
+        )?;
         java_kagemusha_byte_arrays(env, &fields)
     })
 }
-pub(super) fn java_native_kagemusha_project_operation_status_v4(
+pub(super) fn java_native_kagemusha_project_operation_status_v2(
     env: &mut jni::JNIEnv<'_>,
     archive: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jobjectArray {
     java_kagemusha_archive_array_result(env, "operation status projection", |env| {
-        use iroha_torii_shared::offline_api::{
-            OfflineOperationKind, OfflineOperationResult, OfflineOperationStatus,
-        };
+        use iroha_torii_shared::offline_api::{OfflineOperationResult, OfflineOperationStatus};
         let status = java_kagemusha_decode_archive_bounded::<OfflineOperationStatus>(
             env,
             &archive,
@@ -2612,75 +2647,73 @@ pub(super) fn java_native_kagemusha_project_operation_status_v4(
         status.validate_structure()?;
         let fields = match status {
             OfflineOperationStatus::Pending {
-                operation_id,
-                kind,
+                identity,
                 transaction_hash,
-                submitted_at_ms,
-            } => vec![
-                b"pending".to_vec(),
-                match kind {
-                    OfflineOperationKind::TopUp => b"top_up".to_vec(),
-                    OfflineOperationKind::Redeem => b"redeem".to_vec(),
-                },
-                java_kagemusha_lower_hex_32(&operation_id, "operationId")?,
-                java_kagemusha_transaction_hash(&transaction_hash)?,
-                submitted_at_ms.to_string().into_bytes(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-            ],
+            } => {
+                let mut fields = java_kagemusha_api_operation_identity_fields(&identity)?.to_vec();
+                fields.extend([
+                    b"pending".to_vec(),
+                    java_kagemusha_transaction_hash(&transaction_hash)?,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                ]);
+                fields
+            }
             OfflineOperationStatus::Applied {
-                operation_id,
+                identity,
                 result: OfflineOperationResult::TopUp(result),
-            } => vec![
-                b"applied".to_vec(),
-                b"top_up".to_vec(),
-                java_kagemusha_lower_hex_32(&operation_id, "operationId")?,
-                java_kagemusha_transaction_hash(&result.transaction_hash)?,
-                result.finalized_block_height.to_string().into_bytes(),
-                norito::to_bytes(&result.anchor).map_err(|error| {
-                    format!("failed to encode finalized top-up anchor: {error}")
-                })?,
-                norito::to_bytes(&result.finality_proof)
-                    .map_err(|error| format!("failed to encode top-up finality proof: {error}"))?,
-                Vec::new(),
-                Vec::new(),
-            ],
+            } => {
+                let mut fields = java_kagemusha_api_operation_identity_fields(&identity)?.to_vec();
+                fields.extend([
+                    b"applied".to_vec(),
+                    java_kagemusha_transaction_hash(&result.transaction_hash)?,
+                    result.finalized_block_height.to_string().into_bytes(),
+                    norito::to_bytes(&result.anchor).map_err(|error| {
+                        format!("failed to encode finalized top-up anchor: {error}")
+                    })?,
+                    norito::to_bytes(&result.finality_proof).map_err(|error| {
+                        format!("failed to encode top-up finality proof: {error}")
+                    })?,
+                    Vec::new(),
+                    Vec::new(),
+                ]);
+                fields
+            }
             OfflineOperationStatus::Applied {
-                operation_id,
+                identity,
                 result: OfflineOperationResult::Redeem(result),
-            } => vec![
-                b"applied".to_vec(),
-                b"redeem".to_vec(),
-                java_kagemusha_lower_hex_32(&operation_id, "operationId")?,
-                java_kagemusha_transaction_hash(&result.transaction_hash)?,
-                result.finalized_block_height.to_string().into_bytes(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-            ],
+            } => {
+                let mut fields = java_kagemusha_api_operation_identity_fields(&identity)?.to_vec();
+                fields.extend([
+                    b"applied".to_vec(),
+                    java_kagemusha_transaction_hash(&result.transaction_hash)?,
+                    result.finalized_block_height.to_string().into_bytes(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                ]);
+                fields
+            }
             OfflineOperationStatus::Rejected {
-                operation_id,
-                kind,
+                identity,
                 transaction_hash,
                 error,
             } => {
-                vec![
+                let mut fields = java_kagemusha_api_operation_identity_fields(&identity)?.to_vec();
+                fields.extend([
                     b"rejected".to_vec(),
-                    match kind {
-                        OfflineOperationKind::TopUp => b"top_up".to_vec(),
-                        OfflineOperationKind::Redeem => b"redeem".to_vec(),
-                    },
-                    java_kagemusha_lower_hex_32(&operation_id, "operationId")?,
                     java_kagemusha_transaction_hash(&transaction_hash)?,
                     Vec::new(),
                     Vec::new(),
                     Vec::new(),
                     error.code.into_bytes(),
                     error.message.into_bytes(),
-                ]
+                ]);
+                fields
             }
         };
         java_kagemusha_byte_arrays(env, &fields)

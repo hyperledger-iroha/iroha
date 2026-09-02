@@ -36,10 +36,12 @@ fn plain_ballot_rejected_when_duration_below_min() {
     let mut stx = sblock.transaction();
     let instr = CastPlainBallot {
         referendum_id: "rid-min-dur".to_string(),
-        owner: ALICE_ID.clone(),
-        amount: 100_u64.into(),
-        duration_blocks: 10, // below min
-        direction: 0,
+        direction: iroha_data_model::isi::governance::GovernancePlainBallotDirectionV1::Aye,
+        lock: iroha_data_model::isi::governance::GovernanceParticipationLockV1 {
+            amount: 100_u64.into(),
+            duration_blocks: core::num::NonZeroU64::new(10)
+                .expect("non-zero but below-minimum lock duration"),
+        },
     };
     let err = instr.execute(&ALICE_ID, &mut stx).unwrap_err();
     let s = format!("{err}");

@@ -34,13 +34,21 @@ public enum AtomicPrivateSettlementOperationV1 {
       AtomicPrivateSettlementAuthV1.SPONSOR,
       Set.of("manifest", "audit_policy", "committee_authority", "payload"),
       32 * 1024 * 1024),
+  /** Fetch one restricted capsule using the exact current governed audit policy. */
+  AUDITOR_CAPSULE(
+      "/v1/nexus/private-settlements/legs/{payload_digest}/audit-capsule",
+      AtomicPrivateSettlementAuthV1.ROLE_IDENTITY,
+      Set.of("audit_policy"),
+      1024 * 1024),
   /** Submit one purpose-separated governed auditor approval. */
   AUDIT_APPROVAL(
       "/v1/nexus/private-settlements/legs/{payload_digest}/audit-approvals",
       AtomicPrivateSettlementAuthV1.ROLE_IDENTITY,
-      Set.of("approval"),
+      Set.of("audit_policy", "approval"),
       2 * 1024 * 1024),
-  /** Submit one sponsor-signed exact global finalization or abort carrier. */
+  /**
+   * Submit one sponsor-signed exact Prepare-lock registration, finalization, or abort carrier.
+   */
   BUNDLE_SUBMIT(
       "/v1/nexus/private-settlements/bundles",
       AtomicPrivateSettlementAuthV1.SPONSOR,
@@ -63,7 +71,7 @@ public enum AtomicPrivateSettlementOperationV1 {
     this.maximumRequestBytes = maximumRequestBytes;
   }
 
-  /** Returns the exact route, with a payload placeholder only for auditor approval. */
+  /** Returns the exact route, with a payload placeholder for governed-auditor operations. */
   public String path() {
     return path;
   }

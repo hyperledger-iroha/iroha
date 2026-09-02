@@ -88,8 +88,14 @@ pub const PRIVATE_SETTLEMENT_LIFECYCLE_FINALIZED_V1: u8 = 4;
 pub const PRIVATE_SETTLEMENT_LIFECYCLE_ABORTED_V1: u8 = 5;
 /// Attested lifecycle code for an expired sidecar.
 pub const PRIVATE_SETTLEMENT_LIFECYCLE_EXPIRED_V1: u8 = 6;
+/// Exact number of ordinary fee-bearing carriers in a successful V1 settlement.
+///
+/// Prepare registration is the first carrier and atomic financial finalization
+/// is the second. The designated private reimbursement terms bind this count so
+/// they cannot be interpreted as covering only the final carrier.
+pub const PRIVATE_SETTLEMENT_SUCCESS_FEE_BEARING_CARRIERS_V1: u8 = 2;
 /// Exact audited settlement-local proof profile descriptor.
-pub const PRIVATE_SETTLEMENT_PROOF_PROFILE_DESCRIPTOR_V1: &[u8] = b"iroha-atomic-private-settlement-stark-v1:native-rust:first-release:inputs=2-fixed:payer-authorization=purpose-separated-controller-signatures:outputs=3-fixed:roles=recipient+change+sponsor-reimbursement:selectors=canonical-active-or-domain-dummy:values=u128-checked-balanced:asset=salted-hidden-binding:tree=sha256-depth32:successor=validator-derived-only:public-intent=canonical-proof-binding-excluding-post-proof-artifacts:business-plaintext=auditor-capsule-sha256-commitment:wallet=x25519+xchacha20poly1305:proof=stark-fri-sha256-goldilocks";
+pub const PRIVATE_SETTLEMENT_PROOF_PROFILE_DESCRIPTOR_V1: &[u8] = b"iroha-atomic-private-settlement-stark-v1:native-rust:first-release:inputs=2-fixed:payer-authorization=purpose-separated-controller-signatures:outputs=3-fixed:roles=recipient+change+sponsor-reimbursement:selectors=canonical-active-or-domain-dummy:values=u128-checked-balanced:asset=salted-hidden-binding:tree=sha256-depth32:successor=proof-statement-bound-root+epoch:successor-correctness=validator-derived-frontier:public-intent=canonical-proof-binding-excluding-post-proof-artifacts:reimbursement-success-fee-carriers=2:business-plaintext=auditor-capsule-sha256-commitment:wallet=x25519+xchacha20poly1305:proof=stark-fri-sha256-goldilocks";
 
 /// Return a deterministic safe upper bound for one canonical V1 audit capsule.
 ///
@@ -569,8 +575,12 @@ pub struct PrivateSettlementProofStatementV1 {
     pub asset_binding_commitment: Hash,
     /// Current private state root.
     pub old_root: PrivacyRootV1,
+    /// Successor root bound into the proof statement and independently derived by validators.
+    pub new_root: PrivacyRootV1,
     /// Epoch of `old_root`.
     pub old_epoch: u64,
+    /// Epoch of `new_root`; exactly one greater than `old_epoch`.
+    pub new_epoch: u64,
     /// Two fixed nullifier slots, including any domain-separated dummy slot.
     pub nullifiers: Vec<PrivacyNullifierV1>,
     /// Three fixed commitment slots: recipient, change/dummy, and sponsor reimbursement.
@@ -622,6 +632,7 @@ impl PrivateSettlementProofStatementV1 {
             || self.pool_id.is_zero()
             || hash_is_zero(&self.asset_binding_commitment)
             || self.old_root.is_zero()
+            || self.new_root.is_zero()
             || hash_is_zero(&self.audit_plaintext_commitment)
             || hash_is_zero(&self.audit_capsule_digest)
             || hash_is_zero(&self.audit_policy_digest)
@@ -630,8 +641,10 @@ impl PrivateSettlementProofStatementV1 {
         {
             return Err(PrivateSettlementValidationError::ZeroCommitment);
         }
-        if self.authority_context_height == 0
+        if self.old_root == self.new_root
+            || self.authority_context_height == 0
             || self.old_epoch == 0
+            || self.old_epoch.checked_add(1) != Some(self.new_epoch)
             || self.audit_key_epoch == 0
             || self.expiry_height <= self.authority_context_height
         {
@@ -662,6 +675,16 @@ impl PrivateSettlementProofStatementV1 {
                 .collect::<BTreeSet<_>>()
                 .len()
                 != PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1
+        {
+            return Err(PrivateSettlementValidationError::DuplicateStateItem);
+        }
+        if self
+            .encrypted_outputs
+            .iter()
+            .map(|output| output.recipient)
+            .collect::<BTreeSet<_>>()
+            .len()
+            != PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1
         {
             return Err(PrivateSettlementValidationError::DuplicateStateItem);
         }
@@ -812,6 +835,16 @@ impl PrivateSettlementDeltaV1 {
         {
             return Err(PrivateSettlementValidationError::DuplicateStateItem);
         }
+        if self
+            .encrypted_outputs
+            .iter()
+            .map(|output| output.recipient)
+            .collect::<BTreeSet<_>>()
+            .len()
+            != PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1
+        {
+            return Err(PrivateSettlementValidationError::DuplicateStateItem);
+        }
         for (index, output) in self.encrypted_outputs.iter().enumerate() {
             if output.recipient.is_zero()
                 || output.ephemeral_public_key.is_zero()
@@ -852,7 +885,9 @@ impl PrivateSettlementDeltaV1 {
             || self.pool_id != statement.pool_id
             || self.asset_binding_commitment != statement.asset_binding_commitment
             || self.old_root != statement.old_root
+            || self.new_root != statement.new_root
             || self.old_epoch != statement.old_epoch
+            || self.new_epoch != statement.new_epoch
             || self.nullifiers != statement.nullifiers
             || self.output_commitments != statement.output_commitments
             || self.encrypted_outputs != statement.encrypted_outputs
@@ -1452,6 +1487,20 @@ struct PrivateSettlementAuditCommitmentMaterialV1 {
     outputs: Vec<PrivateSettlementAuditOutputCommitmentMaterialV1>,
 }
 
+#[derive(Clone, Encode)]
+struct PrivateSettlementReimbursementTermsMaterialV1 {
+    network_id: NetworkId,
+    leg_ordinal: u8,
+    route: PrivateSettlementRouteV1,
+    sponsor: AccountId,
+    asset_definition_id: AssetDefinitionId,
+    sponsor_reimbursement_amount: u128,
+    fee_intent_digest: Hash,
+    success_fee_bearing_carriers: u8,
+    settlement_expiry_height: u64,
+    reimbursement_terms_salt: [u8; 32],
+}
+
 impl fmt::Debug for PrivateSettlementAuditPlaintextV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("PrivateSettlementAuditPlaintextV1(<redacted>)")
@@ -1656,18 +1705,26 @@ impl PrivateSettlementAuditPlaintextV1 {
     pub fn reimbursement_terms_commitment(&self) -> Result<Hash, norito::Error> {
         canonical_hash(
             REIMBURSEMENT_TERMS_COMMITMENT_DOMAIN_V1,
-            &(
-                self.network_id,
-                self.leg_ordinal,
-                self.route,
-                self.sponsor.clone(),
-                self.asset_definition_id.clone(),
-                self.sponsor_reimbursement_amount,
-                self.fee_intent_digest,
-                self.settlement_expiry_height,
-                self.reimbursement_terms_salt,
-            ),
+            &self.reimbursement_terms_material(PRIVATE_SETTLEMENT_SUCCESS_FEE_BEARING_CARRIERS_V1),
         )
+    }
+
+    fn reimbursement_terms_material(
+        &self,
+        success_fee_bearing_carriers: u8,
+    ) -> PrivateSettlementReimbursementTermsMaterialV1 {
+        PrivateSettlementReimbursementTermsMaterialV1 {
+            network_id: self.network_id,
+            leg_ordinal: self.leg_ordinal,
+            route: self.route,
+            sponsor: self.sponsor.clone(),
+            asset_definition_id: self.asset_definition_id.clone(),
+            sponsor_reimbursement_amount: self.sponsor_reimbursement_amount,
+            fee_intent_digest: self.fee_intent_digest,
+            success_fee_bearing_carriers,
+            settlement_expiry_height: self.settlement_expiry_height,
+            reimbursement_terms_salt: self.reimbursement_terms_salt,
+        }
     }
 
     /// Validate the restricted plaintext's fixed slot shape and value balance.
@@ -2740,8 +2797,14 @@ pub struct PrivateSettlementAuditorViewDigestMaterialV1 {
     pub authoritative_height: u64,
     /// Exact public bundle manifest.
     pub manifest: AtomicPrivateSettlementV1,
-    /// Exact governed local auditor policy.
+    /// Exact historical governed policy bound by the encrypted sidecar.
     pub audit_policy: PrivateSettlementAuditPolicyV1,
+    /// Exact current policy used to authorize restricted access.
+    ///
+    /// This can equal `audit_policy` or be a later policy in the same governed
+    /// lineage when retained historical capsule material is read after key
+    /// rotation.
+    pub access_audit_policy: PrivateSettlementAuditPolicyV1,
     /// Exact four-validator participant authority.
     pub committee_authority: PrivateSettlementCommitteeAuthorityV1,
     /// Restricted proof statement; proof bytes remain absent.
@@ -3611,7 +3674,59 @@ pub enum PrivateSettlementPhaseV1 {
     Commit,
 }
 
-/// Deduplicated committee authority record referenced by both phase certificates.
+/// Route-free four-validator committee roster stored once in an authority catalog.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivateSettlementCommitteeRosterV1 {
+    /// Canonical hash of `validators`.
+    pub validator_set_hash: HashOf<Vec<PeerId>>,
+    /// Exactly four ordered validator identities.
+    pub validators: Vec<PeerId>,
+    /// BLS proofs of possession aligned one-for-one with `validators`.
+    pub validator_pops: Vec<Vec<u8>>,
+}
+
+impl PrivateSettlementCommitteeRosterV1 {
+    /// Validate exact four-validator committee shape and proofs of possession.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed structural error.
+    pub fn validate(&self) -> Result<(), PrivateSettlementValidationError> {
+        if self.validators.len() != PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1
+            || self.validator_pops.len() != self.validators.len()
+            || self.validators.iter().collect::<BTreeSet<_>>().len() != self.validators.len()
+            || self
+                .validator_pops
+                .iter()
+                .any(|pop| pop.len() != PRIVATE_SETTLEMENT_BLS_BYTES_V1)
+            || self.validator_set_hash != HashOf::new(&self.validators)
+        {
+            return Err(PrivateSettlementValidationError::InvalidCommitteeAuthority);
+        }
+        Ok(())
+    }
+
+    /// Reconstruct the route-bound authority committed by a phase body.
+    #[must_use]
+    pub fn with_route(
+        &self,
+        route: PrivateSettlementRouteV1,
+    ) -> PrivateSettlementCommitteeAuthorityV1 {
+        PrivateSettlementCommitteeAuthorityV1 {
+            route,
+            validator_set_hash: self.validator_set_hash,
+            validators: self.validators.clone(),
+            validator_pops: self.validator_pops.clone(),
+        }
+    }
+}
+
+/// Route-bound committee authority used by sidecars and phase signatures.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -3630,6 +3745,16 @@ pub struct PrivateSettlementCommitteeAuthorityV1 {
 }
 
 impl PrivateSettlementCommitteeAuthorityV1 {
+    /// Return the route-free roster material stored in compact public catalogs.
+    #[must_use]
+    pub fn roster(&self) -> PrivateSettlementCommitteeRosterV1 {
+        PrivateSettlementCommitteeRosterV1 {
+            validator_set_hash: self.validator_set_hash,
+            validators: self.validators.clone(),
+            validator_pops: self.validator_pops.clone(),
+        }
+    }
+
     /// Compute the compact authority-record digest signed into phase bodies.
     ///
     /// # Errors
@@ -3645,19 +3770,148 @@ impl PrivateSettlementCommitteeAuthorityV1 {
     ///
     /// Returns a typed structural error.
     pub fn validate(&self) -> Result<(), PrivateSettlementValidationError> {
-        if self.validators.len() != PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1
-            || self.validator_pops.len() != self.validators.len()
-            || self.validators.iter().collect::<BTreeSet<_>>().len() != self.validators.len()
-            || self
-                .validator_pops
-                .iter()
-                .any(|pop| pop.len() != PRIVATE_SETTLEMENT_BLS_BYTES_V1)
-            || self.validator_set_hash != HashOf::new(&self.validators)
-            || hash_is_zero(&self.route.lane_incarnation)
-        {
+        if hash_is_zero(&self.route.lane_incarnation) || self.roster().validate().is_err() {
             return Err(PrivateSettlementValidationError::InvalidCommitteeAuthority);
         }
         Ok(())
+    }
+}
+
+/// Compact two-level committee catalog shared by every public bundle object.
+///
+/// Phase certificates keep indexing the logical leg slot. The corresponding
+/// entry in `leg_roster_indices` selects a route-free roster, which is combined
+/// with the manifest leg route before authority-digest or QC verification.
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivateSettlementAuthorityCatalogV1 {
+    /// Unique committee rosters in canonical first-use order.
+    pub rosters: Vec<PrivateSettlementCommitteeRosterV1>,
+    /// Roster index for every canonical manifest leg.
+    pub leg_roster_indices: Vec<u8>,
+}
+
+impl PrivateSettlementAuthorityCatalogV1 {
+    /// Build the canonical compact catalog from route-bound per-leg authorities.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error if a route is missing, a roster is malformed, or
+    /// the same validator-set hash is supplied with different roster material.
+    pub fn from_leg_authorities(
+        manifest: &AtomicPrivateSettlementV1,
+        authorities: &[PrivateSettlementCommitteeAuthorityV1],
+    ) -> Result<Self, PrivateSettlementValidationError> {
+        manifest.validate()?;
+        if authorities.len() != manifest.legs.len() {
+            return Err(PrivateSettlementValidationError::InvalidAuthorityCatalog);
+        }
+        let mut catalog = Self::default();
+        for (leg, authority) in manifest.legs.iter().zip(authorities) {
+            authority.validate()?;
+            if authority.route != leg.route {
+                return Err(PrivateSettlementValidationError::InvalidAuthorityCatalog);
+            }
+            let roster = authority.roster();
+            let roster_index = if let Some(index) = catalog
+                .rosters
+                .iter()
+                .position(|candidate| candidate.validator_set_hash == roster.validator_set_hash)
+            {
+                if catalog.rosters[index] != roster {
+                    return Err(PrivateSettlementValidationError::InvalidAuthorityCatalog);
+                }
+                index
+            } else {
+                let index = catalog.rosters.len();
+                catalog.rosters.push(roster);
+                index
+            };
+            catalog.leg_roster_indices.push(
+                u8::try_from(roster_index)
+                    .map_err(|_| PrivateSettlementValidationError::InvalidAuthorityCatalog)?,
+            );
+        }
+        catalog.validate_for_manifest(manifest)?;
+        Ok(catalog)
+    }
+
+    /// Validate bounds, uniqueness, references, and canonical first-use order.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error for any malformed or non-canonical catalog.
+    pub fn validate_for_manifest(
+        &self,
+        manifest: &AtomicPrivateSettlementV1,
+    ) -> Result<(), PrivateSettlementValidationError> {
+        manifest.validate()?;
+        if self.leg_roster_indices.len() != manifest.legs.len()
+            || self.rosters.is_empty()
+            || self.rosters.len() > manifest.legs.len()
+            || self.rosters.len() > usize::from(u8::MAX)
+        {
+            return Err(PrivateSettlementValidationError::InvalidAuthorityCatalog);
+        }
+        let mut roster_hashes = BTreeSet::new();
+        for roster in &self.rosters {
+            roster.validate()?;
+            if !roster_hashes.insert(roster.validator_set_hash) {
+                return Err(PrivateSettlementValidationError::InvalidAuthorityCatalog);
+            }
+        }
+        let mut seen = vec![false; self.rosters.len()];
+        let mut next_first_use = 0_usize;
+        for &roster_index in &self.leg_roster_indices {
+            let roster_index = usize::from(roster_index);
+            let Some(was_seen) = seen.get_mut(roster_index) else {
+                return Err(PrivateSettlementValidationError::InvalidAuthorityCatalog);
+            };
+            if !*was_seen {
+                if roster_index != next_first_use {
+                    return Err(PrivateSettlementValidationError::InvalidAuthorityCatalog);
+                }
+                *was_seen = true;
+                next_first_use += 1;
+            }
+        }
+        if next_first_use != self.rosters.len() {
+            return Err(PrivateSettlementValidationError::InvalidAuthorityCatalog);
+        }
+        Ok(())
+    }
+
+    /// Resolve one logical leg slot to its exact route-bound authority.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error if the manifest ordinal or catalog reference is invalid.
+    pub fn authority_for_leg(
+        &self,
+        manifest: &AtomicPrivateSettlementV1,
+        leg_index: usize,
+    ) -> Result<PrivateSettlementCommitteeAuthorityV1, PrivateSettlementValidationError> {
+        let leg = manifest
+            .legs
+            .get(leg_index)
+            .ok_or(PrivateSettlementValidationError::InvalidAuthorityCatalog)?;
+        if usize::from(leg.ordinal) != leg_index {
+            return Err(PrivateSettlementValidationError::InvalidAuthorityCatalog);
+        }
+        let roster_index = self
+            .leg_roster_indices
+            .get(leg_index)
+            .copied()
+            .map(usize::from)
+            .ok_or(PrivateSettlementValidationError::InvalidAuthorityCatalog)?;
+        self.rosters
+            .get(roster_index)
+            .map(|roster| roster.with_route(leg.route))
+            .ok_or(PrivateSettlementValidationError::InvalidAuthorityCatalog)
     }
 }
 
@@ -3681,7 +3935,7 @@ pub struct PrivateSettlementPhaseBodyV1 {
     pub route: PrivateSettlementRouteV1,
     /// Digest of the fixed-shape state delta.
     pub delta_digest: Hash,
-    /// Digest of the deduplicated authority record.
+    /// Digest of the reconstructed route-bound authority record.
     pub authority_digest: Hash,
     /// Digest of the exact all-leg Prepare barrier.
     ///
@@ -3766,7 +4020,7 @@ impl PrivateSettlementPhaseVoteV1 {
     }
 }
 
-/// Compact phase certificate referencing a receipt-level authority catalog entry.
+/// Compact phase certificate referencing a receipt-level logical leg slot.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -3776,7 +4030,7 @@ impl PrivateSettlementPhaseVoteV1 {
 pub struct PrivateSettlementPhaseCertificateV1 {
     /// Exact signed phase body.
     pub body: PrivateSettlementPhaseBodyV1,
-    /// Index into [`PrivateSettlementReceiptV1::authority_catalog`].
+    /// Logical leg-slot index resolved through the catalog's `leg_roster_indices` map.
     pub authority_catalog_index: u8,
     /// Four-bit LSB-first signer bitmap.
     pub signers_bitmap: u8,
@@ -3834,8 +4088,8 @@ pub struct PrivateSettlementPrepareBarrierV1 {
     pub version: u8,
     /// Exact finalized public manifest.
     pub manifest: AtomicPrivateSettlementV1,
-    /// Canonically ordered, deduplicated participant authorities.
-    pub authority_catalog: Vec<PrivateSettlementCommitteeAuthorityV1>,
+    /// Compact participant authority catalog with one logical slot per leg.
+    pub authority_catalog: PrivateSettlementAuthorityCatalogV1,
     /// Every fixed-shape delta in canonical leg order.
     pub deltas: Vec<PrivateSettlementDeltaV1>,
     /// Every cryptographically valid Prepare QC in canonical leg order.
@@ -3872,6 +4126,31 @@ impl PrivateSettlementPrepareBarrierV1 {
         canonical_hash(PREPARED_BUNDLE_DIGEST_DOMAIN_V1, &material)
     }
 
+    /// Return whether two barriers carry the same certified statements.
+    ///
+    /// Signer bitmaps and aggregate signatures may differ because any valid
+    /// three-of-four subset certifies the same Prepare body. This comparison
+    /// deliberately remains structural: callers must independently validate
+    /// both barriers and their aggregate signatures before treating them as
+    /// quorum-equivalent.
+    #[must_use]
+    pub fn quorum_equivalent_to(&self, other: &Self) -> bool {
+        self.version == other.version
+            && self.manifest == other.manifest
+            && self.authority_catalog == other.authority_catalog
+            && self.deltas == other.deltas
+            && self.prepared_bundle_digest == other.prepared_bundle_digest
+            && self.prepare_certificates.len() == other.prepare_certificates.len()
+            && self
+                .prepare_certificates
+                .iter()
+                .zip(&other.prepare_certificates)
+                .all(|(left, right)| {
+                    left.body == right.body
+                        && left.authority_catalog_index == right.authority_catalog_index
+                })
+    }
+
     /// Validate bounded canonical vector alignment before cryptographic checks.
     ///
     /// # Errors
@@ -3885,18 +4164,20 @@ impl PrivateSettlementPrepareBarrierV1 {
         }
         self.manifest.validate()?;
         let leg_count = self.manifest.legs.len();
-        if self.authority_catalog.len() != leg_count
-            || self.deltas.len() != leg_count
+        if self.deltas.len() != leg_count
             || self.prepare_certificates.len() != leg_count
             || hash_is_zero(&self.prepared_bundle_digest)
         {
             return Err(PrivateSettlementValidationError::InvalidPrepareBarrier);
         }
-        for (index, (((manifest_leg, authority), delta), certificate)) in self
+        self.authority_catalog
+            .validate_for_manifest(&self.manifest)
+            .map_err(|_| PrivateSettlementValidationError::InvalidPrepareBarrier)?;
+        let mut output_recipients = BTreeSet::new();
+        for (index, ((manifest_leg, delta), certificate)) in self
             .manifest
             .legs
             .iter()
-            .zip(&self.authority_catalog)
             .zip(&self.deltas)
             .zip(&self.prepare_certificates)
             .enumerate()
@@ -3904,9 +4185,13 @@ impl PrivateSettlementPrepareBarrierV1 {
             let ordinal =
                 u8::try_from(index).expect("private settlement has at most 255 participant legs");
             if manifest_leg.ordinal != ordinal
-                || authority.route != manifest_leg.route
                 || delta.leg_ordinal != ordinal
                 || delta.route != manifest_leg.route
+                || delta.validate_public_shape().is_err()
+                || delta
+                    .encrypted_outputs
+                    .iter()
+                    .any(|output| !output_recipients.insert(output.recipient))
                 || certificate.authority_catalog_index != ordinal
                 || certificate.body.phase != PrivateSettlementPhaseV1::Prepare
                 || certificate.body.leg_ordinal != ordinal
@@ -3952,8 +4237,8 @@ pub struct PrivateSettlementCommitBundleV1 {
     pub version: u8,
     /// Exact public manifest.
     pub manifest: AtomicPrivateSettlementV1,
-    /// One authority record per canonical participant leg.
-    pub authority_catalog: Vec<PrivateSettlementCommitteeAuthorityV1>,
+    /// Compact participant authority catalog with one logical slot per leg.
+    pub authority_catalog: PrivateSettlementAuthorityCatalogV1,
     /// One Prepare/Commit-certified row per canonical participant leg.
     pub legs: Vec<PrivateSettlementLegReceiptV1>,
 }
@@ -4001,8 +4286,8 @@ pub struct PrivateSettlementReceiptV1 {
     pub version: u8,
     /// Exact public manifest.
     pub manifest: AtomicPrivateSettlementV1,
-    /// One authority record per canonical participant leg.
-    pub authority_catalog: Vec<PrivateSettlementCommitteeAuthorityV1>,
+    /// Compact participant authority catalog with one logical slot per leg.
+    pub authority_catalog: PrivateSettlementAuthorityCatalogV1,
     /// One finalized leg record per canonical participant leg.
     pub legs: Vec<PrivateSettlementLegReceiptV1>,
     /// Global height at which every delta became active atomically.
@@ -4044,26 +4329,34 @@ impl PrivateSettlementReceiptV1 {
         self.manifest.validate()?;
         if self.finalized_height < self.manifest.authority_context_height
             || self.finalized_height > self.manifest.expiry_height
-            || self.authority_catalog.len() != self.manifest.legs.len()
             || self.legs.len() != self.manifest.legs.len()
         {
             return Err(PrivateSettlementValidationError::InvalidReceiptShape);
         }
+        self.authority_catalog
+            .validate_for_manifest(&self.manifest)
+            .map_err(|_| PrivateSettlementValidationError::InvalidReceiptShape)?;
         let manifest_digest = self
             .manifest
             .manifest_digest()
             .map_err(|_| PrivateSettlementValidationError::CanonicalEncoding)?;
         let mut prepared_bundle_digest = None;
-        for (index, ((manifest_leg, authority), leg)) in self
-            .manifest
-            .legs
-            .iter()
-            .zip(&self.authority_catalog)
-            .zip(&self.legs)
-            .enumerate()
-        {
+        let mut output_recipients = BTreeSet::new();
+        for (index, (manifest_leg, leg)) in self.manifest.legs.iter().zip(&self.legs).enumerate() {
+            let authority = self
+                .authority_catalog
+                .authority_for_leg(&self.manifest, index)
+                .map_err(|_| PrivateSettlementValidationError::InvalidReceiptShape)?;
             authority.validate()?;
             leg.delta.validate_public_shape()?;
+            if leg
+                .delta
+                .encrypted_outputs
+                .iter()
+                .any(|output| !output_recipients.insert(output.recipient))
+            {
+                return Err(PrivateSettlementValidationError::DuplicateStateItem);
+            }
             leg.prepare.validate_shape()?;
             leg.commit.validate_shape()?;
             let ordinal = u8::try_from(index).expect("receipt has at most 255 legs");
@@ -4382,6 +4675,9 @@ pub enum PrivateSettlementValidationError {
     /// Four-validator authority record is malformed.
     #[error("private settlement committee authority is invalid")]
     InvalidCommitteeAuthority,
+    /// Compact authority catalog is malformed or non-canonical.
+    #[error("private settlement authority catalog is invalid")]
+    InvalidAuthorityCatalog,
     /// Phase certificate bitmap or signature shape is malformed.
     #[error("private settlement phase certificate is invalid")]
     InvalidPhaseCertificate,
@@ -4658,6 +4954,9 @@ mod tests {
             .iter()
             .map(|leg| measured_authority(leg.route, &validators, &validator_pops))
             .collect::<Vec<_>>();
+        let authority_catalog =
+            PrivateSettlementAuthorityCatalogV1::from_leg_authorities(&manifest, &authorities)
+                .expect("fixture authority catalog compacts");
         let prepared_bundle_digest = hash(0xE1);
         let legs = deltas
             .into_iter()
@@ -4703,7 +5002,7 @@ mod tests {
         PrivateSettlementReceiptV1 {
             version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
             manifest,
-            authority_catalog: authorities,
+            authority_catalog,
             legs,
             finalized_height: 50,
         }
@@ -5028,6 +5327,19 @@ mod tests {
             .validate_against_manifest(&manifest)
             .expect("plaintext binds exact manifest leg");
         let commitment = plaintext.commitment().expect("plaintext commitment");
+        let reimbursement = plaintext
+            .reimbursement_terms_commitment()
+            .expect("reimbursement terms commitment");
+        let one_carrier_reimbursement = canonical_hash(
+            REIMBURSEMENT_TERMS_COMMITMENT_DOMAIN_V1,
+            &plaintext.reimbursement_terms_material(1),
+        )
+        .expect("one-carrier reimbursement terms commitment");
+        assert_eq!(PRIVATE_SETTLEMENT_SUCCESS_FEE_BEARING_CARRIERS_V1, 2);
+        assert_ne!(
+            reimbursement, one_carrier_reimbursement,
+            "reimbursement terms must bind both fee-bearing success carriers"
+        );
         let mut changed = plaintext.clone();
         changed.memo.push(b'!');
         assert_ne!(
@@ -5589,13 +5901,142 @@ mod tests {
     }
 
     #[test]
+    fn authority_catalog_deduplicates_rosters_and_reconstructs_route_bound_authorities() {
+        let manifest = manifest(3);
+        let (validators, validator_pops) = measured_validator_material();
+        let authorities = manifest
+            .legs
+            .iter()
+            .map(|leg| measured_authority(leg.route, &validators, &validator_pops))
+            .collect::<Vec<_>>();
+        let catalog =
+            PrivateSettlementAuthorityCatalogV1::from_leg_authorities(&manifest, &authorities)
+                .expect("shared roster compacts");
+
+        assert_eq!(catalog.rosters.len(), 1);
+        assert_eq!(catalog.leg_roster_indices, vec![0, 0, 0]);
+        catalog
+            .validate_for_manifest(&manifest)
+            .expect("canonical catalog validates");
+        for (index, expected) in authorities.iter().enumerate() {
+            assert_eq!(
+                catalog
+                    .authority_for_leg(&manifest, index)
+                    .expect("leg authority resolves"),
+                *expected
+            );
+        }
+
+        let encoded = norito::encode_canonical(&catalog).expect("catalog encodes");
+        let decoded = norito::decode_canonical::<PrivateSettlementAuthorityCatalogV1>(&encoded)
+            .expect("catalog decodes");
+        assert_eq!(decoded, catalog);
+    }
+
+    #[test]
+    fn authority_catalog_rejects_conflicts_and_noncanonical_references() {
+        let manifest = manifest(2);
+        let (validators, validator_pops) = measured_validator_material();
+        let authorities = manifest
+            .legs
+            .iter()
+            .map(|leg| measured_authority(leg.route, &validators, &validator_pops))
+            .collect::<Vec<_>>();
+        let catalog =
+            PrivateSettlementAuthorityCatalogV1::from_leg_authorities(&manifest, &authorities)
+                .expect("shared roster compacts");
+
+        let mut conflicting = authorities.clone();
+        conflicting[1].validator_pops[0][0] ^= 1;
+        assert_eq!(
+            PrivateSettlementAuthorityCatalogV1::from_leg_authorities(&manifest, &conflicting),
+            Err(PrivateSettlementValidationError::InvalidAuthorityCatalog)
+        );
+
+        let mut duplicate_roster = catalog.clone();
+        duplicate_roster.rosters.push(catalog.rosters[0].clone());
+        duplicate_roster.leg_roster_indices = vec![0, 1];
+        assert_eq!(
+            duplicate_roster.validate_for_manifest(&manifest),
+            Err(PrivateSettlementValidationError::InvalidAuthorityCatalog)
+        );
+
+        let mut noncanonical = catalog.clone();
+        noncanonical
+            .rosters
+            .push(PrivateSettlementCommitteeRosterV1 {
+                validator_set_hash: HashOf::new(&vec![
+                    PeerId::from(
+                        KeyPair::from_seed(vec![0xC1; 32], Algorithm::BlsNormal)
+                            .public_key()
+                            .clone(),
+                    ),
+                    PeerId::from(
+                        KeyPair::from_seed(vec![0xC2; 32], Algorithm::BlsNormal)
+                            .public_key()
+                            .clone(),
+                    ),
+                    PeerId::from(
+                        KeyPair::from_seed(vec![0xC3; 32], Algorithm::BlsNormal)
+                            .public_key()
+                            .clone(),
+                    ),
+                    PeerId::from(
+                        KeyPair::from_seed(vec![0xC4; 32], Algorithm::BlsNormal)
+                            .public_key()
+                            .clone(),
+                    ),
+                ]),
+                validators: vec![
+                    PeerId::from(
+                        KeyPair::from_seed(vec![0xC1; 32], Algorithm::BlsNormal)
+                            .public_key()
+                            .clone(),
+                    ),
+                    PeerId::from(
+                        KeyPair::from_seed(vec![0xC2; 32], Algorithm::BlsNormal)
+                            .public_key()
+                            .clone(),
+                    ),
+                    PeerId::from(
+                        KeyPair::from_seed(vec![0xC3; 32], Algorithm::BlsNormal)
+                            .public_key()
+                            .clone(),
+                    ),
+                    PeerId::from(
+                        KeyPair::from_seed(vec![0xC4; 32], Algorithm::BlsNormal)
+                            .public_key()
+                            .clone(),
+                    ),
+                ],
+                validator_pops: vec![vec![0xC1; PRIVATE_SETTLEMENT_BLS_BYTES_V1]; 4],
+            });
+        noncanonical.leg_roster_indices = vec![1, 0];
+        assert_eq!(
+            noncanonical.validate_for_manifest(&manifest),
+            Err(PrivateSettlementValidationError::InvalidAuthorityCatalog)
+        );
+
+        let mut out_of_range = catalog;
+        out_of_range.leg_roster_indices[1] = 1;
+        assert_eq!(
+            out_of_range.validate_for_manifest(&manifest),
+            Err(PrivateSettlementValidationError::InvalidAuthorityCatalog)
+        );
+    }
+
+    #[test]
     fn phase_vote_and_prepare_barrier_roundtrip_with_closed_shape() {
         let receipt = measured_receipt(2);
         let body = receipt.legs[0].prepare.body;
+        let authority = receipt
+            .authority_catalog
+            .authority_for_leg(&receipt.manifest, 0)
+            .expect("fixture authority resolves");
         let vote = PrivateSettlementPhaseVoteV1 {
             version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
             body,
-            signer: receipt.authority_catalog[0].validators[0].clone(),
+            signer: authority.validators[0].clone(),
             signature: vec![0xA5; PRIVATE_SETTLEMENT_BLS_BYTES_V1],
         };
         vote.validate_shape().expect("phase vote shape");
@@ -5627,6 +6068,12 @@ mod tests {
             digest,
             "the digest binds the certified body, not its quorum encoding"
         );
+        assert!(barrier.quorum_equivalent_to(&quorum_equivalent_encoding));
+        let mut substituted_statement = quorum_equivalent_encoding.clone();
+        substituted_statement.prepare_certificates[0]
+            .body
+            .delta_digest = hash(0x44);
+        assert!(!barrier.quorum_equivalent_to(&substituted_statement));
         let json = norito::json::to_json(&barrier).expect("barrier JSON encodes");
         let decoded: PrivateSettlementPrepareBarrierV1 =
             norito::json::from_json(&json).expect("barrier JSON decodes");
@@ -5636,6 +6083,30 @@ mod tests {
         incomplete.prepare_certificates.pop();
         assert_eq!(
             incomplete.validate_shape(),
+            Err(PrivateSettlementValidationError::InvalidPrepareBarrier)
+        );
+    }
+
+    #[test]
+    fn prepare_and_receipt_shapes_reject_cross_leg_recipient_reuse() {
+        let mut receipt = measured_receipt(2);
+        let reused = receipt.legs[0].delta.encrypted_outputs[0].recipient;
+        receipt.legs[1].delta.encrypted_outputs[0].recipient = reused;
+        assert_eq!(
+            receipt.validate_shape(),
+            Err(PrivateSettlementValidationError::DuplicateStateItem)
+        );
+
+        let barrier = PrivateSettlementPrepareBarrierV1 {
+            version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+            manifest: receipt.manifest,
+            authority_catalog: receipt.authority_catalog,
+            deltas: receipt.legs.iter().map(|leg| leg.delta.clone()).collect(),
+            prepare_certificates: receipt.legs.iter().map(|leg| leg.prepare.clone()).collect(),
+            prepared_bundle_digest: hash(0xE5),
+        };
+        assert_eq!(
+            barrier.validate_shape(),
             Err(PrivateSettlementValidationError::InvalidPrepareBarrier)
         );
     }
@@ -5835,7 +6306,9 @@ mod tests {
             pool_id: PrivacyPoolIdV1::new([3; 32]),
             asset_binding_commitment: hash(4),
             old_root: PrivacyRootV1::new([5; 32]),
+            new_root: PrivacyRootV1::new([6; 32]),
             old_epoch: 1,
+            new_epoch: 2,
             nullifiers: vec![
                 PrivacyNullifierV1::new([7; 32]),
                 PrivacyNullifierV1::new([8; 32]),
@@ -5851,6 +6324,32 @@ mod tests {
             reimbursement_leg_ordinal: 0,
             expiry_height: 100,
         };
+        statement.validate().expect("statement shape is valid");
+        let statement_bytes = norito::encode_canonical(&statement).expect("statement encodes");
+        let decoded_statement =
+            norito::decode_canonical::<PrivateSettlementProofStatementV1>(&statement_bytes)
+                .expect("statement decodes");
+        assert_eq!(decoded_statement, statement);
+        assert_eq!(decoded_statement.new_root, PrivacyRootV1::new([6; 32]));
+        assert_eq!(decoded_statement.new_epoch, 2);
+        let mut zero_successor = statement.clone();
+        zero_successor.new_root = PrivacyRootV1::new([0; 32]);
+        assert_eq!(
+            zero_successor.validate(),
+            Err(PrivateSettlementValidationError::ZeroCommitment)
+        );
+        let mut unchanged_successor = statement.clone();
+        unchanged_successor.new_root = unchanged_successor.old_root;
+        assert_eq!(
+            unchanged_successor.validate(),
+            Err(PrivateSettlementValidationError::InvalidEpoch)
+        );
+        let mut skipped_epoch = statement.clone();
+        skipped_epoch.new_epoch = 3;
+        assert_eq!(
+            skipped_epoch.validate(),
+            Err(PrivateSettlementValidationError::InvalidEpoch)
+        );
         let mut delta = PrivateSettlementDeltaV1 {
             version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
             bundle_id: statement.bundle_id,
@@ -5859,9 +6358,9 @@ mod tests {
             pool_id: statement.pool_id,
             asset_binding_commitment: statement.asset_binding_commitment,
             old_root: statement.old_root,
-            new_root: PrivacyRootV1::new([6; 32]),
+            new_root: statement.new_root,
             old_epoch: statement.old_epoch,
-            new_epoch: statement.old_epoch + 1,
+            new_epoch: statement.new_epoch,
             nullifiers: statement.nullifiers.clone(),
             output_commitments: statement.output_commitments.clone(),
             encrypted_outputs: encrypted_outputs.clone(),
@@ -5872,6 +6371,33 @@ mod tests {
             audit_key_epoch: statement.audit_key_epoch,
         };
         delta.validate_against(&statement).expect("delta aligns");
+        let mut reused_statement_recipient = statement.clone();
+        reused_statement_recipient.encrypted_outputs[1].recipient =
+            reused_statement_recipient.encrypted_outputs[0].recipient;
+        assert_eq!(
+            reused_statement_recipient.validate(),
+            Err(PrivateSettlementValidationError::DuplicateStateItem)
+        );
+        let mut reused_delta_recipient = delta.clone();
+        reused_delta_recipient.encrypted_outputs[1].recipient =
+            reused_delta_recipient.encrypted_outputs[0].recipient;
+        assert_eq!(
+            reused_delta_recipient.validate_public_shape(),
+            Err(PrivateSettlementValidationError::DuplicateStateItem)
+        );
+        let mut substituted_successor = delta.clone();
+        substituted_successor.new_root = PrivacyRootV1::new([17; 32]);
+        assert_eq!(
+            substituted_successor.validate_against(&statement),
+            Err(PrivateSettlementValidationError::DeltaStatementMismatch)
+        );
+        let mut substituted_epoch = delta.clone();
+        substituted_epoch.old_epoch = 2;
+        substituted_epoch.new_epoch = 3;
+        assert_eq!(
+            substituted_epoch.validate_against(&statement),
+            Err(PrivateSettlementValidationError::DeltaStatementMismatch)
+        );
         delta.encrypted_outputs[2].ciphertext.pop();
         assert_eq!(
             delta.validate_against(&statement),

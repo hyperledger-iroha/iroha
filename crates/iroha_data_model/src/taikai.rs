@@ -795,9 +795,12 @@ pub struct CekRotationReceiptV1 {
     pub event_id: TaikaiEventId,
     /// Stream associated with the rotation.
     pub stream_id: TaikaiStreamId,
-    /// Named KMS profile that issued the wrap key.
+    /// Named custody-provider profile that issued the wrap key.
+    ///
+    /// The field name is compatibility vocabulary and does not require a
+    /// managed KMS; software providers are valid.
     pub kms_profile: String,
-    /// Label of the new wrap key provided by the KMS.
+    /// Label of the new wrap key provided by the selected custody provider.
     pub new_wrap_key_label: String,
     /// Optional label of the previously active wrap key.
     #[norito(default)]
@@ -814,7 +817,7 @@ pub struct CekRotationReceiptV1 {
     pub notes: Option<String>,
 }
 impl CekRotationReceiptV1 {
-    /// Validate the schema version and canonical KMS/key labels.
+    /// Validate the schema version and canonical provider/key labels.
     ///
     /// # Errors
     /// Returns [`CekRotationReceiptValidationError`] when the receipt version is unsupported or

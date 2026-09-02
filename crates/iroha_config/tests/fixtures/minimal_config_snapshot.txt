@@ -1826,8 +1826,9 @@ Root {
                 },
             ),
             max_validators: 32,
+            max_stake_shares_per_validator: 256,
+            max_pending_unbonds_per_share: 8,
             unbonding_delay: 0ns,
-            withdraw_grace: 0ns,
             max_slash_bps: 10000,
             reward_dust_threshold: Quantity(
                 Numeric {

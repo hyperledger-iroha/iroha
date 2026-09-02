@@ -2,6 +2,7 @@
 use super::ReceiptInsertOutcome;
 use crate::{panic_recovery, routing::MaybeTelemetry};
 use iroha_core::panic_hook::catch_unwind_suppressed;
+use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::warn;
 use std::{
     any::Any,
@@ -205,6 +206,12 @@ pub(crate) struct DaSpooler {
     tx: mpsc::Sender<DaSpoolJob>,
     depth: Arc<AtomicUsize>,
     telemetry: MaybeTelemetry,
+    worker: std::sync::Mutex<DaSpoolWorkerRegistration>,
+}
+struct DaSpoolWorkerRegistration {
+    receiver: Option<mpsc::Receiver<DaSpoolJob>>,
+    batch_max: usize,
+    task: Option<tokio::task::JoinHandle<crate::ToriiCriticalWorkerExit>>,
 }
 struct PendingDepthGuard<'a> {
     spooler: &'a DaSpooler,
@@ -224,25 +231,67 @@ impl Drop for PendingDepthGuard<'_> {
     }
 }
 impl DaSpooler {
-    /// Spawn a DA spool worker.
-    pub(crate) fn spawn(
+    /// Prepare a DA spooler without starting background work.
+    pub(crate) fn prepare(
         queue_capacity: std::num::NonZeroUsize,
         batch_max: std::num::NonZeroUsize,
         telemetry: MaybeTelemetry,
     ) -> Arc<Self> {
         let (tx, rx) = mpsc::channel(queue_capacity.get());
         let depth = Arc::new(AtomicUsize::new(0));
-        tokio::spawn(Self::run(
-            rx,
-            batch_max.get().max(1),
-            Arc::clone(&depth),
-            telemetry.clone(),
-        ));
         Arc::new(Self {
             tx,
             depth,
             telemetry,
+            worker: std::sync::Mutex::new(DaSpoolWorkerRegistration {
+                receiver: Some(rx),
+                batch_max: batch_max.get().max(1),
+                task: None,
+            }),
         })
+    }
+    /// Start the prepared worker and retain its join handle until Torii takes ownership.
+    pub(crate) fn start(&self, shutdown: ShutdownSignal) -> Result<(), &'static str> {
+        let mut worker = self
+            .worker
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if worker.task.is_some() {
+            return Err("DA spool worker was started more than once");
+        }
+        let receiver = worker
+            .receiver
+            .take()
+            .ok_or("DA spool worker receiver is unavailable")?;
+        let batch_max = worker.batch_max;
+        let depth = Arc::clone(&self.depth);
+        let telemetry = self.telemetry.clone();
+        worker.task = Some(tokio::spawn(Self::run(
+            receiver, batch_max, depth, telemetry, shutdown,
+        )));
+        Ok(())
+    }
+    /// Transfer the started worker handle to Torii's critical-worker supervisor.
+    pub(crate) fn take_worker(
+        &self,
+    ) -> Option<tokio::task::JoinHandle<crate::ToriiCriticalWorkerExit>> {
+        self.worker
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .task
+            .take()
+    }
+    #[cfg(test)]
+    pub(crate) fn spawn(
+        queue_capacity: std::num::NonZeroUsize,
+        batch_max: std::num::NonZeroUsize,
+        telemetry: MaybeTelemetry,
+    ) -> Arc<Self> {
+        let spooler = Self::prepare(queue_capacity, batch_max, telemetry);
+        spooler
+            .start(ShutdownSignal::new())
+            .expect("fresh test DA spooler must start");
+        spooler
     }
     /// Submit a batch and wait for the worker acknowledgement.
     pub(crate) async fn submit(&self, batch: DaSpoolBatch) -> DaSpoolBatchReport {
@@ -253,7 +302,9 @@ impl DaSpooler {
         }
         let Some(queued_depth) = Self::try_increment_depth(&self.depth) else {
             self.record_queue_depth(usize::MAX);
-            let report = batch.execute_sync();
+            let report = DaSpoolBatchReport::worker_error(
+                "DA spool queue depth counter is exhausted".to_owned(),
+            );
             Self::record_report(&self.telemetry, &report);
             return report;
         };
@@ -277,9 +328,10 @@ impl DaSpooler {
                     }
                 }
             }
-            Err(err) => {
+            Err(_err) => {
                 drop(depth_guard);
-                let report = err.0.batch.execute_sync();
+                let report =
+                    DaSpoolBatchReport::worker_error("DA spool worker is unavailable".to_owned());
                 Self::record_report(&self.telemetry, &report);
                 report
             }
@@ -290,8 +342,22 @@ impl DaSpooler {
         batch_max: usize,
         depth: Arc<AtomicUsize>,
         telemetry: MaybeTelemetry,
-    ) {
-        while let Some(first) = rx.recv().await {
+        shutdown: ShutdownSignal,
+    ) -> crate::ToriiCriticalWorkerExit {
+        loop {
+            let first = tokio::select! {
+                biased;
+                () = shutdown.receive() => {
+                    // Reject new queued work, then durably drain every job
+                    // accepted before shutdown before reporting completion.
+                    rx.close();
+                    rx.recv().await
+                }
+                first = rx.recv() => first,
+            };
+            let Some(first) = first else {
+                break;
+            };
             let mut jobs = Vec::with_capacity(batch_max);
             jobs.push(first);
             while jobs.len() < batch_max {
@@ -325,6 +391,11 @@ impl DaSpooler {
             }
         }
         Self::record_queue_depth_for(&telemetry, 0);
+        if shutdown.is_sent() {
+            crate::ToriiCriticalWorkerExit::StoppedByShutdown
+        } else {
+            crate::ToriiCriticalWorkerExit::UnexpectedExit
+        }
     }
     fn record_queue_depth(&self, depth: usize) {
         Self::record_queue_depth_for(&self.telemetry, depth);
@@ -395,7 +466,7 @@ mod tests {
         assert_eq!(depth.load(Ordering::SeqCst), 0);
     }
     #[tokio::test]
-    async fn da_spooler_executes_sync_when_queue_depth_counter_exhausted() {
+    async fn da_spooler_rejects_when_queue_depth_counter_is_exhausted() {
         let marker = Arc::new(AtomicUsize::new(0));
         let spooler = DaSpooler::spawn(
             NonZeroUsize::new(1).expect("non-zero queue"),
@@ -410,10 +481,90 @@ mod tests {
             Ok(DaSpoolActionOutput::None)
         }));
         let report = spooler.submit(batch).await;
-        assert_eq!(marker.load(Ordering::SeqCst), 1);
+        assert_eq!(marker.load(Ordering::SeqCst), 0);
         assert_eq!(spooler.depth.load(Ordering::SeqCst), usize::MAX);
         assert_eq!(report.actions().len(), 1);
-        assert_eq!(report.actions()[0].kind(), "test_artifact");
+        assert_eq!(report.actions()[0].kind(), KIND_WORKER);
+        assert_eq!(
+            report.actions()[0].error(),
+            Some("DA spool queue depth counter is exhausted")
+        );
+    }
+    #[tokio::test]
+    async fn da_spooler_rejects_when_worker_receiver_is_closed() {
+        let marker = Arc::new(AtomicUsize::new(0));
+        let spooler = DaSpooler::prepare(
+            NonZeroUsize::new(1).expect("non-zero queue"),
+            NonZeroUsize::new(1).expect("non-zero batch"),
+            MaybeTelemetry::disabled(),
+        );
+        drop(
+            spooler
+                .worker
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .receiver
+                .take()
+                .expect("prepared spooler retains its receiver"),
+        );
+        let mut batch = DaSpoolBatch::new();
+        let marker_for_action = Arc::clone(&marker);
+        batch.push(DaSpoolAction::new("test_artifact", move || {
+            marker_for_action.fetch_add(1, Ordering::SeqCst);
+            Ok(DaSpoolActionOutput::None)
+        }));
+
+        let report = spooler.submit(batch).await;
+
+        assert_eq!(marker.load(Ordering::SeqCst), 0);
+        assert_eq!(spooler.queued_depth(), 0);
+        assert_eq!(report.actions().len(), 1);
+        assert_eq!(report.actions()[0].kind(), KIND_WORKER);
+        assert_eq!(
+            report.actions()[0].error(),
+            Some("DA spool worker is unavailable")
+        );
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn da_spooler_shutdown_drains_physically_started_batch() {
+        let spooler = DaSpooler::prepare(
+            NonZeroUsize::new(1).expect("non-zero queue"),
+            NonZeroUsize::new(1).expect("non-zero batch"),
+            MaybeTelemetry::disabled(),
+        );
+        let shutdown = ShutdownSignal::new();
+        spooler
+            .start(shutdown.clone())
+            .expect("prepared spooler starts once");
+        let worker = spooler
+            .take_worker()
+            .expect("started spooler retains its worker");
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let mut batch = DaSpoolBatch::new();
+        batch.push(DaSpoolAction::new("blocked_artifact", move || {
+            started_tx.send(()).expect("signal physical spool work");
+            release_rx.recv().expect("release physical spool work");
+            Ok(DaSpoolActionOutput::None)
+        }));
+        let submitter = Arc::clone(&spooler);
+        let submission = tokio::spawn(async move { submitter.submit(batch).await });
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("spool batch must start");
+
+        shutdown.send();
+        tokio::task::yield_now().await;
+        assert!(
+            !worker.is_finished(),
+            "shutdown must not detach physically running spool work"
+        );
+        release_tx.send(()).expect("release physical spool work");
+        let report = submission.await.expect("submission task must join");
         assert!(report.actions()[0].error().is_none());
+        assert_eq!(
+            worker.await.expect("spool worker must join"),
+            crate::ToriiCriticalWorkerExit::StoppedByShutdown
+        );
     }
 }

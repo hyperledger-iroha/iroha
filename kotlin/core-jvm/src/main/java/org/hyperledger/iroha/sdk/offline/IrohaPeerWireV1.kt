@@ -71,7 +71,7 @@ class IrohaPeerCanonicalPayload(
     val schemaVersion: Int,
     bytes: ByteArray,
 ) {
-    private val canonicalBytes = bytes.copyOf()
+    private val canonicalBytes = bytes.boundedCanonicalCopy()
     val bytes: ByteArray get() = canonicalBytes.copyOf()
     val byteCount: Int get() = canonicalBytes.size
 
@@ -80,10 +80,6 @@ class IrohaPeerCanonicalPayload(
         require(schemaVersion == profile.requiredSchemaVersion) {
             "Peer payload profile ${profile.name} requires schema " +
                 "${profile.requiredSchemaVersion}, received $schemaVersion"
-        }
-        require(canonicalBytes.isNotEmpty()) { "Peer payload is empty" }
-        require(canonicalBytes.size <= IrohaPeerWireMessageV1.MAXIMUM_CANONICAL_BYTES) {
-            "Peer payload exceeds its bound"
         }
         validateTypedCanonicalPayload(profile, kind, canonicalBytes)
     }
@@ -99,6 +95,14 @@ class IrohaPeerCanonicalPayload(
         return 31 * result + canonicalBytes.contentHashCode()
     }
 
+}
+
+private fun ByteArray.boundedCanonicalCopy(): ByteArray {
+    require(isNotEmpty()) { "Peer payload is empty" }
+    require(size <= IrohaPeerWireMessageV1.MAXIMUM_CANONICAL_BYTES) {
+        "Peer payload exceeds its bound"
+    }
+    return copyOf()
 }
 
 private fun validateTypedCanonicalPayload(

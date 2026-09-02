@@ -27,7 +27,13 @@ use iroha_data_model::{
         AccountValue,
     },
     asset::{AssetDefinition, AssetDefinitionAlias, AssetDefinitionId},
-    block::{BlockHeader, SignedBlock},
+    block::{
+        BlockHeader, SignedBlock,
+        consensus::{
+            Evidence, EvidencePenaltyStatus, EvidenceRecord, SumeragiV2EquivocationEvidence,
+        },
+        consensus_v2 as wire_v2,
+    },
     domain::DomainId,
     isi::{Log, space_directory::PublishSpaceDirectoryManifest},
     metadata::Metadata,
@@ -50,6 +56,65 @@ use std::{
 };
 use tempfile::tempdir;
 const TEST_CHUNK_SIZE: NonZeroUsize = nonzero!(1024_usize);
+const PRE_PRIVATE_SETTLEMENT_WORLD_FIXTURE_V1: &str =
+    include_str!("../../tests/fixtures/snapshot/pre_private_settlement_world_v1.json");
+const PRE_PRIVATE_SETTLEMENT_STATE_FIXTURE_V1: &[u8] =
+    include_bytes!("../../tests/fixtures/snapshot/pre_private_settlement_state_v1.json");
+const PRE_PRIVATE_SETTLEMENT_BLOCK_WIRE_FIXTURE_V1: &[u8] =
+    include_bytes!("../../tests/fixtures/snapshot/pre_private_settlement_block_v1.norito");
+const PRE_PRIVATE_SETTLEMENT_WSV_CHECKPOINT_FIXTURE_V1: &[u8] =
+    include_bytes!("../../tests/fixtures/snapshot/pre_private_settlement_wsv_checkpoint_v1.norito");
+const PRE_PRIVATE_SETTLEMENT_COMMIT_MANIFEST_FIXTURE_V1: &[u8] = include_bytes!(
+    "../../tests/fixtures/snapshot/pre_private_settlement_commit_manifest_v1.norito"
+);
+const PRE_PRIVATE_SETTLEMENT_FINALITY_FIXTURE_V1: &[u8] =
+    include_bytes!("../../tests/fixtures/snapshot/pre_private_settlement_finality_v1.norito");
+const PRE_PRIVATE_SETTLEMENT_WSV_HASH_FIXTURE_V1: &str =
+    include_str!("../../tests/fixtures/snapshot/pre_private_settlement_state_v1.wsv");
+const PRE_PRIVATE_SETTLEMENT_PROVENANCE_FIXTURE_V1: &str =
+    include_str!("../../tests/fixtures/snapshot/pre_private_settlement_v1.provenance");
+const PRE_PRIVATE_SETTLEMENT_GENERATOR_SOURCE_V1: &[u8] =
+    include_bytes!("pre_private_settlement_v1_generator.rs");
+const PRE_PRIVATE_SETTLEMENT_STATE_FIXTURE_SHA256_V1: &str =
+    "c4ed9375846c8217ed0c28ae0e9ef28f00fb66aab39e8dfbe57c6ce771eed30c";
+const PRE_PRIVATE_SETTLEMENT_BLOCK_WIRE_FIXTURE_SHA256_V1: &str =
+    "134f36ddceaee8339cdaff9836f1f476180c48aad08477460f7093a6d4a5967c";
+const PRE_PRIVATE_SETTLEMENT_WSV_CHECKPOINT_FIXTURE_SHA256_V1: &str =
+    "08161a6c6376212e8ec38cd7c0d19969658226a7b834618d4329d2b902c36359";
+const PRE_PRIVATE_SETTLEMENT_COMMIT_MANIFEST_FIXTURE_SHA256_V1: &str =
+    "81ac529112fb6478a2d8df2f78c39377b875f9a01cfc6a5a6bb3b39541ba010b";
+const PRE_PRIVATE_SETTLEMENT_FINALITY_FIXTURE_SHA256_V1: &str =
+    "862968be63f62ddcf3054c846ec1b490f69e6529b172cf6900eb0b687f318859";
+const PRE_PRIVATE_SETTLEMENT_WSV_HASH_FIXTURE_SHA256_V1: &str =
+    "9257a5ba5cc4f93155de3b3d3f3a82ed085b495aabd2f9f3eedc776f95b9aa94";
+const PRE_PRIVATE_SETTLEMENT_PROVENANCE_FIXTURE_SHA256_V1: &str =
+    "7f767620b62510ed4fabc3e9a68565c1e738b9505d7a98c3e70342b5ec73ca3d";
+const PRE_PRIVATE_SETTLEMENT_GENERATOR_SOURCE_SHA256_V1: &str =
+    "155d9183bdbbf032dc789c447fa6afc27c4127341de9157b71b5a99259fbe934";
+const PRE_PRIVATE_SETTLEMENT_INJECTION_SHA256_V1: &str =
+    "8a2dd37e612f90b6f244fb43dff0c3bb1765453eeb5a57a5966d2848c35f2bf5";
+// This source is also appended verbatim to the exact predecessor checkout. Compiling its
+// fail-closed staging test here keeps atomic publication behavior covered by the current suite;
+// the ignored emitter itself can only produce the reviewed 180-field predecessor schema.
+include!("pre_private_settlement_v1_generator.rs");
+fn parsed_pre_private_settlement_provenance_v1()
+-> std::collections::BTreeMap<&'static str, &'static str> {
+    let mut entries = std::collections::BTreeMap::new();
+    for (line_index, line) in PRE_PRIVATE_SETTLEMENT_PROVENANCE_FIXTURE_V1
+        .lines()
+        .enumerate()
+    {
+        let (key, value) = line
+            .split_once('=')
+            .unwrap_or_else(|| panic!("provenance line {} has no separator", line_index + 1));
+        assert!(!key.is_empty(), "provenance keys must not be empty");
+        assert!(
+            entries.insert(key, value).is_none(),
+            "duplicate predecessor provenance key {key}"
+        );
+    }
+    entries
+}
 fn dummy_block_hash(marker: u8) -> HashOf<BlockHeader> {
     HashOf::from_untyped_unchecked(Hash::prehashed([marker; 32]))
 }
@@ -78,6 +143,99 @@ fn checked_random_snapshot_keypair() -> KeyPair {
 fn checked_random_snapshot_bls_keypair() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
         .expect("snapshot BLS fixture key generation should succeed")
+}
+fn canonical_snapshot_v2_phase_vote_evidence(network_id: NetworkId) -> Evidence {
+    let mut keys = (1_u8..=4)
+        .map(|seed| {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic snapshot evidence key")
+        })
+        .collect::<Vec<_>>();
+    keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    let roster = keys
+        .iter()
+        .map(|key| wire_v2::ValidatorPower {
+            validator: PeerId::new(key.public_key().clone()),
+            power: 1,
+        })
+        .collect::<Vec<_>>();
+    let context = wire_v2::HeightContext {
+        network_id,
+        protocol_version: wire_v2::PROTOCOL_VERSION,
+        height: 1,
+        epoch: 0,
+        epoch_end_height: u64::MAX,
+        next_epoch_snapshot: None,
+        snapshot_bootstrap: None,
+        mode: wire_v2::ConsensusMode::Permissioned,
+        parent_commit_qc: None,
+        quorum: wire_v2::DualQuorum::from_roster(&roster)
+            .expect("equal-power snapshot evidence quorum"),
+        roster,
+        nexus_amx_context_hash: Hash::new(b"snapshot evidence context"),
+        execution_policy_hash: Hash::new(b"snapshot evidence execution policy"),
+        da_layout: wire_v2::DataAvailabilityLayout {
+            encoding: wire_v2::PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 32,
+            data_shards: 1,
+            parity_shards: 1,
+            max_payload_size_bytes: 1024,
+            max_chunk_count: 64,
+        },
+        leader_seed: [0x51; 32],
+    };
+    context
+        .validate()
+        .expect("snapshot evidence height context must be valid");
+    let proofs_of_possession = keys
+        .iter()
+        .map(|key| {
+            bls_normal_pop_prove(key.private_key()).expect("snapshot evidence proof of possession")
+        })
+        .collect::<Vec<_>>();
+    let round = wire_v2::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view: 0,
+    };
+    let execution_commitment = wire_v2::ExecutionCommitment::without_topups_or_merge_carrier(
+        Hash::new(b"snapshot evidence parent state"),
+        Hash::new(b"snapshot evidence post state"),
+        Hash::new(b"snapshot evidence ordinary writes"),
+        1,
+        Hash::new(b"snapshot evidence executed block wire"),
+    );
+    let signer: wire_v2::ValidatorIndex = 1;
+    let signer_index = usize::try_from(signer).expect("snapshot evidence signer index fits usize");
+    let signed_vote = |seed: u8| {
+        let mut vote = wire_v2::Vote {
+            round,
+            proposal_round: round,
+            phase: wire_v2::GlobalPhase::Prepare,
+            subject: wire_v2::BlockSubject {
+                parent_block_hash: None,
+                block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([seed; 32])),
+                payload_hash: Hash::prehashed([seed.wrapping_add(1); 32]),
+            },
+            execution_commitment,
+            signer,
+            signature: Vec::new(),
+        };
+        vote.signature =
+            Signature::try_new(keys[signer_index].private_key(), &vote.signature_preimage())
+                .expect("snapshot evidence phase-vote signature")
+                .payload()
+                .to_vec();
+        vote
+    };
+    crate::sumeragi::evidence::canonical_v2_evidence(&SumeragiV2EquivocationEvidence {
+        context,
+        proofs_of_possession,
+        conflict: wire_v2::SumeragiV2Equivocation::PhaseVote {
+            first: signed_vote(0x61),
+            second: signed_vote(0x62),
+        },
+    })
 }
 fn current_generation_name(store_dir: &Path) -> String {
     let pointer_path = store_dir.join(SNAPSHOT_CURRENT_FILE_NAME);
@@ -1017,6 +1175,633 @@ async fn borrowed_snapshot_wsv_hash_matches_typed_canonical_surface() {
     );
     assert_eq!(canonical_state_snapshot_hash(&state), tree_reference);
 }
+
+#[tokio::test]
+async fn empty_private_settlement_migration_preserves_predecessor_wsv_hash() {
+    assert_eq!(
+        PRE_PRIVATE_SETTLEMENT_SOURCE_REVISION_V1,
+        crate::state::deserialize::PRE_PRIVATE_SETTLEMENT_WORLD_REVISION_V1,
+        "the generator and decoder must freeze the same exact predecessor revision"
+    );
+    assert_eq!(
+        PRE_PRIVATE_SETTLEMENT_WORLD_SCHEMA_ORDER_SHA256_V1,
+        crate::state::deserialize::PRE_PRIVATE_SETTLEMENT_WORLD_FIELD_ORDER_SHA256_V1,
+        "the generator and decoder must freeze the same predecessor World order"
+    );
+    assert_eq!(
+        hex::encode(Sha256::digest(PRE_PRIVATE_SETTLEMENT_STATE_FIXTURE_V1)),
+        PRE_PRIVATE_SETTLEMENT_STATE_FIXTURE_SHA256_V1,
+        "the checked-in complete predecessor State must match its reviewed SHA-256"
+    );
+    assert_eq!(
+        hex::encode(Sha256::digest(PRE_PRIVATE_SETTLEMENT_BLOCK_WIRE_FIXTURE_V1)),
+        PRE_PRIVATE_SETTLEMENT_BLOCK_WIRE_FIXTURE_SHA256_V1,
+        "the checked-in predecessor SignedBlockWire must match its reviewed SHA-256"
+    );
+    assert_eq!(
+        hex::encode(Sha256::digest(
+            PRE_PRIVATE_SETTLEMENT_WSV_CHECKPOINT_FIXTURE_V1
+        )),
+        PRE_PRIVATE_SETTLEMENT_WSV_CHECKPOINT_FIXTURE_SHA256_V1,
+        "the checked-in predecessor WSV checkpoint must match its reviewed SHA-256"
+    );
+    assert_eq!(
+        hex::encode(Sha256::digest(
+            PRE_PRIVATE_SETTLEMENT_COMMIT_MANIFEST_FIXTURE_V1
+        )),
+        PRE_PRIVATE_SETTLEMENT_COMMIT_MANIFEST_FIXTURE_SHA256_V1,
+        "the checked-in predecessor commit manifest must match its reviewed SHA-256"
+    );
+    assert_eq!(
+        hex::encode(Sha256::digest(PRE_PRIVATE_SETTLEMENT_FINALITY_FIXTURE_V1)),
+        PRE_PRIVATE_SETTLEMENT_FINALITY_FIXTURE_SHA256_V1,
+        "the checked-in predecessor finality artifact must match its reviewed SHA-256"
+    );
+    assert_eq!(
+        hex::encode(Sha256::digest(
+            PRE_PRIVATE_SETTLEMENT_WSV_HASH_FIXTURE_V1.as_bytes()
+        )),
+        PRE_PRIVATE_SETTLEMENT_WSV_HASH_FIXTURE_SHA256_V1,
+        "the checked-in predecessor WSV-hash artifact must match its reviewed SHA-256"
+    );
+    assert_eq!(
+        hex::encode(Sha256::digest(
+            PRE_PRIVATE_SETTLEMENT_PROVENANCE_FIXTURE_V1.as_bytes()
+        )),
+        PRE_PRIVATE_SETTLEMENT_PROVENANCE_FIXTURE_SHA256_V1,
+        "the checked-in predecessor provenance must match its reviewed SHA-256"
+    );
+    assert_eq!(
+        hex::encode(Sha256::digest(PRE_PRIVATE_SETTLEMENT_GENERATOR_SOURCE_V1)),
+        PRE_PRIVATE_SETTLEMENT_GENERATOR_SOURCE_SHA256_V1,
+        "the compiled predecessor generator must match its reviewed SHA-256"
+    );
+    let provenance = parsed_pre_private_settlement_provenance_v1();
+    assert_eq!(
+        provenance.keys().copied().collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "block_wire_sha256",
+            "cargo_version",
+            "checkout_injection_sha256",
+            "commit_manifest_sha256",
+            "finality_artifact_sha256",
+            "format_version",
+            "generation_command",
+            "generator_path",
+            "generator_sha256",
+            "rustc_verbose",
+            "source_revision",
+            "state_sha256",
+            "world_field_count",
+            "world_schema_order_sha256",
+            "world_sha256",
+            "wsv_artifact_sha256",
+            "wsv_checkpoint_sha256",
+            "wsv_hash",
+        ]),
+        "predecessor provenance must have one exact closed field inventory"
+    );
+    let provenance_field = |key| {
+        provenance
+            .get(key)
+            .copied()
+            .unwrap_or_else(|| panic!("missing predecessor provenance field {key}"))
+    };
+    assert_eq!(provenance_field("format_version"), "1");
+    assert_eq!(
+        provenance_field("source_revision"),
+        PRE_PRIVATE_SETTLEMENT_SOURCE_REVISION_V1
+    );
+    assert_eq!(
+        provenance_field("generator_path"),
+        "crates/iroha_core/src/snapshot/pre_private_settlement_v1_generator.rs"
+    );
+    assert_eq!(
+        provenance_field("generator_sha256"),
+        PRE_PRIVATE_SETTLEMENT_GENERATOR_SOURCE_SHA256_V1
+    );
+    assert_eq!(
+        provenance_field("checkout_injection_sha256"),
+        PRE_PRIVATE_SETTLEMENT_INJECTION_SHA256_V1
+    );
+    assert_eq!(provenance_field("world_field_count"), "180");
+    assert_eq!(
+        provenance_field("world_schema_order_sha256"),
+        PRE_PRIVATE_SETTLEMENT_WORLD_SCHEMA_ORDER_SHA256_V1
+    );
+    assert_eq!(
+        provenance_field("world_sha256"),
+        hex::encode(Sha256::digest(
+            PRE_PRIVATE_SETTLEMENT_WORLD_FIXTURE_V1.as_bytes()
+        ))
+    );
+    assert_eq!(
+        provenance_field("state_sha256"),
+        PRE_PRIVATE_SETTLEMENT_STATE_FIXTURE_SHA256_V1
+    );
+    assert_eq!(
+        provenance_field("block_wire_sha256"),
+        PRE_PRIVATE_SETTLEMENT_BLOCK_WIRE_FIXTURE_SHA256_V1
+    );
+    assert_eq!(
+        provenance_field("wsv_checkpoint_sha256"),
+        PRE_PRIVATE_SETTLEMENT_WSV_CHECKPOINT_FIXTURE_SHA256_V1
+    );
+    assert_eq!(
+        provenance_field("commit_manifest_sha256"),
+        PRE_PRIVATE_SETTLEMENT_COMMIT_MANIFEST_FIXTURE_SHA256_V1
+    );
+    assert_eq!(
+        provenance_field("finality_artifact_sha256"),
+        PRE_PRIVATE_SETTLEMENT_FINALITY_FIXTURE_SHA256_V1
+    );
+    assert_eq!(
+        provenance_field("wsv_artifact_sha256"),
+        PRE_PRIVATE_SETTLEMENT_WSV_HASH_FIXTURE_SHA256_V1
+    );
+    assert_eq!(
+        provenance_field("wsv_hash"),
+        PRE_PRIVATE_SETTLEMENT_WSV_HASH_FIXTURE_V1
+            .strip_suffix('\n')
+            .expect("predecessor WSV artifact has one trailing newline")
+    );
+    assert_eq!(
+        provenance_field("generation_command"),
+        concat!(
+            "IROHA_PRE_PRIVATE_SETTLEMENT_FIXTURE_PARENT=\"$FIXTURE_PARENT\" ",
+            "IROHA_PRE_PRIVATE_SETTLEMENT_SOURCE_REVISION=\"$(git rev-parse HEAD)\" ",
+            "IROHA_PRE_PRIVATE_SETTLEMENT_GENERATOR_PATH=\"$GENERATOR\" ",
+            "IROHA_PRE_PRIVATE_SETTLEMENT_GENERATOR_SHA256=\"$(shasum -a 256 \"$GENERATOR\" | cut -d ' ' -f 1)\" ",
+            "CARGO_TARGET_DIR=\"$TARGET_DIR\" cargo test --locked -p iroha_core --lib ",
+            "snapshot::tests::emit_pre_private_settlement_fixture_v1 ",
+            "-- --ignored --exact",
+        )
+    );
+    assert!(provenance_field("rustc_verbose").starts_with("rustc "));
+    assert!(provenance_field("rustc_verbose").contains("\\nhost: "));
+    assert!(provenance_field("cargo_version").starts_with("cargo "));
+    let predecessor_payload = PRE_PRIVATE_SETTLEMENT_STATE_FIXTURE_V1;
+    let predecessor_text = std::str::from_utf8(predecessor_payload)
+        .expect("exact predecessor State snapshot is UTF-8");
+    let predecessor_members = borrowed_json_object_members(predecessor_text)
+        .expect("parse complete exact predecessor State snapshot");
+    let predecessor_world = predecessor_members
+        .iter()
+        .find(|member| member.key == "world")
+        .expect("exact predecessor State carries World")
+        .value;
+    assert_eq!(
+        predecessor_world, PRE_PRIVATE_SETTLEMENT_WORLD_FIXTURE_V1,
+        "the focused World fixture must be the byte-exact World emitted inside the full State"
+    );
+
+    let kura = Kura::blank_kura_for_testing();
+    let block = Arc::new(
+        iroha_data_model::block::decode_framed_signed_block(
+            PRE_PRIVATE_SETTLEMENT_BLOCK_WIRE_FIXTURE_V1,
+        )
+        .expect("decode exact predecessor SignedBlockWire with current compatibility surface"),
+    );
+    assert_eq!(
+        block
+            .encode_wire()
+            .expect("re-encode exact predecessor SignedBlockWire"),
+        PRE_PRIVATE_SETTLEMENT_BLOCK_WIRE_FIXTURE_V1,
+        "current block compatibility must preserve the predecessor canonical wire byte-for-byte"
+    );
+    kura.store_block(Arc::clone(&block))
+        .expect("store exact predecessor block bytes in current Kura");
+    assert_eq!(
+        kura.canonical_block_wire_bytes_for_testing(nonzero!(1_usize))
+            .expect("read exact persisted predecessor block bytes"),
+        PRE_PRIVATE_SETTLEMENT_BLOCK_WIRE_FIXTURE_V1,
+        "current Kura must persist the checked-in predecessor SignedBlockWire byte-for-byte"
+    );
+    let mut predecessor_checkpoint_bytes = PRE_PRIVATE_SETTLEMENT_WSV_CHECKPOINT_FIXTURE_V1;
+    let predecessor_checkpoint =
+        crate::kura::WsvCheckpoint::decode_all(&mut predecessor_checkpoint_bytes)
+            .expect("decode exact predecessor WSV checkpoint");
+    assert_eq!(
+        predecessor_checkpoint.encode(),
+        PRE_PRIVATE_SETTLEMENT_WSV_CHECKPOINT_FIXTURE_V1,
+        "current Norito must preserve the predecessor WSV checkpoint byte-for-byte"
+    );
+    let mut predecessor_manifest_bytes = PRE_PRIVATE_SETTLEMENT_COMMIT_MANIFEST_FIXTURE_V1;
+    let predecessor_manifest =
+        crate::kura::CommitManifest::decode_all(&mut predecessor_manifest_bytes)
+            .expect("decode exact predecessor commit manifest");
+    assert_eq!(
+        predecessor_manifest.encode(),
+        PRE_PRIVATE_SETTLEMENT_COMMIT_MANIFEST_FIXTURE_V1,
+        "current Norito must preserve the predecessor commit manifest byte-for-byte"
+    );
+    let mut predecessor_finality_bytes = PRE_PRIVATE_SETTLEMENT_FINALITY_FIXTURE_V1;
+    let predecessor_finality =
+        iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact::decode_all(
+            &mut predecessor_finality_bytes,
+        )
+        .expect("decode exact predecessor finality artifact");
+    predecessor_finality
+        .verify()
+        .expect("the exact predecessor finality artifact must remain cryptographically valid");
+    assert_eq!(
+        predecessor_finality.encode(),
+        PRE_PRIVATE_SETTLEMENT_FINALITY_FIXTURE_V1,
+        "current Norito must preserve the predecessor finality artifact byte-for-byte"
+    );
+    let predecessor_hash = canonical_snapshot_wsv_hash(predecessor_payload)
+        .expect("hash exact predecessor snapshot surface");
+    assert_eq!(
+        hex::encode(predecessor_hash.as_ref()),
+        PRE_PRIVATE_SETTLEMENT_WSV_HASH_FIXTURE_V1
+            .strip_suffix('\n')
+            .expect("exact predecessor WSV hash artifact has one trailing newline"),
+        "current streaming normalization must reproduce the complete WSV hash emitted by the predecessor revision"
+    );
+    assert_eq!(
+        predecessor_checkpoint.state_hash(),
+        predecessor_hash,
+        "the predecessor-emitted checkpoint must commit the exact predecessor State"
+    );
+    assert_eq!(
+        predecessor_manifest,
+        crate::kura::CommitManifest::new(1, block.hash(), None, None, predecessor_hash, None,)
+            .with_authenticated_v2_commit_authority(&predecessor_finality),
+        "the predecessor manifest must bind the exact State, block, and finality authority"
+    );
+    kura.store_wsv_checkpoint(1, block.hash(), predecessor_hash)
+        .expect("persist exact predecessor WSV checkpoint");
+    kura.store_commit_manifest(predecessor_manifest.clone())
+        .expect("replay the predecessor-emitted manifest against its durable block and WSV");
+    let _ = kura
+        .store_v2_finality_artifact(&predecessor_finality)
+        .expect("persist the predecessor-emitted finality artifact");
+    assert_eq!(
+        kura.v2_finality_artifact(1)
+            .expect("read replayed predecessor finality artifact")
+            .expect("replayed predecessor finality artifact exists")
+            .encode(),
+        PRE_PRIVATE_SETTLEMENT_FINALITY_FIXTURE_V1,
+        "current Kura must reproduce the exact predecessor finality sidecar"
+    );
+    assert_eq!(
+        kura.wsv_checkpoint(1)
+            .expect("read replayed predecessor WSV checkpoint")
+            .expect("replayed predecessor WSV checkpoint exists")
+            .encode(),
+        PRE_PRIVATE_SETTLEMENT_WSV_CHECKPOINT_FIXTURE_V1,
+        "current Kura must reproduce the exact predecessor checkpoint binding"
+    );
+    let restored = KuraSeed {
+        kura: Arc::clone(&kura),
+        query_handle: LiveQueryStore::start_test(),
+        #[cfg(feature = "telemetry")]
+        telemetry: crate::telemetry::StateTelemetry::default(),
+    }
+    .into_state_from_json_str(predecessor_text)
+    .expect("restore the exact complete predecessor State snapshot");
+    assert_eq!(restored.committed_height(), 1);
+    assert_eq!(
+        restored.latest_block_hash_fast(),
+        Some(block.hash()),
+        "the historical snapshot tip must identify the exact checked-in SignedBlockWire"
+    );
+    let migrated_hash = canonical_state_snapshot_hash(&restored);
+    assert_eq!(
+        migrated_hash, predecessor_hash,
+        "migration must preserve the complete predecessor WSV commitment"
+    );
+    let typed_migrated_bytes = canonical_state_snapshot_bytes(&restored);
+    assert_eq!(
+        Hash::new(&typed_migrated_bytes),
+        predecessor_hash,
+        "typed normalization must hash the complete migrated State to the exact predecessor WSV commitment"
+    );
+    let predecessor_value: json::Value = json::from_slice(predecessor_payload)
+        .expect("decode exact predecessor State for recursive schema comparison");
+    let current_payload = exact_snapshot_payload_bytes(&restored);
+    let current_value: json::Value = json::from_slice(&current_payload)
+        .expect("decode migrated current State for recursive schema comparison");
+    let mut predecessor_paths = BTreeSet::new();
+    collect_snapshot_object_field_paths(&predecessor_value, "", &mut predecessor_paths);
+    let mut current_paths = BTreeSet::new();
+    collect_snapshot_object_field_paths(&current_value, "", &mut current_paths);
+    let mut expected_current_only = BTreeSet::new();
+    for field in PRE_PRIVATE_SETTLEMENT_SUCCESSOR_WORLD_FIELDS_V1 {
+        let field = format!("world.{field}");
+        expected_current_only.insert(field.clone());
+        expected_current_only.insert(format!("{field}.revert"));
+        expected_current_only.insert(format!("{field}.blocks"));
+    }
+    let mut expected_predecessor_only = BTreeSet::from([
+        "transactions.direct_committed".to_owned(),
+        "world.parameters.blocks.sumeragi.key_require_hsm".to_owned(),
+        "world.parameters.blocks.sumeragi.key_allowed_hsm_providers".to_owned(),
+    ]);
+    for field in PRE_PRIVATE_SETTLEMENT_RETIRED_WORLD_FIELDS_V1 {
+        let field = format!("world.{field}");
+        expected_predecessor_only.insert(field.clone());
+        expected_predecessor_only.insert(format!("{field}.revert"));
+        expected_predecessor_only.insert(format!("{field}.blocks"));
+    }
+    assert_eq!(
+        current_paths
+            .difference(&predecessor_paths)
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        expected_current_only,
+        "compiled predecessor/current State JSON must have only the reviewed recursive successor delta"
+    );
+    assert_eq!(
+        predecessor_paths
+            .difference(&current_paths)
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        expected_predecessor_only,
+        "compiled predecessor/current State JSON must have only the reviewed recursive retired delta"
+    );
+
+    validate_snapshot_wsv_checkpoint(predecessor_hash, &[block.hash()], &kura)
+        .expect("exact predecessor hash must match Kura");
+    validate_snapshot_wsv_checkpoint(migrated_hash, &[block.hash()], &kura)
+        .expect("migrated current hash must retain the exact Kura binding");
+    assert_eq!(
+        kura.commit_manifest(1)
+            .expect("read predecessor commit manifest"),
+        Some(predecessor_manifest.clone()),
+        "the durable commit manifest must retain the predecessor WSV hash"
+    );
+    assert_eq!(
+        kura.commit_manifest_binding_state(&predecessor_manifest)
+            .expect("read predecessor manifest binding"),
+        crate::kura::CommitManifestBindingState::Bound,
+        "Kura must bind the exact migrated WSV hash to the complete manifest"
+    );
+}
+
+#[test]
+fn predecessor_hash_bridge_requires_exact_successor_schema_and_empty_encodings() {
+    assert_eq!(
+        json::to_json(&json::Value::Array(
+            PRE_PRIVATE_SETTLEMENT_HSM_PROVIDERS_V1
+                .into_iter()
+                .map(|provider| json::Value::String(provider.to_owned()))
+                .collect(),
+        ))
+        .expect("serialize frozen predecessor HSM providers"),
+        PRE_PRIVATE_SETTLEMENT_HSM_PROVIDERS_JSON_V1,
+        "the typed and streaming HSM defaults must be byte-identical"
+    );
+    let current = json::to_json(&crate::state::World::default())
+        .expect("serialize exact current World schema");
+    let canonical =
+        borrowed_json_object_members(&current).expect("parse exact current World schema");
+    assert!(
+        is_exact_post_private_settlement_world_values_v1(&canonical),
+        "the exact frozen successor World schema must match the reviewed bridge"
+    );
+
+    let mut future =
+        borrowed_json_object_members(&current).expect("parse current World for future-field case");
+    future.push(BorrowedJsonMember {
+        key: "future_current_world_field".to_owned(),
+        encoded_key: r#""future_current_world_field""#,
+        value: "null",
+    });
+    assert!(
+        !is_exact_post_private_settlement_world_values_v1(&future),
+        "a future field must retain the current schema instead of entering predecessor normalization"
+    );
+
+    for noncanonical_empty in [
+        r#"{"blocks":{},"revert":{}}"#,
+        r#"{"revert": {}, "blocks": {}}"#,
+    ] {
+        let mut members = borrowed_json_object_members(&current)
+            .expect("parse current World for noncanonical-empty case");
+        members
+            .iter_mut()
+            .find(|member| member.key == "consensus_evidence")
+            .expect("current World carries consensus evidence")
+            .value = noncanonical_empty;
+        assert!(
+            !is_exact_post_private_settlement_world_values_v1(&members),
+            "noncanonical empty successor storage must retain the current schema"
+        );
+    }
+
+    let state = state_factory();
+    let current_state = exact_snapshot_payload_bytes(&state);
+    let current_state = std::str::from_utf8(&current_state).expect("current State is UTF-8");
+    let current_state = borrowed_json_object_members(current_state).expect("parse current State");
+    assert!(
+        is_exact_pre_private_settlement_current_state_hash_v1(&current_state, None)
+            .expect("inspect complete current State boundary"),
+        "World and parameter migration must be admitted together at the complete State root"
+    );
+
+    let raw_current_state = exact_snapshot_payload_bytes(&state);
+    let mut normalized: json::Value =
+        json::from_slice(&raw_current_state).expect("decode current State for typed normalization");
+    normalize_mv_cell_fields_in_state_value(&mut normalized);
+    assert!(
+        normalize_exact_pre_private_settlement_fields_in_state_value_v1(&mut normalized),
+        "the typed bridge must recognize the same complete State boundary"
+    );
+    let normalized_world = normalized
+        .get("world")
+        .and_then(json::Value::as_object)
+        .expect("normalized State carries World");
+    assert!(
+        PRE_PRIVATE_SETTLEMENT_RETIRED_WORLD_FIELDS_V1
+            .iter()
+            .all(|field| normalized_world.contains_key(*field))
+            && PRE_PRIVATE_SETTLEMENT_SUCCESSOR_WORLD_FIELDS_V1
+                .iter()
+                .all(|field| !normalized_world.contains_key(*field)),
+        "the typed bridge must replace the complete 13/5 World delta atomically"
+    );
+    let normalized_sumeragi = normalized_world
+        .get("parameters")
+        .and_then(json::Value::as_object)
+        .and_then(|parameters| parameters.get("sumeragi"))
+        .and_then(json::Value::as_object)
+        .expect("normalized State carries Sumeragi parameters");
+    assert_eq!(
+        normalized_sumeragi.get("key_require_hsm"),
+        Some(&json::Value::Bool(false))
+    );
+    assert_eq!(
+        normalized_sumeragi.get("key_allowed_hsm_providers"),
+        Some(&json::Value::Array(
+            PRE_PRIVATE_SETTLEMENT_HSM_PROVIDERS_V1
+                .into_iter()
+                .map(|provider| json::Value::String(provider.to_owned()))
+                .collect()
+        )),
+        "parameter defaults must be restored in the same bridge decision as the World delta"
+    );
+    let normalized_transactions = normalized
+        .get("transactions")
+        .and_then(json::Value::as_object)
+        .expect("normalized State carries transaction storage");
+    assert_eq!(
+        normalized_transactions.get("direct_committed"),
+        Some(&json::Value::Object(json::Map::new())),
+        "the typed bridge must restore the exact empty retired transaction index"
+    );
+
+    let mut future_state: json::Value =
+        json::from_slice(&raw_current_state).expect("decode current State");
+    future_state
+        .as_object_mut()
+        .expect("State is an object")
+        .insert("future_current_state_field".to_owned(), json::Value::Null);
+    let future_state = json::to_json(&future_state).expect("encode future State");
+    let future_state = borrowed_json_object_members(&future_state).expect("parse future State");
+    assert!(
+        !is_exact_pre_private_settlement_current_state_hash_v1(&future_state, None)
+            .expect("inspect future State boundary"),
+        "an unreviewed State-root field must keep the entire current schema"
+    );
+
+    let mut future_parameters: json::Value =
+        json::from_slice(&raw_current_state).expect("decode current State parameter boundary");
+    future_parameters
+        .get_mut("world")
+        .and_then(json::Value::as_object_mut)
+        .and_then(|world| world.get_mut("parameters"))
+        .and_then(json::Value::as_object_mut)
+        .and_then(|cell| cell.get_mut("blocks"))
+        .and_then(json::Value::as_object_mut)
+        .and_then(|parameters| parameters.get_mut("sumeragi"))
+        .and_then(json::Value::as_object_mut)
+        .expect("current State carries Sumeragi parameters")
+        .insert("future_sumeragi_field".to_owned(), json::Value::Null);
+    let future_parameters = json::to_json(&future_parameters).expect("encode future parameters");
+    let future_parameters =
+        borrowed_json_object_members(&future_parameters).expect("parse future parameters State");
+    assert!(
+        !is_exact_pre_private_settlement_current_state_hash_v1(&future_parameters, None)
+            .expect("inspect future parameter boundary"),
+        "an unreviewed nested parameter field must keep the entire current schema"
+    );
+
+    let mut future_block_parameters: json::Value =
+        json::from_slice(&raw_current_state).expect("decode current State block parameters");
+    future_block_parameters
+        .get_mut("world")
+        .and_then(json::Value::as_object_mut)
+        .and_then(|world| world.get_mut("parameters"))
+        .and_then(json::Value::as_object_mut)
+        .and_then(|cell| cell.get_mut("blocks"))
+        .and_then(json::Value::as_object_mut)
+        .and_then(|parameters| parameters.get_mut("block"))
+        .and_then(json::Value::as_object_mut)
+        .expect("current State carries block parameters")
+        .insert("future_block_field".to_owned(), json::Value::Null);
+    let future_block_parameters =
+        json::to_json(&future_block_parameters).expect("encode future block parameters");
+    let future_block_parameters = borrowed_json_object_members(&future_block_parameters)
+        .expect("parse future block-parameter State");
+    assert!(
+        !is_exact_pre_private_settlement_current_state_hash_v1(&future_block_parameters, None)
+            .expect("inspect future block-parameter boundary"),
+        "an unreviewed non-Sumeragi parameter field must keep the entire current schema"
+    );
+
+    let mut future_runtime: json::Value =
+        json::from_slice(&raw_current_state).expect("decode current Nexus runtime");
+    future_runtime
+        .get_mut("nexus_runtime")
+        .and_then(json::Value::as_object_mut)
+        .expect("current State carries Nexus runtime")
+        .insert("future_runtime_field".to_owned(), json::Value::Null);
+    let future_runtime = json::to_json(&future_runtime).expect("encode future Nexus runtime");
+    let future_runtime =
+        borrowed_json_object_members(&future_runtime).expect("parse future Nexus runtime State");
+    assert!(
+        !is_exact_pre_private_settlement_current_state_hash_v1(&future_runtime, None)
+            .expect("inspect future Nexus runtime boundary"),
+        "an unreviewed persisted-State compatibility generation must fail closed"
+    );
+
+    let mut future_runtime_version: json::Value =
+        json::from_slice(&raw_current_state).expect("decode current Nexus runtime version");
+    *future_runtime_version
+        .get_mut("nexus_runtime")
+        .and_then(json::Value::as_object_mut)
+        .and_then(|runtime| runtime.get_mut("version"))
+        .expect("current State carries Nexus runtime version") = json::Value::from(4_u64);
+    let future_runtime_version =
+        json::to_json(&future_runtime_version).expect("encode future Nexus runtime version");
+    let future_runtime_version = borrowed_json_object_members(&future_runtime_version)
+        .expect("parse future Nexus runtime-version State");
+    assert!(
+        !is_exact_pre_private_settlement_current_state_hash_v1(&future_runtime_version, None)
+            .expect("inspect future compatibility generation"),
+        "the bridge must stay pinned to compatibility generation 3"
+    );
+
+    let mut future_transactions: json::Value =
+        json::from_slice(&raw_current_state).expect("decode current transaction storage");
+    future_transactions
+        .get_mut("transactions")
+        .and_then(json::Value::as_object_mut)
+        .expect("current State carries transaction storage")
+        .insert("future_transaction_index".to_owned(), json::Value::Null);
+    let future_transactions =
+        json::to_json(&future_transactions).expect("encode future transaction storage");
+    let future_transactions = borrowed_json_object_members(&future_transactions)
+        .expect("parse future transaction-storage State");
+    assert!(
+        !is_exact_pre_private_settlement_current_state_hash_v1(&future_transactions, None)
+            .expect("inspect future transaction-storage boundary"),
+        "an unreviewed transaction-storage field must keep the entire current schema"
+    );
+
+    let mut retired_transaction_index: json::Value =
+        json::from_slice(&raw_current_state).expect("decode current transaction storage");
+    retired_transaction_index
+        .get_mut("transactions")
+        .and_then(json::Value::as_object_mut)
+        .expect("current State carries transaction storage")
+        .insert(
+            "direct_committed".to_owned(),
+            json::Value::Object(json::Map::new()),
+        );
+    let retired_transaction_index = json::to_json(&retired_transaction_index)
+        .expect("encode current State with retired transaction index");
+    let retired_transaction_index = borrowed_json_object_members(&retired_transaction_index)
+        .expect("parse current State with retired transaction index");
+    assert!(
+        !is_exact_pre_private_settlement_current_state_hash_v1(&retired_transaction_index, None,)
+            .expect("inspect retired transaction-index boundary"),
+        "the retired transaction index must never be accepted in the current schema"
+    );
+
+    let mut populated_tle_lifecycle: json::Value =
+        json::from_slice(&raw_current_state).expect("decode current TLE lifecycle store");
+    populated_tle_lifecycle
+        .get_mut("world")
+        .and_then(json::Value::as_object_mut)
+        .and_then(|world| world.get_mut("tle_key_session_lifecycles"))
+        .and_then(json::Value::as_object_mut)
+        .and_then(|storage| storage.get_mut("blocks"))
+        .and_then(json::Value::as_object_mut)
+        .expect("current State carries the TLE lifecycle storage")
+        .insert("unreconstructable-session".to_owned(), json::Value::Null);
+    let populated_tle_lifecycle =
+        json::to_json(&populated_tle_lifecycle).expect("encode populated TLE lifecycle store");
+    let populated_tle_lifecycle = borrowed_json_object_members(&populated_tle_lifecycle)
+        .expect("parse populated TLE lifecycle State");
+    assert!(
+        !is_exact_pre_private_settlement_current_state_hash_v1(&populated_tle_lifecycle, None)
+            .expect("inspect populated TLE lifecycle boundary"),
+        "a populated successor TLE lifecycle cannot be reconstructed by the predecessor bridge"
+    );
+}
+
 #[tokio::test]
 async fn borrowed_snapshot_wsv_hash_canonicalizes_json_lexemes() {
     let lexical = br#"{"\u0077orld":{"note":"\u0061","number":1e0}}"#;
@@ -1037,10 +1822,110 @@ async fn staged_snapshot_wsv_hash_injects_committed_event_buffer() {
             staged,
             CanonicalWsvOverrides {
                 committed_external_event_buf: Some(committed_event_buffer),
+                ..CanonicalWsvOverrides::default()
             },
         )
         .expect("hash staged snapshot with its committed event buffer"),
         Hash::new(canonical),
+    );
+}
+
+#[tokio::test]
+async fn staged_snapshot_wsv_hash_commits_consensus_evidence() {
+    for evidence in [
+        None,
+        Some(canonical_snapshot_v2_phase_vote_evidence(
+            snapshot_test_network_id(),
+        )),
+    ] {
+        let state = State::new_with_chain_and_network_id_for_testing(
+            crate::state::World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            ChainId::from(TEST_CHAIN_ID),
+            snapshot_test_network_id(),
+        );
+        let header = BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero test height"),
+            None,
+            None,
+            None,
+            1_000,
+            0,
+        );
+        let mut state_block = state.block(header);
+        if let Some(evidence) = evidence {
+            let key = crate::sumeragi::evidence::evidence_key(&evidence);
+            state_block.world.consensus_evidence.insert(
+                key,
+                EvidenceRecord {
+                    evidence,
+                    recorded_at_height: 1,
+                    recorded_at_view: 0,
+                    recorded_at_ms: 1_000,
+                    penalty_status: EvidencePenaltyStatus::Pending,
+                },
+            );
+        }
+        let staged_hash = canonical_staged_state_snapshot_hash(&state_block);
+        state_block
+            .commit_world_overlay_for_testing()
+            .expect("commit consensus-evidence world overlay");
+        assert_eq!(
+            staged_hash,
+            canonical_state_snapshot_hash(&state),
+            "empty and populated consensus evidence must have identical staged and committed WSV projections",
+        );
+    }
+}
+
+#[tokio::test]
+async fn nonempty_successor_world_is_not_normalized_to_the_predecessor_schema() {
+    let state = State::new_with_chain_and_network_id_for_testing(
+        crate::state::World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+        ChainId::from(TEST_CHAIN_ID),
+        snapshot_test_network_id(),
+    );
+    let header = BlockHeader::new(
+        NonZeroU64::new(1).expect("non-zero test height"),
+        None,
+        None,
+        None,
+        1_000,
+        0,
+    );
+    let mut state_block = state.block(header);
+    let evidence = canonical_snapshot_v2_phase_vote_evidence(snapshot_test_network_id());
+    let key = crate::sumeragi::evidence::evidence_key(&evidence);
+    state_block.world.consensus_evidence.insert(
+        key,
+        EvidenceRecord {
+            evidence,
+            recorded_at_height: 1,
+            recorded_at_view: 0,
+            recorded_at_ms: 1_000,
+            penalty_status: EvidencePenaltyStatus::Pending,
+        },
+    );
+    state_block
+        .commit_world_overlay_for_testing()
+        .expect("commit nonempty successor evidence overlay");
+    let normalized = canonical_state_snapshot_value(&state);
+    let normalized_world = normalized
+        .get("world")
+        .and_then(json::Value::as_object)
+        .expect("normalized State carries World");
+    assert!(
+        PRIVATE_SETTLEMENT_SNAPSHOT_FIELDS_V1
+            .iter()
+            .all(|field| normalized_world.contains_key(*field))
+            && normalized_world.contains_key("consensus_evidence")
+            && PRE_PRIVATE_SETTLEMENT_RETIRED_WORLD_FIELDS_V1
+                .iter()
+                .all(|field| !normalized_world.contains_key(*field)),
+        "a nonempty successor field must retain the complete current schema instead of entering an APS-only hybrid"
     );
 }
 
@@ -1199,6 +2084,32 @@ fn exact_snapshot_payload_bytes(state: &State) -> Vec<u8> {
     let mut payload = String::new();
     serialize_state_snapshot(state, &mut payload);
     payload.into_bytes()
+}
+fn collect_snapshot_object_field_paths(
+    value: &json::Value,
+    parent: &str,
+    fields: &mut BTreeSet<String>,
+) {
+    match value {
+        json::Value::Object(object) => {
+            for (field, value) in object {
+                let path = if parent.is_empty() {
+                    field.clone()
+                } else {
+                    format!("{parent}.{field}")
+                };
+                fields.insert(path.clone());
+                collect_snapshot_object_field_paths(value, &path, fields);
+            }
+        }
+        json::Value::Array(items) => {
+            let path = format!("{parent}[]");
+            for value in items {
+                collect_snapshot_object_field_paths(value, &path, fields);
+            }
+        }
+        _ => {}
+    }
 }
 fn snapshot_payload_without_space_directory_manifest_section(state: &State) -> Vec<u8> {
     let mut snapshot: json::Value = json::from_slice(&exact_snapshot_payload_bytes(state))

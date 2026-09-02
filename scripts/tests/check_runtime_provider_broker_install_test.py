@@ -581,7 +581,7 @@ class RuntimeProviderBrokerSupervisorAssetTests(unittest.TestCase):
     def test_docs_do_not_claim_concrete_provider_backends(self) -> None:
         docs = (ASSET_ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn(
-            "it does not supply a concrete HSM, KMS,", docs
+            "it does not supply a concrete signing backend,", docs
         )
         self.assertIn("deployment-owned", docs)
         self.assertIn(

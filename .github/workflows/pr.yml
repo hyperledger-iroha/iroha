@@ -3,10 +3,6 @@ name: Pull Request CI
 on:
   pull_request:
     branches: [main]
-    paths-ignore:
-      - ".github/workflows/publish*"
-      - ".github/workflows/ci_image.yml"
-      - "Dockerfile*"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -549,6 +545,7 @@ jobs:
             --config AtomicPrivateSettlementV1CommitteeFaults_2_validator_focused.cfg \
             --config AtomicPrivateSettlementV1CommitteeFaults_4_clean.cfg \
             --config AtomicPrivateSettlementV1CommitteeFaults_expiry.cfg \
+            --config AtomicPrivateSettlementV1CommitteeFaults_drop_stage_bug.cfg \
             --config AtomicPrivateSettlementV1_partial_apply_bug.cfg \
             --config AtomicPrivateSettlementV1_commit_before_prepare_bug.cfg \
             --config AtomicPrivateSettlementV1_drop_stage_on_crash_bug.cfg \

@@ -9,7 +9,7 @@ The maintained CLI accepts that key only through the explicit absolute
 key, token, environment variable, or client TOML credential.
 
 - GET `/v1/sumeragi/evidence/count`
-  - Returns the number of unique Evidence entries observed by this node.
+  - Returns the number of unique evidence entries admitted by committed blocks.
   - Response (Norito payload): `count: u64`.
   - Set `Accept: application/json` to receive `{ "count": <u64> }`.
   - Notes:
@@ -20,17 +20,19 @@ key, token, environment variable, or client TOML credential.
 
 - GET `/v1/sumeragi/evidence`
   - Lists recent evidence entries persisted in the WSV audit snapshot.
-  - Query params: `limit` (default 50, max 1000), `offset` (default 0), `kind` (optional; the sole accepted value is `SumeragiV2Equivocation`).
+  - Query params: `limit` (default 50, range 1..=1000), `offset` (default 0, range 0..=10000), `kind` (optional; the sole accepted value is `SumeragiV2Equivocation`).
   - Response (Norito payload): `(total, Vec<EvidenceRecord>)`.
   - Set `Accept: application/json` to receive a JSON object `{ "total": <u64>, "items": [ ... ] }`.
-  - `EvidenceRecord` entries include `penalty_applied`, `penalty_cancelled`, `penalty_cancelled_at_height`, `penalty_applied_at_height`, and `consensus_admitted_at_height`. For exact Sumeragi v2 equivocation evidence, a missing admission height means the proof is only a node-local pending observation and cannot drive penalties; a committed admission height is identical on every peer.
-  - Those five fields are mandatory parts of the persisted first-release Norito layout. Nullable heights encode `None` explicitly; shortened pre-release records are rejected rather than default-filled.
-  - `EvidenceRecord` is not itself a typed JSON DTO. The JSON response above is the fixed audit projection assembled by Torii; full typed `SumeragiV2EquivocationEvidence` JSON, where embedded in signed data, is a closed object.
-  - Governance cancellation of exact v2 evidence is accepted only after that admission height is committed. This prevents a transaction from depending on a node-local pending observation that other validators may not have received.
+  - Every JSON audit item includes the non-null `consensus_admitted_height` and one closed `penalty_status` object. Its exact shape is `{ "status": "pending", "details": null }`, `{ "status": "applied", "details": { "height": <u64> } }`, or `{ "status": "cancelled", "details": { "height": <u64> } }`; the terminal height is the canonical block that applied or cancelled the penalty.
+  - The persisted first-release Norito `EvidenceRecord` stores `recorded_at_height`, `recorded_at_view`, `recorded_at_ms`, and the same closed `EvidencePenaltyStatus` sum type. Shortened pre-release records and retired boolean/nullable penalty layouts are rejected rather than default-filled.
+  - `EvidenceRecord` is not itself the JSON response DTO. Torii exposes a fixed, closed audit projection; full typed `SumeragiV2EquivocationEvidence` JSON, where embedded in signed data, is also a closed object.
+  - Node-local pending observations have no data-model record and never appear in either endpoint. Governance cancellation is accepted only after the proof has been admitted by a committed block, so a transaction never depends on an observation other validators may not have received.
 - Evidence with a subject height older than governed
   `SumeragiNposParameters.reconfig.evidence_horizon_blocks` is dropped on
   ingress; the actor logs the rejection to help operators investigate stale
-  submissions. This value is on-chain state, not local `[sumeragi]` config.
+  submissions. This signed value and `slashing_delay_blocks` are immutable
+  after initial installation; their sum cannot exceed three epochs. They are
+  on-chain state, not local `[sumeragi]` config or executor-owned defaults.
 
 Evidence mutation is not an HTTP or CLI operation. Evidence enters through the
 authenticated consensus peer path and, for exact v2 equivocation proofs,
@@ -41,6 +43,10 @@ roster-ordered proofs of possession, both artifact signatures, referenced
 current-context certificates, the evidence horizon, canonical ordering, batch
 bounds, and the durable deduplication key before admission. Torii and the SDKs
   expose only the two read-only audit endpoints above.
+
+Committed evidence is part of canonical WSV snapshot state. An at-tip restart
+must restore each pending or terminal record exactly; peer-local gossip is not
+a reconstruction authority for penalty liens or replay fences.
 
 The binary `Evidence` shape is also v2-only. Retired global-v1 kind/payload
 records fail decode and are never reconstructed from mutable topology state.

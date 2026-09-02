@@ -345,7 +345,229 @@ fn read_direct_salt_announcement(
     Ok(bytes)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn load_direct_salt_announcements(
+    dir: &Path,
+) -> Result<BTreeMap<u32, [u8; 32]>, SaltScheduleError> {
+    use crate::secure_file_metadata::{
+        from_file, from_path, is_direct_directory, same_file, unchanged,
+    };
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const FILE_SHARE_READ_WRITE: u32 = 0x0000_0001 | 0x0000_0002;
+
+    let named_before = match from_path(dir) {
+        Ok(metadata) => metadata,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {
+            return Err(SaltScheduleError::DirectoryMissing(dir.to_path_buf()));
+        }
+        Err(source) => return Err(source.into()),
+    };
+    if !is_direct_directory(&named_before) {
+        return Err(SaltScheduleError::UnsafeDirectory(dir.to_path_buf()));
+    }
+
+    // Retain a handle that denies delete sharing for the complete scan. Windows therefore cannot
+    // rename or replace this directory after it has been bound below, while read/write sharing
+    // still permits ordinary child-file access.
+    let directory = fs::OpenOptions::new()
+        .access_mode(0)
+        .share_mode(FILE_SHARE_READ_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(dir)?;
+    let opened_before = from_file(&directory)?;
+    let named_after_open = from_path(dir)?;
+    if !is_direct_directory(&opened_before)
+        || !is_direct_directory(&named_after_open)
+        || !same_file(&named_before, &opened_before)
+        || !unchanged(&named_before, &opened_before)
+        || !same_file(&opened_before, &named_after_open)
+        || !unchanged(&opened_before, &named_after_open)
+    {
+        return Err(SaltScheduleError::DirectoryChanged(dir.to_path_buf()));
+    }
+
+    let mut entries = fs::read_dir(dir)?;
+    revalidate_windows_salt_directory(dir, &directory, &opened_before)?;
+    let mut salts = BTreeMap::new();
+    let mut entry_count = 0_usize;
+    while let Some(entry) = entries.next() {
+        // Charge every result produced by the OS before doing any work on it. This keeps a
+        // concurrently changing enumeration inside the same fixed work bound as a stable one.
+        entry_count =
+            entry_count
+                .checked_add(1)
+                .ok_or_else(|| SaltScheduleError::TooManyAnnouncements {
+                    dir: dir.to_path_buf(),
+                    limit: MAX_SALT_ANNOUNCEMENT_FILES_V1,
+                })?;
+        if entry_count > MAX_SALT_ANNOUNCEMENT_FILES_V1 {
+            return Err(SaltScheduleError::TooManyAnnouncements {
+                dir: dir.to_path_buf(),
+                limit: MAX_SALT_ANNOUNCEMENT_FILES_V1,
+            });
+        }
+        let entry = entry?;
+        revalidate_windows_salt_directory(dir, &directory, &opened_before)?;
+        let filename = entry.file_name();
+        let path = dir.join(&filename);
+        let filename = filename
+            .to_str()
+            .ok_or_else(|| SaltScheduleError::NonCanonicalFilename { path: path.clone() })?;
+        let filename_epoch = epoch_from_salt_filename(filename)
+            .ok_or_else(|| SaltScheduleError::NonCanonicalFilename { path: path.clone() })?;
+        let bytes = read_direct_salt_announcement_windows(dir, &directory, &opened_before, &path)?;
+        let salt = decode_salt_announcement(&path, filename_epoch, &bytes)?;
+        if salts.insert(filename_epoch, salt).is_some() {
+            return Err(SaltScheduleError::DuplicateEpoch {
+                path,
+                epoch: filename_epoch,
+            });
+        }
+    }
+
+    revalidate_windows_salt_directory(dir, &directory, &opened_before)?;
+    Ok(salts)
+}
+
+#[cfg(windows)]
+fn revalidate_windows_salt_directory(
+    path: &Path,
+    directory: &File,
+    original: &crate::secure_file_metadata::SecureMetadata,
+) -> Result<(), SaltScheduleError> {
+    use crate::secure_file_metadata::{
+        from_file, from_path, is_direct_directory, same_file, unchanged,
+    };
+
+    let opened_after = from_file(directory)?;
+    let named_after = match from_path(path) {
+        Ok(metadata) => metadata,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {
+            return Err(SaltScheduleError::DirectoryChanged(path.to_path_buf()));
+        }
+        Err(source) => return Err(source.into()),
+    };
+    if !is_direct_directory(&opened_after)
+        || !is_direct_directory(&named_after)
+        || !same_file(original, &opened_after)
+        || !unchanged(original, &opened_after)
+        || !same_file(&opened_after, &named_after)
+        || !unchanged(&opened_after, &named_after)
+    {
+        return Err(SaltScheduleError::DirectoryChanged(path.to_path_buf()));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn read_direct_salt_announcement_windows(
+    directory_path: &Path,
+    directory: &File,
+    directory_before: &crate::secure_file_metadata::SecureMetadata,
+    path: &Path,
+) -> Result<Vec<u8>, SaltScheduleError> {
+    use crate::secure_file_metadata::{
+        from_file, from_path, is_direct_file, number_of_links, same_file, unchanged,
+    };
+
+    let maximum_bytes = u64::try_from(MAX_SALT_ANNOUNCEMENT_BYTES_V1)
+        .map_err(|_| io::Error::other("salt announcement byte limit exceeds this platform"))?;
+    let named_before = match from_path(path) {
+        Ok(metadata) => metadata,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {
+            return Err(SaltScheduleError::AnnouncementChanged(path.to_path_buf()));
+        }
+        Err(source) => return Err(source.into()),
+    };
+    if !is_direct_file(&named_before) || number_of_links(&named_before) != Some(1) {
+        return Err(SaltScheduleError::UnsafeAnnouncement(path.to_path_buf()));
+    }
+    if named_before.len() > maximum_bytes {
+        return Err(SaltScheduleError::AnnouncementTooLarge {
+            path: path.to_path_buf(),
+            limit: MAX_SALT_ANNOUNCEMENT_BYTES_V1,
+        });
+    }
+    revalidate_windows_salt_directory(directory_path, directory, directory_before)?;
+
+    let mut file = match crate::secure_file_metadata::open_direct_file(path) {
+        Ok(file) => file,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {
+            return Err(SaltScheduleError::AnnouncementChanged(path.to_path_buf()));
+        }
+        Err(source) => return Err(source.into()),
+    };
+    let opened_before = from_file(&file)?;
+    let named_after_open = match from_path(path) {
+        Ok(metadata) => metadata,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {
+            return Err(SaltScheduleError::AnnouncementChanged(path.to_path_buf()));
+        }
+        Err(source) => return Err(source.into()),
+    };
+    if !is_direct_file(&opened_before)
+        || !is_direct_file(&named_after_open)
+        || number_of_links(&opened_before) != Some(1)
+        || number_of_links(&named_after_open) != Some(1)
+    {
+        return Err(SaltScheduleError::UnsafeAnnouncement(path.to_path_buf()));
+    }
+    if !same_file(&named_before, &opened_before)
+        || !unchanged(&named_before, &opened_before)
+        || !same_file(&opened_before, &named_after_open)
+        || !unchanged(&opened_before, &named_after_open)
+        || opened_before.len() > maximum_bytes
+    {
+        return Err(SaltScheduleError::AnnouncementChanged(path.to_path_buf()));
+    }
+    revalidate_windows_salt_directory(directory_path, directory, directory_before)?;
+
+    let initial_capacity = usize::try_from(opened_before.len())
+        .map_err(|_| io::Error::other("salt announcement length exceeds this platform"))?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(initial_capacity)
+        .map_err(io::Error::other)?;
+    (&mut file)
+        .take(maximum_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_SALT_ANNOUNCEMENT_BYTES_V1 {
+        return Err(SaltScheduleError::AnnouncementTooLarge {
+            path: path.to_path_buf(),
+            limit: MAX_SALT_ANNOUNCEMENT_BYTES_V1,
+        });
+    }
+
+    let opened_after = from_file(&file)?;
+    let named_after_read = match from_path(path) {
+        Ok(metadata) => metadata,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {
+            return Err(SaltScheduleError::AnnouncementChanged(path.to_path_buf()));
+        }
+        Err(source) => return Err(source.into()),
+    };
+    if !is_direct_file(&opened_after)
+        || !is_direct_file(&named_after_read)
+        || number_of_links(&opened_after) != Some(1)
+        || number_of_links(&named_after_read) != Some(1)
+        || !same_file(&opened_before, &opened_after)
+        || !unchanged(&opened_before, &opened_after)
+        || !same_file(&opened_after, &named_after_read)
+        || !unchanged(&opened_after, &named_after_read)
+        || !same_file(&named_before, &named_after_read)
+        || !unchanged(&named_before, &named_after_read)
+        || u64::try_from(bytes.len()).ok() != Some(opened_before.len())
+    {
+        return Err(SaltScheduleError::AnnouncementChanged(path.to_path_buf()));
+    }
+    revalidate_windows_salt_directory(directory_path, directory, directory_before)?;
+    Ok(bytes)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn load_direct_salt_announcements(
     _dir: &Path,
 ) -> Result<BTreeMap<u32, [u8; 32]>, SaltScheduleError> {
@@ -803,6 +1025,122 @@ impl EpochBloom {
         })
     }
 }
+
+#[cfg(all(test, windows))]
+mod windows_salt_schedule_tests {
+    use super::*;
+
+    const TEST_SALT: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+
+    fn announcement_payload(epoch: u32, previous_epoch: Option<u32>) -> String {
+        let previous_epoch =
+            previous_epoch.map_or_else(|| "null".to_owned(), |epoch| epoch.to_string());
+        let valid_after = i64::from(epoch).saturating_mul(1_000).saturating_add(1);
+        let valid_until = valid_after.saturating_add(999);
+        format!(
+            r#"{{
+                "epoch_id": {epoch},
+                "previous_epoch": {previous_epoch},
+                "valid_after": {valid_after},
+                "valid_until": {valid_until},
+                "blinded_cid_salt_hex": "{TEST_SALT}",
+                "emergency_rotation": false,
+                "notes": null,
+                "signature": null
+            }}"#
+        )
+    }
+
+    fn write_announcement(directory: &Path, epoch: u32) -> PathBuf {
+        let path = directory.join(canonical_salt_filename(epoch));
+        fs::write(&path, announcement_payload(epoch, epoch.checked_sub(1)))
+            .expect("write salt announcement");
+        path
+    }
+
+    #[test]
+    fn loads_direct_bounded_announcement() {
+        let directory = tempfile::tempdir().expect("create salt directory");
+        write_announcement(directory.path(), 1);
+
+        let schedule = SaltSchedule::load_from_dir(directory.path()).expect("load salt schedule");
+
+        assert_eq!(
+            schedule.salt(1).map(hex::encode).as_deref(),
+            Some(TEST_SALT)
+        );
+    }
+
+    #[test]
+    fn rejects_hard_linked_announcement() {
+        let directory = tempfile::tempdir().expect("create salt directory");
+        let outside = tempfile::tempdir().expect("create hard-link holder");
+        let announcement = write_announcement(directory.path(), 1);
+        fs::hard_link(&announcement, outside.path().join("second-link.json"))
+            .expect("hard-link salt announcement");
+
+        assert!(matches!(
+            SaltSchedule::load_from_dir(directory.path()),
+            Err(SaltScheduleError::UnsafeAnnouncement(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_reparse_directory_and_file_when_platform_allows_fixture() {
+        use std::os::windows::fs::{symlink_dir, symlink_file};
+
+        let source = tempfile::tempdir().expect("create source salt directory");
+        write_announcement(source.path(), 1);
+        let holder = tempfile::tempdir().expect("create reparse holder");
+        let linked_directory = holder.path().join("linked-salts");
+        match symlink_dir(source.path(), &linked_directory) {
+            Ok(()) => assert!(matches!(
+                SaltSchedule::load_from_dir(&linked_directory),
+                Err(SaltScheduleError::UnsafeDirectory(_))
+            )),
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("create salt directory reparse point: {error}"),
+        }
+
+        let directory = tempfile::tempdir().expect("create direct salt directory");
+        let external = holder.path().join("external.json");
+        fs::write(&external, announcement_payload(1, Some(0)))
+            .expect("write external salt announcement");
+        let linked_file = directory.path().join(canonical_salt_filename(1));
+        match symlink_file(&external, &linked_file) {
+            Ok(()) => assert!(matches!(
+                SaltSchedule::load_from_dir(directory.path()),
+                Err(SaltScheduleError::UnsafeAnnouncement(_))
+            )),
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {}
+            Err(error) => panic!("create salt announcement reparse point: {error}"),
+        }
+    }
+
+    #[test]
+    fn bounds_directory_entries_and_file_bytes() {
+        let directory = tempfile::tempdir().expect("create oversized salt directory");
+        fs::write(
+            directory.path().join(canonical_salt_filename(1)),
+            vec![b' '; MAX_SALT_ANNOUNCEMENT_BYTES_V1 + 1],
+        )
+        .expect("write oversized salt announcement");
+        assert!(matches!(
+            SaltSchedule::load_from_dir(directory.path()),
+            Err(SaltScheduleError::AnnouncementTooLarge { .. })
+        ));
+
+        let directory = tempfile::tempdir().expect("create crowded salt directory");
+        for epoch in 0..=MAX_SALT_ANNOUNCEMENT_FILES_V1 as u32 {
+            write_announcement(directory.path(), epoch);
+        }
+        assert!(matches!(
+            SaltSchedule::load_from_dir(directory.path()),
+            Err(SaltScheduleError::TooManyAnnouncements { .. })
+        ));
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;

@@ -1396,16 +1396,18 @@ impl Read for DeadlineBoundedReaderV1 {
         Ok(read)
     }
 }
-struct BlockingStoreJoinGuardV1(Option<std::thread::JoinHandle<()>>);
+struct BlockingStoreJoinGuardV1(Option<std::thread::JoinHandle<std::thread::Result<()>>>);
 impl BlockingStoreJoinGuardV1 {
     fn join(mut self) -> bool {
-        self.0.take().is_some_and(|thread| thread.join().is_ok())
+        self.0
+            .take()
+            .is_some_and(|thread| crate::panic_recovery::join_thread_recoverable(thread).is_ok())
     }
 }
 impl Drop for BlockingStoreJoinGuardV1 {
     fn drop(&mut self) {
         if let Some(thread) = self.0.take() {
-            let _ = thread.join();
+            let _ = crate::panic_recovery::join_thread_recoverable(thread);
         }
     }
 }
@@ -1422,9 +1424,11 @@ impl ProviderIngestLocalStorageV1<VerifiedProviderIngestPayloadV1>
     > {
         let node = self.node.clone();
         Box::pin(async move {
-            tokio::task::spawn_blocking(move || {
-                verify_existing_manifest(&node, &authorization, musubi_archive.as_ref())
-            })
+            crate::panic_recovery::join_recoverable(
+                crate::panic_recovery::spawn_blocking_recoverable(move || {
+                    verify_existing_manifest(&node, &authorization, musubi_archive.as_ref())
+                }),
+            )
             .await
             .map_err(|_| ProviderIngestLocalStorageErrorV1::Retryable)?
         })
@@ -1448,9 +1452,9 @@ impl ProviderIngestLocalStorageV1<VerifiedProviderIngestPayloadV1>
                 authorization.content_length(),
             ));
             let (result_sender, result_receiver) = tokio::sync::oneshot::channel();
-            let thread = std::thread::Builder::new()
-                .name("sorafs-provider-ingest-store".to_owned())
-                .spawn(move || {
+            let thread = crate::panic_recovery::spawn_thread_recoverable(
+                std::thread::Builder::new().name("sorafs-provider-ingest-store".to_owned()),
+                move || {
                     let result = match node.ingest_manifest(
                         &fetched.manifest,
                         &fetched.plan,
@@ -1484,8 +1488,9 @@ impl ProviderIngestLocalStorageV1<VerifiedProviderIngestPayloadV1>
                         Err(error) => Err(classify_storage_error(&error)),
                     };
                     let _ = result_sender.send(result);
-                })
-                .map_err(|_| ProviderIngestLocalStorageErrorV1::Retryable)?;
+                },
+            )
+            .map_err(|_| ProviderIngestLocalStorageErrorV1::Retryable)?;
             let guard = BlockingStoreJoinGuardV1(Some(thread));
             let result = result_receiver
                 .await
@@ -2008,9 +2013,13 @@ impl ProviderIngestCompletionPayloadBuilderV1 for NativeCompletionPayloadBuilder
     > {
         let builder = self.clone();
         Box::pin(async move {
-            tokio::task::spawn_blocking(move || builder.build_payload_sync(request))
-                .await
-                .map_err(|_| ProviderIngestCompletionPayloadErrorV1::Unavailable)?
+            crate::panic_recovery::join_recoverable(
+                crate::panic_recovery::spawn_blocking_recoverable(move || {
+                    builder.build_payload_sync(request)
+                }),
+            )
+            .await
+            .map_err(|_| ProviderIngestCompletionPayloadErrorV1::Unavailable)?
         })
     }
 }
@@ -2132,9 +2141,13 @@ impl ProviderIngestTransactionIngressV1 for NativeTransactionIngressV1 {
     > {
         let ingress = self.clone();
         Box::pin(async move {
-            tokio::task::spawn_blocking(move || ingress.prepare_sync(transaction))
-                .await
-                .map_err(|_| ProviderIngestIngressPrepareErrorV1::Rejected)?
+            crate::panic_recovery::join_recoverable(
+                crate::panic_recovery::spawn_blocking_recoverable(move || {
+                    ingress.prepare_sync(transaction)
+                }),
+            )
+            .await
+            .map_err(|_| ProviderIngestIngressPrepareErrorV1::Rejected)?
         })
     }
     fn expose(
@@ -2144,9 +2157,13 @@ impl ProviderIngestTransactionIngressV1 for NativeTransactionIngressV1 {
     ) -> ProviderIngestFutureV1<'_, ProviderIngestIngressDispositionV1> {
         let ingress = self.clone();
         Box::pin(async move {
-            tokio::task::spawn_blocking(move || ingress.expose_sync(prepared, &transaction))
-                .await
-                .unwrap_or(ProviderIngestIngressDispositionV1::Ambiguous)
+            crate::panic_recovery::join_recoverable(
+                crate::panic_recovery::spawn_blocking_recoverable(move || {
+                    ingress.expose_sync(prepared, &transaction)
+                }),
+            )
+            .await
+            .unwrap_or(ProviderIngestIngressDispositionV1::Ambiguous)
         })
     }
     fn observe(
@@ -2155,9 +2172,13 @@ impl ProviderIngestTransactionIngressV1 for NativeTransactionIngressV1 {
     ) -> ProviderIngestFutureV1<'_, ProviderIngestTransactionObservationV1> {
         let ingress = self.clone();
         Box::pin(async move {
-            tokio::task::spawn_blocking(move || ingress.observe_sync(transaction_hash))
-                .await
-                .unwrap_or(ProviderIngestTransactionObservationV1::Unavailable)
+            crate::panic_recovery::join_recoverable(
+                crate::panic_recovery::spawn_blocking_recoverable(move || {
+                    ingress.observe_sync(transaction_hash)
+                }),
+            )
+            .await
+            .unwrap_or(ProviderIngestTransactionObservationV1::Unavailable)
         })
     }
 }
@@ -2461,9 +2482,14 @@ async fn bounded_blocking_readiness_probe<F>(
 where
     F: FnOnce() -> RuntimeDependencyProbeV1 + Send + 'static,
 {
-    match tokio::time::timeout(deadline, tokio::task::spawn_blocking(probe)).await {
-        Ok(Ok(result)) => result,
-        Ok(Err(_)) => RuntimeDependencyProbeV1::Panicked,
+    match tokio::time::timeout(
+        deadline,
+        crate::panic_recovery::spawn_blocking_recoverable(probe),
+    )
+    .await
+    {
+        Ok(joined) => crate::panic_recovery::recover_joined(joined)
+            .unwrap_or(RuntimeDependencyProbeV1::Panicked),
         Err(_) => RuntimeDependencyProbeV1::TimedOut,
     }
 }

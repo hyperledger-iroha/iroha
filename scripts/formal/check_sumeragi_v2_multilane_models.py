@@ -456,18 +456,13 @@ _CURRENT_NATIVE_RECOVERY_REPLACEMENT_BINDINGS = frozenset(
         "plan_lane_application_evidence_repair",
         "apply_lane_application_evidence_repair",
         "CanonicalExecutedBlockRecovery::new",
-        "CanonicalExecutedBlockRecovery::service_next",
+        "CanonicalExecutedBlockRecovery::service_next_with_archive_targets",
         "CanonicalExecutedBlockRecovery::accept_with_ingress_ownership",
         "CanonicalExecutedBlockRecovery::accept_response",
     )
 )
 _ALLOWED_MERGED_DUPLICATE_PRODUCTION_BINDINGS = frozenset()
 _PRODUCTION_TOKEN_REBINDINGS = {
-    (
-        "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
-        "peer_is_global_finality_signer",
-        "commit_qc.signers.binary_search",
-    ): "finality.commit_qc.signers.iter().any",
     (
         "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
         "V2LaneWorkAdapter::has_pending_historical_recovery",

@@ -5348,7 +5348,12 @@ impl V2LaneWorkAdapter {
             && self.globally_locked_body.is_some_and(|locked| {
                 locked.subject == decided
                     && locked.round.height == self.context.height
-                    && locked.round.view == hint.proposal_view
+                    // A certified later-view lock can protect the exact same
+                    // immutable carrier body without rewriting its header.
+                    // Keep the header-origin hint and the actual lock round
+                    // distinct while requiring their order and subject to be
+                    // exact.
+                    && locked.round.view >= hint.proposal_view
             })
             && self
                 .locally_bound_lane_proposals
@@ -9128,7 +9133,7 @@ impl V2LaneWorkAdapter {
             proposal.payload_block_hint.is_some_and(|hint| {
                 locked.round.context_id == self.context.id()
                     && locked.round.height == self.context.height
-                    && locked.round.view == hint.proposal_view
+                    && locked.round.view >= hint.proposal_view
                     && locked.subject.block_hash == hint.proposal_block_hash
             })
         });

@@ -411,6 +411,31 @@ mod windows_dacl {
 pub(super) fn validate_retained_directory_acl(handle: &File, path: &Path) -> io::Result<()> {
     platform::validate_directory_acl(handle, path)
 }
+#[cfg(windows)]
+pub(super) fn validate_retained_private_storage_acl(handle: &File, path: &Path) -> io::Result<()> {
+    platform::validate_private_storage_acl(handle, path)
+}
+#[cfg(windows)]
+pub(super) fn protect_retained_private_storage_acl(handle: &File, path: &Path) -> io::Result<()> {
+    platform::protect_private_storage_acl(handle, path)
+}
+#[cfg(windows)]
+pub(super) fn create_private_storage_directory(path: &Path) -> io::Result<()> {
+    platform::create_private_storage_directory(path)
+}
+#[cfg(windows)]
+#[derive(Clone, Copy)]
+pub(super) enum PrivateStorageFileSharing {
+    ReadWrite,
+    ReadDelete,
+}
+#[cfg(windows)]
+pub(super) fn create_private_storage_file(
+    path: &Path,
+    sharing: PrivateStorageFileSharing,
+) -> io::Result<File> {
+    platform::create_private_storage_file(path, sharing)
+}
 #[cfg(any(target_os = "linux", test))]
 fn stable_linux_acl_attribute_names<F>(path: &Path, mut read: F) -> io::Result<Vec<u8>>
 where
@@ -1341,7 +1366,9 @@ pub(crate) fn rename_path_exclusive(_source: &Path, _destination: &Path) -> io::
 }
 #[cfg(windows)]
 mod platform {
-    use super::{FileIdentity, RootedDirectory, file_identity, windows_dacl};
+    use super::{
+        FileIdentity, PrivateStorageFileSharing, RootedDirectory, file_identity, windows_dacl,
+    };
     use std::{
         ffi::{OsStr, OsString, c_void},
         fs::{self, File, OpenOptions},
@@ -1352,7 +1379,7 @@ mod platform {
             fs::{MetadataExt as _, OpenOptionsExt as _},
             io::{AsRawHandle as _, FromRawHandle as _, RawHandle},
         },
-        path::{Component, Path, PathBuf},
+        path::{Component, Path, PathBuf, Prefix},
         ptr,
     };
     type Handle = *mut c_void;
@@ -1368,6 +1395,7 @@ mod platform {
     const FILE_SHARE_READ: u32 = 0x1;
     const FILE_SHARE_WRITE: u32 = 0x2;
     const FILE_SHARE_DELETE: u32 = 0x4;
+    const CREATE_NEW: u32 = 1;
     const FILE_OPEN: u32 = 1;
     const FILE_CREATE: u32 = 2;
     const FILE_DIRECTORY_FILE: u32 = 0x0000_0001;
@@ -1385,13 +1413,25 @@ mod platform {
     const SE_FILE_OBJECT: i32 = 1;
     const OWNER_SECURITY_INFORMATION: u32 = 0x1;
     const DACL_SECURITY_INFORMATION: u32 = 0x4;
+    const PROTECTED_DACL_SECURITY_INFORMATION: u32 = 0x8000_0000;
     const SE_DACL_PRESENT: u16 = 0x0004;
+    const SE_DACL_PROTECTED: u16 = 0x1000;
     const SE_SELF_RELATIVE: u16 = 0x8000;
     const SECURITY_DESCRIPTOR_REVISION: u32 = 1;
     const SECURITY_DESCRIPTOR_HEADER_BYTES: usize = 20;
     const SECURITY_DESCRIPTOR_OWNER_OFFSET: usize = 4;
     const SECURITY_DESCRIPTOR_DACL_OFFSET: usize = 16;
     const MAX_SECURITY_DESCRIPTOR_BYTES: usize = 1024 * 1024;
+    const ERROR_INSUFFICIENT_BUFFER: i32 = 122;
+    const TOKEN_QUERY: u32 = 0x0008;
+    const TOKEN_USER_CLASS: u32 = 1;
+    const ACL_REVISION: u8 = 2;
+    const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
+    const OBJECT_INHERIT_ACE: u8 = 0x01;
+    const CONTAINER_INHERIT_ACE: u8 = 0x02;
+    const FILE_ALL_ACCESS: u32 = 0x001f_01ff;
+    const LOCAL_SYSTEM_SID: &[u8] = &[1, 1, 0, 0, 0, 0, 0, 5, 18, 0, 0, 0];
+    const BUILTIN_ADMINISTRATORS_SID: &[u8] = &[1, 2, 0, 0, 0, 0, 0, 5, 32, 0, 0, 0, 32, 2, 0, 0];
     #[repr(C)]
     struct UnicodeString {
         length: u16,
@@ -1423,6 +1463,31 @@ mod platform {
     struct FileDispositionInfo {
         delete_file: u8,
     }
+    #[repr(C)]
+    struct SidAndAttributes {
+        sid: Handle,
+        _attributes: u32,
+    }
+    #[repr(C)]
+    struct TokenUser {
+        user: SidAndAttributes,
+    }
+    #[repr(C)]
+    struct SecurityDescriptor {
+        revision: u8,
+        _reserved: u8,
+        control: u16,
+        owner: Handle,
+        group: Handle,
+        sacl: Handle,
+        dacl: Handle,
+    }
+    #[repr(C)]
+    struct SecurityAttributes {
+        length: u32,
+        security_descriptor: Handle,
+        inherit_handle: i32,
+    }
     #[derive(Debug, PartialEq, Eq)]
     struct WindowsDaclSnapshot {
         control: u16,
@@ -1436,6 +1501,15 @@ mod platform {
                 // SAFETY: `GetSecurityInfo` allocated this descriptor with
                 // LocalAlloc-compatible storage and ownership is unique here.
                 let _ = unsafe { local_free(self.0) };
+            }
+        }
+    }
+    struct TokenHandle(Handle);
+    impl Drop for TokenHandle {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                // SAFETY: `OpenProcessToken` returned this owned handle and it is closed once.
+                let _ = unsafe { close_handle(self.0) };
             }
         }
     }
@@ -1495,6 +1569,25 @@ mod platform {
         ) -> i32;
         #[link_name = "LocalFree"]
         fn local_free(memory: Handle) -> Handle;
+        #[link_name = "CloseHandle"]
+        fn close_handle(handle: Handle) -> i32;
+        #[link_name = "GetCurrentProcess"]
+        fn get_current_process() -> Handle;
+        #[link_name = "CreateDirectoryW"]
+        fn create_directory_w(
+            path: *const u16,
+            security_attributes: *const SecurityAttributes,
+        ) -> i32;
+        #[link_name = "CreateFileW"]
+        fn create_file_w(
+            path: *const u16,
+            desired_access: u32,
+            share_mode: u32,
+            security_attributes: *const SecurityAttributes,
+            creation_disposition: u32,
+            flags_and_attributes: u32,
+            template_file: Handle,
+        ) -> Handle;
     }
     #[link(name = "advapi32")]
     unsafe extern "system" {
@@ -1519,6 +1612,51 @@ mod platform {
         fn get_security_descriptor_length(security_descriptor: Handle) -> u32;
         #[link_name = "IsValidSecurityDescriptor"]
         fn is_valid_security_descriptor(security_descriptor: Handle) -> i32;
+        #[link_name = "OpenProcessToken"]
+        fn open_process_token(
+            process_handle: Handle,
+            desired_access: u32,
+            token_handle: *mut Handle,
+        ) -> i32;
+        #[link_name = "GetTokenInformation"]
+        fn get_token_information(
+            token_handle: Handle,
+            information_class: u32,
+            information: *mut c_void,
+            information_length: u32,
+            return_length: *mut u32,
+        ) -> i32;
+        #[link_name = "SetSecurityInfo"]
+        fn set_security_info(
+            handle: Handle,
+            object_type: i32,
+            security_information: u32,
+            owner: Handle,
+            group: Handle,
+            dacl: Handle,
+            sacl: Handle,
+        ) -> u32;
+        #[link_name = "InitializeSecurityDescriptor"]
+        fn initialize_security_descriptor(security_descriptor: Handle, revision: u32) -> i32;
+        #[link_name = "SetSecurityDescriptorOwner"]
+        fn set_security_descriptor_owner(
+            security_descriptor: Handle,
+            owner: Handle,
+            owner_defaulted: i32,
+        ) -> i32;
+        #[link_name = "SetSecurityDescriptorDacl"]
+        fn set_security_descriptor_dacl(
+            security_descriptor: Handle,
+            dacl_present: i32,
+            dacl: Handle,
+            dacl_defaulted: i32,
+        ) -> i32;
+        #[link_name = "SetSecurityDescriptorControl"]
+        fn set_security_descriptor_control(
+            security_descriptor: Handle,
+            control_bits_of_interest: u16,
+            control_bits_to_set: u16,
+        ) -> i32;
     }
     pub(super) fn ensure_supported() -> io::Result<()> {
         Ok(())
@@ -1557,6 +1695,376 @@ mod platform {
     pub(super) fn validate_directory_acl(handle: &File, path: &Path) -> io::Result<()> {
         qualified_directory_dacl_snapshot(handle, path).map(drop)
     }
+    pub(super) fn validate_private_storage_acl(handle: &File, path: &Path) -> io::Result<()> {
+        let snapshot = qualified_directory_dacl_snapshot(handle, path)?;
+        let current_user_sid = current_process_user_sid()?;
+        if snapshot.owner_sid != current_user_sid {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "private local-storage object `{}` is not owned by the current process user",
+                    path.display()
+                ),
+            ));
+        }
+        if snapshot.control & SE_DACL_PROTECTED == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "private local-storage object `{}` has an inherited DACL",
+                    path.display()
+                ),
+            ));
+        }
+        let expected = canonical_private_dacl(&current_user_sid, handle.metadata()?.is_dir())?;
+        if snapshot.dacl != expected {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "private local-storage object `{}` does not have the canonical owner-only DACL",
+                    path.display()
+                ),
+            ));
+        }
+        Ok(())
+    }
+    pub(super) fn protect_private_storage_acl(handle: &File, path: &Path) -> io::Result<()> {
+        let snapshot = stable_directory_dacl_snapshot(handle, path)?;
+        let current_user_sid = current_process_user_sid()?;
+        if snapshot.owner_sid != current_user_sid {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "existing private local-storage object `{}` is not owned by the current process user",
+                    path.display()
+                ),
+            ));
+        }
+        install_private_storage_acl(handle, path)
+    }
+    fn install_private_storage_acl(handle: &File, path: &Path) -> io::Result<()> {
+        let current_user_sid = current_process_user_sid()?;
+        let dacl = canonical_private_dacl(&current_user_sid, handle.metadata()?.is_dir())?;
+        let mut aligned_dacl = aligned_bytes(&dacl);
+        let security_information = DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION;
+        // SAFETY: `handle` is live with WRITE_DAC. The aligned ACL buffer is canonical and remains
+        // live, and unused owner/group/SACL pointers are null.
+        let status = unsafe {
+            set_security_info(
+                handle.as_raw_handle(),
+                SE_FILE_OBJECT,
+                security_information,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                aligned_dacl.as_mut_ptr().cast(),
+                ptr::null_mut(),
+            )
+        };
+        if status != ERROR_SUCCESS {
+            return Err(io::Error::from_raw_os_error(
+                i32::try_from(status).unwrap_or(i32::MAX),
+            ));
+        }
+        validate_private_storage_acl(handle, path)
+    }
+    pub(super) fn create_private_storage_directory(path: &Path) -> io::Result<()> {
+        let wide = private_wide_path(path)?;
+        with_private_security_attributes(true, |attributes| {
+            // SAFETY: `wide` is NUL-terminated and `attributes` references live buffers for the
+            // complete call.
+            if unsafe { create_directory_w(wide.as_ptr(), attributes) } == 0 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        })
+    }
+    pub(super) fn create_private_storage_file(
+        path: &Path,
+        sharing: PrivateStorageFileSharing,
+    ) -> io::Result<File> {
+        let wide = private_wide_path(path)?;
+        let share_mode = match sharing {
+            PrivateStorageFileSharing::ReadWrite => FILE_SHARE_READ | FILE_SHARE_WRITE,
+            PrivateStorageFileSharing::ReadDelete => FILE_SHARE_READ | FILE_SHARE_DELETE,
+        };
+        with_private_security_attributes(false, |attributes| {
+            // SAFETY: `wide` is NUL-terminated and `attributes` references live buffers for the
+            // complete call. CREATE_NEW ensures this call never opens or truncates an old object.
+            let handle = unsafe {
+                create_file_w(
+                    wide.as_ptr(),
+                    GENERIC_READ | GENERIC_WRITE,
+                    share_mode,
+                    attributes,
+                    CREATE_NEW,
+                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+                    ptr::null_mut(),
+                )
+            };
+            if handle as isize == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            // SAFETY: successful CreateFileW returns one fresh owned HANDLE.
+            Ok(unsafe { File::from_raw_handle(handle as RawHandle) })
+        })
+    }
+    fn with_private_security_attributes<T>(
+        directory: bool,
+        operation: impl FnOnce(*const SecurityAttributes) -> io::Result<T>,
+    ) -> io::Result<T> {
+        let current_user_sid = current_process_user_sid()?;
+        let dacl = canonical_private_dacl(&current_user_sid, directory)?;
+        let mut aligned_sid = aligned_bytes(&current_user_sid);
+        let mut aligned_dacl = aligned_bytes(&dacl);
+        let mut descriptor = SecurityDescriptor {
+            revision: 0,
+            _reserved: 0,
+            control: 0,
+            owner: ptr::null_mut(),
+            group: ptr::null_mut(),
+            sacl: ptr::null_mut(),
+            dacl: ptr::null_mut(),
+        };
+        let descriptor_pointer = ptr::from_mut(&mut descriptor).cast();
+        // SAFETY: the descriptor, aligned SID, and aligned ACL remain live through directory
+        // creation and have the exact layouts required by the security-descriptor APIs.
+        if unsafe {
+            initialize_security_descriptor(descriptor_pointer, SECURITY_DESCRIPTOR_REVISION)
+        } == 0
+            || unsafe {
+                set_security_descriptor_owner(
+                    descriptor_pointer,
+                    aligned_sid.as_mut_ptr().cast(),
+                    0,
+                )
+            } == 0
+            || unsafe {
+                set_security_descriptor_dacl(
+                    descriptor_pointer,
+                    1,
+                    aligned_dacl.as_mut_ptr().cast(),
+                    0,
+                )
+            } == 0
+            || unsafe {
+                set_security_descriptor_control(
+                    descriptor_pointer,
+                    SE_DACL_PROTECTED,
+                    SE_DACL_PROTECTED,
+                )
+            } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        let attributes = SecurityAttributes {
+            length: u32::try_from(size_of::<SecurityAttributes>())
+                .expect("SECURITY_ATTRIBUTES size fits u32"),
+            security_descriptor: descriptor_pointer,
+            inherit_handle: 0,
+        };
+        operation(&attributes)
+    }
+    fn aligned_bytes(bytes: &[u8]) -> Vec<usize> {
+        let mut aligned = vec![0_usize; bytes.len().div_ceil(size_of::<usize>())];
+        // SAFETY: `aligned` has at least `bytes.len()` writable bytes and the regions do not
+        // overlap. The allocation remains suitably aligned for Win32 SID and ACL pointers.
+        unsafe {
+            ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                aligned.as_mut_ptr().cast::<u8>(),
+                bytes.len(),
+            );
+        }
+        aligned
+    }
+    fn private_wide_path(path: &Path) -> io::Result<Vec<u16>> {
+        if !path.is_absolute() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "private Windows storage path must be absolute",
+            ));
+        }
+        if path
+            .components()
+            .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "private Windows storage path must be lexically normalized",
+            ));
+        }
+        let needs_verbatim_prefix = match path.components().next() {
+            Some(Component::Prefix(prefix)) => match prefix.kind() {
+                Prefix::Disk(_) => true,
+                Prefix::VerbatimDisk(_) => false,
+                _ => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "private Windows storage path must use a local disk prefix",
+                    ));
+                }
+            },
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "private Windows storage path has no disk prefix",
+                ));
+            }
+        };
+        let mut wide = if needs_verbatim_prefix {
+            "\\\\?\\".encode_utf16().collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        wide.extend(path.as_os_str().encode_wide().map(|unit| {
+            if unit == u16::from(b'/') {
+                u16::from(b'\\')
+            } else {
+                unit
+            }
+        }));
+        if wide.contains(&0) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "private Windows storage path contains NUL",
+            ));
+        }
+        wide.push(0);
+        Ok(wide)
+    }
+    fn current_process_user_sid() -> io::Result<Vec<u8>> {
+        let mut token = ptr::null_mut();
+        // SAFETY: the process pseudo-handle is valid and `token` is a writable out pointer.
+        if unsafe { open_process_token(get_current_process(), TOKEN_QUERY, &mut token) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let token = TokenHandle(token);
+        let mut required = 0_u32;
+        // SAFETY: a null buffer and zero length are the documented size-query form.
+        let first = unsafe {
+            get_token_information(token.0, TOKEN_USER_CLASS, ptr::null_mut(), 0, &mut required)
+        };
+        let first_error = io::Error::last_os_error();
+        if first != 0
+            || required == 0
+            || first_error.raw_os_error() != Some(ERROR_INSUFFICIENT_BUFFER)
+        {
+            return Err(if first != 0 || required == 0 {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Windows token-user size query returned an invalid result",
+                )
+            } else {
+                first_error
+            });
+        }
+        let required_usize = usize::try_from(required)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "token SID is too large"))?;
+        let mut information = vec![0_usize; required_usize.div_ceil(size_of::<usize>())];
+        let mut returned = required;
+        // SAFETY: the aligned buffer has at least `required` bytes and all pointers are live.
+        if unsafe {
+            get_token_information(
+                token.0,
+                TOKEN_USER_CLASS,
+                information.as_mut_ptr().cast(),
+                required,
+                &mut returned,
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        if returned == 0 || returned > required {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Windows token-user query returned an invalid length",
+            ));
+        }
+        // SAFETY: a successful TokenUser query initialized a `TOKEN_USER` at the buffer start.
+        let token_user = unsafe { &*information.as_ptr().cast::<TokenUser>() };
+        let start = information.as_ptr() as usize;
+        let end = start
+            .checked_add(usize::try_from(returned).unwrap_or(usize::MAX))
+            .ok_or_else(|| io::Error::other("Windows token-user buffer address overflow"))?;
+        let sid_start = token_user.user.sid as usize;
+        if !(start..end).contains(&sid_start) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Windows token-user SID points outside its response buffer",
+            ));
+        }
+        let available = end
+            .checked_sub(sid_start)
+            .ok_or_else(|| io::Error::other("Windows token-user SID offset underflow"))?;
+        // SAFETY: the pointer range was checked against the live token-information allocation.
+        let sid_bytes =
+            unsafe { std::slice::from_raw_parts(token_user.user.sid.cast(), available) };
+        let sid_length = windows_dacl::sid_encoded_length(sid_bytes)?;
+        Ok(sid_bytes[..sid_length].to_vec())
+    }
+    fn canonical_private_dacl(current_user_sid: &[u8], directory: bool) -> io::Result<Vec<u8>> {
+        if windows_dacl::sid_encoded_length(current_user_sid)? != current_user_sid.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "current Windows user SID has trailing bytes",
+            ));
+        }
+        let mut sids = Vec::<&[u8]>::with_capacity(3);
+        for sid in [
+            current_user_sid,
+            LOCAL_SYSTEM_SID,
+            BUILTIN_ADMINISTRATORS_SID,
+        ] {
+            if !sids.contains(&sid) {
+                sids.push(sid);
+            }
+        }
+        let acl_length = 8_usize
+            .checked_add(
+                sids.iter()
+                    .try_fold(0_usize, |total, sid| total.checked_add(8 + sid.len()))
+                    .ok_or_else(|| io::Error::other("private Windows DACL length overflow"))?,
+            )
+            .ok_or_else(|| io::Error::other("private Windows DACL length overflow"))?;
+        let acl_length_u16 = u16::try_from(acl_length).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "private Windows DACL is too large",
+            )
+        })?;
+        let ace_count = u16::try_from(sids.len()).expect("private SID count fits u16");
+        let mut dacl = Vec::with_capacity(acl_length);
+        dacl.extend_from_slice(&[
+            ACL_REVISION,
+            0,
+            acl_length_u16.to_le_bytes()[0],
+            acl_length_u16.to_le_bytes()[1],
+            ace_count.to_le_bytes()[0],
+            ace_count.to_le_bytes()[1],
+            0,
+            0,
+        ]);
+        let ace_flags = if directory {
+            OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE
+        } else {
+            0
+        };
+        for sid in sids {
+            let ace_length = u16::try_from(8 + sid.len()).expect("SID-backed ACE length fits u16");
+            dacl.extend_from_slice(&[
+                ACCESS_ALLOWED_ACE_TYPE,
+                ace_flags,
+                ace_length.to_le_bytes()[0],
+                ace_length.to_le_bytes()[1],
+            ]);
+            dacl.extend_from_slice(&FILE_ALL_ACCESS.to_le_bytes());
+            dacl.extend_from_slice(sid);
+        }
+        windows_dacl::validate(Some(current_user_sid), Some(&dacl))?;
+        Ok(dacl)
+    }
     pub(super) fn directory_owner_sid(handle: &File, path: &Path) -> io::Result<Vec<u8>> {
         qualified_directory_dacl_snapshot(handle, path).map(|snapshot| snapshot.owner_sid)
     }
@@ -1564,10 +2072,16 @@ mod platform {
         handle: &File,
         path: &Path,
     ) -> io::Result<WindowsDaclSnapshot> {
+        let snapshot = stable_directory_dacl_snapshot(handle, path)?;
+        windows_dacl::validate(Some(&snapshot.owner_sid), Some(&snapshot.dacl))?;
+        Ok(snapshot)
+    }
+    fn stable_directory_dacl_snapshot(
+        handle: &File,
+        path: &Path,
+    ) -> io::Result<WindowsDaclSnapshot> {
         let first = read_directory_dacl_snapshot(handle, path)?;
-        windows_dacl::validate(Some(&first.owner_sid), Some(&first.dacl))?;
         let second = read_directory_dacl_snapshot(handle, path)?;
-        windows_dacl::validate(Some(&second.owner_sid), Some(&second.dacl))?;
         if first != second {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,

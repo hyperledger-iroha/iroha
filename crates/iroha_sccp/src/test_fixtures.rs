@@ -1045,7 +1045,7 @@ fn exact_sccp_fixture_block(
         v2_evidence_admissions: Vec::new(),
         penalty_actions: vec![NposPenaltyAction::MarkConsensusEvidenceApplied(
             NposMarkConsensusEvidenceAppliedAction {
-                evidence_key: b"exact-sccp-fixture".to_vec(),
+                evidence_key: Hash::new(b"exact-sccp-fixture"),
                 height,
             },
         )],

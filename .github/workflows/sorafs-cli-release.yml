@@ -261,6 +261,8 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           shared-key: sorafs-cli-release
+      - name: Enforce reviewed shipping feature graphs
+        run: python3 scripts/check_release_feature_graph.py
       - name: Install script test dependencies
         run: python3 -m pip install -r scripts/requirements.txt
       - name: Validate runtime-provider broker deployment contract

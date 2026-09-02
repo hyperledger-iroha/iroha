@@ -177,6 +177,18 @@ pub trait PrivateSettlementAuditorCredentialProviderV1: Send + Sync {
     /// Public counterpart of the governed hybrid capsule-decryption key.
     fn capsule_public_key(&self) -> &HybridPublicKey;
 
+    /// Return whether this provider retains the exact governed decryption key.
+    ///
+    /// Providers with one key inherit the exact default comparison. Providers
+    /// backed by a retained keyring override this method without exposing key
+    /// count, epochs, or backend-selection details to the protocol.
+    fn supports_capsule_public_key(
+        &self,
+        governed_key: &PrivateSettlementHybridPublicKeyV1,
+    ) -> bool {
+        PrivateSettlementHybridPublicKeyV1::from_hybrid(self.capsule_public_key()) == *governed_key
+    }
+
     /// Open one exact governed capsule into its canonical plaintext bytes.
     ///
     /// # Errors
@@ -260,6 +272,111 @@ impl PrivateSettlementAuditorCredentialProviderV1
             self.decryption_secret,
         )
         .map_err(|_| PrivateSettlementAuditorCredentialErrorV1)
+    }
+
+    fn sign_approval(
+        &self,
+        body: &PrivateSettlementAuditApprovalBodyV1,
+    ) -> Result<
+        SignatureOf<PrivateSettlementAuditApprovalBodyV1>,
+        PrivateSettlementAuditorCredentialErrorV1,
+    > {
+        SignatureOf::try_new(self.signing_key.private_key(), body)
+            .map_err(|_| PrivateSettlementAuditorCredentialErrorV1)
+    }
+}
+
+/// Runtime-only software adapter retaining current and retired capsule keys.
+///
+/// The first key is the operationally current key; later entries are retained
+/// only for the configured regulatory read horizon. Capsule opening selects by
+/// the exact historical policy encryption key, never by trial decryption.
+pub struct SoftwarePrivateSettlementAuditorKeyringCredentialsV1<'a> {
+    decryption_secrets: &'a [HybridSecretKey],
+    signing_key: &'a KeyPair,
+}
+
+impl core::fmt::Debug for SoftwarePrivateSettlementAuditorKeyringCredentialsV1<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("SoftwarePrivateSettlementAuditorKeyringCredentialsV1")
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a> SoftwarePrivateSettlementAuditorKeyringCredentialsV1<'a> {
+    /// Borrow a non-empty, duplicate-free current-plus-retired keyring.
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted credential error for an empty keyring or duplicate
+    /// public keys.
+    pub fn new(
+        decryption_secrets: &'a [HybridSecretKey],
+        signing_key: &'a KeyPair,
+    ) -> Result<Self, PrivateSettlementAuditorCredentialErrorV1> {
+        if decryption_secrets.is_empty()
+            || decryption_secrets.iter().enumerate().any(|(index, key)| {
+                decryption_secrets[..index].iter().any(|prior| {
+                    PrivateSettlementHybridPublicKeyV1::from_hybrid(prior.public())
+                        == PrivateSettlementHybridPublicKeyV1::from_hybrid(key.public())
+                })
+            })
+        {
+            return Err(PrivateSettlementAuditorCredentialErrorV1);
+        }
+        Ok(Self {
+            decryption_secrets,
+            signing_key,
+        })
+    }
+
+    fn secret_for(
+        &self,
+        governed_key: &PrivateSettlementHybridPublicKeyV1,
+    ) -> Option<&HybridSecretKey> {
+        self.decryption_secrets.iter().find(|secret| {
+            PrivateSettlementHybridPublicKeyV1::from_hybrid(secret.public()) == *governed_key
+        })
+    }
+}
+
+impl PrivateSettlementAuditorCredentialProviderV1
+    for SoftwarePrivateSettlementAuditorKeyringCredentialsV1<'_>
+{
+    fn approval_public_key(&self) -> &PublicKey {
+        self.signing_key.public_key()
+    }
+
+    fn capsule_public_key(&self) -> &HybridPublicKey {
+        self.decryption_secrets[0].public()
+    }
+
+    fn supports_capsule_public_key(
+        &self,
+        governed_key: &PrivateSettlementHybridPublicKeyV1,
+    ) -> bool {
+        self.secret_for(governed_key).is_some()
+    }
+
+    fn open_capsule(
+        &self,
+        capsule: &PrivateSettlementAuditCapsuleV1,
+        policy: &PrivateSettlementAuditPolicyV1,
+        auditor_id: &AccountId,
+    ) -> Result<Zeroizing<Vec<u8>>, PrivateSettlementAuditorCredentialErrorV1> {
+        let governed_key = policy
+            .body
+            .auditors
+            .iter()
+            .find(|auditor| &auditor.auditor_id == auditor_id)
+            .map(|auditor| &auditor.encryption_key)
+            .ok_or(PrivateSettlementAuditorCredentialErrorV1)?;
+        let secret = self
+            .secret_for(governed_key)
+            .ok_or(PrivateSettlementAuditorCredentialErrorV1)?;
+        open_private_settlement_audit_capsule_v1(capsule, policy, auditor_id, secret)
+            .map_err(|_| PrivateSettlementAuditorCredentialErrorV1)
     }
 
     fn sign_approval(
@@ -369,9 +486,7 @@ pub fn approve_private_settlement_leg_with_provider_v1<
     if credentials.approval_public_key() != &governed_auditor.signing_key {
         return Err(PrivateSettlementAuditorApprovalErrorV1::SigningKeyMismatch);
     }
-    let provider_encryption_key =
-        PrivateSettlementHybridPublicKeyV1::from_hybrid(credentials.capsule_public_key());
-    if provider_encryption_key != governed_auditor.encryption_key {
+    if !credentials.supports_capsule_public_key(&governed_auditor.encryption_key) {
         return Err(PrivateSettlementAuditorApprovalErrorV1::CapsuleAuthenticationFailed);
     }
 
@@ -835,6 +950,63 @@ mod tests {
         );
         assert!(!debug.contains("PrivateKey"));
         assert!(!debug.contains("HybridSecretKey"));
+    }
+
+    #[test]
+    fn retained_keyring_selects_the_exact_historical_decryption_key() {
+        let fixture = sidecar_fixture();
+        let mut current_rng =
+            iroha_crypto::rng_from_seed_slice(b"rotated current auditor capsule key");
+        let current =
+            iroha_crypto::HybridKeyPair::generate(&mut current_rng).expect("current hybrid key");
+        let current_signing = KeyPair::from_seed(vec![0xE1; 32], Algorithm::Ed25519);
+        let retained = vec![current.secret().clone(), fixture.hybrid.secret().clone()];
+        let keyring =
+            SoftwarePrivateSettlementAuditorKeyringCredentialsV1::new(&retained, &current_signing)
+                .expect("current-plus-retired keyring");
+        assert!(
+            keyring.supports_capsule_public_key(
+                &fixture.sidecar.policy.body.auditors[0].encryption_key
+            )
+        );
+        let opened = keyring
+            .open_capsule(
+                &fixture.sidecar.payload.audit_capsule,
+                &fixture.sidecar.policy,
+                &fixture.auditor,
+            )
+            .expect("retained historical key decrypts its exact old capsule");
+        let plaintext = norito::decode_canonical::<PrivateSettlementAuditPlaintextV1>(&opened)
+            .expect("historical capsule plaintext remains canonical");
+        assert_eq!(plaintext, fixture.plaintext);
+
+        let current_only = vec![current.secret().clone()];
+        let current_only = SoftwarePrivateSettlementAuditorKeyringCredentialsV1::new(
+            &current_only,
+            &current_signing,
+        )
+        .expect("current-only keyring");
+        assert_eq!(
+            current_only.open_capsule(
+                &fixture.sidecar.payload.audit_capsule,
+                &fixture.sidecar.policy,
+                &fixture.auditor,
+            ),
+            Err(PrivateSettlementAuditorCredentialErrorV1),
+            "a current signing credential does not imply possession of a retired decryption key"
+        );
+        assert!(
+            SoftwarePrivateSettlementAuditorKeyringCredentialsV1::new(&[], &current_signing)
+                .is_err()
+        );
+        let duplicate = vec![current.secret().clone(), current.secret().clone()];
+        assert!(
+            SoftwarePrivateSettlementAuditorKeyringCredentialsV1::new(
+                &duplicate,
+                &current_signing,
+            )
+            .is_err()
+        );
     }
 
     #[test]

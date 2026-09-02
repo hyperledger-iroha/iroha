@@ -281,11 +281,11 @@ mod model {
         pub device_id: String,
         /// Asset definition bound into the hardware-signed operation.
         pub asset_definition_id: AssetDefinitionId,
-        /// Globally unique chain idempotency/replay identifier.
+        /// Canonical global chain idempotency/replay identifier.
         ///
-        /// Unlike nonces and payload digests, this identifier is not scoped by
-        /// `authority`; every Kagemusha V2 chain operation shares one replay
-        /// namespace.
+        /// This is derived from the complete canonical `authority` archive and
+        /// `nonce`; callers cannot select it independently. Top-up and redemption
+        /// deliberately share the same global replay namespace.
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub operation_id: [u8; 32],
         /// Request creation time in Unix milliseconds.

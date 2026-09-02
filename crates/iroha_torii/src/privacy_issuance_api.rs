@@ -1975,7 +1975,7 @@ mod tests {
             max_records: 1,
             max_total_bytes: 3_310,
             terminal_retention_blocks: 16,
-            runtime_provider_registry_handle: "hsm://iroha/privacy/bootle-primary".to_owned(),
+            runtime_provider_registry_handle: "provider://iroha/privacy/bootle-primary".to_owned(),
             runtime_provider_registry_revision: 7,
             runtime_provider_registry_policy_digest: raw(3),
         }
@@ -3213,7 +3213,7 @@ mod tests {
             BootleLanternIssuanceApiErrorV1::ProviderMissing
         );
         let unexpected = Arc::new(StartupRegistry::new(
-            "hsm://iroha/privacy/unexpected-primary",
+            "provider://iroha/privacy/unexpected-primary",
             [],
             false,
         ));

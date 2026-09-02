@@ -31,7 +31,7 @@ mod tests {
             KagemushaIosAppAttestHardwareAssertionV1, KagemushaV4PromotionBindingV1,
             KagemushaV4TairaCanaryAuthorizationBodyV1, KagemushaV4TairaCanaryPermitV1,
             KagemushaV4TairaCanaryReservationBodyV1, KagemushaV4TairaCanaryReservationV1,
-            kagemusha_v4_taira_canary_transaction_metadata,
+            derive_kagemusha_operation_id_v4, kagemusha_v4_taira_canary_transaction_metadata,
         },
         permission::Permission,
         role::{Role, RoleId},
@@ -1895,17 +1895,21 @@ mod tests {
             raw
         })
         .expect("valid low-S placeholder");
+        let authority = registration.account_id.clone();
+        let nonce = [0x62; 32];
+        let operation_id = derive_kagemusha_operation_id_v4(&authority, nonce)
+            .expect("canonical online operation id");
         let mut authorization = KagemushaRequestAuthorizationV2 {
-            authority: registration.account_id.clone(),
+            authority,
             device_id: registration.device_id.clone(),
             asset_definition_id: registration
                 .asset_definition_id
                 .clone()
                 .expect("asset-bound fixture"),
-            operation_id: [0x61; 32],
+            operation_id,
             issued_at_ms: POLICY_TEST_TIME_MS,
             expires_at_ms: POLICY_TEST_TIME_MS + 30_000,
-            nonce: [0x62; 32],
+            nonce,
             payload_digest: [0x63; 32],
             registration_hash,
             hardware_assertion: KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(
@@ -1920,6 +1924,60 @@ mod tests {
         authorization
             .set_hardware_signature(online_assertion_signature(assertion_key, &signing_bytes));
         authorization
+    }
+    #[test]
+    fn online_replay_markers_use_the_complete_canonical_authority_identity() {
+        let assertion_key = SigningKey::from_slice(&[0x51; 32]).expect("fixture P-256 key");
+        let authority = ALICE_ID.clone();
+        let asset = offline_test_asset(&authority).definition().clone();
+        let registration = android_online_registration(
+            &authority,
+            &asset,
+            &assertion_key,
+            POLICY_TEST_TIME_MS + 60_000,
+        );
+        let authorization = android_online_authorization(&registration, &assertion_key);
+        let authority_digest = kagemusha_operation_authority_digest_v4(&authority)
+            .expect("canonical authority digest");
+        let authorization_archive =
+            norito::encode_canonical(&authorization).expect("canonical authorization archive");
+        let expected = [
+            kagemusha_v2_marker(
+                KAGEMUSHA_V4_OPERATION_DOMAIN,
+                &[&authorization.operation_id],
+            ),
+            kagemusha_v2_marker(
+                KAGEMUSHA_V4_NONCE_DOMAIN,
+                &[&authority_digest, &authorization.nonce],
+            ),
+            kagemusha_v2_marker(
+                KAGEMUSHA_V4_PAYLOAD_DOMAIN,
+                &[&authority_digest, &authorization.payload_digest],
+            ),
+            kagemusha_v2_marker(
+                KAGEMUSHA_V4_REQUEST_DOMAIN,
+                &[
+                    &authority_digest,
+                    &authorization.operation_id,
+                    &authorization.nonce,
+                    &authorization.payload_digest,
+                    &authorization_archive,
+                ],
+            ),
+        ];
+        assert_eq!(
+            kagemusha_v4_authorization_markers(&authorization)
+                .expect("derive canonical replay markers"),
+            expected,
+        );
+        assert_ne!(
+            expected[1],
+            kagemusha_v2_marker(
+                KAGEMUSHA_V4_NONCE_DOMAIN,
+                &[authority.to_string().as_bytes(), &authorization.nonce],
+            ),
+            "display rendering is not a consensus identity",
+        );
     }
     fn install_android_online_registration(
         state_transaction: &mut StateTransaction<'_, '_>,

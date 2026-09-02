@@ -806,17 +806,24 @@ async fn serve_torii_http_connection(
     }
 }
 fn observe_torii_connection_completion(
-    completion: Result<(std::net::SocketAddr, Result<(), hyper::Error>), JoinError>,
+    completion: Result<
+        std::thread::Result<(std::net::SocketAddr, Result<(), hyper::Error>)>,
+        JoinError,
+    >,
 ) -> std::io::Result<()> {
     match completion {
-        Ok((remote, Ok(()))) => {
+        Ok(Ok((remote, Ok(())))) => {
             iroha_logger::trace!(%remote, "Torii HTTP connection closed");
             Ok(())
         }
-        Ok((remote, Err(error))) => {
+        Ok(Ok((remote, Err(error)))) => {
             // Malformed, timed-out, and reset connections are isolated to the
             // attacker-controlled socket and must not terminate the listener.
             iroha_logger::debug!(%remote, ?error, "Torii HTTP connection terminated");
+            Ok(())
+        }
+        Ok(Err(_)) => {
+            iroha_logger::warn!("Torii HTTP connection panicked and was isolated");
             Ok(())
         }
         Err(error) => Err(std::io::Error::other(format!(
@@ -838,7 +845,12 @@ async fn serve_torii_http_inner(
         Shutdown,
         Accepted(std::io::Result<(TcpStream, std::net::SocketAddr)>),
         ConnectionFinished(
-            Option<Result<(std::net::SocketAddr, Result<(), hyper::Error>), JoinError>>,
+            Option<
+                Result<
+                    std::thread::Result<(std::net::SocketAddr, Result<(), hyper::Error>)>,
+                    JoinError,
+                >,
+            >,
         ),
     }
     loop {
@@ -865,7 +877,7 @@ async fn serve_torii_http_inner(
                 };
                 let router = router.clone();
                 let connection_shutdown = shutdown_signal.clone();
-                connections.spawn(async move {
+                connections.spawn(crate::panic_recovery::catch_async_recoverable(async move {
                     let result = serve_torii_http_connection(
                         stream,
                         remote,
@@ -877,7 +889,7 @@ async fn serve_torii_http_inner(
                     )
                     .await;
                     (remote, result)
-                });
+                }));
             }
             ServerEvent::Accepted(Err(error)) => {
                 iroha_logger::warn!(?error, "Torii TCP accept failed; retrying");
@@ -973,6 +985,34 @@ impl ToriiCriticalWorkerFailure {
             Self::ServerExitedUnexpectedly => "Torii HTTP server exited before shutdown".to_owned(),
         }
     }
+}
+
+async fn rollback_torii_startup_workers(
+    shutdown_signal: &ShutdownSignal,
+    workers: Vec<ToriiCriticalWorker>,
+    mut startup_failure: Report<Error>,
+) -> Report<Error> {
+    shutdown_signal.send();
+    let mut workers = workers
+        .into_iter()
+        .map(|worker| async move { (worker.name, worker.task.await) })
+        .collect::<futures_util::stream::FuturesUnordered<_>>();
+    while let Some((name, result)) = workers.next().await {
+        let worker_failure = match result {
+            Ok(ToriiCriticalWorkerExit::StoppedByShutdown) => None,
+            Ok(ToriiCriticalWorkerExit::UnexpectedExit) => {
+                Some(ToriiCriticalWorkerFailure::ExitedUnexpectedly(name))
+            }
+            Err(error) => Some(ToriiCriticalWorkerFailure::from_join_error(name, &error)),
+        };
+        if let Some(worker_failure) = worker_failure {
+            startup_failure = startup_failure.attach(format!(
+                "startup rollback observed: {}",
+                worker_failure.diagnostic()
+            ));
+        }
+    }
+    startup_failure
 }
 
 async fn supervise_torii_critical_workers<F>(
@@ -3836,10 +3876,8 @@ impl ConnScheme {
             .extensions()
             .get::<MatchedRouteMetadata>()
             .is_some_and(|route| {
-                let route_id = route.stable_route_id();
-                route_id == route_catalog::streaming::SUBSCRIPTION_WS.stable_route_id()
-                    || route_id == route_catalog::streaming::BLOCKS_WS.stable_route_id()
-                    || route_id == route_catalog::connect::WEBSOCKET.stable_route_id()
+                route.transport()
+                    == Some(iroha_torii_shared::route_catalog::RouteTransport::WebSocket)
             });
         let websocket_upgrade = {
             let mut values = req.headers().get_all(axum::http::header::UPGRADE).iter();
@@ -8003,8 +8041,7 @@ mod matched_route_metadata_tests {
         RouteEffect::ReadOnly,
         AdmissionPolicy::Public,
     )
-    .with_projections(RouteProjections::OPENAPI_AND_SDK)
-    .with_implicit_head(true);
+    .with_projections(RouteProjections::OPENAPI_AND_SDK);
     const CORS_ITEM: RouteDescriptor = RouteDescriptor::new(
         "test.cors_item.read",
         HttpMethod::Get,
@@ -8014,7 +8051,6 @@ mod matched_route_metadata_tests {
         RouteEffect::ReadOnly,
         AdmissionPolicy::Public,
     )
-    .with_implicit_head(true)
     .with_cors_options(true);
     const CREDENTIAL_EXCHANGE: RouteDescriptor = RouteDescriptor::new(
         "test.operator_credential_exchange",
@@ -8036,7 +8072,6 @@ mod matched_route_metadata_tests {
         RouteEffect::ReadOnly,
         AdmissionPolicy::Public,
     )
-    .with_implicit_head(true)
     .with_cors_options(true);
     const CANONICAL_ACCOUNT_READ: RouteDescriptor = RouteDescriptor::new(
         "test.canonical_account_read",
@@ -8047,8 +8082,7 @@ mod matched_route_metadata_tests {
         RouteEffect::ReadOnly,
         AdmissionPolicy::AuthenticatedAccount,
     )
-    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
-    .with_implicit_head(true);
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
     async fn metadata_handler(Extension(metadata): Extension<MatchedRouteMetadata>) -> Response {
         assert_eq!(metadata.stable_route_id(), "test.item.read");
         assert_eq!(metadata.path_template(), "/v1/tests/items/{item_id}");
@@ -8269,15 +8303,15 @@ mod matched_route_metadata_tests {
             "http.method_not_allowed"
         );
         assert!(method_not_allowed.requires_private_no_store());
-        let head = index.resolve(
+        let head_method_not_allowed = index.resolve(
             &axum::http::Method::HEAD,
             Some(route_catalog::connect::SESSION_STATUS.path()),
         );
         assert_eq!(
-            head.stable_route_id(),
-            route_catalog::connect::SESSION_STATUS.stable_route_id()
+            head_method_not_allowed.stable_route_id(),
+            "http.method_not_allowed"
         );
-        assert!(head.requires_private_no_store());
+        assert!(head_method_not_allowed.requires_private_no_store());
     }
     #[tokio::test]
     async fn explicit_connect_cache_policy_covers_success_error_and_framework_responses() {
@@ -8379,17 +8413,17 @@ mod matched_route_metadata_tests {
                 "{method} must inherit the strictest cache policy at the path"
             );
         }
-        let head = index.resolve(
+        let head_method_not_allowed = index.resolve(
             &axum::http::Method::HEAD,
             Some(PUBLIC_CREDENTIAL_READ.path()),
         );
         assert_eq!(
-            head.stable_route_id(),
-            PUBLIC_CREDENTIAL_READ.stable_route_id()
+            head_method_not_allowed.stable_route_id(),
+            "http.method_not_allowed"
         );
         assert!(
-            !head.requires_private_no_store(),
-            "HEAD must inherit the exact GET policy, not the path-wide framework fallback"
+            head_method_not_allowed.requires_private_no_store(),
+            "HEAD is method-not-allowed and must inherit the path-wide strict cache policy"
         );
         let router = router
             .method_not_allowed_fallback(|| async {
@@ -18634,26 +18668,45 @@ enum ZkIvmProveJobStatus {
     Error,
 }
 #[derive(Debug)]
-struct ZkIvmProveJobBudget {
+struct ZkIvmProveJobBudgetInner {
     max_bytes: usize,
     used_bytes: AtomicUsize,
     admission: std::sync::Mutex<()>,
 }
+struct ZkIvmProveJobSupervisorRegistration {
+    sender: Option<tokio::sync::mpsc::Sender<ZkIvmProveJob>>,
+    task: Option<tokio::task::JoinHandle<ToriiCriticalWorkerExit>>,
+}
+struct ZkIvmProveJobBudget {
+    inner: Arc<ZkIvmProveJobBudgetInner>,
+    supervisor: std::sync::Mutex<ZkIvmProveJobSupervisorRegistration>,
+}
 impl ZkIvmProveJobBudget {
     fn new(max_bytes: usize) -> Self {
         Self {
-            max_bytes: max_bytes.max(1),
-            used_bytes: AtomicUsize::new(0),
-            admission: std::sync::Mutex::new(()),
+            inner: Arc::new(ZkIvmProveJobBudgetInner {
+                max_bytes: max_bytes.max(1),
+                used_bytes: AtomicUsize::new(0),
+                admission: std::sync::Mutex::new(()),
+            }),
+            supervisor: std::sync::Mutex::new(ZkIvmProveJobSupervisorRegistration {
+                sender: None,
+                task: None,
+            }),
         }
     }
     fn used_bytes(&self) -> usize {
-        self.used_bytes.load(AtomicOrdering::Acquire)
+        self.inner.used_bytes.load(AtomicOrdering::Acquire)
     }
     fn try_reserve(self: &Arc<Self>, bytes: usize) -> Option<Arc<ZkIvmProveJobReservation>> {
         self.try_reserve_bytes(bytes)
-            .then(|| Arc::new(ZkIvmProveJobReservation::new(Arc::clone(self), bytes)))
+            .then(|| Arc::new(ZkIvmProveJobReservation::new(self.inner.clone(), bytes)))
     }
+    fn try_reserve_bytes(&self, bytes: usize) -> bool {
+        self.inner.try_reserve_bytes(bytes)
+    }
+}
+impl ZkIvmProveJobBudgetInner {
     fn try_reserve_bytes(&self, bytes: usize) -> bool {
         if bytes > self.max_bytes {
             return false;
@@ -18682,11 +18735,11 @@ impl ZkIvmProveJobBudget {
 }
 #[derive(Debug)]
 struct ZkIvmProveJobReservation {
-    budget: Arc<ZkIvmProveJobBudget>,
+    budget: Arc<ZkIvmProveJobBudgetInner>,
     bytes: AtomicUsize,
 }
 impl ZkIvmProveJobReservation {
-    fn new(budget: Arc<ZkIvmProveJobBudget>, bytes: usize) -> Self {
+    fn new(budget: Arc<ZkIvmProveJobBudgetInner>, bytes: usize) -> Self {
         Self {
             budget,
             bytes: AtomicUsize::new(bytes),
@@ -18793,8 +18846,8 @@ fn zk_ivm_prove_gc_jobs_at(
             if let Some((_key, state)) = jobs.remove_if(&key, |_, state| {
                 Arc::ptr_eq(&state.retention, &retention) && state.created_ms < expire_before
             }) {
-                // Best-effort cancellation. Proving (spawn_blocking) is not preemptible, but
-                // cancellation frees capacity permits once the async wrapper exits.
+                // Best-effort cancellation. Proving (`spawn_blocking`) is not preemptible;
+                // capacity remains reserved until the supervisor joins physical completion.
                 let _ = state.cancel.send(true);
             }
         }
@@ -18875,6 +18928,7 @@ fn zk_ivm_prove_insert_pending(
     // cannot race past either aggregate cap.
     let _admission = app
         .zk_ivm_prove_job_budget
+        .inner
         .admission
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -19232,6 +19286,25 @@ fn zk_ivm_prove_store_terminal(
     status: ZkIvmProveJobStatus,
     body: Bytes,
 ) {
+    zk_ivm_prove_store_terminal_inner(
+        jobs,
+        budget.inner.as_ref(),
+        owner_max_bytes,
+        job_id,
+        expected_reservation,
+        status,
+        body,
+    );
+}
+fn zk_ivm_prove_store_terminal_inner(
+    jobs: &DashMap<String, ZkIvmProveJobState>,
+    budget: &ZkIvmProveJobBudgetInner,
+    owner_max_bytes: usize,
+    job_id: &str,
+    expected_reservation: &Arc<ZkIvmProveJobReservation>,
+    status: ZkIvmProveJobStatus,
+    body: Bytes,
+) {
     let _admission = budget
         .admission
         .lock()
@@ -19292,24 +19365,304 @@ type ZkIvmProveOutcome = Result<
     ),
     String,
 >;
-async fn zk_ivm_await_started_prove_job<T>(
-    mut prove_job: tokio::task::JoinHandle<std::thread::Result<Result<T, String>>>,
-    cancel_rx: &mut tokio::sync::watch::Receiver<bool>,
-) -> (Result<T, String>, bool) {
-    let flatten = |result| match result {
-        Ok(Ok(outcome)) => outcome,
-        Ok(Err(_)) => Err("prove job panicked".to_owned()),
-        Err(error) => Err(format!("prove job could not be joined: {error}")),
-    };
-    tokio::select! {
-        result = &mut prove_job => (flatten(result), false),
-        _ = cancel_rx.changed() => {
-            // `spawn_blocking` work cannot be preempted. The caller keeps its
-            // compute permits while this await reaches physical completion.
-            let outcome = flatten(prove_job.await);
-            (outcome, true)
+type ZkIvmProveTerminalResult = Result<(ZkIvmProveJobStatus, Bytes), String>;
+type ZkIvmProvePhysicalTask =
+    tokio::task::JoinHandle<std::thread::Result<ZkIvmProveTerminalResult>>;
+
+#[derive(Default)]
+struct ZkIvmProvePhysicalJob {
+    tasks: std::sync::Mutex<Vec<ZkIvmProvePhysicalTask>>,
+}
+impl ZkIvmProvePhysicalJob {
+    fn install(&self, task: ZkIvmProvePhysicalTask) {
+        self.tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(task);
+    }
+    fn poll(
+        &self,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<
+        Option<Result<std::thread::Result<ZkIvmProveTerminalResult>, tokio::task::JoinError>>,
+    > {
+        let mut tasks = self
+            .tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(task) = tasks.first_mut() else {
+            return std::task::Poll::Ready(None);
+        };
+        let result = std::future::Future::poll(std::pin::Pin::new(task), context);
+        if result.is_ready() {
+            tasks.remove(0);
+        }
+        result.map(Some)
+    }
+    fn has_task(&self) -> bool {
+        !self
+            .tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty()
+    }
+    async fn await_started(
+        &self,
+        cancel_rx: &mut tokio::sync::watch::Receiver<bool>,
+    ) -> (ZkIvmProveTerminalResult, bool) {
+        let physical = std::future::poll_fn(|context| self.poll(context));
+        tokio::pin!(physical);
+        let (joined, discard) = tokio::select! {
+            result = &mut physical => (result, false),
+            _ = cancel_rx.changed() => {
+                // Physical proving is not preemptible. Cancellation changes
+                // result retention only; capacity remains held until the task exits.
+                (physical.as_mut().await, true)
+            }
+        };
+        (zk_ivm_prove_flatten_physical_join(joined), discard)
+    }
+    async fn join_remaining(&self) -> bool {
+        let mut joined_any = false;
+        while self.has_task() {
+            joined_any = true;
+            let joined = std::future::poll_fn(|context| self.poll(context)).await;
+            if let Err(error) = zk_ivm_prove_flatten_physical_join(joined) {
+                iroha_logger::warn!(%error, "recovered IVM prove wrapper joined physical work");
+            }
+        }
+        joined_any
+    }
+}
+
+fn zk_ivm_prove_flatten_physical_join(
+    result: Option<Result<std::thread::Result<ZkIvmProveTerminalResult>, tokio::task::JoinError>>,
+) -> ZkIvmProveTerminalResult {
+    match result {
+        Some(Ok(Ok(outcome))) => outcome,
+        Some(Ok(Err(_))) => Err("prove job panicked".to_owned()),
+        Some(Err(error)) => Err(format!("prove job could not be joined: {error}")),
+        None => Err("prove job physical work was not installed".to_owned()),
+    }
+}
+
+struct ZkIvmProveJobControl {
+    job_id: String,
+    jobs: Arc<DashMap<String, ZkIvmProveJobState>>,
+    budget: Arc<ZkIvmProveJobBudgetInner>,
+    owner_max_bytes: usize,
+    retention: Arc<ZkIvmProveJobReservation>,
+    physical: Arc<ZkIvmProvePhysicalJob>,
+    telemetry: routing::MaybeTelemetry,
+    slots: Arc<tokio::sync::Semaphore>,
+    slots_total: usize,
+    slot_permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    inflight: Arc<tokio::sync::Semaphore>,
+    inflight_total: usize,
+}
+impl ZkIvmProveJobControl {
+    fn observe_capacity(&self) {
+        zk_ivm_prove_observe_queue_metrics(
+            &self.telemetry,
+            self.slots.as_ref(),
+            self.slots_total,
+            self.inflight.as_ref(),
+            self.inflight_total,
+        );
+    }
+    fn terminalize_wrapper_failure(&self) {
+        let (status, body) = zk_ivm_prove_terminal_body(
+            self.job_id.clone(),
+            Err("IVM prove async wrapper panicked".to_owned()),
+        );
+        zk_ivm_prove_store_terminal_inner(
+            self.jobs.as_ref(),
+            self.budget.as_ref(),
+            self.owner_max_bytes,
+            &self.job_id,
+            &self.retention,
+            status,
+            body,
+        );
+    }
+    async fn finish(mut self, outcome: std::thread::Result<()>) {
+        let physical_was_left_running = self.physical.join_remaining().await;
+        if outcome.is_err() || physical_was_left_running {
+            if outcome.is_err() {
+                iroha_logger::warn!(
+                    job_id = %self.job_id,
+                    "recovered panic in IVM prove async wrapper"
+                );
+            } else {
+                iroha_logger::error!(
+                    job_id = %self.job_id,
+                    "IVM prove wrapper exited without joining physical work"
+                );
+            }
+            self.terminalize_wrapper_failure();
+        }
+        drop(self.slot_permit.take());
+        self.observe_capacity();
+    }
+}
+
+type ZkIvmProveJobFuture =
+    std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>;
+struct ZkIvmProveJob {
+    control: ZkIvmProveJobControl,
+    future: ZkIvmProveJobFuture,
+}
+
+fn zk_ivm_prove_cancel_active_jobs(jobs: &DashMap<String, ZkIvmProveJobState>) {
+    let cancellations = jobs
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry.status,
+                ZkIvmProveJobStatus::Pending | ZkIvmProveJobStatus::Running
+            )
+        })
+        .map(|entry| entry.cancel.clone())
+        .collect::<Vec<_>>();
+    for cancel in cancellations {
+        let _ = cancel.send(true);
+    }
+}
+
+fn zk_ivm_prove_spawn_supervised_job(workers: &mut tokio::task::JoinSet<()>, job: ZkIvmProveJob) {
+    let ZkIvmProveJob { control, future } = job;
+    workers.spawn(async move {
+        let outcome = panic_recovery::catch_async_recoverable(future).await;
+        control.finish(outcome).await;
+    });
+}
+
+async fn zk_ivm_prove_supervisor(
+    mut receiver: tokio::sync::mpsc::Receiver<ZkIvmProveJob>,
+    jobs: Arc<DashMap<String, ZkIvmProveJobState>>,
+    telemetry: routing::MaybeTelemetry,
+    slots: Arc<tokio::sync::Semaphore>,
+    slots_total: usize,
+    inflight: Arc<tokio::sync::Semaphore>,
+    inflight_total: usize,
+    shutdown_signal: ShutdownSignal,
+) -> ToriiCriticalWorkerExit {
+    let mut workers = tokio::task::JoinSet::new();
+    let mut failed = false;
+    loop {
+        tokio::select! {
+            biased;
+            () = shutdown_signal.receive() => break,
+            completion = workers.join_next(), if !workers.is_empty() => {
+                if let Some(Err(error)) = completion {
+                    iroha_logger::error!(
+                        ?error,
+                        "IVM prove job recovery boundary failed"
+                    );
+                    failed = true;
+                    shutdown_signal.send();
+                    break;
+                }
+            }
+            job = receiver.recv() => match job {
+                Some(job) => zk_ivm_prove_spawn_supervised_job(&mut workers, job),
+                None => {
+                    failed = true;
+                    shutdown_signal.send();
+                    break;
+                }
+            },
         }
     }
+
+    receiver.close();
+    zk_ivm_prove_cancel_active_jobs(jobs.as_ref());
+    while let Ok(job) = receiver.try_recv() {
+        zk_ivm_prove_spawn_supervised_job(&mut workers, job);
+    }
+    while let Some(completion) = workers.join_next().await {
+        if let Err(error) = completion {
+            iroha_logger::error!(
+                ?error,
+                "IVM prove job recovery boundary failed during shutdown"
+            );
+            failed = true;
+        }
+    }
+    jobs.clear();
+    zk_ivm_prove_observe_queue_metrics(
+        &telemetry,
+        slots.as_ref(),
+        slots_total,
+        inflight.as_ref(),
+        inflight_total,
+    );
+    if failed {
+        ToriiCriticalWorkerExit::UnexpectedExit
+    } else {
+        ToriiCriticalWorkerExit::StoppedByShutdown
+    }
+}
+
+fn zk_ivm_prove_ensure_supervisor(app: &SharedAppState) {
+    let mut registration = app
+        .zk_ivm_prove_job_budget
+        .supervisor
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if registration.sender.is_some() {
+        return;
+    }
+    let (sender, receiver) = tokio::sync::mpsc::channel(app.zk_ivm_prove_slots_total);
+    let task = tokio::spawn(zk_ivm_prove_supervisor(
+        receiver,
+        app.zk_ivm_prove_jobs.clone(),
+        app.telemetry.clone(),
+        app.zk_ivm_prove_slots.clone(),
+        app.zk_ivm_prove_slots_total,
+        app.zk_ivm_prove_inflight.clone(),
+        app.zk_ivm_prove_inflight_total,
+        app.shutdown_signal.clone(),
+    ));
+    registration.sender = Some(sender);
+    registration.task = Some(task);
+}
+
+fn zk_ivm_prove_take_supervisor(
+    app: &AppState,
+) -> Option<tokio::task::JoinHandle<ToriiCriticalWorkerExit>> {
+    app.zk_ivm_prove_job_budget
+        .supervisor
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .task
+        .take()
+}
+
+enum ZkIvmProveEnqueueError {
+    NotStarted(ZkIvmProveJob),
+    Full(ZkIvmProveJob),
+    Closed(ZkIvmProveJob),
+}
+
+fn zk_ivm_prove_enqueue(
+    app: &SharedAppState,
+    job: ZkIvmProveJob,
+) -> Result<(), ZkIvmProveEnqueueError> {
+    let sender = app
+        .zk_ivm_prove_job_budget
+        .supervisor
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .sender
+        .clone();
+    let Some(sender) = sender else {
+        return Err(ZkIvmProveEnqueueError::NotStarted(job));
+    };
+    sender.try_send(job).map_err(|error| match error {
+        tokio::sync::mpsc::error::TrySendError::Full(job) => ZkIvmProveEnqueueError::Full(job),
+        tokio::sync::mpsc::error::TrySendError::Closed(job) => ZkIvmProveEnqueueError::Closed(job),
+    })
 }
 fn normalize_halo2_ipa_circuit_id(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
@@ -19377,26 +19730,29 @@ fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
         record_id == env_id
     }
 }
-fn sanitize_zk_key_component(component: &str) -> String {
-    let mut out = String::with_capacity(component.len());
-    for ch in component.chars() {
-        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
-            out.push(ch);
-        } else {
-            out.push('_');
-        }
+const ZK_KEY_ID_PATH_DOMAIN_V1: &[u8] = b"iroha:torii:zk-key-id:v1";
+fn zk_key_store_stem(id: &iroha_data_model::proof::VerifyingKeyId) -> String {
+    use sha2::Digest as _;
+
+    fn put_component(hasher: &mut sha2::Sha256, component: &str) {
+        let bytes = component.as_bytes();
+        let len = u32::try_from(bytes.len())
+            .expect("Norito VerifyingKeyId components fit the u32 wire-length domain");
+        hasher.update(len.to_be_bytes());
+        hasher.update(bytes);
     }
-    if out.is_empty() { "_".to_string() } else { out }
+
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(ZK_KEY_ID_PATH_DOMAIN_V1);
+    put_component(&mut hasher, id.backend.as_ref());
+    put_component(&mut hasher, &id.name);
+    format!("zkid-v1-{}", hex::encode(hasher.finalize()))
 }
 fn zk_vk_store_path(keys_dir: &Path, id: &iroha_data_model::proof::VerifyingKeyId) -> PathBuf {
-    let backend = sanitize_zk_key_component(id.backend.as_ref());
-    let name = sanitize_zk_key_component(&id.name);
-    keys_dir.join(format!("{backend}__{name}.vk"))
+    keys_dir.join(format!("{}.vk", zk_key_store_stem(id)))
 }
 fn zk_pk_store_path(keys_dir: &Path, id: &iroha_data_model::proof::VerifyingKeyId) -> PathBuf {
-    let backend = sanitize_zk_key_component(id.backend.as_ref());
-    let name = sanitize_zk_key_component(&id.name);
-    keys_dir.join(format!("{backend}__{name}.pk"))
+    keys_dir.join(format!("{}.pk", zk_key_store_stem(id)))
 }
 #[cfg(feature = "app_api")]
 fn open_zk_key_file_direct(path: &Path) -> std::io::Result<std::fs::File> {
@@ -19967,43 +20323,44 @@ async fn handler_zk_ivm_prove(
     let inflight = app.zk_ivm_prove_inflight.clone();
     let inflight_total = app.zk_ivm_prove_inflight_total;
     let jobs = app.zk_ivm_prove_jobs.clone();
-    let job_budget = Arc::clone(&app.zk_ivm_prove_job_budget);
+    let job_budget = app.zk_ivm_prove_job_budget.inner.clone();
     let owner_max_bytes = app.zk_ivm_prove_job_max_retained_bytes_per_owner;
-    tokio::spawn(async move {
+    let physical = Arc::new(ZkIvmProvePhysicalJob::default());
+    let control = ZkIvmProveJobControl {
+        job_id: job_id.clone(),
+        jobs: jobs.clone(),
+        budget: job_budget.clone(),
+        owner_max_bytes,
+        retention: retention.clone(),
+        physical: physical.clone(),
+        telemetry: telemetry.clone(),
+        slots: slots.clone(),
+        slots_total,
+        slot_permit: Some(slot_permit),
+        inflight: inflight.clone(),
+        inflight_total,
+    };
+    let jobs_for_task = jobs.clone();
+    let physical_for_task = physical.clone();
+    let future: ZkIvmProveJobFuture = Box::pin(async move {
         // Keep the pending request reservation alive even if a client deletes
         // the status entry while non-preemptible proving work is still running.
         let retention_for_task = retention;
         let mut cancel_rx = cancel_rx;
-        let slot_permit = slot_permit;
         if *cancel_rx.borrow() {
-            drop(slot_permit);
-            zk_ivm_prove_observe_queue_metrics(
-                &telemetry,
-                slots.as_ref(),
-                slots_total,
-                inflight.as_ref(),
-                inflight_total,
-            );
             return;
         }
         let Some(inflight_permit) = (tokio::select! {
+            biased;
+            _ = cancel_rx.changed() => None,
             permit = inflight.clone().acquire_owned() => match permit {
                 Ok(permit) => Some(permit),
                 Err(_) => None,
             },
-            _ = cancel_rx.changed() => None,
         }) else {
-            drop(slot_permit);
-            zk_ivm_prove_observe_queue_metrics(
-                &telemetry,
-                slots.as_ref(),
-                slots_total,
-                inflight.as_ref(),
-                inflight_total,
-            );
             return;
         };
-        if let Some(mut entry) = jobs.get_mut(&job_id_for_task) {
+        if let Some(mut entry) = jobs_for_task.get_mut(&job_id_for_task) {
             entry.status = ZkIvmProveJobStatus::Running;
             if let Ok(body) = zk_ivm_prove_job_response_body(
                 job_id_for_task.clone(),
@@ -20209,15 +20566,17 @@ async fn handler_zk_ivm_prove(
             })();
             Ok::<_, String>(zk_ivm_prove_terminal_body(job_id_for_worker, outcome))
         });
+        physical_for_task.install(prove_job);
         // Keep both permits and the request-memory reservation until physical
-        // completion; cancellation after start is discard-only.
-        let (outcome, discard) = zk_ivm_await_started_prove_job(prove_job, &mut cancel_rx).await;
+        // completion; cancellation after start is discard-only. The physical
+        // handle remains recoverable by the supervisor if this wrapper panics.
+        let (outcome, discard) = physical_for_task.await_started(&mut cancel_rx).await;
         if !discard {
             let (status, response_body) = outcome.unwrap_or_else(|error| {
                 zk_ivm_prove_terminal_body(job_id_for_task.clone(), Err(error))
             });
-            zk_ivm_prove_store_terminal(
-                &jobs,
+            zk_ivm_prove_store_terminal_inner(
+                &jobs_for_task,
                 job_budget.as_ref(),
                 owner_max_bytes,
                 &job_id_for_task,
@@ -20226,16 +20585,42 @@ async fn handler_zk_ivm_prove(
                 response_body,
             );
         }
-        drop(slot_permit);
         drop(retention_for_task);
-        zk_ivm_prove_observe_queue_metrics(
-            &telemetry,
-            slots.as_ref(),
-            slots_total,
-            inflight.as_ref(),
-            inflight_total,
-        );
     });
+    let job = ZkIvmProveJob { control, future };
+    if let Err(error) = zk_ivm_prove_enqueue(&app, job) {
+        let (job, response_error) = match error {
+            ZkIvmProveEnqueueError::Full(job) => (
+                job,
+                Error::ProofRateLimited {
+                    endpoint: "v1/zk/ivm/prove",
+                    retry_after_secs,
+                },
+            ),
+            ZkIvmProveEnqueueError::NotStarted(job) | ZkIvmProveEnqueueError::Closed(job) => (
+                job,
+                Error::AppServiceUnavailable {
+                    code: "zk_ivm_prove_supervisor_unavailable",
+                    message: "IVM proof generation is unavailable".to_owned(),
+                },
+            ),
+        };
+        let expected_retention = job.control.retention.clone();
+        if let Some((_job_id, state)) = jobs.remove_if(&job_id, |_, state| {
+            Arc::ptr_eq(&state.retention, &expected_retention)
+        }) {
+            let _ = state.cancel.send(true);
+        }
+        drop(job);
+        zk_ivm_prove_observe_queue_metrics(
+            &app.telemetry,
+            app.zk_ivm_prove_slots.as_ref(),
+            app.zk_ivm_prove_slots_total,
+            app.zk_ivm_prove_inflight.as_ref(),
+            app.zk_ivm_prove_inflight_total,
+        );
+        return Err(response_error);
+    }
     let mut response = crate::utils::respond_with_format(
         ZkIvmProveJobCreatedDto { job_id },
         crate::utils::ResponseFormat::Json,
@@ -20775,6 +21160,7 @@ fn soracloud_runtime_status_sections(
 }
 fn soracloud_hosted_http_topology_section(app: &SharedAppState) -> norito::json::Value {
     let view = app.state.view();
+    let current_height = u64::try_from(view.height()).unwrap_or(u64::MAX);
     let latest_block_ms = view.latest_block().map_or(0, |block| {
         u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
     });
@@ -20793,6 +21179,7 @@ fn soracloud_hosted_http_topology_section(app: &SharedAppState) -> norito::json:
                 world,
                 validator_account_id,
                 &capability.peer_id,
+                current_height,
                 |lane_id| view.is_lane_active_for_authority(lane_id),
             )
         {
@@ -20812,7 +21199,7 @@ fn soracloud_hosted_http_topology_section(app: &SharedAppState) -> norito::json:
                 service_name,
                 service_version,
                 now_ms,
-                u64::try_from(view.height()).unwrap_or(u64::MAX),
+                current_height,
                 |lane_id| view.is_lane_active_for_authority(lane_id),
             )
         else {
@@ -23509,11 +23896,75 @@ fn current_torii_backpressure(app: &AppState) -> queue::BackpressureState {
     current_torii_queue_pressure(app).into_backpressure()
 }
 #[cfg(feature = "connect")]
-fn new_torii_proxy_session_id() -> Hash {
+fn try_new_torii_proxy_session_id_with_rng<R>(rng: &mut R) -> Result<Hash, ToriiBuildError>
+where
+    R: rand::rand_core::TryCryptoRng + ?Sized,
+{
+    use rand::rand_core::TryRngCore as _;
+
     let mut nonce = [0_u8; Hash::LENGTH];
-    rand::rand_core::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut nonce)
-        .unwrap_or_else(|error| panic!("Torii proxy process-session OS RNG failed: {error}"));
-    Hash::new(nonce)
+    rng.try_fill_bytes(&mut nonce).map_err(|error| {
+        ToriiBuildError::component_initialization(
+            "torii_proxy.session_entropy",
+            format!("operating-system randomness is unavailable: {error}"),
+        )
+    })?;
+    Ok(Hash::new(nonce))
+}
+#[cfg(feature = "connect")]
+fn try_new_torii_proxy_session_id() -> Result<Hash, ToriiBuildError> {
+    try_new_torii_proxy_session_id_with_rng(&mut rand::rngs::OsRng)
+}
+#[cfg(all(test, feature = "connect"))]
+fn new_torii_proxy_session_id() -> Hash {
+    try_new_torii_proxy_session_id()
+        .expect("test Torii proxy process-session entropy must be available")
+}
+#[cfg(all(test, feature = "connect"))]
+mod torii_proxy_session_id_tests {
+    use super::*;
+
+    #[derive(Debug)]
+    struct FailingEntropy;
+
+    impl core::fmt::Display for FailingEntropy {
+        fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            formatter.write_str("injected entropy failure")
+        }
+    }
+
+    struct FailingRng;
+
+    impl rand::rand_core::TryRngCore for FailingRng {
+        type Error = FailingEntropy;
+
+        fn try_next_u32(&mut self) -> core::result::Result<u32, Self::Error> {
+            Err(FailingEntropy)
+        }
+
+        fn try_next_u64(&mut self) -> core::result::Result<u64, Self::Error> {
+            Err(FailingEntropy)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> core::result::Result<(), Self::Error> {
+            Err(FailingEntropy)
+        }
+    }
+
+    impl rand::rand_core::TryCryptoRng for FailingRng {}
+
+    #[test]
+    fn process_session_entropy_failure_is_a_startup_error() {
+        let error = try_new_torii_proxy_session_id_with_rng(&mut FailingRng)
+            .expect_err("entropy failure must not unwind");
+        assert!(matches!(
+            error,
+            ToriiBuildError::ComponentInitialization {
+                component: "torii_proxy.session_entropy",
+                ..
+            }
+        ));
+    }
 }
 #[cfg(feature = "connect")]
 type OwnedToriiProxyRequestIdPreimage = (&'static str, Hash, PeerId, u64, ToriiProxyRequestKindV1);
@@ -32648,19 +33099,17 @@ fn hosted_http_request_hash(
 }
 #[cfg(feature = "app_api")]
 fn hosted_http_placement_has_active_peer_binding(
-    world: &impl WorldReadOnly,
+    state_view: &iroha_core::state::StateView<'_>,
     placement: &iroha_data_model::soracloud::SoraInrouReplicaPlacementV1,
+    current_height: u64,
 ) -> bool {
-    world
-        .public_lane_validators()
-        .iter()
-        .any(|((lane_id, validator_account_id), record)| {
-            lane_id == &record.lane_id
-                && validator_account_id == &record.validator
-                && validator_account_id == &placement.validator_account_id
-                && record.status == iroha_data_model::nexus::PublicLaneValidatorStatus::Active
-                && record.peer_id.to_string() == placement.peer_id
-        })
+    iroha_core::soracloud_runtime::soracloud_validator_has_active_peer_binding(
+        state_view.world(),
+        &placement.validator_account_id,
+        &placement.peer_id,
+        current_height,
+        |lane_id| state_view.is_lane_active_for_authority(lane_id),
+    )
 }
 #[cfg(feature = "app_api")]
 fn hosted_http_runtime_state_matches_placement(
@@ -32694,6 +33143,7 @@ fn select_authoritative_hosted_http_replica(
     iroha_data_model::soracloud::SoraInrouReplicaRuntimeStateV1,
 )> {
     let world = state_view.world();
+    let current_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
     let service_name_id = Name::from_str(service_name).ok()?;
     let lease_started_height = world
         .soracloud_service_deployments()
@@ -32711,7 +33161,11 @@ fn select_authoritative_hosted_http_replica(
             ))?;
             (placement.host_availability.is_available()
                 && placement.lease_started_height == lease_started_height
-                && hosted_http_placement_has_active_peer_binding(world, placement)
+                && hosted_http_placement_has_active_peer_binding(
+                    state_view,
+                    placement,
+                    current_height,
+                )
                 && hosted_http_runtime_state_matches_placement(
                     runtime_state,
                     service_name,
@@ -33139,7 +33593,11 @@ fn resolve_exact_hosted_http_runtime_target(
         })
         .unwrap_or(false);
     if !placement_is_current_lease
-        || !hosted_http_placement_has_active_peer_binding(world, &placement)
+        || !hosted_http_placement_has_active_peer_binding(
+            &state_view,
+            &placement,
+            current_height,
+        )
     {
         return Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
@@ -33343,6 +33801,20 @@ fn validate_soracloud_served_revision_headers(
     Ok(())
 }
 #[cfg(feature = "app_api")]
+fn spawn_soracloud_hosted_connection_driver<F, E>(
+    connection: F,
+) -> tokio::task::JoinHandle<std::thread::Result<()>>
+where
+    F: std::future::Future<Output = Result<(), E>> + Send + 'static,
+    E: Debug + Send + 'static,
+{
+    crate::panic_recovery::spawn_joined_recoverable(async move {
+        if let Err(error) = connection.await {
+            iroha_logger::debug!(?error, "hosted Soracloud HTTP connection driver terminated");
+        }
+    })
+}
+#[cfg(feature = "app_api")]
 async fn proxy_soracloud_public_hosted_http_locally(
     method: &axum::http::Method,
     uri: &axum::http::Uri,
@@ -33412,9 +33884,7 @@ async fn proxy_soracloud_public_hosted_http_locally(
                 ),
             )
         })?;
-    let connection_task = tokio::spawn(async move {
-        let _ = connection.await;
-    });
+    let connection_task = spawn_soracloud_hosted_connection_driver(connection);
     let mut path_and_query = upstream_url.path().to_owned();
     if path_and_query.is_empty() {
         path_and_query.push('/');
@@ -33483,7 +33953,7 @@ async fn proxy_soracloud_public_hosted_http_locally(
         .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response());
     use http_body_util::BodyExt as _;
     let (parts, body) = response.into_parts();
-    struct AbortConnectionOnDrop(tokio::task::JoinHandle<()>);
+    struct AbortConnectionOnDrop(tokio::task::JoinHandle<std::thread::Result<()>>);
     impl Drop for AbortConnectionOnDrop {
         fn drop(&mut self) {
             self.0.abort();
@@ -46201,7 +46671,7 @@ mod appeal_finance_runtime_signer_tests {
             let signing_key = SigningKey::from_bytes(&[seed; 32]);
             Self {
                 identity: AppealFinanceCheckpointRuntimeIdentityV1 {
-                    provider_handle: "hsm:appeal-finance-checkpoint-primary".to_owned(),
+                    provider_handle: "provider:appeal-finance-checkpoint-primary".to_owned(),
                     public_key: signing_key.verifying_key().to_bytes(),
                     qualification: AppealFinanceRuntimeProviderQualificationV1::new(1, [seed; 32]),
                 },
@@ -46306,8 +46776,8 @@ mod appeal_finance_runtime_signer_tests {
     #[test]
     fn registry_rejects_duplicate_opaque_handles() {
         let result = SoraFsAppealFinanceRuntimeSignersV1::new(vec![
-            provider("hsm:appeal", key(1)),
-            provider("hsm:appeal", key(2)),
+            provider("provider:appeal", key(1)),
+            provider("provider:appeal", key(2)),
         ]);
         assert!(matches!(
             result,
@@ -46317,17 +46787,17 @@ mod appeal_finance_runtime_signer_tests {
     #[test]
     fn registry_handles_use_central_production_grammar() {
         SoraFsAppealFinanceRuntimeSignersV1::new(vec![provider(
-            "hsm://appeal-finance/primary.v1_slot-a",
+            "provider://appeal-finance/primary.v1_slot-a",
             key(2),
         )])
         .expect("canonical production runtime handle");
         for handle in [
-            "hsm:test:appeal",
+            "provider:test:appeal",
             "https://operator:secret@appeal-signer",
             "https://appeal-signer/path?credential=secret",
             "https://appeal-signer/path#fragment",
-            "hsm://appeal-finance/%70rimary",
-            "hsm:\\appeal-finance\\primary",
+            "provider://appeal-finance/%70rimary",
+            "provider:\\appeal-finance\\primary",
         ] {
             let result = SoraFsAppealFinanceRuntimeSignersV1::new(vec![provider(handle, key(2))]);
             assert!(matches!(
@@ -46341,7 +46811,7 @@ mod appeal_finance_runtime_signer_tests {
         let configured = key(12);
         let authority = AccountId::new(configured.public_key().clone());
         let binding = iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
-            handle: "hsm:appeal-qualified".to_owned(),
+            handle: "provider:appeal-qualified".to_owned(),
             authority: authority.clone(),
             public_key: configured.public_key().clone(),
             revision: 1,
@@ -46380,7 +46850,7 @@ mod appeal_finance_runtime_signer_tests {
         let authority = AccountId::new(configured.public_key().clone());
         let bindings = vec![
             iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
-                handle: "hsm:appeal-current".to_owned(),
+                handle: "provider:appeal-current".to_owned(),
                 authority,
                 public_key: configured.public_key().clone(),
                 revision: 1,
@@ -46401,7 +46871,7 @@ mod appeal_finance_runtime_signer_tests {
         let mut config = iroha_config::parameters::actual::SorafsAppealFinanceSettlement::default();
         config.submitter_signers = vec![
             iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
-                handle: "hsm:appeal-current".to_owned(),
+                handle: "provider:appeal-current".to_owned(),
                 authority,
                 public_key: configured.public_key().clone(),
                 revision: 1,
@@ -46448,7 +46918,7 @@ mod appeal_finance_runtime_signer_tests {
         let mut config = iroha_config::parameters::actual::SorafsAppealFinanceSettlement::default();
         config.submitter_signers = vec![
             iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
-                handle: "hsm:appeal-current".to_owned(),
+                handle: "provider:appeal-current".to_owned(),
                 authority,
                 public_key: transaction_key.public_key().clone(),
                 revision: 1,
@@ -46467,7 +46937,7 @@ mod appeal_finance_runtime_signer_tests {
         );
         let runtime_signers = Arc::new(
             SoraFsAppealFinanceRuntimeSignersV1::new(vec![provider(
-                "hsm:appeal-current",
+                "provider:appeal-current",
                 transaction_key,
             )])
             .expect("qualified transaction signer"),
@@ -46520,7 +46990,7 @@ mod appeal_finance_runtime_signer_tests {
         let authority = AccountId::new(configured.public_key().clone());
         let bindings = vec![
             iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
-                handle: "hsm:appeal-current".to_owned(),
+                handle: "provider:appeal-current".to_owned(),
                 authority: authority.clone(),
                 public_key: configured.public_key().clone(),
                 revision: 1,
@@ -46529,7 +46999,7 @@ mod appeal_finance_runtime_signer_tests {
                 revoked_at_block_height: Some(10),
             },
             iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
-                handle: "hsm:appeal-future".to_owned(),
+                handle: "provider:appeal-future".to_owned(),
                 authority,
                 public_key: configured.public_key().clone(),
                 revision: 1,
@@ -46539,7 +47009,7 @@ mod appeal_finance_runtime_signer_tests {
             },
         ];
         let only_future = SoraFsAppealFinanceRuntimeSignersV1::new(vec![provider(
-            "hsm:appeal-future",
+            "provider:appeal-future",
             configured.clone(),
         )])
         .expect("valid future-only registry");
@@ -46553,10 +47023,10 @@ mod appeal_finance_runtime_signer_tests {
                 SoraFsAppealFinanceRuntimeSignerQualificationError::ProviderMissing {
                     handle
                 }
-            ) if handle == "hsm:appeal-current"
+            ) if handle == "provider:appeal-current"
         ));
         let only_current = SoraFsAppealFinanceRuntimeSignersV1::new(vec![provider(
-            "hsm:appeal-current",
+            "provider:appeal-current",
             configured,
         )])
         .expect("valid current-only registry");
@@ -46570,7 +47040,7 @@ mod appeal_finance_runtime_signer_tests {
                 SoraFsAppealFinanceRuntimeSignerQualificationError::ProviderMissing {
                     handle
                 }
-            ) if handle == "hsm:appeal-future"
+            ) if handle == "provider:appeal-future"
         ));
     }
     #[test]
@@ -46579,7 +47049,7 @@ mod appeal_finance_runtime_signer_tests {
         let substituted = key(9);
         let authority = AccountId::new(configured.public_key().clone());
         let binding = iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
-            handle: "hsm:appeal-current".to_owned(),
+            handle: "provider:appeal-current".to_owned(),
             authority: authority.clone(),
             public_key: configured.public_key().clone(),
             revision: 1,
@@ -46588,7 +47058,7 @@ mod appeal_finance_runtime_signer_tests {
             revoked_at_block_height: None,
         };
         let substituted_key_registry = SoraFsAppealFinanceRuntimeSignersV1::new(vec![provider(
-            "hsm:appeal-current",
+            "provider:appeal-current",
             substituted.clone(),
         )])
         .expect("valid substituted-key registry");
@@ -46606,7 +47076,7 @@ mod appeal_finance_runtime_signer_tests {
                 ..binding
             };
         let configured_registry = SoraFsAppealFinanceRuntimeSignersV1::new(vec![provider(
-            "hsm:appeal-current",
+            "provider:appeal-current",
             configured,
         )])
         .expect("valid configured-key registry");
@@ -46625,7 +47095,7 @@ mod appeal_finance_runtime_signer_tests {
         let authority = AccountId::new(configured.public_key().clone());
         let bindings = vec![
             iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
-                handle: "hsm:appeal-retired".to_owned(),
+                handle: "provider:appeal-retired".to_owned(),
                 authority: authority.clone(),
                 public_key: configured.public_key().clone(),
                 revision: 1,
@@ -46634,7 +47104,7 @@ mod appeal_finance_runtime_signer_tests {
                 revoked_at_block_height: Some(10),
             },
             iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
-                handle: "hsm:appeal-current".to_owned(),
+                handle: "provider:appeal-current".to_owned(),
                 authority,
                 public_key: configured.public_key().clone(),
                 revision: 1,
@@ -46644,7 +47114,7 @@ mod appeal_finance_runtime_signer_tests {
             },
         ];
         let registry = SoraFsAppealFinanceRuntimeSignersV1::new(vec![provider(
-            "hsm:appeal-current",
+            "provider:appeal-current",
             configured,
         )])
         .expect("valid current registry");
@@ -46657,7 +47127,7 @@ mod appeal_finance_runtime_signer_tests {
         let authority = AccountId::new(configured.public_key().clone());
         let bindings = vec![
             iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
-                handle: "hsm:appeal-retired".to_owned(),
+                handle: "provider:appeal-retired".to_owned(),
                 authority: authority.clone(),
                 public_key: configured.public_key().clone(),
                 revision: 1,
@@ -46666,7 +47136,7 @@ mod appeal_finance_runtime_signer_tests {
                 revoked_at_block_height: Some(10),
             },
             iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
-                handle: "hsm:appeal-current".to_owned(),
+                handle: "provider:appeal-current".to_owned(),
                 authority: authority.clone(),
                 public_key: configured.public_key().clone(),
                 revision: 1,
@@ -46675,7 +47145,7 @@ mod appeal_finance_runtime_signer_tests {
                 revoked_at_block_height: Some(20),
             },
             iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
-                handle: "hsm:appeal-future".to_owned(),
+                handle: "provider:appeal-future".to_owned(),
                 authority,
                 public_key: configured.public_key().clone(),
                 revision: 1,
@@ -46685,8 +47155,8 @@ mod appeal_finance_runtime_signer_tests {
             },
         ];
         let registry = SoraFsAppealFinanceRuntimeSignersV1::new(vec![
-            provider("hsm:appeal-current", configured.clone()),
-            provider("hsm:appeal-future", configured),
+            provider("provider:appeal-current", configured.clone()),
+            provider("provider:appeal-future", configured),
         ])
         .expect("valid rotation registry");
         qualify_appeal_finance_runtime_signer_inventory(&bindings, Some(&registry), 10)
@@ -46699,7 +47169,7 @@ mod appeal_finance_runtime_signer_tests {
         let (submitter, _forwarder_state_dir) = submitter(
             vec![
                 iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
-                    handle: "hsm:appeal".to_owned(),
+                    handle: "provider:appeal".to_owned(),
                     authority: authority.clone(),
                     public_key: configured.public_key().clone(),
                     revision: 1,
@@ -46708,7 +47178,7 @@ mod appeal_finance_runtime_signer_tests {
                     revoked_at_block_height: None,
                 },
             ],
-            vec![provider("hsm:appeal", key(4))],
+            vec![provider("provider:appeal", key(4))],
         );
         assert!(matches!(
             submitter.signer_for(&authority, 1),
@@ -46722,7 +47192,7 @@ mod appeal_finance_runtime_signer_tests {
         let (submitter, _forwarder_state_dir) = submitter(
             vec![
                 iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
-                    handle: "hsm:appeal-offline".to_owned(),
+                    handle: "provider:appeal-offline".to_owned(),
                     authority: authority.clone(),
                     public_key: configured.public_key().clone(),
                     revision: 1,
@@ -46738,7 +47208,7 @@ mod appeal_finance_runtime_signer_tests {
                 .active_binding_for(&authority, 1)
                 .expect("configured binding remains active")
                 .handle,
-            "hsm:appeal-offline"
+            "provider:appeal-offline"
         );
         assert!(matches!(
             submitter.signer_for(&authority, 1),
@@ -46752,7 +47222,7 @@ mod appeal_finance_runtime_signer_tests {
         let (submitter, _forwarder_state_dir) = submitter(
             vec![
                 iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
-                    handle: "hsm:appeal-old".to_owned(),
+                    handle: "provider:appeal-old".to_owned(),
                     authority: authority.clone(),
                     public_key: configured.public_key().clone(),
                     revision: 1,
@@ -46761,7 +47231,7 @@ mod appeal_finance_runtime_signer_tests {
                     revoked_at_block_height: Some(10),
                 },
                 iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
-                    handle: "hsm:appeal-new".to_owned(),
+                    handle: "provider:appeal-new".to_owned(),
                     authority: authority.clone(),
                     public_key: configured.public_key().clone(),
                     revision: 1,
@@ -46771,8 +47241,8 @@ mod appeal_finance_runtime_signer_tests {
                 },
             ],
             vec![
-                provider("hsm:appeal-old", configured.clone()),
-                provider("hsm:appeal-new", configured),
+                provider("provider:appeal-old", configured.clone()),
+                provider("provider:appeal-new", configured),
             ],
         );
         assert!(matches!(
@@ -46784,14 +47254,14 @@ mod appeal_finance_runtime_signer_tests {
                 .signer_for(&authority, 9)
                 .expect("old signer active")
                 .handle,
-            "hsm:appeal-old"
+            "provider:appeal-old"
         );
         assert_eq!(
             submitter
                 .signer_for(&authority, 10)
                 .expect("new signer active")
                 .handle,
-            "hsm:appeal-new"
+            "provider:appeal-new"
         );
         assert!(matches!(
             submitter.signer_for(&authority, 20),
@@ -46964,6 +47434,17 @@ mod sorafs_evidence_viewer_startup_tests {
         assert_eq!(evidence_viewer_transparency_backoff_ticks(u8::MAX), 7);
         assert_eq!(EVIDENCE_VIEWER_TRANSPARENCY_PAGE_ITEMS_V1, 256);
         assert_eq!(EVIDENCE_VIEWER_TRANSPARENCY_MAX_PAGES_PER_TICK_V1, 16);
+    }
+    #[tokio::test]
+    async fn evidence_viewer_compaction_skips_immediate_tick_after_shutdown() {
+        let shutdown = ShutdownSignal::new();
+        shutdown.send();
+        let mut ticker = tokio::time::interval(Duration::from_millis(1));
+
+        assert!(
+            !wait_for_evidence_viewer_compaction_tick(&shutdown, &mut ticker).await,
+            "a pre-sent shutdown must win over Tokio interval's immediate first tick"
+        );
     }
     #[tokio::test]
     async fn evidence_viewer_compaction_supervision_joins_on_normal_shutdown() {
@@ -47302,15 +47783,117 @@ mod semaphore_capacity_validation_tests {
     }
 }
 
-/// Test-only router runtime that keeps its background services alive.
-struct TestApiRouterRuntime {
+/// Owned test-router runtime that keeps every background service supervised.
+///
+/// Call [`Self::shutdown`] after the final request so shutdown is signalled and
+/// every retained worker is joined before the test runtime is torn down.
+#[doc(hidden)]
+#[must_use = "test router runtimes must be shut down with `shutdown().await`"]
+pub struct TestApiRouterRuntime {
     router: axum::Router,
     shutdown_signal: ShutdownSignal,
+    workers: Vec<ToriiCriticalWorker>,
+}
+
+impl TestApiRouterRuntime {
+    /// Clone the router handle owned by this runtime.
+    #[must_use]
+    pub fn router(&self) -> axum::Router {
+        self.router.clone()
+    }
+
+    /// Signal shutdown and await every retained background worker.
+    ///
+    /// Worker failures are reported only after all remaining workers have been
+    /// joined, so a failing test service cannot detach its siblings.
+    pub async fn shutdown(mut self) {
+        self.shutdown_signal.send();
+        let mut workers = std::mem::take(&mut self.workers)
+            .into_iter()
+            .map(|worker| async move { (worker.name, worker.task.await) })
+            .collect::<futures_util::stream::FuturesUnordered<_>>();
+        let mut failures = Vec::new();
+        while let Some((name, result)) = workers.next().await {
+            match result {
+                Ok(ToriiCriticalWorkerExit::StoppedByShutdown) => {}
+                Ok(ToriiCriticalWorkerExit::UnexpectedExit) => {
+                    failures.push(format!("worker `{name}` exited unexpectedly"));
+                }
+                Err(error) => {
+                    failures.push(format!("worker `{name}` could not be joined: {error}"));
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "test router background shutdown failed: {}",
+            failures.join("; ")
+        );
+    }
+}
+
+impl std::ops::Deref for TestApiRouterRuntime {
+    type Target = axum::Router;
+
+    fn deref(&self) -> &Self::Target {
+        &self.router
+    }
 }
 
 impl Drop for TestApiRouterRuntime {
     fn drop(&mut self) {
         self.shutdown_signal.send();
+    }
+}
+
+#[cfg(test)]
+mod test_api_router_runtime_tests {
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shutdown_joins_retained_physical_worker_completion() {
+        let shutdown_signal = ShutdownSignal::new();
+        let worker_shutdown = shutdown_signal.clone();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let worker = tokio::spawn(async move {
+            worker_shutdown.receive().await;
+            tokio::task::spawn_blocking(move || {
+                started_tx
+                    .send(())
+                    .expect("teardown still waits for worker");
+                release_rx
+                    .recv()
+                    .expect("test releases retained physical completion");
+            })
+            .await
+            .expect("retained physical completion joins");
+            ToriiCriticalWorkerExit::StoppedByShutdown
+        });
+        let runtime = TestApiRouterRuntime {
+            router: axum::Router::new(),
+            shutdown_signal,
+            workers: vec![ToriiCriticalWorker {
+                name: "physical_test_worker",
+                task: worker,
+            }],
+        };
+
+        let teardown = tokio::spawn(runtime.shutdown());
+        started_rx
+            .await
+            .expect("retained worker begins physical completion");
+        assert!(
+            !teardown.is_finished(),
+            "test runtime teardown must wait for retained physical completion"
+        );
+        release_tx
+            .send(())
+            .expect("release retained physical completion");
+        tokio::time::timeout(Duration::from_secs(5), teardown)
+            .await
+            .expect("test runtime teardown completes")
+            .expect("test runtime teardown task joins");
     }
 }
 
@@ -47424,7 +48007,6 @@ pub struct Torii {
     push: Option<push::PushBridge>,
     #[cfg(feature = "push")]
     push_rate_limiter: limits::RateLimiter,
-    test_api_router: parking_lot::Mutex<Option<TestApiRouterRuntime>>,
     iso_bridge: Option<Arc<Iso20022BridgeRuntime>>,
     alias_service: Option<Arc<AliasService>>,
     #[cfg(feature = "app_api")]
@@ -48615,7 +49197,7 @@ mod sorafs_native_transaction_signer_startup_tests {
     #[test]
     fn inactive_native_signer_role_rejects_injected_provider() {
         let provider: Arc<dyn SoraFsProofOutcomeTransactionSigner> = Arc::new(ProofSigner::new(
-            "hsm://sorafs/proof-outcome/unrequested",
+            "provider://sorafs/proof-outcome/unrequested",
             0x11,
         ));
         let error = qualify_configured_sorafs_native_transaction_signer_for_startup(
@@ -48631,7 +49213,7 @@ mod sorafs_native_transaction_signer_startup_tests {
     }
     #[test]
     fn native_signer_startup_qualifies_exact_configured_provider() {
-        let provider = Arc::new(ProofSigner::new("hsm://sorafs/proof-outcome/primary", 0x21));
+        let provider = Arc::new(ProofSigner::new("provider://sorafs/proof-outcome/primary", 0x21));
         let configured = provider.configured_binding();
         let provider: Arc<dyn SoraFsProofOutcomeTransactionSigner> = provider;
         let qualified = qualify_configured_sorafs_native_transaction_signer_for_startup(
@@ -48650,10 +49232,10 @@ mod sorafs_native_transaction_signer_startup_tests {
     }
     #[test]
     fn native_signer_startup_rejects_substituted_provider() {
-        let expected = ProofSigner::new("hsm://sorafs/proof-outcome/primary", 0x31);
+        let expected = ProofSigner::new("provider://sorafs/proof-outcome/primary", 0x31);
         let configured = expected.configured_binding();
         let substituted: Arc<dyn SoraFsProofOutcomeTransactionSigner> = Arc::new(ProofSigner::new(
-            "hsm://sorafs/proof-outcome/substituted",
+            "provider://sorafs/proof-outcome/substituted",
             0x32,
         ));
         let error = qualify_configured_sorafs_native_transaction_signer_for_startup(
@@ -49061,6 +49643,17 @@ const fn evidence_viewer_transparency_backoff_ticks(failure_streak: u8) -> u8 {
         EVIDENCE_VIEWER_TRANSPARENCY_MAX_BACKOFF_EXPONENT_V1
     };
     (1_u8 << exponent) - 1
+}
+#[cfg(feature = "app_api")]
+async fn wait_for_evidence_viewer_compaction_tick(
+    shutdown_signal: &ShutdownSignal,
+    ticker: &mut tokio::time::Interval,
+) -> bool {
+    tokio::select! {
+        biased;
+        _ = shutdown_signal.receive() => false,
+        _ = ticker.tick() => !shutdown_signal.is_sent(),
+    }
 }
 #[cfg(feature = "app_api")]
 fn publish_evidence_viewer_transparency_tick(
@@ -49667,31 +50260,37 @@ impl Torii {
         }
     }
     #[cfg(feature = "app_api")]
-    fn spawn_pin_registry_metrics_worker(&self, shutdown_signal: ShutdownSignal) {
+    fn spawn_pin_registry_metrics_worker(
+        &self,
+        shutdown_signal: ShutdownSignal,
+    ) -> Option<tokio::task::JoinHandle<ToriiCriticalWorkerExit>> {
         if !self.telemetry.allows_metrics() {
-            return;
+            return None;
         }
         let state = self.state.clone();
         let telemetry = self.telemetry.clone();
-        tokio::spawn(async move {
+        Some(tokio::spawn(async move {
             const PIN_REGISTRY_METRICS_INTERVAL_SECS: u64 = 30;
             let mut ticker =
                 tokio::time::interval(Duration::from_secs(PIN_REGISTRY_METRICS_INTERVAL_SECS));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            if let Err(err) = Self::sample_pin_registry_metrics(&state, &telemetry) {
-                iroha_logger::error!(?err, "failed to read initial SoraFS pin resource summary");
-            }
             loop {
                 tokio::select! {
-                    _ = shutdown_signal.receive() => break,
+                    biased;
+                    _ = shutdown_signal.receive() => {
+                        return ToriiCriticalWorkerExit::StoppedByShutdown;
+                    }
                     _ = ticker.tick() => {
+                        if shutdown_signal.is_sent() {
+                            return ToriiCriticalWorkerExit::StoppedByShutdown;
+                        }
                         if let Err(err) = Self::sample_pin_registry_metrics(&state, &telemetry) {
                             iroha_logger::error!(?err, "failed to read SoraFS pin resource summary");
                         }
                     }
                 }
             }
-        });
+        }))
     }
     #[cfg(feature = "app_api")]
     fn sample_pin_registry_metrics(
@@ -49729,23 +50328,31 @@ impl Torii {
         Ok(())
     }
     #[cfg(feature = "app_api")]
-    fn spawn_por_ingestion_metrics_worker(&self, shutdown_signal: ShutdownSignal) {
+    fn spawn_por_ingestion_metrics_worker(
+        &self,
+        shutdown_signal: ShutdownSignal,
+    ) -> Option<tokio::task::JoinHandle<ToriiCriticalWorkerExit>> {
         if !self.telemetry.allows_metrics() || !self.sorafs_node.is_enabled() {
-            return;
+            return None;
         }
         let telemetry = self.telemetry.clone();
         let sorafs_node = self.sorafs_node.clone();
-        tokio::spawn(async move {
+        Some(tokio::spawn(async move {
             const POR_INGEST_METRICS_INTERVAL_SECS: u64 = 30;
             let mut ticker =
                 tokio::time::interval(Duration::from_secs(POR_INGEST_METRICS_INTERVAL_SECS));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut known_pairs: HashSet<([u8; 32], [u8; 32])> = HashSet::new();
-            Self::sample_por_ingestion_metrics(&sorafs_node, &telemetry, &mut known_pairs);
             loop {
                 tokio::select! {
-                    _ = shutdown_signal.receive() => break,
+                    biased;
+                    _ = shutdown_signal.receive() => {
+                        return ToriiCriticalWorkerExit::StoppedByShutdown;
+                    }
                     _ = ticker.tick() => {
+                        if shutdown_signal.is_sent() {
+                            return ToriiCriticalWorkerExit::StoppedByShutdown;
+                        }
                         Self::sample_por_ingestion_metrics(
                             &sorafs_node,
                             &telemetry,
@@ -49754,7 +50361,7 @@ impl Torii {
                     }
                 }
             }
-        });
+        }))
     }
     #[cfg(feature = "app_api")]
     fn spawn_evidence_viewer_compaction_worker(
@@ -49774,59 +50381,53 @@ impl Torii {
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut transparency_failure_streak = 0_u8;
             let mut transparency_backoff_ticks = 0_u8;
-            loop {
-                tokio::select! {
-                    _ = shutdown_signal.receive() => break,
-                    _ = ticker.tick() => {
-                        if transparency_backoff_ticks > 0 {
-                            transparency_backoff_ticks -= 1;
-                        } else {
-                            match publish_evidence_viewer_transparency_tick(
-                                service.as_ref(),
-                                transparency_producer.as_ref(),
-                            ) {
-                                Ok(()) => {
-                                    transparency_failure_streak = 0;
-                                }
-                                Err(failure) => {
-                                    transparency_failure_streak =
-                                        transparency_failure_streak.saturating_add(1);
-                                    transparency_backoff_ticks =
-                                        evidence_viewer_transparency_backoff_ticks(
-                                            transparency_failure_streak,
-                                        );
-                                    iroha_logger::warn!(
-                                        code = failure.code(),
-                                        retry_after_ticks = transparency_backoff_ticks,
-                                        "bounded evidence-viewer transparency publication tick failed"
-                                    );
-                                }
-                            }
+            while wait_for_evidence_viewer_compaction_tick(&shutdown_signal, &mut ticker).await {
+                if transparency_backoff_ticks > 0 {
+                    transparency_backoff_ticks -= 1;
+                } else {
+                    match publish_evidence_viewer_transparency_tick(
+                        service.as_ref(),
+                        transparency_producer.as_ref(),
+                    ) {
+                        Ok(()) => {
+                            transparency_failure_streak = 0;
                         }
-                        let now_unix_ms = match SystemTime::now().duration_since(UNIX_EPOCH) {
-                            Ok(duration) => match u64::try_from(duration.as_millis()) {
-                                Ok(timestamp) => timestamp,
-                                Err(_) => {
-                                    iroha_logger::error!(
-                                        "evidence-viewer compaction clock exceeded the supported range"
-                                    );
-                                    continue;
-                                }
-                            },
-                            Err(_) => {
-                                iroha_logger::error!(
-                                    "evidence-viewer compaction clock preceded the Unix epoch"
-                                );
-                                continue;
-                            }
-                        };
-                        if let Err(error) = service.compact_expired_tick(now_unix_ms) {
+                        Err(failure) => {
+                            transparency_failure_streak =
+                                transparency_failure_streak.saturating_add(1);
+                            transparency_backoff_ticks = evidence_viewer_transparency_backoff_ticks(
+                                transparency_failure_streak,
+                            );
                             iroha_logger::warn!(
-                                ?error,
-                                "bounded evidence-viewer archive compaction tick failed"
+                                code = failure.code(),
+                                retry_after_ticks = transparency_backoff_ticks,
+                                "bounded evidence-viewer transparency publication tick failed"
                             );
                         }
                     }
+                }
+                let now_unix_ms = match SystemTime::now().duration_since(UNIX_EPOCH) {
+                    Ok(duration) => match u64::try_from(duration.as_millis()) {
+                        Ok(timestamp) => timestamp,
+                        Err(_) => {
+                            iroha_logger::error!(
+                                "evidence-viewer compaction clock exceeded the supported range"
+                            );
+                            continue;
+                        }
+                    },
+                    Err(_) => {
+                        iroha_logger::error!(
+                            "evidence-viewer compaction clock preceded the Unix epoch"
+                        );
+                        continue;
+                    }
+                };
+                if let Err(error) = service.compact_expired_tick(now_unix_ms) {
+                    iroha_logger::warn!(
+                        ?error,
+                        "bounded evidence-viewer archive compaction tick failed"
+                    );
                 }
             }
         });
@@ -51304,7 +51905,8 @@ impl Torii {
         );
         builder.route(
             &routes::AUDITOR_CAPSULE,
-            catalog_get(private_settlement::handler_auditor_capsule)
+            catalog_post(private_settlement::handler_auditor_capsule)
+                .layer(axum::extract::DefaultBodyLimit::max(upload_limit))
                 .layer(axum::Extension(runtime.clone()))
                 .authenticated_identity_bound(app_state.clone()),
         );
@@ -51947,8 +52549,11 @@ impl Torii {
             .peer_telemetry_urls
             .iter()
             .cloned()
-            .map(telemetry::peers::ToriiUrl::from)
-            .collect::<Vec<_>>();
+            .map(telemetry::peers::ToriiUrl::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| {
+                ToriiBuildError::invalid_configuration("peer_telemetry_urls", error)
+            })?;
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
         let peer_geo = telemetry::peers::GeoLookupConfig::from(&config.peer_geo);
         let sorafs_admission = load_sorafs_admission(&config)?;
@@ -53026,7 +53631,6 @@ impl Torii {
             push: push_bridge,
             #[cfg(feature = "push")]
             push_rate_limiter,
-            test_api_router: parking_lot::Mutex::new(None),
             #[cfg(feature = "app_api")]
             sorafs_cache,
             sorafs_node,
@@ -53643,7 +54247,7 @@ impl Torii {
                 );
             }
         });
-        let spooler = Some(da::DaSpooler::spawn(
+        let spooler = Some(da::DaSpooler::prepare(
             self.da_ingest.spool_queue_capacity,
             self.da_ingest.spool_batch_max,
             self.telemetry.clone(),
@@ -54116,7 +54720,7 @@ impl Torii {
                 CompletedToriiProxyRequests::default(),
             )),
             #[cfg(feature = "connect")]
-            torii_proxy_session_id: new_torii_proxy_session_id(),
+            torii_proxy_session_id: try_new_torii_proxy_session_id()?,
             #[cfg(feature = "connect")]
             torii_proxy_sequence: std::sync::atomic::AtomicU64::new(1),
         });
@@ -54180,6 +54784,13 @@ impl Torii {
             });
         }
         let router = self.compose_api_router(app_state.clone(), cors_layer)?;
+        if let Some(spooler) = app_state.da_spooler.as_ref() {
+            spooler
+                .start(app_state.shutdown_signal.clone())
+                .map_err(|error| ToriiBuildError::component_initialization("da.spool", error))?;
+        }
+        #[cfg(feature = "app_api")]
+        zk_ivm_prove_ensure_supervisor(&app_state);
         Ok((router, app_state))
     }
     /// Compose the HTTP router from prepared runtime state.
@@ -54399,27 +55010,42 @@ impl Torii {
     /// Requests that do not supply `ConnectInfo` receive a loopback socket address so handlers
     /// that depend on transport metadata behave like the bound server path.
     ///
-    /// Successful preparation is cached so repeated handles share one durable runtime rather than
-    /// opening duplicate stores or spawning duplicate DA spoolers.
+    /// The returned runtime owns the router and every background worker started
+    /// during preparation. Tests must retain it through their final request and
+    /// call [`TestApiRouterRuntime::shutdown`] before returning.
     ///
     /// # Errors
     ///
     /// Returns the same typed configuration or component-initialization error as server startup.
-    pub fn api_router_for_tests(&self) -> core::result::Result<axum::Router, ToriiBuildError> {
-        let mut runtime = self.test_api_router.lock();
-        if let Some(runtime) = runtime.as_ref() {
-            return Ok(runtime.router.clone());
-        }
+    pub fn api_router_for_tests(
+        &self,
+    ) -> core::result::Result<TestApiRouterRuntime, ToriiBuildError> {
         let shutdown_signal = ShutdownSignal::new();
-        let (router, _) = self.create_api_router_with_state(shutdown_signal.clone())?;
+        let (router, app_state) = self.create_api_router_with_state(shutdown_signal.clone())?;
         let router = router.layer(axum::middleware::from_fn(
             inject_loopback_connect_info_when_missing,
         ));
-        *runtime = Some(TestApiRouterRuntime {
-            router: router.clone(),
-            shutdown_signal,
+        let mut workers = Vec::new();
+        if let Some(spooler) = app_state.da_spooler.as_ref() {
+            let task = spooler
+                .take_worker()
+                .expect("prepared test DA spooler must retain its worker handle");
+            workers.push(ToriiCriticalWorker {
+                name: "da_spool",
+                task,
+            });
+        }
+        #[cfg(feature = "app_api")]
+        workers.push(ToriiCriticalWorker {
+            name: "zk_ivm_prove_jobs",
+            task: zk_ivm_prove_take_supervisor(app_state.as_ref())
+                .expect("prepared test IVM prove supervisor must retain its worker handle"),
         });
-        Ok(router)
+        Ok(TestApiRouterRuntime {
+            router,
+            shutdown_signal,
+            workers,
+        })
     }
     /// Expose the push bridge to tests so registration side effects can be inspected.
     #[cfg(feature = "push")]
@@ -54437,6 +55063,10 @@ impl Torii {
         shutdown_signal: ShutdownSignal,
     ) -> core::result::Result<(), Report<Error>> {
         let _shutdown_on_drop = ShutdownOnDrop::new(shutdown_signal.clone());
+        if shutdown_signal.is_sent() {
+            iroha_logger::info!("Torii startup skipped because shutdown was already requested");
+            return Ok(());
+        }
         let emergency_fast = self.kura.emergency_fast_startup_enabled();
         let http_transport = ValidatedToriiHttpTransport::new(self.http_transport)
             .change_context(Error::StartServer)
@@ -54474,87 +55104,129 @@ impl Torii {
             .create_api_router_with_state(shutdown_signal.clone())
             .change_context(Error::StartServer)
             .attach("failed to initialize Torii runtime services")?;
-        let iso_bridge_projection_worker = if emergency_fast {
-            None
-        } else {
-            self.iso_bridge
-                .clone()
-                .map(|runtime| {
-                    start_iso_bridge_projection_worker(
-                        runtime,
-                        self.state.clone(),
-                        self.kura.clone(),
-                        &self.events,
-                        shutdown_signal.clone(),
-                    )
-                })
-                .transpose()
-                .change_context(Error::StartServer)
-                .attach("failed to reconcile the durable ISO bridge projection")?
-        };
-        let pipeline_status_projection_worker = (!emergency_fast).then(|| {
-            start_pipeline_status_projection_worker(
-                self.pipeline_status_cache.clone(),
+        let mut critical_workers = Vec::new();
+        let da_spool_worker_expected = app_state.da_spooler.is_some();
+        let da_spool_worker = app_state
+            .da_spooler
+            .as_ref()
+            .and_then(|spooler| spooler.take_worker());
+        let da_spool_worker_missing = da_spool_worker_expected && da_spool_worker.is_none();
+        if let Some(task) = da_spool_worker {
+            critical_workers.push(ToriiCriticalWorker {
+                name: "da_spool",
+                task,
+            });
+        }
+        #[cfg(feature = "app_api")]
+        let zk_ivm_prove_supervisor = zk_ivm_prove_take_supervisor(app_state.as_ref());
+        #[cfg(feature = "app_api")]
+        let zk_ivm_prove_supervisor_missing = zk_ivm_prove_supervisor.is_none();
+        #[cfg(feature = "app_api")]
+        if let Some(task) = zk_ivm_prove_supervisor {
+            critical_workers.push(ToriiCriticalWorker {
+                name: "zk_ivm_prove_jobs",
+                task,
+            });
+        }
+        #[cfg(feature = "app_api")]
+        let retained_worker_missing = da_spool_worker_missing || zk_ivm_prove_supervisor_missing;
+        #[cfg(not(feature = "app_api"))]
+        let retained_worker_missing = da_spool_worker_missing;
+        if retained_worker_missing {
+            let failure = Report::new(Error::StartServer)
+                .attach("prepared Torii runtime did not retain every background worker handle");
+            return Err(rollback_torii_startup_workers(
+                &shutdown_signal,
+                critical_workers,
+                failure,
+            )
+            .await);
+        }
+        if !emergency_fast && let Some(runtime) = self.iso_bridge.clone() {
+            let task = match start_iso_bridge_projection_worker(
+                runtime,
+                self.state.clone(),
                 self.kura.clone(),
                 &self.events,
                 shutdown_signal.clone(),
             )
-        });
-        let iso_audit_persistence_worker = self
-            .iso_bridge
-            .as_ref()
-            .map(|runtime| runtime.start_audit_persistence_worker(shutdown_signal.clone()));
-        #[cfg(feature = "connect")]
-        let connect_runtime_enabled = !emergency_fast && self.connect_enabled;
-        #[cfg(feature = "connect")]
-        let connect_cleaner_worker = connect_runtime_enabled
-            .then(|| self.connect_bus.start_cleaner(shutdown_signal.clone()));
-        #[cfg(feature = "connect")]
-        let connect_network_worker = if connect_runtime_enabled {
-            if let Some(network) = self.p2p.as_ref() {
-                Some(
-                    self.connect_bus
-                        .attach_network(network.clone(), shutdown_signal.clone())
-                        .await,
-                )
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        #[cfg(feature = "connect")]
-        let torii_proxy_network_worker = if emergency_fast {
-            None
-        } else {
-            self.p2p.clone().map(|network| {
-                attach_torii_proxy_network(app_state.clone(), network, shutdown_signal.clone())
-            })
-        };
-        #[cfg(feature = "push")]
-        let push_event_worker = self.push.as_ref().and_then(|bridge| {
-            bridge.start_event_worker(
-                self.kura.clone(),
-                self.events.clone(),
-                shutdown_signal.clone(),
-            )
-        });
-        let mut critical_workers = Vec::new();
-        if let Some(task) = iso_bridge_projection_worker {
+            .change_context(Error::StartServer)
+            .attach("failed to reconcile the durable ISO bridge projection")
+            {
+                Ok(task) => task,
+                Err(failure) => {
+                    return Err(rollback_torii_startup_workers(
+                        &shutdown_signal,
+                        critical_workers,
+                        failure,
+                    )
+                    .await);
+                }
+            };
             critical_workers.push(ToriiCriticalWorker {
                 name: "iso_bridge_projection",
                 task,
             });
         }
-        if let Some(task) = pipeline_status_projection_worker {
+        if !emergency_fast {
             critical_workers.push(ToriiCriticalWorker {
                 name: "pipeline_status_projection",
-                task,
+                task: start_pipeline_status_projection_worker(
+                    self.pipeline_status_cache.clone(),
+                    self.kura.clone(),
+                    &self.events,
+                    shutdown_signal.clone(),
+                ),
             });
         }
-        if let Some(task) = iso_audit_persistence_worker {
+        if let Some(runtime) = self.iso_bridge.as_ref() {
             critical_workers.push(ToriiCriticalWorker {
                 name: "iso_audit_persistence",
+                task: runtime.start_audit_persistence_worker(shutdown_signal.clone()),
+            });
+        }
+        #[cfg(feature = "connect")]
+        let connect_runtime_enabled = !emergency_fast && self.connect_enabled;
+        #[cfg(feature = "connect")]
+        if connect_runtime_enabled {
+            critical_workers.push(ToriiCriticalWorker {
+                name: "connect_cleaner",
+                task: self.connect_bus.start_cleaner(shutdown_signal.clone()),
+            });
+        }
+        #[cfg(feature = "connect")]
+        if connect_runtime_enabled {
+            if let Some(network) = self.p2p.as_ref() {
+                critical_workers.push(ToriiCriticalWorker {
+                    name: "connect_network",
+                    task: self
+                        .connect_bus
+                        .attach_network(network.clone(), shutdown_signal.clone())
+                        .await,
+                });
+            }
+        }
+        #[cfg(feature = "connect")]
+        if !emergency_fast && let Some(network) = self.p2p.clone() {
+            critical_workers.push(ToriiCriticalWorker {
+                name: "torii_proxy_network",
+                task: attach_torii_proxy_network(
+                    app_state.clone(),
+                    network,
+                    shutdown_signal.clone(),
+                ),
+            });
+        }
+        #[cfg(feature = "push")]
+        if let Some(task) = self.push.as_ref().and_then(|bridge| {
+            bridge.start_event_worker(
+                self.kura.clone(),
+                self.events.clone(),
+                shutdown_signal.clone(),
+            )
+        }) {
+            critical_workers.push(ToriiCriticalWorker {
+                name: "push_event",
                 task,
             });
         }
@@ -54562,34 +55234,6 @@ impl Torii {
         if let Some(task) = app_state.peer_telemetry.start(shutdown_signal.clone()) {
             critical_workers.push(ToriiCriticalWorker {
                 name: "peer_telemetry",
-                task,
-            });
-        }
-        #[cfg(feature = "connect")]
-        if let Some(task) = connect_cleaner_worker {
-            critical_workers.push(ToriiCriticalWorker {
-                name: "connect_cleaner",
-                task,
-            });
-        }
-        #[cfg(feature = "connect")]
-        if let Some(task) = connect_network_worker {
-            critical_workers.push(ToriiCriticalWorker {
-                name: "connect_network",
-                task,
-            });
-        }
-        #[cfg(feature = "connect")]
-        if let Some(task) = torii_proxy_network_worker {
-            critical_workers.push(ToriiCriticalWorker {
-                name: "torii_proxy_network",
-                task,
-            });
-        }
-        #[cfg(feature = "push")]
-        if let Some(task) = push_event_worker {
-            critical_workers.push(ToriiCriticalWorker {
-                name: "push_event",
                 task,
             });
         }
@@ -54642,18 +55286,40 @@ impl Torii {
         {
             if self.zk_attachments_enabled {
                 // The supervised GC fails visibly on storage or quota-recovery errors.
-                let task = crate::zk_attachments::start_gc_worker(shutdown_signal.clone())
+                let task = match crate::zk_attachments::start_gc_worker(shutdown_signal.clone())
                     .change_context(Error::StartServer)
-                    .attach("failed to start ZK attachment garbage collector")?;
+                    .attach("failed to start ZK attachment garbage collector")
+                {
+                    Ok(task) => task,
+                    Err(failure) => {
+                        return Err(rollback_torii_startup_workers(
+                            &shutdown_signal,
+                            critical_workers,
+                            failure,
+                        )
+                        .await);
+                    }
+                };
                 critical_workers.push(ToriiCriticalWorker {
                     name: "zk_attachment_gc",
                     task,
                 });
             }
             if zk_prover_enabled {
-                let task = crate::zk_prover::start_worker(shutdown_signal.clone())
+                let task = match crate::zk_prover::start_worker(shutdown_signal.clone())
                     .change_context(Error::StartServer)
-                    .attach("failed to start ZK prover worker")?;
+                    .attach("failed to start ZK prover worker")
+                {
+                    Ok(task) => task,
+                    Err(failure) => {
+                        return Err(rollback_torii_startup_workers(
+                            &shutdown_signal,
+                            critical_workers,
+                            failure,
+                        )
+                        .await);
+                    }
+                };
                 critical_workers.push(ToriiCriticalWorker {
                     name: "zk_prover",
                     task,
@@ -54670,13 +55336,24 @@ impl Torii {
         #[cfg(feature = "app_api")]
         {
             if !emergency_fast && let Some(anchor_cfg) = self.da_ingest.taikai_anchor.clone() {
-                let task = crate::da::spawn_anchor_worker(
+                let task = match crate::da::spawn_anchor_worker(
                     self.da_ingest.manifest_store_dir.clone(),
                     anchor_cfg,
                     shutdown_signal.clone(),
                 )
                 .await
-                .map_err(|reason| Report::new(Error::StartServer).attach(reason))?;
+                .map_err(|reason| Report::new(Error::StartServer).attach(reason))
+                {
+                    Ok(task) => task,
+                    Err(failure) => {
+                        return Err(rollback_torii_startup_workers(
+                            &shutdown_signal,
+                            critical_workers,
+                            failure,
+                        )
+                        .await);
+                    }
+                };
                 critical_workers.push(ToriiCriticalWorker {
                     name: "taikai_anchor",
                     task,
@@ -54685,74 +55362,166 @@ impl Torii {
         }
         #[cfg(feature = "app_api")]
         if !emergency_fast {
-            self.spawn_pin_registry_metrics_worker(shutdown_signal.clone());
+            if let Some(task) = self.spawn_pin_registry_metrics_worker(shutdown_signal.clone()) {
+                critical_workers.push(ToriiCriticalWorker {
+                    name: "pin_registry_metrics",
+                    task,
+                });
+            }
+            if let Some(task) = self.spawn_por_ingestion_metrics_worker(shutdown_signal.clone()) {
+                critical_workers.push(ToriiCriticalWorker {
+                    name: "por_ingestion_metrics",
+                    task,
+                });
+            }
+            if let Some(task) =
+                private_settlement::spawn_private_settlement_finality_reconciliation_v1(
+                    self.private_settlement_runtime.clone(),
+                    Arc::clone(&self.state),
+                    shutdown_signal.clone(),
+                )
+            {
+                critical_workers.push(ToriiCriticalWorker {
+                    name: "private_settlement_reconciliation",
+                    task,
+                });
+            }
+        }
+        #[cfg(feature = "app_api")]
+        if !emergency_fast && let Some(runtime) = &self.por_runtime {
+            critical_workers.push(ToriiCriticalWorker {
+                name: "sorafs_por",
+                task: runtime.clone().spawn(shutdown_signal.clone()),
+            });
+        }
+        #[cfg(feature = "app_api")]
+        if !emergency_fast && let Some(runtime) = &self.sorafs_pop_credentials {
+            critical_workers.push(ToriiCriticalWorker {
+                name: "sorafs_pop_credentials",
+                task: runtime.clone().spawn(shutdown_signal.clone()),
+            });
+        }
+        #[cfg(feature = "app_api")]
+        if !emergency_fast && let Some(runtime) = &self.gc_runtime {
+            critical_workers.push(ToriiCriticalWorker {
+                name: "sorafs_gc",
+                task: runtime.clone().spawn(shutdown_signal.clone()),
+            });
+        }
+        if !emergency_fast && let Some(components) = &self.sorafs_gateway_security {
+            if let Some(automation) = &components.tls_automation {
+                critical_workers.push(ToriiCriticalWorker {
+                    name: "sorafs_tls_automation",
+                    task: automation.spawn(self.telemetry.clone(), shutdown_signal.clone()),
+                });
+            }
         }
         #[cfg(feature = "app_api")]
         if !emergency_fast {
-            self.spawn_por_ingestion_metrics_worker(shutdown_signal.clone());
+            let capacity_worker = match sorafs::api::spawn_sorafs_capacity_reconciler_worker(
+                app_state.clone(),
+                shutdown_signal.clone(),
+            ) {
+                Ok(worker) => worker,
+                Err(reason) => {
+                    let failure = Report::new(Error::StartServer).attach(format!(
+                        "failed to start SoraFS capacity reconciler: {reason}"
+                    ));
+                    return Err(rollback_torii_startup_workers(
+                        &shutdown_signal,
+                        critical_workers,
+                        failure,
+                    )
+                    .await);
+                }
+            };
+            if let Some(task) = capacity_worker {
+                critical_workers.push(ToriiCriticalWorker {
+                    name: "sorafs_capacity_reconciler",
+                    task,
+                });
+            }
+            if let Some(task) = sorafs::api::spawn_sorafs_appeal_finance_forwarder_worker(
+                app_state.clone(),
+                shutdown_signal.clone(),
+            ) {
+                critical_workers.push(ToriiCriticalWorker {
+                    name: "sorafs_appeal_finance_forwarder",
+                    task,
+                });
+            }
+            if let Some(task) = sorafs::api::spawn_sorafs_proof_outcome_forwarder_worker(
+                app_state.clone(),
+                shutdown_signal.clone(),
+            ) {
+                critical_workers.push(ToriiCriticalWorker {
+                    name: "sorafs_proof_outcome_forwarder",
+                    task,
+                });
+            }
+            if let Some(task) = sorafs::api::spawn_sorafs_repair_transaction_forwarder_worker(
+                app_state.clone(),
+                shutdown_signal.clone(),
+            ) {
+                critical_workers.push(ToriiCriticalWorker {
+                    name: "sorafs_repair_transaction_forwarder",
+                    task,
+                });
+            }
+            if let Some(task) =
+                sorafs::reserve_runtime::spawn_sorafs_reserve_transaction_forwarder_worker(
+                    app_state.clone(),
+                    shutdown_signal.clone(),
+                )
+            {
+                critical_workers.push(ToriiCriticalWorker {
+                    name: "sorafs_reserve_transaction_forwarder",
+                    task,
+                });
+            }
+            if let Some(task) =
+                sorafs::orderbook_runtime::spawn_sorafs_orderbook_transaction_forwarder_worker(
+                    app_state.clone(),
+                    shutdown_signal.clone(),
+                )
+            {
+                critical_workers.push(ToriiCriticalWorker {
+                    name: "sorafs_orderbook_transaction_forwarder",
+                    task,
+                });
+            }
+            let moderation_worker = match sorafs::api::spawn_sorafs_moderation_orchestrator_worker(
+                app_state.clone(),
+                shutdown_signal.clone(),
+            ) {
+                Ok(worker) => worker,
+                Err(reason) => {
+                    let failure = Report::new(Error::StartServer).attach(format!(
+                        "failed to start SoraFS moderation orchestrator: {reason}"
+                    ));
+                    return Err(rollback_torii_startup_workers(
+                        &shutdown_signal,
+                        critical_workers,
+                        failure,
+                    )
+                    .await);
+                }
+            };
+            if let Some(task) = moderation_worker {
+                critical_workers.push(ToriiCriticalWorker {
+                    name: "sorafs_moderation_orchestrator",
+                    task,
+                });
+            }
         }
+        // This separately supervised compaction worker starts only after every
+        // fallible startup operation, so no early return can detach it.
         #[cfg(feature = "app_api")]
         let evidence_viewer_compaction_worker = if emergency_fast {
             None
         } else {
             self.spawn_evidence_viewer_compaction_worker(shutdown_signal.clone())
         };
-        #[cfg(feature = "app_api")]
-        if !emergency_fast {
-            private_settlement::spawn_private_settlement_finality_reconciliation_v1(
-                self.private_settlement_runtime.clone(),
-                Arc::clone(&self.state),
-                shutdown_signal.clone(),
-            );
-        }
-        #[cfg(feature = "app_api")]
-        if !emergency_fast && let Some(runtime) = &self.por_runtime {
-            runtime.clone().spawn(shutdown_signal.clone());
-        }
-        #[cfg(feature = "app_api")]
-        if !emergency_fast && let Some(runtime) = &self.sorafs_pop_credentials {
-            runtime.clone().spawn(shutdown_signal.clone());
-        }
-        #[cfg(feature = "app_api")]
-        if !emergency_fast && let Some(runtime) = &self.gc_runtime {
-            runtime.clone().spawn(shutdown_signal.clone());
-        }
-        if !emergency_fast && let Some(components) = &self.sorafs_gateway_security {
-            if let Some(automation) = &components.tls_automation {
-                automation.spawn(self.telemetry.clone(), shutdown_signal.clone());
-            }
-        }
-        #[cfg(feature = "app_api")]
-        if !emergency_fast {
-            sorafs::api::spawn_sorafs_capacity_reconciler_worker(
-                app_state.clone(),
-                shutdown_signal.clone(),
-            );
-            sorafs::api::spawn_sorafs_appeal_finance_forwarder_worker(
-                app_state.clone(),
-                shutdown_signal.clone(),
-            );
-            sorafs::api::spawn_sorafs_proof_outcome_forwarder_worker(
-                app_state.clone(),
-                shutdown_signal.clone(),
-            );
-            sorafs::api::spawn_sorafs_repair_transaction_forwarder_worker(
-                app_state.clone(),
-                shutdown_signal.clone(),
-            );
-            sorafs::reserve_runtime::spawn_sorafs_reserve_transaction_forwarder_worker(
-                app_state.clone(),
-                shutdown_signal.clone(),
-            );
-            sorafs::orderbook_runtime::spawn_sorafs_orderbook_transaction_forwarder_worker(
-                app_state.clone(),
-                shutdown_signal.clone(),
-            );
-            sorafs::api::spawn_sorafs_moderation_orchestrator_worker(
-                app_state.clone(),
-                shutdown_signal.clone(),
-            );
-        }
         #[cfg(not(feature = "app_api"))]
         drop(app_state);
         iroha_logger::info!(addr = %torii_address, "Torii bound and listening");
@@ -55482,7 +56251,7 @@ mod gateway_runtime_config_tests {
     }
     impl sorafs::StreamTokenRuntimeSigner for TestStreamTokenRuntimeSigner {
         fn handle(&self) -> &str {
-            "pkcs11:prod/stream-token/v1"
+            "provider:prod/stream-token/v1"
         }
         fn public_key(&self) -> [u8; 32] {
             self.public_key

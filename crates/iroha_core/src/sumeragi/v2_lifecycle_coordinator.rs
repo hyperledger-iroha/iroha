@@ -298,8 +298,8 @@ pub(crate) use selector::{
     certified_fetch_preledger_productive_ingress_token,
 };
 pub(in crate::sumeragi) use validate_sidecar::{
-    LifecycleValidateSidecarDriveV1, LifecycleValidateSidecarRegistrationIdentityV1,
-    RegisteredLifecycleValidateSidecarWaitV1,
+    CancelledLifecycleValidateSidecarV1, LifecycleValidateSidecarDriveV1,
+    LifecycleValidateSidecarRegistrationIdentityV1, RegisteredLifecycleValidateSidecarWaitV1,
 };
 #[cfg_attr(
     not(test),

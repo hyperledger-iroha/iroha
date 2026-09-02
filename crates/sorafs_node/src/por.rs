@@ -3948,7 +3948,7 @@ mod tests {
             )
             .expect("valid archive binding");
             Self {
-                runtime_handle: format!("hsm://sorafs/por-replay-archive/{seed:02x}"),
+                runtime_handle: format!("provider://sorafs/por-replay-archive/{seed:02x}"),
                 binding,
                 signing_key,
                 state: Mutex::new(MemoryReplayArchiveState::default()),

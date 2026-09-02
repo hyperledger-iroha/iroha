@@ -1006,6 +1006,101 @@ fn read_policy(
 ) -> Result<Option<ModerationLedgerPolicyRecord>, InstructionExecutionError> {
     read_policy_with_current(world, None)
 }
+
+/// Return the first live moderation reference that prevents account deletion.
+///
+/// Active policy custody, custody pinned by an open case, and all parties to an
+/// unsettled challenge must remain registered until no future bond movement can
+/// name them. Persisted state is decoded canonically and malformed records fail
+/// the deletion closed.
+pub(crate) fn retained_moderation_account_reference(
+    world: &impl WorldReadOnly,
+    account: &AccountId,
+) -> Result<Option<String>, InstructionExecutionError> {
+    if let Some(record) = read_policy(world)? {
+        if &record.policy.challenge_escrow_account == account {
+            return Ok(Some("active policy challenge escrow".to_owned()));
+        }
+        if &record.policy.challenge_slash_receiver_account == account {
+            return Ok(Some("active policy challenge slash receiver".to_owned()));
+        }
+    }
+
+    let case_start =
+        StatePath::from_str(CASE_STATE_KEY_PREFIX).expect("static moderation case prefix is valid");
+    for (key, payload) in world.smart_contract_state().range(case_start..) {
+        if !key.as_ref().starts_with(CASE_STATE_KEY_PREFIX) {
+            break;
+        }
+        let case: ModerationCaseRecordV1 =
+            decode_state_with_current(payload, "moderation case", None)?;
+        if case_key(&case.spec.context.case_id, &case.spec.round_id) != *key {
+            return Err(corrupt_state(
+                "retained moderation case key does not match its record",
+            ));
+        }
+        if case.status == ModerationCaseStatusV1::Open {
+            if &case.policy.challenge_escrow_account == account {
+                return Ok(Some(format!(
+                    "open case `{}` round `{}` challenge escrow",
+                    case.spec.context.case_id, case.spec.round_id
+                )));
+            }
+            if &case.policy.challenge_slash_receiver_account == account {
+                return Ok(Some(format!(
+                    "open case `{}` round `{}` challenge slash receiver",
+                    case.spec.context.case_id, case.spec.round_id
+                )));
+            }
+        }
+    }
+
+    let challenge_start = StatePath::from_str(CHALLENGE_STATE_KEY_PREFIX)
+        .expect("static moderation challenge prefix is valid");
+    for (key, payload) in world.smart_contract_state().range(challenge_start..) {
+        if !key.as_ref().starts_with(CHALLENGE_STATE_KEY_PREFIX) {
+            break;
+        }
+        let challenge: ModerationChallengeRecordV1 =
+            decode_state_with_current(payload, "moderation challenge", None)?;
+        if challenge_key(
+            &challenge.case_id,
+            &challenge.round_id,
+            &challenge.challenge_id,
+        ) != *key
+        {
+            return Err(corrupt_state(
+                "retained moderation challenge key does not match its record",
+            ));
+        }
+        let pending_decision = challenge.decision.is_none();
+        let pending_settlement = challenge.bond.settled_at_unix_ms.is_none();
+        if pending_decision != pending_settlement {
+            return Err(corrupt_state(
+                "moderation challenge decision and bond settlement disagree",
+            ));
+        }
+        if !pending_decision {
+            continue;
+        }
+        let label = if &challenge.challenger == account {
+            Some("challenger")
+        } else if &challenge.bond.escrow_account == account {
+            Some("bond escrow")
+        } else if &challenge.bond.slash_receiver_account == account {
+            Some("bond slash receiver")
+        } else {
+            None
+        };
+        if let Some(label) = label {
+            return Ok(Some(format!(
+                "pending challenge `{}` for case `{}` round `{}` {label}",
+                challenge.challenge_id, challenge.case_id, challenge.round_id
+            )));
+        }
+    }
+    Ok(None)
+}
 fn read_policy_for_current(
     world: &impl WorldReadOnly,
     current: &mut crate::smartcontracts::isi::query::SingularQueryCurrentAllocation,
@@ -5852,7 +5947,7 @@ mod tests {
         asset::{Asset, AssetBalancePolicy, AssetDefinition, AssetDefinitionId, AssetId},
         block::BlockHeader,
         isi::{
-            Transfer,
+            Transfer, Unregister,
             sorafs::{
                 CommitSorafsPopCredentialBatch, PublishSorafsPopRevocationList,
                 SetSorafsPopIssuerPolicy,
@@ -7711,6 +7806,58 @@ mod tests {
                 .no_shows,
             0
         );
+    }
+    #[test]
+    fn pending_challenge_retains_challenger_until_permissionless_expiry_settles() {
+        let mut fixture = Fixture::new(1);
+        let challenger = account(&fixture.outsider);
+        fixture
+            .run(2_500, |transaction| {
+                RaiseSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-retains-account".to_owned(),
+                    ModerationChallengeKindV1::EvidenceMismatch,
+                    None,
+                    [0x74; 32],
+                    "retain refund destination".to_owned(),
+                )
+                .execute(&challenger, transaction)
+            })
+            .expect("raise bonded challenge");
+        let error = fixture
+            .run(2_501, |transaction| {
+                Unregister::account(challenger.clone()).execute(&challenger, transaction)
+            })
+            .expect_err("pending challenger must remain a valid refund destination");
+        assert!(
+            error
+                .to_string()
+                .contains("retained by moderation pending challenge")
+                && error.to_string().contains("challenge-retains-account"),
+            "unexpected retained-account error: {error}"
+        );
+        assert!(fixture.state.view().world().account(&challenger).is_ok());
+        assert_bond_custody_distribution(&fixture.state, &challenger, 850, 150, 150);
+
+        let expiry_authority = fixture.juror_id(0);
+        fixture
+            .run(CHALLENGE_RESOLUTION_DEADLINE + 1, |transaction| {
+                ExpireSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-retains-account".to_owned(),
+                )
+                .execute(&expiry_authority, transaction)
+            })
+            .expect("permissionless expiry refunds the retained challenger");
+        assert_bond_custody_distribution(&fixture.state, &challenger, 1_000, 0, 0);
+        fixture
+            .run(CHALLENGE_RESOLUTION_DEADLINE + 2, |transaction| {
+                Unregister::account(challenger.clone()).execute(&challenger, transaction)
+            })
+            .expect("settled challenger is no longer retained by moderation");
+        assert!(fixture.state.view().world().account(&challenger).is_err());
     }
     #[test]
     fn unresolved_challenge_expires_permissionlessly_and_fails_open() {

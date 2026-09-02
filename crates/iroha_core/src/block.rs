@@ -6594,6 +6594,29 @@ pub(crate) mod valid {
             }
             Ok(())
         }
+        fn validate_npos_soft_fork_composition(
+            block: &SignedBlock,
+            soft_fork: bool,
+        ) -> Result<(), BlockValidationError> {
+            if soft_fork && block.npos_consensus_effects().is_some() {
+                return Err(Self::npos_effects_error(
+                    "soft-fork replacement cannot safely apply NPoS finality effects",
+                ));
+            }
+            Ok(())
+        }
+        fn validate_npos_merge_composition(
+            block: &SignedBlock,
+            reference: &CertifiedMergeLedgerReference,
+        ) -> Result<(), BlockValidationError> {
+            if block.npos_consensus_effects().is_some() && reference.execution_batch_hash.is_some()
+            {
+                return Err(Self::execution_context_error(
+                    "a carrier cannot mix NPoS finality effects with a certified merge execution batch",
+                ));
+            }
+            Ok(())
+        }
         fn new_unverified(block: SignedBlock) -> Self {
             Self {
                 block,
@@ -7435,9 +7458,74 @@ pub(crate) mod valid {
             state: &'state State,
             soft_fork: bool,
             authoritative_mode: Option<iroha_data_model::block::consensus_v2::ConsensusMode>,
+            authenticated_height_context: Option<
+                &iroha_data_model::block::consensus_v2::HeightContext,
+            >,
         ) -> Result<Box<StateBlock<'state>>, BlockValidationError> {
+            Self::validate_npos_soft_fork_composition(block, soft_fork)?;
+            crate::smartcontracts::ivm::active_runtime_abi_hash(
+                &state.world_view(),
+                block.header().height().get(),
+            )
+            .map_err(|error| {
+                Self::execution_context_error(format!(
+                    "persisted active runtime ABI is incompatible with this node: {error:?}"
+                ))
+            })?;
+            let prepared_npos = if let Some(effects) = block.npos_consensus_effects() {
+                let context = authenticated_height_context.ok_or_else(|| {
+                    Self::npos_effects_error(
+                        "NPoS finality effects require the authenticated height context",
+                    )
+                })?;
+                let roster = context
+                    .roster
+                    .iter()
+                    .map(|entry| entry.validator.clone())
+                    .collect::<Vec<_>>();
+                let height = block.header().height().get();
+                let prune_keys =
+                    crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(
+                        state,
+                        height,
+                        effects.v2_evidence_admissions.len(),
+                    );
+                let expected_anchor = block.header().prev_block_hash().map(|block_hash| {
+                    iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1 {
+                        height: height.saturating_sub(1),
+                        block_hash,
+                    }
+                });
+                Some((effects, prune_keys, expected_anchor, roster))
+            } else {
+                None
+            };
+            let apply_npos = |state_block: &mut StateBlock<'_>| {
+                let Some((effects, prune_keys, expected_anchor, roster)) = &prepared_npos else {
+                    return Ok(());
+                };
+                state_block
+                    .apply_pristine_npos_consensus_effects(
+                        effects,
+                        prune_keys,
+                        expected_anchor.clone(),
+                        roster,
+                        block.header().height().get(),
+                        block.header().view_change_index(),
+                        block.header().creation_time_ms,
+                    )
+                    .map(|_| ())
+                    .map_err(|error| {
+                        Self::npos_effects_error(format!(
+                            "NPoS consensus effects are not applicable to pristine parent state: {error}"
+                        ))
+                    })
+            };
             let execution_context = block.execution_context();
             let merge_reference = execution_context.and_then(|bundle| bundle.merge_entry.as_ref());
+            if let Some(reference) = merge_reference {
+                Self::validate_npos_merge_composition(block, reference)?;
+            }
             let queue_plan_admissions = execution_context
                 .map(|bundle| bundle.queue_plan_admissions())
                 .unwrap_or_default();
@@ -7453,11 +7541,15 @@ pub(crate) mod valid {
                     ));
                 }
                 return state
-                    .block_with_queue_plan_admissions(block.header(), queue_plan_admissions)
-                    .map_err(|error| {
-                        Self::execution_context_error(format!(
-                            "QueuePlan admission controls could not be staged: {error}"
-                        ))
+                    .block_with_pristine_stage(block.header(), |state_block| {
+                        state_block
+                            .stage_queue_plan_admissions_for_carrier(queue_plan_admissions)
+                            .map_err(|error| {
+                                Self::execution_context_error(format!(
+                                    "QueuePlan admission controls could not be staged: {error}"
+                                ))
+                            })?;
+                        apply_npos(state_block)
                     })
                     .map(Box::new);
             }
@@ -7473,22 +7565,40 @@ pub(crate) mod valid {
                     )
                 })?;
                 return state
-                    .block_with_certified_merge_reference(block.header(), reference, frozen_mode)
-                    .map(Box::new)
-                    .map_err(|error| match error {
-                        crate::state::MergeLedgerCommitError::MissingCertifiedMergeSidecar {
-                            entry_hash,
-                        } => BlockValidationError::MissingCertifiedMergeSidecar { entry_hash },
-                        other => Self::execution_context_error(format!(
-                            "certified merge entry could not be staged: {other}"
-                        )),
-                    });
+                    .block_with_pristine_stage(block.header(), |state_block| {
+                        state_block
+                            .stage_certified_merge_reference(reference, frozen_mode)
+                            .map_err(|error| {
+                                match error {
+                                crate::state::MergeLedgerCommitError::MissingCertifiedMergeSidecar {
+                                    entry_hash,
+                                } => BlockValidationError::MissingCertifiedMergeSidecar {
+                                    entry_hash,
+                                },
+                                other => Self::execution_context_error(format!(
+                                    "certified merge entry could not be staged: {other}"
+                                )),
+                            }
+                            })?;
+                        if prepared_npos.is_some()
+                            && state_block
+                                .staged_merge_entry()
+                                .is_some_and(|entry| entry.execution_batch.is_some())
+                        {
+                            return Err(Self::execution_context_error(
+                                "a carrier cannot mix NPoS finality effects with a certified merge execution batch",
+                            ));
+                        }
+                        apply_npos(state_block)
+                    })
+                    .map(Box::new);
             }
-            Ok(Box::new(if soft_fork {
-                state.block_and_revert(block.header())
+            let state_block = if soft_fork {
+                state.block_and_revert_with_pristine_stage(block.header(), apply_npos)
             } else {
-                state.block(block.header())
-            }))
+                state.block_with_pristine_stage(block.header(), apply_npos)
+            }?;
+            Ok(Box::new(state_block))
         }
         fn validate_staged_execution_controls(
             block: &SignedBlock,
@@ -7815,6 +7925,9 @@ pub(crate) mod valid {
                 state,
                 soft_fork,
                 Some(validation_profile.authoritative_consensus_mode()),
+                validation_profile
+                    .v2_context()
+                    .and_then(SumeragiV2ValidationContext::authenticated_height_context),
             ) {
                 Ok(state_block) => state_block,
                 Err(error) => {
@@ -7900,58 +8013,6 @@ pub(crate) mod valid {
             }
             state_block.capture_exec_witness();
             drop(exec_witness_guard);
-            let post_execution_npos_validation = (|| {
-                let Some(effects) = block.npos_consensus_effects() else {
-                    return Ok(());
-                };
-                let context = validation_profile
-                    .v2_context()
-                    .and_then(SumeragiV2ValidationContext::authenticated_height_context)
-                    .ok_or_else(|| {
-                        Self::npos_effects_error(
-                            "post-execution NPoS effect validation requires the authenticated height context",
-                        )
-                    })?;
-                let authenticated_roster = context
-                    .roster
-                    .iter()
-                    .map(|entry| entry.validator.clone())
-                    .collect::<Vec<_>>();
-                let height = block.header().height().get();
-                let evidence_prune_keys =
-                    crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(
-                        state,
-                        height,
-                        effects.v2_evidence_admissions.len(),
-                    );
-                let expected_beacon_anchor = block.header().prev_block_hash().map(|block_hash| {
-                    iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1 {
-                        height: height.saturating_sub(1),
-                        block_hash,
-                    }
-                });
-                crate::sumeragi::penalties::validate_npos_consensus_effects_after_execution(
-                    &mut state_block,
-                    effects,
-                    &evidence_prune_keys,
-                    expected_beacon_anchor,
-                    &authenticated_roster,
-                    height,
-                    block.header().view_change_index(),
-                    block.header().creation_time_ms,
-                )
-                .map_err(|error| {
-                    Self::npos_effects_error(format!(
-                        "NPoS consensus effects are not applicable after block execution: {error}"
-                    ))
-                })
-            })();
-            if let Err(error) = post_execution_npos_validation {
-                drop(state_block);
-                record_timings(&mut timings, stateless_elapsed, Some(execution_start));
-                emit_rejection(&block, &error);
-                return WithEvents::new(Err((Box::new(block), Box::new(error))));
-            }
             if block.is_empty() && !allow_empty_block {
                 let error = BlockValidationError::EmptyBlock;
                 drop(state_block);
@@ -8781,6 +8842,7 @@ pub(crate) mod valid {
                 return Ok(());
             };
             Self::validate_merge_reference_execution_projection(reference)?;
+            Self::validate_npos_merge_composition(block, reference)?;
             if block.header().is_genesis() {
                 return Err(Self::execution_context_error(
                     "genesis block cannot carry a certified merge entry",
@@ -16880,7 +16942,7 @@ pub(crate) mod valid {
                 .expect("settlement-only reference is admissible at the projection boundary");
             let mut partial = settlement.clone();
             partial.entrypoint_count = Some(1);
-            let mut full = settlement;
+            let mut full = settlement.clone();
             full.execution_batch_hash = Some(Hash::new(b"execution-batch"));
             full.entrypoint_count = Some(1);
             full.entrypoint_merkle_root = Some(HashOf::from_untyped_unchecked(Hash::new(
@@ -16899,6 +16961,19 @@ pub(crate) mod valid {
             ));
             ValidBlock::validate_merge_reference_execution_projection(&full)
                 .expect("complete execution projection is admissible");
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let mut npos_block =
+                npos_effects_block(leader.private_key(), 2, Some(npos_marker_effects(2)));
+            assert!(matches!(
+                ValidBlock::validate_npos_merge_composition(&npos_block, &full),
+                Err(BlockValidationError::ExecutionContextInvalid(reason))
+                    if reason.contains("cannot mix NPoS finality effects")
+            ));
+            ValidBlock::validate_npos_merge_composition(&npos_block, &settlement)
+                .expect("control-only merge certificates carry no independent execution write-set");
+            npos_block.set_npos_consensus_effects(None);
+            ValidBlock::validate_npos_merge_composition(&npos_block, &full)
+                .expect("an execution merge is admissible when the carrier has no NPoS effects");
             for invalid_count in [0, MAX_MERGE_EXECUTION_ENTRYPOINTS as u64 + 1] {
                 let mut invalid = full.clone();
                 invalid.entrypoint_count = Some(invalid_count);
@@ -17038,7 +17113,8 @@ pub(crate) mod valid {
         include!("block/exact_quorum_cardinality_tests.rs");
         #[test]
         fn merge_reference_accepts_distinct_merge_epoch_with_equal_vote_quorum() {
-            let (state, block, bundle, profile) = equal_vote_merge_reference_fixture(&[0, 1, 3]);
+            let (state, mut block, bundle, profile) =
+                equal_vote_merge_reference_fixture(&[0, 1, 3]);
             ValidBlock::validate_execution_context_merge_reference(
                 &block,
                 state.network_id_ref(),
@@ -17046,6 +17122,15 @@ pub(crate) mod valid {
                 &profile,
             )
             .expect("an independently contiguous merge epoch with three signers satisfies quorum");
+            let block_height = block.header().height().get();
+            block.set_npos_consensus_effects(Some(npos_marker_effects(block_height)));
+            ValidBlock::validate_execution_context_merge_reference(
+                &block,
+                state.network_id_ref(),
+                &bundle,
+                &profile,
+            )
+            .expect("control-only merge certification composes with NPoS finality effects");
         }
         struct AutonomousAnchorFixture {
             state: State,
@@ -19294,6 +19379,31 @@ pub(crate) mod valid {
             let mut block: SignedBlock = valid.into();
             block.set_npos_consensus_effects(effects);
             block
+        }
+        fn npos_marker_effects(height: u64) -> NposConsensusEffects {
+            NposConsensusEffects {
+                penalty_actions: vec![
+                    iroha_data_model::consensus::NposPenaltyAction::MarkConsensusEvidenceApplied(
+                        iroha_data_model::consensus::NposMarkConsensusEvidenceAppliedAction {
+                            evidence_key: iroha_crypto::Hash::new([0xA5]),
+                            height,
+                        },
+                    ),
+                ],
+                ..NposConsensusEffects::default()
+            }
+        }
+        #[test]
+        fn soft_fork_replacement_rejects_npos_effects_before_overlay_construction() {
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let block = npos_effects_block(leader.private_key(), 2, Some(npos_marker_effects(2)));
+            assert!(matches!(
+                ValidBlock::validate_npos_soft_fork_composition(&block, true),
+                Err(BlockValidationError::NposEffectsInvalid(reason))
+                    if reason.contains("soft-fork replacement")
+            ));
+            ValidBlock::validate_npos_soft_fork_composition(&block, false)
+                .expect("ordinary parent-preserving execution may apply NPoS effects");
         }
         #[test]
         fn validation_profiles_always_carry_an_explicit_consensus_mode() {

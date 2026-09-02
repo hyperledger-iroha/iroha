@@ -3133,39 +3133,19 @@ fn parameter_targets_same_slot(lhs: &Parameter, rhs: &Parameter) -> bool {
 fn parameters_with_staging(parameters: &Parameters) -> Vec<Parameter> {
     parameters.parameters().collect()
 }
-fn has_set_parameter(instructions: &[InstructionBox], parameter: &Parameter) -> bool {
-    instructions.iter().any(|instruction| {
-        instruction
-            .as_any()
-            .downcast_ref::<SetParameter>()
-            .is_some_and(|existing| parameter_targets_same_slot(existing.inner(), parameter))
-    })
-}
-fn parameter_generation_priority(parameter: &Parameter, current: &Parameters) -> u8 {
-    let _ = (parameter, current);
+fn parameter_generation_priority(parameter: &Parameter) -> u8 {
+    let _ = parameter;
     25
 }
-fn collect_parameter_instructions(
-    parameters: &Parameters,
-    existing: &[InstructionBox],
-    manual: &[Parameter],
-    current: &Parameters,
-) -> Vec<InstructionBox> {
+fn collect_parameter_instructions(parameters: &Parameters) -> Vec<InstructionBox> {
     let mut generated = Vec::new();
     for parameter in parameters_with_staging(parameters) {
         match parameter {
             Parameter::Executor(_) | Parameter::Transaction(_) | Parameter::SmartContract(_) => {}
             other => {
-                if manual
+                if generated
                     .iter()
-                    .any(|manual| parameter_targets_same_slot(manual, &other))
-                {
-                    continue;
-                }
-                if has_set_parameter(existing, &other)
-                    || generated
-                        .iter()
-                        .any(|existing| parameter_targets_same_slot(existing, &other))
+                    .any(|existing| parameter_targets_same_slot(existing, &other))
                 {
                     continue;
                 }
@@ -3173,26 +3153,11 @@ fn collect_parameter_instructions(
             }
         }
     }
-    generated.sort_by_key(|parameter| parameter_generation_priority(parameter, current));
+    generated.sort_by_key(parameter_generation_priority);
     generated
         .into_iter()
         .map(|parameter| InstructionBox::from(SetParameter::new(parameter)))
         .collect()
-}
-fn collect_manual_set_parameters(transactions: &[RawGenesisTx]) -> Vec<Parameter> {
-    let mut manual = Vec::new();
-    for tx in transactions {
-        for instruction in &tx.instructions {
-            if let Some(set_param) = instruction.as_any().downcast_ref::<SetParameter>() {
-                let parameter = set_param.inner().clone();
-                if manual.iter().any(|existing| existing == &parameter) {
-                    continue;
-                }
-                manual.push(parameter);
-            }
-        }
-    }
-    manual
 }
 fn is_consensus_handshake_metadata_instruction(instruction: &InstructionBox) -> bool {
     instruction
@@ -3213,7 +3178,6 @@ fn compute_consensus_parameters_fingerprint_v2(
 }
 impl RawGenesisTransaction {
     fn validate_mode_specific_consensus_parameters(&self) -> Result<()> {
-        self.validate_structured_parameter_blocks()?;
         let has_npos = self
             .effective_parameters()?
             .custom()
@@ -3243,6 +3207,35 @@ impl RawGenesisTransaction {
             ));
         }
         Ok(())
+    }
+    fn validate_no_explicit_set_parameter_instructions(&self) -> Result<()> {
+        if let Some((tx_index, instr_index)) =
+            Self::explicit_set_parameter_position(&self.transactions)
+        {
+            return Err(eyre!(Self::explicit_set_parameter_message(
+                tx_index,
+                instr_index
+            )));
+        }
+        Ok(())
+    }
+    fn explicit_set_parameter_position(transactions: &[RawGenesisTx]) -> Option<(usize, usize)> {
+        transactions.iter().enumerate().find_map(|(tx_index, tx)| {
+            tx.instructions
+                .iter()
+                .position(|instruction| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<SetParameter>()
+                        .is_some()
+                })
+                .map(|instr_index| (tx_index, instr_index))
+        })
+    }
+    fn explicit_set_parameter_message(tx_index: usize, instr_index: usize) -> String {
+        format!(
+            "genesis transactions must not contain SetParameter instructions (tx {tx_index}, instruction {instr_index}); move parameters into the structured `parameters` block"
+        )
     }
     fn expect_object(
         value: norito::json::Value,
@@ -3294,18 +3287,10 @@ impl RawGenesisTransaction {
     fn reject_set_parameter_instructions(
         transactions: &[RawGenesisTx],
     ) -> Result<(), norito::json::Error> {
-        for (tx_index, tx) in transactions.iter().enumerate() {
-            for (instr_index, instruction) in tx.instructions.iter().enumerate() {
-                if instruction
-                    .as_any()
-                    .downcast_ref::<SetParameter>()
-                    .is_some()
-                {
-                    return Err(norito::json::Error::Message(format!(
-                        "genesis transactions must not contain SetParameter instructions (tx {tx_index}, instruction {instr_index}); move parameters into the `parameters` block"
-                    )));
-                }
-            }
+        if let Some((tx_index, instr_index)) = Self::explicit_set_parameter_position(transactions) {
+            return Err(norito::json::Error::Message(
+                Self::explicit_set_parameter_message(tx_index, instr_index),
+            ));
         }
         Ok(())
     }
@@ -3373,33 +3358,24 @@ impl RawGenesisTransaction {
             crypto,
         })
     }
-    /// Compute the effective parameter set after applying all structured sections and explicit `SetParameter` instructions.
+    /// Compute the effective parameter set from the authoritative structured parameter snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the manifest contains more than one structured parameter block or any
+    /// explicit [`SetParameter`] instruction. Parameters must be supplied only through the
+    /// structured `parameters` block.
     pub fn effective_parameters(&self) -> Result<Parameters> {
+        self.validate_no_explicit_set_parameter_instructions()?;
         self.validate_structured_parameter_blocks()?;
-        // Mirror `parse()` parameter injection rules: structured `parameters` sections are first
-        // turned into `SetParameter` instructions with `collect_parameter_instructions`, which
-        // suppresses slots already set manually (any explicit `SetParameter` anywhere in the
-        // manifest). This keeps the derived consensus fingerprint consistent with the final
-        // parsed instruction batches.
-        let manual_parameters = collect_manual_set_parameters(&self.transactions);
         let mut aggregated = Parameters::default();
         for tx in &self.transactions {
             if let Some(params) = &tx.parameters {
                 aggregated.sumeragi.block_cadence_ms = params.sumeragi.block_cadence_ms;
-                for instruction in collect_parameter_instructions(
-                    params,
-                    &tx.instructions,
-                    &manual_parameters,
-                    &aggregated,
-                ) {
+                for instruction in collect_parameter_instructions(params) {
                     if let Some(set_param) = instruction.as_any().downcast_ref::<SetParameter>() {
                         aggregated.set_parameter(set_param.inner().clone());
                     }
-                }
-            }
-            for instruction in &tx.instructions {
-                if let Some(set_param) = instruction.as_any().downcast_ref::<SetParameter>() {
-                    aggregated.set_parameter(set_param.inner().clone());
                 }
             }
         }
@@ -3423,8 +3399,7 @@ impl RawGenesisTransaction {
         let custom = params.custom();
         let block_cadence_ms = sumeragi.block_cadence_ms();
         let block_max_transactions = block.max_transactions();
-        // `effective_parameters()` already applies both structured parameter sections and
-        // explicit SetParameter instructions in manifest transaction order.
+        // `effective_parameters()` applies the single structured parameter snapshot.
         let npos_param_id = SumeragiNposParameters::parameter_id();
         let npos_payload = custom
             .get(&npos_param_id)
@@ -3564,6 +3539,25 @@ impl RawGenesisTransaction {
         {
             return Err(eyre!(
                 "replacement batch {batch_index} for raw genesis transaction {index} must not be empty"
+            ));
+        }
+        if let Some((batch_index, instruction_index)) = replacement_batches
+            .iter()
+            .enumerate()
+            .find_map(|(batch_index, batch)| {
+                batch
+                    .iter()
+                    .position(|instruction| {
+                        instruction
+                            .as_any()
+                            .downcast_ref::<SetParameter>()
+                            .is_some()
+                    })
+                    .map(|instruction_index| (batch_index, instruction_index))
+            })
+        {
+            return Err(eyre!(
+                "replacement batch {batch_index}, instruction {instruction_index} contains SetParameter; move parameters into the structured `parameters` block"
             ));
         }
         let original = self.transactions.get(index).ok_or_else(|| {
@@ -3939,14 +3933,12 @@ impl RawGenesisTransaction {
                 *parameters = Parameters::from_iter(filtered_parameters);
             }
         }
-        let manual_parameters = collect_manual_set_parameters(&transactions);
         let meta_vec = Self::build_consensus_meta_instructions(
             consensus_mode,
             block_cadence_ms,
             wire_protocol_version,
             consensus_fingerprint,
             sumeragi_v2,
-            &manual_parameters,
         )?;
         let mut pending_meta = if meta_vec.is_empty() {
             None
@@ -3954,7 +3946,6 @@ impl RawGenesisTransaction {
             Some(meta_vec)
         };
         let mut instructions_list = Vec::new();
-        let mut aggregated_parameters = Parameters::default();
         let mut ivm_bytecode_total = 0_usize;
         if let Some(executor_path) = executor {
             let executor = load_genesis_ivm_bytecode(&executor_path, &mut ivm_bytecode_total)?;
@@ -3964,25 +3955,10 @@ impl RawGenesisTransaction {
         for tx in transactions {
             let mut instructions = Vec::new();
             if let Some(parameters) = tx.parameters {
-                let generated = collect_parameter_instructions(
-                    &parameters,
-                    &tx.instructions,
-                    &manual_parameters,
-                    &aggregated_parameters,
-                );
-                for instruction in &generated {
-                    if let Some(set_param) = instruction.as_any().downcast_ref::<SetParameter>() {
-                        aggregated_parameters.set_parameter(set_param.inner().clone());
-                    }
-                }
+                let generated = collect_parameter_instructions(&parameters);
                 instructions.extend(generated);
             }
             if !tx.instructions.is_empty() {
-                for instruction in &tx.instructions {
-                    if let Some(set_param) = instruction.as_any().downcast_ref::<SetParameter>() {
-                        aggregated_parameters.set_parameter(set_param.inner().clone());
-                    }
-                }
                 instructions.extend(tx.instructions);
             }
             for trigger in tx.ivm_triggers {
@@ -4024,33 +4000,15 @@ impl RawGenesisTransaction {
         {
             instructions_list.push(meta);
         }
-        Self::inject_crypto_manifest_param(
-            &mut instructions_list,
-            &manual_parameters,
-            &manifest.crypto,
-        )?;
+        Self::inject_crypto_manifest_param(&mut instructions_list, &manifest.crypto)?;
         let registry = GenesisVkRegistry::build(instructions_list.iter().flatten())?;
-        Self::inject_confidential_registry_param(
-            &mut instructions_list,
-            &manual_parameters,
-            registry.vk_set_hash(),
-        );
+        Self::inject_confidential_registry_param(&mut instructions_list, registry.vk_set_hash());
         Ok(instructions_list)
     }
     fn inject_confidential_registry_param(
         instructions_list: &mut Vec<Vec<InstructionBox>>,
-        manual_parameters: &[Parameter],
         vk_set_hash: Option<[u8; 32]>,
     ) {
-        if manual_parameters.iter().any(|param| {
-            matches!(
-                param,
-                Parameter::Custom(custom)
-                    if custom.id() == &confidential_metadata::registry_root_id()
-            )
-        }) {
-            return;
-        }
         let already_present = instructions_list.iter().flatten().any(|instr| {
             instr
                 .as_any()
@@ -4082,7 +4040,6 @@ impl RawGenesisTransaction {
     }
     fn inject_crypto_manifest_param(
         instructions_list: &mut Vec<Vec<InstructionBox>>,
-        manual_parameters: &[Parameter],
         crypto: &ManifestCrypto,
     ) -> eyre::Result<()> {
         let meta_id = crypto_metadata::manifest_meta_id();
@@ -4098,13 +4055,6 @@ impl RawGenesisTransaction {
             }
             Ok(())
         };
-        for param in manual_parameters {
-            if let Parameter::Custom(custom) = param
-                && custom.id() == &meta_id
-            {
-                return ensure_matches(custom);
-            }
-        }
         for existing in instructions_list
             .iter()
             .flatten()
@@ -4161,7 +4111,6 @@ impl RawGenesisTransaction {
         wire_protocol_version: u32,
         consensus_fingerprint: Option<ConsensusFingerprint>,
         sumeragi_v2: SumeragiV2GenesisContextParameters,
-        manual_parameters: &[Parameter],
     ) -> Result<Vec<InstructionBox>> {
         let mut instructions = Vec::new();
         let fingerprint = consensus_fingerprint.ok_or_else(|| {
@@ -4187,12 +4136,7 @@ impl RawGenesisTransaction {
             consensus_metadata::handshake_meta_id(),
             handshake_payload,
         ));
-        if !manual_parameters
-            .iter()
-            .any(|existing| existing == &handshake_param)
-        {
-            instructions.push(InstructionBox::from(SetParameter::new(handshake_param)));
-        }
+        instructions.push(InstructionBox::from(SetParameter::new(handshake_param)));
         Ok(instructions)
     }
 }
@@ -4349,9 +4293,24 @@ impl GenesisBuilder {
             .push(parameter);
         self
     }
-    /// Entry a instruction to the end of entries.
+    /// Append an instruction to the current transaction.
+    ///
+    /// Parameters have a dedicated authoritative snapshot and must be added with
+    /// [`Self::append_parameter`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `instruction` is [`SetParameter`].
     pub fn append_instruction(mut self, instruction: impl Into<InstructionBox>) -> Self {
-        self.current_tx_mut().instructions.push(instruction.into());
+        let instruction = instruction.into();
+        assert!(
+            instruction
+                .as_any()
+                .downcast_ref::<SetParameter>()
+                .is_none(),
+            "GenesisBuilder::append_instruction does not accept SetParameter; use GenesisBuilder::append_parameter"
+        );
+        self.current_tx_mut().instructions.push(instruction);
         self
     }
     /// Entry an IVM trigger to the end of entries.
@@ -5259,15 +5218,9 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn parse_replaces_stale_consensus_handshake_metadata() -> Result<()> {
+    fn parse_rejects_stale_consensus_handshake_metadata_instruction() {
         init_instruction_registry();
         let chain = ChainId::from("test-consensus-meta-replace");
-        let expected_fingerprint = GenesisBuilder::new_without_executor(chain.clone(), ".")
-            .build_raw()
-            .with_consensus_meta()
-            .consensus_fingerprint
-            .expect("consensus fingerprint expected")
-            .to_string();
         let stale_param = Parameter::Custom(CustomParameter::new(
             consensus_metadata::handshake_meta_id(),
             Json::from_norito_value_ref(&norito::json::Value::Object({
@@ -5297,29 +5250,15 @@ mod tests {
             .expect("missing manifest transaction")
             .instructions
             .push(InstructionBox::from(SetParameter::new(stale_param)));
-        let mut found = Vec::new();
-        for instr in manifest.parse()?.into_iter().flatten() {
-            if let Some(set_param) = instr.as_any().downcast_ref::<SetParameter>()
-                && let Parameter::Custom(custom) = set_param.inner()
-                && custom.id() == &consensus_metadata::handshake_meta_id()
-                && let Ok(payload) = custom
-                    .payload()
-                    .try_into_any_norito::<norito::json::Value>()
-            {
-                if let Some(fingerprint) =
-                    payload
-                        .get("consensus_fingerprint")
-                        .and_then(|value: &norito::json::Value| {
-                            value.as_str().map(std::string::ToString::to_string)
-                        })
-                {
-                    found.push(fingerprint);
-                }
-            }
-        }
-        assert_eq!(found.len(), 1);
-        assert_eq!(found[0], expected_fingerprint);
-        Ok(())
+        let error = manifest
+            .parse()
+            .expect_err("explicit handshake SetParameter must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("SetParameter instructions (tx 0, instruction 0)"),
+            "unexpected error: {error:?}"
+        );
     }
     #[test]
     fn parse_replaces_stale_consensus_handshake_metadata_in_parameters() -> Result<()> {
@@ -5386,7 +5325,7 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn parse_recomputes_explicit_consensus_handshake_metadata() -> Result<()> {
+    fn parse_rejects_explicit_consensus_handshake_metadata() {
         init_instruction_registry();
         let chain = ChainId::from("test-consensus-meta-preserve-valid");
         let mut manifest = GenesisBuilder::new_without_executor(chain, ".")
@@ -5426,51 +5365,23 @@ mod tests {
             .expect("missing manifest transaction")
             .instructions
             .push(InstructionBox::from(SetParameter::new(explicit_param)));
-        let mut found = Vec::new();
-        for instr in manifest.parse()?.into_iter().flatten() {
-            if let Some(set_param) = instr.as_any().downcast_ref::<SetParameter>()
-                && let Parameter::Custom(custom) = set_param.inner()
-                && custom.id() == &consensus_metadata::handshake_meta_id()
-                && let Ok(payload) = custom
-                    .payload()
-                    .try_into_any_norito::<norito::json::Value>()
-            {
-                found.push(payload);
-            }
-        }
-        assert_eq!(found.len(), 1);
-        let payload = found.remove(0);
-        assert_eq!(
-            payload.get("mode").and_then(norito::json::Value::as_str),
-            Some("Permissioned")
+        let error = manifest
+            .parse()
+            .expect_err("explicit handshake SetParameter must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("SetParameter instructions (tx 0, instruction 0)"),
+            "unexpected error: {error:?}"
         );
-        assert_eq!(
-            payload
-                .get("wire_protocol_version")
-                .and_then(norito::json::Value::as_u64),
-            Some(u64::from(CONSENSUS_PROTOCOL_VERSION))
-        );
-        assert_eq!(
-            payload
-                .get("consensus_fingerprint")
-                .and_then(norito::json::Value::as_str),
-            Some(expected_fingerprint.as_str())
-        );
-        Ok(())
     }
     #[test]
-    fn parse_replaces_explicit_consensus_handshake_metadata_with_external_fingerprint() -> Result<()>
-    {
+    fn parse_rejects_external_consensus_handshake_metadata_instruction() {
         init_instruction_registry();
         let chain = ChainId::from("test-consensus-meta-preserve-external-fingerprint");
         let mut manifest = GenesisBuilder::new_without_executor(chain, ".")
             .build_raw()
             .with_consensus_meta();
-        let expected_fingerprint = manifest
-            .consensus_fingerprint
-            .clone()
-            .expect("consensus fingerprint expected")
-            .to_string();
         let external_fingerprint =
             "0x1111111111111111111111111111111111111111111111111111111111111111";
         let explicit_param = Parameter::Custom(CustomParameter::new(
@@ -5499,36 +5410,18 @@ mod tests {
             .expect("missing manifest transaction")
             .instructions
             .push(InstructionBox::from(SetParameter::new(explicit_param)));
-        let mut found = Vec::new();
-        for instr in manifest.parse()?.into_iter().flatten() {
-            if let Some(set_param) = instr.as_any().downcast_ref::<SetParameter>()
-                && let Parameter::Custom(custom) = set_param.inner()
-                && custom.id() == &consensus_metadata::handshake_meta_id()
-                && let Ok(payload) = custom
-                    .payload()
-                    .try_into_any_norito::<norito::json::Value>()
-            {
-                found.push(payload);
-            }
-        }
-        assert_eq!(found.len(), 1);
-        let payload = found.remove(0);
-        assert_eq!(
-            payload
-                .get("consensus_fingerprint")
-                .and_then(norito::json::Value::as_str),
-            Some(expected_fingerprint.as_str())
+        let error = manifest
+            .parse()
+            .expect_err("external handshake SetParameter must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("SetParameter instructions (tx 0, instruction 0)"),
+            "unexpected error: {error:?}"
         );
-        assert_ne!(
-            payload
-                .get("consensus_fingerprint")
-                .and_then(norito::json::Value::as_str),
-            Some(external_fingerprint)
-        );
-        Ok(())
     }
     #[test]
-    fn parse_recomputes_explicit_consensus_handshake_metadata_in_parameters() -> Result<()> {
+    fn parse_recomputes_structured_consensus_handshake_metadata() -> Result<()> {
         init_instruction_registry();
         let chain = ChainId::from("test-consensus-meta-preserve-valid-params");
         let mut manifest = GenesisBuilder::new_without_executor(chain, ".")

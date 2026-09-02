@@ -12,6 +12,7 @@ import {
   KAGEMUSHA_MANIFEST_VERSION,
   KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES,
   KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION,
+  KAGEMUSHA_REQUIRED_NATIVE_CONTRACT_REVISION,
   KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES,
   _normalizeKagemushaOperationStatusWithNativeValidation,
   normalizeOfflineStatus,
@@ -31,7 +32,9 @@ import {
   TORII_TEST_NATIVE_BINDING as DIST_TORII_TEST_NATIVE_BINDING,
 } from "../dist/toriiTestHooks.js";
 
-const OPERATION_ID = "11".repeat(32);
+const AUTHORITY_PAYLOAD = Buffer.from([1]);
+const AUTHORIZATION_NONCE = Buffer.alloc(32, 7);
+const OPERATION_ID = deriveOperationId(AUTHORITY_PAYLOAD, AUTHORIZATION_NONCE);
 const TRANSACTION_HASH = "23".repeat(32);
 const TOP_UP_SCHEMA_NAME = "iroha.torii.v1.offline.top_up.request";
 const REDEEM_SCHEMA_NAME = "iroha.torii.v1.offline.redeem.request";
@@ -74,14 +77,22 @@ function encodeCompactLength(value) {
 function authorizationPayload({
   operationId = OPERATION_ID,
   issuedAtMs = 1234n,
+  expiresAtMs = 301234n,
+  nonce = AUTHORIZATION_NONCE,
+  authorityPayload = AUTHORITY_PAYLOAD,
   fieldOverrides = {},
 } = {}) {
   const issuedAt = Buffer.alloc(8);
   issuedAt.writeBigUInt64LE(BigInt(issuedAtMs));
+  const expiresAt = Buffer.alloc(8);
+  expiresAt.writeBigUInt64LE(BigInt(expiresAtMs));
   const fields = Array.from({ length: 10 }, (_, index) => {
     if (Object.hasOwn(fieldOverrides, index)) return Buffer.from(fieldOverrides[index]);
+    if (index === 0) return Buffer.from(authorityPayload);
     if (index === 3) return Buffer.from(operationId, "hex");
     if (index === 4) return issuedAt;
+    if (index === 5) return expiresAt;
+    if (index === 6) return Buffer.from(nonce);
     return Buffer.from([index + 1]);
   });
   return Buffer.concat(fields.map((field) => Buffer.concat([
@@ -96,6 +107,9 @@ function requestPayload(
     operationId = OPERATION_ID,
     authorizationOperationId = operationId,
     issuedAtMs = 1234n,
+    expiresAtMs = 301234n,
+    nonce = AUTHORIZATION_NONCE,
+    authorityPayload = AUTHORITY_PAYLOAD,
     fieldOverrides = {},
     extraFields = [],
   } = {},
@@ -108,7 +122,13 @@ function requestPayload(
     if (index === 0) return Buffer.from([4, 0]);
     if (index === operationIdFieldIndex) return Buffer.from(operationId, "hex");
     if (index === authorizationFieldIndex) {
-      return authorizationPayload({ operationId: authorizationOperationId, issuedAtMs });
+      return authorizationPayload({
+        operationId: authorizationOperationId,
+        issuedAtMs,
+        expiresAtMs,
+        nonce,
+        authorityPayload,
+      });
     }
     return Buffer.from([index + 1]);
   });
@@ -142,14 +162,19 @@ function requestV4(schemaName = TOP_UP_SCHEMA_NAME, options = {}) {
   return { version: 4, norito: noritoArchive(schemaName, options) };
 }
 
-function operationReference(kind) {
+function operationIdentity(kind) {
+  const normalized = kind === "top_up"
+    ? normalizeKagemushaTopUpRequestV4(requestV4(TOP_UP_SCHEMA_NAME))
+    : normalizeKagemushaRedeemRequestV4(requestV4(REDEEM_SCHEMA_NAME));
+  return normalized.identity;
+}
+
+function operationReference(kind, identity = operationIdentity(kind)) {
   return {
-    operation_id: OPERATION_ID,
-    kind: { kind, value: null },
+    identity,
     state: { state: "pending", value: null },
     transaction_hash: TRANSACTION_HASH,
     status_uri: `/v1/offline/operations/${OPERATION_ID}`,
-    submitted_at_ms: 1234,
   };
 }
 
@@ -159,36 +184,60 @@ function testIrohaHash(bytes) {
   return digest;
 }
 
+function deriveOperationId(authorityPayload, nonce) {
+  const accountArchive = Buffer.alloc(40 + authorityPayload.length);
+  accountArchive.write("NRT0", 0, "ascii");
+  Buffer.from("60e81473aed0a1276f1c5776d0f69c38", "hex").copy(accountArchive, 6);
+  accountArchive.writeBigUInt64LE(BigInt(authorityPayload.length), 23);
+  accountArchive.writeBigUInt64LE(crc64Xz(authorityPayload), 31);
+  accountArchive[39] = 0x02;
+  authorityPayload.copy(accountArchive, 40);
+  const length = Buffer.alloc(8);
+  length.writeBigUInt64LE(BigInt(accountArchive.length));
+  return Buffer.from(testIrohaHash(Buffer.concat([
+    Buffer.from("iroha:offline:kagemusha:operation-id:v4\0", "utf8"),
+    length,
+    accountArchive,
+    nonce,
+  ]))).toString("hex");
+}
+
 function testHashLiteral(bytes) {
   const body = Buffer.from(bytes).toString("hex").toUpperCase();
   return `hash:${body}#${computeHashLiteralCrc("hash", body)}`;
 }
 
-function appliedTopUpStatus() {
-  const operationId = Uint8Array.from({ length: 32 }, () => 0x11);
+function appliedTopUpStatus(identity = operationIdentity("top_up")) {
+  const operationId = Uint8Array.from(Buffer.from(OPERATION_ID, "hex"));
   const anchorDigest = Uint8Array.from({ length: 32 }, () => 0x37);
-  // Independent vectors for the Rust Hash::new leaf/node/post-state formulas.
   const rightLeaf = Buffer.from(
     "15464a83b3b00ac58769c03c31db71e68728a4a68cbf93913554c5f6571192f3",
-    "hex",
-  );
-  const topUpRoot = Buffer.from(
-    "e7f5692eba6838b2af3a7bcff9193f6f412b58d8f9257ee7125238032e2785ef",
     "hex",
   );
   const ordinaryWritesRoot = Buffer.from(
     "bb589bfbd50c9bf8e3e52bfbd6a33a9ad3d410d0049cb7a5e904d1b51cbf1215",
     "hex",
   );
-  const postStateRoot = Buffer.from(
-    "995688156171042abd0ab32d9075ca59caa874253636c9134641e0fedcda7f27",
-    "hex",
-  );
+  const keyHash = testIrohaHash(Buffer.concat([Buffer.from([0xd2]), operationId]));
+  const valueHash = testIrohaHash(anchorDigest);
+  const leaf = testIrohaHash(Buffer.concat([Buffer.from([0]), keyHash, valueHash]));
+  const topUpRoot = testIrohaHash(Buffer.concat([
+    Buffer.from("iroha:kagemusha:v2:topup-node\0", "utf8"),
+    Buffer.from([0, 0]),
+    leaf,
+    rightLeaf,
+  ]));
+  const postStateRoot = testIrohaHash(Buffer.concat([
+    Buffer.from("iroha:kagemusha:v2:post-state-root\0", "utf8"),
+    Buffer.from([2, 0, 0, 0]),
+    ordinaryWritesRoot,
+    topUpRoot,
+  ]));
   const networkId = testHashLiteral(testIrohaHash(new TextEncoder().encode("network")));
   return {
     state: "applied",
     value: {
-      operation_id: OPERATION_ID,
+      identity,
       result: {
         kind: "top_up",
         result: {
@@ -235,7 +284,8 @@ function appliedTopUpStatus() {
 const TEST_NATIVE_STATUS_BYTES = Uint8Array.of(0x7b, 0x7d);
 const TEST_NATIVE_STATUS_VALIDATOR = Object.freeze({
   connectNoritoBridgeAbiVersion() { return 23; },
-  kagemushaOfflineOperationStatusJsonValidateV1() {},
+  kagemushaNativeContractRevision() { return 1; },
+  kagemushaOfflineOperationStatusJsonValidateV2() {},
 });
 
 const POST_NATIVE_TOP_UP_NORMALIZERS = Object.freeze([
@@ -263,11 +313,13 @@ const POST_NATIVE_TOP_UP_NORMALIZERS = Object.freeze([
 
 test("Kagemusha JavaScript surface is transport-only ABI-23/V4", () => {
   assert.equal(KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION, 23);
+  assert.equal(KAGEMUSHA_REQUIRED_NATIVE_CONTRACT_REVISION, 1);
   assert.equal(KAGEMUSHA_CASH_HANDOFF_CAPABILITY, "cash_handoff_v1");
   assert.equal(KAGEMUSHA_MANIFEST_VERSION, 4);
   assert.equal(KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES, 512 * 1024);
   assert.equal(KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES, 48 * 1024 * 1024);
   assert.equal(distSdk.KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION, 23);
+  assert.equal(distSdk.KAGEMUSHA_REQUIRED_NATIVE_CONTRACT_REVISION, 1);
   assert.equal(typeof sdk.ToriiClient.prototype.getOfflineCapability, "function");
   assert.equal(typeof distSdk.ToriiClient.prototype.getOfflineCapability, "function");
   for (const Client of [ToriiClient, ToriiBrowserClient]) {
@@ -310,26 +362,27 @@ test("Kagemusha JavaScript surface is transport-only ABI-23/V4", () => {
 
 test("Kagemusha requests require an exact schema-bound Norito frame", () => {
   const normalizedTopUp = normalizeKagemushaTopUpRequestV4(requestV4());
-  assert.equal(normalizedTopUp.operationId, OPERATION_ID);
-  assert.equal(normalizedTopUp.issuedAtMs, 1234);
-  assert.equal(normalizedTopUp.norito.length, 153);
+  assert.equal(normalizedTopUp.identity.operation_id, OPERATION_ID);
+  assert.equal(normalizedTopUp.identity.issued_at_ms, 1234);
+  assert.equal(normalizedTopUp.identity.expires_at_ms, 301234);
+  assert.equal(normalizedTopUp.norito.length, 191);
   assert.equal(
     normalizeKagemushaRedeemRequestV4(requestV4(REDEEM_SCHEMA_NAME)).norito.length,
-    157,
+    195,
   );
   assert.equal(
-    normalizeKagemushaRedeemRequestV4(requestV4(REDEEM_SCHEMA_NAME)).operationId,
+    normalizeKagemushaRedeemRequestV4(requestV4(REDEEM_SCHEMA_NAME)).identity.operation_id,
     OPERATION_ID,
   );
   assert.equal(
-    normalizeKagemushaRedeemRequestV4(requestV4(REDEEM_SCHEMA_NAME)).issuedAtMs,
+    normalizeKagemushaRedeemRequestV4(requestV4(REDEEM_SCHEMA_NAME)).identity.issued_at_ms,
     1234,
   );
   assert.equal(
     normalizeKagemushaTopUpRequestV4({
       version: 4,
       norito: noritoArchive(TOP_UP_SCHEMA_NAME, { fieldOverrides: { 1: [] } }),
-    }).operationId,
+    }).identity.operation_id,
     OPERATION_ID,
   );
 
@@ -408,7 +461,7 @@ test("Kagemusha requests require an exact schema-bound Norito frame", () => {
     () => normalizeKagemushaTopUpRequestV4(requestV4(TOP_UP_SCHEMA_NAME, {
       authorizationOperationId: "12".repeat(32),
     })),
-    /authorization operation id must match/u,
+    /operation ids must equal the canonical authority-and-nonce derivation/u,
   );
   assert.throws(
     () => normalizeKagemushaRedeemRequestV4(requestV4(REDEEM_SCHEMA_NAME, {
@@ -481,7 +534,7 @@ test("ToriiClient preserves all four Kagemusha routes and V4 request headers", a
     jsonResponse({
       state: "applied",
       value: {
-        operation_id: OPERATION_ID,
+        identity: operationIdentity("redeem"),
         result: {
           kind: "redeem",
           result: {
@@ -506,8 +559,8 @@ test("ToriiClient preserves all four Kagemusha routes and V4 request headers", a
   const status = await client.getKagemushaOperationStatus(redeem);
 
   assert.deepEqual(capability, universalCapability());
-  assert.equal(topUp.kind.kind, "top_up");
-  assert.equal(redeem.kind.kind, "redeem");
+  assert.equal(topUp.identity.kind.kind, "top_up");
+  assert.equal(redeem.identity.kind.kind, "redeem");
   assert.equal(status.state, "applied");
   assert.equal(status.value.result.kind, "redeem");
   assert.deepEqual(
@@ -564,7 +617,7 @@ test("ToriiClient never redispatches an ambiguous Kagemusha POST", async () => {
   }
 });
 
-test("Kagemusha submission binds the accepted timestamp to the signed request", async () => {
+test("Kagemusha submission binds the complete accepted identity to the signed request", async () => {
   for (const Client of [
     sdk.ToriiClient,
     distSdk.ToriiClient,
@@ -577,7 +630,10 @@ test("Kagemusha submission binds the accepted timestamp to the signed request", 
         dispatches += 1;
         return jsonResponse({
           ...operationReference("top_up"),
-          submitted_at_ms: 1235,
+          identity: {
+            ...operationIdentity("top_up"),
+            expires_at_ms: 301235,
+          },
         }, {
           status: 202,
           headers: {
@@ -590,7 +646,7 @@ test("Kagemusha submission binds the accepted timestamp to the signed request", 
 
     await assert.rejects(
       () => client.submitKagemushaTopUpV4(requestV4()),
-      /submitted_at_ms/u,
+      /identity/u,
     );
     assert.equal(dispatches, 1);
   }
@@ -610,10 +666,8 @@ test("ToriiBrowserClient exposes the same transport-only Kagemusha contract", as
     jsonResponse({
       state: "pending",
       value: {
-        operation_id: OPERATION_ID,
-        kind: { kind: "top_up", value: null },
+        identity: operationIdentity("top_up"),
         transaction_hash: TRANSACTION_HASH,
-        submitted_at_ms: 1234,
       },
     }),
   ];
@@ -666,22 +720,26 @@ test("raw Kagemusha JSON preserves lossless u64 fields", async () => {
   ];
 
   for (const { label, Client, nativeBindingSymbol } of clients) {
-    const topUpReference = {
-      ...operationReference("top_up"),
-      submitted_at_ms: firstUnsafeU64,
-    };
-    const topUpStatus = appliedTopUpStatus();
+    const topUpRequest = requestV4(TOP_UP_SCHEMA_NAME, {
+      issuedAtMs: firstUnsafeU64,
+      expiresAtMs: firstUnsafeU64 + 300000n,
+    });
+    const topUpIdentity = normalizeKagemushaTopUpRequestV4(topUpRequest).identity;
+    const topUpReference = operationReference("top_up", topUpIdentity);
+    const topUpStatus = appliedTopUpStatus(topUpIdentity);
     topUpStatus.value.result.result.finalized_block_height = maxU64;
     topUpStatus.value.result.result.anchor.finalized_height = maxU64;
     topUpStatus.value.result.result.finality_proof.commit_qc.height_context.height = maxU64;
-    const redeemReference = {
-      ...operationReference("redeem"),
-      submitted_at_ms: maxU64,
-    };
+    const redeemRequest = requestV4(REDEEM_SCHEMA_NAME, {
+      issuedAtMs: firstUnsafeU64,
+      expiresAtMs: firstUnsafeU64 + 300000n,
+    });
+    const redeemIdentity = normalizeKagemushaRedeemRequestV4(redeemRequest).identity;
+    const redeemReference = operationReference("redeem", redeemIdentity);
     const redeemStatus = {
       state: "applied",
       value: {
-        operation_id: OPERATION_ID,
+        identity: redeemIdentity,
         result: {
           kind: "redeem",
           result: {
@@ -716,7 +774,8 @@ test("raw Kagemusha JSON preserves lossless u64 fields", async () => {
     let validatedStatusBytes = null;
     const nativeBinding = {
       connectNoritoBridgeAbiVersion() { return 23; },
-      kagemushaOfflineOperationStatusJsonValidateV1(bytes) {
+      kagemushaNativeContractRevision() { return 1; },
+      kagemushaOfflineOperationStatusJsonValidateV2(bytes) {
         validatedStatusBytes = Buffer.from(bytes);
       },
     };
@@ -732,7 +791,7 @@ test("raw Kagemusha JSON preserves lossless u64 fields", async () => {
     });
 
     const acceptedTopUp = await client.submitKagemushaTopUpV4(
-      requestV4(TOP_UP_SCHEMA_NAME, { issuedAtMs: firstUnsafeU64 }),
+      topUpRequest,
     );
     const appliedTopUpPromise = client.getKagemushaOperationStatus(acceptedTopUp);
     const appliedTopUp = nativeBindingSymbol === undefined
@@ -742,12 +801,12 @@ test("raw Kagemusha JSON preserves lossless u64 fields", async () => {
       )
       : await appliedTopUpPromise;
     const acceptedRedeem = await client.submitKagemushaRedeemV4(
-      requestV4(REDEEM_SCHEMA_NAME, { issuedAtMs: maxU64 }),
+      redeemRequest,
     );
     const appliedRedeem = await client.getKagemushaOperationStatus(acceptedRedeem);
 
-    assert.equal(acceptedTopUp.submitted_at_ms, firstUnsafeU64, label);
-    assert.equal(typeof acceptedTopUp.submitted_at_ms, "bigint", label);
+    assert.equal(acceptedTopUp.identity.issued_at_ms, firstUnsafeU64, label);
+    assert.equal(typeof acceptedTopUp.identity.issued_at_ms, "bigint", label);
     if (nativeBindingSymbol !== undefined) {
       assert.deepEqual(validatedStatusBytes, Buffer.from(rawTopUpStatus), label);
       assert.equal(appliedTopUp.value.result.result.finalized_block_height, maxU64, label);
@@ -769,7 +828,7 @@ test("raw Kagemusha JSON preserves lossless u64 fields", async () => {
         label,
       );
     }
-    assert.equal(acceptedRedeem.submitted_at_ms, maxU64, label);
+    assert.equal(acceptedRedeem.identity.issued_at_ms, firstUnsafeU64, label);
     assert.equal(appliedRedeem.value.result.result.finalized_block_height, maxU64, label);
   }
 });
@@ -808,7 +867,7 @@ test("Applied top-up status fails closed without successful native validation", 
     });
     await assert.rejects(
       () => missingValidator.getKagemushaOperationStatus(operationReference("top_up")),
-      /does not expose kagemushaOfflineOperationStatusJsonValidateV1/u,
+      /does not expose kagemushaOfflineOperationStatusJsonValidateV2/u,
     );
 
     const nativeError = new Error("native structural validation rejected the status");
@@ -818,7 +877,8 @@ test("Applied top-up status fails closed without successful native validation", 
       maxRetries: 0,
       [nativeBindingSymbol]: {
         connectNoritoBridgeAbiVersion() { return 23; },
-        kagemushaOfflineOperationStatusJsonValidateV1(bytes) {
+        kagemushaNativeContractRevision() { return 1; },
+        kagemushaOfflineOperationStatusJsonValidateV2(bytes) {
           observedBytes = Buffer.from(bytes);
           throw nativeError;
         },
@@ -831,10 +891,14 @@ test("Applied top-up status fails closed without successful native validation", 
     assert.deepEqual(observedBytes, Buffer.from(rawStatus));
 
     for (const [label, binding] of [
-      ["missing", { kagemushaOfflineOperationStatusJsonValidateV1() {} }],
+      ["missing", {
+        kagemushaNativeContractRevision() { return 1; },
+        kagemushaOfflineOperationStatusJsonValidateV2() {},
+      }],
       ["wrong", {
         connectNoritoBridgeAbiVersion() { return 22; },
-        kagemushaOfflineOperationStatusJsonValidateV1() {},
+        kagemushaNativeContractRevision() { return 1; },
+        kagemushaOfflineOperationStatusJsonValidateV2() {},
       }],
     ]) {
       const wrongAbi = new Client("https://torii.example", {
@@ -848,24 +912,49 @@ test("Applied top-up status fails closed without successful native validation", 
         `${label} ABI version must fail closed`,
       );
     }
+    for (const [label, binding] of [
+      ["missing", {
+        connectNoritoBridgeAbiVersion() { return 23; },
+        kagemushaOfflineOperationStatusJsonValidateV2() {},
+      }],
+      ["wrong", {
+        connectNoritoBridgeAbiVersion() { return 23; },
+        kagemushaNativeContractRevision() { return 2; },
+        kagemushaOfflineOperationStatusJsonValidateV2() {},
+      }],
+    ]) {
+      const wrongContract = new Client("https://torii.example", {
+        fetchImpl: async () => rawJsonResponse(rawStatus),
+        maxRetries: 0,
+        [nativeBindingSymbol]: binding,
+      });
+      await assert.rejects(
+        () => wrongContract.getKagemushaOperationStatus(operationReference("top_up")),
+        /kagemushaNativeContractRevision\(\) === 1/u,
+        `${label} Kagemusha contract revision must fail closed`,
+      );
+    }
   }
 });
 
-test("Kagemusha u64 fields reject lossy numbers and overflow", () => {
+test("Kagemusha identity u64 fields reject lossy numbers and overflow", () => {
   for (const normalize of [
     sdk.normalizeKagemushaOperationReference,
     distSdk.normalizeKagemushaOperationReference,
   ]) {
-    for (const submittedAtMs of [
+    for (const issuedAtMs of [
       Number.MAX_SAFE_INTEGER + 1,
       0x1_0000_0000_0000_0000n,
     ]) {
       assert.throws(
         () => normalize({
           ...operationReference("top_up"),
-          submitted_at_ms: submittedAtMs,
+          identity: {
+            ...operationIdentity("top_up"),
+            issued_at_ms: issuedAtMs,
+          },
         }),
-        /submitted_at_ms must be a positive lossless unsigned 64-bit integer/u,
+        /issued_at_ms must be a positive lossless unsigned 64-bit integer/u,
       );
     }
   }
@@ -934,8 +1023,7 @@ test("Kagemusha operation status accepts valid JSON above 256 KiB", async () => 
   const body = JSON.stringify({
     state: "rejected",
     value: {
-      operation_id: OPERATION_ID,
-      kind: { kind: "redeem", value: null },
+      identity: operationIdentity("redeem"),
       transaction_hash: TRANSACTION_HASH,
       error: {
         code: "offline_operation_rejected",
@@ -995,9 +1083,7 @@ test("operation references require Torii's positive Retry-After header", () => {
   ]) {
     assert.throws(
       () => normalizeKagemushaOperationReference(operationReference("top_up"), {
-        expectedOperationId: OPERATION_ID,
-        expectedKind: "top_up",
-        expectedSubmittedAtMs: 1234,
+        expectedIdentity: operationIdentity("top_up"),
         location: `/v1/offline/operations/${OPERATION_ID}`,
         retryAfter,
       }),
@@ -1011,9 +1097,16 @@ test("operation reference normalization reads accessor-backed tags exactly once"
     normalizeKagemushaOperationReference,
     distSdk.normalizeKagemushaOperationReference,
   ]) {
-    const reference = operationReference("top_up");
+    const frozenReference = operationReference("top_up");
+    const reference = {
+      ...frozenReference,
+      identity: {
+        ...frozenReference.identity,
+        kind: { ...frozenReference.identity.kind },
+      },
+    };
     let reads = 0;
-    Object.defineProperty(reference.kind, "kind", {
+    Object.defineProperty(reference.identity.kind, "kind", {
       configurable: true,
       enumerable: true,
       get() {
@@ -1023,46 +1116,40 @@ test("operation reference normalization reads accessor-backed tags exactly once"
     });
     const normalized = normalize(reference);
     assert.equal(reads, 1);
-    assert.equal(normalized.kind.kind, "top_up");
+    assert.equal(normalized.identity.kind.kind, "top_up");
   }
 });
 
-test("pending operation timestamps must be positive", () => {
+test("operation identity chronology must be positive and bounded", () => {
   assert.throws(
     () => normalizeKagemushaOperationReference({
       ...operationReference("top_up"),
-      submitted_at_ms: 0,
+      identity: { ...operationIdentity("top_up"), issued_at_ms: 0 },
     }, {
-      expectedOperationId: OPERATION_ID,
-      expectedKind: "top_up",
-      expectedSubmittedAtMs: 1234,
+      expectedIdentity: operationIdentity("top_up"),
       location: `/v1/offline/operations/${OPERATION_ID}`,
       retryAfter: "1",
     }),
-    /submitted_at_ms must be a positive lossless unsigned 64-bit integer/u,
+    /issued_at_ms must be a positive lossless unsigned 64-bit integer/u,
   );
   assert.throws(
     () => normalizeKagemushaOperationStatus({
       state: "pending",
       value: {
-        operation_id: OPERATION_ID,
-        kind: { kind: "top_up", value: null },
+        identity: { ...operationIdentity("top_up"), expires_at_ms: 301233 },
         transaction_hash: TRANSACTION_HASH,
-        submitted_at_ms: 0,
       },
     }, operationReference("top_up")),
-    /submitted_at_ms must be a positive lossless unsigned 64-bit integer/u,
+    /identity does not match/u,
   );
 });
 
-test("pending operation status preserves request time across an exact retry attempt", () => {
+test("pending operation status preserves the whole identity across an exact retry attempt", () => {
   const pending = {
     state: "pending",
     value: {
-      operation_id: OPERATION_ID,
-      kind: { kind: "top_up", value: null },
+      identity: operationIdentity("top_up"),
       transaction_hash: TRANSACTION_HASH,
-      submitted_at_ms: 1234,
     },
   };
   for (const normalize of [
@@ -1082,23 +1169,27 @@ test("pending operation status preserves request time across an exact retry atte
         value: {
           ...pending.value,
           transaction_hash: "25".repeat(32),
-          submitted_at_ms: 1234,
         },
       },
       operationReference("top_up"),
     );
     assert.equal(advanced.value.transaction_hash, "25".repeat(32));
-    assert.equal(advanced.value.submitted_at_ms, 1234);
-    for (const value of [
-      { ...pending.value, operation_id: "21".repeat(32) },
-      { ...pending.value, kind: { kind: "redeem", value: null } },
-      { ...pending.value, submitted_at_ms: 1235 },
-      {
-        ...pending.value,
-        transaction_hash: "25".repeat(32),
-        submitted_at_ms: 1235,
-      },
+    for (const field of [
+      "operation_id",
+      "request_authority_digest",
+      "canonical_request_digest",
+      "kind",
+      "expires_at_ms",
     ]) {
+      const replacement = field === "kind"
+        ? { kind: "redeem", value: null }
+        : field === "expires_at_ms"
+          ? 301233
+          : "23".repeat(32);
+      const value = {
+        ...pending.value,
+        identity: { ...pending.value.identity, [field]: replacement },
+      };
       assert.throws(
         () => normalize(
           { ...pending, value },
@@ -1114,7 +1205,7 @@ test("operation status keeps kind immutable while allowing a newer carrier hash"
   const appliedRedeem = {
     state: "applied",
     value: {
-      operation_id: OPERATION_ID,
+      identity: operationIdentity("redeem"),
       result: {
         kind: "redeem",
         result: {
@@ -1127,8 +1218,7 @@ test("operation status keeps kind immutable while allowing a newer carrier hash"
   const rejected = {
     state: "rejected",
     value: {
-      operation_id: OPERATION_ID,
-      kind: { kind: "redeem", value: null },
+      identity: operationIdentity("redeem"),
       transaction_hash: TRANSACTION_HASH,
       error: { code: "offline_operation_rejected", message: "rejected" },
     },
@@ -1186,7 +1276,7 @@ test("operation status normalization snapshots its outer discriminant once", () 
   const status = {
     state: "applied",
     value: {
-      operation_id: OPERATION_ID,
+      identity: operationIdentity("redeem"),
       result: {
         kind: "redeem",
         result: {
@@ -1251,7 +1341,7 @@ test("post-native top-up parsing rejects a V3 anchor instead of upgrading it", (
   const status = {
     state: "applied",
     value: {
-      operation_id: OPERATION_ID,
+      identity: operationIdentity("top_up"),
       result: {
         kind: "top_up",
         result: {
@@ -1418,8 +1508,7 @@ test("rejected operation parsing requires the exact error envelope", () => {
   const rejected = {
     state: "rejected",
     value: {
-      operation_id: OPERATION_ID,
-      kind: { kind: "redeem", value: null },
+      identity: operationIdentity("redeem"),
       transaction_hash: TRANSACTION_HASH,
       error: {
         code: "offline_operation_rejected",
@@ -1469,10 +1558,8 @@ test("rejected operation parsing requires the exact error envelope", () => {
       () => normalize({
         state: "pending",
         value: {
-          operation_id: OPERATION_ID,
-          kind: { kind: "redeem", value: null },
+          identity: operationIdentity("redeem"),
           transaction_hash: "22".repeat(32),
-          submitted_at_ms: 1234,
         },
       }, operationReference("redeem")),
       /canonical lowercase 32-byte Iroha hash/u,
@@ -1516,7 +1603,7 @@ test("applied operation parsing rejects a zero finalized height", () => {
   const applied = {
     state: "applied",
     value: {
-      operation_id: OPERATION_ID,
+      identity: operationIdentity("redeem"),
       result: {
         kind: "redeem",
         result: {

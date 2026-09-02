@@ -6,7 +6,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.TreeMap;
 
 /** Platform-neutral NFC APDU datastream used by Android HCE/IsoDep and iOS CardSession peers. */
 public final class KagemushaNfcProtocol {
@@ -18,6 +20,10 @@ public final class KagemushaNfcProtocol {
   public static final int MAX_EXTENDED_READ_CHUNK_BYTES = 1024;
   public static final int MAX_EXTENDED_WRITE_CHUNK_BYTES = 16 * 1024;
   public static final int MAXIMUM_PAYLOAD_BYTES = KagemushaPeerTransport.MAXIMUM_ARCHIVE_BYTES;
+  private static final int SPARSE_FRAGMENT_ALLOWANCE = 64;
+  private static final int MAXIMUM_SPARSE_FRAGMENT_COUNT =
+      (MAXIMUM_PAYLOAD_BYTES + SAFE_CHUNK_BYTES - 1) / SAFE_CHUNK_BYTES
+          + SPARSE_FRAGMENT_ALLOWANCE;
 
   private static final byte[] CANONICAL_STATUS_SUCCESS = new byte[] {(byte) 0x90, 0x00};
   private static final byte[] CANONICAL_STATUS_WRONG_DATA =
@@ -138,15 +144,21 @@ public final class KagemushaNfcProtocol {
     };
   }
 
+  /** Builds a canonical bulk write whose non-final chunks are at least 220 bytes. */
   public static List<byte[]> writePayloadApdus(
       final PayloadKind kind, final byte[] payloadBytes) {
     return writePayloadApdus(kind, payloadBytes, SAFE_CHUNK_BYTES);
   }
 
+  /** Builds a canonical bulk write whose non-final chunks are at least 220 bytes. */
   public static List<byte[]> writePayloadApdus(
       final PayloadKind kind, final byte[] payloadBytes, final int maxChunkLength) {
     Objects.requireNonNull(payloadBytes, "payloadBytes");
     requirePayloadLength(payloadBytes.length);
+    if (maxChunkLength < SAFE_CHUNK_BYTES) {
+      throw new IllegalArgumentException(
+          "bulk-write chunks must be at least " + SAFE_CHUNK_BYTES + " bytes");
+    }
     requireChunkLength(maxChunkLength, MAX_EXTENDED_WRITE_CHUNK_BYTES);
     final List<byte[]> apdus = new ArrayList<>();
     apdus.add(writeMetaApdu(kind, payloadBytes));
@@ -293,7 +305,9 @@ public final class KagemushaNfcProtocol {
     if (offset < 0 || offset > data.length) {
       throw new IllegalArgumentException("offset out of bounds");
     }
-    if (length < 0 || offset + length > data.length) {
+    if (length < 0
+        || length > data.length - offset
+        || length > Integer.MAX_VALUE - CANONICAL_STATUS_SUCCESS.length) {
       throw new IllegalArgumentException("length out of bounds");
     }
     final byte[] response = new byte[length + CANONICAL_STATUS_SUCCESS.length];
@@ -470,6 +484,13 @@ public final class KagemushaNfcProtocol {
     if (length <= 0 || length > maxChunkLength) {
       throw new IllegalArgumentException("chunk length out of bounds");
     }
+  }
+
+  private static int sparseFragmentBudget(final int payloadLength) {
+    final int canonicalFragments =
+        (payloadLength + SAFE_CHUNK_BYTES - 1) / SAFE_CHUNK_BYTES;
+    return Math.min(
+        canonicalFragments + SPARSE_FRAGMENT_ALLOWANCE, MAXIMUM_SPARSE_FRAGMENT_COUNT);
   }
 
   private static void writeInt32(final int value, final byte[] out, final int offset) {
@@ -720,12 +741,30 @@ public final class KagemushaNfcProtocol {
 
   /** Incrementally validates APDU write chunks before exposing a completed NFC payload. */
   public static final class PayloadAssembler {
+    private static final class StoredFragment {
+      private final int offset;
+      private final byte[] bytes;
+
+      private StoredFragment(final int offset, final byte[] bytes) {
+        this.offset = offset;
+        this.bytes = bytes;
+      }
+
+      private int end() {
+        return offset + bytes.length;
+      }
+    }
+
     private final PayloadKind kind;
     private final int expectedLength;
     private final byte[] expectedSha256;
-    private final byte[] bytes;
-    private final boolean[] written;
-    private int writtenCount;
+    private final TreeMap<Integer, byte[]> fragments = new TreeMap<>();
+    private final TreeMap<Integer, Integer> coveredRanges = new TreeMap<>();
+    // The canonical 220-byte writer needs ceil(length / 220) fragments. A fixed
+    // allowance admits modest overlap/out-of-order splitting without allowing
+    // attacker-selected one-byte writes to create unbounded nodes.
+    private final int fragmentBudget;
+    private int bufferedByteCount;
     private boolean cleared;
 
     public PayloadAssembler(final PayloadInfo info) {
@@ -746,8 +785,7 @@ public final class KagemushaNfcProtocol {
       }
       this.expectedLength = expectedLength;
       this.expectedSha256 = expectedSha256.clone();
-      this.bytes = new byte[expectedLength];
-      this.written = new boolean[expectedLength];
+      this.fragmentBudget = sparseFragmentBudget(expectedLength);
     }
 
     public PayloadKind kind() {
@@ -758,15 +796,24 @@ public final class KagemushaNfcProtocol {
       return expectedLength;
     }
 
-    public byte[] expectedSha256() {
+    public synchronized byte[] expectedSha256() {
       return expectedSha256.clone();
     }
 
-    public boolean isComplete() {
-      return !cleared && writtenCount == expectedLength;
+    /** Returns the unique payload bytes currently retained by the sparse assembler. */
+    public synchronized int bufferedByteCount() {
+      return bufferedByteCount;
     }
 
-    public boolean write(final int offset, final byte[] chunk) {
+    public synchronized boolean isComplete() {
+      return !cleared
+          && bufferedByteCount == expectedLength
+          && coveredRanges.size() == 1
+          && coveredRanges.firstKey() == 0
+          && coveredRanges.firstEntry().getValue() == expectedLength;
+    }
+
+    public synchronized boolean write(final int offset, final byte[] chunk) {
       Objects.requireNonNull(chunk, "chunk");
       if (cleared
           || offset < 0
@@ -779,42 +826,142 @@ public final class KagemushaNfcProtocol {
         return false;
       }
       final int end = offset + chunk.length;
-      for (int index = 0; index < chunk.length; index++) {
-        final int writeIndex = offset + index;
-        if (written[writeIndex] && bytes[writeIndex] != chunk[index]) {
-          return false;
+      final List<StoredFragment> overlaps = overlappingFragments(offset, end);
+      for (final StoredFragment fragment : overlaps) {
+        final int overlapStart = Math.max(offset, fragment.offset);
+        final int overlapEnd = Math.min(end, fragment.end());
+        for (int target = overlapStart; target < overlapEnd; target++) {
+          if (fragment.bytes[target - fragment.offset] != chunk[target - offset]) {
+            return false;
+          }
         }
       }
-      System.arraycopy(chunk, 0, bytes, offset, chunk.length);
-      for (int index = offset; index < end; index++) {
-        if (!written[index]) {
-          written[index] = true;
-          writtenCount++;
+
+      int proposedFragmentCount = 0;
+      int budgetCursor = offset;
+      for (final StoredFragment fragment : overlaps) {
+        if (budgetCursor < fragment.offset) {
+          proposedFragmentCount += 1;
         }
+        budgetCursor = Math.max(budgetCursor, Math.min(fragment.end(), end));
       }
+      if (budgetCursor < end) {
+        proposedFragmentCount += 1;
+      }
+      if (fragments.size() + proposedFragmentCount > fragmentBudget) {
+        clear();
+        return false;
+      }
+
+      // Materialize only uncovered ranges before mutating state. Coalesced
+      // interval metadata avoids per-byte flags, while immutable fragments
+      // avoid quadratic copying as adjacent writes grow the covered range.
+      final List<StoredFragment> additions = new ArrayList<>();
+      int cursor = offset;
+      for (final StoredFragment fragment : overlaps) {
+        if (cursor < fragment.offset) {
+          final int gapEnd = Math.min(fragment.offset, end);
+          additions.add(
+              new StoredFragment(
+                  cursor,
+                  Arrays.copyOfRange(chunk, cursor - offset, gapEnd - offset)));
+        }
+        cursor = Math.max(cursor, Math.min(fragment.end(), end));
+      }
+      if (cursor < end) {
+        additions.add(
+            new StoredFragment(cursor, Arrays.copyOfRange(chunk, cursor - offset, end - offset)));
+      }
+      if (additions.isEmpty()) {
+        return true;
+      }
+      for (final StoredFragment addition : additions) {
+        fragments.put(addition.offset, addition.bytes);
+        bufferedByteCount += addition.bytes.length;
+      }
+      mergeCoverage(offset, end);
       return true;
     }
 
-    public byte[] commit() {
+    public synchronized byte[] commit() {
       if (cleared) {
         throw new IllegalStateException("payload assembler is cleared");
       }
       if (!isComplete()) {
         throw new IllegalStateException("payload is incomplete");
       }
-      if (!payloadDigestMatches(bytes, expectedSha256)) {
-        throw new IllegalStateException("payload checksum mismatch");
+      byte[] assembled = null;
+      boolean succeeded = false;
+      try {
+        assembled = new byte[expectedLength];
+        int cursor = 0;
+        for (final Map.Entry<Integer, byte[]> fragment : fragments.entrySet()) {
+          if (fragment.getKey() != cursor
+              || fragment.getValue().length > expectedLength - cursor) {
+            throw new IllegalStateException("payload reconstruction mismatch");
+          }
+          System.arraycopy(fragment.getValue(), 0, assembled, cursor, fragment.getValue().length);
+          cursor += fragment.getValue().length;
+        }
+        if (cursor != expectedLength) {
+          throw new IllegalStateException("payload reconstruction mismatch");
+        }
+        if (!payloadDigestMatches(assembled, expectedSha256)) {
+          throw new IllegalStateException("payload checksum mismatch");
+        }
+        succeeded = true;
+        return assembled;
+      } finally {
+        if (!succeeded && assembled != null) {
+          Arrays.fill(assembled, (byte) 0);
+        }
+        // Exact coverage makes commit a one-shot operation. Both success and
+        // terminal validation failure consume and zeroize the state.
+        clear();
       }
-      return bytes.clone();
     }
 
     /** Zeroizes all owned payload and digest bytes and makes this assembler unusable. */
-    public void clear() {
+    public synchronized void clear() {
       Arrays.fill(expectedSha256, (byte) 0);
-      Arrays.fill(bytes, (byte) 0);
-      Arrays.fill(written, false);
-      writtenCount = 0;
+      for (final byte[] fragment : fragments.values()) {
+        Arrays.fill(fragment, (byte) 0);
+      }
+      fragments.clear();
+      coveredRanges.clear();
+      bufferedByteCount = 0;
       cleared = true;
+    }
+
+    private List<StoredFragment> overlappingFragments(final int start, final int end) {
+      final List<StoredFragment> overlapping = new ArrayList<>();
+      Map.Entry<Integer, byte[]> entry = fragments.floorEntry(start);
+      if (entry == null || entry.getKey() + entry.getValue().length <= start) {
+        entry = fragments.ceilingEntry(start);
+      }
+      while (entry != null && entry.getKey() < end) {
+        overlapping.add(new StoredFragment(entry.getKey(), entry.getValue()));
+        entry = fragments.higherEntry(entry.getKey());
+      }
+      return overlapping;
+    }
+
+    private void mergeCoverage(final int start, final int end) {
+      int mergedStart = start;
+      int mergedEnd = end;
+      final Map.Entry<Integer, Integer> floor = coveredRanges.floorEntry(mergedStart);
+      if (floor != null && floor.getValue() >= mergedStart) {
+        mergedStart = floor.getKey();
+        mergedEnd = Math.max(mergedEnd, floor.getValue());
+        coveredRanges.remove(floor.getKey());
+      }
+      Map.Entry<Integer, Integer> next = coveredRanges.ceilingEntry(mergedStart);
+      while (next != null && next.getKey() <= mergedEnd) {
+        mergedEnd = Math.max(mergedEnd, next.getValue());
+        coveredRanges.remove(next.getKey());
+        next = coveredRanges.ceilingEntry(mergedStart);
+      }
+      coveredRanges.put(mergedStart, mergedEnd);
     }
   }
 }

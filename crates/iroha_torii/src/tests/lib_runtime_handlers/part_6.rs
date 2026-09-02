@@ -1767,8 +1767,8 @@ fn seed_authoritative_hosted_http_revision(
                 self_stake: iroha_primitives::numeric::Quantity::from(1_u64),
                 metadata: iroha_data_model::metadata::Metadata::default(),
                 status: iroha_data_model::nexus::staking::PublicLaneValidatorStatus::Active,
-                activation_epoch: Some(0),
-                activation_height: Some(0),
+                activation_height: 1,
+                deactivation_height: None,
                 last_reward_epoch: None,
             },
         );
@@ -2020,8 +2020,8 @@ fn seed_hosted_http_public_lane_validator(
                 self_stake: Quantity::from(1_u64),
                 metadata: iroha_data_model::metadata::Metadata::default(),
                 status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
-                activation_epoch: None,
-                activation_height: None,
+                activation_height: 1,
+                deactivation_height: None,
                 last_reward_epoch: None,
             },
         );

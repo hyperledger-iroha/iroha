@@ -44,6 +44,10 @@ import {
   KAIGI_RELAY_MANIFEST_MAX_HOPS_V1,
   buildRegisterSmartContractCodeInstruction,
   buildRegisterSmartContractBytesInstruction,
+  buildUploadSmartContractCodeChunkInstruction,
+  buildFinalizeSmartContractCodeUploadInstruction,
+  buildCancelSmartContractCodeUploadInstruction,
+  buildCommitContractDeploymentInstruction,
   buildRemoveSmartContractBytesInstruction,
   buildProposeDeployContractInstruction,
   buildCastZkBallotInstruction,
@@ -328,6 +332,91 @@ function readInstructionEnvelopeWireId(encoded, context) {
   );
   assert.equal(inner.next, outer.payload.length);
   return wireValue.payload.toString("utf8");
+}
+
+function readInstructionEnvelopeIdentity(encoded, context) {
+  const outer = validateNoritoFrame(encoded);
+  const wire = readCompactFieldPayload(outer.payload, 0, `${context}.wire`);
+  const wireValue = readCompactFieldPayload(
+    wire.payload,
+    0,
+    `${context}.wire.value`,
+  );
+  assert.equal(wireValue.next, wire.payload.length);
+  const inner = readCompactFieldPayload(
+    outer.payload,
+    wire.next,
+    `${context}.inner`,
+  );
+  assert.equal(inner.next, outer.payload.length);
+  const frameLength = Number(inner.payload.readBigUInt64LE(0));
+  const innerFrame = inner.payload.subarray(8);
+  assert.equal(innerFrame.length, frameLength);
+  return {
+    wireId: wireValue.payload.toString("utf8"),
+    innerSchemaHash: validateNoritoFrame(innerFrame).schemaHash,
+  };
+}
+
+function rustTypeSchemaHash(typeName) {
+  return createHash("sha256")
+    .update(`norito:v1:type-name\0${typeName}`, "utf8")
+    .digest()
+    .subarray(0, 16);
+}
+
+const RUST_PRELUDE_INSTRUCTION_TYPE_NAMES = Object.freeze({
+  BurnBox: "iroha_data_model::isi::mint_burn::BurnBox",
+  CustomInstruction: "iroha_data_model::isi::transparent::CustomInstruction",
+  ExecuteTrigger: "iroha_data_model::isi::transparent::ExecuteTrigger",
+  MintBox: "iroha_data_model::isi::mint_burn::MintBox",
+  RegisterBox: "iroha_data_model::isi::register::RegisterBox",
+  TransferBox: "iroha_data_model::isi::transfer::TransferBox",
+});
+
+function rustInstructionTypeName(registryTypeLabel) {
+  const preludeType = RUST_PRELUDE_INSTRUCTION_TYPE_NAMES[registryTypeLabel];
+  if (preludeType !== undefined) {
+    return preludeType;
+  }
+  if (registryTypeLabel.startsWith("crate::isi::")) {
+    return `iroha_data_model::${registryTypeLabel.slice("crate::".length)}`;
+  }
+  assert.match(
+    registryTypeLabel,
+    /^[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)+$/u,
+    `registry type ${registryTypeLabel} must be module-qualified`,
+  );
+  return `iroha_data_model::isi::${registryTypeLabel}`;
+}
+
+function readRustInstructionRegistryBindings() {
+  const source = fs.readFileSync(
+    path.join(
+      repoRoot,
+      "crates",
+      "iroha_data_model",
+      "src",
+      "isi",
+      "registry",
+      "wire_ids.rs",
+    ),
+    "utf8",
+  );
+  const entries = new Map();
+  const pattern =
+    /\b(?:built_in_wire_id|governance_wire_id)!\(\s*([A-Za-z_][A-Za-z0-9_:]*)\s*=>\s*"([^"]+)"/gu;
+  for (const match of source.matchAll(pattern)) {
+    const [, typeLabel, outerWireId] = match;
+    const existing = entries.get(outerWireId);
+    assert.ok(
+      existing === undefined || existing === typeLabel,
+      `Rust registry wire ID ${outerWireId} has conflicting types ${existing} and ${typeLabel}`,
+    );
+    entries.set(outerWireId, typeLabel);
+  }
+  assert.ok(entries.size > 0, "Rust instruction registry must not be empty");
+  return entries;
 }
 
 function encodeAndDecode(
@@ -2892,9 +2981,183 @@ test("buildRemoveSmartContractBytesInstruction accepts reason or null", () => {
   assert.equal(withoutReason.RemoveSmartContractBytes.reason, undefined);
 });
 
+baseTest("every pure-JS instruction binding matches the Rust registry and inner type", () => {
+  const rustBindings = readRustInstructionRegistryBindings();
+  const jsBindings = _createNoritoInstructionApi(
+    Object.freeze({}),
+  )._instructionWireSchemaBindings();
+  assert.ok(Object.isFrozen(jsBindings));
+  assert.ok(jsBindings.length > 0, "JS instruction binding inventory must not be empty");
+  assert.equal(
+    new Set(jsBindings.map(({ outerWireId }) => outerWireId)).size,
+    jsBindings.length,
+    "JS instruction outer wire IDs must be unique",
+  );
+
+  for (const { outerWireId, innerTypeName } of jsBindings) {
+    const registryTypeLabel = rustBindings.get(outerWireId);
+    assert.notEqual(
+      registryTypeLabel,
+      undefined,
+      `${outerWireId} must exist in the Rust instruction registry`,
+    );
+    assert.equal(
+      innerTypeName,
+      rustInstructionTypeName(registryTypeLabel),
+      `${outerWireId} must retain the Rust registry type identity`,
+    );
+    assert.match(
+      innerTypeName,
+      /^iroha_data_model::isi::/u,
+      `${outerWireId} inner schema must use a Rust data-model type name`,
+    );
+    assert.notEqual(
+      innerTypeName,
+      outerWireId,
+      `${outerWireId} must not reuse its public wire ID as the inner schema name`,
+    );
+  }
+});
+
+baseTest("smart-contract instructions bind canonical outer ids to Rust payload schemas", () => {
+  const contractAddress =
+    "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
+  const hash = `${"aa".repeat(31)}ab`;
+  const manifest = JSON.parse(
+    fs.readFileSync(
+      path.join(__dirname, "fixtures", "contract_manifest_v1.json"),
+      "utf8",
+    ),
+  ).manifest;
+  const cases = [
+    [
+      "RegisterSmartContractCode",
+      buildRegisterSmartContractCodeInstruction({ manifest }),
+    ],
+    [
+      "RegisterSmartContractBytes",
+      buildRegisterSmartContractBytesInstruction({
+        codeHash: hash,
+        code: Buffer.of(1),
+      }),
+    ],
+    [
+      "DeactivateContractInstance",
+      {
+        DeactivateContractInstance: {
+          contract_address: contractAddress,
+          expected_revision: "1",
+          reason: null,
+        },
+      },
+    ],
+    [
+      "ActivateContractInstance",
+      {
+        ActivateContractInstance: {
+          contract_address: contractAddress,
+          expected_revision: "2",
+          code_hash: hash,
+        },
+      },
+    ],
+    [
+      "SetContractParliamentDelegation",
+      {
+        SetContractParliamentDelegation: {
+          contract_address: contractAddress,
+          expected_revision: "3",
+          delegated: true,
+        },
+      },
+    ],
+    [
+      "OfferContractOwnership",
+      {
+        OfferContractOwnership: {
+          contract_address: contractAddress,
+          expected_revision: "4",
+          new_owner: { owner: "Parliament", value: null },
+        },
+      },
+    ],
+    [
+      "AcceptContractOwnership",
+      {
+        AcceptContractOwnership: {
+          contract_address: contractAddress,
+          expected_revision: "5",
+        },
+      },
+    ],
+    [
+      "CancelContractOwnershipOffer",
+      {
+        CancelContractOwnershipOffer: {
+          contract_address: contractAddress,
+          expected_revision: "6",
+        },
+      },
+    ],
+    [
+      "CommitContractDeployment",
+      buildCommitContractDeploymentInstruction({
+        expectedDeployNonce: 7,
+        contractAddress,
+        codeHash: hash,
+        contractAlias: "ledger",
+      }),
+    ],
+    [
+      "UploadSmartContractCodeChunk",
+      buildUploadSmartContractCodeChunkInstruction({
+        codeHash: hash,
+        totalSize: 1,
+        chunkIndex: 0,
+        chunkCount: 1,
+        chunk: Buffer.of(1),
+      }),
+    ],
+    [
+      "FinalizeSmartContractCodeUpload",
+      buildFinalizeSmartContractCodeUploadInstruction({
+        codeHash: hash,
+        totalSize: 1,
+        chunkCount: 1,
+      }),
+    ],
+    [
+      "CancelSmartContractCodeUpload",
+      buildCancelSmartContractCodeUploadInstruction({ codeHash: hash }),
+    ],
+    [
+      "RemoveSmartContractBytes",
+      buildRemoveSmartContractBytesInstruction({ codeHash: hash }),
+    ],
+  ];
+
+  withPureJsInstructionCodec(({ noritoEncodeInstruction }) => {
+    for (const [name, instruction] of cases) {
+      const identity = readInstructionEnvelopeIdentity(
+        noritoEncodeInstruction(instruction),
+        name,
+      );
+      assert.equal(
+        identity.wireId,
+        `iroha.instruction.v1::smart_contract_code::${name}`,
+      );
+      assert.deepEqual(
+        identity.innerSchemaHash,
+        rustTypeSchemaHash(
+          `iroha_data_model::isi::smart_contract_code::${name}`,
+        ),
+      );
+    }
+  });
+});
+
 baseTest("buildProposeDeployContractInstruction normalizes the typed V1 payload", () => {
   const instruction = buildProposeDeployContractInstruction({
-    proposalOperator: ACCOUNT_ID,
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: `blake2b32:0x${"AA".repeat(32)}`,
     abiHash: `0X${"BB".repeat(32)}`,
@@ -2902,7 +3165,6 @@ baseTest("buildProposeDeployContractInstruction normalizes the typed V1 payload"
   });
   const expected = {
     ProposeDeployContract: {
-      proposal_operator: ACCOUNT_ID_CANONICAL,
       contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
       code_hash: "aa".repeat(32),
       abi_hash: "bb".repeat(32),
@@ -2913,11 +3175,26 @@ baseTest("buildProposeDeployContractInstruction normalizes the typed V1 payload"
   const decoded = withPureJsInstructionCodec((codec) =>
     encodeAndDecode(instruction, codec));
   assert.deepEqual(decoded, expected);
+  withPureJsInstructionCodec(({ noritoEncodeInstruction }) => {
+    const identity = readInstructionEnvelopeIdentity(
+      noritoEncodeInstruction(instruction),
+      "ProposeDeployContract",
+    );
+    assert.equal(
+      identity.wireId,
+      "iroha.instruction.v1::governance::ProposeDeployContract",
+    );
+    assert.deepEqual(
+      identity.innerSchemaHash,
+      rustTypeSchemaHash(
+        "iroha_data_model::isi::governance::ProposeDeployContract",
+      ),
+    );
+  });
 });
 
-baseTest("buildProposeDeployContractInstruction encodes manifest provenance after the bound operator", () => {
+baseTest("buildProposeDeployContractInstruction encodes optional manifest provenance", () => {
   const instruction = buildProposeDeployContractInstruction({
-    proposalOperator: ACCOUNT_ID,
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: "aa".repeat(32),
     abiHash: "bb".repeat(32),
@@ -2943,7 +3220,6 @@ baseTest("buildProposeDeployContractInstruction encodes manifest provenance afte
 
 baseTest("buildProposeDeployContractInstruction validates ML-DSA manifest signer keys", () => {
   const base = {
-    proposalOperator: ACCOUNT_ID,
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: "aa".repeat(32),
     abiHash: "bb".repeat(32),
@@ -2979,12 +3255,12 @@ baseTest("buildProposeDeployContractInstruction validates ML-DSA manifest signer
 
 baseTest("buildProposeDeployContractInstruction has a closed canonical local target", () => {
   const base = {
-    proposalOperator: ACCOUNT_ID,
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: "aa".repeat(32),
     abiHash: "bb".repeat(32),
   };
   for (const field of [
+    "proposalOperator",
     "contractAlias",
     "contract_address",
     "code_hash",
@@ -3016,7 +3292,6 @@ baseTest("buildProposeDeployContractInstruction has a closed canonical local tar
 
 baseTest("buildProposeDeployContractInstruction accepts only numeric ABI V1", () => {
   const base = {
-    proposalOperator: ACCOUNT_ID,
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: "aa".repeat(32),
     abiHash: "bb".repeat(32),
@@ -3036,7 +3311,6 @@ baseTest("buildProposeDeployContractInstruction accepts only numeric ABI V1", ()
 
 baseTest("buildProposeDeployContractInstruction enforces the governance hash grammar", () => {
   const base = {
-    proposalOperator: ACCOUNT_ID,
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: "aa".repeat(32),
     abiHash: "bb".repeat(32),
@@ -3057,7 +3331,6 @@ baseTest("buildProposeDeployContractInstruction enforces the governance hash gra
 
 baseTest("governance proposal builder rejects every private-key alias recursively", () => {
   const base = {
-    proposalOperator: ACCOUNT_ID,
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: "aa".repeat(32),
     abiHash: "bb".repeat(32),
@@ -3089,7 +3362,6 @@ baseTest("governance proposal builder rejects every private-key alias recursivel
 
 baseTest("buildProposeDeployContractInstruction rejects retired lifecycle controls", () => {
   const base = {
-    proposalOperator: ACCOUNT_ID,
     contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
     codeHash: "aa".repeat(32),
     abiHash: "bb".repeat(32),
@@ -3101,12 +3373,17 @@ baseTest("buildProposeDeployContractInstruction rejects retired lifecycle contro
     );
   }
 
-  for (const field of ["window", "mode", "code_hash_hex", "abi_hash_hex"]) {
+  for (const field of [
+    "proposal_operator",
+    "window",
+    "mode",
+    "code_hash_hex",
+    "abi_hash_hex",
+  ]) {
     assert.throws(
       () =>
         noritoEncodeInstruction({
           ProposeDeployContract: {
-            proposal_operator: ACCOUNT_ID,
             contract_address: base.contractAddress,
             code_hash: base.codeHash,
             abi_hash: base.abiHash,
@@ -3375,7 +3652,6 @@ baseTest("direct governance Norito validation runs before native dispatch", () =
   assert.throws(
       () => encodeWithNative({
         ProposeDeployContract: {
-          proposal_operator: ACCOUNT_ID,
           contract_address:
             "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
           code_hash: "aa".repeat(32),

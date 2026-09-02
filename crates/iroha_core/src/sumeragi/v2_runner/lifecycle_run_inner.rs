@@ -1930,7 +1930,10 @@ pub(super) fn run_non_pending_lifecycle_loop(
         let new_block_sync_server = block_sync_server
             .is_none()
             .then(|| {
-                let limits = HistoricalBodyServeLimits::first_release(certified_request_capacity)?;
+                let limits = HistoricalBodyServeLimits::first_release(
+                    certified_request_capacity,
+                    network.reply_route_source_capacity(),
+                )?;
                 V2BlockSyncServer::new_with_historical_body_service(
                     context.network_id,
                     certified_request_capacity,

@@ -334,7 +334,8 @@ pub(crate) fn plan_due_privacy_activation_promotions_v1(
 ///
 /// A proposed activation or protocol-limit transition effective at `E` is valid in a snapshot
 /// committed at `E - 1` and invalid once committed height `E` has already been reached. No
-/// lifecycle may claim a transition height after the snapshot's committed height.
+/// lifecycle may claim a transition height after the snapshot's committed height, and every
+/// lifecycle that records an activation must retain the protocol-wide minimum activation notice.
 pub(crate) fn validate_privacy_activations_at_committed_height_v1(
     activations: &impl StorageReadOnly<PrivacyActivationKeyV1, PrivacyProtocolActivationRecordV1>,
     committed_height: u64,
@@ -407,13 +408,27 @@ pub(crate) fn validate_privacy_activations_at_committed_height_v1(
                 record.protocol_id
             ));
         }
-        if let Some(activated_at_height) = activated_at_height
-            && activated_at_height > committed_height
-        {
-            return Err(format!(
-                "privacy activation {:?} activation height {activated_at_height} is after committed height {committed_height}",
-                record.protocol_id
-            ));
+        if let Some(activated_at_height) = activated_at_height {
+            let earliest_activation_height = proposed_at_height
+                .checked_add(crate::privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
+                .ok_or_else(|| {
+                    format!(
+                        "privacy activation {:?} minimum activation notice overflows after proposal height {proposed_at_height}",
+                        record.protocol_id
+                    )
+                })?;
+            if activated_at_height < earliest_activation_height {
+                return Err(format!(
+                    "privacy activation {:?} activation height {activated_at_height} is earlier than minimum notice height {earliest_activation_height} after proposal height {proposed_at_height}",
+                    record.protocol_id
+                ));
+            }
+            if activated_at_height > committed_height {
+                return Err(format!(
+                    "privacy activation {:?} activation height {activated_at_height} is after committed height {committed_height}",
+                    record.protocol_id
+                ));
+            }
         }
         if let Some(state_since_height) = state_since_height
             && state_since_height > committed_height
@@ -11536,6 +11551,81 @@ mod tests {
             validate(uncompiled, 1_300)
                 .expect_err("uncompiled restored activation must reject")
                 .contains("not compiled")
+        );
+    }
+    #[test]
+    fn restored_activated_lifecycles_require_minimum_activation_notice() {
+        let validate = |record: PrivacyProtocolActivationRecordV1, committed_height| {
+            let key = PrivacyActivationKeyV1::new(record.protocol_id);
+            let mut activations = Storage::new();
+            activations.insert(key, record);
+            validate_privacy_activations_at_committed_height_v1(
+                &activations.view(),
+                committed_height,
+            )
+        };
+        let proposal = activation_proposal();
+        let short_notice_lifecycles = [
+            (
+                "active",
+                PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+                    proposed_at_height: 1_000,
+                    activated_at_height: 1_299,
+                    state_since_height: 1_299,
+                }),
+                1_299,
+            ),
+            (
+                "suspended",
+                PrivacyProtocolLifecycleV1::Suspended(PrivacySuspendedLifecycleV1 {
+                    proposed_at_height: 1_000,
+                    activated_at_height: 1_299,
+                    state_since_height: 1_300,
+                }),
+                1_300,
+            ),
+            (
+                "retired after activation",
+                PrivacyProtocolLifecycleV1::Retired(PrivacyRetiredLifecycleV1 {
+                    proposed_at_height: 1_000,
+                    activated_at_height: Some(1_299),
+                    state_since_height: 1_300,
+                }),
+                1_300,
+            ),
+        ];
+        for (label, lifecycle, committed_height) in short_notice_lifecycles {
+            let mut record = proposal;
+            record.lifecycle = lifecycle;
+            let error = validate(record, committed_height)
+                .expect_err("restored activation with short notice must reject");
+            assert!(
+                error.contains("minimum notice height 1300"),
+                "unexpected {label} restore error: {error}"
+            );
+        }
+
+        let mut retired_at_boundary = proposal;
+        retired_at_boundary.lifecycle =
+            PrivacyProtocolLifecycleV1::Retired(PrivacyRetiredLifecycleV1 {
+                proposed_at_height: 1_000,
+                activated_at_height: Some(1_300),
+                state_since_height: 1_301,
+            });
+        validate(retired_at_boundary, 1_301)
+            .expect("the exact minimum notice remains valid after retirement");
+
+        let mut overflowing_notice = proposal;
+        overflowing_notice.lifecycle =
+            PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+                proposed_at_height: u64::MAX - 1,
+                activated_at_height: u64::MAX,
+                state_since_height: u64::MAX,
+            });
+        assert!(
+            validate(overflowing_notice, u64::MAX)
+                .expect_err("overflowing restored notice must reject")
+                .contains("minimum activation notice overflows")
         );
     }
     #[test]

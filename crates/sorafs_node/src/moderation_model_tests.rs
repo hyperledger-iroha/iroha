@@ -842,7 +842,7 @@ fn moderation_quarantine_provider_handles_use_canonical_production_grammar() {
     for handle in [
         "software://sorafs/moderation/quarantine-primary",
         "kms://sorafs/moderation/quarantine-primary",
-        "hsm://sorafs/moderation/quarantine-primary",
+        "provider://sorafs/moderation/quarantine-primary",
     ] {
         assert_eq!(
             validate_moderation_quarantine_key_provider_handle(handle, true),
@@ -870,7 +870,7 @@ fn moderation_quarantine_provider_handles_use_canonical_production_grammar() {
 fn moderation_quarantine_wrapping_key_ids_use_canonical_production_grammar() {
     for key_id in [
         "software://sorafs/moderation/quarantine-primary",
-        "pkcs11:sorafs/moderation/quarantine-primary",
+        "provider:sorafs/moderation/quarantine-primary",
         "kms:sorafs/moderation/quarantine-primary",
     ] {
         assert_eq!(validate_wrapping_key_id_text(key_id), Ok(()));

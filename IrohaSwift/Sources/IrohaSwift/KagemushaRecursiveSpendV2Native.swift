@@ -5,6 +5,7 @@ import Darwin
 #endif
 
 extension NoritoNativeBridge {
+    private typealias KagemushaNativeContractRevisionFn = @convention(c) () -> UInt32
     private typealias KagemushaV2SymbolProbeFn = @convention(c) () -> Void
     private typealias KagemushaV2FreeFn = @convention(c) (UnsafeMutablePointer<UInt8>?) -> Void
     private typealias KagemushaV4SecretFreeFn = @convention(c) (
@@ -153,9 +154,23 @@ extension NoritoNativeBridge {
         #endif
     }
 
+    /// Return the exact first-release Kagemusha native contract revision.
+    /// A missing probe is a stale bridge and therefore returns `nil`.
+    func kagemushaNativeContractRevision() -> UInt32? {
+        #if canImport(Darwin)
+        guard let function = resolveKagemushaV2Symbol(
+            "connect_norito_kagemusha_native_contract_revision",
+            as: KagemushaNativeContractRevisionFn.self
+        ) else { return nil }
+        return function()
+        #else
+        return nil
+        #endif
+    }
+
     /// Canonical-decode and validate the complete shared offline-operation
     /// status before Swift projects attacker-controlled nested fields.
-    func kagemushaOfflineOperationStatusValidateV1(
+    func kagemushaOfflineOperationStatusValidateV2(
         statusArchive: Data
     ) throws -> Bool? {
         guard !statusArchive.isEmpty,
@@ -164,7 +179,7 @@ extension NoritoNativeBridge {
         }
         #if canImport(Darwin)
         guard let function = resolveKagemushaV2Symbol(
-            "connect_norito_kagemusha_offline_operation_status_validate_v1",
+            "connect_norito_kagemusha_offline_operation_status_validate_v2",
             as: KagemushaV2ArchiveValidateFn.self
         ) else {
             return nil
@@ -268,7 +283,7 @@ extension NoritoNativeBridge {
         )
     }
 
-    func kagemushaRecursiveSpendRedemptionChangePrepareV4(
+    func kagemushaRecursiveSpendRedemptionChangePrepareV5(
         requestArchive: Data
     ) throws -> Data? {
         guard !requestArchive.isEmpty,
@@ -280,7 +295,7 @@ extension NoritoNativeBridge {
         }
         #if canImport(Darwin)
         guard let function = resolveKagemushaV2Symbol(
-            "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4",
+            "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v5",
             as: KagemushaV2ArchiveOutFn.self
         ), let secureFree = resolveKagemushaV2Symbol(
             "connect_norito_kagemusha_secret_free_buffer",
@@ -683,16 +698,16 @@ extension NoritoNativeBridge {
         #endif
     }
 
-    func kagemushaRequestAuthorizationSigningBytesV2(
+    func kagemushaRequestAuthorizationSigningBytesV3(
         preparationArchive: Data
     ) throws -> Data? {
         try callKagemushaV2Archive(
-            symbol: "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
+            symbol: "connect_norito_kagemusha_request_authorization_signing_bytes_v3",
             archive: preparationArchive
         )
     }
 
-    func kagemushaRequestAuthorizationFinalizeHardwareV2(
+    func kagemushaRequestAuthorizationFinalizeHardwareV3(
         preparationArchive: Data,
         authenticatorData: Data,
         derSignature: Data
@@ -706,7 +721,7 @@ extension NoritoNativeBridge {
         }
         #if canImport(Darwin)
         guard let function = resolveKagemushaV2Symbol(
-            "connect_norito_kagemusha_request_authorization_finalize_hardware_v2",
+            "connect_norito_kagemusha_request_authorization_finalize_hardware_v3",
             as: KagemushaV2ThreeArchiveTwoOutFn.self
         ), let freeFunction = resolveKagemushaV2Symbol(
             "connect_norito_free",
@@ -760,7 +775,7 @@ extension NoritoNativeBridge {
         #endif
     }
 
-    func kagemushaRequestAuthorizationFinalizeIosAppAttestV2(
+    func kagemushaRequestAuthorizationFinalizeIosAppAttestV3(
         preparationArchive: Data,
         assertionObject: Data
     ) throws -> (
@@ -777,7 +792,7 @@ extension NoritoNativeBridge {
         }
         #if canImport(Darwin)
         guard let function = resolveKagemushaV2Symbol(
-            "connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2",
+            "connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v3",
             as: KagemushaV2TwoArchiveThreeOutFn.self
         ), let freeFunction = resolveKagemushaV2Symbol(
             "connect_norito_free",

@@ -56,6 +56,11 @@ PRIMARY_PARTICIPANTS = 3
 VALIDATORS_PER_DATASPACE = 4
 GLOBAL_VALIDATORS = 4
 QUORUM = "3-of-4"
+RAYON_WORKER_THREADS = 8
+VALIDATOR_WORKER_THREADS = 4
+CARGO_BUILD_JOBS = 1
+CARGO_RELEASE_CODEGEN_UNITS = 1
+CARGO_INCREMENTAL = False
 PROFILES = ("private", "transparent_control")
 MIN_FAULT_SEEDS = 10
 MAX_FAULT_SEEDS = 256
@@ -202,12 +207,14 @@ FAULT_STATE_COUNT_FIELDS = {
     "staged_pool_heads",
     "staged_nullifiers",
     "staged_output_commitments",
+    "replicated_staged_locks",
     "staged_locks",
 }
 FAULT_STAGED_COUNT_FIELDS = {
     "staged_pool_heads",
     "staged_nullifiers",
     "staged_output_commitments",
+    "replicated_staged_locks",
     "staged_locks",
 }
 FAULT_LEDGER_COUNT_FIELDS = FAULT_STATE_COUNT_FIELDS - FAULT_STAGED_COUNT_FIELDS
@@ -582,6 +589,13 @@ def build_configuration(
         "protocol": PROTOCOL,
         "participants": participants,
         "primary_paper_configuration": participants == PRIMARY_PARTICIPANTS,
+        "execution": {
+            "rayon_worker_threads": RAYON_WORKER_THREADS,
+            "validator_worker_threads": VALIDATOR_WORKER_THREADS,
+            "cargo_build_jobs": CARGO_BUILD_JOBS,
+            "cargo_release_codegen_units": CARGO_RELEASE_CODEGEN_UNITS,
+            "cargo_incremental": CARGO_INCREMENTAL,
+        },
         "topology": {
             "global_validators": GLOBAL_VALIDATORS,
             "participant_dataspaces": list(range(participants)),
@@ -2242,9 +2256,11 @@ def validate_fault_trial_control_semantics(
         "sidecar_fsync": "after_private_settlement_sidecar_fsync",
         "staged_delta_fsync": "after_private_settlement_staged_delta_fsync",
         "prepare_qc": "after_private_settlement_prepare_qc_fsync",
+        "prepare_registration_kura_append": "after_private_settlement_kura_append",
+        "prepare_registration_wsv_application": "after_private_settlement_wsv_application",
         "commit_qc": "after_private_settlement_commit_qc_fsync",
-        "kura_append": "after_private_settlement_kura_append",
-        "wsv_application": "after_private_settlement_wsv_application",
+        "finalization_kura_append": "after_private_settlement_kura_append",
+        "finalization_wsv_application": "after_private_settlement_wsv_application",
         "receipt_publication": "after_private_settlement_receipt_publication",
     }
     expected_phase = boundary_to_phase.get(trial["boundary"])
@@ -2259,7 +2275,12 @@ def validate_fault_trial_control_semantics(
         if control["control_type"].endswith("restart"):
             restarts.append(control)
     boundary = trial["boundary"]
-    expected_global_target = boundary in {"kura_append", "wsv_application"}
+    expected_global_target = boundary in {
+        "prepare_registration_kura_append",
+        "prepare_registration_wsv_application",
+        "finalization_kura_append",
+        "finalization_wsv_application",
+    }
     expected_restart_type = (
         "global_restart" if expected_global_target else "validator_restart"
     )
@@ -2289,7 +2310,7 @@ def _validate_fault_state_response(
     *,
     label: str,
     expected_peer_index: int,
-) -> tuple[str, str, tuple[tuple[str, int], ...]]:
+) -> tuple[str, str, str, tuple[tuple[str, int], ...]]:
     observation = exact_fields(
         item,
         {
@@ -2299,6 +2320,7 @@ def _validate_fault_state_response(
             "height",
             "commitment",
             "ledger_commitment",
+            "replicated_staged_lock_commitment",
             "staged_lock_commitment",
             "counts",
         },
@@ -2316,6 +2338,7 @@ def _validate_fault_state_response(
             "height",
             "commitment",
             "ledger_commitment",
+            "replicated_staged_lock_commitment",
             "staged_lock_commitment",
             "counts",
         },
@@ -2323,14 +2346,15 @@ def _validate_fault_state_response(
     )
     if decoded["format_version"] != 1:
         raise RunnerError(f"{label} has an unsupported state-evidence version")
-    for field in ("commitment", "ledger_commitment", "staged_lock_commitment"):
+    for field in (
+        "commitment",
+        "ledger_commitment",
+        "replicated_staged_lock_commitment",
+        "staged_lock_commitment",
+    ):
         digest = observation[field]
-        if (
-            not isinstance(digest, str)
-            or SHA256.fullmatch(digest) is None
-            or digest == "0" * 64
-            or decoded[field] != digest
-        ):
+        canonical_iroha_hash_body(digest, f"{label}.{field}")
+        if decoded[field] != digest:
             raise RunnerError(f"{label}.{field} is invalid or substituted")
     if (
         isinstance(observation["height"], bool)
@@ -2347,9 +2371,32 @@ def _validate_fault_state_response(
         (field, nonnegative_integer(counts[field], f"{label}.counts.{field}"))
         for field in sorted(FAULT_STATE_COUNT_FIELDS)
     )
+    normalized_by_name = dict(normalized_counts)
+    staged_pool_heads = normalized_by_name["staged_pool_heads"]
+    staged_nullifiers = normalized_by_name["staged_nullifiers"]
+    staged_outputs = normalized_by_name["staged_output_commitments"]
+    staged_total = normalized_by_name["staged_locks"]
+    if (
+        staged_nullifiers != staged_pool_heads * 2
+        or staged_outputs != staged_pool_heads * 3
+        or staged_total != staged_pool_heads + staged_nullifiers + staged_outputs
+    ):
+        raise RunnerError(f"{label}.counts has an impossible local staged-lock shape")
+    replicated_total = normalized_by_name["replicated_staged_locks"]
+    if replicated_total != 0 and (
+        replicated_total <= 1
+        or (replicated_total - 1) % 9 != 0
+        or not 2 <= (replicated_total - 1) // 9 <= 255
+    ):
+        raise RunnerError(f"{label}.counts has an impossible replicated staged-lock shape")
     if decoded_counts != counts:
         raise RunnerError(f"{label}.counts do not bind response_hex")
-    return observation["ledger_commitment"], observation["staged_lock_commitment"], normalized_counts
+    return (
+        observation["ledger_commitment"],
+        observation["replicated_staged_lock_commitment"],
+        observation["staged_lock_commitment"],
+        normalized_counts,
+    )
 
 
 def validate_fault_observation_records(
@@ -2418,6 +2465,7 @@ def validate_fault_observation_records(
             raise RunnerError(
                 f"fault observation evidence[{index}].expected_after_state is invalid"
             )
+        requires_full_prepare_locks = row["collection"] != "crash_recoveries"
         if row["collection"] == "crash_recoveries":
             pre_application = {
                 "sidecar_fsync",
@@ -2426,8 +2474,10 @@ def validate_fault_observation_records(
                 "commit_qc",
             }
             post_carrier = {
-                "kura_append",
-                "wsv_application",
+                "prepare_registration_kura_append",
+                "prepare_registration_wsv_application",
+                "finalization_kura_append",
+                "finalization_wsv_application",
                 "receipt_publication",
             }
             # The boundary is bound to the payload below. Here the ordered trial
@@ -2437,6 +2487,11 @@ def validate_fault_observation_records(
                     f"fault observation evidence[{index}].trial_index is out of range"
                 )
             boundary = fault_report.REQUIRED_CRASH_BOUNDARIES[row["trial_index"]]
+            requires_full_prepare_locks = boundary not in {
+                "sidecar_fsync",
+                "staged_delta_fsync",
+                "prepare_qc",
+            }
             required_after_state = (
                 "reverted" if boundary in pre_application else "finalized"
             )
@@ -2500,19 +2555,89 @@ def validate_fault_observation_records(
                 ledger,
                 tuple((field, count) for field, count in counts if field in FAULT_LEDGER_COUNT_FIELDS),
             )
-            for ledger, _staged, counts in before
+            for ledger, _replicated_staged, _staged, counts in before
         }
         nonfinalized_ledger = {
             (
                 ledger,
                 tuple((field, count) for field, count in counts if field in FAULT_LEDGER_COUNT_FIELDS),
             )
-            for ledger, _staged, counts in nonfinalized
+            for ledger, _replicated_staged, _staged, counts in nonfinalized
         }
         if len(before_ledger) != 1 or nonfinalized_ledger != before_ledger:
             raise RunnerError(
-                f"fault observation evidence[{index}] changed a global APS map before finality"
+                f"fault observation evidence[{index}] changed a financial APS map before finality"
             )
+        if requires_full_prepare_locks:
+            before_counts = dict(before[0][3])
+            lock_fields = {
+                "staged_pool_heads",
+                "staged_nullifiers",
+                "staged_output_commitments",
+                "replicated_staged_locks",
+                "staged_locks",
+            }
+            if any(before_counts[field] != 0 for field in lock_fields):
+                raise RunnerError(
+                    f"fault observation evidence[{index}] Prepare-lock baseline is not empty"
+                )
+            expected_replicated_count = 1 + participants * 9
+            replicated_states = {
+                (replicated_staged, dict(counts)["replicated_staged_locks"])
+                for _ledger, replicated_staged, _staged, counts in nonfinalized
+            }
+            if replicated_states != {
+                (nonfinalized[0][1], expected_replicated_count)
+            } or nonfinalized[0][1] == before[0][1]:
+                raise RunnerError(
+                    f"fault observation evidence[{index}] lacks one coherent full replicated Prepare lock"
+                )
+            committee_commitments: dict[int, str] = {}
+            for peer_index, (_ledger, _replicated, local_commitment, counts_tuple) in enumerate(
+                nonfinalized
+            ):
+                counts = dict(counts_tuple)
+                if peer_index < VALIDATORS_PER_DATASPACE:
+                    if (
+                        any(
+                            counts[field] != 0
+                            for field in {
+                                "staged_pool_heads",
+                                "staged_nullifiers",
+                                "staged_output_commitments",
+                                "staged_locks",
+                            }
+                        )
+                        or local_commitment != before[0][2]
+                    ):
+                        raise RunnerError(
+                            f"fault observation evidence[{index}] gives a global validator a local lock"
+                        )
+                    continue
+                if (
+                    counts["staged_pool_heads"] != 1
+                    or counts["staged_nullifiers"] != 2
+                    or counts["staged_output_commitments"] != 3
+                    or counts["staged_locks"] != 6
+                    or local_commitment == before[0][2]
+                ):
+                    raise RunnerError(
+                        f"fault observation evidence[{index}] lacks one complete local leg lock"
+                    )
+                committee = (
+                    peer_index - VALIDATORS_PER_DATASPACE
+                ) // VALIDATORS_PER_DATASPACE
+                existing = committee_commitments.setdefault(
+                    committee, local_commitment
+                )
+                if existing != local_commitment:
+                    raise RunnerError(
+                        f"fault observation evidence[{index}] has divergent committee-local locks"
+                    )
+            if len(committee_commitments) != participants:
+                raise RunnerError(
+                    f"fault observation evidence[{index}] omits a committee-local lock"
+                )
         if len(set(after)) != 1:
             raise RunnerError(
                 f"fault observation evidence[{index}] did not converge every validator"
@@ -2525,8 +2650,18 @@ def validate_fault_observation_records(
                     f"fault observation evidence[{index}] did not restore pre-carrier state"
                 )
         else:
-            before_ledger_commitment, before_staged, before_counts_tuple = before_identity
-            after_ledger_commitment, after_staged, after_counts_tuple = after_identity
+            (
+                before_ledger_commitment,
+                before_replicated_staged,
+                before_staged,
+                before_counts_tuple,
+            ) = before_identity
+            (
+                after_ledger_commitment,
+                after_replicated_staged,
+                after_staged,
+                after_counts_tuple,
+            ) = after_identity
             before_counts = dict(before_counts_tuple)
             after_counts = dict(after_counts_tuple)
             unchanged = {
@@ -2536,6 +2671,7 @@ def validate_fault_observation_records(
                 "staged_pool_heads",
                 "staged_nullifiers",
                 "staged_output_commitments",
+                "replicated_staged_locks",
                 "staged_locks",
             }
             expected_deltas = {
@@ -2548,7 +2684,10 @@ def validate_fault_observation_records(
             }
             if (
                 after_ledger_commitment == before_ledger_commitment
+                or after_replicated_staged != before_replicated_staged
                 or after_staged != before_staged
+                or after_counts["replicated_staged_locks"] != 0
+                or after_counts["staged_locks"] != 0
                 or any(after_counts[field] != before_counts[field] for field in unchanged)
                 or any(
                     after_counts[field] != before_counts[field] + delta
@@ -3302,7 +3441,10 @@ def _validate_leakage_atomicity_observations(
 ) -> int:
     """Independently replay every retained full-topology atomicity observation."""
 
-    if len(rows) != expected_peers:
+    if (
+        expected_peers != (participants + 1) * VALIDATORS_PER_DATASPACE
+        or len(rows) != expected_peers
+    ):
         raise RunnerError("restricted atomicity evidence omits validators")
     count_fields = {
         "governance",
@@ -3317,6 +3459,7 @@ def _validate_leakage_atomicity_observations(
         "staged_pool_heads",
         "staged_nullifiers",
         "staged_output_commitments",
+        "replicated_staged_locks",
         "staged_locks",
     }
     expected_deltas = {
@@ -3329,8 +3472,16 @@ def _validate_leakage_atomicity_observations(
     }
     total_checks = 0
     final_ledgers: set[str] = set()
-    baseline_states: set[tuple[str, str, tuple[tuple[str, int], ...]]] = set()
-    final_states: set[tuple[str, str, tuple[tuple[str, int], ...]]] = set()
+    baseline_states: set[tuple[str, str, str, tuple[tuple[str, int], ...]]] = set()
+    final_states: set[tuple[str, str, str, tuple[tuple[str, int], ...]]] = set()
+    registered_states: list[
+        tuple[
+            tuple[str, str, str, tuple[tuple[str, int], ...]],
+            int,
+            int,
+            int,
+        ]
+    ] = []
     for peer_index, row in enumerate(rows):
         try:
             document_text = _read_restricted_archive_row(archive, row).decode("utf-8")
@@ -3341,8 +3492,19 @@ def _validate_leakage_atomicity_observations(
         )
         document = exact_fields(
             document,
-            {"version", "peer_index", "observations"},
+            {"version", "peer_index", "registered", "observations"},
             f"atomicity evidence peer {peer_index}",
+        )
+        registered_state = _validate_fault_state_response(
+            document["registered"],
+            label=f"atomicity evidence peer {peer_index}.registered",
+            expected_peer_index=peer_index,
+        )
+        registered_height = bounded_integer(
+            document["registered"]["height"],
+            1,
+            MAX_OBSERVATION_COUNT,
+            "registered atomicity observation height",
         )
         observations = document["observations"]
         if (
@@ -3356,9 +3518,11 @@ def _validate_leakage_atomicity_observations(
         baseline_ledger: str | None = None
         finalized = 0
         peer_final_ledger: str | None = None
+        empty_replicated_staged_commitment: str | None = None
         empty_staged_commitment: str | None = None
         previous_height: int | None = None
-        peer_final_state: tuple[str, str, tuple[tuple[str, int], ...]] | None = None
+        first_height: int | None = None
+        peer_final_state: tuple[str, str, str, tuple[tuple[str, int], ...]] | None = None
         for observation_index, item in enumerate(observations):
             observation = exact_fields(
                 item,
@@ -3369,6 +3533,7 @@ def _validate_leakage_atomicity_observations(
                     "height",
                     "commitment",
                     "ledger_commitment",
+                    "replicated_staged_lock_commitment",
                     "staged_lock_commitment",
                     "counts",
                 },
@@ -3384,29 +3549,26 @@ def _validate_leakage_atomicity_observations(
             )
             if previous_height is not None and height < previous_height:
                 raise RunnerError("atomicity observation heights are not nondecreasing")
+            if first_height is None:
+                first_height = height
             previous_height = height
-            for field in ("commitment", "ledger_commitment", "staged_lock_commitment"):
-                value = observation[field]
-                if not isinstance(value, str) or IROHA_HASH_LITERAL.fullmatch(value) is None:
-                    raise RunnerError(f"atomicity observation {field} is not canonical")
-            try:
-                response = bytes.fromhex(observation["response_hex"])
-            except (TypeError, ValueError) as error:
-                raise RunnerError("atomicity observation response is not canonical hex") from error
+            for field in (
+                "commitment",
+                "ledger_commitment",
+                "replicated_staged_lock_commitment",
+                "staged_lock_commitment",
+            ):
+                canonical_iroha_hash_body(
+                    observation[field], f"atomicity observation {field}"
+                )
+            response, response_document = _decode_bound_evidence_json_hex(
+                observation["response_hex"],
+                f"atomicity response peer {peer_index} observation {observation_index}",
+            )
             if (
-                not response
-                or observation["response_hex"] != response.hex()
-                or hashlib.sha256(response).hexdigest()
-                != observation["response_sha256"]
+                hashlib.sha256(response).hexdigest() != observation["response_sha256"]
             ):
                 raise RunnerError("atomicity observation response binding is false")
-            try:
-                response_document = strict_json_loads(
-                    response.decode("utf-8"),
-                    f"atomicity response peer {peer_index} observation {observation_index}",
-                )
-            except UnicodeError as error:
-                raise RunnerError("atomicity observation response is not UTF-8") from error
             response_document = exact_fields(
                 response_document,
                 {
@@ -3414,6 +3576,7 @@ def _validate_leakage_atomicity_observations(
                     "height",
                     "commitment",
                     "ledger_commitment",
+                    "replicated_staged_lock_commitment",
                     "staged_lock_commitment",
                     "counts",
                 },
@@ -3425,6 +3588,8 @@ def _validate_leakage_atomicity_observations(
                 or response_document["commitment"] != observation["commitment"]
                 or response_document["ledger_commitment"]
                 != observation["ledger_commitment"]
+                or response_document["replicated_staged_lock_commitment"]
+                != observation["replicated_staged_lock_commitment"]
                 or response_document["staged_lock_commitment"]
                 != observation["staged_lock_commitment"]
                 or response_document["counts"] != observation["counts"]
@@ -3443,6 +3608,7 @@ def _validate_leakage_atomicity_observations(
             staged_nullifiers = normalized["staged_nullifiers"]
             staged_outputs = normalized["staged_output_commitments"]
             staged_total = normalized["staged_locks"]
+            replicated_staged_total = normalized["replicated_staged_locks"]
             if (
                 staged_pool_heads > participants
                 or staged_nullifiers != staged_pool_heads * 2
@@ -3451,6 +3617,30 @@ def _validate_leakage_atomicity_observations(
                 != staged_pool_heads + staged_nullifiers + staged_outputs
             ):
                 raise RunnerError("atomicity observation has an impossible staged-lock shape")
+            if replicated_staged_total not in (0, 1 + participants * 9):
+                raise RunnerError(
+                    "atomicity observation has an impossible replicated staged-lock shape"
+                )
+            if replicated_staged_total == 0:
+                if empty_replicated_staged_commitment is None:
+                    empty_replicated_staged_commitment = observation[
+                        "replicated_staged_lock_commitment"
+                    ]
+                elif (
+                    observation["replicated_staged_lock_commitment"]
+                    != empty_replicated_staged_commitment
+                ):
+                    raise RunnerError(
+                        "empty replicated staged-lock commitment changed during observation"
+                    )
+            elif (
+                empty_replicated_staged_commitment is not None
+                and observation["replicated_staged_lock_commitment"]
+                == empty_replicated_staged_commitment
+            ):
+                raise RunnerError(
+                    "non-empty replicated staged locks reused the empty commitment"
+                )
             if staged_total == 0:
                 if empty_staged_commitment is None:
                     empty_staged_commitment = observation["staged_lock_commitment"]
@@ -3464,16 +3654,29 @@ def _validate_leakage_atomicity_observations(
             ledger_normalized = {
                 name: value
                 for name, value in normalized.items()
-                if not name.startswith("staged_")
+                if name
+                not in {
+                    "staged_pool_heads",
+                    "staged_nullifiers",
+                    "staged_output_commitments",
+                    "replicated_staged_locks",
+                    "staged_locks",
+                }
             }
             if baseline_counts is None:
-                if staged_total != 0 or empty_staged_commitment is None:
+                if (
+                    staged_total != 0
+                    or replicated_staged_total != 0
+                    or empty_staged_commitment is None
+                    or empty_replicated_staged_commitment is None
+                ):
                     raise RunnerError("atomicity baseline contains staged locks")
                 baseline_counts = ledger_normalized
                 baseline_ledger = observation["ledger_commitment"]
                 baseline_states.add(
                     (
                         baseline_ledger,
+                        empty_replicated_staged_commitment,
                         empty_staged_commitment,
                         tuple(sorted(ledger_normalized.items())),
                     )
@@ -3498,7 +3701,13 @@ def _validate_leakage_atomicity_observations(
                     raise RunnerError(
                         f"atomicity observation changed {name} outside finalization"
                     )
-            if staged_total != 0 or observation["staged_lock_commitment"] != empty_staged_commitment:
+            if (
+                staged_total != 0
+                or replicated_staged_total != 0
+                or observation["replicated_staged_lock_commitment"]
+                != empty_replicated_staged_commitment
+                or observation["staged_lock_commitment"] != empty_staged_commitment
+            ):
                 raise RunnerError("finalized atomicity observation retained staged locks")
             if peer_final_ledger is None:
                 peer_final_ledger = observation["ledger_commitment"]
@@ -3507,6 +3716,7 @@ def _validate_leakage_atomicity_observations(
             finalized += 1
             current_final_state = (
                 observation["ledger_commitment"],
+                observation["replicated_staged_lock_commitment"],
                 observation["staged_lock_commitment"],
                 tuple(sorted(normalized.items())),
             )
@@ -3522,11 +3732,81 @@ def _validate_leakage_atomicity_observations(
         if peer_final_state is None:
             raise RunnerError("atomicity evidence lacks a complete final state")
         final_states.add(peer_final_state)
+        if first_height is None or previous_height is None:
+            raise RunnerError("atomicity evidence lacks a complete height interval")
+        registered_states.append(
+            (registered_state, registered_height, first_height, previous_height)
+        )
         total_checks += len(observations)
     if len(baseline_states) != 1:
         raise RunnerError("atomicity evidence validators disagree on baseline state")
     if len(final_ledgers) != 1 or len(final_states) != 1:
         raise RunnerError("atomicity evidence validators disagree on final state")
+    baseline_ledger, empty_replicated, empty_local, baseline_counts_tuple = next(
+        iter(baseline_states)
+    )
+    baseline_counts = dict(baseline_counts_tuple)
+    expected_replicated = 1 + participants * 9
+    replicated_commitment: str | None = None
+    committee_commitments: dict[int, str] = {}
+    for peer_index, (
+        (ledger, registered_replicated, registered_local, counts_tuple),
+        registered_height,
+        first_height,
+        last_height,
+    ) in enumerate(registered_states):
+        counts = dict(counts_tuple)
+        if not first_height <= registered_height <= last_height:
+            raise RunnerError(
+                "registered Prepare-lock observation escapes the retained atomicity interval"
+            )
+        if (
+            ledger != baseline_ledger
+            or any(counts[field] != baseline_counts[field] for field in baseline_counts)
+            or counts["replicated_staged_locks"] != expected_replicated
+            or registered_replicated == empty_replicated
+        ):
+            raise RunnerError(
+                "atomicity evidence lacks one complete registered replicated Prepare lock"
+            )
+        if replicated_commitment is None:
+            replicated_commitment = registered_replicated
+        elif registered_replicated != replicated_commitment:
+            raise RunnerError(
+                "atomicity evidence has divergent registered replicated Prepare locks"
+            )
+        if peer_index < VALIDATORS_PER_DATASPACE:
+            if (
+                counts["staged_pool_heads"] != 0
+                or counts["staged_nullifiers"] != 0
+                or counts["staged_output_commitments"] != 0
+                or counts["staged_locks"] != 0
+                or registered_local != empty_local
+            ):
+                raise RunnerError(
+                    "atomicity evidence gives a global validator a committee-local lock"
+                )
+            continue
+        if (
+            counts["staged_pool_heads"] != 1
+            or counts["staged_nullifiers"] != 2
+            or counts["staged_output_commitments"] != 3
+            or counts["staged_locks"] != 6
+            or registered_local == empty_local
+        ):
+            raise RunnerError(
+                "atomicity evidence lacks one complete registered committee-local leg lock"
+            )
+        committee = (
+            peer_index - VALIDATORS_PER_DATASPACE
+        ) // VALIDATORS_PER_DATASPACE
+        existing = committee_commitments.setdefault(committee, registered_local)
+        if existing != registered_local:
+            raise RunnerError(
+                "atomicity evidence has divergent registered committee-local locks"
+            )
+    if len(committee_commitments) != participants:
+        raise RunnerError("atomicity evidence omits a registered participant committee")
     return total_checks
 
 

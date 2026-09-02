@@ -4,6 +4,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - Python 3.10 and older
@@ -79,6 +81,20 @@ FORBIDDEN_PROCESS_CONTROL_PATTERNS = (
 )
 
 
+def parse_json_rejecting_duplicate_members(payload: bytes, label: str) -> object:
+    """Parse JSON without allowing later members to shadow earlier ones."""
+
+    def reject_duplicate_members(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        parsed: dict[str, object] = {}
+        for key, value in pairs:
+            if key in parsed:
+                raise ValueError(f"{label} contains duplicate JSON member {key!r}")
+            parsed[key] = value
+        return parsed
+
+    return json.loads(payload, object_pairs_hook=reject_duplicate_members)
+
+
 def forbidden_process_control_matches(source: str) -> tuple[str, ...]:
     """Return precise process-control primitives present in production source."""
 
@@ -107,6 +123,8 @@ def test_openapi_static_authorities_are_exact_package_mirrors() -> None:
     authority_bytes = [path.read_bytes() for path in OPENAPI_AUTHORITIES]
 
     assert authority_bytes[0] == authority_bytes[1] == authority_bytes[2]
+    for path, payload in zip(OPENAPI_AUTHORITIES, authority_bytes, strict=True):
+        parse_json_rejecting_duplicate_members(payload, str(path))
     torii_openapi = TORII_OPENAPI.read_text(encoding="utf-8")
     release_gate = OPENAPI_GATE.read_text(encoding="utf-8")
     assert 'include_str!("../assets/openapi/torii.json")' in torii_openapi
@@ -118,6 +136,13 @@ def test_openapi_static_authorities_are_exact_package_mirrors() -> None:
     )
     assert 'for authority in "${CURRENT_SPEC_PATH}" "${PACKAGE_SPEC_PATH}"' in release_gate
     assert 'cmp -s "${SPEC_PATH}" "${authority}"' in release_gate
+
+
+def test_openapi_authority_parser_rejects_duplicate_members() -> None:
+    payload = b'{"paths":{"/v1/test":{"get":{}}},"paths":{}}'
+
+    with pytest.raises(ValueError, match=r"duplicate JSON member 'paths'"):
+        parse_json_rejecting_duplicate_members(payload, "fixture authority")
 
 
 def test_explorer_openapi_matches_dataspace_auth_and_history_cursor_contract() -> None:

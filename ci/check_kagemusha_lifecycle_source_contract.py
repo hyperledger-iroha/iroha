@@ -325,10 +325,12 @@ def _model_contracts(texts,errors):
   MODEL_TAIL_TESTS,
   errors,
   "active lifecycle transition and retained-policy regressions",
-  "fn release_lifecycle_state_enforces_exact_predecessors_and_terminal_phases()",
-  "the retained redemption policy must match its signed promotion identity",
+  "fn release_lifecycle_state_enforces_exact_predecessors_and_transition_ids()",
+  "fn release_lifecycle_state_requires_strict_phase_chronology()",
+  "fn release_lifecycle_state_requires_nonzero_distinct_transaction_intents()",
+  '"lifecycle.device_attestation_policy_identity"',
   "deactivation must retain the exact policy required for full redemption",
-  "deactivation cannot name the staged state instead of the exact enabled predecessor",
+  '"lifecycle.deactivated_predecessor"',
  )
  q(
   texts[MODEL_PROMOTION_RECEIPT_TESTS],
@@ -431,6 +433,29 @@ def _internal_validation_trust_contracts(texts,errors):
   "unpinned_runner_policy.internal_validation_runner_identity_sha256 = [0; 32]",
   "an authenticated V4 release policy must name a runner trust root",
  )
+def _release_profile_bound_contracts(texts,errors):
+ model = texts[MODEL]
+ release = texts[MODEL_RELEASE_V4]
+ q(
+  model,
+  MODEL,
+  errors,
+  "single exact first-release proof-pair profile",
+  "KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_INITIALIZATION_BYTES_V4: u32 = 186_852",
+  "KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4: u32 = 191_862",
+  "self.max_proof_bytes != KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4",
+ )
+ q(
+  release,
+  MODEL_RELEASE_V4,
+  errors,
+  "release manifest, qualification receipt, and promotion bound to one proof-pair profile",
+  "self.max_proof_bytes != KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4",
+  "KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_INITIALIZATION_BYTES_V4",
+  "KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4",
+  "self.initialization_pair.len() != initialization_pair_bytes",
+  "self.append_pair.len() != append_pair_bytes",
+ )
 def _native_namespace_contracts(texts,errors):
  host = texts[CORE_IVM_HOST]
  read_only = s(
@@ -478,11 +503,11 @@ def _native_namespace_contracts(texts,errors):
   "ivm::VMError::PermissionDenied",
  )
  classifier_test = s(
-  host,
-  CORE_IVM_HOST,
-  errors,
-  "fn contract_state_namespace_access_covers_consensus_owned_prefixes()",
-  "fn state_syscalls_cannot_forge_delete_or_disclose_queue_plan_admission_marker()",
+ host,
+ CORE_IVM_HOST,
+ errors,
+ "fn contract_state_namespace_access_covers_consensus_owned_prefixes()",
+  "fn state_syscalls_cannot_forge_delete_or_disclose_queue_plan_markers()",
  )
  q(
   classifier_test,
@@ -1652,6 +1677,7 @@ def lifecycle_source_contract_errors(
  _topology(texts, errors)
  _model_contracts(texts, errors)
  _internal_validation_trust_contracts(texts, errors)
+ _release_profile_bound_contracts(texts, errors)
  _isi_contracts(texts, errors)
  _carrier_contracts(texts, errors)
  _transition_contracts(texts, errors)

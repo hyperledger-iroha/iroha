@@ -74,6 +74,7 @@ async fn global_transaction_query_requires_operator_auth_but_visible_query_remai
     assert_ne!(operator_response.status(), StatusCode::FORBIDDEN);
 
     let visible_response = app
+        .router()
         .oneshot(query_request("/v1/transactions/visible/query", body))
         .await
         .expect("missing account-auth visible query response");
@@ -83,4 +84,5 @@ async fn global_transaction_query_requires_operator_auth_but_visible_query_remai
         Some(&header::HeaderValue::from_static("Signature")),
         "viewer-scoped query must retain canonical account authentication"
     );
+    app.shutdown().await;
 }

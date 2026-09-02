@@ -124,32 +124,37 @@ use rand::{SeedableRng as _, rngs::StdRng};
 const VALIDATOR_COUNT: usize = 4;
 const CITIZEN_COUNT: usize = 24;
 const BODY_SEATS: u32 = 3;
+// A public QueuePlan transaction reaches terminal application through the
+// admission, autonomous-payload, and merge carriers.
+const QUEUE_PLAN_LIFECYCLE_BLOCKS: u64 = 3;
 // Keep real FastPQ proving enabled, but prevent four local debug daemons from
 // each provisioning a wide Rayon pool on the same host while consensus traffic is live.
 const PARLIAMENT_NETWORK_RAYON_THREADS_PER_PEER: i64 = 2;
 // Six 3-seat bodies can draw eighteen distinct invitees. QueuePlan gives each
-// separately signed response its H + 1 admission and H + 2 execution, so keep
-// enough room for all 36 response heights plus the exact H - 2 roster-seal
+// separately signed response its H + 1 admission, H + 2 autonomous payload,
+// and H + 3 merge execution, so keep enough room for all response heights plus
+// the exact H - 3 roster-seal
 // authority point without relying on accidental cross-body member overlap.
-const INVITATION_PHASE_BLOCKS: u64 = 40;
+const INVITATION_PHASE_BLOCKS: u64 = 56;
 // The public QueuePlan corridor deliberately executes three proof-valid
 // registrations and one proof-invalid early close before the exact close. Each
-// blocking submission consumes its H + 1 admission and H + 2 execution, so the
-// close needs ten blocks from registration.
-const REGISTRATION_PHASE_BLOCKS: u64 = 10;
-const SURVIVOR_PHASE_BLOCKS: u64 = 8;
-// A replayed survivor freeze and an early corpus freeze consume four blocks;
-// retain the H + 4 authority point needed to execute the corpus freeze at H + 6.
-const COMMITMENT_PHASE_BLOCKS: u64 = 6;
-// The replayed corpus freeze and wrong-pulse opening consume four blocks before
-// the autonomous release pulse must still finalize at the exact fifth height.
-const RELEASE_DELAY_BLOCKS: u64 = 5;
-const OPENING_PHASE_BLOCKS: u64 = 8;
-const MIN_ENACTMENT_DELAY: u64 = 3;
+// blocking submission consumes three carrier blocks, so the close window must
+// account for the complete QueuePlan lifecycle.
+const REGISTRATION_PHASE_BLOCKS: u64 = 15;
+const SURVIVOR_PHASE_BLOCKS: u64 = 9;
+// A replayed survivor freeze and an early corpus freeze each consume one full
+// QueuePlan lifecycle before the exact corpus-freeze authority point.
+const COMMITMENT_PHASE_BLOCKS: u64 = 9;
+// The replayed corpus freeze and wrong-pulse opening must terminate before the
+// autonomous release pulse reaches its exact height.
+const RELEASE_DELAY_BLOCKS: u64 = 7;
+const OPENING_PHASE_BLOCKS: u64 = 9;
+const MIN_ENACTMENT_DELAY: u64 = 4;
 const MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS: u64 = 8;
 // Exact-roster lifecycle certificates bind their containing height. Keep a
 // deterministic submission window while public QueuePlanSynced admission
-// commits its owner at H + 1 and executes the admitted transaction at H + 2.
+// commits its owner at H + 1, materializes the autonomous payload at H + 2,
+// and executes the admitted transaction in the merge carrier at H + 3.
 const EXACT_HEIGHT_SUBMISSION_CADENCE: Duration = Duration::from_secs(5);
 const PARLIAMENT_NETWORK_STACK_BYTES: usize = 32 * 1024 * 1024;
 const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1_073_741_824;
@@ -268,21 +273,6 @@ fn tick(client: &Client, label: impl Into<String>) -> Result<u64> {
     current_height(client)
 }
 
-fn advance_to_predecessor(client: &Client, target_height: u64, label: &str) -> Result<()> {
-    loop {
-        let height = current_height(client)?;
-        if height + 1 == target_height {
-            return Ok(());
-        }
-        if height + 1 > target_height {
-            return Err(eyre!(
-                "{label}: exact height {target_height} passed at finalized height {height}"
-            ));
-        }
-        tick(client, format!("{label} height tick {}", height + 1))?;
-    }
-}
-
 fn next_queue_plan_execution_height(
     client: &Client,
     minimum_height: u64,
@@ -291,7 +281,7 @@ fn next_queue_plan_execution_height(
     loop {
         let authority_height = current_height(client)?;
         let execution_height = authority_height
-            .checked_add(2)
+            .checked_add(QUEUE_PLAN_LIFECYCLE_BLOCKS)
             .ok_or_else(|| eyre!("{label}: QueuePlan execution height overflow"))?;
         if execution_height >= minimum_height {
             return Ok(execution_height);
@@ -345,9 +335,13 @@ async fn advance_to_queue_plan_authority_height(
     execution_height: u64,
     label: &str,
 ) -> Result<()> {
-    let authority_height = execution_height.checked_sub(2).ok_or_else(|| {
-        eyre!("{label}: QueuePlan execution height {execution_height} has no H - 2 authority")
-    })?;
+    let authority_height = execution_height
+        .checked_sub(QUEUE_PLAN_LIFECYCLE_BLOCKS)
+        .ok_or_else(|| {
+            eyre!(
+                "{label}: QueuePlan execution height {execution_height} has no H - {QUEUE_PLAN_LIFECYCLE_BLOCKS} authority"
+            )
+        })?;
     advance_to_height_with_queue_plan_carriers(network, client, authority_height, label).await
 }
 
@@ -528,15 +522,21 @@ fn assert_asset_not_found(client: &Client, asset_id: &AssetId, label: &str) -> R
             FindError::Asset(missing),
         )))) if missing.as_ref() == asset_id => Ok(()),
         Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))) => {
-            let exact_match = client
+            let exact_match = match client
                 .query(FindAssets::new())
                 .filter_with(|asset| asset.equals("id", asset_id.clone()).into_predicate())
                 .execute_single_opt()
-                .map_err(|error| {
-                    eyre!(
+            {
+                Ok(exact_match) => exact_match,
+                Err(QueryError::Validation(ValidationFail::QueryFailed(
+                    QueryExecutionFail::NotFound,
+                ))) => None,
+                Err(error) => {
+                    return Err(eyre!(
                         "{label}: exact-ID asset query failed after a generic not-found response: {error}"
-                    )
-                })?;
+                    ));
+                }
+            };
             match exact_match {
                 None => Ok(()),
                 Some(asset) => Err(eyre!(
@@ -906,11 +906,20 @@ fn public_finding_root(attempt_id: GovernanceAttemptId, body: ParliamentBody) ->
 fn exact_block(client: &Client, height: u64) -> Result<SignedBlock> {
     let requested_height =
         NonZeroU64::new(height).ok_or_else(|| eyre!("finalized block height must be nonzero"))?;
-    let block = client
+    let mut matching = client
         .query(FindBlocks)
-        .filter_with(|block| block.equals("height", height).into_predicate())
-        .execute_single()
-        .map_err(|error| eyre!("query exact finalized block {height}: {error}"))?;
+        .execute_all()
+        .map_err(|error| eyre!("query finalized blocks for exact height {height}: {error}"))?
+        .into_iter()
+        .filter(|block| block.header().height() == requested_height);
+    let block = matching
+        .next()
+        .ok_or_else(|| eyre!("finalized block height {height} is absent"))?;
+    if matching.next().is_some() {
+        return Err(eyre!(
+            "finalized block stream contains duplicate height {height}"
+        ));
+    }
     if block.header().height() != requested_height {
         return Err(eyre!(
             "finalized block stream returned height {} for exact request {height}",
@@ -2321,7 +2330,7 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     let boundary_height = MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS;
     let pulse_height = boundary_height - 1;
     assert_eq!(
-        activation_height.checked_add(2),
+        activation_height.checked_add(QUEUE_PLAN_LIFECYCLE_BLOCKS),
         Some(boundary_height),
         "the exact fixture must rotate in the boundary block after one old-session pulse",
     );
@@ -2336,7 +2345,6 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         boundary_height,
     )?;
     client.submit(rotation_certificate, fee())?;
-    advance_to_predecessor(&client, pulse_height, "mandatory pre-boundary pulse")?;
     assert_no_global_beacon_pulse_at(
         &client,
         pulse_height - 1,
@@ -2606,9 +2614,12 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
     let pulse_height = MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS - 1;
     let predecessor_height = pulse_height - 1;
     assert_eq!(
-        activation_height, predecessor_height,
-        "the retained deterministic fixture must expose the below-threshold pulse immediately after activation",
+        activation_height.checked_add(1),
+        Some(predecessor_height),
+        "the retained deterministic fixture must expose one committed predecessor after activation",
     );
+    network.ensure_blocks(predecessor_height).await?;
+    assert_eq!(current_height(&client)?, predecessor_height);
     let pulse_status_is_active = |status: &SumeragiV2Status| -> Result<bool> {
         status
             .validate()

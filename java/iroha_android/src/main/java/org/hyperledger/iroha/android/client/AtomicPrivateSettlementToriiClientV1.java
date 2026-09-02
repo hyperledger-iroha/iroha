@@ -72,10 +72,10 @@ public final class AtomicPrivateSettlementToriiClientV1 {
     }
 
     private static RestrictedResponseVerificationContext auditorCapsule(
-        final String auditorPublicKey) {
+        final byte[] requestJson, final String auditorPublicKey) {
       return new RestrictedResponseVerificationContext(
           RestrictedResponseKind.AUDITOR_CAPSULE,
-          null,
+          Objects.requireNonNull(requestJson, "requestJson"),
           Objects.requireNonNull(auditorPublicKey, "auditorPublicKey"));
     }
 
@@ -190,7 +190,9 @@ public final class AtomicPrivateSettlementToriiClientV1 {
         request, AtomicPrivateSettlementOperationV1.LEG_UPLOAD, sponsorAuth);
   }
 
-  /** Submit one sponsor-signed exact global finalization or abort carrier. */
+  /**
+   * Submit one sponsor-signed exact Prepare-lock registration, finalization, or abort carrier.
+   */
   public CompletableFuture<AtomicPrivateSettlementJsonResponseV1> submitBundle(
       final AtomicPrivateSettlementPreparedRequestV1 request,
       final ToriiCanonicalRequestAuth sponsorAuth) {
@@ -287,22 +289,27 @@ public final class AtomicPrivateSettlementToriiClientV1 {
   /** Fetch one padded encrypted capsule as one exact governed local auditor. */
   public CompletableFuture<AtomicPrivateSettlementJsonResponseV1> getAuditorCapsule(
       final AtomicPrivateSettlementIdentifierV1 payloadDigest,
+      final AtomicPrivateSettlementPreparedRequestV1 request,
       final OperatorSigningContext auditorSigningContext) {
     Objects.requireNonNull(payloadDigest, "payloadDigest");
     Objects.requireNonNull(auditorSigningContext, "auditorSigningContext");
     requireRoleNetwork(auditorSigningContext, "auditor");
+    requireOperation(request, AtomicPrivateSettlementOperationV1.AUDITOR_CAPSULE);
     requireRestrictedResponseVerifierAvailable();
-    return executeGet(
-        "/v1/nexus/private-settlements/legs/"
-            + payloadDigest.pathComponent()
-            + "/audit-capsule",
-        RESPONSE_RESTRICTED_MAX_BYTES,
-        (target, body) ->
+    final String path =
+        request.operation().path().replace("{payload_digest}", payloadDigest.pathComponent());
+    final byte[] body = request.bytes();
+    return executeMutation(
+        path,
+        body,
+        (target, signedBody) ->
             OperatorRequestSigner.buildHeaders(
-                auditorSigningContext, "GET", target, body),
+                auditorSigningContext, "POST", target, signedBody),
         payloadDigest,
         null,
+        null,
         RestrictedResponseVerificationContext.auditorCapsule(
+            body,
             auditorSigningContext.publicKey()));
   }
 
@@ -544,6 +551,7 @@ public final class AtomicPrivateSettlementToriiClientV1 {
       case AUDITOR_CAPSULE:
         responseVerifier.verifyAuditorCapsuleResponse(
             responseJson.clone(),
+            Objects.requireNonNull(verificationContext.requestJson, "requestJson").clone(),
             networkId,
             payloadDigest,
             verificationContext.auditorPublicKey);
@@ -849,7 +857,8 @@ public final class AtomicPrivateSettlementToriiClientV1 {
   private static AuditApprovalRequestContext auditApprovalRequestContext(
       final byte[] bodyBytes) {
     final Map<String, Object> request = parseExactJsonObject(bodyBytes);
-    if (!request.keySet().equals(Set.of("approval"))) {
+    if (!request.keySet().equals(Set.of("audit_policy", "approval"))
+        || !(request.get("audit_policy") instanceof Map<?, ?>)) {
       throw new IllegalArgumentException(
           "prepared settlement audit approval has invalid fields");
     }
@@ -1262,6 +1271,7 @@ public final class AtomicPrivateSettlementToriiClientV1 {
           "authoritative_height",
           "manifest",
           "audit_policy",
+          "access_audit_policy",
           "committee_authority",
           "statement",
           "delta",

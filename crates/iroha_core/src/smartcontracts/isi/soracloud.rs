@@ -1,7 +1,7 @@
 //! Soracloud lifecycle instruction handlers.
 use super::{asset::isi::assert_numeric_spec_with, *};
 use crate::{
-    smartcontracts::Execute,
+    smartcontracts::{Execute, isi::staking::validator_election_eligible_at_height},
     state::{StateReadOnly, StateTransaction, public_lane_validator_record_matches_key},
 };
 #[cfg(all(test, feature = "zk-stark"))]
@@ -80,7 +80,6 @@ use iroha_data_model::{
         soracloud as isi,
     },
     name::Name,
-    nexus::PublicLaneValidatorStatus,
     proof::ProofAttachment,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
@@ -363,7 +362,7 @@ fn is_active_public_lane_validator(
         .any(|(key, record)| {
             public_lane_validator_record_matches_key(key, record)
                 && key.1 == *authority
-                && record.status == PublicLaneValidatorStatus::Active
+                && validator_election_eligible_at_height(record, state_transaction.block_height())
                 && state_transaction.is_lane_active_for_authority(key.0)
         })
 }
@@ -376,6 +375,7 @@ fn require_inrou_host_peer_binding(
         &state_transaction.world,
         authority,
         peer_id,
+        state_transaction.block_height(),
         |lane_id| state_transaction.is_lane_active_for_authority(lane_id),
     ) {
         Ok(())

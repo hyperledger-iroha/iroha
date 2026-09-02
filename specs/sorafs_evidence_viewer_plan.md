@@ -66,7 +66,8 @@ grant and returns a replacement in the sensitive
 `X-SoraFS-Evidence-Grant` response header.
 
 Challenge values, grants, WebAuthn assertions, credential identifiers, signing
-keys, KMS credentials, and evidence bytes never enter the checkpoint or logs.
+keys, custody-provider credentials, and evidence bytes never enter the
+checkpoint or logs.
 The checkpoint stores only one-way digests, finalized anchors, bounded
 payload-free session metadata, signed payload-free receipts, legal holds,
 retention decisions, erasure commitments, and idempotency tombstones. The
@@ -307,8 +308,9 @@ producer blocker below.
 
 For a range request, decryption completes first but bytes are not returned until
 the signed access receipt and rotated grant state are durably committed. Erasure
-holds the state boundary across legal-hold evaluation and the irreversible KMS
-operation, preventing a hold/erasure race. A definite erasure followed by an
+holds the state boundary across legal-hold evaluation and the irreversible
+erasure-provider operation, preventing a hold/erasure race. A definite erasure
+followed by an
 ambiguous checkpoint result leaves the service fail-closed. Restart and live
 refresh reconcile retained erasure intents by their stable operation ids; an
 unavailable or ambiguous provider, a zero commit digest, a finalize failure, or
@@ -339,14 +341,16 @@ events to `/v1/evidence/log/{session_id_hex}`.
   through `RuntimeProviderBrokerExecutableV1`. The shared shell supplies the
   catalog-only CLI, secure bounded loader, readiness/lifecycle bridge, signal
   shutdown, and redacted failures, but no checked-in registry supplies a
-  credential loader, software-signer/KMS/sealed-store implementation, or vendor backend.
+  credential loader, software-signer/key-wrapper/sealed-store implementation,
+  or vendor backend.
   Its bounded canonical client/server protocol covers all seven viewer slots
   (22–26, 47, and 53), including exact public qualification metadata,
   replay-safe operation identities, ambiguity typing, signed readback, and
   authoritative CAS/archive/transparency-head verification.
-- Construct and inject deployment-owned WebAuthn, rotating-grant, external software
-  receipt-signer, KMS/erasure, linearizable sealed-CAS checkpoint-store, and
-  immutable object-lock/archive implementations that satisfy the shipped
+- Construct and inject deployment-owned WebAuthn, rotating-grant, external
+  software receipt-signer, provider-neutral erasure, linearizable sealed-CAS
+  checkpoint-store, and immutable object-lock/archive implementations that
+  satisfy the shipped
   qualification and exact-readback contracts; collect external readiness,
   rotation, revocation, CAS, archive durability, rollback, and recovery
   evidence for those real services.
@@ -392,8 +396,8 @@ provider revision and policy drift before and during operations,
 receipt/signature/chain tampering, authoritative checkpoint substitution,
 stale/forked CAS heads, ambiguous CAS readback, local-cache corruption and
 filesystem attacks, crash points around persistence, concurrent
-legal-hold/erasure requests, KMS ambiguity, viewer CSP/offline controls, and
-payload/secret log scanning.
+legal-hold/erasure requests, erasure-provider ambiguity, viewer CSP/offline
+controls, and payload/secret log scanning.
 
 Deployment promotion remains gated by:
 

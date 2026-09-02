@@ -25,7 +25,8 @@ public final class AtomicPrivateSettlementNativeResponseVerifierV1
           nativeBridgeAbiVersion() == REQUIRED_BRIDGE_ABI_VERSION
               && nativeVerifyCommitteeProofResponseV1(invalid, invalid, invalid)
                   == PRIVATE_SETTLEMENT_REJECTED_STATUS
-              && nativeVerifyAuditorCapsuleResponseV1(invalid, invalid, invalid, invalid)
+              && nativeVerifyAuditorCapsuleResponseWithRequestV1(
+                      invalid, invalid, invalid, invalid, invalid)
                   == PRIVATE_SETTLEMENT_REJECTED_STATUS
               && nativeVerifyAuditApprovalResponseV1(
                       invalid, invalid, invalid, invalid, invalid)
@@ -66,15 +67,23 @@ public final class AtomicPrivateSettlementNativeResponseVerifierV1
   @Override
   public void verifyAuditorCapsuleResponse(
       final byte[] responseJson,
+      final byte[] requestJson,
       final byte[] expectedNetworkId,
       final byte[] requestedPayloadDigest,
       final String auditorPublicKey) {
     requireCommonInputs(responseJson, expectedNetworkId, requestedPayloadDigest);
+    if (requestJson == null
+        || requestJson.length == 0
+        || requestJson.length > APPROVAL_REQUEST_MAX_BYTES) {
+      throw new IllegalArgumentException(
+          "private settlement auditor capsule request is outside the native verification bound");
+    }
     final byte[] auditorPublicKeyUtf8 = requireAuditorPublicKey(auditorPublicKey);
     invokeRequiredNative(
         () ->
-            nativeVerifyAuditorCapsuleResponseV1(
+            nativeVerifyAuditorCapsuleResponseWithRequestV1(
                 responseJson.clone(),
+                requestJson.clone(),
                 expectedNetworkId.clone(),
                 requestedPayloadDigest.clone(),
                 auditorPublicKeyUtf8.clone()));
@@ -169,8 +178,9 @@ public final class AtomicPrivateSettlementNativeResponseVerifierV1
   private static native int nativeVerifyCommitteeProofResponseV1(
       byte[] responseJson, byte[] expectedNetworkId, byte[] requestedPayloadDigest);
 
-  private static native int nativeVerifyAuditorCapsuleResponseV1(
+  private static native int nativeVerifyAuditorCapsuleResponseWithRequestV1(
       byte[] responseJson,
+      byte[] requestJson,
       byte[] expectedNetworkId,
       byte[] requestedPayloadDigest,
       byte[] auditorPublicKeyUtf8);

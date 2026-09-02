@@ -165,7 +165,7 @@
               "min_nomination_bond": "1",
               "min_self_bond": "1000",
               "seat_band_pct": 5,
-              "slashing_delay_blocks": 259200
+              "slashing_delay_blocks": 3600
             }
           }
         },

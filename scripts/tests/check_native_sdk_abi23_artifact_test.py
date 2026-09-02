@@ -1224,6 +1224,7 @@ def test_private_settlement_response_jni_release_symbol_contract_is_closed() -> 
         "nativeBridgeAbiVersion",
         "nativeVerifyCommitteeProofResponseV1",
         "nativeVerifyAuditorCapsuleResponseV1",
+        "nativeVerifyAuditorCapsuleResponseWithRequestV1",
         "nativeVerifyAuditApprovalResponseV1",
     )
     expected = tuple(
@@ -1929,12 +1930,15 @@ def test_node_probe_requires_exports_and_exact_integer_abi(
     complete.write_text(
         "module.exports = {"
         "connectNoritoBridgeAbiVersion() { return 23; },"
+        "kagemushaNativeContractRevision() { return 1; },"
+        "kagemushaOfflineOperationStatusJsonValidateV2() {},"
         "inspectSorafsOrderbookSubmissionForDiscriminantV1() {},"
         "sorafsValidateAppealFinanceCancelAssetLockJson() {}"
         ",validationFeeHijiriQuoteRequestV1() {}"
         ",validationFeeVerifyHijiriQuoteResponseV1() {}"
         ",privateSettlementVerifyCommitteeProofResponseV1() {}"
         ",privateSettlementVerifyAuditorCapsuleResponseV1() {}"
+        ",privateSettlementVerifyAuditorCapsuleResponseWithRequestV1() {}"
         ",privateSettlementVerifyAuditApprovalResponseV1() {}"
         ",verifySorafsOrderbookSubmissionReceiptV1() {}"
         "};\n",
@@ -1948,11 +1952,31 @@ def test_node_probe_requires_exports_and_exact_integer_abi(
         == 23
     )
 
+    wrong_revision = tmp_path / "wrong-kagemusha-revision.cjs"
+    wrong_revision.write_text(
+        complete.read_text(encoding="utf-8").replace(
+            "kagemushaNativeContractRevision() { return 1; }",
+            "kagemushaNativeContractRevision() { return 2; }",
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        checker.ArtifactContractError,
+        match="Kagemusha native contract revision mismatch",
+    ):
+        checker.probe_node_abi(
+            wrong_revision,
+            checker.REQUIRED_SYMBOLS["node"],
+        )
+
     source = complete.read_text(encoding="utf-8")
     for symbol in (
+        "kagemushaNativeContractRevision",
+        "kagemushaOfflineOperationStatusJsonValidateV2",
         "inspectSorafsOrderbookSubmissionForDiscriminantV1",
         "privateSettlementVerifyAuditApprovalResponseV1",
         "privateSettlementVerifyAuditorCapsuleResponseV1",
+        "privateSettlementVerifyAuditorCapsuleResponseWithRequestV1",
         "privateSettlementVerifyCommitteeProofResponseV1",
         "validationFeeHijiriQuoteRequestV1",
         "validationFeeVerifyHijiriQuoteResponseV1",
@@ -1960,7 +1984,8 @@ def test_node_probe_requires_exports_and_exact_integer_abi(
     ):
         incomplete = tmp_path / f"missing-{symbol}.cjs"
         incomplete.write_text(
-            re.sub(rf"{symbol}\(\) \{{\}},?", "", source), encoding="utf-8"
+            re.sub(rf"{re.escape(symbol)}\(\) \{{[^}}]*\}},?", "", source),
+            encoding="utf-8",
         )
         with pytest.raises(checker.ArtifactContractError, match="missing required exports"):
             checker.probe_node_abi(incomplete, checker.REQUIRED_SYMBOLS["node"])
@@ -1992,6 +2017,8 @@ def test_python_probe_requires_exports_and_exact_integer_abi(
         "    return None\n"
         "def private_settlement_verify_auditor_capsule_response_v1():\n"
         "    return None\n"
+        "def private_settlement_verify_auditor_capsule_response_with_request_v1():\n"
+        "    return None\n"
         "def private_settlement_verify_audit_approval_response_v1():\n"
         "    return None\n"
         "def verify_sorafs_orderbook_submission_receipt_v1():\n"
@@ -2011,6 +2038,7 @@ def test_python_probe_requires_exports_and_exact_integer_abi(
         "inspect_sorafs_orderbook_submission_for_discriminant_v1",
         "private_settlement_verify_audit_approval_response_v1",
         "private_settlement_verify_auditor_capsule_response_v1",
+        "private_settlement_verify_auditor_capsule_response_with_request_v1",
         "private_settlement_verify_committee_proof_response_v1",
         "validation_fee_hijiri_quote_request_v1",
         "validation_fee_verify_hijiri_quote_response_v1",
@@ -2038,6 +2066,8 @@ def test_python_probe_requires_exports_and_exact_integer_abi(
         "def private_settlement_verify_committee_proof_response_v1():\n"
         "    return None\n"
         "def private_settlement_verify_auditor_capsule_response_v1():\n"
+        "    return None\n"
+        "def private_settlement_verify_auditor_capsule_response_with_request_v1():\n"
         "    return None\n"
         "def private_settlement_verify_audit_approval_response_v1():\n"
         "    return None\n"

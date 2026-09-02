@@ -10,13 +10,19 @@ in `roadmap.md` and defines the storage layout under
 `specs/compliance/android/` so Release Engineering, Support, and Legal
 can reference the same evidence set before approving Android releases.
 
+The release baseline is provider-neutral and accepts software-backed custody.
+StrongBox, physical device-lab, and hardware-attestation rows are optional
+addenda that apply only when a release or partner deployment explicitly claims
+that hardware profile. Mark those rows not applicable otherwise; their absence
+must not block an ordinary build, deployment, governance flow, or release.
+
 ## Scope & Owners
 
 | Area | Deliverables | Primary Owner | Backup / Reviewer |
 |------|--------------|---------------|-------------------|
 | EU regulatory bundle | ETSI EN 319 401 security target, GDPR DPIA summary, SBOM attestation, evidence log | Compliance & Legal (Sofia Martins) | Release Engineering (Alexei Morozov) |
-| Japan regulatory bundle | FISC security controls checklist, bilingual StrongBox attestation bundles, evidence log | Compliance & Legal (Daniel Park) | Android Program Lead |
-| Device lab readiness | Capacity tracking, contingency triggers, escalation log | Hardware Lab Lead | Android Observability TL |
+| Japan regulatory bundle | FISC security controls checklist and evidence log; optional bilingual StrongBox addendum | Compliance & Legal (Daniel Park) | Android Program Lead |
+| Optional device lab readiness | Capacity tracking, contingency triggers, escalation log for explicitly selected hardware qualification | Hardware Lab Lead | Android Observability TL |
 
 ## Artefact Matrix
 
@@ -26,7 +32,7 @@ can reference the same evidence set before approving Android releases.
 | GDPR DPIA summary | Data protection impact assessment covering telemetry/logging. | `specs/compliance/android/eu/gdpr_dpia_summary.md` | Annual + before material telemetry changes. | Reference redaction policy in `sdk/android/telemetry_redaction.md`. |
 | SBOM attestation | Signed SBOM plus SLSA provenance for the Gradle/Maven artifacts. | `specs/compliance/android/eu/sbom_attestation.md` | Every GA release. | Run `scripts/android_sbom_provenance.sh <version>` to generate CycloneDX reports, cosign bundles, and checksums. |
 | FISC security controls checklist | Completed checklist mapping SDK controls to FISC requirements. | `specs/compliance/android/jp/fisc_controls_checklist.md` | Annual + before JP partner pilots. | Provide bilingual headings (EN/JP). |
-| StrongBox attestation bundle (JP) | Per-device attestation summary + chain for JP regulators. | `specs/compliance/android/jp/strongbox_attestation.md` | When new hardware enters the pool. | Point to raw artefacts under `artifacts/android/attestation/<device>/`. |
+| Optional StrongBox attestation bundle (JP) | Per-device attestation summary + chain for deployments claiming StrongBox qualification. | `specs/compliance/android/jp/strongbox_attestation.md` | When new hardware enters a selected hardware profile. | Not part of the software-custody baseline; point to raw artefacts under `artifacts/android/attestation/<device>/` when applicable. |
 | Legal sign-off memo | Counsel summary covering ETSI/GDPR/FISC scope, privacy posture, and chain of custody for attached artefacts. | `specs/compliance/android/eu/legal_signoff_memo.md` | Every time the artefact bundle changes or a new jurisdiction is added. | Memo references hashes from the evidence log and links to the device-lab contingency bundle. |
 | Evidence log | Index of submitted artefacts with hash/timestamp metadata. | `specs/compliance/android/evidence_log.csv` | Updated whenever any entry above changes. | Add Buildkite link + reviewer sign-off. |
 | Device-lab instrumentation bundle | Slot-specific telemetry, queue, and attestation evidence recorded with the process defined in `device_lab_instrumentation.md`. | `artifacts/android/device_lab/<slot>/` (see `specs/compliance/android/device_lab_instrumentation.md`) | Every reserved slot + failover drill. | Capture SHA-256 manifests and reference the slot ID in the evidence log + checklist. |
@@ -52,9 +58,13 @@ The EU packet ties together the three artefacts above plus the legal memo:
   SHA-256, outline any compensating controls, and link to the evidence log row
   plus the PagerDuty ticket ID that tracked the approval.
 
-## Japan Regulatory Packet (FISC/StrongBox)
+## Japan Regulatory Packet (FISC with Optional StrongBox Addendum)
 
 Japan’s regulators expect a parallel bundle with bilingual documentation:
+
+The FISC checklist and software-custody controls form the baseline. Include the
+StrongBox items below only for a partner deployment that explicitly selects and
+claims that hardware profile.
 
 - `fisc_controls_checklist.md` mirrors the official spreadsheet; fill both the
   EN and JA columns and reference the specific section of `sdk/android/security.md`
@@ -89,14 +99,16 @@ Japan’s regulators expect a parallel bundle with bilingual documentation:
 
 ## Device Lab Reservation & Contingency Plan
 
-To mitigate the **device lab availability** risk called out in the roadmap:
+For optional hardware-qualification work, mitigate **device lab availability**
+risk as follows. This capacity plan is not a release dependency for the
+software-backed profile:
 
 - Track weekly capacity in `specs/compliance/android/evidence_log.csv`
   (column `device_lab_capacity_pct`). Alert Release Engineering if availability
   falls below 70 % for two consecutive weeks.
 - Reserve StrongBox/general lanes following
-  `specs/compliance/android/device_lab_reservation.md` ahead of every
-  freeze, rehearsal, or compliance sweep so requests, approvals, and artefacts
+  `specs/compliance/android/device_lab_reservation.md` ahead of every selected
+  hardware rehearsal or compliance sweep so requests, approvals, and artefacts
   are captured in the `_android-device-lab` queue. Link the resulting ticket IDs
   in the evidence log when recording capacity snapshots.
 - **Fallback pools:** burst to the shared Pixel pool first; if still saturated,
@@ -148,9 +160,10 @@ trigger, actions, and follow-ups).
 
 ## CI Evidence (Lint, Tests, Attestation)
 
-- `.github/workflows/android-and6.yml` now runs all AND6 gates (javac lint +
-  dependency scan, Android test suite, StrongBox attestation verifier, and
-  device-lab slot validation) on every PR/push touching the Android surface.
+- `.github/workflows/android-and6.yml` runs the provider-neutral AND6 gates
+  (javac lint, dependency scan, and Android test suite) plus StrongBox and
+  device-lab fixture validation on every PR/push touching the Android surface.
+  The latter checks archived/sample data and do not require physical hardware.
 - `ci/run_android_tests.sh` wraps `ci/run_android_tests.sh` and emits
   a deterministic summary at `artifacts/android/tests/test-summary.json` while
   persisting the console log to `artifacts/android/tests/test.log`. Attach both
@@ -170,7 +183,7 @@ trigger, actions, and follow-ups).
 
 ## Device-Lab Instrumentation Workflow
 
-Every reservation or failover rehearsal must follow the
+Every selected hardware reservation or failover rehearsal must follow the
 `device_lab_instrumentation.md` guide so telemetry, queue, and attestation
 artefacts line up with the booking log:
 
@@ -186,15 +199,16 @@ artefacts line up with the booking log:
    with the slot ID, SHA-256 manifest path, and corresponding dashboard/Buildkite
    links.
 
-Attach the artefact folder and the hash manifest to the AND6 release packet for
-the affected freeze window. Governance reviewers will reject checklists that do
-not cite a slot identifier plus the instrumentation guide.
+Attach the artefact folder and the hash manifest to the optional hardware
+addendum for the affected qualification window. Governance reviewers should
+require a slot identifier only when that hardware addendum is selected.
 
 ### Reservation & Failover Readiness Evidence
 
 Roadmap item “Regulatory artefact approvals & lab contingency” requires more
-than instrumentation. Every AND6 packet must also reference the proactive
-reservation workflow and quarterly failover rehearsal:
+than instrumentation for releases claiming hardware qualification. Every such
+hardware addendum must also reference the proactive reservation workflow and
+quarterly failover rehearsal:
 
 - **Reservation playbook (`device_lab_reservation.md`).** Follow the booking
   table (lead times, owners, slot lengths), export the shared calendar via

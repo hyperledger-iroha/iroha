@@ -15,6 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = ROOT / "scripts" / "formal" / "private_settlement_tlc_report.py"
 RUNNER = ROOT / "scripts" / "formal" / "run_atomic_private_settlement_tlc.sh"
+RESULT_CONTRACT = ROOT / "scripts" / "formal" / "sumeragi_v2_tlc_result_contract.sh"
 SPEC = importlib.util.spec_from_file_location("private_settlement_tlc_report", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
@@ -58,6 +59,23 @@ def negative_log(*, generated: int = 9, distinct: int = 7, depth: int = 3) -> st
     )
 
 
+def action_property_negative_log(
+    *, generated: int = 12, distinct: int = 8, depth: int = 4
+) -> str:
+    """Return a minimal complete TLC action-property counterexample."""
+
+    return run_header() + (
+        f"{MODULE.ACTION_PROPERTY_VIOLATION_MARKER}\n"
+        f"{MODULE.VIOLATION_BEHAVIOR_MARKER}\n"
+        "State 1: <Initial predicate>\n"
+        "State 2: <CrashCommitteeAt>\n"
+        f"{generated} states generated, {distinct} distinct states found, "
+        "0 states left on queue.\n"
+        f"The depth of the state graph search is {depth}.\n"
+        "Finished in 3s at (2026-08-30 12:35:01)\n"
+    )
+
+
 class PrivateSettlementTlcReportTests(unittest.TestCase):
     """Exercise report parsing, hashing, and exact matrix generation."""
 
@@ -93,6 +111,142 @@ class PrivateSettlementTlcReportTests(unittest.TestCase):
         )
         self.assertEqual(negative.observed_outcome, "safety_violation")
         self.assertEqual(negative.generated_states, 9)
+
+        action_property = MODULE.parse_run(
+            name="action-property-negative.cfg",
+            model="Negative.tla",
+            expected_outcome="action_property_violation",
+            stdout=action_property_negative_log(),
+            stderr="",
+            status=13,
+            seed=20260829,
+            fingerprint_index=0,
+            workers="4",
+            tlc_version="2.19",
+        )
+        self.assertEqual(
+            action_property.observed_outcome, "action_property_violation"
+        )
+        self.assertEqual(action_property.generated_states, 12)
+
+    def test_action_property_result_contract_is_distinct_and_fail_closed(self) -> None:
+        with self.assertRaisesRegex(
+            MODULE.ReportError, "exact action-property violation"
+        ):
+            MODULE.parse_run(
+                name="action-property-wrong-status.cfg",
+                model="Negative.tla",
+                expected_outcome="action_property_violation",
+                stdout=action_property_negative_log(),
+                stderr="",
+                status=12,
+                seed=20260829,
+                fingerprint_index=0,
+                workers="4",
+                tlc_version="2.19",
+            )
+
+        missing_trace_header = action_property_negative_log().replace(
+            f"{MODULE.VIOLATION_BEHAVIOR_MARKER}\n", ""
+        )
+        with self.assertRaisesRegex(
+            MODULE.ReportError, "exact action-property violation"
+        ):
+            MODULE.parse_run(
+                name="action-property-missing-trace.cfg",
+                model="Negative.tla",
+                expected_outcome="action_property_violation",
+                stdout=missing_trace_header,
+                stderr="",
+                status=13,
+                seed=20260829,
+                fingerprint_index=0,
+                workers="4",
+                tlc_version="2.19",
+            )
+
+        with self.assertRaisesRegex(MODULE.ReportError, "exact Safety violation"):
+            MODULE.parse_run(
+                name="action-property-as-safety.cfg",
+                model="Negative.tla",
+                expected_outcome="safety_violation",
+                stdout=action_property_negative_log(),
+                stderr="",
+                status=13,
+                seed=20260829,
+                fingerprint_index=0,
+                workers="4",
+                tlc_version="2.19",
+            )
+
+        unrelated_failure = action_property_negative_log().replace(
+            "State 1: <Initial predicate>\n",
+            "Error: unrelated TLC failure\nState 1: <Initial predicate>\n",
+        )
+        with self.assertRaisesRegex(MODULE.ReportError, "unexpected diagnostics"):
+            MODULE.parse_run(
+                name="action-property-unrelated-error.cfg",
+                model="Negative.tla",
+                expected_outcome="action_property_violation",
+                stdout=unrelated_failure,
+                stderr="",
+                status=13,
+                seed=20260829,
+                fingerprint_index=0,
+                workers="4",
+                tlc_version="2.19",
+            )
+
+    def test_shell_action_property_result_contract_uses_status_13(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "action-property.log"
+            log.write_text(action_property_negative_log(), encoding="utf-8")
+            command = (
+                'source "$1"; '
+                'sumeragi_v2_tlc_assert_action_property_violation '
+                '"$2" "$3" "$4" "$5"'
+            )
+            invocation = [
+                "bash",
+                "-c",
+                command,
+                "bash",
+                str(RESULT_CONTRACT),
+                "action-property",
+                str(log),
+            ]
+            accepted = subprocess.run(
+                [*invocation, "13", MODULE.ACTION_PROPERTY_VIOLATION_MARKER],
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+            wrong_status = subprocess.run(
+                [*invocation, "12", MODULE.ACTION_PROPERTY_VIOLATION_MARKER],
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(wrong_status.returncode, 1)
+            self.assertIn("expected action-property status 13", wrong_status.stderr)
+
+            log.write_text(
+                action_property_negative_log().replace(
+                    "State 1: <Initial predicate>\n",
+                    "Error: unrelated TLC failure\nState 1: <Initial predicate>\n",
+                ),
+                encoding="utf-8",
+            )
+            extra_diagnostic = subprocess.run(
+                [*invocation, "13", MODULE.ACTION_PROPERTY_VIOLATION_MARKER],
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(extra_diagnostic.returncode, 1)
+            self.assertIn("exactly its primary", extra_diagnostic.stderr)
 
     def test_parse_rejects_stderr_wrong_status_and_trailing_output(self) -> None:
         with self.assertRaisesRegex(MODULE.ReportError, "separate stderr"):
@@ -237,7 +391,7 @@ class PrivateSettlementTlcReportTests(unittest.TestCase):
             original = MODULE.formal_package_sha256(formal_dir)
             self.assertEqual(
                 original,
-                "189ade59d8c92aadc413bb7c4283ef36b91a201600b82e038bdd9d734cc2ccc1",
+                "3928371d12ea9523dec157a37ed466d729c17efe810131bc9648c2d7342f9ac8",
             )
             changed_path = formal_dir / MODULE.CONFIGURATIONS[0][0]
             changed_path.write_text("changed\n", encoding="utf-8")
@@ -271,17 +425,30 @@ class PrivateSettlementTlcReportTests(unittest.TestCase):
                 )
             for index, (name, outcome, _) in enumerate(MODULE.CONFIGURATIONS, start=1):
                 prefix = logs_dir / name
-                stdout = (
-                    positive_log(generated=str(index + 10), distinct=str(index), depth=index)
-                    if outcome == "pass"
-                    else negative_log(generated=index + 10, distinct=index, depth=index)
-                )
+                if outcome == "pass":
+                    stdout = positive_log(
+                        generated=str(index + 10), distinct=str(index), depth=index
+                    )
+                elif outcome == "safety_violation":
+                    stdout = negative_log(
+                        generated=index + 10, distinct=index, depth=index
+                    )
+                else:
+                    self.assertEqual(outcome, "action_property_violation")
+                    stdout = action_property_negative_log(
+                        generated=index + 10, distinct=index, depth=index
+                    )
                 prefix.with_suffix(prefix.suffix + ".stdout.log").write_text(
                     stdout, encoding="utf-8"
                 )
                 prefix.with_suffix(prefix.suffix + ".stderr.log").write_bytes(b"")
                 prefix.with_suffix(prefix.suffix + ".status").write_text(
-                    "0\n" if outcome == "pass" else "12\n", encoding="ascii"
+                    {
+                        "pass": "0\n",
+                        "safety_violation": "12\n",
+                        "action_property_violation": "13\n",
+                    }[outcome],
+                    encoding="ascii",
                 )
 
             report, transcript = MODULE.build_report(
@@ -471,6 +638,22 @@ class PrivateSettlementTlcReportTests(unittest.TestCase):
         observed = [tuple(line.split("\t")) for line in result.stdout.splitlines()]
         expected = list(MODULE.CONFIGURATIONS)
         self.assertEqual(observed, expected)
+        self.assertIn(
+            (
+                "AtomicPrivateSettlementV1CommitteeFaults_commit_without_registration_bug.cfg",
+                "safety_violation",
+                MODULE.INDEXED_MODEL,
+            ),
+            expected,
+        )
+        self.assertIn(
+            (
+                "AtomicPrivateSettlementV1CommitteeFaults_drop_stage_bug.cfg",
+                "action_property_violation",
+                MODULE.INDEXED_MODEL,
+            ),
+            expected,
+        )
         self.assertEqual(result.stderr, "")
 
         complete = subprocess.run(
@@ -495,6 +678,107 @@ class PrivateSettlementTlcReportTests(unittest.TestCase):
             )
             self.assertEqual(noncanonical.returncode, 2)
             self.assertIn("unsigned integer", noncanonical.stderr)
+
+    def test_indexed_model_uses_liveness_safe_fault_canonicalization(self) -> None:
+        model_path = ROOT / "formal" / "private_settlement" / MODULE.INDEXED_MODEL
+        source = model_path.read_text(encoding="utf-8")
+
+        self.assertIn('NetworkModes == {"Deliver", "Impaired"}', source)
+        self.assertIn("CanonicalFaultValidator == 1", source)
+        self.assertIn("InjectValidatorFault(leg, kind) ==", source)
+        self.assertIn(
+            '!.validatorStatus[leg][CanonicalFaultValidator] = kind,', source
+        )
+        self.assertIn("RestoreValidator(leg) ==", source)
+        self.assertIn(
+            'st.validatorStatus[leg][CanonicalFaultValidator] # "Honest"', source
+        )
+        self.assertIn("ImpairChannel(channel, leg) ==", source)
+        self.assertIn('!.networkMode[channel][leg] = "Impaired",', source)
+        self.assertNotIn("InjectValidatorFault(leg, validator, kind) ==", source)
+        self.assertNotIn("RestoreValidator(leg, validator) ==", source)
+        self.assertNotIn("ChannelFaultKinds", source)
+        self.assertNotIn("ImpairChannel(channel, leg, mode) ==", source)
+        self.assertNotIn('mode \\in {"Hold", "Drop", "Delay"}', source)
+        self.assertIn("DurableStep ==", source)
+        self.assertIn("APSDurabilityTemporal == [][DurableStep]_vars", source)
+        self.assertIn("CertificateQuorumStep ==", source)
+        self.assertIn(
+            "APSCertificateQuorumTemporal == [][CertificateQuorumStep]_vars",
+            source,
+        )
+        self.assertIn("CompleteBundleIdentity ==", source)
+        self.assertIn("CompletePrepareRegistration ==", source)
+        self.assertIn("RegisterCompletePrepareBundle ==", source)
+        self.assertIn("OpenCommitWithoutPrepareRegistration ==", source)
+        self.assertIn("APSPrepareRegistrationAndCommitBinding ==", source)
+        self.assertIn(
+            "APSPrepareRegistrationCrashRecoveryTemporal ==", source
+        )
+        self.assertIn(
+            "!.prepareRegistration = CompletePrepareRegistration,", source
+        )
+        self.assertIn(
+            "!.prepareRegistration = EmptyPrepareRegistration,", source
+        )
+        self.assertIn(
+            "st.prepareRegistration = CompletePrepareRegistration", source
+        )
+        self.assertIn(
+            "st'.commitBinding[leg] = CompleteBundleIdentity", source
+        )
+        self.assertIn("!.daVotes[leg] = {},", source)
+        self.assertIn(
+            "!.prepareVotes[leg] = [digest \\in Digests |-> {}],", source
+        )
+        self.assertIn(
+            "!.commitVotes[leg] = [digest \\in Digests |-> {}],", source
+        )
+        self.assertNotIn("crashFloor", source)
+        self.assertNotIn("crashedBoundaries", source)
+        self.assertNotIn("faultIdentity", source)
+        self.assertNotIn("height |->", source)
+        self.assertNotIn("invalidRejected", source)
+
+        formal_dir = model_path.parent
+        for name, outcome, model in MODULE.CONFIGURATIONS:
+            if model != MODULE.INDEXED_MODEL:
+                continue
+            config = (formal_dir / name).read_text(encoding="utf-8")
+            self.assertNotIn("SYMMETRY", config)
+            self.assertNotIn("VIEW", config)
+            if name.endswith("commit_without_registration_bug.cfg"):
+                self.assertIn(
+                    "CommitWithoutPrepareRegistration = TRUE", config
+                )
+            else:
+                self.assertIn(
+                    "CommitWithoutPrepareRegistration = FALSE", config
+                )
+            if outcome == "pass":
+                self.assertIn("APSDurabilityTemporal", config)
+                self.assertIn(
+                    "APSPrepareRegistrationCrashRecoveryTemporal", config
+                )
+                self.assertIn("APSCertificateQuorumTemporal", config)
+
+    def test_count_model_includes_prepare_registration_lifecycle(self) -> None:
+        model_path = ROOT / "formal" / "private_settlement" / MODULE.COUNT_MODEL
+        source = model_path.read_text(encoding="utf-8")
+
+        self.assertIn('BundleIdentities == {"None", "CompleteBundle"}', source)
+        self.assertIn("RegisterCompletePrepareBundle ==", source)
+        self.assertIn('prepareRegistration\' = "CompleteBundle"', source)
+        self.assertIn('commitBundleIdentity\' = prepareRegistration', source)
+        self.assertIn('prepareRegistration\' = "None"', source)
+        self.assertIn("APSPrepareRegistrationCrashRecoveryTemporal ==", source)
+
+        formal_dir = model_path.parent
+        for name, outcome, model in MODULE.CONFIGURATIONS:
+            if model != MODULE.COUNT_MODEL or outcome != "pass":
+                continue
+            config = (formal_dir / name).read_text(encoding="utf-8")
+            self.assertIn("APSPrepareRegistrationCrashRecoveryTemporal", config)
 
     def test_runner_pins_the_candidate_before_invoking_the_toolchain(self) -> None:
         source = RUNNER.read_text(encoding="utf-8")

@@ -23,6 +23,8 @@ mod kagemusha_validator_qualification_command;
 pub mod musubi_publication_service;
 /// Asynchronous Nexus DPN fee settlement relay.
 mod nexus_fee_relay_worker;
+/// Explicit recovery boundaries for daemon-owned provider work.
+mod panic_recovery;
 /// Synchronizes peer-gossip voter authority with the committed validator roster.
 #[path = "main/peers_gossiper_topology_sync.rs"]
 mod peers_gossiper_topology_sync;
@@ -15301,7 +15303,7 @@ mod tests {
     #[allow(unused_imports)]
     use super::*;
     use iroha_config_base::toml::TomlSource;
-    const GOVERNANCE_DAG_PUBLISHER_HANDLE: &str = "pkcs11:governance-dag-publisher";
+    const GOVERNANCE_DAG_PUBLISHER_HANDLE: &str = "provider:governance-dag-publisher";
     const GOVERNANCE_DAG_PUBLISHER_PEER_ID: &str = "governance-dag-publisher";
     const GOVERNANCE_DAG_PUBLISHER_POLICY_DIGEST: [u8; 32] = [0xA5; 32];
     const GOVERNANCE_DAG_CHECKPOINT_STORE_HANDLE: &str =
@@ -16259,7 +16261,7 @@ mod tests {
         let appeal_finance = &mut config.torii.sorafs_appeal_finance_settlement;
         appeal_finance.submitter_signers = vec![
             SorafsAppealFinanceSignerBinding {
-                handle: "pkcs11:appeal-finance-a".to_owned(),
+                handle: "provider:appeal-finance-a".to_owned(),
                 authority: AccountId::new(signer_a.public_key().clone()),
                 public_key: signer_a.public_key().clone(),
                 revision: 7,
@@ -16268,7 +16270,7 @@ mod tests {
                 revoked_at_block_height: Some(10),
             },
             SorafsAppealFinanceSignerBinding {
-                handle: "pkcs11:appeal-finance-b".to_owned(),
+                handle: "provider:appeal-finance-b".to_owned(),
                 authority: AccountId::new(signer_b.public_key().clone()),
                 public_key: signer_b.public_key().clone(),
                 revision: 8,
@@ -16301,13 +16303,13 @@ mod tests {
             vec![
                 (
                     IrohaRuntimeProviderSlotV1::AppealFinanceTransactionSigner,
-                    "pkcs11:appeal-finance-a".to_owned(),
+                    "provider:appeal-finance-a".to_owned(),
                     Some(7),
                     Some([0xA7; 32]),
                 ),
                 (
                     IrohaRuntimeProviderSlotV1::AppealFinanceTransactionSigner,
-                    "pkcs11:appeal-finance-b".to_owned(),
+                    "provider:appeal-finance-b".to_owned(),
                     Some(8),
                     Some([0xA8; 32]),
                 ),
@@ -18798,7 +18800,7 @@ mod tests {
                         0x96, 0x8c, 0xc0, 0xcd, 0x55, 0xf1, 0x2a, 0xf4, 0x66, 0x0c,
                     ],
                     maintenance_authority: authority,
-                    transaction_signer_handle: "hsm:moderation:signer-primary".into(),
+                    transaction_signer_handle: "provider:moderation:signer-primary".into(),
                     transaction_signer_revision: 1,
                     transaction_signer_policy_digest: [0x82; 32],
                     strict_ingress_handle: iroha_torii::sorafs::moderation_runtime::

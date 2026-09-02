@@ -152,10 +152,10 @@ fn with_consensus_meta_handles_npos_mode() {
 fn with_consensus_meta_respects_block_max_transactions_override() {
     let chain = ChainId::from("iroha:test:blockmax");
     let max_txs = NonZeroU64::new(13).expect("non-zero max transactions");
+    let mut parameters = Parameters::default();
+    parameters.set_parameter(Parameter::Block(BlockParameter::MaxTransactions(max_txs)));
     let tx = RawGenesisTx {
-        instructions: vec![InstructionBox::from(SetParameter::new(Parameter::Block(
-            BlockParameter::MaxTransactions(max_txs),
-        )))],
+        parameters: Some(parameters),
         ..RawGenesisTx::default()
     };
     let manifest = RawGenesisTransaction {
@@ -338,35 +338,12 @@ fn build_and_sign_checked_genesis_transaction_signatures_verify() {
     }
 }
 #[test]
-fn collect_parameter_instructions_respects_manual_values() {
-    use iroha_data_model::parameter::{Parameters, system::SumeragiParameter};
-    let parameters = Parameters::default();
-    let manual = vec![Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(250))];
-    let generated =
-        collect_parameter_instructions(&parameters, &[], &manual, &Parameters::default());
-    let has_conflict = generated.iter().any(|instruction| {
-        instruction
-            .as_any()
-            .downcast_ref::<SetParameter>()
-            .is_some_and(|set| {
-                matches!(
-                    set.inner(),
-                    Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(_))
-                )
-            })
-    });
-    assert!(
-        !has_conflict,
-        "manual Sumeragi overrides must suppress default value reinsertion"
-    );
-}
-#[test]
 fn collect_parameter_instructions_emits_max_clock_drift_update() {
     use iroha_data_model::parameter::{Parameters, system::SumeragiParameter};
     let current = Parameters::default();
     let mut target = current.clone();
     target.set_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333)));
-    let generated = collect_parameter_instructions(&target, &[], &[], &current);
+    let generated = collect_parameter_instructions(&target);
     assert!(
         generated.iter().any(|instruction| {
             instruction
@@ -381,17 +358,6 @@ fn collect_parameter_instructions_emits_max_clock_drift_update() {
         }),
         "generated instructions must contain the mutable Sumeragi update"
     );
-}
-#[test]
-fn has_set_parameter_detects_conflicting_sumeragi_slots() {
-    use iroha_data_model::parameter::system::SumeragiParameter;
-    let instruction = InstructionBox::from(SetParameter::new(Parameter::Sumeragi(
-        SumeragiParameter::MaxClockDriftMs(100),
-    )));
-    assert!(has_set_parameter(
-        &[instruction],
-        &Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(200))
-    ));
 }
 #[test]
 fn build_and_sign_sets_confidential_digest() {
@@ -492,7 +458,7 @@ fn genesis_canonical_wire_roundtrip_preserves_digest() {
     );
 }
 #[test]
-fn effective_parameters_prefers_set_parameter_instructions() {
+fn programmatic_raw_genesis_rejects_explicit_set_parameter_instructions() {
     use iroha_data_model::{isi::InstructionBox, parameter::system::SumeragiParameter};
     let chain = ChainId::from("iroha:test:paramagg");
     let mut base = Parameters::default();
@@ -519,56 +485,64 @@ fn effective_parameters_prefers_set_parameter_instructions() {
         sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
         crypto: ManifestCrypto::default(),
     };
-    let effective = manifest
+    let error = manifest
         .effective_parameters()
-        .expect("single structured parameter block");
-    assert_eq!(effective.sumeragi().max_clock_drift_ms(), 1_500);
+        .expect_err("explicit SetParameter must not override the structured snapshot");
+    assert!(
+        error
+            .to_string()
+            .contains("SetParameter instructions (tx 0, instruction 0)"),
+        "unexpected error: {error:?}"
+    );
+    let error = manifest
+        .parse()
+        .expect_err("signing must reject explicit SetParameter instructions");
+    assert!(
+        error
+            .to_string()
+            .contains("SetParameter instructions (tx 0, instruction 0)"),
+        "unexpected error: {error:?}"
+    );
 }
 #[test]
-fn effective_parameters_respects_manual_overrides_across_transactions() {
-    init_instruction_registry();
-    use iroha_data_model::{
-        isi::InstructionBox,
-        parameter::{
-            Parameters,
-            custom::CustomParameter,
-            system::{SumeragiParameter, confidential_metadata},
-        },
-    };
-    let chain = ChainId::from("iroha:test:paramagg-manual");
-    let tx_manual = RawGenesisTx {
-        instructions: vec![InstructionBox::from(SetParameter::new(
-            Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333)),
-        ))],
-        ..RawGenesisTx::default()
-    };
-    // Parameters created from a single custom entry still include system defaults.
-    // `effective_parameters()` must follow the same suppression rules as `parse()` so
-    // that later structured sections don't overwrite globally-manual overrides.
-    let conf_param = Parameter::Custom(CustomParameter::new(
-        confidential_metadata::registry_root_id(),
-        Json::new(norito::json!({ "vk_set_hash": null })),
-    ));
-    let tx_defaults = RawGenesisTx {
-        parameters: Some(Parameters::from_iter([conf_param])),
-        ..RawGenesisTx::default()
-    };
-    let manifest = RawGenesisTransaction {
-        chain,
+fn transaction_replacement_rejects_explicit_set_parameter_instructions() {
+    use iroha_data_model::{isi::InstructionBox, parameter::system::SumeragiParameter};
+    let mut manifest = RawGenesisTransaction {
+        chain: ChainId::from("iroha:test:paramagg-replacement"),
         chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
         executor: None,
         ivm_dir: IvmPath::default(),
-        transactions: vec![tx_manual, tx_defaults],
+        transactions: vec![RawGenesisTx::default()],
         consensus_mode: SumeragiConsensusMode::Permissioned,
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
         sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
         crypto: ManifestCrypto::default(),
     };
-    let effective = manifest
-        .effective_parameters()
-        .expect("single structured parameter block");
-    assert_eq!(effective.sumeragi().max_clock_drift_ms(), 333);
+    let set_parameter = InstructionBox::from(SetParameter::new(Parameter::Sumeragi(
+        SumeragiParameter::MaxClockDriftMs(333),
+    )));
+    let error = manifest
+        .replace_instruction_only_transaction(0, vec![vec![set_parameter]])
+        .expect_err("transaction replacement must not inject SetParameter");
+    assert!(
+        error
+            .to_string()
+            .contains("replacement batch 0, instruction 0 contains SetParameter"),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "GenesisBuilder::append_instruction does not accept SetParameter; use GenesisBuilder::append_parameter"
+)]
+fn genesis_builder_rejects_set_parameter_as_generic_instruction() {
+    use iroha_data_model::parameter::system::SumeragiParameter;
+    let _ = GenesisBuilder::new_without_executor(ChainId::from("iroha:test:paramagg-builder"), ".")
+        .append_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::MaxClockDriftMs(333),
+        )));
 }
 #[test]
 fn multiple_structured_parameter_blocks_are_rejected_as_ambiguous_snapshots() {

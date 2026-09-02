@@ -416,16 +416,6 @@ class AppAttestFreshnessAuthorityTest(unittest.TestCase):
                     sidecar = Path(str(state.path) + suffix)
                     self.assertTrue(sidecar.is_file())
                     self.assertEqual(sidecar.stat().st_mode & 0o777, 0o600)
-                database_path = state.path
-            legacy = authority.sqlite3.connect(str(database_path))
-            try:
-                legacy.execute("DROP TABLE catalog_revalidations")
-                legacy.execute(
-                    "UPDATE authority_metadata SET schema_version = 1 WHERE singleton = 1"
-                )
-                legacy.commit()
-            finally:
-                legacy.close()
             with authority.AuthorityState(state_dir) as reopened:
                 self.assertEqual(
                     reopened.connection.execute(
@@ -442,6 +432,151 @@ class AppAttestFreshnessAuthorityTest(unittest.TestCase):
                     ),
                     authority.CATALOG_REVALIDATION_TABLE_COLUMNS,
                 )
+
+    def test_legacy_schema_version_fails_closed_without_repair(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            state_dir = Path(temporary) / "state"
+            with authority.AuthorityState(state_dir) as state:
+                database_path = state.path
+            legacy = authority.sqlite3.connect(str(database_path))
+            try:
+                legacy.execute(
+                    "UPDATE authority_metadata SET schema_version = 1 WHERE singleton = 1"
+                )
+                legacy.commit()
+            finally:
+                legacy.close()
+
+            with self.assertRaisesRegex(
+                authority.AuthorityError, "archive or remove.*reinitialize"
+            ):
+                authority.AuthorityState(state_dir)
+
+            unchanged = authority.sqlite3.connect(str(database_path))
+            try:
+                self.assertEqual(
+                    unchanged.execute(
+                        "SELECT schema_version FROM authority_metadata"
+                    ).fetchone(),
+                    (1,),
+                )
+                self.assertEqual(
+                    tuple(
+                        row[1]
+                        for row in unchanged.execute(
+                            "PRAGMA table_info(catalog_revalidations)"
+                        )
+                    ),
+                    authority.CATALOG_REVALIDATION_TABLE_COLUMNS,
+                )
+            finally:
+                unchanged.close()
+
+    def test_partial_current_schema_fails_closed_without_repair(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            state_dir = Path(temporary) / "state"
+            with authority.AuthorityState(state_dir) as state:
+                database_path = state.path
+            partial = authority.sqlite3.connect(str(database_path))
+            try:
+                partial.execute("DROP TABLE catalog_revalidations")
+                partial.commit()
+            finally:
+                partial.close()
+
+            with self.assertRaisesRegex(
+                authority.AuthorityError, "archive or remove.*reinitialize"
+            ):
+                authority.AuthorityState(state_dir)
+
+            unchanged = authority.sqlite3.connect(str(database_path))
+            try:
+                self.assertIsNone(
+                    unchanged.execute(
+                        """
+                        SELECT name FROM sqlite_schema
+                         WHERE type = 'table' AND name = 'catalog_revalidations'
+                        """
+                    ).fetchone()
+                )
+                self.assertEqual(
+                    unchanged.execute(
+                        "SELECT schema_version FROM authority_metadata"
+                    ).fetchone(),
+                    (authority.STATE_SCHEMA_VERSION,),
+                )
+            finally:
+                unchanged.close()
+
+    def test_same_named_noncanonical_schema_fails_closed_without_repair(self) -> None:
+        variants = (
+            (
+                "weakened constraint",
+                "CHECK (singleton = 1)",
+                "CHECK (singleton >= 1)",
+            ),
+            (
+                "changed column type",
+                "issued_at_unix_ms INTEGER NOT NULL",
+                "issued_at_unix_ms TEXT NOT NULL",
+            ),
+            (
+                "changed index order",
+                "ON challenges(state, expires_at_unix_ms)",
+                "ON challenges(expires_at_unix_ms, state)",
+            ),
+        )
+        canonical_ddl = ";\n".join(
+            sql
+            for _object_type, _name, _table_name, sql in authority.AUTHORITY_SCHEMA_DEFINITIONS
+        )
+        for label, original, replacement in variants:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
+                self.assertIn(original, canonical_ddl)
+                state_dir = Path(temporary) / "state"
+                state_dir.mkdir(mode=0o700)
+                database_path = (
+                    state_dir / "app-attest-freshness-authority-v1.sqlite3"
+                )
+                noncanonical = authority.sqlite3.connect(str(database_path))
+                try:
+                    noncanonical.executescript(
+                        canonical_ddl.replace(original, replacement, 1)
+                        + f"; INSERT INTO authority_metadata VALUES "
+                        f"(1, {authority.STATE_SCHEMA_VERSION});"
+                    )
+                    before = tuple(
+                        noncanonical.execute(
+                            """
+                            SELECT type, name, tbl_name, sql FROM sqlite_schema
+                             WHERE name NOT LIKE 'sqlite_%'
+                             ORDER BY type, name
+                            """
+                        )
+                    )
+                finally:
+                    noncanonical.close()
+                database_path.chmod(0o600)
+
+                with self.assertRaisesRegex(
+                    authority.AuthorityError, "archive or remove.*reinitialize"
+                ):
+                    authority.AuthorityState(state_dir)
+
+                unchanged = authority.sqlite3.connect(str(database_path))
+                try:
+                    after = tuple(
+                        unchanged.execute(
+                            """
+                            SELECT type, name, tbl_name, sql FROM sqlite_schema
+                             WHERE name NOT LIKE 'sqlite_%'
+                             ORDER BY type, name
+                            """
+                        )
+                    )
+                finally:
+                    unchanged.close()
+                self.assertEqual(after, before)
 
     def test_authority_output_is_private_durable_and_never_replaced(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -488,7 +623,7 @@ class AppAttestFreshnessAuthorityTest(unittest.TestCase):
             authority._write_all(123, b"signed CMS receipt", "CMS receipt")
         self.assertEqual(writer.call_count, 1)
 
-    def test_schema_v2_catalog_rows_migrate_to_active_terminal_state(self) -> None:
+    def test_schema_v2_catalog_rows_fail_closed_without_migration(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             state_dir = Path(temporary) / "state"
             state_dir.mkdir(mode=0o700)
@@ -538,26 +673,50 @@ class AppAttestFreshnessAuthorityTest(unittest.TestCase):
                 legacy.close()
             database_path.chmod(0o600)
 
-            with authority.AuthorityState(state_dir) as migrated:
+            with self.assertRaisesRegex(
+                authority.AuthorityError, "archive or remove.*reinitialize"
+            ):
+                authority.AuthorityState(state_dir)
+
+            unchanged = authority.sqlite3.connect(str(database_path))
+            try:
                 self.assertEqual(
                     tuple(
                         row[1]
-                        for row in migrated.connection.execute(
+                        for row in unchanged.execute(
                             "PRAGMA table_info(catalog_revalidations)"
                         )
                     ),
-                    authority.CATALOG_REVALIDATION_TABLE_COLUMNS,
+                    (
+                        "promotion_id",
+                        "catalog_sha256",
+                        "receipt_id",
+                        "issued_at_unix_ms",
+                        "expires_at_unix_ms",
+                        "authority_key_id",
+                        "authority_public_key_sha256",
+                        "receipt_payload",
+                    ),
                 )
                 self.assertEqual(
-                    migrated.connection.execute(
+                    unchanged.execute(
                         """
-                        SELECT state, retired_at_unix_ms
+                        SELECT promotion_id, catalog_sha256, receipt_id
                           FROM catalog_revalidations WHERE promotion_id = ?
                         """,
                         ("1" * 64,),
                     ).fetchone(),
-                    ("active", None),
+                    ("1" * 64, "2" * 64, "3" * 64),
                 )
+                self.assertEqual(
+                    unchanged.execute(
+                        "SELECT schema_version FROM authority_metadata"
+                    ).fetchone(),
+                    (2,),
+                )
+            finally:
+                unchanged.close()
+
     def test_state_rejects_writable_ancestor_and_preplanted_wal_alias(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             unsafe = Path(temporary) / "unsafe"

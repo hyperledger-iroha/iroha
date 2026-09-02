@@ -31,6 +31,11 @@ const HARNESS_REQUEST_SHA_ENV: &str = "APS_REAL_PROCESS_REQUEST_SHA256";
 const HARNESS_VALIDATOR_SHA_ENV: &str = "APS_REAL_PROCESS_VALIDATOR_SHA256";
 const HARNESS_EVIDENCE_DIR_ENV: &str = "APS_REAL_PROCESS_EVIDENCE_DIR";
 const HARNESS_PORT_MANIFEST_ENV: &str = "APS_REAL_PROCESS_PORT_MANIFEST";
+const RAYON_NUM_THREADS_ENV: &str = "RAYON_NUM_THREADS";
+const REAL_PROCESS_RAYON_WORKER_THREADS: u64 = 8;
+const REAL_PROCESS_RAYON_WORKER_THREADS_TEXT: &str = "8";
+const REAL_PROCESS_CARGO_BUILD_JOBS: u64 = 1;
+const REAL_PROCESS_CARGO_RELEASE_CODEGEN_UNITS: u64 = 1;
 const COORDINATOR_ROOT_ENV: &str = "APS_REAL_PROCESS_COORDINATOR_ROOT";
 const COORDINATOR_COMMAND_FILE: &str = "command.json";
 const COORDINATOR_ACK_FILE: &str = "ack.json";
@@ -42,6 +47,18 @@ const HARNESS_MAX_JSON_BYTES: usize = 16 * 1024 * 1024;
 const FAULT_CONTROL_EVIDENCE_FILE: &str = "fault-control.jsonl";
 const FAULT_OBSERVATION_EVIDENCE_FILE: &str = "fault-observations.jsonl";
 const FAULT_ROUTE_MATCHES: u64 = 20;
+const PRIVATE_SETTLEMENT_CRASH_BOUNDARIES: &[&str] = &[
+    "sidecar_fsync",
+    "staged_delta_fsync",
+    "prepare_qc",
+    "prepare_registration_kura_append",
+    "prepare_registration_wsv_application",
+    "commit_qc",
+    "finalization_kura_append",
+    "finalization_wsv_application",
+    "receipt_publication",
+];
+const FAULT_CAMPAIGN_TRIALS: usize = 9 + 4 + PRIVATE_SETTLEMENT_CRASH_BOUNDARIES.len();
 const FAULT_BUNDLE_EXPIRY_BLOCKS: u64 = 96;
 const FAULT_CONTROL_TIMEOUT: Duration = Duration::from_secs(60);
 const FAULT_CONTINUOUS_OBSERVATION_DOMAIN_V1: &[u8] =
@@ -308,6 +325,7 @@ struct RealProcessLeakageResultV1 {
 struct LeakageAtomicityObservationEvidenceV1 {
     version: u8,
     peer_index: usize,
+    registered: FaultStateObservationV1,
     observations: Vec<FaultStateObservationV1>,
 }
 
@@ -337,6 +355,22 @@ struct CoordinatorAckV1 {
     #[norito(required)]
     barrier: Option<iroha::data_model::nexus::PrivateSettlementPrepareBarrierV1>,
     commit_certificates: Vec<iroha::data_model::nexus::PrivateSettlementPhaseCertificateV1>,
+}
+
+fn submit_prepare_registration_and_wait_v1(
+    client: &Client,
+    barrier: &iroha::data_model::nexus::PrivateSettlementPrepareBarrierV1,
+) -> Result<()> {
+    client.register_private_settlement_prepare_and_wait_v1(
+        barrier,
+        u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
+            .expect("V1 carrier ceiling fits u64"),
+        iroha::client::TransactionWaitOptions {
+            timeout: FINALITY_TIMEOUT,
+            poll_interval: POLL_INTERVAL,
+        },
+    )?;
+    Ok(())
 }
 
 #[derive(Clone, Debug, norito::JsonSerialize)]
@@ -374,6 +408,7 @@ struct FaultStateObservationV1 {
     height: u64,
     commitment: String,
     ledger_commitment: String,
+    replicated_staged_lock_commitment: String,
     staged_lock_commitment: String,
     counts: HarnessJsonValue,
 }
@@ -415,6 +450,7 @@ struct FaultContinuousObservationSummaryV1 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct FaultStateIdentityV1 {
     ledger_commitment: String,
+    replicated_staged_lock_commitment: String,
     staged_lock_commitment: String,
     counts: String,
 }
@@ -500,6 +536,7 @@ const PRIVATE_BENCHMARK_STAGES: &[&str] = &[
     "auditor_response",
     "committee_verification",
     "prepare",
+    "prepare_registration",
     "commit",
     "global_finality",
     "end_to_end",
@@ -628,6 +665,16 @@ fn validate_real_process_request_common(
                 .get("participants")
                 .and_then(HarnessJsonValue::as_u64)
                 == u64::try_from(participants).ok()
+            && harness_json_object_u64(configuration, "execution", "rayon_worker_threads")
+                == Some(REAL_PROCESS_RAYON_WORKER_THREADS)
+            && harness_json_object_u64(configuration, "execution", "validator_worker_threads")
+                == Some(REAL_PROCESS_VALIDATOR_WORKER_THREADS)
+            && harness_json_object_u64(configuration, "execution", "cargo_build_jobs")
+                == Some(REAL_PROCESS_CARGO_BUILD_JOBS)
+            && harness_json_object_u64(configuration, "execution", "cargo_release_codegen_units",)
+                == Some(REAL_PROCESS_CARGO_RELEASE_CODEGEN_UNITS)
+            && harness_json_object_bool(configuration, "execution", "cargo_incremental")
+                == Some(false)
             && harness_json_object_u64(configuration, "topology", "validators_per_dataspace",)
                 == Some(4)
             && harness_json_object_u64(configuration, "topology", "global_validators",) == Some(4)
@@ -638,7 +685,28 @@ fn validate_real_process_request_common(
                 "consensus",
                 "authenticated_message_control",
             ) == Some(true),
-        "embedded configuration does not bind the required topology"
+        "embedded configuration does not bind the required topology and execution widths"
+    );
+    ensure!(
+        std::env::var(RAYON_NUM_THREADS_ENV).ok().as_deref()
+            == Some(REAL_PROCESS_RAYON_WORKER_THREADS_TEXT),
+        "Rust harness Rayon width differs from the bound release configuration"
+    );
+    ensure!(
+        std::env::var("CARGO_BUILD_JOBS").ok().as_deref() == Some("1")
+            && std::env::var("CARGO_INCREMENTAL").ok().as_deref() == Some("0")
+            && std::env::var("CARGO_PROFILE_RELEASE_CODEGEN_UNITS")
+                .ok()
+                .as_deref()
+                == Some("1")
+            && std::env::var("CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_CODEGEN_UNITS")
+                .ok()
+                .as_deref()
+                == Some("1")
+            && std::env::var_os("RUSTFLAGS").is_none()
+            && std::env::var_os("RUSTC_WRAPPER").is_none()
+            && std::env::var_os("RUSTC_WORKSPACE_WRAPPER").is_none(),
+        "Rust harness build environment differs from the bound release configuration"
     );
     Ok(())
 }
@@ -729,16 +797,7 @@ fn validate_real_process_fault_request(request: &RealProcessFaultRequestV1) -> R
                     "commit_before_complete_barrier",
                     "carrier_before_global_finality",
                 ]
-            && request.payload.crash_boundaries
-                == [
-                    "sidecar_fsync",
-                    "staged_delta_fsync",
-                    "prepare_qc",
-                    "commit_qc",
-                    "kura_append",
-                    "wsv_application",
-                    "receipt_publication",
-                ]
+            && request.payload.crash_boundaries == PRIVATE_SETTLEMENT_CRASH_BOUNDARIES
             && request.payload.committee_validator_restarts
                 == (0..request.participants).collect::<Vec<_>>()
             && request.payload.restart_coordinator
@@ -2205,6 +2264,14 @@ fn canonical_harness_json_value_bytes(value: &HarnessJsonValue) -> Result<Vec<u8
         .wrap_err("encode canonical harness evidence JSON value")
 }
 
+fn canonical_hash_json_literal(hash: &Hash) -> Result<String> {
+    let value = norito::json::to_value(hash).wrap_err("encode canonical hash literal")?;
+    value
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| eyre!("canonical hash JSON is not a string"))
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
@@ -2686,6 +2753,7 @@ fn run_coordinator_helper_process() -> Result<()> {
                 &command.authority_catalog,
                 &command.deltas,
             )?;
+            submit_prepare_registration_and_wait_v1(&client, &barrier)?;
             (Some(barrier), Vec::new())
         }
         "recover_prepare_commit" => {
@@ -2699,6 +2767,7 @@ fn run_coordinator_helper_process() -> Result<()> {
                 &command.authority_catalog,
                 &command.deltas,
             )?;
+            submit_prepare_registration_and_wait_v1(&client, &barrier)?;
             let commits =
                 client.recover_or_commit_private_settlement_bundle_v1(&endpoints, &barrier)?;
             (Some(barrier), commits)
@@ -2736,6 +2805,7 @@ fn run_coordinator_helper_process() -> Result<()> {
 fn fault_state_identity(observation: &FaultStateObservationV1) -> Result<FaultStateIdentityV1> {
     Ok(FaultStateIdentityV1 {
         ledger_commitment: observation.ledger_commitment.clone(),
+        replicated_staged_lock_commitment: observation.replicated_staged_lock_commitment.clone(),
         staged_lock_commitment: observation.staged_lock_commitment.clone(),
         counts: norito::json::to_string(&observation.counts)
             .wrap_err("encode fault state count identity")?,
@@ -2752,6 +2822,7 @@ fn fault_ledger_identity(observation: &FaultStateObservationV1) -> Result<FaultL
         "staged_pool_heads",
         "staged_nullifiers",
         "staged_output_commitments",
+        "replicated_staged_locks",
         "staged_locks",
     ] {
         ensure!(counts.remove(field).is_some(), "fault state lacks {field}");
@@ -2779,9 +2850,12 @@ fn capture_fault_state_observation(
         response_sha256: hex::encode(Sha256::digest(&response_bytes)),
         response_hex: hex::encode(response_bytes),
         height: response.height,
-        commitment: response.commitment.to_string(),
-        ledger_commitment: response.ledger_commitment.to_string(),
-        staged_lock_commitment: response.staged_lock_commitment.to_string(),
+        commitment: canonical_hash_json_literal(&response.commitment)?,
+        ledger_commitment: canonical_hash_json_literal(&response.ledger_commitment)?,
+        replicated_staged_lock_commitment: canonical_hash_json_literal(
+            &response.replicated_staged_lock_commitment,
+        )?,
+        staged_lock_commitment: canonical_hash_json_literal(&response.staged_lock_commitment)?,
         counts,
     })
 }
@@ -2809,6 +2883,38 @@ enum FaultContinuousObservationClassV1 {
     Finalized,
 }
 
+fn validate_fault_lock_shape_v1(
+    observation: &FaultStateObservationV1,
+    participants: usize,
+) -> Result<()> {
+    let staged_pool_heads = fault_count(&observation.counts, "staged_pool_heads")?;
+    let staged_nullifiers = fault_count(&observation.counts, "staged_nullifiers")?;
+    let staged_outputs = fault_count(&observation.counts, "staged_output_commitments")?;
+    let staged_total = fault_count(&observation.counts, "staged_locks")?;
+    ensure!(
+        staged_pool_heads <= u64::try_from(participants)?
+            && staged_nullifiers == staged_pool_heads.saturating_mul(2)
+            && staged_outputs == staged_pool_heads.saturating_mul(3)
+            && staged_total
+                == staged_pool_heads
+                    .saturating_add(staged_nullifiers)
+                    .saturating_add(staged_outputs),
+        "validator #{} exposed an impossible committee-local staged-lock shape",
+        observation.peer_index
+    );
+    let replicated = fault_count(&observation.counts, "replicated_staged_locks")?;
+    let expected_replicated = u64::try_from(participants)?
+        .checked_mul(9)
+        .and_then(|count| count.checked_add(1))
+        .ok_or_else(|| eyre!("replicated APS staged-lock count overflow"))?;
+    ensure!(
+        replicated == 0 || replicated == expected_replicated,
+        "validator #{} exposed an impossible replicated staged-lock shape",
+        observation.peer_index
+    );
+    Ok(())
+}
+
 fn classify_fault_continuous_observation(
     baseline: &FaultStateObservationV1,
     observation: &FaultStateObservationV1,
@@ -2818,6 +2924,8 @@ fn classify_fault_continuous_observation(
         baseline.peer_index == observation.peer_index,
         "continuous APS observation changed validator identity"
     );
+    validate_fault_lock_shape_v1(baseline, participants)?;
+    validate_fault_lock_shape_v1(observation, participants)?;
     if fault_ledger_identity(baseline)? == fault_ledger_identity(observation)? {
         return Ok(FaultContinuousObservationClassV1::Baseline);
     }
@@ -2847,6 +2955,19 @@ fn classify_fault_continuous_observation(
         ensure!(
             fault_count(&observation.counts, field)? == fault_count(&baseline.counts, field)?,
             "validator #{} changed APS `{field}` outside one complete finalization",
+            observation.peer_index
+        );
+    }
+    for field in [
+        "staged_pool_heads",
+        "staged_nullifiers",
+        "staged_output_commitments",
+        "replicated_staged_locks",
+        "staged_locks",
+    ] {
+        ensure!(
+            fault_count(&observation.counts, field)? == 0,
+            "validator #{} retained APS `{field}` after finalization",
             observation.peer_index
         );
     }
@@ -3229,6 +3350,118 @@ fn wait_for_converged_fault_state_snapshot(
     ))
 }
 
+fn wait_for_recovered_prepare_registration(
+    network: &Network,
+    before: &FaultStateSnapshotV1,
+    participants: usize,
+) -> Result<FaultStateSnapshotV1> {
+    let started = Instant::now();
+    let mut last = None;
+    while started.elapsed() <= FINALITY_TIMEOUT {
+        match capture_fault_state_snapshot(network, "nonfinalized") {
+            Ok(snapshot)
+                if ensure_fault_prepare_lock_planes_full_v1(before, &snapshot, participants)
+                    .is_ok() =>
+            {
+                return Ok(snapshot);
+            }
+            Ok(_) => last = Some("complete Prepare lock planes have not converged".to_owned()),
+            Err(error) => last = Some(error.to_string()),
+        }
+        thread::sleep(POLL_INTERVAL);
+    }
+    Err(eyre!(
+        "timed out waiting for recovered replicated Prepare registration: {}",
+        last.unwrap_or_else(|| "no state response".to_owned())
+    ))
+}
+
+fn ensure_fault_prepare_lock_planes_full_v1(
+    before: &FaultStateSnapshotV1,
+    prepared: &FaultStateSnapshotV1,
+    participants: usize,
+) -> Result<()> {
+    let expected_peers = participants
+        .checked_add(1)
+        .and_then(|lanes| lanes.checked_mul(VALIDATORS_PER_LANE))
+        .ok_or_else(|| eyre!("Prepare-lock validator count overflow"))?;
+    ensure!(
+        before.validators.len() == expected_peers && prepared.validators.len() == expected_peers,
+        "Prepare-lock snapshots omit validators"
+    );
+    ensure_fault_state_converged(before)?;
+    let baseline = &before.validators[0];
+    for field in [
+        "staged_pool_heads",
+        "staged_nullifiers",
+        "staged_output_commitments",
+        "replicated_staged_locks",
+        "staged_locks",
+    ] {
+        ensure!(
+            fault_count(&baseline.counts, field)? == 0,
+            "Prepare-lock baseline is not empty"
+        );
+    }
+    let baseline_ledger = fault_ledger_identity(baseline)?;
+    let expected_replicated = u64::try_from(participants)?
+        .checked_mul(9)
+        .and_then(|count| count.checked_add(1))
+        .ok_or_else(|| eyre!("replicated Prepare-lock count overflow"))?;
+    let replicated_commitment = &prepared.validators[0].replicated_staged_lock_commitment;
+    ensure!(
+        replicated_commitment != &baseline.replicated_staged_lock_commitment,
+        "replicated Prepare-lock commitment remained empty"
+    );
+    let mut committee_commitments = BTreeMap::<usize, String>::new();
+    for observation in &prepared.validators {
+        validate_fault_lock_shape_v1(observation, participants)?;
+        ensure!(
+            fault_ledger_identity(observation)? == baseline_ledger
+                && fault_count(&observation.counts, "replicated_staged_locks")?
+                    == expected_replicated
+                && &observation.replicated_staged_lock_commitment == replicated_commitment,
+            "validator #{} did not observe one complete replicated Prepare lock",
+            observation.peer_index
+        );
+        if observation.peer_index < VALIDATORS_PER_LANE {
+            ensure!(
+                fault_count(&observation.counts, "staged_pool_heads")? == 0
+                    && fault_count(&observation.counts, "staged_nullifiers")? == 0
+                    && fault_count(&observation.counts, "staged_output_commitments")? == 0
+                    && fault_count(&observation.counts, "staged_locks")? == 0
+                    && observation.staged_lock_commitment == baseline.staged_lock_commitment,
+                "global validator #{} exposed a committee-local lock",
+                observation.peer_index
+            );
+            continue;
+        }
+        ensure!(
+            fault_count(&observation.counts, "staged_pool_heads")? == 1
+                && fault_count(&observation.counts, "staged_nullifiers")? == 2
+                && fault_count(&observation.counts, "staged_output_commitments")? == 3
+                && fault_count(&observation.counts, "staged_locks")? == 6
+                && observation.staged_lock_commitment != baseline.staged_lock_commitment,
+            "participant validator #{} lacks one complete committee-local leg lock",
+            observation.peer_index
+        );
+        let committee = (observation.peer_index - VALIDATORS_PER_LANE) / VALIDATORS_PER_LANE;
+        if let Some(expected) = committee_commitments.get(&committee) {
+            ensure!(
+                expected == &observation.staged_lock_commitment,
+                "participant committee {committee} has divergent local lock commitments"
+            );
+        } else {
+            committee_commitments.insert(committee, observation.staged_lock_commitment.clone());
+        }
+    }
+    ensure!(
+        committee_commitments.len() == participants,
+        "Prepare-lock snapshot omits a participant committee"
+    );
+    Ok(())
+}
+
 fn fault_count(value: &HarnessJsonValue, name: &str) -> Result<u64> {
     value
         .get(name)
@@ -3247,8 +3480,9 @@ fn ensure_fault_state_finalized_once(
     let after = &after.validators[0];
     ensure!(
         before.ledger_commitment != after.ledger_commitment
+            && before.replicated_staged_lock_commitment == after.replicated_staged_lock_commitment
             && before.staged_lock_commitment == after.staged_lock_commitment,
-        "finalized APS trial did not change exactly the global ledger"
+        "finalized APS trial did not atomically change the financial ledger and release both lock layers"
     );
     let expected_deltas = [
         ("roots", participants),
@@ -3272,6 +3506,7 @@ fn ensure_fault_state_finalized_once(
         "staged_pool_heads",
         "staged_nullifiers",
         "staged_output_commitments",
+        "replicated_staged_locks",
         "staged_locks",
     ] {
         ensure!(
@@ -3279,6 +3514,11 @@ fn ensure_fault_state_finalized_once(
             "finalized APS trial unexpectedly changed `{field}`"
         );
     }
+    ensure!(
+        fault_count(&after.counts, "replicated_staged_locks")? == 0
+            && fault_count(&after.counts, "staged_locks")? == 0,
+        "finalized APS trial retained a replicated or committee-local lock"
+    );
     Ok(())
 }
 
@@ -3412,11 +3652,7 @@ fn prepare_fault_bundle(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let activation =
-        sponsor.build_transaction_from_items(
-            activations,
-            bounded_nexus_fee(),
-            Metadata::default(),
-        );
+        sponsor.build_transaction_from_items(activations, bounded_nexus_fee(), Metadata::default());
     sponsor
         .submit_transaction_blocking(&activation)
         .wrap_err("activate fault-campaign private pools")?;
@@ -3493,10 +3729,14 @@ fn audit_fault_bundle(
     for (ordinal, (leg, committee)) in bundle.prepared.iter().zip(committees).enumerate() {
         let auditor_transport_signer =
             BorrowedKeyPairIdentityRequestSignerV1::new(&leg.governed.auditor_signing);
+        let capsule_request = PrivateSettlementAuditorCapsuleRequestV1 {
+            audit_policy: leg.governed.policy.clone(),
+        };
         let fetched = sponsor.private_settlement_auditor_capsule_quorum_for_authority_v1(
             &committee.endpoints,
             &bundle.authorities[ordinal],
             bundle.manifest.legs[ordinal].payload_digest,
+            &capsule_request,
             &auditor_transport_signer,
         )?;
         ensure!(
@@ -3529,7 +3769,10 @@ fn audit_fault_bundle(
             &bundle.authorities[ordinal],
             bundle.manifest.legs[ordinal].payload_digest,
             &auditor_transport_signer,
-            &PrivateSettlementAuditApprovalRequestV1 { approval },
+            &PrivateSettlementAuditApprovalRequestV1 {
+                audit_policy: capsule_request.audit_policy,
+                approval,
+            },
         )?;
         ensure!(
             response.lifecycle == PrivateSettlementLifecycleDtoV1::Audited,
@@ -3568,7 +3811,7 @@ fn finalize_fault_bundle(
     let carrier = FinalizeAtomicPrivateSettlementV1::new(PrivateSettlementCommitBundleV1 {
         version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
         manifest: bundle.manifest.clone(),
-        authority_catalog: bundle.authorities.clone(),
+        authority_catalog: barrier.authority_catalog.clone(),
         legs,
     });
     let transaction = sponsor.build_transaction(
@@ -4034,7 +4277,10 @@ fn prepare_fault_bundle_with_normalization(
         authority_index_binding_verified,
         signed_body_binding_verified,
     };
-    Ok((first_barrier, normalization))
+    // Every committee retained the first QC encoding above. Register and use
+    // the second barrier so this real-process trial proves that an equivalent
+    // coordinator recovery cannot orphan the global lock or block Commit.
+    Ok((second_barrier, normalization))
 }
 
 fn build_fault_carrier_submit(
@@ -4058,7 +4304,7 @@ fn build_fault_carrier_submit(
     let carrier = FinalizeAtomicPrivateSettlementV1::new(PrivateSettlementCommitBundleV1 {
         version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
         manifest: bundle.manifest.clone(),
-        authority_catalog: bundle.authorities.clone(),
+        authority_catalog: barrier.authority_catalog.clone(),
         legs,
     });
     PrivateSettlementBundleSubmitRequestV1 {
@@ -4099,7 +4345,7 @@ fn verify_invalid_leg_carrier_is_state_byte_identical(
     let carrier = FinalizeAtomicPrivateSettlementV1::new(PrivateSettlementCommitBundleV1 {
         version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
         manifest: bundle.manifest.clone(),
-        authority_catalog: bundle.authorities.clone(),
+        authority_catalog: barrier.authority_catalog.clone(),
         legs,
     });
     let request = PrivateSettlementBundleSubmitRequestV1 {
@@ -4618,6 +4864,14 @@ fn run_fresh_route_fault_trial(
             None,
         )
     };
+    let fee_before_registration = sponsor_nexus_fee_balance(sponsor)?;
+    submit_prepare_registration_and_wait_v1(sponsor, &barrier)?;
+    let fee_after_registration = sponsor_nexus_fee_balance(sponsor)?;
+    ensure_exact_private_settlement_carrier_fee(
+        &fee_before_registration,
+        &fee_after_registration,
+        "fault-trial Prepare registration",
+    )?;
 
     match fault {
         FreshRouteFaultV1::Loss {
@@ -4719,6 +4973,7 @@ fn run_fresh_route_fault_trial(
             controls.push(restart_quorum_progress_peer(network, runtime, stopped)?);
         }
     }
+    let fee_before_finalization = sponsor_nexus_fee_balance(sponsor)?;
     let (nonfinalized, receipt) = if matches!(fault, FreshRouteFaultV1::CarrierHold) {
         controls.push(restart_peer_with_evidence(
             network,
@@ -4797,7 +5052,14 @@ fn run_fresh_route_fault_trial(
         let receipt = finalize_fault_bundle(sponsor, network, &bundle, barrier, commits)?;
         (nonfinalized, receipt)
     };
+    let fee_after_finalization = sponsor_nexus_fee_balance(sponsor)?;
+    ensure_exact_private_settlement_carrier_fee(
+        &fee_before_finalization,
+        &fee_after_finalization,
+        "fault-trial financial finalization",
+    )?;
     ensure_fault_ledger_unchanged_before_finality(&before, &nonfinalized)?;
+    ensure_fault_prepare_lock_planes_full_v1(&before, &nonfinalized, request.participants)?;
     let after = wait_for_converged_fault_state_snapshot(network, "after")?;
     ensure_fault_state_finalized_once(&before, &after, request.participants)?;
     let continuous_observations = observer.finish(&after)?;
@@ -4830,10 +5092,10 @@ fn crash_boundary_phase(index: usize) -> Result<NativeAmxFaultPhase> {
         0 => Ok(NativeAmxFaultPhase::AfterPrivateSettlementSidecarFsync),
         1 => Ok(NativeAmxFaultPhase::AfterPrivateSettlementStagedDeltaFsync),
         2 => Ok(NativeAmxFaultPhase::AfterPrivateSettlementPrepareQcFsync),
-        3 => Ok(NativeAmxFaultPhase::AfterPrivateSettlementCommitQcFsync),
-        4 => Ok(NativeAmxFaultPhase::AfterPrivateSettlementKuraAppend),
-        5 => Ok(NativeAmxFaultPhase::AfterPrivateSettlementWsvApplication),
-        6 => Ok(NativeAmxFaultPhase::AfterPrivateSettlementReceiptPublication),
+        3 | 6 => Ok(NativeAmxFaultPhase::AfterPrivateSettlementKuraAppend),
+        4 | 7 => Ok(NativeAmxFaultPhase::AfterPrivateSettlementWsvApplication),
+        5 => Ok(NativeAmxFaultPhase::AfterPrivateSettlementCommitQcFsync),
+        8 => Ok(NativeAmxFaultPhase::AfterPrivateSettlementReceiptPublication),
         _ => Err(eyre!("unknown APS crash boundary")),
     }
 }
@@ -4871,12 +5133,17 @@ fn run_fresh_crash_trial(
     )?;
     let before = wait_for_converged_fault_state_snapshot(network, "before")?;
     let observer = FaultContinuousObserverV1::start(network, &before, request.participants)?;
+    let fee_before_settlement_carriers = sponsor_nexus_fee_balance(sponsor)?;
+    let mut fee_after_registration = None;
     let phase = crash_boundary_phase(trial_index)?;
-    let post_carrier = trial_index >= 4;
-    // Kura append and WSV application are global carrier boundaries. Receipt
-    // publication is deliberately a participant target: its crash hook follows
-    // fsync of that committee's restricted sidecar lifecycle record, which a
-    // global-only peer does not possess.
+    let registration_cut = matches!(trial_index, 3 | 4);
+    let commit_qc_cut = trial_index == 5;
+    let finalization_cut = matches!(trial_index, 6..=8);
+    let expected_finalized = registration_cut || finalization_cut;
+    // Registration and finalization Kura/WSV cuts target the global lane.
+    // Receipt publication deliberately targets a participant: its crash hook
+    // follows fsync of that committee's restricted sidecar lifecycle record,
+    // which a global-only peer does not possess.
     let peer_index = crash_boundary_peer_index(phase);
     let mut barrier = None;
     let mut commits = None;
@@ -4893,8 +5160,23 @@ fn run_fresh_crash_trial(
             &bundle.authorities,
             &bundle.deltas,
         )?);
+        if commit_qc_cut || finalization_cut {
+            submit_prepare_registration_and_wait_v1(
+                sponsor,
+                barrier
+                    .as_ref()
+                    .expect("Prepare registration follows barrier construction"),
+            )?;
+            let after = sponsor_nexus_fee_balance(sponsor)?;
+            ensure_exact_private_settlement_carrier_fee(
+                &fee_before_settlement_carriers,
+                &after,
+                "crash-trial Prepare registration",
+            )?;
+            fee_after_registration = Some(after);
+        }
     }
-    if trial_index >= 4 {
+    if finalization_cut {
         let endpoint_matrix = fault_endpoint_matrix(committees);
         commits = Some(
             sponsor.commit_private_settlement_bundle_v1(
@@ -4905,8 +5187,38 @@ fn run_fresh_crash_trial(
             )?,
         );
     }
-    let nonfinalized = capture_fault_state_snapshot(network, "nonfinalized")?;
+    let registration_request = if registration_cut {
+        Some(
+            sponsor.build_private_settlement_prepare_registration_request_v1(
+                barrier
+                    .as_ref()
+                    .ok_or_else(|| eyre!("registration crash lacks Prepare barrier"))?,
+                u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
+                    .expect("V1 carrier ceiling fits u64"),
+            )?,
+        )
+    } else {
+        None
+    };
+    let registration_hash = registration_request
+        .as_ref()
+        .map(|request| request.transaction.hash());
+    let mut nonfinalized = capture_fault_state_snapshot(network, "nonfinalized")?;
     ensure_fault_ledger_unchanged_before_finality(&before, &nonfinalized)?;
+    if commit_qc_cut || finalization_cut {
+        ensure_fault_prepare_lock_planes_full_v1(&before, &nonfinalized, request.participants)?;
+    }
+    let fee_before_finalization = if finalization_cut {
+        Some(sponsor_nexus_fee_balance(sponsor)?)
+    } else {
+        None
+    };
+    if finalization_cut {
+        ensure!(
+            fee_before_finalization.as_ref() == fee_after_registration.as_ref(),
+            "crash-trial Commit certification charged an extra carrier fee"
+        );
+    }
 
     let controls = match trial_index {
         0 => trigger_persistence_cut_and_restart(
@@ -4971,7 +5283,26 @@ fn run_fresh_crash_trial(
                 },
             )?
         }
-        3 => {
+        3 | 4 => {
+            let submit = registration_request
+                .as_ref()
+                .ok_or_else(|| eyre!("registration crash lacks registration carrier"))?
+                .clone();
+            trigger_persistence_cut_and_restart(
+                network,
+                runtime,
+                peer_index,
+                phase,
+                bundle.manifest.bundle_id,
+                u64::try_from(trial_index + 1)?,
+                || {
+                    sponsor
+                        .submit_private_settlement_bundle_v1(&submit)
+                        .map(|_| ())
+                },
+            )?
+        }
+        5 => {
             let barrier = barrier
                 .as_ref()
                 .ok_or_else(|| eyre!("Commit-QC crash lacks Prepare barrier"))?;
@@ -5002,7 +5333,7 @@ fn run_fresh_crash_trial(
                 },
             )?
         }
-        4..=6 => {
+        6..=8 => {
             let submit = build_fault_carrier_submit(
                 sponsor,
                 &bundle,
@@ -5030,8 +5361,69 @@ fn run_fresh_crash_trial(
         _ => unreachable!(),
     };
 
-    let (after, signed_rs16) = if post_carrier {
+    if trial_index < 3 {
+        ensure!(
+            sponsor_nexus_fee_balance(sponsor)? == fee_before_settlement_carriers,
+            "pre-registration crash charged a settlement carrier fee"
+        );
+    } else if commit_qc_cut {
+        ensure!(
+            sponsor_nexus_fee_balance(sponsor)?
+                == fee_after_registration
+                    .as_ref()
+                    .expect("Commit-QC cut follows Prepare registration")
+                    .clone(),
+            "Commit-QC crash charged a financial carrier fee"
+        );
+    }
+
+    let (after, signed_rs16) = if registration_cut {
+        sponsor.wait_for_transaction_applied(
+            registration_hash.ok_or_else(|| eyre!("registration crash lacks transaction hash"))?,
+            iroha::client::TransactionWaitOptions {
+                timeout: FINALITY_TIMEOUT,
+                poll_interval: POLL_INTERVAL,
+            },
+        )?;
+        let fee_after_recovered_registration = sponsor_nexus_fee_balance(sponsor)?;
+        ensure_exact_private_settlement_carrier_fee(
+            &fee_before_settlement_carriers,
+            &fee_after_recovered_registration,
+            "recovered crash-trial Prepare registration",
+        )?;
+        nonfinalized =
+            wait_for_recovered_prepare_registration(network, &before, request.participants)?;
+        ensure_fault_ledger_unchanged_before_finality(&before, &nonfinalized)?;
+        let barrier = barrier
+            .take()
+            .ok_or_else(|| eyre!("recovered registration lacks Prepare barrier"))?;
+        let endpoint_matrix = fault_endpoint_matrix(committees);
+        let recovered_commits =
+            sponsor.commit_private_settlement_bundle_v1(&endpoint_matrix, &barrier)?;
+        let fee_before_recovered_finalization = sponsor_nexus_fee_balance(sponsor)?;
+        let receipt = finalize_fault_bundle(sponsor, network, &bundle, barrier, recovered_commits)?;
+        let fee_after_recovered_finalization = sponsor_nexus_fee_balance(sponsor)?;
+        ensure_exact_private_settlement_carrier_fee(
+            &fee_before_recovered_finalization,
+            &fee_after_recovered_finalization,
+            "recovered crash-trial financial finalization",
+        )?;
+        let after = wait_for_converged_fault_state_snapshot(network, "after")?;
+        ensure_fault_state_finalized_once(&before, &after, request.participants)?;
+        (
+            after,
+            verify_signed_rs16_finality(network, receipt.finalized_height)?,
+        )
+    } else if finalization_cut {
         let receipt = wait_for_identical_receipt(network, bundle.manifest.bundle_id)?;
+        let fee_after_finalization = sponsor_nexus_fee_balance(sponsor)?;
+        ensure_exact_private_settlement_carrier_fee(
+            fee_before_finalization
+                .as_ref()
+                .expect("finalization cut captures its pre-carrier fee balance"),
+            &fee_after_finalization,
+            "crash-trial financial finalization",
+        )?;
         let after = wait_for_converged_fault_state_snapshot(network, "after")?;
         ensure_fault_state_finalized_once(&before, &after, request.participants)?;
         (
@@ -5050,7 +5442,7 @@ fn run_fresh_crash_trial(
             collection: "crash_recoveries",
             trial_index,
             bundle_id: hex::encode(bundle.manifest.bundle_id.as_ref()),
-            expected_after_state: if post_carrier {
+            expected_after_state: if expected_finalized {
                 "finalized"
             } else {
                 "reverted"
@@ -5110,7 +5502,7 @@ fn materialize_fault_campaign_payload(
     normalization: &FaultPrepareQcNormalizationV1,
 ) -> Result<HarnessJsonValue> {
     ensure!(
-        trials.len() == 20,
+        trials.len() == FAULT_CAMPAIGN_TRIALS,
         "fault campaign trial inventory is incomplete"
     );
     let mut control_rows = Vec::with_capacity(trials.len());
@@ -5266,31 +5658,24 @@ fn materialize_fault_campaign_payload(
         })
     })
     .collect::<Vec<_>>();
-    let crash_recoveries = [
-        "sidecar_fsync",
-        "staged_delta_fsync",
-        "prepare_qc",
-        "commit_qc",
-        "kura_append",
-        "wsv_application",
-        "receipt_publication",
-    ]
-    .into_iter()
-    .enumerate()
-    .map(|(index, boundary)| {
-        norito::json!({
-            "boundary": boundary,
-            "process_restarted": true,
-            "durable_state_reconciled": true,
-            "converged": true,
-            "partial_visibility_observed": false,
-            "control_transcript_sha256": (control_sha.clone()),
-            "control_transcript_record": (make_reference("crash_recoveries", index)),
-            "observation_capture_sha256": (observation_sha.clone()),
-            "observation_capture_record": (make_reference("crash_recoveries", index)),
+    let crash_recoveries = PRIVATE_SETTLEMENT_CRASH_BOUNDARIES
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(index, boundary)| {
+            norito::json!({
+                "boundary": boundary,
+                "process_restarted": true,
+                "durable_state_reconciled": true,
+                "converged": true,
+                "partial_visibility_observed": false,
+                "control_transcript_sha256": (control_sha.clone()),
+                "control_transcript_record": (make_reference("crash_recoveries", index)),
+                "observation_capture_sha256": (observation_sha.clone()),
+                "observation_capture_record": (make_reference("crash_recoveries", index)),
+            })
         })
-    })
-    .collect::<Vec<_>>();
+        .collect::<Vec<_>>();
     Ok(norito::json!({
         "committee_validator_restarts": ((0..request.participants).collect::<Vec<_>>()),
         "maximum_simultaneously_unavailable_per_committee": 1,
@@ -5346,7 +5731,7 @@ fn run_real_process_fault_campaign(
         "fault campaign topology material is incomplete"
     );
     let mut coordinator = CoordinatorProcessV1::start(&sponsor)?;
-    let mut trials = Vec::with_capacity(20);
+    let mut trials = Vec::with_capacity(FAULT_CAMPAIGN_TRIALS);
     let mut bundle_ordinal = 0_usize;
     let mut signed_rs16_da_observations = 0_u64;
 
@@ -5426,7 +5811,7 @@ fn run_real_process_fault_campaign(
     trials.push((draft, after));
     bundle_ordinal += 1;
 
-    for trial_index in 0..7 {
+    for trial_index in 0..PRIVATE_SETTLEMENT_CRASH_BOUNDARIES.len() {
         let (draft, after, signed_rs16) = run_fresh_crash_trial(
             &request,
             bundle_ordinal,
@@ -5442,7 +5827,7 @@ fn run_real_process_fault_campaign(
         bundle_ordinal += 1;
     }
     ensure!(
-        bundle_ordinal == 20
+        bundle_ordinal == FAULT_CAMPAIGN_TRIALS
             && signed_rs16_da_observations >= request.minimum_signed_rs16_da_observations,
         "fault campaign did not complete its fresh-bundle/RS16 matrix"
     );
@@ -6471,11 +6856,7 @@ fn run_real_process_leakage_campaign(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let activation_transaction =
-        sponsor.build_transaction_from_items(
-            activations,
-            bounded_nexus_fee(),
-            Metadata::default(),
-        );
+        sponsor.build_transaction_from_items(activations, bounded_nexus_fee(), Metadata::default());
     sponsor
         .submit_transaction_blocking(&activation_transaction)
         .wrap_err("activate governed leakage pools")?;
@@ -6528,10 +6909,14 @@ fn run_real_process_leakage_campaign(
     for (ordinal, (leg, committee)) in prepared.iter().zip(&committees).enumerate() {
         let auditor_transport_signer =
             BorrowedKeyPairIdentityRequestSignerV1::new(&leg.governed.auditor_signing);
+        let capsule_request = PrivateSettlementAuditorCapsuleRequestV1 {
+            audit_policy: leg.governed.policy.clone(),
+        };
         let fetched = sponsor.private_settlement_auditor_capsule_quorum_for_authority_v1(
             &committee.endpoints,
             &materials[ordinal].committee_authority,
             final_manifest.legs[ordinal].payload_digest,
+            &capsule_request,
             &auditor_transport_signer,
         )?;
         ensure!(
@@ -6564,7 +6949,10 @@ fn run_real_process_leakage_campaign(
             &materials[ordinal].committee_authority,
             final_manifest.legs[ordinal].payload_digest,
             &auditor_transport_signer,
-            &PrivateSettlementAuditApprovalRequestV1 { approval },
+            &PrivateSettlementAuditApprovalRequestV1 {
+                audit_policy: capsule_request.audit_policy,
+                approval,
+            },
         )?;
         ensure!(
             response.lifecycle == PrivateSettlementLifecycleDtoV1::Audited,
@@ -6593,6 +6981,16 @@ fn run_real_process_leakage_campaign(
         &deltas,
     )?;
     assert_no_partial_visibility(&network, final_manifest.bundle_id, "leakage-prepared")?;
+    let fee_before_registration = sponsor_nexus_fee_balance(&sponsor)?;
+    submit_prepare_registration_and_wait_v1(&sponsor, &barrier)?;
+    let fee_after_registration = sponsor_nexus_fee_balance(&sponsor)?;
+    ensure_exact_private_settlement_carrier_fee(
+        &fee_before_registration,
+        &fee_after_registration,
+        "leakage Prepare registration",
+    )?;
+    let registered =
+        wait_for_recovered_prepare_registration(&network, &before, request.participants)?;
     let commits = sponsor.commit_private_settlement_bundle_v1(&endpoint_matrix, &barrier)?;
     assert_no_partial_visibility(
         &network,
@@ -6612,7 +7010,7 @@ fn run_real_process_leakage_campaign(
     let carrier = FinalizeAtomicPrivateSettlementV1::new(PrivateSettlementCommitBundleV1 {
         version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
         manifest: final_manifest.clone(),
-        authority_catalog: authorities,
+        authority_catalog: barrier.authority_catalog.clone(),
         legs,
     });
     let transaction = sponsor.build_transaction(
@@ -6624,6 +7022,7 @@ fn run_real_process_leakage_campaign(
     let submit = PrivateSettlementBundleSubmitRequestV1 {
         transaction: transaction.clone(),
     };
+    let fee_before_finalization = sponsor_nexus_fee_balance(&sponsor)?;
     let (event_record, event_source) = submit_leakage_carrier_with_event(
         &runtime,
         &sponsor,
@@ -6631,6 +7030,12 @@ fn run_real_process_leakage_campaign(
         final_manifest.bundle_id,
     )?;
     let receipt = wait_for_identical_receipt(&network, final_manifest.bundle_id)?;
+    let fee_after_finalization = sponsor_nexus_fee_balance(&sponsor)?;
+    ensure_exact_private_settlement_carrier_fee(
+        &fee_before_finalization,
+        &fee_after_finalization,
+        "leakage financial finalization",
+    )?;
     ensure!(
         receipt.legs.len() == request.participants,
         "leakage receipt participant count mismatch"
@@ -6653,6 +7058,10 @@ fn run_real_process_leakage_campaign(
             .submit_private_settlement_bundle_v1(&submit)
             .is_err(),
         "replaying the exact leakage carrier was accepted"
+    );
+    ensure!(
+        sponsor_nexus_fee_balance(&sponsor)? == fee_after_finalization,
+        "rejected leakage replay charged a third carrier fee"
     );
     ensure!(
         wait_for_identical_receipt(&network, final_manifest.bundle_id)? == receipt,
@@ -6702,6 +7111,7 @@ fn run_real_process_leakage_campaign(
                 canonical_harness_json_bytes(&LeakageAtomicityObservationEvidenceV1 {
                     version: 1,
                     peer_index,
+                    registered: registered.validators[peer_index].clone(),
                     observations,
                 })?,
             ))
@@ -7044,11 +7454,7 @@ fn run_real_process_private_benchmark(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let activation_transaction =
-        sponsor.build_transaction_from_items(
-            activations,
-            bounded_nexus_fee(),
-            Metadata::default(),
-        );
+        sponsor.build_transaction_from_items(activations, bounded_nexus_fee(), Metadata::default());
     sponsor
         .submit_transaction_blocking(&activation_transaction)
         .wrap_err("activate governed private pools")?;
@@ -7101,10 +7507,14 @@ fn run_real_process_private_benchmark(
     for (ordinal, (leg, committee)) in prepared.iter().zip(&committees).enumerate() {
         let auditor_transport_signer =
             BorrowedKeyPairIdentityRequestSignerV1::new(&leg.governed.auditor_signing);
+        let capsule_request = PrivateSettlementAuditorCapsuleRequestV1 {
+            audit_policy: leg.governed.policy.clone(),
+        };
         let fetched = sponsor.private_settlement_auditor_capsule_quorum_for_authority_v1(
             &committee.endpoints,
             &materials[ordinal].committee_authority,
             final_manifest.legs[ordinal].payload_digest,
+            &capsule_request,
             &auditor_transport_signer,
         )?;
         ensure!(
@@ -7137,7 +7547,10 @@ fn run_real_process_private_benchmark(
             &materials[ordinal].committee_authority,
             final_manifest.legs[ordinal].payload_digest,
             &auditor_transport_signer,
-            &PrivateSettlementAuditApprovalRequestV1 { approval },
+            &PrivateSettlementAuditApprovalRequestV1 {
+                audit_policy: capsule_request.audit_policy,
+                approval,
+            },
         )?;
         ensure!(
             response.lifecycle == PrivateSettlementLifecycleDtoV1::Audited,
@@ -7170,8 +7583,18 @@ fn run_real_process_private_benchmark(
         &authorities,
         &deltas,
     )?;
-    let prepare = elapsed_ms(prepare_started);
     assert_no_partial_visibility(&network, final_manifest.bundle_id, "prepared")?;
+    let prepare = elapsed_ms(prepare_started);
+    let prepare_registration_started = Instant::now();
+    let fee_before_registration = sponsor_nexus_fee_balance(&sponsor)?;
+    submit_prepare_registration_and_wait_v1(&sponsor, &barrier)?;
+    let fee_after_registration = sponsor_nexus_fee_balance(&sponsor)?;
+    ensure_exact_private_settlement_carrier_fee(
+        &fee_before_registration,
+        &fee_after_registration,
+        "benchmark Prepare registration",
+    )?;
+    let prepare_registration = elapsed_ms(prepare_registration_started);
     let commit_started = Instant::now();
     let commits = sponsor.commit_private_settlement_bundle_v1(&endpoint_matrix, &barrier)?;
     let commit = elapsed_ms(commit_started);
@@ -7190,7 +7613,7 @@ fn run_real_process_private_benchmark(
     let carrier = FinalizeAtomicPrivateSettlementV1::new(PrivateSettlementCommitBundleV1 {
         version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
         manifest: final_manifest.clone(),
-        authority_catalog: authorities,
+        authority_catalog: barrier.authority_catalog.clone(),
         legs,
     });
     let transaction = sponsor.build_transaction(
@@ -7202,8 +7625,15 @@ fn run_real_process_private_benchmark(
         transaction: transaction.clone(),
     };
     let finality_started = Instant::now();
+    let fee_before_finalization = sponsor_nexus_fee_balance(&sponsor)?;
     sponsor.submit_private_settlement_bundle_v1(&submit)?;
     let receipt = wait_for_identical_receipt(&network, final_manifest.bundle_id)?;
+    let fee_after_finalization = sponsor_nexus_fee_balance(&sponsor)?;
+    ensure_exact_private_settlement_carrier_fee(
+        &fee_before_finalization,
+        &fee_after_finalization,
+        "benchmark financial finalization",
+    )?;
     let global_finality = elapsed_ms(finality_started);
     let end_to_end = elapsed_ms(end_to_end_started);
     ensure!(
@@ -7228,6 +7658,10 @@ fn run_real_process_private_benchmark(
             .submit_private_settlement_bundle_v1(&submit)
             .is_err(),
         "replaying the exact finalized carrier was accepted"
+    );
+    ensure!(
+        sponsor_nexus_fee_balance(&sponsor)? == fee_after_finalization,
+        "rejected benchmark replay charged a third carrier fee"
     );
     ensure!(
         wait_for_identical_receipt(&network, final_manifest.bundle_id)? == receipt,
@@ -7265,6 +7699,7 @@ fn run_real_process_private_benchmark(
             && auditor_response > 0.0
             && committee_verification > 0.0
             && prepare > 0.0
+            && prepare_registration > 0.0
             && commit > 0.0
             && global_finality > 0.0
             && end_to_end > 0.0
@@ -7294,6 +7729,7 @@ fn run_real_process_private_benchmark(
                 "auditor_response": auditor_response,
                 "committee_verification": committee_verification,
                 "prepare": prepare,
+                "prepare_registration": prepare_registration,
                 "commit": commit,
                 "global_finality": global_finality,
                 "end_to_end": end_to_end,
@@ -7445,6 +7881,7 @@ fn fault_observation_fixture(
         height: 1,
         commitment: ledger_byte.to_string().repeat(64),
         ledger_commitment: ledger_byte.to_string().repeat(64),
+        replicated_staged_lock_commitment: "4".repeat(64),
         staged_lock_commitment: "3".repeat(64),
         counts: norito::json!({
             "governance": 1,
@@ -7459,6 +7896,7 @@ fn fault_observation_fixture(
             "staged_pool_heads": 0,
             "staged_nullifiers": 0,
             "staged_output_commitments": 0,
+            "replicated_staged_locks": 0,
             "staged_locks": 0,
         }),
     }
@@ -7478,6 +7916,16 @@ fn fault_continuous_observer_accepts_only_baseline_or_complete_finalization() {
     );
     let partial = fault_observation_fixture(0, 'c', 1);
     assert!(classify_fault_continuous_observation(&baseline, &partial, 2).is_err());
+    let mut malformed_lock = baseline.clone();
+    malformed_lock
+        .counts
+        .as_object_mut()
+        .expect("fixture counts are an object")
+        .insert(
+            "replicated_staged_locks".to_owned(),
+            HarnessJsonValue::from(2_u64),
+        );
+    assert!(classify_fault_continuous_observation(&baseline, &malformed_lock, 2).is_err());
 
     let mut accumulator = FaultContinuousObservationAccumulatorV1::new(0);
     accumulator.record(&baseline, &baseline, 2).unwrap();
@@ -7497,6 +7945,8 @@ fn fault_crash_boundary_inventory_is_exact() {
         NativeAmxFaultPhase::AfterPrivateSettlementSidecarFsync,
         NativeAmxFaultPhase::AfterPrivateSettlementStagedDeltaFsync,
         NativeAmxFaultPhase::AfterPrivateSettlementPrepareQcFsync,
+        NativeAmxFaultPhase::AfterPrivateSettlementKuraAppend,
+        NativeAmxFaultPhase::AfterPrivateSettlementWsvApplication,
         NativeAmxFaultPhase::AfterPrivateSettlementCommitQcFsync,
         NativeAmxFaultPhase::AfterPrivateSettlementKuraAppend,
         NativeAmxFaultPhase::AfterPrivateSettlementWsvApplication,
@@ -7507,14 +7957,14 @@ fn fault_crash_boundary_inventory_is_exact() {
         assert_eq!(phase, expected);
         assert_eq!(
             crash_boundary_peer_index(phase),
-            if matches!(index, 4 | 5) {
+            if matches!(index, 3 | 4 | 6 | 7) {
                 0
             } else {
                 VALIDATORS_PER_LANE
             }
         );
     }
-    assert!(crash_boundary_phase(7).is_err());
+    assert!(crash_boundary_phase(PRIVATE_SETTLEMENT_CRASH_BOUNDARIES.len()).is_err());
 }
 
 #[test]

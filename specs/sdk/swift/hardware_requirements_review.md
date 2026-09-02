@@ -10,9 +10,11 @@ summary: Review agenda for Swift key storage, attestation, and crypto dependenci
 # Swift Hardware Requirements Review (IOS4)
 
 This brief schedules the hardware requirements review called out in the IOS4
-roadmap. The session confirms Secure Enclave / Keychain coverage, attestation
-export requirements, and dependency alignment with the Android AND2 StrongBox
-initiative before the multi-algorithm signing work lands.
+roadmap. The session reviews optional Secure Enclave / Keychain coverage,
+conditional attestation export, and dependency alignment with the Android AND2
+StrongBox initiative before the multi-algorithm signing work lands. The
+software-backed signing and custody baseline does not depend on this review,
+physical devices, or hardware evidence.
 
 ## Session Overview
 
@@ -32,10 +34,10 @@ initiative before the multi-algorithm signing work lands.
 1. Inventory supported hardware tiers (Secure Enclave, simulator fallback,
    macOS Catalyst) and map them to the `SigningKey` storage abstractions defined
    in `specs/sdk/swift/ios4_crypto_api_rfc.md`.
-2. Align attestation evidence requirements with the Android AND2 StrongBox
-   programme so governance reviews can reuse artefacts.
-3. Approve the rollout matrix (devices × signing algorithms × multisig flows)
-   and the automation hooks needed for IOS4 readiness gates.
+2. Align evidence for deployments that explicitly select hardware attestation
+   with the Android AND2 StrongBox programme so reviews can reuse artefacts.
+3. Approve the optional hardware rollout matrix (devices × signing algorithms
+   × multisig flows) and its automation hooks without gating the software lane.
 4. Capture action items (CI coverage, device lab scheduling, doc updates) with
    explicit owners and due dates.
 
@@ -64,6 +66,9 @@ initiative before the multi-algorithm signing work lands.
   - `specs/sdk/swift/attestation_sample.md`
 
 ## Required Outputs
+
+These are required outputs of the hardware review itself, not prerequisites for
+a provider-neutral Swift SDK build, release, deployment, or signing workflow.
 
 - Updated hardware matrix & attestation checklist (to be recorded in
   `specs/sdk/swift/hardware_matrix.md` after the session).

@@ -247,6 +247,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
 
         workflow = read(".github/workflows/mobile_sdk_artifacts.yml")
         checker_job = workflow_job(workflow, "checker-self-test")
+        authorization_job = workflow_job(workflow, "authorize-mobile-production")
         apple_job = workflow_job(workflow, "apple-mobile-sdk")
         android_job = workflow_job(workflow, "android-mobile-sdk")
         publisher_job = workflow_job(workflow, "publish-release-assets")
@@ -259,12 +260,19 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
         self.assertIn(production_binding, apple_job)
         self.assertIn(production_binding, android_job)
         self.assertIn(
-            'MOBILE_SDK_REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION: "1"',
+            "MOBILE_SDK_REQUIRE_KAGEMUSHA_PRODUCTION_AUTHORIZATION: "
+            "${{ needs.authorize-mobile-production.outputs.production == "
+            "'true' && '1' || '0' }}",
             apple_job,
         )
         self.assertIn(
-            "-PrequireKagemushaProductionAuthorization=true",
+            '-PrequireKagemushaProductionAuthorization="$PRIVACY_PRODUCTION_ENABLED"',
             android_job,
+        )
+        self.assertNotIn('elif [[ "$GITHUB_REF_TYPE" == tag ]]', authorization_job)
+        self.assertIn(
+            "Resolve an explicitly requested protected promotion run",
+            authorization_job,
         )
         self.assertNotIn("PRIVACY_PRODUCTION_ENABLED: ${{ env.", workflow)
         self.assertNotIn("inputs.privacy_production_enabled", workflow)
@@ -280,6 +288,17 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             android_job,
         )
         self.assertIn("verify-pair", publisher_job)
+        self.assertIn(
+            "needs.authorize-mobile-production.outputs.production == 'true'",
+            publisher_job,
+        )
+        self.assertIn('release_inventory_phase=artifacts', publisher_job)
+        self.assertIn('release_inventory_phase=final', publisher_job)
+        self.assertNotIn(
+            "github.repository == 'hyperledger-iroha/iroha' &&\n"
+            "      needs.authorize-mobile-production.outputs.production == 'true'",
+            publisher_job,
+        )
         self.assertGreaterEqual(publisher_job.count("gh attestation verify"), 2)
         self.assertIn("verify-apple-artifact", publisher_job)
         self.assertIn("verify-android-artifact", publisher_job)
@@ -299,7 +318,8 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
         self.assertIn("ANDROID_BUILD_PACKAGE_INVENTORY_SHA256", publisher_job)
         self.assertEqual(publisher_job.count("verify-release-inventory"), 3)
         self.assertIn("--phase artifacts", publisher_job)
-        self.assertEqual(publisher_job.count("--phase final"), 2)
+        self.assertEqual(publisher_job.count("--phase final"), 1)
+        self.assertIn('--phase "$RELEASE_INVENTORY_PHASE"', publisher_job)
         self.assertIn(
             '--release-root "$GITHUB_WORKSPACE/release-assets"', publisher_job
         )
@@ -316,7 +336,9 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             "release asset bytes changed after final verification", publisher_job
         )
         self.assertLess(
-            publisher_job.index("Reverify both authorizations"),
+            publisher_job.index(
+                "Verify release inventory and any selected production authorizations"
+            ),
             publisher_job.index('gh release create "$GITHUB_REF_NAME"'),
         )
 

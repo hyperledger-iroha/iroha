@@ -1927,7 +1927,7 @@ mod tests {
         actual.governance_dag_publisher_peer_id =
             Some("12D3KooWGovernanceConfigPrimary".to_owned());
         actual.governance_dag_signer_handle =
-            Some("pkcs11:governance-dag:config-primary".to_owned());
+            Some("provider:governance-dag:config-primary".to_owned());
         actual.governance_dag_signer_revision = Some(31);
         actual.governance_dag_signer_policy_digest = Some([0xA7; 32]);
         actual.governance_dag_publisher_public_key_hex = Some("a8".repeat(32));
@@ -2261,7 +2261,7 @@ mod tests {
         )
         .expect("valid archive binding");
         let policy = PorReplayArchivePolicyV1::try_new(
-            "hsm://sorafs/por-replay-archive/primary",
+            "provider://sorafs/por-replay-archive/primary",
             binding,
             Duration::from_millis(750),
             31,
@@ -2271,7 +2271,7 @@ mod tests {
         .expect("valid archive policy");
         assert_eq!(
             policy.runtime_handle(),
-            "hsm://sorafs/por-replay-archive/primary"
+            "provider://sorafs/por-replay-archive/primary"
         );
         assert_eq!(policy.binding(), binding);
         assert_eq!(policy.poll_interval(), Duration::from_millis(750));
@@ -2280,7 +2280,7 @@ mod tests {
         assert_eq!(policy.max_successor_proof_bytes(), 8_192);
         assert!(
             PorReplayArchivePolicyV1::try_new(
-                "hsm://sorafs/por-replay-archive/test-provider",
+                "provider://sorafs/por-replay-archive/test-provider",
                 binding,
                 Duration::from_millis(750),
                 31,
@@ -2291,7 +2291,7 @@ mod tests {
         );
         assert!(
             PorReplayArchivePolicyV1::try_new(
-                "hsm://sorafs/por-replay-archive/primary",
+                "provider://sorafs/por-replay-archive/primary",
                 binding,
                 Duration::from_micros(750_001),
                 31,
@@ -2302,7 +2302,7 @@ mod tests {
         );
         assert!(
             PorReplayArchivePolicyV1::try_new(
-                "hsm://sorafs/por-replay-archive/primary",
+                "provider://sorafs/por-replay-archive/primary",
                 binding,
                 Duration::from_millis(750),
                 0,
@@ -2319,7 +2319,7 @@ mod tests {
             .to_bytes();
         let mut actual = actual::SorafsStorage::default();
         actual.por_replay_archive = Some(actual::SorafsPorReplayArchive {
-            handle: "hsm://sorafs/por-replay-archive/secondary".to_owned(),
+            handle: "provider://sorafs/por-replay-archive/secondary".to_owned(),
             archive_id: [0x51; 32],
             revision: 9,
             policy_digest: [0x52; 32],
@@ -2335,7 +2335,7 @@ mod tests {
             .expect("projected replay-archive policy");
         assert_eq!(
             policy.runtime_handle(),
-            "hsm://sorafs/por-replay-archive/secondary"
+            "provider://sorafs/por-replay-archive/secondary"
         );
         assert_eq!(policy.binding().archive_id, [0x51; 32]);
         assert_eq!(policy.binding().revision, 9);

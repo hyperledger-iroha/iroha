@@ -362,6 +362,70 @@ fn install_canonical_replica_terminal_merge_entry_for_test(
     entry
 }
 
+fn evict_canonical_replica_terminal_carrier_to_local_sidecar(
+    fixture: &mut CanonicalAutonomousReplicaFixture,
+    merge_entry: &MergeLedgerEntry,
+) -> (NonZeroUsize, PathBuf) {
+    let carrier_height = NonZeroUsize::new(
+        usize::try_from(merge_entry.merge_qc.carrier_height)
+            .expect("terminal carrier height fits usize"),
+    )
+    .expect("terminal carrier height is non-zero");
+    fixture.config.blocks_in_memory = nonzero!(1_usize);
+    Arc::get_mut(&mut fixture.kura)
+        .expect("terminal carrier eviction fixture keeps exclusive Kura ownership")
+        .blocks_in_memory = nonzero!(1_usize);
+    let carrier = fixture
+        .kura
+        .get_block(carrier_height)
+        .expect("read terminal merge carrier before eviction");
+    let mut tail: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
+        .chain(carrier.header().height().get(), Some(carrier.as_ref()))
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
+        .unpack(|_| {})
+        .into();
+    attach_ok_results_to_block(&mut tail);
+    let tail = Arc::new(tail);
+    fixture
+        .kura
+        .store_block(Arc::clone(&tail))
+        .expect("store terminal carrier eviction tail");
+    persist_v2_finality_chain_through(
+        &fixture.kura,
+        NonZeroUsize::new(
+            usize::try_from(tail.header().height().get())
+                .expect("terminal carrier eviction tail height fits usize"),
+        )
+        .expect("terminal carrier eviction tail height is non-zero"),
+    );
+    let wire_len = fixture
+        .kura
+        .advertise_required_replicas_for_bench(carrier_height)
+        .expect("terminal carrier has exact selected-keeper adverts");
+    assert!(
+        fixture
+            .kura
+            .evict_block_bodies_for_bench(wire_len)
+            .expect("evict terminal carrier inline body")
+            >= wire_len,
+    );
+    let carrier_hash = fixture
+        .kura
+        .block_hash_at_height(carrier_height)
+        .expect("resolve evicted terminal carrier hash");
+    assert!(matches!(
+        fixture.kura.block_body_status_by_hash(carrier_hash),
+        Some(BlockBodyStatus::LocalSidecar),
+    ));
+    let da_path = fixture
+        .kura
+        .block_store
+        .lock()
+        .da_block_path(u64::try_from(carrier_height.get()).expect("carrier height fits u64"));
+    assert!(da_path.exists());
+    (carrier_height, da_path)
+}
+
 fn canonical_terminal_payload_for_replica_network_test(
     lane: &LaneConfigEntry,
     height_context_id: HeightContextId,
@@ -611,6 +675,7 @@ fn canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custo
     )
     .expect("decode replica Pending outcome");
     assert_eq!(pending.outcome_hash, source_outcome_hash);
+    assert_eq!(pending.wire_layout_for_test(), "v2");
     assert!(matches!(
         pending.basis(),
         AutonomousLifecycleTerminalOutcomeBasisV1::CanonicalReplica { .. }
@@ -620,12 +685,149 @@ fn canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custo
         pending.binding().producer_index,
         "replica binding uses only the producer as its logical witness",
     );
+    let transitional_pending = pending
+        .to_basis_v1_for_test()
+        .expect("construct the basis-bearing V1 compatibility fixture");
+    let transitional_bytes = transitional_pending
+        .encode_framed()
+        .expect("encode basis-bearing V1 compatibility fixture");
+    let decoded_transitional =
+        AutonomousLifecycleTerminalOutcomeV1::decode_framed(&transitional_bytes)
+            .expect("decode basis-bearing V1 compatibility fixture");
+    decoded_transitional
+        .validate_structure()
+        .expect("validate basis-bearing V1 compatibility fixture");
+    assert_eq!(decoded_transitional.wire_layout_for_test(), "basis_v1");
+    assert_eq!(decoded_transitional.basis(), pending.basis());
+    assert_eq!(
+        decoded_transitional
+            .encode_framed()
+            .expect("re-encode basis-bearing V1 compatibility fixture"),
+        transitional_bytes,
+        "transitional V1 evidence must remain byte-exact",
+    );
+    let v2_body = AutonomousLifecycleTerminalOutcomeBodyV2 {
+        version: AutonomousLifecycleTerminalOutcomeV1::VERSION,
+        binding: pending.binding().clone(),
+        basis: pending.basis(),
+        source: pending.source(),
+        stage: pending.stage(),
+    };
+    let v2_body_bytes = norito::encode_canonical(&v2_body).expect("encode V2 body fixture");
+    let valid_v2_hash = Hash::new_from_chunks(&[
+        AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN_V2,
+        &v2_body_bytes,
+    ]);
+    assert_eq!(valid_v2_hash, pending.outcome_hash);
+    let basis_v1_body = BasisAutonomousLifecycleTerminalOutcomeBodyV1 {
+        version: AutonomousLifecycleTerminalOutcomeV1::LEGACY_VERSION,
+        binding: pending.binding().clone(),
+        basis: pending.basis(),
+        source: pending.source(),
+        stage: pending.stage(),
+    };
+    let basis_v1_body_bytes =
+        norito::encode_canonical(&basis_v1_body).expect("encode basis-bearing V1 body fixture");
+    let valid_basis_v1_hash = Hash::new_from_chunks(&[
+        AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN_V1,
+        &basis_v1_body_bytes,
+    ]);
+    assert_eq!(valid_basis_v1_hash, transitional_pending.outcome_hash);
+
+    let relabeled_v2_as_v1 =
+        norito::encode_canonical(&BasisAutonomousLifecycleTerminalOutcomeWireV1 {
+            body: BasisAutonomousLifecycleTerminalOutcomeBodyV1 {
+                version: AutonomousLifecycleTerminalOutcomeV1::VERSION,
+                binding: pending.binding().clone(),
+                basis: pending.basis(),
+                source: pending.source(),
+                stage: pending.stage(),
+            },
+            outcome_hash: valid_v2_hash,
+        })
+        .expect("encode V2 payload under the V1 schema");
+    assert!(
+        AutonomousLifecycleTerminalOutcomeV1::decode_framed(&relabeled_v2_as_v1).is_err(),
+        "a V2-shaped payload advertised as V1 must fail closed",
+    );
+    let relabeled_v1_as_v2 = norito::encode_canonical(&AutonomousLifecycleTerminalOutcomeWireV2 {
+        body: AutonomousLifecycleTerminalOutcomeBodyV2 {
+            version: AutonomousLifecycleTerminalOutcomeV1::LEGACY_VERSION,
+            binding: pending.binding().clone(),
+            basis: pending.basis(),
+            source: pending.source(),
+            stage: pending.stage(),
+        },
+        outcome_hash: valid_basis_v1_hash,
+    })
+    .expect("encode V1 payload under the V2 schema");
+    assert!(
+        AutonomousLifecycleTerminalOutcomeV1::decode_framed(&relabeled_v1_as_v2).is_err(),
+        "a basis-bearing V1 payload advertised as V2 must fail closed",
+    );
+    let wrong_v2_hash = Hash::new_from_chunks(&[
+        AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN_V1,
+        &v2_body_bytes,
+    ]);
+    let v2_with_substituted_hash =
+        norito::encode_canonical(&AutonomousLifecycleTerminalOutcomeWireV2 {
+            body: v2_body,
+            outcome_hash: wrong_v2_hash,
+        })
+        .expect("encode V2 fixture with a substituted hash domain");
+    assert!(
+        AutonomousLifecycleTerminalOutcomeV1::decode_framed(&v2_with_substituted_hash).is_err(),
+        "a recomputed body hash from the wrong version domain must fail closed",
+    );
+    let basis_v1_with_unrecomputed_hash =
+        norito::encode_canonical(&BasisAutonomousLifecycleTerminalOutcomeWireV1 {
+            body: basis_v1_body,
+            outcome_hash: Hash::new(b"substituted terminal outcome hash"),
+        })
+        .expect("encode basis-bearing V1 fixture with an unrecomputed hash");
+    assert!(
+        AutonomousLifecycleTerminalOutcomeV1::decode_framed(&basis_v1_with_unrecomputed_hash)
+            .is_err(),
+        "an unrecomputed basis-bearing V1 hash substitution must fail closed",
+    );
+    let malformed_basis_v1_body = BasisAutonomousLifecycleTerminalOutcomeBodyV1 {
+        version: AutonomousLifecycleTerminalOutcomeV1::LEGACY_VERSION,
+        binding: pending.binding().clone(),
+        basis: pending.basis(),
+        source: AutonomousLifecycleTerminalOutcomeSourceV1::RetiredRelease {
+            retirement_hash: Hash::new(b"malformed basis-bearing V1 retirement"),
+        },
+        stage: pending.stage(),
+    };
+    let malformed_basis_v1_body_bytes = norito::encode_canonical(&malformed_basis_v1_body)
+        .expect("encode malformed basis-bearing V1 body");
+    let malformed_basis_v1_bytes =
+        norito::encode_canonical(&BasisAutonomousLifecycleTerminalOutcomeWireV1 {
+            body: malformed_basis_v1_body,
+            outcome_hash: Hash::new_from_chunks(&[
+                AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN_V1,
+                &malformed_basis_v1_body_bytes,
+            ]),
+        })
+        .expect("encode malformed basis-bearing V1 fixture");
+    assert!(
+        norito::decode_canonical::<BasisAutonomousLifecycleTerminalOutcomeWireV1>(
+            &malformed_basis_v1_bytes,
+        )
+        .is_ok(),
+        "the adversarial fixture must be wire-valid basis-bearing V1",
+    );
+    assert!(
+        AutonomousLifecycleTerminalOutcomeV1::decode_framed(&malformed_basis_v1_bytes).is_err(),
+        "a semantically invalid basis-bearing V1 must not fall back to legacy V1",
+    );
     #[derive(Encode)]
     enum UnknownTerminalOutcomeBasisV1 {
         #[codec(index = 2)]
         FutureReplica,
     }
     #[derive(Encode)]
+    #[norito(schema_name = "iroha_core::kura::AutonomousLifecycleTerminalOutcomeBodyV2")]
     struct UnknownTerminalOutcomeBodyV1 {
         version: u16,
         binding: AutonomousLifecycleAttemptBindingV1,
@@ -634,6 +836,7 @@ fn canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custo
         stage: AutonomousLifecycleTerminalOutcomeStageV1,
     }
     #[derive(Encode)]
+    #[norito(schema_name = "iroha_core::kura::AutonomousLifecycleTerminalOutcomeV2")]
     struct UnknownTerminalOutcomeV1 {
         body: UnknownTerminalOutcomeBodyV1,
         outcome_hash: Hash,
@@ -641,17 +844,16 @@ fn canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custo
     let unknown_basis_bytes = norito::encode_canonical(&UnknownTerminalOutcomeV1 {
         body: UnknownTerminalOutcomeBodyV1 {
             version: AutonomousLifecycleTerminalOutcomeV1::VERSION,
-            binding: pending.body.binding.clone(),
+            binding: pending.binding().clone(),
             basis: UnknownTerminalOutcomeBasisV1::FutureReplica,
-            source: pending.body.source,
-            stage: pending.body.stage,
+            source: pending.source(),
+            stage: pending.stage(),
         },
         outcome_hash: pending.outcome_hash,
     })
     .expect("encode unknown terminal basis fixture");
     assert!(
-        norito::decode_canonical::<AutonomousLifecycleTerminalOutcomeV1>(&unknown_basis_bytes)
-            .is_err(),
+        AutonomousLifecycleTerminalOutcomeV1::decode_framed(&unknown_basis_bytes).is_err(),
         "Norito must reject an unknown terminal-outcome basis tag",
     );
     assert!(
@@ -744,11 +946,35 @@ fn canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custo
         pending_stages[0].stage(),
         AutonomousLifecycleTerminalOutcomeDurableStage::Pending,
     );
+    let terminal_projection =
+        canonical_terminal_projection_for_binding_test(group, pending.binding());
+    let transitional_complete = decoded_transitional
+        .complete(terminal_projection)
+        .expect("complete basis-bearing V1 compatibility fixture");
+    let transitional_complete_bytes = transitional_complete
+        .encode_framed()
+        .expect("encode basis-bearing V1 Complete compatibility fixture");
+    assert_eq!(
+        transitional_complete_bytes.len(),
+        transitional_bytes.len(),
+        "basis-bearing V1 Pending-to-Complete CAS must remain fixed-width",
+    );
+    let decoded_transitional_complete =
+        AutonomousLifecycleTerminalOutcomeV1::decode_framed(&transitional_complete_bytes)
+            .expect("decode basis-bearing V1 Complete compatibility fixture");
+    decoded_transitional_complete
+        .validate_structure()
+        .expect("validate basis-bearing V1 Complete compatibility fixture");
+    assert_eq!(
+        decoded_transitional_complete.wire_layout_for_test(),
+        "basis_v1",
+    );
+    assert!(decoded_transitional_complete.is_complete());
     fixture
         .kura
         .complete_autonomous_lifecycle_terminal_outcome(
             group,
-            canonical_terminal_projection_for_binding_test(group, pending.binding()),
+            terminal_projection,
             true,
             source_outcome_hash,
         )
@@ -991,10 +1217,7 @@ fn canonical_replica_pending_survives_prebind_restart_and_rejects_committee_bind
     assert_eq!(expected_groups.len(), 1);
     assert_eq!(expected_groups[0].binding(), group);
     let stages = reopened
-        .verify_expected_autonomous_lifecycle_terminal_outcome_stages(
-            network_id,
-            &expected_groups,
-        )
+        .verify_expected_autonomous_lifecycle_terminal_outcome_stages(network_id, &expected_groups)
         .expect("verify restarted replica Pending stage");
     assert_eq!(stages.len(), 1);
     assert_eq!(
@@ -1029,6 +1252,175 @@ fn canonical_replica_pending_survives_prebind_restart_and_rejects_committee_bind
 }
 
 #[test]
+fn canonical_replica_pending_rejects_remote_only_terminal_carrier_without_mutation() {
+    let mut fixture = canonical_autonomous_replica_fixture();
+    let outsider = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    fixture
+        .kura
+        .bind_local_peer_id(PeerId::new(outsider.public_key().clone()))
+        .expect("bind remote-only replica outsider");
+    let execution = canonical_terminal_merge_execution_from_durable_source_for_test(
+        &fixture.payload,
+        fixture.source.clone(),
+    );
+    let merge_entry = install_canonical_replica_terminal_merge_entry_for_test(
+        &fixture.kura,
+        &fixture.carrier,
+        vec![execution],
+        1,
+    );
+    let (carrier_height, da_path) =
+        evict_canonical_replica_terminal_carrier_to_local_sidecar(&mut fixture, &merge_entry);
+    fixture
+        .kura
+        .remove_evicted_block_sidecar_for_testing(carrier_height)
+        .expect("damage unpinned terminal carrier into RemoteOnly storage");
+    assert!(!da_path.exists());
+    let carrier_hash = fixture
+        .kura
+        .block_hash_at_height(carrier_height)
+        .expect("resolve remote-only terminal carrier hash");
+    assert!(matches!(
+        fixture.kura.block_body_status_by_hash(carrier_hash),
+        Some(BlockBodyStatus::RemoteOnly { .. }),
+    ));
+    let descriptor = &fixture.payload.origin_proposal.descriptor;
+    let outcome_path = Kura::autonomous_lifecycle_terminal_outcome_path_for_entry(
+        fixture
+            .lane_config
+            .entry(descriptor.lane_id)
+            .expect("remote-only replica lane entry"),
+        &fixture.kura.store_root,
+        descriptor.lane_block_height,
+        descriptor.proposal_height,
+    );
+    let error = match fixture
+        .kura
+        .persist_autonomous_lifecycle_canonical_terminal_outcomes_pending(&merge_entry)
+    {
+        Ok(_) => panic!("RemoteOnly carrier must fail before replica Pending publication"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("requires its exact local carrier body"),
+        "unexpected RemoteOnly publication rejection: {error:?}",
+    );
+    assert!(
+        !outcome_path.exists(),
+        "failed carrier preflight must leave terminal evidence byte-absent",
+    );
+}
+
+#[test]
+fn canonical_replica_pending_and_complete_pin_corrupt_carrier_on_strict_restart() {
+    for complete_before_restart in [false, true] {
+        let stage = if complete_before_restart {
+            "Complete"
+        } else {
+            "Pending"
+        };
+        let mut fixture = canonical_autonomous_replica_fixture();
+        let outsider = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        fixture
+            .kura
+            .bind_local_peer_id(PeerId::new(outsider.public_key().clone()))
+            .expect("bind pinned-carrier replica outsider");
+        let execution = canonical_terminal_merge_execution_from_durable_source_for_test(
+            &fixture.payload,
+            fixture.source.clone(),
+        );
+        let merge_entry = install_canonical_replica_terminal_merge_entry_for_test(
+            &fixture.kura,
+            &fixture.carrier,
+            vec![execution],
+            1,
+        );
+        let mut publication = fixture
+            .kura
+            .persist_autonomous_lifecycle_canonical_terminal_outcomes_pending(&merge_entry)
+            .expect("publish carrier-pinned replica Pending")
+            .expect("carrier-pinned merge has one replica outcome")
+            .consume_for_v2_apply(&merge_entry)
+            .expect("consume carrier-pinned publication");
+        let (group, authorization) = publication
+            .pop()
+            .expect("one carrier-pinned replica outcome");
+        assert!(publication.is_empty());
+        let (authorized_group, _, source_outcome_hash) = authorization
+            .consume_for_queue()
+            .expect("consume carrier-pinned Queue authorization");
+        assert_eq!(authorized_group, group);
+        let descriptor = &fixture.payload.origin_proposal.descriptor;
+        let outcome_path = Kura::autonomous_lifecycle_terminal_outcome_path_for_entry(
+            fixture
+                .lane_config
+                .entry(descriptor.lane_id)
+                .expect("pinned-carrier replica lane entry"),
+            &fixture.kura.store_root,
+            descriptor.lane_block_height,
+            descriptor.proposal_height,
+        );
+        let pending = Kura::decode_autonomous_lifecycle_terminal_outcome(
+            &outcome_path,
+            &fs::read(&outcome_path).expect("read carrier-pinned Pending"),
+        )
+        .expect("decode carrier-pinned Pending");
+        if complete_before_restart {
+            fixture
+                .kura
+                .complete_autonomous_lifecycle_terminal_outcome(
+                    group,
+                    canonical_terminal_projection_for_binding_test(group, pending.binding()),
+                    true,
+                    source_outcome_hash,
+                )
+                .expect("complete carrier-pinned replica outcome");
+        }
+        let (carrier_height, da_path) =
+            evict_canonical_replica_terminal_carrier_to_local_sidecar(&mut fixture, &merge_entry);
+        assert_eq!(
+            u64::try_from(carrier_height.get()).expect("carrier height fits u64"),
+            merge_entry.merge_qc.carrier_height,
+        );
+        let canonical_bytes = fs::read(&da_path).expect("read exact pinned carrier DA body");
+        let corrupt_bytes = vec![0xA5; canonical_bytes.len()];
+        assert_ne!(corrupt_bytes, canonical_bytes);
+        fs::write(&da_path, &corrupt_bytes).expect("corrupt pinned carrier in place");
+        std::fs::File::open(&da_path)
+            .expect("open corrupt pinned carrier")
+            .sync_all()
+            .expect("sync corrupt pinned carrier");
+
+        let CanonicalAutonomousReplicaFixture {
+            _temp_dir,
+            config,
+            lane_config,
+            kura,
+            ..
+        } = fixture;
+        drop(kura);
+        let error = match Kura::open_test_kura_with_configured_lane_config(&config, &lane_config) {
+            Ok(_) => panic!("strict restart must reject corrupt {stage} carrier without cleanup"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("carrier DA body differs from signed finality"),
+            "unexpected corrupt {stage} carrier rejection: {error:?}",
+        );
+        assert_eq!(
+            fs::read(&da_path).expect("read preserved corrupt pinned carrier"),
+            corrupt_bytes,
+            "strict startup must not delete or rewrite a {stage}-pinned corrupt carrier",
+        );
+        drop(_temp_dir);
+    }
+}
+
+#[test]
 fn canonical_replica_terminal_only_capacity_is_exact_and_restart_stable() {
     let mut fixture = canonical_autonomous_replica_fixture();
     let outsider = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -1050,10 +1442,7 @@ fn canonical_replica_terminal_only_capacity_is_exact_and_restart_stable() {
     let descriptor = &fixture.payload.origin_proposal.descriptor;
     let receipt = fixture
         .kura
-        .read_lane_block_application_receipt(
-            descriptor.lane_id,
-            descriptor.lane_block_height,
-        )
+        .read_lane_block_application_receipt(descriptor.lane_id, descriptor.lane_block_height)
         .expect("read exact replica capacity receipt");
     let source = Kura::autonomous_lifecycle_terminal_source_from_merge_receipt(&receipt)
         .expect("derive exact replica capacity source");

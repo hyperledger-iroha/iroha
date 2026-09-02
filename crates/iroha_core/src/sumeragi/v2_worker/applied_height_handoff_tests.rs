@@ -692,7 +692,7 @@ fn prepared_historical_body_output(
         ingress_ownership,
     )
     .expect("bind exact historical-body worker input");
-    let limits = crate::sumeragi::v2_block_sync::HistoricalBodyServeLimits::first_release(1)
+    let limits = crate::sumeragi::v2_block_sync::HistoricalBodyServeLimits::first_release(1, 8)
         .expect("valid fixed historical-body worker limits");
     let mut server =
         crate::sumeragi::v2_block_sync::V2BlockSyncServer::new_with_historical_body_service(

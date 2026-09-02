@@ -275,13 +275,13 @@ public struct KagemushaRecursiveSpendTopUpProvenanceV4: Equatable, Sendable {
 
 /// Local-only ABI-21 shield proof request. It contains note secrets and must
 /// never be persisted or sent to Torii.
-public struct KagemushaTopUpShieldBuildRequestV4: Equatable, Sendable {
+public struct KagemushaTopUpShieldBuildRequestV5: Equatable, Sendable {
     public let version: UInt16
     public let networkID: NetworkId
     public let assetID: String
     public let amount: KagemushaScaledAmount
     public let payer: String
-    public let operationID: Data
+    public let nonce: Data
     public let opening: KagemushaNoteOpening
     public let leafIndex: UInt32
     public let zeroPath: PrivacyConfidentialMerklePathWitnessV2
@@ -294,7 +294,7 @@ public struct KagemushaTopUpShieldBuildRequestV4: Equatable, Sendable {
         assetID: String,
         amount: KagemushaScaledAmount,
         payer: String,
-        operationID: Data,
+        nonce: Data,
         opening: KagemushaNoteOpening,
         leafIndex: UInt32,
         zeroPath: PrivacyConfidentialMerklePathWitnessV2,
@@ -308,7 +308,7 @@ public struct KagemushaTopUpShieldBuildRequestV4: Equatable, Sendable {
               String(assetParts[1]) == payer,
               leafIndex < KagemushaRecursiveSpend.topUpShieldInsertionCapacityV2,
               zeroPath.root.contains(where: { $0 != 0 }) else {
-            throw KagemushaRecursiveSpendError.invalidField("topUpShieldBuildRequestV4")
+            throw KagemushaRecursiveSpendError.invalidField("topUpShieldBuildRequestV5")
         }
         try KagemushaRecursiveSpend.requirePortableText(payer, field: "payer")
         try KagemushaRecursiveSpend.requirePortableText(
@@ -316,19 +316,19 @@ public struct KagemushaTopUpShieldBuildRequestV4: Equatable, Sendable {
             field: "shieldVerifierID"
         )
         try KagemushaRecursiveSpend.requireNonzeroFixed32(
-            operationID,
-            field: "operationID"
+            nonce,
+            field: "nonce"
         )
         try KagemushaRecursiveSpend.requireNonzeroFixed32(
             shieldVerifierCommitment,
             field: "shieldVerifierCommitment"
         )
-        version = KagemushaRecursiveSpend.localWitnessVersionV4
+        version = KagemushaRecursiveSpend.topUpLocalWitnessVersionV5
         self.networkID = networkID
         self.assetID = canonicalAssetID
         self.amount = amount
         self.payer = payer
-        self.operationID = Data(operationID)
+        self.nonce = Data(nonce)
         self.opening = opening
         self.leafIndex = leafIndex
         self.zeroPath = zeroPath
@@ -340,10 +340,10 @@ public struct KagemushaTopUpShieldBuildRequestV4: Equatable, Sendable {
     public func buildUnsigned() throws -> KagemushaRecursiveSpendTopUpUnsignedV4 {
         let chainDiscriminant = try KagemushaRecursiveSpend.canonicalAccountAddress(
             payer,
-            field: "topUpShieldBuildRequestV4.payer"
+            field: "topUpShieldBuildRequestV5.payer"
         ).chainDiscriminant
         var archive = try KagemushaRecursiveSpendCodecs
-            .encodeTopUpShieldBuildRequestV4(self)
+            .encodeTopUpShieldBuildRequestV5(self)
         defer { archive.resetBytes(in: 0..<archive.count) }
         do {
             guard let result = try NoritoNativeBridge.shared
@@ -407,8 +407,7 @@ public struct KagemushaRecursiveSpendTopUpUnsignedV4: Equatable, Sendable {
     public func finalize(
         authorization: KagemushaRequestAuthorization
     ) throws -> KagemushaRecursiveSpendTopUpRequestV4 {
-        guard authorization.fields.operationID == operationID,
-              authorization.fields.payloadDigest == (try authorizationPayloadDigest()),
+        guard authorization.fields.payloadDigest == (try authorizationPayloadDigest()),
               let requestArchive = try NoritoNativeBridge.shared
                 .kagemushaRecursiveSpendTopUpFinalizeRequestV4(
                     unsignedArchive: noritoArchive,
@@ -727,37 +726,44 @@ public struct KagemushaRecursiveSpendSpendableBranchV4: Equatable, Sendable {
 
 /// Exact local bridge request for native-derived partial-redemption change.
 /// The archive contains the input opening and is wiped immediately after use.
-struct KagemushaRecursiveSpendRedemptionChangePrepareRequestV4: Equatable, Sendable {
+struct KagemushaRecursiveSpendRedemptionChangePrepareRequestV5: Equatable, Sendable {
     let version: UInt16
     let bundle: KagemushaRecursiveSpendBundleV4
     let inputOpening: KagemushaNoteOpening
     let changeAmount: KagemushaScaledAmount
-    let operationID: Data
+    let recipient: String
+    let nonce: Data
     let entropy: Data
 
     init(
         bundle: KagemushaRecursiveSpendBundleV4,
         inputOpening: KagemushaNoteOpening,
         changeAmount: KagemushaScaledAmount,
-        operationID: Data,
+        recipient: String,
+        nonce: Data,
         entropy: Data
     ) throws {
+        _ = try KagemushaRecursiveSpend.canonicalAccountAddress(
+            recipient,
+            field: "redemptionChangeV5.recipient"
+        )
         try KagemushaRecursiveSpend.requireNonzeroFixed32(
-            operationID,
-            field: "redemptionChangeV4.operationID"
+            nonce,
+            field: "redemptionChangeV5.nonce"
         )
         try KagemushaRecursiveSpend.requireNonzeroFixed32(
             entropy,
-            field: "redemptionChangeV4.entropy"
+            field: "redemptionChangeV5.entropy"
         )
-        guard operationID != entropy else {
-            throw KagemushaRecursiveSpendError.invalidField("redemptionChangeV4.entropy")
+        guard nonce != entropy else {
+            throw KagemushaRecursiveSpendError.invalidField("redemptionChangeV5.entropy")
         }
-        version = KagemushaRecursiveSpend.wireVersionV4
+        version = KagemushaRecursiveSpend.redemptionChangePreparationVersionV5
         self.bundle = bundle
         self.inputOpening = inputOpening
         self.changeAmount = changeAmount
-        self.operationID = Data(operationID)
+        self.recipient = recipient
+        self.nonce = Data(nonce)
         self.entropy = Data(entropy)
     }
 }
@@ -1030,7 +1036,7 @@ public struct KagemushaRecursiveSpendVerifyLocalRequestV4: Equatable, Sendable {
 
 /// Secret-bearing ABI-21 redemption input. Native derives the V4 public
 /// redemption transition and proof; neither is caller-supplied.
-public struct KagemushaRecursiveSpendRedeemLocalRequestV4: Equatable, Sendable {
+public struct KagemushaRecursiveSpendRedeemLocalRequestV5: Equatable, Sendable {
     public let input: KagemushaRecursiveSpendSpendableBranchV4
     public let recipient: String
     public let publicAmount: KagemushaScaledAmount
@@ -1038,7 +1044,7 @@ public struct KagemushaRecursiveSpendRedeemLocalRequestV4: Equatable, Sendable {
     public let changeOutputMembershipPaths: KagemushaOutputMembershipPathsV4?
     public let unshieldVerifier: KagemushaConfidentialVerifierBinding
     public let blockHeight: UInt64
-    public let operationID: Data
+    public let nonce: Data
 
     public init(
         input: KagemushaRecursiveSpendSpendableBranchV4,
@@ -1048,15 +1054,15 @@ public struct KagemushaRecursiveSpendRedeemLocalRequestV4: Equatable, Sendable {
         changeOutputMembershipPaths: KagemushaOutputMembershipPathsV4? = nil,
         unshieldVerifier: KagemushaConfidentialVerifierBinding,
         blockHeight: UInt64,
-        operationID: Data
+        nonce: Data
     ) throws {
         _ = try KagemushaRecursiveSpend.canonicalAccountAddress(
             recipient,
-            field: "redeemRequestV4.recipient"
+            field: "redeemLocalRequestV5.recipient"
         )
         try KagemushaRecursiveSpend.requireNonzeroFixed32(
-            operationID,
-            field: "redeemRequestV4.operationID"
+            nonce,
+            field: "redeemLocalRequestV5.nonce"
         )
         guard (changeOpening != nil) == (changeOutputMembershipPaths != nil),
               changeOutputMembershipPaths.map({
@@ -1065,7 +1071,7 @@ public struct KagemushaRecursiveSpendRedeemLocalRequestV4: Equatable, Sendable {
               unshieldVerifier.role == .unshield,
               unshieldVerifier.blockHeight == blockHeight,
               blockHeight > 0 else {
-            throw KagemushaRecursiveSpendError.invalidField("redeemRequestV4")
+            throw KagemushaRecursiveSpendError.invalidField("redeemLocalRequestV5")
         }
         self.input = input
         self.recipient = recipient
@@ -1074,7 +1080,7 @@ public struct KagemushaRecursiveSpendRedeemLocalRequestV4: Equatable, Sendable {
         self.changeOutputMembershipPaths = changeOutputMembershipPaths
         self.unshieldVerifier = unshieldVerifier
         self.blockHeight = blockHeight
-        self.operationID = Data(operationID)
+        self.nonce = Data(nonce)
     }
 
     public func noritoEncoded() throws -> Data {
@@ -1286,8 +1292,7 @@ public struct KagemushaRecursiveSpendRedeemBuildResultV4: Equatable, Sendable {
     public func finalize(
         authorization: KagemushaRequestAuthorization
     ) throws -> KagemushaRecursiveSpendRedeemResultV4 {
-        guard authorization.fields.operationID == operationID,
-              authorization.fields.payloadDigest == authorizationDigest else {
+        guard authorization.fields.payloadDigest == authorizationDigest else {
             throw KagemushaRecursiveSpendError.invalidField("authorization")
         }
         guard let archive = try NoritoNativeBridge.shared
@@ -1333,33 +1338,37 @@ public extension KagemushaRecursiveSpend {
     /// Derive partial-redemption change entirely inside the native bridge.
     ///
     /// The input bundle and opening are reauthenticated by native code. The
-    /// caller supplies only the exact smaller change amount, operation id, and
-    /// fresh entropy; rho and the protocol diversifier are never caller-chosen.
-    static func prepareRedemptionChangeV4(
+    /// caller supplies only the exact smaller change amount, canonical redemption
+    /// recipient, fresh nonce, and entropy; the operation id and confidential
+    /// opening coordinates are derived inside native code.
+    static func prepareRedemptionChangeV5(
         input: KagemushaRecursiveSpendSpendableBranchV4,
         changeAmount: KagemushaScaledAmount,
-        operationID: Data,
+        recipient: String,
+        nonce: Data,
         entropy: Data
     ) throws -> KagemushaRecursiveSpendRedemptionChangePreparationV4 {
-        let request = try KagemushaRecursiveSpendRedemptionChangePrepareRequestV4(
+        let request = try KagemushaRecursiveSpendRedemptionChangePrepareRequestV5(
             bundle: input.bundle,
             inputOpening: input.opening,
             changeAmount: changeAmount,
-            operationID: operationID,
+            recipient: recipient,
+            nonce: nonce,
             entropy: entropy
         )
         let inputSummary = try input.bundle.projectedSummary()
-        try validateRedemptionChangeV4(
+        try validateRedemptionChangeV5(
             inputSummary: inputSummary,
             changeAmount: changeAmount,
-            operationID: operationID,
+            recipient: recipient,
+            nonce: nonce,
             entropy: entropy
         )
         var requestArchive = try KagemushaRecursiveSpendCodecsV4
             .encodeRedemptionChangePrepareRequest(request)
         defer { requestArchive.resetBytes(in: 0..<requestArchive.count) }
         guard var resultArchive = try NoritoNativeBridge.shared
-            .kagemushaRecursiveSpendRedemptionChangePrepareV4(
+            .kagemushaRecursiveSpendRedemptionChangePrepareV5(
                 requestArchive: requestArchive
             ) else {
             throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
@@ -1420,27 +1429,32 @@ public extension KagemushaRecursiveSpend {
         )
     }
 
-    static func validateRedemptionChangeV4(
+    static func validateRedemptionChangeV5(
         inputSummary: KagemushaRecursiveSpendBundleSummaryV4,
         changeAmount: KagemushaScaledAmount,
-        operationID: Data,
+        recipient: String,
+        nonce: Data,
         entropy: Data
     ) throws {
+        _ = try canonicalAccountAddress(
+            recipient,
+            field: "redemptionChangeV5.recipient"
+        )
         try requireNonzeroFixed32(
-            operationID,
-            field: "redemptionChangeV4.operationID"
+            nonce,
+            field: "redemptionChangeV5.nonce"
         )
         try requireNonzeroFixed32(
             entropy,
-            field: "redemptionChangeV4.entropy"
+            field: "redemptionChangeV5.entropy"
         )
-        guard operationID != entropy,
+        guard nonce != entropy,
               changeAmount.scale == inputSummary.amount.scale,
               KagemushaScaledAmount.compareAtomicUnits(
                   changeAmount.atomicUnits,
                   inputSummary.amount.atomicUnits
               ) == .orderedAscending else {
-            throw KagemushaRecursiveSpendError.invalidField("redemptionChangeV4")
+            throw KagemushaRecursiveSpendError.invalidField("redemptionChangeV5")
         }
     }
 
@@ -1580,7 +1594,7 @@ extension KagemushaRecursiveSpend {
     /// Builds the canonical V4 redemption result with the selected installed
     /// artifact generation.
     public static func buildRedeemV4(
-        request: KagemushaRecursiveSpendRedeemLocalRequestV4,
+        request: KagemushaRecursiveSpendRedeemLocalRequestV5,
         installedArtifacts: KagemushaRecursiveSpendInstalledArtifactSetV4
     ) throws -> KagemushaRecursiveSpendRedeemBuildResultV4 {
         return try KagemushaRecursiveSpendWorkerPermit.withPermit {

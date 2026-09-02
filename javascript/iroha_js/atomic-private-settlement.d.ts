@@ -26,6 +26,7 @@ export const AtomicPrivateSettlementOperationV1: Readonly<{
   COMMIT_VOTE: AtomicPrivateSettlementOperationDescriptorV1;
   PHASE_CERTIFICATE: AtomicPrivateSettlementOperationDescriptorV1;
   LEG_UPLOAD: AtomicPrivateSettlementOperationDescriptorV1;
+  AUDITOR_CAPSULE: AtomicPrivateSettlementOperationDescriptorV1;
   AUDIT_APPROVAL: AtomicPrivateSettlementOperationDescriptorV1;
   BUNDLE_SUBMIT: AtomicPrivateSettlementOperationDescriptorV1;
 }>;
@@ -47,8 +48,9 @@ export interface AtomicPrivateSettlementNativeVerifierV1 {
     expectedNetworkId: Uint8Array,
     requestedPayloadDigest: Uint8Array,
   ) => void;
-  readonly privateSettlementVerifyAuditorCapsuleResponseV1: (
+  readonly privateSettlementVerifyAuditorCapsuleResponseWithRequestV1: (
     responseJson: Uint8Array,
+    requestJson: Uint8Array,
     expectedNetworkId: Uint8Array,
     requestedPayloadDigest: Uint8Array,
     auditorSigningKey: string,
@@ -178,6 +180,7 @@ export class AtomicPrivateSettlementToriiClientV1 {
   ): Promise<AtomicPrivateSettlementJsonResponseV1>;
   getAuditorCapsule(
     payloadDigest: string | AtomicPrivateSettlementIdentifierV1,
+    request: AtomicPrivateSettlementPreparedRequestV1,
     options: AtomicPrivateSettlementRoleOptionsV1,
   ): Promise<AtomicPrivateSettlementJsonResponseV1>;
   getBundleStatus(

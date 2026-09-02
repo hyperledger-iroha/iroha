@@ -3,14 +3,18 @@
 use std::str::FromStr as _;
 
 use iroha_crypto::{Hash, HashOf};
+#[cfg(test)]
+use iroha_data_model::offline::derive_kagemusha_operation_id_v4;
 use iroha_data_model::{
     ValidationFail,
     account::AccountId,
     isi::{InstructionBox, RegisterBox},
     offline::{
         KagemushaOperationCarrierErrorV4, KagemushaOperationCarrierV4, KagemushaOperationKindV4,
-        KagemushaOperationRequestV4, classify_direct_kagemusha_operation_entrypoint_v4,
-        classify_direct_kagemusha_operation_transaction_v4, is_kagemusha_operation_instruction_v4,
+        KagemushaOperationRequestV4, KagemushaValidationError,
+        classify_direct_kagemusha_operation_entrypoint_v4,
+        classify_direct_kagemusha_operation_transaction_v4, is_kagemusha_marked_hash_v4,
+        is_kagemusha_operation_instruction_v4, kagemusha_operation_authority_digest_v4,
     },
     state_path::StatePath,
     transaction::{
@@ -138,8 +142,6 @@ pub const KAGEMUSHA_OPERATION_OUTCOME_RECORD_VERSION_V4: u16 = 4;
 /// Maximum canonical bytes accepted for one persisted outcome record.
 pub const KAGEMUSHA_OPERATION_OUTCOME_RECORD_MAX_BYTES_V4: usize = 16 * 1024;
 
-const KAGEMUSHA_OPERATION_AUTHORITY_KEY_DOMAIN_V4: &[u8] =
-    b"iroha:offline:kagemusha:operation-outcome-authority:v4\0";
 const KAGEMUSHA_SIGNED_TRANSACTION_WIRE_HASH_DOMAIN_V4: &[u8] =
     b"iroha:offline:kagemusha:signed-transaction-wire:v4\0";
 
@@ -169,7 +171,7 @@ pub enum KagemushaOperationOutcomeStateV4 {
 pub struct KagemushaOperationOutcomeRecordV4 {
     /// Exact record format version.
     pub version: u16,
-    /// Stable operation identifier supplied by the authorized device.
+    /// Stable operation identifier derived from the authorized account and nonce.
     pub operation_id: [u8; 32],
     /// Top-up or redemption operation kind.
     pub kind: KagemushaOperationKindV4,
@@ -201,12 +203,12 @@ impl KagemushaOperationOutcomeRecordV4 {
         operation_id: [u8; 32],
     ) -> Result<(), KagemushaOperationOutcomeErrorV4> {
         if self.version != KAGEMUSHA_OPERATION_OUTCOME_RECORD_VERSION_V4
-            || self.operation_id == [0; 32]
+            || !is_kagemusha_marked_hash_v4(&self.operation_id)
             || self.operation_id != operation_id
-            || self.request_authority_digest == [0; 32]
-            || self.outer_authority_digest == [0; 32]
-            || self.canonical_request_digest == [0; 32]
-            || self.signed_transaction_wire_hash == [0; 32]
+            || !is_kagemusha_marked_hash_v4(&self.request_authority_digest)
+            || !is_kagemusha_marked_hash_v4(&self.outer_authority_digest)
+            || !is_kagemusha_marked_hash_v4(&self.canonical_request_digest)
+            || !is_kagemusha_marked_hash_v4(&self.signed_transaction_wire_hash)
             || self.carrier_height == 0
             || matches!(self.outcome, KagemushaOperationOutcomeStateV4::Pending)
                 != self.result_hash.is_none()
@@ -293,6 +295,9 @@ pub enum KagemushaOperationOutcomeErrorV4 {
     /// A canonical state key could not be constructed.
     #[error("invalid Kagemusha operation outcome state key")]
     InvalidStateKey,
+    /// Canonical request identity derivation failed.
+    #[error("invalid Kagemusha operation request identity: {0}")]
+    InvalidRequestIdentity(#[from] KagemushaValidationError),
     /// Canonical record encoding failed.
     #[error("failed to encode Kagemusha operation outcome: {0}")]
     Encode(#[source] norito::Error),
@@ -509,27 +514,6 @@ pub fn signed_transaction_wire_hash_v4(
     .into())
 }
 
-/// Hash one complete canonical account identity for fixed-size outcome records.
-///
-/// # Errors
-///
-/// Returns an encoding or length failure when the account identity cannot be
-/// represented canonically.
-pub fn kagemusha_operation_authority_digest_v4(
-    authority: &AccountId,
-) -> Result<[u8; 32], KagemushaOperationOutcomeErrorV4> {
-    let bytes =
-        norito::encode_canonical(authority).map_err(KagemushaOperationOutcomeErrorV4::Encode)?;
-    let byte_len =
-        u64::try_from(bytes.len()).map_err(|_| KagemushaOperationOutcomeErrorV4::RecordTooLarge)?;
-    Ok(Hash::new_from_chunks(&[
-        KAGEMUSHA_OPERATION_AUTHORITY_KEY_DOMAIN_V4,
-        &byte_len.to_le_bytes(),
-        &bytes,
-    ])
-    .into())
-}
-
 /// Construct the exact per-submitter attempt key for one operation id.
 pub fn kagemusha_operation_outcome_state_key_v4(
     outer_authority: &AccountId,
@@ -549,7 +533,9 @@ pub fn kagemusha_operation_outcome_state_key_from_authority_digest_v4(
     authority_digest: [u8; 32],
     operation_id: [u8; 32],
 ) -> Result<StatePath, KagemushaOperationOutcomeErrorV4> {
-    if authority_digest == [0; 32] || operation_id == [0; 32] {
+    if !is_kagemusha_marked_hash_v4(&authority_digest)
+        || !is_kagemusha_marked_hash_v4(&operation_id)
+    {
         return Err(KagemushaOperationOutcomeErrorV4::InvalidStateKey);
     }
     StatePath::from_str(&format!(
@@ -564,7 +550,7 @@ pub fn kagemusha_operation_outcome_state_key_from_authority_digest_v4(
 pub fn kagemusha_operation_finality_state_key_v4(
     operation_id: [u8; 32],
 ) -> Result<StatePath, KagemushaOperationOutcomeErrorV4> {
-    if operation_id == [0; 32] {
+    if !is_kagemusha_marked_hash_v4(&operation_id) {
         return Err(KagemushaOperationOutcomeErrorV4::InvalidStateKey);
     }
     StatePath::from_str(&format!(
@@ -1239,12 +1225,12 @@ mod tests {
         )))
     }
 
-    fn top_up_request(operation_id: [u8; 32]) -> KagemushaRecursiveSpendTopUpRequestV4 {
-        top_up_request_with_note_commitment(operation_id, [0x61; 32])
+    fn top_up_request(operation_nonce: [u8; 32]) -> KagemushaRecursiveSpendTopUpRequestV4 {
+        top_up_request_with_note_commitment(operation_nonce, [0x61; 32])
     }
 
     fn top_up_request_with_note_commitment(
-        operation_id: [u8; 32],
+        operation_nonce: [u8; 32],
         note_commitment: [u8; 32],
     ) -> KagemushaRecursiveSpendTopUpRequestV4 {
         let request_key = KeyPair::try_from_seed(vec![0x52; 32], Algorithm::Ed25519)
@@ -1259,6 +1245,8 @@ mod tests {
             scale: 0,
         };
         let issued_at_ms = 1;
+        let operation_id = derive_kagemusha_operation_id_v4(&authority, operation_nonce)
+            .expect("derive fixture operation id");
         let mut request = KagemushaRecursiveSpendTopUpRequestV4 {
             version: 4,
             asset: AssetId::new(definition.clone(), authority.clone()),
@@ -1298,7 +1286,7 @@ mod tests {
                 operation_id,
                 issued_at_ms,
                 expires_at_ms: issued_at_ms + KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2,
-                nonce: [0x63; 32],
+                nonce: operation_nonce,
                 payload_digest: [0x64; 32],
                 registration_hash: Hash::new([0x6A; 32]).into(),
                 hardware_assertion: KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(
@@ -1443,11 +1431,12 @@ mod tests {
 
     #[test]
     fn complete_classifier_rejects_deferred_and_non_external_carriers() {
-        let operation_id = [0xB2; 32];
+        let operation_nonce = [0xB2; 32];
         let outer_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(outer_key.public_key().clone());
-        let operation =
-            InstructionBox::from(TopUpKagemushaRecursiveV4::new(top_up_request(operation_id)));
+        let operation = InstructionBox::from(TopUpKagemushaRecursiveV4::new(top_up_request(
+            operation_nonce,
+        )));
 
         let direct = instruction_carrier(&outer_key, operation.clone(), 1);
         assert!(
@@ -1524,7 +1513,7 @@ mod tests {
                 .public_key()
                 .clone(),
         );
-        let operation_id = [0xA5; 32];
+        let operation_id: [u8; 32] = Hash::new(b"first marked operation id").into();
         assert_ne!(
             kagemusha_operation_outcome_state_key_v4(&first, operation_id).expect("first key"),
             kagemusha_operation_outcome_state_key_v4(&second, operation_id).expect("second key")
@@ -1538,7 +1527,10 @@ mod tests {
         );
         assert_ne!(
             global_key,
-            kagemusha_operation_finality_state_key_v4([0xA6; 32]).expect("different operation key")
+            kagemusha_operation_finality_state_key_v4(
+                Hash::new(b"second marked operation id").into(),
+            )
+            .expect("different operation key")
         );
         assert!(
             kagemusha_operation_outcome_state_key_v4(&first, [0; 32]).is_err(),
@@ -1547,6 +1539,20 @@ mod tests {
         assert!(
             kagemusha_operation_finality_state_key_v4([0; 32]).is_err(),
             "zero operation ids must not enter global consensus state"
+        );
+        let mut unmarked_operation_id = operation_id;
+        unmarked_operation_id[Hash::LENGTH - 1] &= !1;
+        assert!(kagemusha_operation_outcome_state_key_v4(&first, unmarked_operation_id).is_err());
+        assert!(kagemusha_operation_finality_state_key_v4(unmarked_operation_id).is_err());
+        let mut unmarked_authority_digest =
+            kagemusha_operation_authority_digest_v4(&first).expect("authority digest");
+        unmarked_authority_digest[Hash::LENGTH - 1] &= !1;
+        assert!(
+            kagemusha_operation_outcome_state_key_from_authority_digest_v4(
+                unmarked_authority_digest,
+                operation_id,
+            )
+            .is_err()
         );
     }
 
@@ -1609,8 +1615,8 @@ mod tests {
             "the fixture must exceed the old variable-size outcome-record ceiling"
         );
 
-        let operation_id = [0xB1; 32];
-        let request = top_up_request(operation_id);
+        let request = top_up_request([0xB1; 32]);
+        let operation_id = request.operation_id;
         let transaction = TransactionBuilder::new(
             test_network_id(),
             outer_authority.clone(),
@@ -1651,14 +1657,33 @@ mod tests {
             kagemusha_operation_authority_digest_v4(&outer_authority)
                 .expect("hash large outer authority")
         );
+        let mut unmarked_request_authority = record;
+        unmarked_request_authority.request_authority_digest[Hash::LENGTH - 1] &= !1;
+        let mut unmarked_outer_authority = record;
+        unmarked_outer_authority.outer_authority_digest[Hash::LENGTH - 1] &= !1;
+        let mut unmarked_request = record;
+        unmarked_request.canonical_request_digest[Hash::LENGTH - 1] &= !1;
+        let mut unmarked_wire = record;
+        unmarked_wire.signed_transaction_wire_hash[Hash::LENGTH - 1] &= !1;
+        for malformed in [
+            unmarked_request_authority,
+            unmarked_outer_authority,
+            unmarked_request,
+            unmarked_wire,
+        ] {
+            assert!(matches!(
+                malformed.validate_attempt(&outer_authority, operation_id),
+                Err(KagemushaOperationOutcomeErrorV4::InvalidRecord)
+            ));
+        }
     }
 
     #[test]
     fn reservation_is_position_bound_and_first_carrier_wins() {
-        let operation_id = [0xA6; 32];
+        let operation_nonce = [0xA6; 32];
         let outer_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let first = top_up_carrier(&outer_key, top_up_request(operation_id), 1);
-        let second = top_up_carrier(&outer_key, top_up_request(operation_id), 2);
+        let first = top_up_carrier(&outer_key, top_up_request(operation_nonce), 1);
+        let second = top_up_carrier(&outer_key, top_up_request(operation_nonce), 2);
         let entrypoints = vec![
             TransactionEntrypoint::External(first.clone()),
             TransactionEntrypoint::External(second.clone()),
@@ -1706,9 +1731,9 @@ mod tests {
 
     #[test]
     fn reservation_rejects_pending_not_owned_by_active_batch() {
-        let operation_id = [0xA7; 32];
+        let operation_nonce = [0xA7; 32];
         let outer_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let transaction = top_up_carrier(&outer_key, top_up_request(operation_id), 1);
+        let transaction = top_up_carrier(&outer_key, top_up_request(operation_nonce), 1);
         let entrypoints = vec![TransactionEntrypoint::External(transaction)];
         let state = test_state();
         let header = BlockHeader::new(
@@ -1774,9 +1799,9 @@ mod tests {
 
     #[test]
     fn finalization_requires_exact_cardinality_and_completes_every_reservation() {
-        let operation_id = [0xA8; 32];
         let outer_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let request = top_up_request(operation_id);
+        let request = top_up_request([0xA8; 32]);
+        let operation_id = request.operation_id;
         let transaction = top_up_carrier(&outer_key, request.clone(), 1);
         let outer_authority = transaction.authority().clone();
         let entrypoints = vec![TransactionEntrypoint::External(transaction.clone())];
@@ -1855,9 +1880,8 @@ mod tests {
 
     #[test]
     fn successful_result_without_fresh_claim_fails_closed() {
-        let operation_id = [0xAB; 32];
         let outer_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let transaction = top_up_carrier(&outer_key, top_up_request(operation_id), 1);
+        let transaction = top_up_carrier(&outer_key, top_up_request([0xAB; 32]), 1);
         let entrypoints = vec![TransactionEntrypoint::External(transaction)];
         let results = vec![TransactionResult::new(Ok(DataTriggerSequence::default()))];
         let state = test_state();
@@ -1893,8 +1917,8 @@ mod tests {
 
     #[test]
     fn rejected_copied_carrier_cannot_poison_later_fresh_claim() {
-        let operation_id = [0xAC; 32];
-        let request = top_up_request(operation_id);
+        let request = top_up_request([0xAC; 32]);
+        let operation_id = request.operation_id;
         let (first_outer, second_outer) = outer_keys_in_reverse_state_key_order(operation_id);
         let first = top_up_carrier(&first_outer, request.clone(), 1);
         let second = top_up_carrier(&second_outer, request.clone(), 2);
@@ -1971,8 +1995,8 @@ mod tests {
 
     #[test]
     fn later_successful_noop_cannot_reown_global_finality() {
-        let operation_id = [0xAD; 32];
-        let request = top_up_request(operation_id);
+        let request = top_up_request([0xAD; 32]);
+        let operation_id = request.operation_id;
         let (first_outer, second_outer) = outer_keys_in_reverse_state_key_order(operation_id);
         let first = top_up_carrier(&first_outer, request.clone(), 1);
         let second = top_up_carrier(&second_outer, request.clone(), 2);
@@ -2034,8 +2058,8 @@ mod tests {
 
     #[test]
     fn matching_retry_replaces_rejected_attempt_and_can_apply() {
-        let operation_id = [0xAE; 32];
-        let request = top_up_request(operation_id);
+        let request = top_up_request([0xAE; 32]);
+        let operation_id = request.operation_id;
         let outer_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let first = top_up_carrier(&outer_key, request.clone(), 1);
         let outer_authority = first.authority().clone();
@@ -2128,9 +2152,9 @@ mod tests {
             KagemushaOperationExecutionPhaseV4::Ordinary,
             KagemushaOperationExecutionPhaseV4::Merge,
         ] {
-            let operation_id = [0xAF; 32];
             let outer_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-            let first_request = top_up_request(operation_id);
+            let first_request = top_up_request([0xAF; 32]);
+            let operation_id = first_request.operation_id;
             let first = top_up_carrier(&outer_key, first_request, 1);
             let outer_authority = first.authority().clone();
             let first_entrypoints = vec![TransactionEntrypoint::External(first)];
@@ -2174,7 +2198,7 @@ mod tests {
                 .expect("rejected attempt exists")
                 .clone();
 
-            let conflicting_request = top_up_request_with_note_commitment(operation_id, [0x70; 32]);
+            let conflicting_request = top_up_request_with_note_commitment([0xAF; 32], [0x70; 32]);
             let conflicting = top_up_carrier(&outer_key, conflicting_request, 2);
             let conflicting_entrypoints =
                 vec![TransactionEntrypoint::External(conflicting.clone())];
@@ -2231,9 +2255,10 @@ mod tests {
 
     #[test]
     fn finalization_rejects_a_disappeared_reservation() {
-        let operation_id = [0xAA; 32];
         let outer_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let transaction = top_up_carrier(&outer_key, top_up_request(operation_id), 1);
+        let request = top_up_request([0xAA; 32]);
+        let operation_id = request.operation_id;
+        let transaction = top_up_carrier(&outer_key, request, 1);
         let authority = transaction.authority().clone();
         let entrypoints = vec![TransactionEntrypoint::External(transaction)];
         let results = vec![TransactionResult::new(Ok(DataTriggerSequence::default()))];

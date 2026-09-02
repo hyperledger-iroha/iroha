@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.offline
 
 import java.security.MessageDigest
+import java.util.TreeMap
 
 class KagemushaNfcPayloadInfo(
     val transportVersion: Int,
@@ -53,10 +54,15 @@ object KagemushaNfcProtocol {
     const val RAW_TRANSPORT_VERSION = 4
     const val MINIMUM_APPLICATION_IDENTIFIER_BYTES = 5
     const val MAXIMUM_APPLICATION_IDENTIFIER_BYTES = 16
+    private const val MAXIMUM_APPLICATION_IDENTIFIER_PADDING_BYTES = 8
     const val SAFE_CHUNK_BYTES = 220
     const val MAXIMUM_EXTENDED_READ_CHUNK_BYTES = 1_024
     const val MAXIMUM_EXTENDED_WRITE_CHUNK_BYTES = 16_384
     const val MAXIMUM_PAYLOAD_BYTES = KagemushaPeerTransportContract.MAXIMUM_ARCHIVE_BYTES
+    private const val SPARSE_FRAGMENT_ALLOWANCE = 64
+    private const val MAXIMUM_SPARSE_FRAGMENT_COUNT =
+        (MAXIMUM_PAYLOAD_BYTES + SAFE_CHUNK_BYTES - 1) / SAFE_CHUNK_BYTES +
+            SPARSE_FRAGMENT_ALLOWANCE
     private const val INSTRUCTION_CLASS = 0x80
     private const val INSTRUCTION_GET_INFO = 0x10
     private const val INSTRUCTION_READ_CHUNK = 0x11
@@ -77,8 +83,23 @@ object KagemushaNfcProtocol {
 
     @JvmStatic
     fun applicationIdentifier(rawHex: String): ByteArray {
+        val minimumEncodedLength = MINIMUM_APPLICATION_IDENTIFIER_BYTES * 2
+        val maximumEncodedLength = MAXIMUM_APPLICATION_IDENTIFIER_BYTES * 2
+        val rawEncodedLength = rawHex.length
+        require(
+            rawEncodedLength <=
+                maximumEncodedLength + MAXIMUM_APPLICATION_IDENTIFIER_PADDING_BYTES &&
+                rawHex.all(::isAsciiApplicationIdentifierText),
+        ) {
+            "Invalid Kagemusha NFC application identifier"
+        }
         val value = rawHex.trim(' ', '\t', '\r', '\n')
-        require(value.isNotEmpty() && value.length % 2 == 0 && value.all(::isAsciiHex)) {
+        val encodedLengthRange = minimumEncodedLength..maximumEncodedLength
+        require(
+            value.length in encodedLengthRange &&
+                rawEncodedLength - value.length <= MAXIMUM_APPLICATION_IDENTIFIER_PADDING_BYTES &&
+                value.length % 2 == 0 && value.all(::isAsciiHex),
+        ) {
             "Invalid Kagemusha NFC application identifier"
         }
         return validateApplicationIdentifier(hexToBytes(value))
@@ -166,6 +187,7 @@ object KagemushaNfcProtocol {
             0,
         )
 
+    /** Builds a canonical bulk write whose non-final chunks are at least 220 bytes. */
     @JvmStatic
     @JvmOverloads
     fun writePayloadCommands(
@@ -174,6 +196,9 @@ object KagemushaNfcProtocol {
         maximumChunkLength: Int = SAFE_CHUNK_BYTES,
     ): List<ByteArray> {
         requirePayloadLength(payloadBytes.size)
+        require(maximumChunkLength >= SAFE_CHUNK_BYTES) {
+            "Kagemusha NFC bulk-write chunks must be at least $SAFE_CHUNK_BYTES bytes"
+        }
         requireChunkLength(maximumChunkLength, MAXIMUM_EXTENDED_WRITE_CHUNK_BYTES)
         val commands = arrayListOf(writeMetadataCommand(kind, payloadBytes))
         var offset = 0
@@ -367,6 +392,15 @@ object KagemushaNfcProtocol {
         require(length in 1..MAXIMUM_PAYLOAD_BYTES) { "Invalid NFC payload length" }
     private fun requireChunkLength(length: Int, maximum: Int) =
         require(length in 1..maximum) { "Invalid NFC chunk length" }
+
+    internal fun sparseFragmentBudget(payloadLength: Int): Int {
+        val canonicalFragments =
+            (payloadLength + SAFE_CHUNK_BYTES - 1) / SAFE_CHUNK_BYTES
+        return minOf(
+            canonicalFragments + SPARSE_FRAGMENT_ALLOWANCE,
+            MAXIMUM_SPARSE_FRAGMENT_COUNT,
+        )
+    }
 }
 
 class KagemushaNfcPayloadAssembler(
@@ -374,21 +408,29 @@ class KagemushaNfcPayloadAssembler(
     val expectedLength: Int,
     expectedSha256: ByteArray,
 ) {
-    private val expectedDigest = expectedSha256.copyOf()
-    private val bytes: ByteArray
-    private val written: BooleanArray
-    private var writtenCount = 0
+    private class StoredFragment(val offset: Int, val bytes: ByteArray) {
+        val end: Int get() = offset + bytes.size
+    }
+
+    private val expectedDigest: ByteArray
+    private val fragments = TreeMap<Int, ByteArray>()
+    private val coveredRanges = TreeMap<Int, Int>()
+    // The canonical 220-byte writer needs ceil(length / 220) fragments. A
+    // fixed allowance admits modest overlap/out-of-order splitting without
+    // allowing attacker-selected one-byte writes to create unbounded nodes.
+    private val fragmentBudget: Int
+    private var bufferedBytes = 0
     private var cleared = false
 
     init {
         require(expectedLength in 1..KagemushaNfcProtocol.MAXIMUM_PAYLOAD_BYTES) {
             "Invalid NFC payload length"
         }
-        require(expectedDigest.size == 32 && expectedDigest.any { it.toInt() != 0 }) {
+        require(expectedSha256.size == 32 && expectedSha256.any { it.toInt() != 0 }) {
             "Invalid NFC payload digest"
         }
-        bytes = ByteArray(expectedLength)
-        written = BooleanArray(expectedLength)
+        expectedDigest = expectedSha256.copyOf()
+        fragmentBudget = KagemushaNfcProtocol.sparseFragmentBudget(expectedLength)
     }
 
     constructor(info: KagemushaNfcPayloadInfo) : this(
@@ -397,25 +439,65 @@ class KagemushaNfcPayloadAssembler(
         info.sha256,
     )
 
-    val isComplete: Boolean get() = !cleared && writtenCount == expectedLength
+    /** Unique payload bytes currently retained by the sparse assembler. */
+    @get:Synchronized
+    val bufferedByteCount: Int get() = bufferedBytes
+
+    @get:Synchronized
+    val isComplete: Boolean get() = !cleared && bufferedBytes == expectedLength &&
+        coveredRanges.size == 1 && coveredRanges.firstKey() == 0 &&
+        coveredRanges.firstEntry().value == expectedLength
 
     @Synchronized
     fun write(offset: Int, chunk: ByteArray): Boolean {
         if (cleared || offset < 0 || offset > expectedLength || chunk.isEmpty() ||
             chunk.size > KagemushaNfcProtocol.MAXIMUM_EXTENDED_WRITE_CHUNK_BYTES ||
             chunk.size > expectedLength - offset) return false
-        chunk.indices.forEach { index ->
-            val target = offset + index
-            if (written[target] && bytes[target] != chunk[index]) return false
-        }
-        chunk.copyInto(bytes, offset)
-        repeat(chunk.size) { index ->
-            val target = offset + index
-            if (!written[target]) {
-                written[target] = true
-                writtenCount += 1
+
+        val end = offset + chunk.size
+        val overlaps = overlappingFragments(offset, end)
+        overlaps.forEach { fragment ->
+            val overlapStart = maxOf(offset, fragment.offset)
+            val overlapEnd = minOf(end, fragment.end)
+            for (target in overlapStart until overlapEnd) {
+                if (fragment.bytes[target - fragment.offset] != chunk[target - offset]) return false
             }
         }
+
+        var proposedFragmentCount = 0
+        var budgetCursor = offset
+        overlaps.forEach { fragment ->
+            if (budgetCursor < fragment.offset) proposedFragmentCount += 1
+            budgetCursor = maxOf(budgetCursor, minOf(fragment.end, end))
+        }
+        if (budgetCursor < end) proposedFragmentCount += 1
+        if (fragments.size + proposedFragmentCount > fragmentBudget) {
+            clear()
+            return false
+        }
+
+        // Allocate only uncovered bytes, and do so before mutating state. The
+        // interval map coalesces coverage while immutable fragments avoid
+        // repeatedly copying a growing segment for sequential writes.
+        val additions = ArrayList<StoredFragment>()
+        var cursor = offset
+        overlaps.forEach { fragment ->
+            if (cursor < fragment.offset) {
+                val gapEnd = minOf(fragment.offset, end)
+                additions += StoredFragment(
+                    cursor,
+                    chunk.copyOfRange(cursor - offset, gapEnd - offset),
+                )
+            }
+            cursor = maxOf(cursor, minOf(fragment.end, end))
+        }
+        if (cursor < end) {
+            additions += StoredFragment(cursor, chunk.copyOfRange(cursor - offset, end - offset))
+        }
+        if (additions.isEmpty()) return true
+        additions.forEach { addition -> fragments[addition.offset] = addition.bytes }
+        bufferedBytes += additions.sumOf { it.bytes.size }
+        mergeCoverage(offset, end)
         return true
     }
 
@@ -423,24 +505,80 @@ class KagemushaNfcPayloadAssembler(
     fun commit(): ByteArray {
         check(!cleared) { "NFC payload assembler is cleared" }
         check(isComplete) { "NFC payload is incomplete" }
-        check(KagemushaNfcProtocol.sha256(bytes).contentEquals(expectedDigest)) {
-            "NFC payload checksum mismatch"
+        var assembled: ByteArray? = null
+        var succeeded = false
+        try {
+            val output = ByteArray(expectedLength)
+            assembled = output
+            var cursor = 0
+            fragments.forEach { (offset, fragment) ->
+                check(offset == cursor && fragment.size <= expectedLength - cursor) {
+                    "NFC payload reconstruction mismatch"
+                }
+                fragment.copyInto(output, cursor)
+                cursor += fragment.size
+            }
+            check(cursor == expectedLength) { "NFC payload reconstruction mismatch" }
+            check(KagemushaNfcProtocol.sha256(output).contentEquals(expectedDigest)) {
+                "NFC payload checksum mismatch"
+            }
+            succeeded = true
+            return output
+        } finally {
+            if (!succeeded) assembled?.fill(0)
+            // Exact coverage makes commit a one-shot operation. Both success
+            // and terminal validation failure consume and zeroize the state.
+            clear()
         }
-        return bytes.copyOf()
     }
 
     @Synchronized
     fun clear() {
         expectedDigest.fill(0)
-        bytes.fill(0)
-        written.fill(false)
-        writtenCount = 0
+        fragments.values.forEach { it.fill(0) }
+        fragments.clear()
+        coveredRanges.clear()
+        bufferedBytes = 0
         cleared = true
+    }
+
+    private fun overlappingFragments(start: Int, end: Int): List<StoredFragment> {
+        val overlapping = ArrayList<StoredFragment>()
+        var entry = fragments.floorEntry(start)
+        if (entry == null || entry.key + entry.value.size <= start) {
+            entry = fragments.ceilingEntry(start)
+        }
+        while (entry != null && entry.key < end) {
+            overlapping += StoredFragment(entry.key, entry.value)
+            entry = fragments.higherEntry(entry.key)
+        }
+        return overlapping
+    }
+
+    private fun mergeCoverage(start: Int, end: Int) {
+        var mergedStart = start
+        var mergedEnd = end
+        val floor = coveredRanges.floorEntry(mergedStart)
+        if (floor != null && floor.value >= mergedStart) {
+            mergedStart = floor.key
+            mergedEnd = maxOf(mergedEnd, floor.value)
+            coveredRanges.remove(floor.key)
+        }
+        var next = coveredRanges.ceilingEntry(mergedStart)
+        while (next != null && next.key <= mergedEnd) {
+            mergedEnd = maxOf(mergedEnd, next.value)
+            coveredRanges.remove(next.key)
+            next = coveredRanges.ceilingEntry(mergedStart)
+        }
+        coveredRanges[mergedStart] = mergedEnd
     }
 }
 
 private fun isAsciiHex(value: Char): Boolean =
     value in '0'..'9' || value in 'A'..'F' || value in 'a'..'f'
+
+private fun isAsciiApplicationIdentifierText(value: Char): Boolean =
+    isAsciiHex(value) || value == ' ' || value == '\t' || value == '\r' || value == '\n'
 
 private fun hexToBytes(value: String): ByteArray = ByteArray(value.length / 2) { index ->
     value.substring(index * 2, index * 2 + 2).toInt(16).toByte()

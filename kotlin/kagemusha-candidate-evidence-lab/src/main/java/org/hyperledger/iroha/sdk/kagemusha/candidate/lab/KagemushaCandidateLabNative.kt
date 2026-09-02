@@ -82,7 +82,7 @@ object KagemushaCandidateLabNative {
         verifiedAtMilliseconds: Long,
     ): ByteArray
 
-    @JvmStatic external fun nativeBuildRedeemRequestV4(
+    @JvmStatic external fun nativeBuildRedeemRequestV5(
         bundle: ByteArray,
         topUpProvenance: ByteArray,
         opening: ByteArray,
@@ -94,7 +94,7 @@ object KagemushaCandidateLabNative {
         changeOpening: ByteArray,
         changeOutputMembership: ByteArray,
         verifierCommitment: ByteArray,
-        operationId: ByteArray,
+        nonce: ByteArray,
         blockHeight: Long,
     ): ByteArray
 

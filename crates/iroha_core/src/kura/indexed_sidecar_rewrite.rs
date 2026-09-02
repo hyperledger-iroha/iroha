@@ -337,10 +337,7 @@ impl Kura {
                     );
                     return false;
                 };
-                if entries
-                    .get(vector_index)
-                    .is_none_or(|entry| entry.len == 0)
-                {
+                if entries.get(vector_index).is_none_or(|entry| entry.len == 0) {
                     iroha_logger::warn!(
                         required_height,
                         ?index_path,
@@ -869,21 +866,22 @@ impl Kura {
                 output_end
                     .saturating_sub(keep_from.max(source_start))
                     .saturating_add(required_heights.map_or(0, |heights| {
-                    u64::try_from(
-                        heights
-                            .iter()
-                            .filter(|height| {
-                                height
-                                    .checked_sub(layout.base_height)
-                                    .is_some_and(|relative| {
-                                        relative >= source_start
-                                            && relative < keep_from
-                                            && relative < source_start.saturating_add(output_entries)
-                                    })
-                            })
-                            .count(),
-                    )
-                    .unwrap_or(u64::MAX)
+                        u64::try_from(
+                            heights
+                                .iter()
+                                .filter(|height| {
+                                    height
+                                        .checked_sub(layout.base_height)
+                                        .is_some_and(|relative| {
+                                            relative >= source_start
+                                                && relative < keep_from
+                                                && relative
+                                                    < source_start.saturating_add(output_entries)
+                                        })
+                                })
+                                .count(),
+                        )
+                        .unwrap_or(u64::MAX)
                     }))
             }
         };

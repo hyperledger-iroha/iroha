@@ -4038,6 +4038,10 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::privacy::RotatePrivacyZkAcePolicyV1,
         iroha_data_model::isi::privacy::RevokePrivacyZkAcePolicyV1,
         iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1,
+        // The complete all-Prepare control-lock carrier is still an ordinary
+        // sponsor-paid transaction; this classification only avoids requiring
+        // a second legacy inline treasury transfer inside its one-ISI payload.
+        iroha_data_model::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1,
         iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1,
         // The global private-settlement carrier mutates only opaque roots,
         // nullifiers, commitments, ciphertexts, and its receipt. Its public

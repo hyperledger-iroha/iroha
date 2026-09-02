@@ -500,7 +500,9 @@ authorizes the client to recycle or change the operation id.
 Accepted request bindings and in-flight reservations share the configured
 positive `operation_registry_max_entries` and `operation_registry_max_bytes`
 budgets under `torii.kagemusha_commands`. They retain fixed-size canonical
-digests, not proof-bearing request DTOs. Capacity never evicts an unexpired
+digests, not proof-bearing request DTOs. Each entry is charged exactly 145
+bytes; the default 4,096-entry registry therefore defaults to exactly 593,920
+bytes. Capacity never evicts an unexpired
 binding: a new unique command receives typed
 `503 offline_operation_capacity_exhausted`, while an identical accepted replay
 or in-flight follower remains available.
@@ -553,16 +555,15 @@ than storing variable-size `AccountId` values, so even a large valid
 multisignature authority cannot make terminal recording exceed the bounded
 state-value budget after Queue acceptance.
 
-Maintained clients keep the operation id, operation kind, canonical status URI,
-and request-bound `submitted_at_ms` immutable across this lifecycle. They accept
-a 202 only when `submitted_at_ms` exactly repeats the submitted request's signed
-`authorization.issued_at_ms`; the SDK derives both identity values from the
-canonical request archive. They accept a different canonical transaction hash
-for a newer exact Pending or Rejected
+Maintained clients keep the complete nested request identity—operation id,
+request-authority digest, canonical request digest, kind, signed issue time, and
+signed expiry—plus the canonical status URI immutable across this lifecycle.
+They accept a 202 or status response only when that exact identity matches the
+one derived from the canonical submitted request archive. They accept a
+different canonical transaction hash for a newer exact Pending or Rejected
 attempt and for a global Applied winner under another authorized outer
-authority. Every Pending response must repeat the accepted `submitted_at_ms`,
-including when an exact retry replaces the active transaction hash. Clients
-promote only that replacement hash to the reference checked by the next poll.
+authority. Clients promote only that replacement hash to the reference checked
+by the next poll.
 Each command POST is a one-shot
 transport dispatch even when an ambient client policy would retry POST. An
 ambiguous dispatch is reconciled through the canonical status resource; another

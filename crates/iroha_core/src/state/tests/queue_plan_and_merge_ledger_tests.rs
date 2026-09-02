@@ -360,18 +360,10 @@ fn queue_plan_live_validation_holds_no_block_hash_guard_while_waiting_for_snapsh
     let generation = state.begin_state_view_write();
     let validator_state = Arc::clone(&state);
     let validator = std::thread::spawn(move || {
-        validator_state.validate_queue_plan_admissions_for_carrier(
-            &[certificate],
-            carrier_height,
-        )
+        validator_state.validate_queue_plan_admissions_for_carrier(&[certificate], carrier_height)
     });
     let contention_deadline = Instant::now() + Duration::from_secs(5);
-    while state
-        .view_lock_contention_log
-        .lock()
-        .last_warn_at
-        .is_none()
-    {
+    while state.view_lock_contention_log.lock().last_warn_at.is_none() {
         assert!(
             Instant::now() < contention_deadline,
             "QueuePlan validator did not wait on the active State generation"
@@ -382,7 +374,9 @@ fn queue_plan_live_validation_holds_no_block_hash_guard_while_waiting_for_snapsh
 
     drop(generation);
     drop(state_write_lock);
-    let validated = validator.join().expect("QueuePlan validator must not panic");
+    let validated = validator
+        .join()
+        .expect("QueuePlan validator must not panic");
 
     assert!(
         block_hash_writer_available,
@@ -881,8 +875,8 @@ state_test! { sync apply_without_execution_keeps_world_peer_append_scoped_to_che
                     self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Active,
-                    activation_epoch: None,
-                    activation_height: None,
+                    activation_height: 1,
+                    deactivation_height: None,
                     last_reward_epoch: None,
                 },
             );
@@ -900,8 +894,8 @@ state_test! { sync apply_without_execution_keeps_world_peer_append_scoped_to_che
                     self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Active,
-                    activation_epoch: None,
-                    activation_height: None,
+                    activation_height: 1,
+                    deactivation_height: None,
                     last_reward_epoch: None,
                 },
             );
@@ -1015,8 +1009,8 @@ state_test! { sync apply_without_execution_widens_npos_commit_topology_with_acti
                     self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Active,
-                    activation_epoch: None,
-                    activation_height: None,
+                    activation_height: 1,
+                    deactivation_height: None,
                     last_reward_epoch: None,
                 },
             );

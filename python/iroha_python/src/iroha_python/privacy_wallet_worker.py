@@ -557,7 +557,6 @@ class PrivacyWalletWorkerControllerV1:
         audit_policy_norito: bytes,
         canonical_genesis_hash: bytes,
         current_height: int,
-        successor_root: bytes,
     ) -> PrivateSettlementPreparedProofV1:
         """Consume one handle in Rust and return the proof-bound public leg."""
 
@@ -591,11 +590,6 @@ class PrivacyWalletWorkerControllerV1:
             raise ValueError("canonical_genesis_hash does not match the witness binding")
         if type(current_height) is not int or not 1 <= current_height <= _U64_MAX:
             raise ValueError("current_height is outside the canonical u64 range")
-        new_root = _require_nonzero_bytes(
-            successor_root,
-            _DIGEST_BYTES_V1,
-            "successor_root",
-        )
         payload = b"".join(
             (
                 _encode_handle_binding(handle, binding),
@@ -605,7 +599,6 @@ class PrivacyWalletWorkerControllerV1:
                 _put_bytes_u32(policy),
                 genesis_hash,
                 struct.pack(">Q", current_height),
-                new_root,
             )
         )
         response = self._exchange(

@@ -129,11 +129,11 @@ internal object CandidateLabHarness {
         "append-hop-02-verified-at-ms.txt",
         "redeem-recipient-account-id.txt",
         "unshield-verifier-commitment-v2.bin",
-        "redeem-hop-01-operation-id.bin",
+        "redeem-hop-01-nonce.bin",
         "redeem-hop-01-block-height.txt",
-        "redeem-hop-02-operation-id.bin",
+        "redeem-hop-02-nonce.bin",
         "redeem-hop-02-block-height.txt",
-        "redeem-sender-change-operation-id.bin",
+        "redeem-sender-change-nonce.bin",
         "redeem-sender-change-block-height.txt",
         "duplicate-input-recipient-request-v2.norito",
         "duplicate-input-output-membership-v4.norito",
@@ -800,7 +800,7 @@ internal object CandidateLabHarness {
                 hopOneRecipientOpening,
                 redeemRecipient,
                 unshieldVerifierCommitment,
-                readDigestAsset(context, "scenario/redeem-hop-01-operation-id.bin"),
+                readDigestAsset(context, "scenario/redeem-hop-01-nonce.bin"),
                 readPositiveLongAsset(context, "scenario/redeem-hop-01-block-height.txt"),
             )
             requireFullRedemption(redeemFirst, restoredHopOne.recipient.amount)
@@ -811,7 +811,7 @@ internal object CandidateLabHarness {
                 hopTwoRecipientOpening,
                 redeemRecipient,
                 unshieldVerifierCommitment,
-                readDigestAsset(context, "scenario/redeem-hop-02-operation-id.bin"),
+                readDigestAsset(context, "scenario/redeem-hop-02-nonce.bin"),
                 readPositiveLongAsset(context, "scenario/redeem-hop-02-block-height.txt"),
             )
             requireFullRedemption(redeemSecond, restoredHopTwo.recipient.amount)
@@ -822,7 +822,7 @@ internal object CandidateLabHarness {
                 hopTwoChangeOpening,
                 redeemRecipient,
                 unshieldVerifierCommitment,
-                readDigestAsset(context, "scenario/redeem-sender-change-operation-id.bin"),
+                readDigestAsset(context, "scenario/redeem-sender-change-nonce.bin"),
                 readPositiveLongAsset(context, "scenario/redeem-sender-change-block-height.txt"),
             )
             requireFullRedemption(redeemSenderChange, restoredHopTwoChange.amount)
@@ -1737,7 +1737,7 @@ internal object CandidateLabHarness {
         opening: ByteArray,
         recipient: ByteArray,
         verifierCommitment: ByteArray,
-        operationId: ByteArray,
+        nonce: ByteArray,
         blockHeight: Long,
     ): RedeemProjection {
         val atomicUnits = branch.amount.atomicUnits.toString().toByteArray(Charsets.US_ASCII)
@@ -1753,10 +1753,10 @@ internal object CandidateLabHarness {
                 u32be(TAIRA_I105_CHAIN_DISCRIMINANT),
                 atomicUnits,
                 verifierCommitment,
-                operationId,
+                nonce,
             ),
         ) {
-            KagemushaCandidateLabNative.nativeBuildRedeemRequestV4(
+            KagemushaCandidateLabNative.nativeBuildRedeemRequestV5(
                 branch.bundle,
                 branch.topUpProvenance,
                 opening,
@@ -1768,7 +1768,7 @@ internal object CandidateLabHarness {
                 byteArrayOf(),
                 byteArrayOf(),
                 verifierCommitment,
-                operationId,
+                nonce,
                 blockHeight,
             )
         }

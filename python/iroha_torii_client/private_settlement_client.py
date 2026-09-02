@@ -81,10 +81,16 @@ class AtomicPrivateSettlementOperationV1(Enum):
         frozenset({"manifest", "audit_policy", "committee_authority", "payload"}),
         32 * 1024 * 1024,
     )
+    AUDITOR_CAPSULE = (
+        "/v1/nexus/private-settlements/legs/{payload_digest}/audit-capsule",
+        AtomicPrivateSettlementAuthV1.ROLE_IDENTITY,
+        frozenset({"audit_policy"}),
+        1024 * 1024,
+    )
     AUDIT_APPROVAL = (
         "/v1/nexus/private-settlements/legs/{payload_digest}/audit-approvals",
         AtomicPrivateSettlementAuthV1.ROLE_IDENTITY,
-        frozenset({"approval"}),
+        frozenset({"audit_policy", "approval"}),
         2 * 1024 * 1024,
     )
     BUNDLE_SUBMIT = (
@@ -420,6 +426,7 @@ _RESPONSE_FIELDS: tuple[tuple[str, frozenset[str]], ...] = (
                 "authoritative_height",
                 "manifest",
                 "audit_policy",
+                "access_audit_policy",
                 "committee_authority",
                 "statement",
                 "delta",
@@ -481,8 +488,10 @@ def _canonical_attestation_hash(value: Any, context: str) -> str:
 
 
 def _validate_bls_normal_signature_literal(value: Any, context: str) -> None:
-    # TODO: Verify the responder PoP and signature once this package exposes the
-    # typed Norito attestation preimages and BLS-Normal verification boundary.
+    # This is only the allocation-bounded syntax preflight. Every restricted
+    # response is subsequently passed to the mandatory native verifier, which
+    # reconstructs the typed Norito preimage and verifies the roster PoP and
+    # BLS-Normal response signature before this client returns it.
     if not isinstance(value, str):
         raise ValueError(f"{context} must be exact standard base64")
     try:
@@ -511,6 +520,10 @@ def _audit_approval_request_context(
     parsed = _parse_exact_json_object(
         request.bytes(), "prepared settlement audit approval"
     )
+    if frozenset(parsed) != frozenset({"audit_policy", "approval"}) or not isinstance(
+        parsed.get("audit_policy"), dict
+    ):
+        raise ValueError("prepared settlement audit approval has invalid fields")
     approval = parsed.get("approval")
     if (
         not isinstance(approval, dict)
@@ -829,7 +842,7 @@ def create_atomic_private_settlement_client_mixin(
             if verifier is not None:
                 for name in (
                     "private_settlement_verify_committee_proof_response_v1",
-                    "private_settlement_verify_auditor_capsule_response_v1",
+                    "private_settlement_verify_auditor_capsule_response_with_request_v1",
                     "private_settlement_verify_audit_approval_response_v1",
                 ):
                     function = getattr(verifier, name, None)
@@ -1153,7 +1166,7 @@ def create_atomic_private_settlement_client_mixin(
         def submit_private_settlement_bundle_v1(
             self, request: AtomicPrivateSettlementPreparedRequestV1, *, canonical_auth: Any
         ) -> AtomicPrivateSettlementJsonResponseV1:
-            """Submit one exact sponsor-signed global finalization or abort carrier."""
+            """Submit an exact sponsor-signed registration, finalization, or abort carrier."""
 
             return self._private_settlement_sponsor_mutation(
                 request, AtomicPrivateSettlementOperationV1.BUNDLE_SUBMIT, canonical_auth
@@ -1301,11 +1314,14 @@ def create_atomic_private_settlement_client_mixin(
         def private_settlement_auditor_capsule_v1(
             self,
             payload_digest: Union[str, AtomicPrivateSettlementIdentifierV1],
+            request: AtomicPrivateSettlementPreparedRequestV1,
             *,
             auditor_signing_context: Any,
         ) -> AtomicPrivateSettlementJsonResponseV1:
             """Fetch one padded encrypted capsule as a governed auditor."""
 
+            if request.operation is not AtomicPrivateSettlementOperationV1.AUDITOR_CAPSULE:
+                raise ValueError("prepared settlement request is bound to another operation")
             if not isinstance(auditor_signing_context, operator_context_type):
                 raise TypeError("settlement role identity has the wrong signing-context type")
             identifier = (
@@ -1317,11 +1333,14 @@ def create_atomic_private_settlement_client_mixin(
                 auditor_signing_context.network_id
             )
             native_function = self._private_settlement_native_function(
-                "private_settlement_verify_auditor_capsule_response_v1"
+                "private_settlement_verify_auditor_capsule_response_with_request_v1"
             )
-            path = f"/v1/nexus/private-settlements/legs/{identifier.path_component}/audit-capsule"
+            request_bytes = request.bytes()
+            path = request.operation.path.replace(
+                "{payload_digest}", identifier.path_component
+            )
             response = self._private_settlement_role_request(
-                "GET", path, b"", auditor_signing_context
+                "POST", path, request_bytes, auditor_signing_context
             )
             return self._private_settlement_validate_response(
                 response,
@@ -1334,6 +1353,7 @@ def create_atomic_private_settlement_client_mixin(
                 (
                     native_function,
                     (
+                        request_bytes,
                         network_id.bytes,
                         identifier.bytes,
                         auditor_signing_context.public_key,

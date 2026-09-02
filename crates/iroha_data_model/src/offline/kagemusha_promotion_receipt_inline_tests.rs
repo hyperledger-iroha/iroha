@@ -273,9 +273,15 @@ fn qualified_receipt_hosts(
         genesis_public_key: KeyPair::from_seed(vec![0x80; 32], Algorithm::Ed25519)
             .public_key()
             .clone(),
-        genesis_expected_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-            b"genesis header",
-        )),
+        genesis_expected_hash: BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero anchor height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        )
+        .hash(),
         validators,
         sumeragi_config_fingerprint: Hash::new(b"effective Sumeragi V2 config"),
         genesis_context: crate::block::consensus_v2::SumeragiV2GenesisContextParameters {
@@ -633,8 +639,8 @@ fn complete_receipt_fixture_with_options(
             catalog_consensus_policy_digest: binding.catalog_consensus_policy_digest,
             execution_policy_hash: binding.execution_policy_hash,
             device_attestation_policy: policy.clone(),
-            policy_evaluation_time_ms: 1_700_000_000_000,
-            validator_qualification_expires_at_unix_ms: 1_700_000_300_000,
+            policy_evaluation_time_ms: 1_699_999_999_000,
+            validator_qualification_expires_at_unix_ms: 1_700_000_299_000,
         },
         &promotion_controller,
     )
@@ -657,7 +663,7 @@ fn complete_receipt_fixture_with_options(
             Json::from(expiry),
         );
     }
-    let transaction_builder = (if options.direct_activation {
+    let mut transaction_builder = (if options.direct_activation {
         TransactionBuilder::new(
             binding.network_id,
             governance_authority.clone(),
@@ -689,6 +695,7 @@ fn complete_receipt_fixture_with_options(
         )])
     })
     .with_metadata(metadata);
+    transaction_builder.set_creation_time(std::time::Duration::from_millis(1_699_999_999_000));
     let approved_transaction = transaction_builder.clone().sign_multisig([
         governance_keys[0].private_key(),
         governance_keys[1].private_key(),
@@ -725,7 +732,7 @@ fn complete_receipt_fixture_with_options(
         result_inner,
         2,
         Some(anchor_block.hash()),
-        0,
+        1_699_999_999_000,
     );
     let finality_proof = finalized_receipt_proof(
         &block,

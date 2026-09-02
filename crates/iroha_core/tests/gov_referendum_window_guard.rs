@@ -37,13 +37,13 @@ fn plain_ballot_rejected_outside_window() {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut sblock = state.block(header);
         let mut stx = sblock.transaction();
-        stx.world.governance_referenda_mut().insert(
+        stx.world.put_governance_referendum_for_testing(
             "ref-window".to_string(),
             iroha_core::state::GovernanceReferendumRecord {
                 h_start: 5,
                 h_end: 6,
                 status: iroha_core::state::GovernanceReferendumStatus::Proposed,
-                mode: iroha_core::state::GovernanceReferendumMode::Plain,
+                final_tally: None,
             },
         );
         let ballot_perm: Permission = CanSubmitGovernanceBallot {
@@ -55,10 +55,11 @@ fn plain_ballot_rejected_outside_window() {
             .expect("grant ballot permission");
         let ballot = CastPlainBallot {
             referendum_id: "ref-window".to_string(),
-            owner: ALICE_ID.clone(),
-            amount: 10_u64.into(),
-            duration_blocks: 10,
-            direction: 0,
+            direction: iroha_data_model::isi::governance::GovernancePlainBallotDirectionV1::Aye,
+            lock: iroha_data_model::isi::governance::GovernanceParticipationLockV1 {
+                amount: 10_u64.into(),
+                duration_blocks: core::num::NonZeroU64::new(10).expect("non-zero lock duration"),
+            },
         };
         let err = ballot
             .clone()
@@ -75,13 +76,13 @@ fn plain_ballot_rejected_outside_window() {
         let mut sblock_late = state.block(header_late);
         let mut stx_late = sblock_late.transaction();
         // Reinsert referendum (state.block() took a snapshot)
-        stx_late.world.governance_referenda_mut().insert(
+        stx_late.world.put_governance_referendum_for_testing(
             "ref-window".to_string(),
             iroha_core::state::GovernanceReferendumRecord {
                 h_start: 5,
                 h_end: 6,
-                status: iroha_core::state::GovernanceReferendumStatus::Proposed,
-                mode: iroha_core::state::GovernanceReferendumMode::Plain,
+                status: iroha_core::state::GovernanceReferendumStatus::Closed,
+                final_tally: Some(iroha_core::state::GovernanceReferendumTallyV1::new(0, 0, 0)),
             },
         );
         let late_perm: Permission = CanSubmitGovernanceBallot {
@@ -93,10 +94,11 @@ fn plain_ballot_rejected_outside_window() {
             .expect("grant ballot permission (late)");
         let ballot = CastPlainBallot {
             referendum_id: "ref-window".to_string(),
-            owner: ALICE_ID.clone(),
-            amount: 10_u64.into(),
-            duration_blocks: 10,
-            direction: 0,
+            direction: iroha_data_model::isi::governance::GovernancePlainBallotDirectionV1::Aye,
+            lock: iroha_data_model::isi::governance::GovernanceParticipationLockV1 {
+                amount: 10_u64.into(),
+                duration_blocks: core::num::NonZeroU64::new(10).expect("non-zero lock duration"),
+            },
         };
         let err_late = ballot
             .execute(&ALICE_ID, &mut stx_late)

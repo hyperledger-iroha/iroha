@@ -149,7 +149,7 @@ kotlin_methods = {
     "nativeBuildAppendRequestV4",
     "nativeBuildDuplicateInputAppendRequestV4",
     "nativeBuildVerifyRequestV4",
-    "nativeBuildRedeemRequestV4",
+    "nativeBuildRedeemRequestV5",
     "nativeInitV4",
     "nativeAppendV4",
     "nativeVerifyV4",
@@ -314,7 +314,7 @@ continuity_signatures = {
         ["ByteArray", "ByteArray", "ByteArray", "Int", "Long", "Long"],
         "ByteArray",
     ),
-    "nativeBuildRedeemRequestV4": (
+    "nativeBuildRedeemRequestV5": (
         ["ByteArray"] * 5 + ["Int", "ByteArray", "Int"] + ["ByteArray"] * 4 + ["Long"],
         "ByteArray",
     ),
@@ -526,7 +526,7 @@ for needle, message in (
     ("nativeBuildInitRequestV4", "candidate lifecycle must build init on-device"),
     ("nativeBuildAppendRequestV4", "candidate lifecycle must build appends from observed branches"),
     ("nativeBuildVerifyRequestV4", "candidate lifecycle must build verify requests from observed branches"),
-    ("nativeBuildRedeemRequestV4", "candidate lifecycle must build redemptions from observed branches"),
+    ("nativeBuildRedeemRequestV5", "candidate lifecycle must build redemptions from observed branches"),
     ("nativeBuildDuplicateInputAppendRequestV4", "duplicate test must derive from an observed branch"),
     ("nativeValidateBranchV4", "candidate lifecycle must independently validate observed branches"),
     ("val bundle: ByteArray", "branch projection must retain the exact native bundle"),

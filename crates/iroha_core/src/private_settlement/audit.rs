@@ -536,14 +536,14 @@ mod tests {
         let capsule = seal_private_settlement_audit_capsule_v1_with_rng(
             &fixture.plaintext,
             fixture.aad,
-            PrivateSettlementCapsulePaddingV1::KiB4,
+            PrivateSettlementCapsulePaddingV1::KiB16,
             &fixture.policy,
             &mut rng,
         )
         .expect("capsule seals");
         assert_eq!(
             capsule.ciphertext.len(),
-            PrivateSettlementCapsulePaddingV1::KiB4.ciphertext_bytes()
+            PrivateSettlementCapsulePaddingV1::KiB16.ciphertext_bytes()
         );
         assert_eq!(capsule.wrapped_deks.len(), fixture.recipients.len());
         assert!(
@@ -554,7 +554,7 @@ mod tests {
             )
             .expect("capsule length fits u64")
                 <= private_settlement_capsule_canonical_upper_bound_v1(
-                    u64::try_from(PrivateSettlementCapsulePaddingV1::KiB4.plaintext_bytes())
+                    u64::try_from(PrivateSettlementCapsulePaddingV1::KiB16.plaintext_bytes())
                         .expect("padding fits u64"),
                     u64::try_from(fixture.recipients.len()).expect("auditor count fits u64"),
                 )
@@ -581,7 +581,7 @@ mod tests {
         let capsule = seal_private_settlement_audit_capsule_v1_with_rng(
             &fixture.plaintext,
             fixture.aad,
-            PrivateSettlementCapsulePaddingV1::KiB4,
+            PrivateSettlementCapsulePaddingV1::KiB16,
             &fixture.policy,
             &mut rng,
         )
@@ -608,7 +608,7 @@ mod tests {
         let capsule = seal_private_settlement_audit_capsule_v1_with_rng(
             &fixture.plaintext,
             fixture.aad,
-            PrivateSettlementCapsulePaddingV1::KiB4,
+            PrivateSettlementCapsulePaddingV1::KiB16,
             &fixture.policy,
             &mut rng,
         )
@@ -690,15 +690,22 @@ mod tests {
         {
             let maximum = maximum_plaintext_bytes(padding);
             let mut rng = iroha_crypto::rng_from_seed_slice(&[0x91 + index as u8]);
-            let capsule = seal_private_settlement_audit_capsule_v1_with_rng(
+            let typed_result = seal_private_settlement_audit_capsule_v1_with_rng(
                 &fixture.plaintext,
                 fixture.aad,
                 padding,
                 &fixture.policy,
                 &mut rng,
-            )
-            .expect("typed plaintext seals");
-            assert_eq!(capsule.ciphertext.len(), padding.ciphertext_bytes());
+            );
+            if fixture.plaintext.len() <= maximum {
+                let capsule = typed_result.expect("fitting typed plaintext seals");
+                assert_eq!(capsule.ciphertext.len(), padding.ciphertext_bytes());
+            } else {
+                assert_eq!(
+                    typed_result.expect_err("undersized padding class must fail"),
+                    PrivateSettlementAuditCryptoErrorV1::InvalidPlaintextSize
+                );
+            }
 
             let too_large = vec![0xA5; maximum + 1];
             let error = seal_private_settlement_audit_capsule_v1_with_rng(
@@ -772,7 +779,7 @@ mod tests {
         let error = seal_private_settlement_audit_capsule_v1_with_rng(
             &fixture.plaintext,
             fixture.aad,
-            PrivateSettlementCapsulePaddingV1::KiB4,
+            PrivateSettlementCapsulePaddingV1::KiB16,
             &fixture.policy,
             &mut FailingRng,
         )

@@ -2476,12 +2476,13 @@ impl ConcreteLifecycleWorkRegistry {
     pub(super) fn publish_certified_serve_terminal_transition<T, E>(
         &mut self,
         prepared: PreparedCertifiedServeTerminalRegistryTransitionV1,
+        verified: &VerifiedHeightContext,
         current: &LifecycleCoordinator,
         staged: &LifecycleCoordinator,
         lease: &TurnLease,
         publish: impl FnOnce() -> Result<T, E>,
     ) -> Result<T, CertifiedServeTerminalRegistryPublicationError<E>> {
-        if !prepared.preflights_current(self, current, lease)
+        if !prepared.preflights_current(self, verified, current, lease)
             || !prepared.preflights_exact_staged_successor(current, staged, lease)
         {
             return Err(CertifiedServeTerminalRegistryPublicationError::Preflight(
@@ -3097,7 +3098,7 @@ impl ConcreteLifecycleWorkRegistry {
         verified: &VerifiedHeightContext,
         coordinator: &LifecycleCoordinator,
     ) -> bool {
-        self.exactly_covers_all_live_work_with_optional_active_producer(verified, coordinator, None)
+        self.exactly_covers_all_live_work_with_optional_active_lease(verified, coordinator, None)
     }
 
     /// Verify the same exhaustive census while one exact ProducerTurn owns the
@@ -3108,11 +3109,12 @@ impl ConcreteLifecycleWorkRegistry {
         coordinator: &LifecycleCoordinator,
         lease: &TurnLease,
     ) -> bool {
-        self.exactly_covers_all_live_work_with_optional_active_producer(
-            verified,
-            coordinator,
-            Some(lease),
-        )
+        lease.work_class == LifecycleWorkClass::ProducerTurn
+            && self.exactly_covers_all_live_work_with_optional_active_lease(
+                verified,
+                coordinator,
+                Some(lease),
+            )
     }
 }
 include!("v2_lifecycle_work_registry_validate_recovery_census_impl.rs");
@@ -3253,34 +3255,26 @@ impl ConcreteLifecycleWorkRegistry {
     }
     fn exactly_covers_active_certified_serve_lease(
         &self,
+        verified: &VerifiedHeightContext,
         coordinator: &LifecycleCoordinator,
         lease: &TurnLease,
     ) -> bool {
-        if coordinator.fault.is_some()
-            || coordinator.active_lease.as_ref() != Some(lease)
-            || lease.work_class != LifecycleWorkClass::CertifiedServe
-        {
-            return false;
-        }
-        let Some(sign) = self.exact_recovered_wal_registry_slot() else {
-            return false;
-        };
-        self.exactly_covers_ready_work_with_extra(
-            coordinator,
-            sign,
-            &std::collections::BTreeSet::new(),
-            Some(lease),
-            &std::collections::BTreeSet::new(),
-        )
+        lease.work_class == LifecycleWorkClass::CertifiedServe
+            && self.exactly_covers_all_live_work_with_optional_active_lease(
+                verified,
+                coordinator,
+                Some(lease),
+            )
     }
     /// Prove the complete private registry and exact active Serve lease without
     /// consulting caller-supplied request material.
     pub(super) fn preflight_certified_serve_terminal_owner_state(
         &self,
+        verified: &VerifiedHeightContext,
         coordinator: &LifecycleCoordinator,
         lease: &TurnLease,
     ) -> bool {
-        if !self.exactly_covers_active_certified_serve_lease(coordinator, lease) {
+        if !self.exactly_covers_active_certified_serve_lease(verified, coordinator, lease) {
             return false;
         }
         let Some(&producer_ordinal) = coordinator.producer_debts.get(&lease.ordinal) else {
@@ -3331,11 +3325,12 @@ impl ConcreteLifecycleWorkRegistry {
     /// has independently passed preflight.
     pub(super) fn preflight_certified_serve_terminal_settlement(
         &self,
+        verified: &VerifiedHeightContext,
         coordinator: &LifecycleCoordinator,
         lease: &TurnLease,
         authenticated: &AuthenticatedCertifiedBodyRequest,
     ) -> bool {
-        if !self.preflight_certified_serve_terminal_owner_state(coordinator, lease) {
+        if !self.preflight_certified_serve_terminal_owner_state(verified, coordinator, lease) {
             return false;
         }
         let Some(&producer_ordinal) = coordinator.producer_debts.get(&lease.ordinal) else {
@@ -3358,12 +3353,18 @@ impl ConcreteLifecycleWorkRegistry {
     /// active Serve and adjacent Producer carriers.
     pub(super) fn prepare_certified_serve_terminal_transition(
         &self,
+        verified: &VerifiedHeightContext,
         coordinator: &LifecycleCoordinator,
         lease: &TurnLease,
         authenticated: &AuthenticatedCertifiedBodyRequest,
         terminal: &CertifiedServeTerminalReplayAuthorityPairV1,
     ) -> Option<PreparedCertifiedServeTerminalRegistryTransitionV1> {
-        if !self.preflight_certified_serve_terminal_settlement(coordinator, lease, authenticated) {
+        if !self.preflight_certified_serve_terminal_settlement(
+            verified,
+            coordinator,
+            lease,
+            authenticated,
+        ) {
             return None;
         }
         let producer_ordinal = *coordinator.producer_debts.get(&lease.ordinal)?;

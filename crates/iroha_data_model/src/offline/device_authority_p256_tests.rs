@@ -78,14 +78,18 @@ mod device_authority_p256_tests {
                 )
             },
         );
+        let authority = account(21);
+        let nonce = [0x22; 32];
+        let operation_id =
+            derive_kagemusha_operation_id_v4(&authority, nonce).expect("canonical operation id");
         let mut authorization = KagemushaRequestAuthorizationV2 {
-            authority: account(21),
+            authority,
             device_id: "hardware-device-21".to_owned(),
             asset_definition_id: asset("cash"),
-            operation_id: [0x21; 32],
+            operation_id,
             issued_at_ms: 1_800_000_000_000,
             expires_at_ms: 1_800_000_030_000,
-            nonce: [0x22; 32],
+            nonce,
             payload_digest: [0x23; 32],
             registration_hash: Hash::new([0x24; 32]).into(),
             hardware_assertion,
@@ -918,6 +922,57 @@ mod device_authority_p256_tests {
                 "every account/device/asset/platform/hash/time/operation coordinate is signed",
             );
         }
+    }
+    #[test]
+    fn online_operation_identity_uses_the_complete_authority_archive_and_nonce() {
+        let authority = account(61);
+        let nonce = [0x61; 32];
+        let authority_archive =
+            norito::encode_canonical(&authority).expect("canonical standalone account archive");
+        let authority_archive_len =
+            u64::try_from(authority_archive.len()).expect("test account archive length");
+        let expected_operation_id: [u8; 32] = Hash::new_from_chunks(&[
+            KAGEMUSHA_OPERATION_ID_DOMAIN_V4,
+            &authority_archive_len.to_le_bytes(),
+            &authority_archive,
+            &nonce,
+        ])
+        .into();
+        let expected_authority_digest: [u8; 32] = Hash::new_from_chunks(&[
+            KAGEMUSHA_OPERATION_AUTHORITY_DIGEST_DOMAIN_V4,
+            &authority_archive_len.to_le_bytes(),
+            &authority_archive,
+        ])
+        .into();
+
+        assert_eq!(
+            derive_kagemusha_operation_id_v4(&authority, nonce)
+                .expect("derive canonical operation identity"),
+            expected_operation_id,
+        );
+        assert_eq!(
+            kagemusha_operation_authority_digest_v4(&authority)
+                .expect("derive canonical authority identity"),
+            expected_authority_digest,
+        );
+        assert!(is_kagemusha_marked_hash_v4(&expected_operation_id));
+        assert!(is_kagemusha_marked_hash_v4(&expected_authority_digest));
+        assert_ne!(
+            expected_operation_id,
+            derive_kagemusha_operation_id_v4(&authority, [0x62; 32])
+                .expect("a distinct nonce is valid"),
+        );
+        assert_ne!(
+            expected_operation_id,
+            derive_kagemusha_operation_id_v4(&account(62), nonce)
+                .expect("a distinct authority is valid"),
+        );
+        assert!(matches!(
+            derive_kagemusha_operation_id_v4(&authority, [0; 32]),
+            Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "authorization.nonce",
+            })
+        ));
     }
     #[test]
     fn online_authorization_rejects_unmarked_registration_hash() {

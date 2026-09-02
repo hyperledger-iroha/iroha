@@ -1356,16 +1356,18 @@ hop bound, and `ready: true` as its only four fields. Assets and
 dataspaces require no offline enrollment or backend enablement.
 
 `KagemushaTopUpRequest` and `KagemushaRedeemRequest` accept only the corresponding
-typed Kagemusha Norito archive. They derive the lowercase idempotency key from
-the embedded nonzero operation ID, require the nested authorization to repeat
-that ID, and retain its positive signed `issued_at_ms`; callers cannot override
-either value. Top-up archives
+typed Kagemusha Norito archive. The native bridge derives the marked lowercase
+operation ID from the canonical request-authority archive and its nonce; Swift
+uses that derived ID as the idempotency key and retains the authorization's
+positive signed `issued_at_ms`. Callers cannot supply or override the operation
+ID. Top-up archives
 are limited to 512 KiB and redeem archives to 48 MiB, exactly matching Torii.
 Keep a submitted
 operation and its input note until the operation status reaches final chain
 state. A transport timeout or unknown state is not permission to create a new
-operation ID. Across Pending observations, `submitted_at_ms` remains immutable
-for that operation even if an exact retry advances the active transaction hash.
+operation ID. Across Pending observations, the complete signed request identity
+(`operation_id`, both request digests, kind, `issued_at_ms`, and `expires_at_ms`)
+remains immutable even if an exact retry advances the active transaction hash.
 
 Local artifact validation requires exact bridge ABI 23 and manifest
 schema `kagemusha.offline.recursive_spend.artifact_manifest.v4`. The V4
@@ -1379,9 +1381,11 @@ archives are each limited to 1 MiB. Circuit parameters remain authenticated inli
 profiles. Proof material and verifier bindings are validated by the operation
 that consumes them; they do not change universal offline capability.
 
-Top-up uses `KagemushaTopUpShieldBuildRequestV4`,
+Top-up uses the private nonce-bearing `KagemushaTopUpShieldBuildRequestV5`,
 `KagemushaRecursiveSpendTopUpUnsignedV4`, and an authorization over the
-canonical ABI-21 digest. After direct Torii submission and authenticated
+canonical ABI-21 digest. The V5 local carrier never accepts an operation ID;
+native proof preparation returns the authority-and-nonce-derived ID in the
+unsigned V4 request. After direct Torii submission and authenticated
 finality verification, initialize the offline branch with
 `KagemushaRecursiveSpendInitLocalRequestV4` and
 `KagemushaRecursiveSpend.initSpendV4`. Offline transfer is receiver-initiated:
@@ -1400,11 +1404,13 @@ receipt only; it can never accept, roll back, replace, or claw back the spend.
 Replayed peer payments and acknowledgements remain idempotent at the wallet
 operation layer.
 
-Redemption uses `KagemushaRecursiveSpendRedeemLocalRequestV4`, the retained
+Redemption uses the private nonce-bearing
+`KagemushaRecursiveSpendRedeemLocalRequestV5`, the retained
 unshield-v3 primitive proof APIs, and
 `KagemushaRecursiveSpendRedeemUnsignedV4`. Full redeem has no change branch;
-partial redeem binds one offline change branch to the same proof and operation
-ID. `buildRedeemV4` produces the authorization-bound build result; finalizing it
+partial redeem binds one offline change branch to the same proof and the
+authority-and-nonce-derived operation ID returned by native preparation.
+`buildRedeemV4` produces the authorization-bound build result; finalizing it
 returns the canonical V4 request submitted by `submitKagemushaRedeem`.
 
 All accumulator, proof, verifier-record, and finality-proof archives are opaque

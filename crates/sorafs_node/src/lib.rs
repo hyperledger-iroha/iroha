@@ -41,6 +41,104 @@ pub mod scheduler;
 pub mod store;
 pub mod telemetry;
 mod transparency;
+
+/// Validate the descriptor-bound ACL of a retained private local-storage object.
+///
+/// On Windows this requires the current process user to own the object, requires inheritance to be
+/// disabled, and permits full access only to that user, LocalSystem, and the built-in
+/// Administrators group. On Linux and macOS it rejects extended ACL authority that can grant
+/// mutation outside the object's ordinary owner and mode bits; callers must validate those owner
+/// and mode bits separately.
+///
+/// # Errors
+///
+/// Returns an error when the platform cannot qualify ACLs, the ACL cannot be inspected stably, or
+/// it grants mutation authority outside the trusted storage principals.
+pub fn validate_private_local_storage_acl(
+    handle: &std::fs::File,
+    path: &std::path::Path,
+) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        return governance_rooted_fs::validate_retained_private_storage_acl(handle, path);
+    }
+    #[cfg(unix)]
+    {
+        return governance_rooted_fs::validate_retained_directory_acl(handle, path);
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (handle, path);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "private local-storage ACL qualification is unsupported on this platform",
+        ))
+    }
+}
+
+/// Protect an existing current-user-owned Windows storage object's ACL.
+///
+/// This operation leaves the owner unchanged, disables DACL inheritance, and installs the
+/// canonical private ACL on the exact retained handle. It is intended for adopting an existing
+/// current-user-owned data directory before any of its contents are trusted.
+///
+/// # Errors
+///
+/// Returns an error if the object is not owned by the current process user, its descriptor changes
+/// during inspection, or the canonical protected ACL cannot be installed and verified.
+#[cfg(windows)]
+pub fn protect_private_local_storage_acl(
+    handle: &std::fs::File,
+    path: &std::path::Path,
+) -> std::io::Result<()> {
+    governance_rooted_fs::protect_retained_private_storage_acl(handle, path)
+}
+
+/// Atomically create a Windows directory with the canonical private ACL.
+///
+/// # Errors
+///
+/// Returns an error if the current process identity cannot be resolved, the path is invalid, the
+/// directory already exists, or Windows refuses the secured creation.
+#[cfg(windows)]
+pub fn create_private_local_storage_directory(path: &std::path::Path) -> std::io::Result<()> {
+    governance_rooted_fs::create_private_storage_directory(path)
+}
+
+/// Windows sharing policy for one atomically created private local-storage file.
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrivateLocalFileSharing {
+    /// Permit other handles to read or write while this handle remains open, but deny deletion.
+    ReadWrite,
+    /// Permit other handles to read or delete while this handle remains open, but deny writes.
+    ReadDelete,
+}
+
+/// Atomically create a Windows file with the current user owner and canonical private ACL.
+///
+/// The file is opened for reading and writing with `CREATE_NEW`; this function never opens or
+/// truncates an existing path. The supplied sharing policy applies to the returned handle.
+///
+/// # Errors
+///
+/// Returns an error if the current process identity cannot be resolved, the path is invalid or
+/// already exists, Windows refuses the secured creation, or the resulting object cannot be opened.
+#[cfg(windows)]
+pub fn create_private_local_storage_file(
+    path: &std::path::Path,
+    sharing: PrivateLocalFileSharing,
+) -> std::io::Result<std::fs::File> {
+    let sharing = match sharing {
+        PrivateLocalFileSharing::ReadWrite => {
+            governance_rooted_fs::PrivateStorageFileSharing::ReadWrite
+        }
+        PrivateLocalFileSharing::ReadDelete => {
+            governance_rooted_fs::PrivateStorageFileSharing::ReadDelete
+        }
+    };
+    governance_rooted_fs::create_private_storage_file(path, sharing)
+}
 include!("lib/governance_public_exports.rs");
 use governance::{
     FilesystemGovernancePublisher, GovernanceFilesystemRootGuard,

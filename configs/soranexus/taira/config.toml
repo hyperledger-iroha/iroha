@@ -145,7 +145,7 @@ private_key_file = "/run/secrets/iroha/taira-kagemusha-commands-private-key"
 minimum_xor_balance = "1"
 max_tx_value = "1000000000"
 operation_registry_max_entries = 4096
-operation_registry_max_bytes = 524288
+operation_registry_max_bytes = 593920
 
 # The base template deliberately has no active `[settlement.offline]` release
 # paths, so ordinary rendering has no dependency on unpublished artifacts.

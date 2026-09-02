@@ -2399,10 +2399,12 @@ pub struct NexusStaking {
     pub min_validator_stake: Quantity,
     /// Maximum number of validators allowed per lane.
     pub max_validators: NonZeroU32,
+    /// Maximum number of stake-share rows retained for one validator.
+    pub max_stake_shares_per_validator: NonZeroU32,
+    /// Maximum number of pending unbond requests retained in one stake share.
+    pub max_pending_unbonds_per_share: NonZeroU32,
     /// Minimum delay between scheduling and finalising an unbond (milliseconds).
     pub unbonding_delay: Duration,
-    /// Grace window after `release_at_ms` during which withdrawals must be finalised (milliseconds).
-    pub withdraw_grace: Duration,
     /// Maximum slash ratio allowed (basis points, 10_000 = 100%).
     pub max_slash_bps: u16,
     /// Minimum reward amount paid out; smaller amounts are skipped as dust.
@@ -2420,8 +2422,11 @@ impl_default!(NexusStaking => {
             restricted_validator_mode: LaneValidatorMode::AdminManaged,
             min_validator_stake: defaults::nexus::staking::min_validator_stake(),
             max_validators: defaults::nexus::staking::MAX_VALIDATORS,
+            max_stake_shares_per_validator:
+                defaults::nexus::staking::MAX_STAKE_SHARES_PER_VALIDATOR,
+            max_pending_unbonds_per_share:
+                defaults::nexus::staking::MAX_PENDING_UNBONDS_PER_SHARE,
             unbonding_delay: defaults::nexus::staking::UNBONDING_DELAY,
-            withdraw_grace: defaults::nexus::staking::WITHDRAW_GRACE,
             max_slash_bps: defaults::nexus::staking::MAX_SLASH_BPS,
             reward_dust_threshold: defaults::nexus::staking::reward_dust_threshold(),
             stake_asset_id: defaults::nexus::staking::stake_asset_id(),
@@ -3100,8 +3105,9 @@ struct NexusConsensusStakingV1 {
     restricted_validator_mode: u8,
     min_validator_stake: Quantity,
     max_validators: u32,
+    max_stake_shares_per_validator: u32,
+    max_pending_unbonds_per_share: u32,
     unbonding_delay: NexusConsensusDurationV1,
-    withdraw_grace: NexusConsensusDurationV1,
     max_slash_bps: u16,
     reward_dust_threshold: Quantity,
     stake_asset_id: String,
@@ -3397,8 +3403,9 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
             ),
             min_validator_stake: nexus.staking.min_validator_stake.clone(),
             max_validators: nexus.staking.max_validators.get(),
+            max_stake_shares_per_validator: nexus.staking.max_stake_shares_per_validator.get(),
+            max_pending_unbonds_per_share: nexus.staking.max_pending_unbonds_per_share.get(),
             unbonding_delay: nexus.staking.unbonding_delay.into(),
-            withdraw_grace: nexus.staking.withdraw_grace.into(),
             max_slash_bps: nexus.staking.max_slash_bps,
             reward_dust_threshold: nexus.staking.reward_dust_threshold.clone(),
             stake_asset_id: nexus.staking.stake_asset_id.clone(),
@@ -5175,13 +5182,18 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
     );
     append(
         &mut preimage,
-        "nexus.staking.unbonding_delay_ns",
-        &nexus.staking.unbonding_delay.as_nanos(),
+        "nexus.staking.max_stake_shares_per_validator",
+        &nexus.staking.max_stake_shares_per_validator.get(),
     );
     append(
         &mut preimage,
-        "nexus.staking.withdraw_grace_ns",
-        &nexus.staking.withdraw_grace.as_nanos(),
+        "nexus.staking.max_pending_unbonds_per_share",
+        &nexus.staking.max_pending_unbonds_per_share.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.staking.unbonding_delay_ns",
+        &nexus.staking.unbonding_delay.as_nanos(),
     );
     append(
         &mut preimage,

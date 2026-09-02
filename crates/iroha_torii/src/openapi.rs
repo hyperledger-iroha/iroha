@@ -314,7 +314,7 @@ mod tests {
         uri,
     };
     use sorafs_node::evidence_viewer::EVIDENCE_VIEWER_MAX_OPAQUE_TOKEN_BYTES_V1;
-    use std::collections::{BTreeSet, VecDeque};
+    use std::collections::{BTreeMap, BTreeSet, VecDeque};
     const GOVERNANCE_HASH_LITERAL_PATTERN: &str =
         "^(?:[bB][lL][aA][kK][eE]2[bB]32:)?(?:0[xX])?[0-9a-fA-F]{64}$";
     const GOVERNANCE_LOWER_HEX32_PATTERN: &str = "^[0-9a-f]{64}$";
@@ -2322,6 +2322,83 @@ mod tests {
             latest.as_bytes(),
             package.as_bytes(),
             "release/package authority drift"
+        );
+    }
+    #[test]
+    fn public_lane_staking_schema_closes_status_variants_and_unbond_cutoff() {
+        let document = canonical_document();
+        let schemas = component_schemas(&document);
+        let status = schemas["PublicLaneValidatorStatus"]
+            .as_object()
+            .expect("public-lane validator status schema");
+        assert_eq!(
+            status
+                .get("discriminator")
+                .and_then(Value::as_object)
+                .and_then(|value| value.get("propertyName"))
+                .and_then(Value::as_str),
+            Some("type")
+        );
+        let variants = status
+            .get("oneOf")
+            .and_then(Value::as_array)
+            .expect("closed public-lane validator status variants");
+        let expected = BTreeMap::from([
+            ("Active", BTreeSet::from(["type"])),
+            ("Exited", BTreeSet::from(["type"])),
+            ("Exiting", BTreeSet::from(["releases_at_ms", "type"])),
+            (
+                "PendingActivation",
+                BTreeSet::from(["activates_at_height", "type"]),
+            ),
+            ("Slashed", BTreeSet::from(["slash_id", "type"])),
+        ]);
+        let mut observed = BTreeMap::new();
+        for variant in variants {
+            let variant = variant.as_object().expect("status variant object");
+            assert_eq!(variant.get("type").and_then(Value::as_str), Some("object"));
+            assert_eq!(
+                variant.get("additionalProperties").and_then(Value::as_bool),
+                Some(false)
+            );
+            let properties = variant
+                .get("properties")
+                .and_then(Value::as_object)
+                .expect("status variant properties");
+            let tag = properties["type"]
+                .get("const")
+                .and_then(Value::as_str)
+                .expect("status variant discriminator constant");
+            let property_names = properties
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>();
+            let required = variant
+                .get("required")
+                .and_then(Value::as_array)
+                .expect("status variant required fields")
+                .iter()
+                .map(|field| field.as_str().expect("required field name"))
+                .collect::<BTreeSet<_>>();
+            assert_eq!(required, property_names, "{tag} payload must be exact");
+            assert!(observed.insert(tag, property_names).is_none());
+        }
+        assert_eq!(observed, expected);
+
+        let unbonding = schemas["PublicLaneUnbonding"]
+            .as_object()
+            .expect("public-lane unbonding schema");
+        let properties = unbonding["properties"]
+            .as_object()
+            .expect("public-lane unbonding properties");
+        assert!(properties.contains_key("slashable_through_height"));
+        assert!(!properties.contains_key("scheduled_at_height"));
+        assert!(
+            unbonding["required"]
+                .as_array()
+                .expect("public-lane unbonding required fields")
+                .iter()
+                .any(|field| field.as_str() == Some("slashable_through_height"))
         );
     }
     #[cfg(all(
@@ -5273,13 +5350,17 @@ mod tests {
         for (name, required) in [
             (
                 "OfflineOperationReference",
+                &["identity", "state", "transaction_hash", "status_uri"][..],
+            ),
+            (
+                "OfflineOperationIdentity",
                 &[
                     "operation_id",
+                    "request_authority_digest",
+                    "canonical_request_digest",
                     "kind",
-                    "state",
-                    "transaction_hash",
-                    "status_uri",
-                    "submitted_at_ms",
+                    "issued_at_ms",
+                    "expires_at_ms",
                 ][..],
             ),
             (
@@ -5297,23 +5378,27 @@ mod tests {
             ),
             (
                 "OfflineOperationPendingValue",
-                &[
-                    "operation_id",
-                    "kind",
-                    "transaction_hash",
-                    "submitted_at_ms",
-                ][..],
+                &["identity", "transaction_hash"][..],
             ),
-            (
-                "OfflineOperationAppliedValue",
-                &["operation_id", "result"][..],
-            ),
+            ("OfflineOperationAppliedValue", &["identity", "result"][..]),
             (
                 "OfflineOperationRejectedValue",
-                &["operation_id", "kind", "transaction_hash", "error"][..],
+                &["identity", "transaction_hash", "error"][..],
             ),
         ] {
             assert_strict_object_schema(schemas, name, required, &[]);
+        }
+        for schema_name in [
+            "OfflineOperationReference",
+            "OfflineOperationPendingValue",
+            "OfflineOperationAppliedValue",
+            "OfflineOperationRejectedValue",
+        ] {
+            assert_eq!(
+                component_properties(schemas, schema_name)["identity"]["$ref"].as_str(),
+                Some("#/components/schemas/OfflineOperationIdentity"),
+                "{schema_name} must carry the sole nested operation identity"
+            );
         }
         for name in [
             "OfflineTopUpOperationResult",
@@ -5445,6 +5530,24 @@ mod tests {
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4
             ))
         );
+        assert!(
+            opaque_proof["bytes"]["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("defensive")),
+            "the 384 KiB pair cap must be described only as a defensive ceiling"
+        );
+        assert_eq!(
+            opaque_proof["bytes"]["x-iroha-initialization-proof-bytes"].as_u64(),
+            Some(u64::from(
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_INITIALIZATION_BYTES_V4
+            ))
+        );
+        assert_eq!(
+            opaque_proof["bytes"]["x-iroha-release-max-proof-bytes"].as_u64(),
+            Some(u64::from(
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_RELEASE_MAX_BYTES_V4
+            ))
+        );
         let proof_envelope = component_properties(schemas, "OfflinePastaCycleProofEnvelope");
         let proof_envelope_version = u64::from(
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
@@ -5482,10 +5585,33 @@ mod tests {
         };
 
         for path in ["/v1/offline/top-up", "/v1/offline/redeem"] {
-            let accepted = &openapi_operation(&doc, path, "post")["responses"]["202"];
+            let operation = openapi_operation(&doc, path, "post");
+            let idempotency_key = operation["parameters"]
+                .as_array()
+                .expect("offline command parameters")
+                .iter()
+                .find(|parameter| parameter["name"].as_str() == Some("Idempotency-Key"))
+                .expect("Idempotency-Key header parameter");
+            assert_eq!(
+                idempotency_key["schema"]["pattern"].as_str(),
+                Some("^[0-9a-f]{63}[13579bdf]$")
+            );
+            let idempotency_description = idempotency_key["description"]
+                .as_str()
+                .expect("Idempotency-Key description");
+            assert!(
+                idempotency_description
+                    .contains("derived from the canonical authority archive plus the signed nonce")
+            );
+            assert!(idempotency_description.contains("separate canonical request digest binds"));
+            let accepted = &operation["responses"]["202"];
             assert_required_headers(
                 accepted,
                 &["Cache-Control", "Location", "Retry-After", "Vary"],
+            );
+            assert_eq!(
+                accepted["headers"]["Location"]["schema"]["pattern"].as_str(),
+                Some("^/v1/offline/operations/[0-9a-f]{63}[13579bdf]$")
             );
             for media_type in ["application/json", "application/x-norito"] {
                 assert_response_cap(
@@ -5511,11 +5637,19 @@ mod tests {
             &["Cache-Control", "ETag", "Vary"],
         );
 
-        let operation_status = &openapi_operation(
-            &doc,
-            "/v1/offline/operations/{operation_id}",
-            "get",
-        )["responses"]["200"];
+        let operation_status_operation =
+            openapi_operation(&doc, "/v1/offline/operations/{operation_id}", "get");
+        let operation_id_parameter = operation_status_operation["parameters"]
+            .as_array()
+            .expect("operation status parameters")
+            .iter()
+            .find(|parameter| parameter["name"].as_str() == Some("operation_id"))
+            .expect("operation_id path parameter");
+        assert_eq!(
+            operation_id_parameter["schema"]["pattern"].as_str(),
+            Some("^[0-9a-f]{63}[13579bdf]$")
+        );
+        let operation_status = &operation_status_operation["responses"]["200"];
         assert_required_headers(operation_status, &["Cache-Control", "Vary"]);
         let operation_status_content = operation_status["content"]
             .as_object()
@@ -5592,16 +5726,29 @@ mod tests {
         }
     }
     #[test]
-    fn generated_spec_requires_positive_offline_timestamps_and_retry_delays() {
+    fn generated_spec_requires_exact_offline_identity_lifetime_and_retry_delays() {
         let doc = generate_spec();
         let schemas = component_schemas(&doc);
-        for schema_name in ["OfflineOperationReference", "OfflineOperationPendingValue"] {
+        let identity = component_properties(schemas, "OfflineOperationIdentity");
+        assert_eq!(identity["issued_at_ms"]["minimum"].as_u64(), Some(1));
+        assert_eq!(identity["expires_at_ms"]["minimum"].as_u64(), Some(2));
+        assert_eq!(
+            identity["expires_at_ms"]["x-iroha-maximum-ttl-ms"].as_u64(),
+            Some(300_000)
+        );
+        for field in [
+            "operation_id",
+            "request_authority_digest",
+            "canonical_request_digest",
+        ] {
+            let referenced = identity[field]["$ref"]
+                .as_str()
+                .and_then(|reference| reference.strip_prefix("#/components/schemas/"))
+                .expect("identity digest field must use a component schema");
             assert_eq!(
-                component_properties(schemas, schema_name)["submitted_at_ms"]
-                    .get("minimum")
-                    .and_then(Value::as_u64),
-                Some(1),
-                "{schema_name}.submitted_at_ms must exclude the zero sentinel"
+                schemas[referenced]["pattern"].as_str(),
+                Some("^[0-9a-f]{63}[13579bdf]$"),
+                "{field} must be a lowercase marked 32-byte digest"
             );
         }
 
@@ -6083,7 +6230,7 @@ mod tests {
                 .and_then(Value::as_object)
                 .and_then(|schema| schema.get("pattern"))
                 .and_then(Value::as_str),
-            Some("^/v1/offline/operations/(?!0{64}$)[0-9a-f]{64}$")
+            Some("^/v1/offline/operations/[0-9a-f]{63}[13579bdf]$")
         );
         assert_eq!(
             schemas
@@ -6091,7 +6238,7 @@ mod tests {
                 .and_then(Value::as_object)
                 .and_then(|schema| schema.get("pattern"))
                 .and_then(Value::as_str),
-            Some("^(?!0{64}$)[0-9a-f]{64}$")
+            Some("^[0-9a-f]{63}[13579bdf]$")
         );
         assert!(
             schemas
@@ -6673,6 +6820,229 @@ mod tests {
                 !paths.contains_key(legacy_path),
                 "legacy path survived: {legacy_path}"
             );
+        }
+    }
+    #[test]
+    fn sumeragi_evidence_audit_contract_is_closed_and_bounded() {
+        const LIST_PATH: &str = "/v1/sumeragi/evidence";
+        const COUNT_PATH: &str = "/v1/sumeragi/evidence/count";
+        let canonical = canonical_document();
+        let compiled = generate_spec();
+        for (label, document) in [("canonical", &canonical), ("compiled", &compiled)] {
+            let list = openapi_operation(document, LIST_PATH, "get");
+            assert_eq!(
+                operation_response_schema_ref(list, "200", LIST_PATH),
+                "#/components/schemas/SumeragiEvidenceListResponse",
+                "{label} evidence-list response"
+            );
+            let parameters = list
+                .get("parameters")
+                .and_then(Value::as_array)
+                .expect("evidence-list query parameters");
+            assert_eq!(parameters.len(), 3, "{label} evidence-list parameter count");
+            let parameter = |name: &str| {
+                parameters
+                    .iter()
+                    .find(|parameter| parameter.get("name").and_then(Value::as_str) == Some(name))
+                    .and_then(Value::as_object)
+                    .unwrap_or_else(|| panic!("{label} evidence-list `{name}` parameter"))
+            };
+            let limit = parameter("limit");
+            assert_eq!(limit.get("in").and_then(Value::as_str), Some("query"));
+            let limit = limit
+                .get("schema")
+                .and_then(Value::as_object)
+                .expect("evidence-list limit schema");
+            assert_eq!(limit.get("minimum").and_then(Value::as_u64), Some(1));
+            assert_eq!(limit.get("maximum").and_then(Value::as_u64), Some(1_000));
+            assert_eq!(limit.get("default").and_then(Value::as_u64), Some(50));
+            let offset = parameter("offset")
+                .get("schema")
+                .and_then(Value::as_object)
+                .expect("evidence-list offset schema");
+            assert_eq!(offset.get("minimum").and_then(Value::as_u64), Some(0));
+            assert_eq!(offset.get("maximum").and_then(Value::as_u64), Some(10_000));
+            assert_eq!(offset.get("default").and_then(Value::as_u64), Some(0));
+            let kind = parameter("kind")
+                .get("schema")
+                .and_then(Value::as_object)
+                .expect("evidence-list kind schema");
+            assert_eq!(
+                kind.get("enum").and_then(Value::as_array),
+                Some(&vec![Value::from("SumeragiV2Equivocation")])
+            );
+            let count = openapi_operation(document, COUNT_PATH, "get");
+            assert_eq!(
+                operation_response_schema_ref(count, "200", COUNT_PATH),
+                "#/components/schemas/SumeragiEvidenceCountResponse",
+                "{label} evidence-count response"
+            );
+        }
+
+        let schemas = component_schemas(&canonical);
+        assert_strict_object_schema(
+            schemas,
+            "SumeragiEvidenceAuditRecord",
+            &[
+                "kind",
+                "class",
+                "height",
+                "view",
+                "epoch",
+                "signer",
+                "context_id",
+                "artifact_hash_1",
+                "artifact_hash_2",
+                "recorded_height",
+                "recorded_view",
+                "recorded_ms",
+                "consensus_admitted_height",
+                "penalty_status",
+            ],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "SumeragiEvidenceListResponse",
+            &["total", "items"],
+            &[],
+        );
+        assert_strict_object_schema(schemas, "SumeragiEvidenceCountResponse", &["count"], &[]);
+        let record = schemas
+            .get("SumeragiEvidenceAuditRecord")
+            .and_then(Value::as_object)
+            .expect("Sumeragi evidence audit schema");
+        let properties = record
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("Sumeragi evidence audit properties");
+        assert_eq!(
+            properties
+                .get("penalty_status")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SumeragiEvidencePenaltyStatus")
+        );
+        assert_eq!(
+            properties
+                .get("kind")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("const"))
+                .and_then(Value::as_str),
+            Some("SumeragiV2Equivocation")
+        );
+        let classes = properties
+            .get("class")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("enum"))
+            .and_then(Value::as_array)
+            .expect("evidence class enum")
+            .iter()
+            .map(|class| class.as_str().expect("evidence class string"))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            classes,
+            ["proposal", "phase_vote", "timeout_vote"]
+                .into_iter()
+                .collect()
+        );
+        for hash in ["context_id", "artifact_hash_1", "artifact_hash_2"] {
+            assert_eq!(
+                properties
+                    .get(hash)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("pattern"))
+                    .and_then(Value::as_str),
+                Some("^[0-9a-f]{64}$"),
+                "{hash} must remain canonical lowercase hex"
+            );
+        }
+        for retired in [
+            "penalty_applied",
+            "penalty_cancelled",
+            "penalty_cancelled_at_height",
+            "penalty_applied_at_height",
+            "consensus_admitted_at_height",
+        ] {
+            assert!(
+                !properties.contains_key(retired),
+                "retired evidence field `{retired}` remains documented"
+            );
+        }
+        let list_items = schemas
+            .get("SumeragiEvidenceListResponse")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("items"))
+            .and_then(Value::as_object)
+            .expect("evidence-list items schema");
+        assert_eq!(
+            list_items.get("maxItems").and_then(Value::as_u64),
+            Some(1_000)
+        );
+        assert_eq!(
+            list_items
+                .get("items")
+                .and_then(Value::as_object)
+                .and_then(|items| items.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SumeragiEvidenceAuditRecord")
+        );
+
+        let variants = schemas
+            .get("SumeragiEvidencePenaltyStatus")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("oneOf"))
+            .and_then(Value::as_array)
+            .expect("closed evidence penalty variants");
+        assert_eq!(variants.len(), 3);
+        for status in ["pending", "applied", "cancelled"] {
+            let variant = variants
+                .iter()
+                .find(|variant| {
+                    variant
+                        .get("properties")
+                        .and_then(Value::as_object)
+                        .and_then(|properties| properties.get("status"))
+                        .and_then(Value::as_object)
+                        .and_then(|status| status.get("const"))
+                        .and_then(Value::as_str)
+                        == Some(status)
+                })
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing `{status}` evidence penalty variant"));
+            assert_eq!(
+                variant.get("additionalProperties"),
+                Some(&Value::Bool(false))
+            );
+            let required = variant
+                .get("required")
+                .and_then(Value::as_array)
+                .expect("penalty variant required fields")
+                .iter()
+                .map(|field| field.as_str().expect("required field"))
+                .collect::<BTreeSet<_>>();
+            assert_eq!(required, ["status", "details"].into_iter().collect());
+            let details = variant
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("details"))
+                .and_then(Value::as_object)
+                .expect("penalty variant details");
+            if status == "pending" {
+                assert_eq!(details.get("type").and_then(Value::as_str), Some("null"));
+            } else {
+                assert_eq!(
+                    details.get("additionalProperties"),
+                    Some(&Value::Bool(false))
+                );
+                assert_eq!(
+                    details.get("required").and_then(Value::as_array),
+                    Some(&vec![Value::from("height")])
+                );
+            }
         }
     }
     #[test]

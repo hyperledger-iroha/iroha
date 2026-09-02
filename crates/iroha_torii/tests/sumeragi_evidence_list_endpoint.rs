@@ -14,7 +14,9 @@ use iroha_data_model::{
     NetworkId,
     block::{
         BlockHeader,
-        consensus::{Evidence, EvidenceRecord, SumeragiV2EquivocationEvidence},
+        consensus::{
+            Evidence, EvidencePenaltyStatus, EvidenceRecord, SumeragiV2EquivocationEvidence,
+        },
         consensus_v2::{
             BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
             ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
@@ -114,30 +116,21 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
             recorded_at_height: 1,
             recorded_at_view: 0,
             recorded_at_ms: 10,
-            penalty_applied: false,
-            penalty_cancelled: false,
-            penalty_cancelled_at_height: None,
-            penalty_applied_at_height: None,
+            penalty_status: EvidencePenaltyStatus::Pending,
         },
         EvidenceRecord {
             evidence: make_phase_vote_evidence(20, 0xB2),
             recorded_at_height: 2,
             recorded_at_view: 0,
             recorded_at_ms: 20,
-            penalty_applied: false,
-            penalty_cancelled: false,
-            penalty_cancelled_at_height: None,
-            penalty_applied_at_height: None,
+            penalty_status: EvidencePenaltyStatus::Applied { height: 4 },
         },
         EvidenceRecord {
             evidence: make_phase_vote_evidence(30, 0xC3),
             recorded_at_height: 3,
             recorded_at_view: 0,
             recorded_at_ms: 30,
-            penalty_applied: false,
-            penalty_cancelled: false,
-            penalty_cancelled_at_height: None,
-            penalty_applied_at_height: None,
+            penalty_status: EvidencePenaltyStatus::Cancelled { height: 5 },
         },
     ];
     for record in records {
@@ -145,7 +138,7 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
     }
     let state = Arc::new(state);
     let query_all = EvidenceListQuery {
-        limit: Some(2),
+        limit: Some(3),
         offset: Some(0),
         kind: None,
     };
@@ -169,19 +162,50 @@ async fn evidence_list_endpoint_supports_filters_and_pagination() {
         .and_then(norito::json::Value::as_array)
         .cloned()
         .expect("array of items");
-    assert_eq!(items.len(), 2);
-    assert_eq!(
-        items[0].get("kind").and_then(norito::json::Value::as_str),
-        Some("SumeragiV2Equivocation")
-    );
-    assert_eq!(
-        items[1].get("kind").and_then(norito::json::Value::as_str),
-        Some("SumeragiV2Equivocation")
-    );
-    assert!(matches!(
-        items[0].get("consensus_admitted_height"),
-        Some(norito::json::Value::Null)
-    ));
+    assert_eq!(items.len(), 3);
+    let expected_statuses = [
+        norito::json::json!({
+            "status": "cancelled",
+            "details": { "height": 5 }
+        }),
+        norito::json::json!({
+            "status": "applied",
+            "details": { "height": 4 }
+        }),
+        norito::json::json!({
+            "status": "pending",
+            "details": null
+        }),
+    ];
+    for ((item, expected_status), expected_admission_height) in items
+        .iter()
+        .zip(expected_statuses.iter())
+        .zip([3_u64, 2, 1])
+    {
+        assert_eq!(
+            item.get("kind").and_then(norito::json::Value::as_str),
+            Some("SumeragiV2Equivocation")
+        );
+        assert_eq!(item.get("penalty_status"), Some(expected_status));
+        assert_eq!(
+            item.get("consensus_admitted_height")
+                .and_then(norito::json::Value::as_u64),
+            Some(expected_admission_height)
+        );
+        let item = item.as_object().expect("evidence audit object");
+        for retired in [
+            "penalty_applied",
+            "penalty_cancelled",
+            "penalty_cancelled_at_height",
+            "penalty_applied_at_height",
+            "consensus_admitted_at_height",
+        ] {
+            assert!(
+                !item.contains_key(retired),
+                "retired evidence field `{retired}` must remain absent"
+            );
+        }
+    }
     let query_filtered = EvidenceListQuery {
         limit: Some(1),
         offset: Some(1),

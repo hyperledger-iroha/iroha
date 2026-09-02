@@ -13,6 +13,9 @@ the global all-Prepare, all-Commit, and all-or-none application barriers.
 "Fixed" is the production protocol. The other modes are deliberate mutations
 used to demonstrate that the invariants detect partial application, Commit
 before the all-Prepare barrier, and loss of a durable staged delta on restart.
+The complete Prepare barrier is registered in global state before Commit; a
+Commit QC retains the exact registered bundle identity after that live lock is
+released by finalization, abort, or expiry.
 ***************************************************************************)
 
 CONSTANTS
@@ -30,6 +33,7 @@ CONSTANTS
   Mode
 
 Modes == {"Fixed", "PartialApply", "CommitBeforeAllPrepare", "DropStageOnCrash"}
+BundleIdentities == {"None", "CompleteBundle"}
 Phases ==
   {"Collecting", "Audited", "Prepared", "CommitCertified",
    "Finalized", "Aborted", "Expired"}
@@ -43,7 +47,9 @@ VARIABLES
   stagedLegs,
   prepareQcs,
   preparedBundleDigest,
+  prepareRegistration,
   commitQcs,
+  commitBundleIdentity,
   carrierDurable,
   globallyAppliedLegs,
   applyCount,
@@ -55,7 +61,8 @@ VARIABLES
 
 vars ==
   <<phase, height, certifiedSidecars, auditedLegs, stagedLegs,
-    prepareQcs, preparedBundleDigest, commitQcs, carrierDurable,
+    prepareQcs, preparedBundleDigest, prepareRegistration, commitQcs,
+    commitBundleIdentity, carrierDurable,
     globallyAppliedLegs, applyCount, receiptDurable, online,
     crashesRemaining, replayRejected, invalidRejected>>
 
@@ -75,7 +82,9 @@ Init ==
   /\ stagedLegs = 0
   /\ prepareQcs = 0
   /\ preparedBundleDigest = FALSE
+  /\ prepareRegistration = "None"
   /\ commitQcs = 0
+  /\ commitBundleIdentity = "None"
   /\ carrierDurable = FALSE
   /\ globallyAppliedLegs = 0
   /\ applyCount = 0
@@ -92,7 +101,8 @@ UploadCertifiedSidecar ==
   /\ certifiedSidecars < LegCount
   /\ certifiedSidecars' = certifiedSidecars + 1
   /\ UNCHANGED <<phase, height, auditedLegs, stagedLegs, prepareQcs,
-                  preparedBundleDigest, commitQcs, carrierDurable,
+                  preparedBundleDigest, prepareRegistration, commitQcs,
+                  commitBundleIdentity, carrierDurable,
                   globallyAppliedLegs, applyCount, receiptDurable, online,
                   crashesRemaining, replayRejected, invalidRejected>>
 
@@ -105,7 +115,8 @@ AuditOneLeg ==
   /\ auditedLegs' = auditedLegs + 1
   /\ phase' = IF auditedLegs + 1 = LegCount THEN "Audited" ELSE phase
   /\ UNCHANGED <<height, certifiedSidecars, stagedLegs, prepareQcs,
-                  preparedBundleDigest, commitQcs, carrierDurable,
+                  preparedBundleDigest, prepareRegistration, commitQcs,
+                  commitBundleIdentity, carrierDurable,
                   globallyAppliedLegs, applyCount, receiptDurable, online,
                   crashesRemaining, replayRejected, invalidRejected>>
 
@@ -116,7 +127,8 @@ DurablyStageOneLeg ==
   /\ stagedLegs < LegCount
   /\ stagedLegs' = stagedLegs + 1
   /\ UNCHANGED <<phase, height, certifiedSidecars, auditedLegs, prepareQcs,
-                  preparedBundleDigest, commitQcs, carrierDurable,
+                  preparedBundleDigest, prepareRegistration, commitQcs,
+                  commitBundleIdentity, carrierDurable,
                   globallyAppliedLegs, applyCount, receiptDurable, online,
                   crashesRemaining, replayRejected, invalidRejected>>
 
@@ -126,12 +138,27 @@ CertifyOnePrepare ==
   /\ AvailableValidators >= Quorum
   /\ prepareQcs < stagedLegs
   /\ prepareQcs' = prepareQcs + 1
-  /\ phase' = IF prepareQcs + 1 = LegCount THEN "Prepared" ELSE phase
   /\ preparedBundleDigest' = (prepareQcs + 1 = LegCount)
-  /\ UNCHANGED <<height, certifiedSidecars, auditedLegs, stagedLegs,
-                  commitQcs, carrierDurable, globallyAppliedLegs, applyCount,
+  /\ UNCHANGED <<phase, height, certifiedSidecars, auditedLegs, stagedLegs,
+                  prepareRegistration, commitQcs, commitBundleIdentity,
+                  carrierDurable, globallyAppliedLegs, applyCount,
                   receiptDurable, online, crashesRemaining, replayRejected,
                   invalidRejected>>
+
+RegisterCompletePrepareBundle ==
+  /\ online
+  /\ phase = "Audited"
+  /\ prepareQcs = LegCount
+  /\ preparedBundleDigest
+  /\ GlobalQuorumAvailable
+  /\ prepareRegistration = "None"
+  /\ prepareRegistration' = "CompleteBundle"
+  /\ phase' = "Prepared"
+  /\ UNCHANGED <<height, certifiedSidecars, auditedLegs, stagedLegs,
+                  prepareQcs, preparedBundleDigest, commitQcs,
+                  commitBundleIdentity, carrierDurable, globallyAppliedLegs,
+                  applyCount, receiptDurable, online, crashesRemaining,
+                  replayRejected, invalidRejected>>
 
 CertifyOneCommit ==
   /\ online
@@ -143,10 +170,14 @@ CertifyOneCommit ==
         ELSE /\ phase = "Prepared"
              /\ prepareQcs = LegCount
              /\ preparedBundleDigest
+             /\ prepareRegistration = "CompleteBundle"
+  /\ (commitQcs = 0 \/ commitBundleIdentity = prepareRegistration)
   /\ commitQcs' = commitQcs + 1
+  /\ commitBundleIdentity' = prepareRegistration
   /\ phase' = IF commitQcs + 1 = LegCount THEN "CommitCertified" ELSE phase
   /\ UNCHANGED <<height, certifiedSidecars, auditedLegs, stagedLegs,
-                  prepareQcs, preparedBundleDigest, carrierDurable,
+                  prepareQcs, preparedBundleDigest, prepareRegistration,
+                  carrierDurable,
                   globallyAppliedLegs, applyCount, receiptDurable, online,
                   crashesRemaining, replayRejected, invalidRejected>>
 
@@ -154,10 +185,13 @@ PersistCarrier ==
   /\ online
   /\ phase = "CommitCertified"
   /\ commitQcs = LegCount
+  /\ prepareRegistration = "CompleteBundle"
+  /\ commitBundleIdentity = prepareRegistration
   /\ ~carrierDurable
   /\ carrierDurable' = TRUE
   /\ UNCHANGED <<phase, height, certifiedSidecars, auditedLegs, stagedLegs,
-                  prepareQcs, preparedBundleDigest, commitQcs,
+                  prepareQcs, preparedBundleDigest, prepareRegistration,
+                  commitQcs, commitBundleIdentity,
                   globallyAppliedLegs, applyCount, receiptDurable, online,
                   crashesRemaining, replayRejected, invalidRejected>>
 
@@ -165,36 +199,45 @@ ApplyGlobalTransaction ==
   /\ online
   /\ phase = "CommitCertified"
   /\ commitQcs = LegCount
+  /\ prepareRegistration = "CompleteBundle"
+  /\ commitBundleIdentity = prepareRegistration
   /\ carrierDurable
   /\ GlobalQuorumAvailable
   /\ applyCount = 0
   /\ globallyAppliedLegs' = IF Mode = "PartialApply" THEN 1 ELSE LegCount
   /\ applyCount' = 1
   /\ receiptDurable' = TRUE
+  /\ stagedLegs' = 0
+  /\ prepareRegistration' = "None"
   /\ phase' = "Finalized"
-  /\ UNCHANGED <<height, certifiedSidecars, auditedLegs, stagedLegs,
-                  prepareQcs, preparedBundleDigest, commitQcs, carrierDurable,
+  /\ UNCHANGED <<height, certifiedSidecars, auditedLegs,
+                  prepareQcs, preparedBundleDigest, commitQcs,
+                  commitBundleIdentity, carrierDurable,
                   online, crashesRemaining, replayRejected, invalidRejected>>
 
 RejectReplay ==
   /\ online
-  /\ phase = "Finalized"
+  /\ phase \in TerminalPhases
   /\ ~replayRejected
   /\ replayRejected' = TRUE
   /\ UNCHANGED <<phase, height, certifiedSidecars, auditedLegs, stagedLegs,
-                  prepareQcs, preparedBundleDigest, commitQcs, carrierDurable,
+                  prepareQcs, preparedBundleDigest, prepareRegistration,
+                  commitQcs, commitBundleIdentity, carrierDurable,
                   globallyAppliedLegs, applyCount, receiptDurable, online,
                   crashesRemaining, invalidRejected>>
 
 RejectInvalidLeg ==
   /\ AllowInvalid
   /\ online
-  /\ phase \in {"Collecting", "Audited"}
+  /\ phase \in {"Collecting", "Audited", "Prepared"}
   /\ ~invalidRejected
   /\ invalidRejected' = TRUE
   /\ phase' = "Aborted"
-  /\ UNCHANGED <<height, certifiedSidecars, auditedLegs, stagedLegs,
-                  prepareQcs, preparedBundleDigest, commitQcs, carrierDurable,
+  /\ stagedLegs' = 0
+  /\ prepareRegistration' = "None"
+  /\ UNCHANGED <<height, certifiedSidecars, auditedLegs,
+                  prepareQcs, preparedBundleDigest, commitQcs,
+                  commitBundleIdentity, carrierDurable,
                   globallyAppliedLegs, applyCount, receiptDurable, online,
                   crashesRemaining, replayRejected>>
 
@@ -205,8 +248,11 @@ ExpireBeforeFinality ==
   /\ height <= ExpiryHeight
   /\ height' = ExpiryHeight + 1
   /\ phase' = "Expired"
-  /\ UNCHANGED <<certifiedSidecars, auditedLegs, stagedLegs, prepareQcs,
-                  preparedBundleDigest, commitQcs, carrierDurable,
+  /\ stagedLegs' = 0
+  /\ prepareRegistration' = "None"
+  /\ UNCHANGED <<certifiedSidecars, auditedLegs, prepareQcs,
+                  preparedBundleDigest, commitQcs, commitBundleIdentity,
+                  carrierDurable,
                   globallyAppliedLegs, applyCount, receiptDurable, online,
                   crashesRemaining, replayRejected, invalidRejected>>
 
@@ -218,7 +264,8 @@ Crash ==
   /\ crashesRemaining' = crashesRemaining - 1
   /\ stagedLegs' = IF Mode = "DropStageOnCrash" THEN 0 ELSE stagedLegs
   /\ UNCHANGED <<phase, height, certifiedSidecars, auditedLegs, prepareQcs,
-                  preparedBundleDigest, commitQcs, carrierDurable,
+                  preparedBundleDigest, prepareRegistration, commitQcs,
+                  commitBundleIdentity, carrierDurable,
                   globallyAppliedLegs, applyCount, receiptDurable,
                   replayRejected, invalidRejected>>
 
@@ -226,7 +273,8 @@ Restart ==
   /\ ~online
   /\ online' = TRUE
   /\ UNCHANGED <<phase, height, certifiedSidecars, auditedLegs, stagedLegs,
-                  prepareQcs, preparedBundleDigest, commitQcs, carrierDurable,
+                  prepareQcs, preparedBundleDigest, prepareRegistration,
+                  commitQcs, commitBundleIdentity, carrierDurable,
                   globallyAppliedLegs, applyCount, receiptDurable,
                   crashesRemaining, replayRejected, invalidRejected>>
 
@@ -239,6 +287,7 @@ Next ==
   \/ AuditOneLeg
   \/ DurablyStageOneLeg
   \/ CertifyOnePrepare
+  \/ RegisterCompletePrepareBundle
   \/ CertifyOneCommit
   \/ PersistCarrier
   \/ ApplyGlobalTransaction
@@ -257,6 +306,7 @@ FairSpec ==
   /\ WF_vars(AuditOneLeg)
   /\ WF_vars(DurablyStageOneLeg)
   /\ WF_vars(CertifyOnePrepare)
+  /\ WF_vars(RegisterCompletePrepareBundle)
   /\ WF_vars(CertifyOneCommit)
   /\ WF_vars(PersistCarrier)
   /\ WF_vars(ApplyGlobalTransaction)
@@ -274,7 +324,9 @@ TypeOK ==
   /\ applyCount \in 0..1
   /\ crashesRemaining \in 0..MaxCrashes
   /\ preparedBundleDigest \in BOOLEAN
+  /\ prepareRegistration \in BundleIdentities
   /\ carrierDurable \in BOOLEAN
+  /\ commitBundleIdentity \in BundleIdentities
   /\ receiptDurable \in BOOLEAN
   /\ online \in BOOLEAN
   /\ replayRejected \in BOOLEAN
@@ -282,11 +334,20 @@ TypeOK ==
 
 APSExactCommitteeQuorum == CommitteeSize = 4 /\ Quorum = 3
 
-APSFsyncBeforePrepare == prepareQcs <= stagedLegs
+APSFsyncBeforePrepare ==
+  phase \notin TerminalPhases => prepareQcs <= stagedLegs
 
 APSAllPrepareBarrier ==
   /\ (preparedBundleDigest <=> prepareQcs = LegCount)
-  /\ (commitQcs > 0 => prepareQcs = LegCount /\ preparedBundleDigest)
+  /\ (prepareRegistration = "CompleteBundle" =>
+       prepareQcs = LegCount /\ preparedBundleDigest)
+  /\ (phase \in {"Prepared", "CommitCertified"} =>
+       prepareRegistration = "CompleteBundle")
+  /\ (commitQcs > 0 =>
+       /\ prepareQcs = LegCount
+       /\ preparedBundleDigest
+       /\ commitBundleIdentity = "CompleteBundle")
+  /\ (phase \in TerminalPhases => prepareRegistration = "None")
 
 APSAtomicVisibility ==
   globallyAppliedLegs = 0 \/ globallyAppliedLegs = LegCount
@@ -297,17 +358,20 @@ APSNoEarlyVisibility ==
     /\ commitQcs = LegCount
     /\ carrierDurable
 
-APSIdempotentFinality == applyCount <= 1
+APSAtMostOnceFinality == applyCount <= 1
 
 APSTerminalFailureIsByteSilent ==
   phase \in {"Aborted", "Expired"} =>
     /\ globallyAppliedLegs = 0
     /\ applyCount = 0
     /\ ~receiptDurable
+    /\ stagedLegs = 0
+    /\ prepareRegistration = "None"
 
 APSReceiptMatchesAtomicState ==
   receiptDurable <=>
-    (phase = "Finalized" /\ globallyAppliedLegs = LegCount /\ applyCount = 1)
+    (phase = "Finalized" /\ globallyAppliedLegs = LegCount /\ applyCount = 1
+     /\ stagedLegs = 0 /\ prepareRegistration = "None")
 
 Safety ==
   /\ TypeOK
@@ -316,9 +380,18 @@ Safety ==
   /\ APSAllPrepareBarrier
   /\ APSAtomicVisibility
   /\ APSNoEarlyVisibility
-  /\ APSIdempotentFinality
+  /\ APSAtMostOnceFinality
   /\ APSTerminalFailureIsByteSilent
   /\ APSReceiptMatchesAtomicState
+
+(* A crash or restart cannot change the globally replicated Prepare lock. The
+   lock is cleared only by an explicit terminal protocol transition. *)
+PrepareRegistrationCrashRecoveryStep ==
+  /\ (online /\ ~online' => prepareRegistration' = prepareRegistration)
+  /\ (~online /\ online' => prepareRegistration' = prepareRegistration)
+
+APSPrepareRegistrationCrashRecoveryTemporal ==
+  [][PrepareRegistrationCrashRecoveryStep]_vars
 
 BoundedLivenessAssumptions ==
   /\ Mode = "Fixed"

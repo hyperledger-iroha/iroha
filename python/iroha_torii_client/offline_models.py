@@ -366,7 +366,7 @@ class OfflineRecursiveStateBoundaryV5Json(TypedDict):
 class OfflinePastaCycleProofEnvelopeV4Json(TypedDict):
     """Authenticated ABI-21/V4 Eq/Ep proof-pair envelope."""
 
-    version: Literal[4]
+    version: Literal[5]
     proof_backend: str
     transcript_profile: str
     step_eq_circuit_id: str

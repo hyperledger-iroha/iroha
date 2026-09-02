@@ -110,12 +110,26 @@ fn private_settlement_carrier_bundle_source_v1(
         .instructions()
         .explicit_instructions()
         .find_map(|instruction| {
+            let instruction = instruction.as_any();
             instruction
-                .as_any()
                 .downcast_ref::<
                     iroha_data_model::isi::private_settlement::FinalizeAtomicPrivateSettlementV1,
                 >()
                 .map(|carrier| *carrier.commit_bundle.manifest.bundle_id.as_ref())
+                .or_else(|| {
+                    instruction
+                        .downcast_ref::<
+                            iroha_data_model::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1,
+                        >()
+                        .map(|carrier| *carrier.barrier.manifest.bundle_id.as_ref())
+                })
+                .or_else(|| {
+                    instruction
+                        .downcast_ref::<
+                            iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1,
+                        >()
+                        .map(|carrier| *carrier.manifest.bundle_id.as_ref())
+                })
         })
 }
 
@@ -5165,22 +5179,62 @@ mod private_settlement_fault_source_tests {
     use super::*;
     use crate::private_settlement::coordinator::tests::certified_commit_bundle_fixture;
     use iroha_data_model::{
-        isi::private_settlement::FinalizeAtomicPrivateSettlementV1, transaction::TransactionBuilder,
+        isi::private_settlement::{
+            AbortAtomicPrivateSettlementV1, FinalizeAtomicPrivateSettlementV1,
+            RegisterAtomicPrivateSettlementPrepareV1,
+        },
+        nexus::{PrivateSettlementAbortReasonV1, PrivateSettlementPrepareBarrierV1},
+        transaction::TransactionBuilder,
     };
 
     #[test]
-    fn carrier_source_is_the_exact_public_bundle_id() {
+    fn every_global_carrier_source_is_the_exact_public_bundle_id() {
         let (bundle, sponsor_key) = certified_commit_bundle_fixture();
         let expected = *bundle.manifest.bundle_id.as_ref();
-        let transaction = TransactionBuilder::new(
+        let finalization = TransactionBuilder::new(
             bundle.manifest.network_id,
             bundle.manifest.sponsor.clone(),
             bundle.manifest.public_fee_intent.clone(),
         )
-        .with_instructions([FinalizeAtomicPrivateSettlementV1::new(bundle)])
+        .with_instructions([FinalizeAtomicPrivateSettlementV1::new(bundle.clone())])
         .sign(sponsor_key.private_key());
         assert_eq!(
-            private_settlement_carrier_bundle_source_v1(&transaction),
+            private_settlement_carrier_bundle_source_v1(&finalization),
+            Some(expected)
+        );
+
+        let barrier = PrivateSettlementPrepareBarrierV1 {
+            version: bundle.version,
+            manifest: bundle.manifest.clone(),
+            authority_catalog: bundle.authority_catalog.clone(),
+            deltas: bundle.legs.iter().map(|leg| leg.delta.clone()).collect(),
+            prepare_certificates: bundle.legs.iter().map(|leg| leg.prepare.clone()).collect(),
+            prepared_bundle_digest: bundle.legs[0].commit.body.prepared_bundle_digest,
+        };
+        let registration = TransactionBuilder::new(
+            bundle.manifest.network_id,
+            bundle.manifest.sponsor.clone(),
+            bundle.manifest.public_fee_intent.clone(),
+        )
+        .with_instructions([RegisterAtomicPrivateSettlementPrepareV1::new(barrier)])
+        .sign(sponsor_key.private_key());
+        assert_eq!(
+            private_settlement_carrier_bundle_source_v1(&registration),
+            Some(expected)
+        );
+
+        let abort = TransactionBuilder::new(
+            bundle.manifest.network_id,
+            bundle.manifest.sponsor.clone(),
+            bundle.manifest.public_fee_intent.clone(),
+        )
+        .with_instructions([AbortAtomicPrivateSettlementV1::new(
+            bundle.manifest,
+            PrivateSettlementAbortReasonV1::ParticipantRejected,
+        )])
+        .sign(sponsor_key.private_key());
+        assert_eq!(
+            private_settlement_carrier_bundle_source_v1(&abort),
             Some(expected)
         );
     }

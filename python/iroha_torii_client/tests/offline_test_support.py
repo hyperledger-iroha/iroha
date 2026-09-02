@@ -7,7 +7,11 @@ import hashlib
 from typing import Any, Dict, List, Mapping, Optional
 
 from iroha_torii_client import KagemushaRedeemRequestV4, KagemushaTopUpRequestV4
-from iroha_torii_client.norito_frame import _crc64_xz, schema_hash_for_type_name
+from iroha_torii_client.norito_frame import (
+    _crc64_xz,
+    encode_norito_frame,
+    schema_hash_for_type_name,
+)
 
 CANONICAL_OWNER = "sorauﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
 CANONICAL_ASSET_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
@@ -57,8 +61,22 @@ def offline_capability_payload(**overrides: Any) -> Dict[str, Any]:
     return payload
 
 
-OFFLINE_OPERATION_BYTES = [0x11] * 32
-OFFLINE_OPERATION_ID = "11" * 32
+_OFFLINE_AUTHORITY_PAYLOAD = b"\x01"
+_OFFLINE_NONCE = b"\x07" * 32
+_OFFLINE_AUTHORITY_ARCHIVE = encode_norito_frame(
+    _OFFLINE_AUTHORITY_PAYLOAD,
+    type_name="iroha_data_model::account::model::AccountId",
+    flags=0x02,
+    payload_alignment=1,
+)
+_OFFLINE_OPERATION_RAW = _iroha_hash(
+    b"iroha:offline:kagemusha:operation-id:v4\0",
+    len(_OFFLINE_AUTHORITY_ARCHIVE).to_bytes(8, "little"),
+    _OFFLINE_AUTHORITY_ARCHIVE,
+    _OFFLINE_NONCE,
+)
+OFFLINE_OPERATION_BYTES = list(_OFFLINE_OPERATION_RAW)
+OFFLINE_OPERATION_ID = _OFFLINE_OPERATION_RAW.hex()
 OFFLINE_TRANSACTION_HASH = "23" * 32
 OFFLINE_STATUS_URI = f"/v1/offline/operations/{OFFLINE_OPERATION_ID}"
 OFFLINE_NETWORK_ID = _canonical_hash(0x91)
@@ -66,6 +84,7 @@ OFFLINE_OTHER_NETWORK_ID = _canonical_hash(0x93)
 OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME = "iroha.torii.v1.offline.top_up.request"
 OFFLINE_REDEEM_REQUEST_SCHEMA_NAME = "iroha.torii.v1.offline.redeem.request"
 OFFLINE_ISSUED_AT_MS = 1_725_000_000_123
+OFFLINE_EXPIRES_AT_MS = OFFLINE_ISSUED_AT_MS + 60_000
 
 
 def offline_norito_frame(type_name: str, payload: bytes = b"\x01") -> bytes:
@@ -123,12 +142,18 @@ def offline_kagemusha_authorization_archive(
     operation_id: bytes = bytes(OFFLINE_OPERATION_BYTES),
     issued_at_ms: int = OFFLINE_ISSUED_AT_MS,
     issued_at_ms_bytes: Optional[bytes] = None,
+    expires_at_ms: int = OFFLINE_EXPIRES_AT_MS,
+    expires_at_ms_bytes: Optional[bytes] = None,
+    nonce: bytes = _OFFLINE_NONCE,
+    authority_payload: bytes = _OFFLINE_AUTHORITY_PAYLOAD,
     field_count: int = 10,
     trailing_payload: bytes = b"",
 ) -> bytes:
     """Build the exact compact Kagemusha request-authorization archive."""
 
     fields = [b"\x01" for _ in range(field_count)]
+    if field_count > 0:
+        fields[0] = authority_payload
     if field_count > 3:
         fields[3] = operation_id
     if field_count > 4:
@@ -137,6 +162,14 @@ def offline_kagemusha_authorization_archive(
             if issued_at_ms_bytes is None
             else issued_at_ms_bytes
         )
+    if field_count > 5:
+        fields[5] = (
+            expires_at_ms.to_bytes(8, "little")
+            if expires_at_ms_bytes is None
+            else expires_at_ms_bytes
+        )
+    if field_count > 6:
+        fields[6] = nonce
     return (
         b"".join(_compact_length(len(field)) + field for field in fields)
         + trailing_payload
@@ -183,15 +216,57 @@ def offline_operation_reference(**overrides: Any) -> Dict[str, Any]:
     """Build one canonical offline operation reference fixture."""
 
     reference = {
-        "operation_id": OFFLINE_OPERATION_ID,
-        "kind": {"kind": "top_up", "value": None},
+        "identity": offline_operation_identity("top_up"),
         "state": {"state": "pending", "value": None},
         "transaction_hash": OFFLINE_TRANSACTION_HASH,
         "status_uri": OFFLINE_STATUS_URI,
-        "submitted_at_ms": OFFLINE_ISSUED_AT_MS,
     }
     reference.update(overrides)
     return reference
+
+
+def offline_operation_identity(
+    kind: str,
+    *,
+    request_archive: Optional[bytes] = None,
+    **overrides: Any,
+) -> Dict[str, Any]:
+    """Build the complete nested immutable operation identity."""
+
+    if request_archive is None:
+        if kind == "top_up":
+            request_archive = offline_kagemusha_request_frame(
+                OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
+                field_count=8,
+                operation_id_field_index=6,
+            )
+        elif kind == "redeem":
+            request_archive = offline_kagemusha_request_frame(
+                OFFLINE_REDEEM_REQUEST_SCHEMA_NAME,
+                field_count=10,
+                operation_id_field_index=8,
+            )
+        else:
+            raise ValueError("kind must be top_up or redeem")
+    identity = {
+        "operation_id": OFFLINE_OPERATION_ID,
+        "request_authority_digest": _iroha_hash(
+            b"iroha:offline:kagemusha:operation-outcome-authority:v4\0",
+            len(_OFFLINE_AUTHORITY_ARCHIVE).to_bytes(8, "little"),
+            _OFFLINE_AUTHORITY_ARCHIVE,
+        ).hex(),
+        "canonical_request_digest": _iroha_hash(
+            b"iroha:offline:kagemusha:operation-request:v4\0",
+            kind.encode("ascii"),
+            len(request_archive).to_bytes(8, "little"),
+            request_archive,
+        ).hex(),
+        "kind": {"kind": kind, "value": None},
+        "issued_at_ms": OFFLINE_ISSUED_AT_MS,
+        "expires_at_ms": OFFLINE_EXPIRES_AT_MS,
+    }
+    identity.update(overrides)
+    return identity
 
 
 def offline_fixed_bytes(byte: int) -> List[int]:
@@ -408,7 +483,7 @@ def offline_applied_top_up_status(
     return {
         "state": "applied",
         "value": {
-            "operation_id": OFFLINE_OPERATION_ID,
+            "identity": offline_operation_identity("top_up"),
             "result": {"kind": "top_up", "result": result},
         },
     }
@@ -420,8 +495,7 @@ def offline_rejected_status(error: Mapping[str, Any]) -> Dict[str, Any]:
     return {
         "state": "rejected",
         "value": {
-            "operation_id": OFFLINE_OPERATION_ID,
-            "kind": {"kind": "redeem", "value": None},
+            "identity": offline_operation_identity("redeem"),
             "transaction_hash": OFFLINE_TRANSACTION_HASH,
             "error": dict(error),
         },

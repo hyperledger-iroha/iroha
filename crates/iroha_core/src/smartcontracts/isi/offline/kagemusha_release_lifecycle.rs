@@ -1799,7 +1799,7 @@ pub(super) mod tests {
                 enable_transaction_intent: HashOf::from_untyped_unchecked(Hash::new(
                     b"enable transaction",
                 )),
-                enabled_at_height: 3,
+                enabled_at_height: 4,
                 enabled_at_unix_ms: 1_800_000_000_001,
                 validator_liveness_evidence: KagemushaExactBytesDigestV1::from_bytes(
                     b"validator liveness",
@@ -1808,14 +1808,14 @@ pub(super) mod tests {
                 canary_transaction_intent: HashOf::from_untyped_unchecked(Hash::new(
                     b"canary transaction",
                 )),
-                canary_finalized_height: 2,
+                canary_finalized_height: 3,
                 canary_finalized_block_hash: HashOf::from_untyped_unchecked(Hash::new(
                     b"canary block",
                 )),
                 endpoint_challenge: [0xA2; 32],
                 validator_ids,
-                observed_tip_heights: [2; KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT],
-                highest_observed_tip_height: 2,
+                observed_tip_heights: [3; KAGEMUSHA_V4_ACTIVATION_VALIDATOR_COUNT],
+                highest_observed_tip_height: 3,
             }));
         lifecycle
             .validate()
@@ -2006,7 +2006,7 @@ pub(super) mod tests {
         let signed = lifecycle_transaction(&lifecycle, instruction.clone().into());
         let state = lifecycle_state(&lifecycle);
         let header = BlockHeader::new(
-            core::num::NonZeroU64::new(4).expect("nonzero lifecycle height"),
+            core::num::NonZeroU64::new(5).expect("nonzero lifecycle height"),
             None,
             None,
             None,

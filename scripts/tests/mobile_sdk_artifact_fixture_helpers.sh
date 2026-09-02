@@ -240,7 +240,7 @@ enum KagemushaRecursiveSpendV4Fixture {
     static func appendSpendV4() {}
     static func verifySpendV4() {}
     static func buildRedeemV4() {}
-    static func prepareRedemptionChangeV4() {}
+    static func prepareRedemptionChangeV5() {}
 
     static let symbols = [
         "connect_norito_kagemusha_recursive_spend_capabilities_v4",
@@ -285,7 +285,7 @@ native_lifecycle = (
     "kagemushaRecursiveSpendCapabilitiesV4",
     "kagemushaRecursiveSpendInitV4",
     "kagemushaRecursiveSpendRedeemV4",
-    "kagemushaRecursiveSpendRedemptionChangePrepareV4",
+    "kagemushaRecursiveSpendRedemptionChangePrepareV5",
     "kagemushaRecursiveSpendVerifyV4",
 )
 swift = root / "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift"
@@ -294,8 +294,8 @@ swift.write_text(
         [
             *(f'let symbol_{index} = "{symbol}"' for index, symbol in enumerate(c_symbols)),
             *(f"func {method}() {{}}" for method in native_lifecycle
-              if method != "kagemushaRecursiveSpendRedemptionChangePrepareV4"),
-            "func kagemushaRecursiveSpendRedemptionChangePrepareV4() {",
+              if method != "kagemushaRecursiveSpendRedemptionChangePrepareV5"),
+            "func kagemushaRecursiveSpendRedemptionChangePrepareV5() {",
             '    let secureFree = "connect_norito_kagemusha_secret_free_buffer"',
             "    copyKagemushaNativeSecretArchiveOutput()",
             "}",
@@ -620,11 +620,13 @@ SWIFT
     "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
     "connect_norito_private_settlement_committee_proof_response_verify_v1",
     "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
+    "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
     "connect_norito_private_settlement_audit_approval_response_verify_v1",
     "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
     "connect_norito_kagemusha_recursive_spend_capabilities_v4",
-    "connect_norito_kagemusha_offline_operation_status_validate_v1",
-    "connect_norito_kagemusha_offline_operation_status_json_validate_v1",
+    "connect_norito_kagemusha_native_contract_revision",
+    "connect_norito_kagemusha_offline_operation_status_validate_v2",
+    "connect_norito_kagemusha_offline_operation_status_json_validate_v2",
     "connect_norito_kagemusha_topup_finality_verify_v4",
     "connect_norito_kagemusha_topup_shield_build_unsigned_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_begin_v4",
@@ -649,7 +651,7 @@ SWIFT
     "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v4",
     "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v4",
     "connect_norito_kagemusha_recursive_spend_redeem_v4",
-    "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4",
+    "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v5",
     "connect_norito_kagemusha_secret_free_buffer",
     "connect_norito_kagemusha_receiver_key_reference_v2",
     "connect_norito_kagemusha_recipient_output_derive_v2",
@@ -661,9 +663,9 @@ SWIFT
     "connect_norito_kagemusha_recipient_receive_offer_create_v2",
     "connect_norito_kagemusha_recipient_receive_offer_project_v2",
     "connect_norito_kagemusha_recipient_receive_offer_verify_v2",
-    "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
-    "connect_norito_kagemusha_request_authorization_finalize_hardware_v2",
-    "connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2",
+    "connect_norito_kagemusha_request_authorization_signing_bytes_v3",
+    "connect_norito_kagemusha_request_authorization_finalize_hardware_v3",
+    "connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v3",
     "connect_norito_kagemusha_receiver_acknowledgement_payload_v2",
     "connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2",
     "connect_norito_kagemusha_receiver_acknowledgement_create_v2",

@@ -35,7 +35,7 @@ use iroha_data_model::{
         offline::{RedeemKagemushaRecursiveV4, TopUpKagemushaRecursiveV4},
         private_settlement::{
             AbortAtomicPrivateSettlementV1, ActivatePrivateSettlementPoolV1,
-            FinalizeAtomicPrivateSettlementV1,
+            FinalizeAtomicPrivateSettlementV1, RegisterAtomicPrivateSettlementPrepareV1,
         },
         settlement::{
             DvpIsi, FundFxCorridorEscrow, FxCorridorPolicy, FxCorridorPolicyRegistry, PvpIsi,
@@ -1773,8 +1773,11 @@ fn instruction_settlement_dataspace_target_with_stack(
         return Ok(Some(activation.route.dataspace_id));
     }
     if any
-        .downcast_ref::<AbortAtomicPrivateSettlementV1>()
+        .downcast_ref::<RegisterAtomicPrivateSettlementPrepareV1>()
         .is_some()
+        || any
+            .downcast_ref::<AbortAtomicPrivateSettlementV1>()
+            .is_some()
         || any
             .downcast_ref::<FinalizeAtomicPrivateSettlementV1>()
             .is_some()
@@ -1980,8 +1983,11 @@ fn instruction_settlement_dataspace_target_with_world_and_stack<W: WorldReadOnly
         return Ok(Some(activation.route.dataspace_id));
     }
     if any
-        .downcast_ref::<AbortAtomicPrivateSettlementV1>()
+        .downcast_ref::<RegisterAtomicPrivateSettlementPrepareV1>()
         .is_some()
+        || any
+            .downcast_ref::<AbortAtomicPrivateSettlementV1>()
+            .is_some()
         || any
             .downcast_ref::<FinalizeAtomicPrivateSettlementV1>()
             .is_some()
@@ -5523,8 +5529,11 @@ fn instruction_transaction_target_requires_universal_coordinator(
         return Ok(true);
     }
     if any
-        .downcast_ref::<AbortAtomicPrivateSettlementV1>()
+        .downcast_ref::<RegisterAtomicPrivateSettlementPrepareV1>()
         .is_some()
+        || any
+            .downcast_ref::<AbortAtomicPrivateSettlementV1>()
+            .is_some()
         || any
             .downcast_ref::<FinalizeAtomicPrivateSettlementV1>()
             .is_some()
@@ -5670,8 +5679,11 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
         return Ok(true);
     }
     if any
-        .downcast_ref::<AbortAtomicPrivateSettlementV1>()
+        .downcast_ref::<RegisterAtomicPrivateSettlementPrepareV1>()
         .is_some()
+        || any
+            .downcast_ref::<AbortAtomicPrivateSettlementV1>()
+            .is_some()
         || any
             .downcast_ref::<FinalizeAtomicPrivateSettlementV1>()
             .is_some()
@@ -8829,7 +8841,7 @@ mod tests {
             prelude::{Mint, Register, Transfer},
             private_settlement::{
                 AbortAtomicPrivateSettlementV1, ActivatePrivateSettlementPoolV1,
-                FinalizeAtomicPrivateSettlementV1,
+                FinalizeAtomicPrivateSettlementV1, RegisterAtomicPrivateSettlementPrepareV1,
             },
             settlement::{
                 DvpIsi, FundFxCorridorEscrow, FxCorridorOracleEvidence, FxCorridorPolicy,
@@ -8849,7 +8861,7 @@ mod tests {
             AUTOSCALE_META_MANAGED, AssetPermissionManifest, AtomicPrivateSettlementV1, LaneConfig,
             LaneId, LaneVisibility, ManifestVersion, PrivateSettlementAbortReasonV1,
             PrivateSettlementCommitBundleV1, PrivateSettlementPoolGovernanceLifecycleV1,
-            PrivateSettlementRouteV1, UniversalAccountId,
+            PrivateSettlementPrepareBarrierV1, PrivateSettlementRouteV1, UniversalAccountId,
         },
         oracle::{FeedConfigVersion, FeedEvent, FeedEventOutcome, FeedSuccess, ObservationValue},
         peer::PeerId,
@@ -8906,8 +8918,60 @@ mod tests {
                     reimbursement_leg_ordinal: 0,
                     legs: Vec::new(),
                 },
-                authority_catalog: Vec::new(),
+                authority_catalog: Default::default(),
                 legs: Vec::new(),
+            },
+        ));
+
+        assert_eq!(
+            instruction_settlement_dataspace_target(&*instruction, None, None),
+            Ok(Some(DataSpaceId::UNIVERSAL))
+        );
+        assert_eq!(
+            instruction_transaction_target_requires_universal_coordinator(
+                &*instruction,
+                None,
+                None,
+            ),
+            Ok(true)
+        );
+        assert!(!instruction_transaction_dataspace_target_needs_state(
+            &*instruction
+        ));
+    }
+
+    #[test]
+    fn private_settlement_prepare_registration_routes_to_universal_without_state_lookup() {
+        let (sponsor, _) = gen_account_in("settlement-prepare-registration");
+        let instruction = InstructionBox::from(RegisterAtomicPrivateSettlementPrepareV1::new(
+            PrivateSettlementPrepareBarrierV1 {
+                version: AtomicPrivateSettlementV1::VERSION,
+                manifest: AtomicPrivateSettlementV1 {
+                    version: AtomicPrivateSettlementV1::VERSION,
+                    network_id: super::super::queue_test_network_id(),
+                    bundle_id: Hash::new(b"router-private-settlement-prepare-registration"),
+                    authority_context_height: 10,
+                    expiry_height: 20,
+                    sponsor,
+                    public_fee_intent: iroha_data_model::transaction::FeePaymentIntent::authority(
+                        Vec::new(),
+                        None,
+                    ),
+                    fee_intent_digest: Hash::new(
+                        b"router-private-settlement-prepare-registration-fee",
+                    ),
+                    reimbursement_terms_commitment: Hash::new(
+                        b"router-private-settlement-prepare-registration-reimbursement",
+                    ),
+                    reimbursement_leg_ordinal: 0,
+                    legs: Vec::new(),
+                },
+                authority_catalog: Default::default(),
+                deltas: Vec::new(),
+                prepare_certificates: Vec::new(),
+                prepared_bundle_digest: Hash::new(
+                    b"router-private-settlement-prepare-registration-barrier",
+                ),
             },
         ));
 

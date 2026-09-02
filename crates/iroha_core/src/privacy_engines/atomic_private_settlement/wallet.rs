@@ -134,8 +134,7 @@ impl core::fmt::Debug for AtomicPrivateSettlementPreparedProofV1 {
 ///
 /// This remains a native client-side value: it contains restricted proof and
 /// capsule bytes, but no spending secret, note opening, or membership path.
-/// The delta is derived mechanically from the self-verified proof statement and
-/// a caller-supplied successor root obtained from the local accumulator view.
+/// The delta is derived mechanically from the self-verified proof statement.
 #[derive(Clone, PartialEq, Eq)]
 pub struct AtomicPrivateSettlementPreparedLegV1 {
     /// Exact fixed-shape public statement proved by `proof`.
@@ -156,20 +155,17 @@ impl core::fmt::Debug for AtomicPrivateSettlementPreparedLegV1 {
 
 /// Complete one self-verified native proof into the canonical fixed-shape delta.
 ///
-/// `new_root` must come from the wallet's authenticated accumulator view. Nodes
-/// independently derive and compare the successor frontier before Prepare, so
-/// this helper cannot make a caller-invented root admissible. It removes the
-/// error-prone public field assembly previously required of Rust and native
-/// wallet callers.
+/// The proof statement already binds the successor root and epoch. Nodes still
+/// derive and compare that successor frontier independently before Prepare.
+/// This helper deliberately accepts no post-proof transition material.
 ///
 /// # Errors
 ///
 /// Rejects an invalid statement or proof size, a substituted capsule, an
-/// invalid successor root or epoch transition, canonical encoding failure, or
-/// any derived delta that does not exactly match the proof statement.
+/// canonical encoding failure, or any derived delta that does not exactly
+/// match the proof statement.
 pub fn complete_atomic_private_settlement_prepared_leg_v1(
     prepared: AtomicPrivateSettlementPreparedProofV1,
-    new_root: PrivacyRootV1,
 ) -> Result<AtomicPrivateSettlementPreparedLegV1, AtomicPrivateSettlementWalletErrorV1> {
     let AtomicPrivateSettlementPreparedProofV1 {
         statement,
@@ -182,13 +178,6 @@ pub fn complete_atomic_private_settlement_prepared_leg_v1(
     if proof.is_empty() || proof.len() > PRIVATE_SETTLEMENT_MAX_PROOF_BYTES_V1 {
         return Err(AtomicPrivateSettlementWalletErrorV1::PublicBinding);
     }
-    if new_root.is_zero() || new_root == statement.old_root {
-        return Err(AtomicPrivateSettlementWalletErrorV1::PublicBinding);
-    }
-    let new_epoch = statement
-        .old_epoch
-        .checked_add(1)
-        .ok_or(AtomicPrivateSettlementWalletErrorV1::PublicBinding)?;
     let statement_digest = statement
         .digest()
         .map_err(|_| AtomicPrivateSettlementWalletErrorV1::PublicBinding)?;
@@ -206,9 +195,9 @@ pub fn complete_atomic_private_settlement_prepared_leg_v1(
         pool_id: statement.pool_id,
         asset_binding_commitment: statement.asset_binding_commitment,
         old_root: statement.old_root,
-        new_root,
+        new_root: statement.new_root,
         old_epoch: statement.old_epoch,
-        new_epoch,
+        new_epoch: statement.new_epoch,
         nullifiers: statement.nullifiers.clone(),
         output_commitments: statement.output_commitments.clone(),
         encrypted_outputs: statement.encrypted_outputs.clone(),
@@ -496,6 +485,10 @@ pub struct AtomicPrivateSettlementBootstrapPlanV1 {
     pub old_root: PrivacyRootV1,
     /// Root after appending all three fixed output commitments in statement order.
     pub new_root: PrivacyRootV1,
+    /// Epoch assigned to the governed origin root.
+    pub old_epoch: u64,
+    /// Epoch assigned to the derived successor root.
+    pub new_epoch: u64,
     inputs: [AtomicPrivateSettlementInputSecretV1; PRIVATE_SETTLEMENT_INPUT_SLOTS_V1],
 }
 
@@ -714,27 +707,23 @@ pub fn prepare_atomic_private_settlement_outputs_v1(
 ///
 /// # Errors
 ///
-/// Rejects an invalid statement, zero/duplicate commitments, reserved-zero
-/// spending secrets, or an accumulator construction failure. Binding each
+/// Rejects zero/duplicate commitments, reserved-zero spending secrets, or an
+/// accumulator construction failure. Binding each
 /// secret to its audit-opened commitment is performed by the owner-bundle
 /// encoder once the corresponding openings are supplied.
 pub fn plan_atomic_private_settlement_bootstrap_v1(
-    statement: &PrivateSettlementProofStatementV1,
+    pool_id: iroha_data_model::privacy::PrivacyPoolIdV1,
     input_commitments: [PrivacyCommitmentV1; PRIVATE_SETTLEMENT_INPUT_SLOTS_V1],
+    output_commitments: [PrivacyCommitmentV1; PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1],
     input_spending_secrets: [[u8; 32]; PRIVATE_SETTLEMENT_INPUT_SLOTS_V1],
 ) -> Result<AtomicPrivateSettlementBootstrapPlanV1, AtomicPrivateSettlementWalletErrorV1> {
-    statement
-        .validate()
-        .map_err(|_| AtomicPrivateSettlementWalletErrorV1::PublicBinding)?;
-    let output_commitments: [PrivacyCommitmentV1; PRIVATE_SETTLEMENT_OUTPUT_SLOTS_V1] = statement
-        .output_commitments
-        .as_slice()
-        .try_into()
-        .map_err(|_| AtomicPrivateSettlementWalletErrorV1::PublicBinding)?;
+    if pool_id.is_zero() {
+        return Err(AtomicPrivateSettlementWalletErrorV1::PublicBinding);
+    }
     let namespace = PrivacyNamespaceV1::new(
         PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
         PrivacyNamespaceScopeV1::PoolProgram(PrivacyPoolProgramNamespaceV1 {
-            pool_id: statement.pool_id,
+            pool_id,
             program_id: atomic_private_settlement_program_id_v1()
                 .map_err(|_| AtomicPrivateSettlementWalletErrorV1::PublicBinding)?,
         }),
@@ -761,6 +750,8 @@ pub fn plan_atomic_private_settlement_bootstrap_v1(
         initial_commitments: planned.initial_commitments,
         old_root: planned.old_root,
         new_root: planned.new_root,
+        old_epoch: 1,
+        new_epoch: 2,
         inputs,
     })
 }
@@ -1447,6 +1438,22 @@ mod tests {
         assert!(!prepared.proof.is_empty());
         assert_eq!(prepared.statement, statement);
         assert_eq!(prepared.audit_capsule, capsule);
+        let mut substituted_statement = prepared.statement.clone();
+        substituted_statement.new_root = PrivacyRootV1::new([0xE8; 32]);
+        substituted_statement
+            .validate()
+            .expect("successor substitution remains structurally valid");
+        assert!(
+            crate::privacy_engines::atomic_private_settlement::verify_atomic_private_settlement_v1(
+                &manifest,
+                &substituted_statement,
+                *manifest.network_id.as_genesis_hash().as_ref(),
+                manifest.authority_context_height,
+                &prepared.proof,
+            )
+            .is_err(),
+            "a proof must not verify after successor-root substitution"
+        );
         let debug = format!("{prepared:?}");
         assert_eq!(
             debug,
@@ -1454,29 +1461,20 @@ mod tests {
         );
         assert!(!debug.contains(&hex::encode(&prepared.proof)));
 
+        let mut unchanged_successor = prepared.clone();
+        unchanged_successor.statement.new_root = unchanged_successor.statement.old_root;
         assert!(
-            complete_atomic_private_settlement_prepared_leg_v1(
-                prepared.clone(),
-                statement.old_root,
-            )
-            .is_err(),
-            "an unchanged successor root must fail closed"
+            complete_atomic_private_settlement_prepared_leg_v1(unchanged_successor).is_err(),
+            "an unchanged proof-bound successor root must fail closed"
         );
         let mut substituted_capsule = prepared.clone();
         substituted_capsule.audit_capsule.ciphertext[0] ^= 1;
         assert!(
-            complete_atomic_private_settlement_prepared_leg_v1(
-                substituted_capsule,
-                fixture.sidecar.payload.delta.new_root,
-            )
-            .is_err(),
+            complete_atomic_private_settlement_prepared_leg_v1(substituted_capsule).is_err(),
             "a capsule substitution must fail before delta construction"
         );
-        let prepared_leg = complete_atomic_private_settlement_prepared_leg_v1(
-            prepared,
-            fixture.sidecar.payload.delta.new_root,
-        )
-        .expect("native proof completes into a canonical delta");
+        let prepared_leg = complete_atomic_private_settlement_prepared_leg_v1(prepared)
+            .expect("native proof completes into a canonical delta");
         prepared_leg
             .delta
             .validate_against(&prepared_leg.statement)

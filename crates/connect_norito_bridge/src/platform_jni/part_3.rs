@@ -745,6 +745,15 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ) -> jni::sys::jint {
     CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
 }
+android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeKagemushaContractRevision();
+sdk:
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeKagemushaContractRevision(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jint {
+    KAGEMUSHA_NATIVE_CONTRACT_REVISION as jni::sys::jint
+}
 android: fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativePastaCycleV4BackendAvailable();
 sdk:
 #[unsafe(no_mangle)]
@@ -848,12 +857,12 @@ kagemusha_sdk_android_forwarders! {
     } -> JniByteArray = java_native_kagemusha_build_verify_request_v4,
         JavaKagemushaArtifactRegistryV4::Production;
     #[allow(clippy::too_many_arguments)]
-    nativeBuildRedeemRequestV4 {
+    nativeBuildRedeemRequestV5 {
         bundle bytes, topup_provenance bytes, opening bytes, membership_witness bytes,
         recipient bytes, chain_discriminant int, atomic_units bytes, scale int,
-        change_opening bytes, change_output_membership bytes, verifier_commitment bytes, operation_id bytes,
+        change_opening bytes, change_output_membership bytes, verifier_commitment bytes, nonce bytes,
         block_height long
-    } -> JniByteArray = java_native_kagemusha_build_redeem_request_v4;
+    } -> JniByteArray = java_native_kagemusha_build_redeem_request_v5;
     nativeProjectPeerPaymentV4 { payment bytes } -> JniObjectArray = java_native_kagemusha_project_peer_payment_v4;
     nativeProjectInitResultV4 { result bytes } -> JniObjectArray = java_native_kagemusha_project_init_result_v4;
     nativeProjectSplitResultV4 { result bytes } -> JniObjectArray = java_native_kagemusha_project_split_result_v4;
@@ -863,34 +872,34 @@ kagemusha_sdk_android_forwarders! {
     nativeCreateAcknowledgementV2 { payload bytes, signature bytes, request bytes, payment bytes } -> JniByteArray = java_native_kagemusha_create_acknowledgement_v2;
     nativeVerifyAcknowledgementV2 { acknowledgement bytes, request bytes, payment bytes } -> JniObjectArray = java_native_kagemusha_verify_acknowledgement_v2;
     #[allow(clippy::too_many_arguments)]
-    nativePrepareAuthorizationV2 {
+    nativePrepareAuthorizationV3 {
         authority bytes, chain_discriminant int, device_id bytes, asset_definition_id bytes,
-        operation_id bytes, issued_at_ms long, expires_at_ms long, nonce bytes,
+        issued_at_ms long, expires_at_ms long, nonce bytes,
         payload_digest bytes, registration_hash bytes, hardware_assertion_platform bytes
-    } -> JniObjectArray = java_native_kagemusha_prepare_authorization_v2;
-    nativeFinalizeHardwareAuthorizationV2 {
+    } -> JniObjectArray = java_native_kagemusha_prepare_authorization_v3;
+    nativeFinalizeHardwareAuthorizationV3 {
         preparation bytes, authenticator_data bytes, signature_der bytes
-    } -> JniObjectArray = java_native_kagemusha_finalize_hardware_authorization_v2;
-    nativeFinalizeIosAppAttestAuthorizationV2 { preparation bytes, assertion_object bytes } -> JniObjectArray = java_native_kagemusha_finalize_ios_app_attest_authorization_v2;
-    nativeFinalizeTopUpV4 { unsigned bytes, authorization bytes } -> JniByteArray = java_native_kagemusha_finalize_top_up_v4;
-    nativeFinalizeRedeemV4 { build_result bytes, authorization bytes } -> JniObjectArray = java_native_kagemusha_finalize_redeem_v4;
+    } -> JniObjectArray = java_native_kagemusha_finalize_hardware_authorization_v3;
+    nativeFinalizeIosAppAttestAuthorizationV3 { preparation bytes, assertion_object bytes } -> JniObjectArray = java_native_kagemusha_finalize_ios_app_attest_authorization_v3;
+    nativeFinalizeTopUpV5 { unsigned bytes, authorization bytes } -> JniByteArray = java_native_kagemusha_finalize_top_up_v5;
+    nativeFinalizeRedeemV5 { build_result bytes, authorization bytes } -> JniObjectArray = java_native_kagemusha_finalize_redeem_v5;
     #[allow(clippy::too_many_arguments)]
-    nativePrepareTopUpV4 {
+    nativePrepareTopUpV5 {
         network_id bytes, chain_discriminant int, asset_definition bytes, payer bytes,
-        atomic_units bytes, scale int, operation_id bytes, spend_key bytes,
+        atomic_units bytes, scale int, nonce bytes, spend_key bytes,
         rho bytes, diversifier bytes, leaf_index int, flattened_siblings bytes,
         directions bytes, root bytes, shield_verifier_commitment bytes, artifact_binding bytes
-    } -> JniObjectArray = java_native_kagemusha_prepare_top_up_v4;
+    } -> JniObjectArray = java_native_kagemusha_prepare_top_up_v5;
     nativeProjectTopUpRequestIdentityV4 { request bytes } -> JniObjectArray = java_native_kagemusha_project_top_up_request_identity_v4;
     nativeProjectRedeemRequestIdentityV4 { request bytes } -> JniObjectArray = java_native_kagemusha_project_redeem_request_identity_v4;
-    nativeProjectOperationReferenceV4 { reference bytes } -> JniObjectArray = java_native_kagemusha_project_operation_reference_v4;
-    nativeProjectOperationStatusV4 { status bytes } -> JniObjectArray = java_native_kagemusha_project_operation_status_v4;
+    nativeProjectOperationReferenceV2 { reference bytes } -> JniObjectArray = java_native_kagemusha_project_operation_reference_v2;
+    nativeProjectOperationStatusV2 { status bytes } -> JniObjectArray = java_native_kagemusha_project_operation_status_v2;
     nativeBranchClaimsConflictV2 { left bytes, right bytes } -> JniBoolean = java_native_kagemusha_branch_claims_conflict_v2;
     #[allow(clippy::too_many_arguments)]
-    nativePrepareRedemptionChangeV4 {
+    nativePrepareRedemptionChangeV5 {
         bundle bytes, input_opening bytes, atomic_units bytes, scale int,
-        operation_id bytes, entropy bytes
-    } -> JniObjectArray = java_native_kagemusha_prepare_redemption_change_v4;
+        recipient bytes, chain_discriminant int, nonce bytes, entropy bytes
+    } -> JniObjectArray = java_native_kagemusha_prepare_redemption_change_v5;
     #[allow(clippy::too_many_arguments)]
     nativePreparePeerSplitChangeV4 {
         bundles objects, input_openings objects, recipient_request bytes, atomic_units bytes,

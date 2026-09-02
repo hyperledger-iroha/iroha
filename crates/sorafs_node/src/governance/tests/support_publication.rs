@@ -900,7 +900,7 @@ impl GovernanceDagRuntimeSigner for TestRuntimeDagSigner {
 fn qualified_test_runtime_dag_signer(revision: u64, seed: u8) -> GovernanceRuntimeDagSigner {
     let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
     let signer = Arc::new(TestRuntimeDagSigner::new(
-        "pkcs11:governance-dag:primary",
+        "provider:governance-dag:primary",
         &peer_id,
         seed,
     ));
@@ -909,7 +909,7 @@ fn qualified_test_runtime_dag_signer(revision: u64, seed: u8) -> GovernanceRunti
         .store(revision, Ordering::SeqCst);
     let public_key = signer.public_key();
     GovernanceRuntimeDagSigner::try_new(
-        "pkcs11:governance-dag:primary".to_owned(),
+        "provider:governance-dag:primary".to_owned(),
         peer_id,
         public_key,
         GovernanceDagRuntimeProviderQualificationV1::new(
@@ -954,12 +954,12 @@ fn signed_runtime_publisher_with_observable_providers(
 ) {
     let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
     let signer_provider = Arc::new(TestRuntimeDagSigner::new(
-        "pkcs11:governance-dag:primary",
+        "provider:governance-dag:primary",
         &peer_id,
         0x31,
     ));
     let signer = GovernanceRuntimeDagSigner::try_new(
-        "pkcs11:governance-dag:primary".to_owned(),
+        "provider:governance-dag:primary".to_owned(),
         peer_id,
         signer_provider.public_key(),
         test_runtime_dag_signer_qualification(),
@@ -1185,13 +1185,13 @@ fn filesystem_publisher_restart_rejects_runtime_signer_revision_substitution() {
     );
     let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
     let provider = Arc::new(TestRuntimeDagSigner::new(
-        "pkcs11:governance-dag:primary",
+        "provider:governance-dag:primary",
         &peer_id,
         0x31,
     ));
     provider.qualification_revision.store(2, Ordering::SeqCst);
     let signer = GovernanceRuntimeDagSigner::try_new(
-        "pkcs11:governance-dag:primary".to_owned(),
+        "provider:governance-dag:primary".to_owned(),
         peer_id,
         provider.public_key(),
         GovernanceDagRuntimeProviderQualificationV1::new(2, TEST_RUNTIME_DAG_SIGNER_POLICY_DIGEST),

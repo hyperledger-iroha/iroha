@@ -2141,7 +2141,7 @@ export class ToriiBrowserClient {
       contentType: "application/x-norito",
       headers: {
         Accept: "application/json",
-        "Idempotency-Key": normalized.operationId,
+        "Idempotency-Key": normalized.identity.operation_id,
       },
       signal: opts.signal,
       oneShot: true,
@@ -2160,9 +2160,7 @@ export class ToriiBrowserClient {
         retryAfter = response.headers.get("retry-after");
       },
     }).then((payload) => normalizeKagemushaOperationReference(payload, {
-      expectedOperationId: normalized.operationId,
-      expectedKind: kind,
-      expectedSubmittedAtMs: normalized.issuedAtMs,
+      expectedIdentity: normalized.identity,
       location,
       retryAfter,
     }));

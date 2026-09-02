@@ -909,7 +909,7 @@ fn build_historical_body_response(
         )?;
     let request = authenticated.request();
     if request.subject != artifact.subject {
-        return Err(V2BlockSyncError::HistoricalSubjectMismatch { height });
+        return Err(V2BlockSyncError::HistoricalRequestSubjectMismatch { height });
     }
     let responder = PeerId::new(responder_key.public_key().clone());
     let block_height = usize::try_from(height)?;
@@ -1009,10 +1009,20 @@ pub(crate) enum V2BlockSyncError {
     /// Internal bounded response-cache indexes diverged.
     #[error("Sumeragi v2 block-sync response cache is internally inconsistent")]
     CorruptServerCache,
-    /// The requested CommitQC subject differs from Kura's canonical decision.
-    #[error("Sumeragi v2 historical certified subject differs at height {height}")]
-    HistoricalSubjectMismatch {
+    /// A fully authenticated request certifies a subject other than the canonical artifact.
+    #[error(
+        "Sumeragi v2 authenticated historical-body request subject differs from canonical finality at height {height}"
+    )]
+    HistoricalRequestSubjectMismatch {
         /// Conflicting historical height.
+        height: wire::Height,
+    },
+    /// Kura's canonical block or body differs from its persisted finality artifact.
+    #[error(
+        "Sumeragi v2 historical finality subject differs from Kura's canonical body at height {height}"
+    )]
+    HistoricalSubjectMismatch {
+        /// Locally inconsistent historical height.
         height: wire::Height,
     },
     /// Kura finality exists without its canonical block body.
@@ -2196,7 +2206,7 @@ pub(super) mod tests {
                 &history.requester,
                 &history.validators[0],
             ),
-            Err(V2BlockSyncError::HistoricalSubjectMismatch { height: 1 })
+            Err(V2BlockSyncError::HistoricalRequestSubjectMismatch { height: 1 })
         ));
         assert_eq!(mismatch_server.body_len(), 0);
         let mut invalid_qc = prepare_qc;

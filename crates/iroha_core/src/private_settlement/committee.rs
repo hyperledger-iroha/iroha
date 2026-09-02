@@ -123,6 +123,20 @@ where
         .get(&pool_key)
         .cloned()
         .ok_or(PrivateSettlementCommitteeErrorV1)?;
+    if material
+        .payload
+        .delta
+        .encrypted_outputs
+        .iter()
+        .any(|output| {
+            world
+                .private_settlement_recipient_index
+                .get(&output.recipient)
+                .is_some()
+        })
+    {
+        return Err(PrivateSettlementCommitteeErrorV1);
+    }
     let existing_nullifiers = world
         .private_settlement_nullifiers
         .iter()
@@ -217,6 +231,8 @@ mod tests {
 
         restricted.sidecar.payload.statement.old_epoch = pool.epoch();
         restricted.sidecar.payload.statement.old_root = pool.root();
+        restricted.sidecar.payload.statement.new_epoch = successor.epoch;
+        restricted.sidecar.payload.statement.new_root = successor.root;
         restricted.sidecar.payload.delta.old_epoch = pool.epoch();
         restricted.sidecar.payload.delta.old_root = pool.root();
         restricted.sidecar.payload.delta.new_epoch = successor.epoch;
@@ -439,7 +455,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_pool_head_and_wsv_replay_are_uniformly_rejected() {
+    fn stale_pool_head_and_wsv_replays_are_uniformly_rejected() {
         let fixture = align_fixture_with_governed_pool(sidecar_fixture());
         let temp = tempfile::tempdir().expect("tempdir");
         let (store, digest) = open_and_audit(&fixture, temp.path());
@@ -483,6 +499,30 @@ mod tests {
             prepare_from_world(
                 &fixture,
                 &replay_world,
+                &store,
+                digest,
+                &fixture.restricted.validator,
+                12,
+            ),
+            Err(PrivateSettlementCommitteeErrorV1)
+        );
+
+        let mut recipient_replay_world = world_with_pool(&fixture, fixture.pool.clone());
+        recipient_replay_world
+            .private_settlement_recipient_index
+            .insert(
+                fixture.restricted.sidecar.payload.delta.encrypted_outputs[0].recipient,
+                PrivateSettlementFinalizationReferenceV1 {
+                    bundle_id: Hash::new(b"prior recipient bundle"),
+                    receipt_digest: Hash::new(b"prior recipient receipt"),
+                    leg_ordinal: 0,
+                    finalized_height: 11,
+                },
+            );
+        assert_eq!(
+            prepare_from_world(
+                &fixture,
+                &recipient_replay_world,
                 &store,
                 digest,
                 &fixture.restricted.validator,

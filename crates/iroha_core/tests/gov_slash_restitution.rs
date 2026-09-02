@@ -97,13 +97,13 @@ fn seed_plain_referendum(
     tx: &mut iroha_core::state::StateTransaction<'_, '_>,
     referendum_id: &str,
 ) {
-    tx.world.governance_referenda_mut().insert(
+    tx.world.put_governance_referendum_for_testing(
         referendum_id.to_string(),
         iroha_core::state::GovernanceReferendumRecord {
             h_start: 1,
             h_end: 5,
-            status: iroha_core::state::GovernanceReferendumStatus::Proposed,
-            mode: iroha_core::state::GovernanceReferendumMode::Plain,
+            status: iroha_core::state::GovernanceReferendumStatus::Open,
+            final_tally: None,
         },
     );
 }
@@ -114,10 +114,11 @@ fn lock_slash_restitute(
 ) {
     let ballot = iroha_data_model::isi::governance::CastPlainBallot {
         referendum_id: referendum_id.to_string(),
-        owner: owner.clone(),
-        amount: 10_u64.into(),
-        duration_blocks: 200,
-        direction: 0,
+        direction: iroha_data_model::isi::governance::GovernancePlainBallotDirectionV1::Aye,
+        lock: iroha_data_model::isi::governance::GovernanceParticipationLockV1 {
+            amount: 10_u64.into(),
+            duration_blocks: core::num::NonZeroU64::new(200).expect("non-zero lock duration"),
+        },
     };
     ballot
         .clone()

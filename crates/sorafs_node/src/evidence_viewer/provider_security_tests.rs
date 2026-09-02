@@ -161,10 +161,10 @@ fn signed_checkpoint_envelope_rejects_non_receipt_state_tampering() {
     let mut substituted_handle =
         signed_checkpoint_envelope(&key, &config, EvidenceViewerCheckpointV1::default())
             .checkpoint_anchor;
-    substituted_handle.signer_handle = "pkcs11:rotated-evidence-receipts".to_owned();
+    substituted_handle.signer_handle = "provider:rotated-evidence-receipts".to_owned();
     assert_eq!(
         substituted_handle.verify(
-            "pkcs11:rotated-evidence-receipts",
+            "provider:rotated-evidence-receipts",
             config.receipt_signer_public_key,
         ),
         Err(EvidenceViewerErrorV1::InvalidCheckpoint),
@@ -215,7 +215,7 @@ fn signed_receipt_rejects_body_signature_and_chain_tampering() {
     let receipt = signed_receipt(&key);
     receipt
         .verify(
-            "pkcs11:prod-evidence-receipts",
+            "provider:prod-evidence-receipts",
             key.verifying_key().to_bytes(),
         )
         .expect("valid signed receipt");
@@ -223,7 +223,7 @@ fn signed_receipt_rejects_body_signature_and_chain_tampering() {
     tampered_body.body.range_end = Some(2048);
     assert_eq!(
         tampered_body.verify(
-            "pkcs11:prod-evidence-receipts",
+            "provider:prod-evidence-receipts",
             key.verifying_key().to_bytes()
         ),
         Err(EvidenceViewerErrorV1::InvalidCheckpoint)
@@ -232,7 +232,7 @@ fn signed_receipt_rejects_body_signature_and_chain_tampering() {
     tampered_signature.signature[0] ^= 1;
     assert_eq!(
         tampered_signature.verify(
-            "pkcs11:prod-evidence-receipts",
+            "provider:prod-evidence-receipts",
             key.verifying_key().to_bytes()
         ),
         Err(EvidenceViewerErrorV1::InvalidCheckpoint)

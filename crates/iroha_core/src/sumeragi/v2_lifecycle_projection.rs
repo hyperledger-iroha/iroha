@@ -1270,7 +1270,11 @@ impl super::ProductionLifecycleOwnerV1 {
         if !self
             .registry
             .registry_mut()
-            .preflight_certified_serve_terminal_owner_state(&self.coordinator, lease)
+            .preflight_certified_serve_terminal_owner_state(
+                &self.verified,
+                &self.coordinator,
+                lease,
+            )
         {
             return Err(self.certified_serve_terminal_restart(
                 CertifiedServeTerminalSettlementFailureV1::Registry,
@@ -1294,7 +1298,12 @@ impl super::ProductionLifecycleOwnerV1 {
         if !self
             .registry
             .registry_mut()
-            .preflight_certified_serve_terminal_settlement(&self.coordinator, lease, authenticated)
+            .preflight_certified_serve_terminal_settlement(
+                &self.verified,
+                &self.coordinator,
+                lease,
+                authenticated,
+            )
         {
             return Err(self.certified_serve_terminal_restart(
                 CertifiedServeTerminalSettlementFailureV1::Registry,
@@ -1367,6 +1376,7 @@ impl super::ProductionLifecycleOwnerV1 {
             .registry
             .registry_mut()
             .prepare_certified_serve_terminal_transition(
+                &self.verified,
                 &self.coordinator,
                 &lease,
                 authenticated,
@@ -1400,6 +1410,7 @@ impl super::ProductionLifecycleOwnerV1 {
             .registry_mut()
             .publish_certified_serve_terminal_transition(
                 transition,
+                &self.verified,
                 &self.coordinator,
                 &staged,
                 &lease,
