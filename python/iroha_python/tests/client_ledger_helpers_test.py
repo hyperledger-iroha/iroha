@@ -1829,7 +1829,7 @@ def test_privacy_verifier_registry_is_closed_exact_and_engine_typed() -> None:
             "halo2/pasta/kaigi-roster-v1",
             "halo2/pasta/kaigi-usage-v1",
             "halo2/pasta/ivm-execution-v1",
-            "halo2/pasta/offline-cash-v1-mint-fold-merkle16-axiom-poseidon-v1",
+            "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1",
             "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
             "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
             "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",

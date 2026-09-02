@@ -344,7 +344,7 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
             proposal_round: finality_round,
             phase: wire::GlobalPhase::Commit,
             subject: finality_subject,
-            execution_commitment: wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            execution_commitment: wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                 iroha_crypto::Hash::new(b"lifecycle retirement pre-state"),
                 iroha_crypto::Hash::new(b"lifecycle retirement post-state"),
                 iroha_crypto::Hash::new(b"lifecycle retirement writes"),

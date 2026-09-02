@@ -314,7 +314,7 @@ def test_first_release_sdk_versions_are_final_and_swift_is_tag_pinned() -> None:
     for relative in (
         "kotlin/core-jvm/build.gradle.kts",
         "kotlin/client-android/build.gradle.kts",
-        "kotlin/offline-wallet-android/build.gradle.kts",
+        "kotlin/kagemusha-wallet-android/build.gradle.kts",
         "java/iroha_android/build.gradle.kts",
         "java/iroha_android/core/build.gradle.kts",
         "java/iroha_android/jvm/build.gradle.kts",

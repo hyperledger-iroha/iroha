@@ -19,8 +19,8 @@ pub mod multisig;
 /// Musubi package registry instruction handlers.
 pub mod musubi;
 pub mod nft;
-/// Offline allowance settlement instruction handlers.
-pub mod offline;
+/// Kagemusha reserve settlement instruction handlers.
+pub mod kagemusha;
 /// Oracle feed admission and aggregation instruction handlers.
 pub mod oracle;
 /// Canonical first-release privacy governance and proof admission.
@@ -308,8 +308,8 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::ram_lfe::ActivateRamLfeProgramPolicy>,
     dispatch_instruction::<iroha_data_model::isi::ram_lfe::DeactivateRamLfeProgramPolicy>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetDefinitionAlias>,
-    dispatch_instruction::<iroha_data_model::isi::TopUpOfflineCashV1>,
-    dispatch_instruction::<iroha_data_model::isi::RedeemOfflineCashV1>,
+    dispatch_instruction::<iroha_data_model::isi::TopUpKagemushaV1>,
+    dispatch_instruction::<iroha_data_model::isi::RedeemKagemushaV1>,
     dispatch_instruction::<iroha_data_model::isi::social::ClaimTwitterFollowReward>,
     dispatch_instruction::<iroha_data_model::isi::social::SendToTwitter>,
     dispatch_instruction::<iroha_data_model::isi::social::CancelTwitterEscrow>,

@@ -182,11 +182,11 @@ whose marker appears on another route is replaced by the ordinary typed
 envelope. Errors after a stream has started follow that stream's terminal
 framing instead of the finite HTTP envelope.
 
-`GET /v1/offline/readiness` is the canonical universal offline-wallet
+`GET /v1/kagemusha/readiness` is the canonical universal offline-wallet
 capability discovery route. It does not evaluate a validator, asset,
 domain, dataspace, escrow account, verifier catalog, or deployment profile.
-Every app-API build returns the same asset-neutral Offline Cash V1
-`cash_handoff_v1` contract. Its only fields are `cash_handoff_capability`,
+Every app-API build returns the same asset-neutral Kagemusha V1
+`kagemusha_handoff_v1` contract. Its only fields are `kagemusha_handoff_capability`,
 `wire_version`, `device_lifecycle_version`, and `ready`; both versions are
 exactly `1` and `ready` is always true. No hop, ancestry, input, or history
 limit is advertised. Clients must not use this response, `/health`,
@@ -485,7 +485,7 @@ public response schema.
 
 Both Offline command routes use the configured Torii `max_content_len` request
 limit, the same operator-controlled ceiling used for transaction ingress. They
-do not inherit Axum's smaller framework default: an Offline Cash V1 redemption that is
+do not inherit Axum's smaller framework default: an Kagemusha V1 redemption that is
 within the configured limit reaches typed decoding. A streamed or
 declared body that exceeds the configured limit fails with typed `413` code
 `request_payload_too_large` before command admission.
@@ -500,16 +500,16 @@ authorizes the client to recycle or change the operation id.
 
 Accepted request bindings and in-flight reservations share the configured
 positive `operation_registry_max_entries` and `operation_registry_max_bytes`
-budgets under `torii.offline_cash_v1_commands`. They retain fixed-size canonical
+budgets under `torii.kagemusha_v1_commands`. They retain fixed-size canonical
 digests, not proof-bearing request DTOs. Each entry is charged exactly 145
 bytes; the default 4,096-entry registry therefore defaults to exactly 593,920
 bytes. Capacity never evicts an unexpired
 binding: a new unique command receives typed
-`503 offline_operation_capacity_exhausted`, while an identical accepted replay
+`503 kagemusha_operation_capacity_exhausted`, while an identical accepted replay
 or in-flight follower remains available.
 
-Every Torii replica allowed to accept Offline Cash V1 commands for one deployment
-must use the same Offline Cash V1 submission authority and behaviorally identical
+Every Torii replica allowed to accept Kagemusha V1 commands for one deployment
+must use the same Kagemusha V1 submission authority and behaviorally identical
 command policy. Given the same signed request, those replicas consequently
 construct the same signed transaction. A cross-instance race can still admit
 the same candidate more than once into independent local queues, so the
@@ -518,7 +518,7 @@ permits at most one economic effect. This is not a distributed
 idempotency-cache guarantee.
 
 Pre-commit ownership and rejected attempts are keyed by the configured
-Offline Cash V1 submission authority together with the signed operation id. A
+Kagemusha V1 submission authority together with the signed operation id. A
 transaction under another outer authority therefore cannot shadow a
 Torii-submitted attempt merely by copying its signed request body into a
 transaction that rejects. A rejected attempt is retryable under the same
@@ -528,7 +528,7 @@ derives the replacement carrier's nonce by checked increment of the rejected
 wire's nonce (`None` becomes `1`). Retry wires therefore remain deterministic
 across replicas without colliding with Queue's committed-hash replay guard. If
 the increment would exceed the transaction nonce space, the command returns
-`409 offline_operation_retry_exhausted`; the caller must authorize a new
+`409 kagemusha_operation_retry_exhausted`; the caller must authorize a new
 operation id. Rejected is therefore terminal only for one carrier attempt, not
 for the operation-id resource.
 
@@ -538,7 +538,7 @@ cardinality and the exact reciprocal entry in logarithmic time; the complete
 bijection is scanned once after cold journal reconstruction. A newer exact
 Queue-owned attempt supersedes a stale process-local admitted transaction hash,
 while any logical carrier mismatch remains
-`503 offline_operation_evidence_inconsistent`.
+`503 kagemusha_operation_evidence_inconsistent`.
 
 Applied finality is instead unique by operation id across all authorized
 submission authorities. Only the authenticated fresh economic branch may
@@ -576,9 +576,9 @@ through Queue's exact composite-key ownership index. If Queue startup recovery
 or an in-flight durability transition prevents a coherent ownership snapshot,
 status lookup and
 idempotent submission reconciliation return
-`503 offline_operation_pending_unavailable` rather than guessing absent or
+`503 kagemusha_operation_pending_unavailable` rather than guessing absent or
 pending. Any forward/reverse index or exact-carrier mismatch returns
-`503 offline_operation_evidence_inconsistent`. A terminal consensus outcome,
+`503 kagemusha_operation_evidence_inconsistent`. A terminal consensus outcome,
 when present, takes precedence over process-local admission, Queue, and
 pipeline hints.
 
@@ -593,9 +593,9 @@ match exactly. Torii follows the locator directly to the retained ordinary
 block or flattened merge evidence; it never scans history or trusts a
 process-local pipeline hint over terminal consensus state. A replica that does
 not retain the referenced body or merge batch returns
-`503 offline_operation_history_unavailable`. Malformed outcome state or any
+`503 kagemusha_operation_history_unavailable`. Malformed outcome state or any
 carrier/result mismatch returns
-`503 offline_operation_evidence_inconsistent`. Applied results carry the
+`503 kagemusha_operation_evidence_inconsistent`. Applied results carry the
 non-zero finalized height from that exact evidence. The result wire deliberately
 omits server time because it is not authenticated by the operation's consensus
 proof. Deployments that cannot provide pre-commit affinity must not expose

@@ -292,41 +292,41 @@ const JS_MAX_SAFE_INTEGER_F64: f64 = 9_007_199_254_740_991.0;
 pub fn connect_norito_bridge_abi_version() -> u32 {
     PRIVACY_BRIDGE_ABI_VERSION_V1
 }
-/// Return the sole Offline Cash native contract revision.
-#[napi(js_name = "offlineCashV1NativeContractRevision")]
-pub fn offline_cash_v1_native_contract_revision() -> u32 {
+/// Return the sole Kagemusha native contract revision.
+#[napi(js_name = "kagemushaV1NativeContractRevision")]
+pub fn kagemusha_v1_native_contract_revision() -> u32 {
     1
 }
-/// Fail-closed validation for exact Offline Cash V1 operation-status JSON.
+/// Fail-closed validation for exact Kagemusha V1 operation-status JSON.
 ///
 /// Applied results are rejected here because terminal validation requires a
 /// caller-pinned finality trust anchor; this boundary validates only pending
 /// and rejected status envelopes.
-#[napi(js_name = "offlineCashV1OperationStatusJsonValidate")]
-pub fn offline_cash_v1_operation_status_json_validate(status_json: Uint8Array) -> napi::Result<()> {
+#[napi(js_name = "kagemushaV1OperationStatusJsonValidate")]
+pub fn kagemusha_v1_operation_status_json_validate(status_json: Uint8Array) -> napi::Result<()> {
     use iroha::client::{
-        OFFLINE_CASH_OPERATION_STATUS_JSON_MAX_BYTES_V1, OfflineCashOperationStatusV1,
+        KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1, KagemushaOperationStatusV1,
     };
 
     let bytes = status_json.as_ref();
-    if bytes.is_empty() || bytes.len() > OFFLINE_CASH_OPERATION_STATUS_JSON_MAX_BYTES_V1 {
+    if bytes.is_empty() || bytes.len() > KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1 {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
             format!(
-                "Offline Cash V1 operation-status JSON must contain 1..={OFFLINE_CASH_OPERATION_STATUS_JSON_MAX_BYTES_V1} bytes"
+                "Kagemusha V1 operation-status JSON must contain 1..={KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1} bytes"
             ),
         ));
     }
-    let status = json::from_slice::<OfflineCashOperationStatusV1>(bytes).map_err(|error| {
+    let status = json::from_slice::<KagemushaOperationStatusV1>(bytes).map_err(|error| {
         napi::Error::new(
             napi::Status::InvalidArg,
-            format!("invalid Offline Cash V1 operation-status JSON: {error}"),
+            format!("invalid Kagemusha V1 operation-status JSON: {error}"),
         )
     })?;
     status.validate().map_err(|error| {
         napi::Error::new(
             napi::Status::InvalidArg,
-            format!("invalid Offline Cash V1 operation status: {error}"),
+            format!("invalid Kagemusha V1 operation status: {error}"),
         )
     })
 }
@@ -12447,22 +12447,22 @@ mod tests {
         Uint8Array::from(test_network_id(label).as_bytes().to_vec())
     }
     #[test]
-    fn offline_cash_v1_status_json_napi_boundary_validates_exact_structure() {
-        use iroha_data_model::isi::offline_cash_v1::{
-            OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashOperationKindV1, OfflineCashOperationStateV1,
-            OfflineCashOperationStatusV1,
+    fn kagemusha_v1_status_json_napi_boundary_validates_exact_structure() {
+        use iroha_data_model::isi::kagemusha_v1::{
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaOperationKindV1, KagemushaOperationStateV1,
+            KagemushaOperationStatusV1,
         };
 
-        let pending = norito::json::to_vec(&OfflineCashOperationStatusV1 {
-            version: OFFLINE_CASH_CHAIN_VERSION_V1,
+        let pending = norito::json::to_vec(&KagemushaOperationStatusV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
             operation_id: [0x11; 32],
-            kind: OfflineCashOperationKindV1::TopUp,
-            state: OfflineCashOperationStateV1::Pending,
+            kind: KagemushaOperationKindV1::TopUp,
+            state: KagemushaOperationStateV1::Pending,
             result: None,
             rejection: None,
         })
         .expect("encode canonical Pending status");
-        offline_cash_v1_operation_status_json_validate(Uint8Array::from(pending))
+        kagemusha_v1_operation_status_json_validate(Uint8Array::from(pending))
             .expect("canonical Pending status");
 
         for invalid in [
@@ -12470,7 +12470,7 @@ mod tests {
             br#"{"state":"pending","value":{"operation_id":"00"}}"#.as_slice(),
         ] {
             assert!(
-                offline_cash_v1_operation_status_json_validate(Uint8Array::from(invalid.to_vec()))
+                kagemusha_v1_operation_status_json_validate(Uint8Array::from(invalid.to_vec()))
                     .is_err()
             );
         }

@@ -58,7 +58,7 @@ from iroha_torii_client.client import (
     NetworkTimeSample,
     NetworkTimeSnapshot,
     NetworkTimeStatus,
-    OfflineStatus,
+    KagemushaReadinessV1,
     SorafsOrderbookSubmissionAmbiguousError,
     SorafsOrderbookSubmissionIdentity,
     SorafsOrderbookSubmissionReceipt,
@@ -11233,8 +11233,8 @@ class SumeragiV2ExecutionCommitment:
     parent_state_root: str
     post_state_root: str
     ordinary_writes_root: str
-    offline_cash_top_up_root: Optional[str]
-    offline_cash_top_up_count: int
+    kagemusha_top_up_root: Optional[str]
+    kagemusha_top_up_count: int
     native_amx_application_manifest_version: int
     native_amx_application_manifest_root: str
     native_amx_application_manifest_count: int
@@ -11253,8 +11253,8 @@ class SumeragiV2ExecutionCommitment:
                 "parent_state_root",
                 "post_state_root",
                 "ordinary_writes_root",
-                "offline_cash_top_up_root",
-                "offline_cash_top_up_count",
+                "kagemusha_top_up_root",
+                "kagemusha_top_up_count",
                 "native_amx_application_manifest_version",
                 "native_amx_application_manifest_root",
                 "native_amx_application_manifest_count",
@@ -11268,24 +11268,24 @@ class SumeragiV2ExecutionCommitment:
         for field_name in ("lane_finality_manifest", "merge_carrier"):
             if field_name not in payload:
                 raise TypeError(f"{context}.{field_name} is required")
-        offline_cash_top_up_count = _sumeragi_v2_uint(
-            payload.get("offline_cash_top_up_count"),
-            f"{context}.offline_cash_top_up_count",
+        kagemusha_top_up_count = _sumeragi_v2_uint(
+            payload.get("kagemusha_top_up_count"),
+            f"{context}.kagemusha_top_up_count",
             maximum=(1 << 32) - 1,
         )
-        offline_cash_top_up_root_value = payload.get("offline_cash_top_up_root")
-        offline_cash_top_up_root = (
+        kagemusha_top_up_root_value = payload.get("kagemusha_top_up_root")
+        kagemusha_top_up_root = (
             None
-            if offline_cash_top_up_root_value is None
+            if kagemusha_top_up_root_value is None
             else _sumeragi_v2_string(
-                offline_cash_top_up_root_value,
-                f"{context}.offline_cash_top_up_root",
+                kagemusha_top_up_root_value,
+                f"{context}.kagemusha_top_up_root",
             )
         )
-        if (offline_cash_top_up_count == 0) != (offline_cash_top_up_root is None):
+        if (kagemusha_top_up_count == 0) != (kagemusha_top_up_root is None):
             raise ValueError(
-                f"{context}.offline_cash_top_up_root must be present exactly when "
-                "offline_cash_top_up_count is positive"
+                f"{context}.kagemusha_top_up_root must be present exactly when "
+                "kagemusha_top_up_count is positive"
             )
         native_manifest_version = _sumeragi_v2_uint(
             payload.get("native_amx_application_manifest_version"),
@@ -11351,8 +11351,8 @@ class SumeragiV2ExecutionCommitment:
                 payload.get("ordinary_writes_root"),
                 f"{context}.ordinary_writes_root",
             ),
-            offline_cash_top_up_root=offline_cash_top_up_root,
-            offline_cash_top_up_count=offline_cash_top_up_count,
+            kagemusha_top_up_root=kagemusha_top_up_root,
+            kagemusha_top_up_count=kagemusha_top_up_count,
             native_amx_application_manifest_version=native_manifest_version,
             native_amx_application_manifest_root=native_manifest_root,
             native_amx_application_manifest_count=native_manifest_count,
@@ -11492,8 +11492,8 @@ class SumeragiStatusSnapshot:
             parent_state_root=execution_commitment.parent_state_root,
             post_state_root=execution_commitment.post_state_root,
             ordinary_writes_root=execution_commitment.ordinary_writes_root,
-            offline_cash_top_up_root=execution_commitment.offline_cash_top_up_root,
-            offline_cash_top_up_count=execution_commitment.offline_cash_top_up_count,
+            kagemusha_top_up_root=execution_commitment.kagemusha_top_up_root,
+            kagemusha_top_up_count=execution_commitment.kagemusha_top_up_count,
             native_amx_application_manifest_version=(
                 execution_commitment.native_amx_application_manifest_version
             ),
@@ -13563,7 +13563,7 @@ __all__ = [
     "NetworkTimeStatus",
     "NetworkTimeSample",
     "NetworkTimeRttBucket",
-    "OfflineStatus",
+    "KagemushaReadinessV1",
     "NodeCapabilities",
     "NodeAdminSnapshot",
     "TransportConfig",

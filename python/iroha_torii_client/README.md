@@ -74,9 +74,9 @@ marker, not a normalization option. Contract `tx_hash_hex` receipt fields use
 the same exact spelling, as do contract entrypoint hashes, multisig transaction
 hashes, and offline-operation status transaction hashes.
 
-`get_offline_cash_readiness()` validates the closed four-field Offline Cash V1
-response from `GET /v1/offline/readiness`. Peer-payment, mint-credit, and
-redemption-voucher codecs live in the sole `OfflineCashV1` Python namespace.
+`get_kagemusha_readiness()` validates the closed four-field Kagemusha V1
+response from `GET /v1/kagemusha/readiness`. Peer-payment, mint-credit, and
+redemption-voucher codecs live in the sole `KagemushaV1` Python namespace.
 
 ## Caller-trusted unsigned drafts
 

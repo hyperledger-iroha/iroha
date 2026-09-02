@@ -2632,7 +2632,7 @@ required_production_liveness_tests=(
   sumeragi::status::v2_liveness_watchdog_tests::active_watchdog_resets_on_successor_owner_and_status_clear
   sumeragi::status::v2_liveness_watchdog_tests::rejected_running_successor_failure_projection_preserves_status
   block::consensus_v2::finality::tests::header_binding_allows_unchanged_reproposal_but_rejects_earlier_decision_round
-  block::consensus_v2::tests::offline_cash_consensus_signature_envelope_roundtrips_and_rejects_drift
+  block::consensus_v2::tests::kagemusha_consensus_signature_envelope_roundtrips_and_rejects_drift
   block::consensus_v2::tests::height_context_identity_ignores_reproposal_round_and_rejects_split_rounds
   block::consensus_v2::tests::timeout_proposal_accepts_only_the_selected_prepare_subject
   sumeragi_v2_runner::prepare_qc_split_tests::locked_commit_progress_witness_rejects_inexact_or_empty_ownership

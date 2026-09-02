@@ -3200,7 +3200,7 @@
           "persist_post_apply_metadata",
           "repair_native_amx_participant_application_evidence",
           "publish_committed_block_merge_entry",
-          "promote_offline_cash_finality_sidecar",
+          "promote_kagemusha_finality_sidecar",
           "finalize_committed_block_merge_reservations"
         ]
       },
@@ -4383,7 +4383,7 @@
           "persist_post_apply_metadata",
           "repair_native_amx_participant_application_evidence",
           "publish_committed_block_merge_entry",
-          "promote_offline_cash_finality_sidecar",
+          "promote_kagemusha_finality_sidecar",
           "finalize_committed_block_merge_reservations"
         ]
       },
@@ -9133,7 +9133,7 @@
             "persist_post_apply_metadata",
             "repair_native_amx_participant_application_evidence",
             "publish_committed_block_merge_entry",
-            "promote_offline_cash_finality_sidecar",
+            "promote_kagemusha_finality_sidecar",
             "finalize_committed_block_merge_reservations"
           ]
         },

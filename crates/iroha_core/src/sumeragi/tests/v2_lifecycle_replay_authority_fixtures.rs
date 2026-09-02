@@ -89,7 +89,7 @@ impl Fixture {
             signature: vec![subject_marker.wrapping_add(1)],
             ..proposal.clone()
         };
-        let commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        let commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"replay parent state"),
             Hash::new(b"replay post state"),
             Hash::new(b"replay ordinary writes"),
@@ -810,8 +810,8 @@ impl CertifiedServeReplayFixture {
             .collect::<Vec<_>>();
         let network_id =
             crate::sumeragi::synthetic_network_id("certified-serve-replay-authority-test");
-        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
                 network_id, 0, &roster,
             );
         let context = wire::HeightContext {
@@ -826,8 +826,8 @@ impl CertifiedServeReplayFixture {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
-            offline_cash_mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"Certified-Serve replay AMX context"),
             execution_policy_hash: Hash::new(b"Certified-Serve replay execution policy"),
             da_layout: wire::recommended_data_availability_layout(),
@@ -851,7 +851,7 @@ impl CertifiedServeReplayFixture {
                 phase: wire::GlobalPhase::Prepare,
                 subject: request_subject,
                 execution_commitment:
-                    wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                    wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                         Hash::new(b"Certified-Serve replay parent state"),
                         Hash::new(b"Certified-Serve replay post state"),
                         Hash::new(b"Certified-Serve replay ordinary writes"),
@@ -933,8 +933,8 @@ impl CertifiedServeRecoveredReplayFixture {
             .collect::<Vec<_>>();
         let network_id =
             crate::sumeragi::synthetic_network_id("recovered-certified-serve-replay-test");
-        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
                 network_id, 0, &roster,
             );
         let context = wire::HeightContext {
@@ -949,8 +949,8 @@ impl CertifiedServeRecoveredReplayFixture {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
-            offline_cash_mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"recovered Serve replay AMX context"),
             execution_policy_hash: Hash::new(b"recovered Serve replay execution policy"),
             da_layout: wire::recommended_data_availability_layout(),
@@ -999,7 +999,7 @@ impl CertifiedServeRecoveredReplayFixture {
         )
         .expect("derive recovered Serve replay manifest");
         let execution_commitment =
-            wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                 Hash::new(b"recovered Serve replay parent state"),
                 Hash::new(b"recovered Serve replay post state"),
                 Hash::new(b"recovered Serve replay ordinary writes"),

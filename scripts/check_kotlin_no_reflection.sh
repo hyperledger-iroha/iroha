@@ -5,7 +5,7 @@ ROOT="$(git rev-parse --show-toplevel)"
 SOURCE_ROOTS=(
   "$ROOT/kotlin/core-jvm/src/main"
   "$ROOT/kotlin/client-android/src/main"
-  "$ROOT/kotlin/offline-wallet-android/src/main"
+  "$ROOT/kotlin/kagemusha-wallet-android/src/main"
 )
 EXISTING_ROOTS=()
 for source_root in "${SOURCE_ROOTS[@]}"; do

@@ -37,7 +37,7 @@ fn assert_restored_stage_seven_retirement_does_not_resurrect(
         proposal_round: round,
         phase: wire::GlobalPhase::Commit,
         subject: body_subject,
-        execution_commitment: wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        execution_commitment: wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new([marker, 3]),
             Hash::new([marker, 4]),
             Hash::new([marker, 5]),

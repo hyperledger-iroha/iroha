@@ -2120,7 +2120,7 @@ fn verified_finality_for_context(
     keys: &[KeyPair],
     block: &SignedBlock,
 ) -> wire::finality::V2FinalityArtifact {
-    let mut execution_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+    let mut execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"historical sidecar parent state"),
         Hash::new(b"historical sidecar post state"),
         Hash::new(b"historical sidecar writes"),

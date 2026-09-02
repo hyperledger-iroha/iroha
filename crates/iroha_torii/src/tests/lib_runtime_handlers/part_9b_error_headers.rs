@@ -52,13 +52,13 @@ fn accept_transaction_nts_unhealthy_sets_header_code() {
     );
 }
 #[test]
-fn offline_reason_query_error_sets_reject_code_header() {
+fn kagemusha_reason_query_error_sets_reject_code_header() {
     use iroha_data_model::{
-        offline::OFFLINE_CASH_V1_REJECTION_REASON_PREFIX,
+        kagemusha::KAGEMUSHA_V1_REJECTION_REASON_PREFIX,
         query::error::QueryExecutionFail,
     };
     let message = format!(
-        "{OFFLINE_CASH_V1_REJECTION_REASON_PREFIX}invalid_proof:recursive proof is invalid"
+        "{KAGEMUSHA_V1_REJECTION_REASON_PREFIX}invalid_proof:recursive proof is invalid"
     );
     let err = super::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         QueryExecutionFail::Conversion(message),

@@ -23687,17 +23687,17 @@ fn finalize_lane_relay_for_state_test(
     let_row! { mut validators = validator_keypairs .iter() .map(|keypair| (PeerId::new(keypair.public_key().clone()), keypair)) .collect::<Vec<_>>() };
     validators.sort_by(|left, right| left.0.cmp(&right.0));
     let_row! { roster = validators .iter() .map(|(validator, _)| wire::ValidatorPower { validator: validator.clone(), power: 1, }) .collect::<Vec<_>>() };
-    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
             *state.network_id_ref(),
             0,
             &roster,
         );
     let_row! { snapshot_bootstrap = (height > 1).then(|| { let parent_height = NonZeroUsize::new(usize::try_from(height - 1).expect("relay parent height fits usize")) .expect("relay parent height is non-zero"); let parent = state .kura .get_block(parent_height) .expect("non-genesis relay finality requires a canonical parent"); wire::SnapshotBootstrapAnchor { snapshot_height: height - 1, snapshot_block_hash: parent.hash(), snapshot_block_creation_time_ms: parent.header().creation_time_ms, snapshot_state_hash: Hash::new(b"state-test-relay-snapshot-state"), } }) };
-    let_row! { context = wire::HeightContext { network_id: *state.network_id_ref(), protocol_version: wire::PROTOCOL_VERSION, height, epoch: 0, epoch_end_height: height.saturating_add(100), next_epoch_snapshot: None, mode: wire::ConsensusMode::Permissioned, parent_commit_qc: None, snapshot_bootstrap, quorum: wire::DualQuorum::from_roster(&roster).expect("valid relay finality quorum"), roster, offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster, nexus_amx_context_hash: Hash::new(b"state-test-relay-nexus-amx-context"), execution_policy_hash: Hash::new(b"state-test-relay-execution-policy"), da_layout: wire::recommended_data_availability_layout(), leader_seed: [0x5A; 32], } };
+    let_row! { context = wire::HeightContext { network_id: *state.network_id_ref(), protocol_version: wire::PROTOCOL_VERSION, height, epoch: 0, epoch_end_height: height.saturating_add(100), next_epoch_snapshot: None, mode: wire::ConsensusMode::Permissioned, parent_commit_qc: None, snapshot_bootstrap, quorum: wire::DualQuorum::from_roster(&roster).expect("valid relay finality quorum"), roster, kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster, nexus_amx_context_hash: Hash::new(b"state-test-relay-nexus-amx-context"), execution_policy_hash: Hash::new(b"state-test-relay-execution-policy"), da_layout: wire::recommended_data_availability_layout(), leader_seed: [0x5A; 32], } };
     let_row! { subject = wire::BlockSubject { parent_block_hash: block.header().prev_block_hash(), block_hash: block.hash(), payload_hash: block .canonical_proposal_wire_hash() .expect("encode relay finality proposal"), } };
     let_row! { executed_block_wire_len = u64::try_from( block .canonical_wire() .expect("encode relay finality carrier") .as_framed() .len(), ) .expect("relay finality carrier length fits u64") };
-    let_row! { mut execution_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier( Hash::new([0xBC; 4]), Hash::new([0xAB; 4]), Hash::new(b"state-test-relay-ordinary-writes"), executed_block_wire_len, block .executed_block_wire_hash() .expect("encode relay finality carrier"), ) };
+    let_row! { mut execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier( Hash::new([0xBC; 4]), Hash::new([0xAB; 4]), Hash::new(b"state-test-relay-ordinary-writes"), executed_block_wire_len, block .executed_block_wire_hash() .expect("encode relay finality carrier"), ) };
     execution_commitment.lane_finality_manifest = Some(statement_commitment);
     execution_commitment
         .validate()

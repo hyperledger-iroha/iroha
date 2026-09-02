@@ -325,7 +325,7 @@ Verifier behavior (native STARK)
   same circuit. The generic `halo2/ipa` entry point uses a closed v1 circuit
 	  registry containing only IVM execution, Kaigi roster/usage, the
 	  protocol-private confidential transfer/unshield circuits used by native
-	  escrow, plus the authenticated Offline Cash V1 artifact set. Tiny arithmetic,
+	  escrow, plus the authenticated Kagemusha V1 artifact set. Tiny arithmetic,
   anonymous-transfer demos, vote-bool demos, the historical IVM overlay-binding
   stand-in, retired recursive-spend labels, cross-family ids, and trusted-setup
   ids all fail before verifier dispatch. Prefixing or otherwise normalizing a
@@ -338,7 +338,7 @@ Verifier behavior (native STARK)
   not the concrete instance columns. Every admitted circuit id normalizes to one
   closed, authoritative descriptor (IVM execution, Kaigi roster/usage,
   confidential transfer/full-unshield/change-unshield, or an authenticated
-  Offline Cash V1 artifact role).
+  Kagemusha V1 artifact role).
   Preverification, guardrails, final dispatch, and verifying-key record
   preparation require exact descriptor bytes or the Iroha hash of those bytes;
   arbitrary nonempty replacements and unmapped circuits fail closed.

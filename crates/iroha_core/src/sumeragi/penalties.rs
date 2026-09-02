@@ -880,7 +880,7 @@ mod tests {
             view,
         };
         let execution_commitment =
-            ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                 Hash::new(b"penalty evidence parent state"),
                 Hash::new(b"penalty evidence post state"),
                 Hash::new(b"penalty evidence ordinary writes"),
@@ -939,8 +939,8 @@ mod tests {
                 power: 1,
             })
             .collect::<Vec<_>>();
-        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
                 network_id, 0, &roster,
             );
         HeightContext {
@@ -955,8 +955,8 @@ mod tests {
             snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("valid fixture quorum"),
             roster,
-            offline_cash_mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"penalties v2 test context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
@@ -1014,7 +1014,7 @@ mod tests {
                 .expect("canonical proposal wire"),
         };
         let execution_commitment =
-            ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                 Hash::new(b"penalties fixture parent state"),
                 Hash::new(b"penalties fixture post state"),
                 Hash::new(b"penalties fixture ordinary writes"),

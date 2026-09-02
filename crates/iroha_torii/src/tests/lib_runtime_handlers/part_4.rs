@@ -2119,9 +2119,9 @@ async fn core_info_handlers_ok() {
     let health = decode_torii_json(resp, "health body", "decode health payload").await;
     assert_eq!(
         health
-            .get("cash_handoff_capability")
+            .get("kagemusha_handoff_capability")
             .and_then(norito::json::Value::as_str),
-        Some("cash_handoff_v1")
+        Some("kagemusha_handoff_v1")
     );
     assert_eq!(
         health

@@ -9,7 +9,7 @@ fn exact_vote_equivocation(
         view: 0,
     };
     let signer = 1;
-    let execution_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+    let execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"equivocation parent state"),
         Hash::new(b"equivocation post state"),
         Hash::new(b"equivocation ordinary writes"),

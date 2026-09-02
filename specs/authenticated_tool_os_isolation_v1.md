@@ -10,7 +10,7 @@ production trust root.
 
 The isolated execution surface is `run-v1`. No first-release production
 protocol grants monetary or consensus authority through this controller;
-Offline Cash V1 relies exclusively on its hardware `GuardBundle` contract.
+Kagemusha V1 relies exclusively on its hardware `GuardBundle` contract.
 `qualify-host-v1` accepts no arguments and runs the controller's built-in
 hostile host suite. Its internal adversarial payload, `qualification-probe-v1`,
 must not be granted as a standalone privileged sudo command. Unknown, duplicate,

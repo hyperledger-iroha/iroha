@@ -8,9 +8,9 @@ Not published to Maven Central yet. Build locally and consume via `mavenLocal()`
 
 | Artifact | Type | Description |
 |----------|------|-------------|
-| `org.hyperledger.iroha.sdk:core-jvm` | JAR | Pure Kotlin/JVM models, codecs, cryptography, clients, and Offline Cash V1 wire support |
-| `org.hyperledger.iroha.sdk:client-android` | AAR | Android keystore, device telemetry, IrohaKeyManager, shared JNI bridge for ML-DSA-65 / offline flows |
-| `org.hyperledger.iroha.sdk:offline-wallet-android` | AAR | Offline-wallet integration built on `client-android`; use this artifact for Android offline cash |
+| `org.hyperledger.iroha.sdk:core-jvm` | JAR | Pure Kotlin/JVM models, codecs, cryptography, clients, and Kagemusha V1 wire support |
+| `org.hyperledger.iroha.sdk:client-android` | AAR | Android keystore, device telemetry, IrohaKeyManager, shared JNI bridge for ML-DSA-65 / Kagemusha flows |
+| `org.hyperledger.iroha.sdk:kagemusha-wallet-android` | AAR | Kagemusha wallet integration built on `client-android`; use this artifact for Android Kagemusha |
 
 ### Consumer usage
 
@@ -23,22 +23,22 @@ repositories {
 // Pure JVM — business logic modules, JUnit tests, server-side
 implementation("org.hyperledger.iroha.sdk:core-jvm:0.1.0")
 
-// Android wallet without offline payments
+// Android wallet without Kagemusha payments
 implementation("org.hyperledger.iroha.sdk:client-android:0.1.0")
 
-// Android wallet with offline payments
-implementation("org.hyperledger.iroha.sdk:offline-wallet-android:0.1.0")
+// Android wallet with Kagemusha payments
+implementation("org.hyperledger.iroha.sdk:kagemusha-wallet-android:0.1.0")
 ```
 
-`OfflineCashWalletV1` is the Android-free aggregate-balance orchestrator. It opens only with an
-`OfflineCashHardwareProviderV1` that attests the complete exact-next counter, rollback-resistant
-journal/inbox/outbox, trusted-time, atomic recovery, and offline-rotation contract. Incoming
+`KagemushaWalletV1` is the Android-free aggregate-balance orchestrator. It opens only with an
+`KagemushaHardwareProviderV1` that attests the complete exact-next counter, rollback-resistant
+journal/inbox/outbox, trusted-time, atomic recovery, and hardware-epoch rotation contract. Incoming
 payments are acknowledged only after durable staging; duplicate delivery returns the provider's
 same durable ACK. Before every send or redemption, the wallet drains all pending credits without a
-count limit. `OfflineCashAndroidWalletV1.openProduction(...)` additionally binds an OEM adapter to
+count limit. `KagemushaAndroidWalletV1.openProduction(...)` additionally binds an OEM adapter to
 the native device service. Stock KeyMint and StrongBox remain online-only because signing keys do
 not supply the required non-forking persistence contract; there is no software fallback.
-Managed Offline Cash X25519 types enforce only the canonical 32-byte nonzero wire shape. They do
+Managed Kagemusha X25519 types enforce only the canonical 32-byte nonzero wire shape. They do
 not perform scalar multiplication or low-order probing; the shared native core authenticates
 canonical X25519 elements during object and complete-exchange validation before monetary use.
 Logical sequence and durable journal revision are per hardware epoch. Authenticated rotation carries
@@ -197,12 +197,12 @@ fields and tags, and current Native AMX V2 evidence. The parsers reject
 status/diagnostics swaps, legacy receipt shapes, unordered or oversized Native
 participant rows, and inconsistent carrier identities.
 
-### Offline peer transports
+### Kagemusha peer transports
 
-`OfflineCashV1` is the only offline-payment API. Kotlin/JVM and Android
+`KagemushaV1` is the only Kagemusha payment API. Kotlin/JVM and Android
 encode the same payment request, payment, acknowledgement, mint credit, and
-redemption voucher bytes, with `oc1:` as the sole text transport. QR, NFC,
-and Nearby consume `../fixtures/offline/offline_cash_v1.json`. Public wire
+redemption voucher bytes, with `kgm1:` as the sole text transport. QR, NFC,
+and Nearby consume `../fixtures/offline/kagemusha_v1.json`. Public wire
 size and verification work are independent of balance history; no hop, input,
 origin, ancestry, fan-in, or proof-depth limit is encoded.
 
@@ -424,7 +424,7 @@ the generated native bridge task.
 
 ### Step 2: Build native libraries (for `client-android`)
 
-The `libconnect_norito_bridge.so` files are **not tracked in git** — they are built from the Rust crate at `crates/connect_norito_bridge` in the same iroha repository. The Gradle task now lives on `client-android`, which owns the shared native bridge used for ML-DSA-65 signing and Offline Cash V1 device lifecycle operations. It defaults to `../..` as the iroha root (override via `iroha.dir` in `local.properties` if needed).
+The `libconnect_norito_bridge.so` files are **not tracked in git** — they are built from the Rust crate at `crates/connect_norito_bridge` in the same iroha repository. The Gradle task now lives on `client-android`, which owns the shared native bridge used for ML-DSA-65 signing and Kagemusha V1 device lifecycle operations. It defaults to `../..` as the iroha root (override via `iroha.dir` in `local.properties` if needed).
 
 **One-time setup:**
 
@@ -537,7 +537,7 @@ This makes the artifacts available to any project on the same machine via `maven
 ```bash
 ls ~/.m2/repository/org/hyperledger/iroha/sdk/core-jvm/0.1.0/
 ls ~/.m2/repository/org/hyperledger/iroha/sdk/client-android/0.1.0/
-ls ~/.m2/repository/org/hyperledger/iroha/sdk/offline-wallet-android/0.1.0/
+ls ~/.m2/repository/org/hyperledger/iroha/sdk/kagemusha-wallet-android/0.1.0/
 ```
 
 ### Quick reference
@@ -753,7 +753,7 @@ Android libraries must target Java 8 bytecode. Java 11+ API calls (`String.isBla
 
 ### Reflection-free
 
-The original Java SDK used reflection in multiple places (Android API discovery, BouncyCastle loading, keystore operations). Kotlin production sources are reflection-free across `core-jvm`, `client-android`, and `offline-wallet-android`; `scripts/check_kotlin_no_reflection.sh` enforces that contract. BouncyCastle is linked directly, Android keystore APIs are guarded by platform-version checks, and WebSocket clients require callers to inject a connector with `setWebSocketConnector(...)` instead of discovering one at runtime.
+The original Java SDK used reflection in multiple places (Android API discovery, BouncyCastle loading, keystore operations). Kotlin production sources are reflection-free across `core-jvm`, `client-android`, and `kagemusha-wallet-android`; `scripts/check_kotlin_no_reflection.sh` enforces that contract. BouncyCastle is linked directly, Android keystore APIs are guarded by platform-version checks, and WebSocket clients require callers to inject a connector with `setWebSocketConnector(...)` instead of discovering one at runtime.
 
 ### Modular architecture
 

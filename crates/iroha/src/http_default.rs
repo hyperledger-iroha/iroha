@@ -594,7 +594,7 @@ mod tests {
     }
 
     #[test]
-    fn offline_cash_loopback_transport_ignores_proxy_environment() {
+    fn kagemusha_loopback_transport_ignores_proxy_environment() {
         const CHILD: &str = "IROHA_LOOPBACK_PROXY_TEST_CHILD";
         const TARGET: &str = "IROHA_LOOPBACK_PROXY_TEST_TARGET";
         if std::env::var_os(CHILD).is_some() {
@@ -656,7 +656,7 @@ mod tests {
         let child = std::process::Command::new(std::env::current_exe().expect("test executable"))
             .args([
                 "--exact",
-                "http_default::tests::offline_cash_loopback_transport_ignores_proxy_environment",
+                "http_default::tests::kagemusha_loopback_transport_ignores_proxy_environment",
                 "--nocapture",
             ])
             .env(CHILD, "1")

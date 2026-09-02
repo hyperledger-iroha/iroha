@@ -27,9 +27,9 @@ use iroha_data_model::{
         TimeoutCertificate, TimeoutJustification, TimeoutVote, TimeoutVoteGroup, ValidatorPower,
         Vote, encode_payload_chunks, native_amx_application_manifest_empty_root,
     },
-    isi::offline_cash_v1::{
-        OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterV1,
-        OfflineCashMintFinalityValidatorKeysV1,
+    isi::kagemusha_v1::{
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
+        KagemushaMintFinalityValidatorKeysV1,
     },
     merge::MergeLedgerEntry,
     peer::PeerId,
@@ -110,8 +110,8 @@ struct PreV4ExecutionCommitment {
     parent_state_root: Hash,
     post_state_root: Hash,
     ordinary_writes_root: Hash,
-    offline_cash_top_up_root: Option<Hash>,
-    offline_cash_top_up_count: u32,
+    kagemusha_top_up_root: Option<Hash>,
+    kagemusha_top_up_count: u32,
     native_amx_application_manifest_version: u16,
     native_amx_application_manifest_root: Hash,
     native_amx_application_manifest_count: u32,
@@ -151,16 +151,16 @@ fn mint_finality_roster(
     network_id: NetworkId,
     epoch: u64,
     roster: &[ValidatorPower],
-) -> OfflineCashMintFinalityEpochRosterV1 {
-    OfflineCashMintFinalityEpochRosterV1 {
-        version: OFFLINE_CASH_CHAIN_VERSION_V1,
+) -> KagemushaMintFinalityEpochRosterV1 {
+    KagemushaMintFinalityEpochRosterV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
         epoch,
         validators: roster
             .iter()
             .enumerate()
             .map(
-                |(index, validator)| OfflineCashMintFinalityValidatorKeysV1 {
+                |(index, validator)| KagemushaMintFinalityValidatorKeysV1 {
                     validator: validator.validator.clone(),
                     eq_proof_public_key: [u8::try_from(index + 1).expect("small fixture roster");
                         32],
@@ -191,8 +191,8 @@ fn context() -> HeightContext {
         protocol_version: PROTOCOL_VERSION,
         height: 1,
         epoch: 2,
-        offline_cash_mint_finality_epoch_id: mint_finality_epoch_id,
-        offline_cash_mint_finality_epoch_roster: mint_finality_roster,
+        kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster: mint_finality_roster,
         epoch_end_height: 100,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Npos,
@@ -232,7 +232,7 @@ fn subject(seed: u8) -> BlockSubject {
     }
 }
 fn execution_commitment(seed: u8) -> ExecutionCommitment {
-    ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+    ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new([seed, 3]),
         Hash::new([seed, 4]),
         Hash::new([seed, 5]),
@@ -665,8 +665,8 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
         parent_state_root: commitment.parent_state_root,
         post_state_root: commitment.post_state_root,
         ordinary_writes_root: commitment.ordinary_writes_root,
-        offline_cash_top_up_root: commitment.offline_cash_top_up_root,
-        offline_cash_top_up_count: commitment.offline_cash_top_up_count,
+        kagemusha_top_up_root: commitment.kagemusha_top_up_root,
+        kagemusha_top_up_count: commitment.kagemusha_top_up_count,
         native_amx_application_manifest_version: commitment.native_amx_application_manifest_version,
         native_amx_application_manifest_root: commitment.native_amx_application_manifest_root,
         native_amx_application_manifest_count: commitment.native_amx_application_manifest_count,

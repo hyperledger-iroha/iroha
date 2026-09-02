@@ -214,13 +214,13 @@ pub(crate) fn validate_staged_genesis_v2_authority(
             da_layout: context.da_layout,
             nexus_amx_context_hash: *context.nexus_amx_context_hash.as_ref(),
             execution_policy_hash: *context.execution_policy_hash.as_ref(),
-            offline_cash_mint_finality_epoch_roster: context
-                .offline_cash_mint_finality_epoch_roster
+            kagemusha_mint_finality_epoch_roster: context
+                .kagemusha_mint_finality_epoch_roster
                 .clone(),
-            next_offline_cash_mint_finality_epoch_roster: context
+            next_kagemusha_mint_finality_epoch_roster: context
                 .next_epoch_snapshot
                 .as_ref()
-                .map(|snapshot| snapshot.offline_cash_mint_finality_epoch_roster.clone()),
+                .map(|snapshot| snapshot.kagemusha_mint_finality_epoch_roster.clone()),
         },
     )?;
     let (verified, _, _) = expected.into_parts();
@@ -297,8 +297,8 @@ pub fn freeze_staged_genesis_v2(
     };
     let election = FrozenElectionInputs {
         epoch: 0,
-        offline_cash_mint_finality_epoch_roster: signed_parameters
-            .offline_cash_mint_finality_epoch_roster
+        kagemusha_mint_finality_epoch_roster: signed_parameters
+            .kagemusha_mint_finality_epoch_roster
             .clone(),
         epoch_end_height,
         mode,
@@ -306,12 +306,12 @@ pub fn freeze_staged_genesis_v2(
         leader_seed,
     };
     let signed_next_mint_roster = signed_parameters
-        .next_offline_cash_mint_finality_epoch_roster
+        .next_kagemusha_mint_finality_epoch_roster
         .clone();
     let next_epoch_snapshot = if election.epoch_end_height == 1 {
         let roster = signed_next_mint_roster.ok_or_else(|| {
             V2GenesisBootstrapError::Context(
-                V2ContextBuildError::MissingNextOfflineCashMintFinalityEpochId.to_string(),
+                V2ContextBuildError::MissingNextKagemushaMintFinalityEpochId.to_string(),
             )
         })?;
         Some(
@@ -321,7 +321,7 @@ pub fn freeze_staged_genesis_v2(
     } else {
         if signed_next_mint_roster.is_some() {
             return Err(V2GenesisBootstrapError::Context(
-                V2ContextBuildError::UnexpectedNextOfflineCashMintFinalityEpochRoster.to_string(),
+                V2ContextBuildError::UnexpectedNextKagemushaMintFinalityEpochRoster.to_string(),
             ));
         }
         None
@@ -534,8 +534,8 @@ pub(crate) struct FrozenElectionInputs {
     /// Election epoch number.
     pub epoch: u64,
     /// Identifier of the paired-Pasta mint-finality roster for this epoch.
-    pub offline_cash_mint_finality_epoch_roster:
-        iroha_data_model::isi::offline_cash_v1::OfflineCashMintFinalityEpochRosterV1,
+    pub kagemusha_mint_finality_epoch_roster:
+        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
     /// Final height governed by this snapshot.
     pub epoch_end_height: wire::Height,
     /// Genesis-selected consensus mode.
@@ -574,20 +574,20 @@ pub(crate) fn build_genesis_height_context(
         return Err(V2ContextBuildError::EpochEndBeforeSuccessor);
     }
     let quorum = inputs.election.quorum()?;
-    let offline_cash_mint_finality_epoch_id = inputs
+    let kagemusha_mint_finality_epoch_id = inputs
         .election
-        .offline_cash_mint_finality_epoch_roster
+        .kagemusha_mint_finality_epoch_roster
         .finality_epoch_id()
-        .map_err(|_| V2ContextBuildError::InvalidOfflineCashMintFinalityEpochRoster)?;
+        .map_err(|_| V2ContextBuildError::InvalidKagemushaMintFinalityEpochRoster)?;
     let context = wire::HeightContext {
         network_id: inputs.network_id,
         protocol_version: wire::PROTOCOL_VERSION,
         height: 1,
         epoch: inputs.election.epoch,
-        offline_cash_mint_finality_epoch_id,
-        offline_cash_mint_finality_epoch_roster: inputs
+        kagemusha_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster: inputs
             .election
-            .offline_cash_mint_finality_epoch_roster,
+            .kagemusha_mint_finality_epoch_roster,
         epoch_end_height: inputs.election.epoch_end_height,
         next_epoch_snapshot: inputs.next_epoch_snapshot,
         mode: inputs.election.mode,
@@ -623,17 +623,17 @@ pub(crate) fn build_successor_height_context(
         return Err(V2ContextBuildError::EpochEndBeforeSuccessor);
     }
     let quorum = election.quorum()?;
-    let offline_cash_mint_finality_epoch_id = election
-        .offline_cash_mint_finality_epoch_roster
+    let kagemusha_mint_finality_epoch_id = election
+        .kagemusha_mint_finality_epoch_roster
         .finality_epoch_id()
-        .map_err(|_| V2ContextBuildError::InvalidOfflineCashMintFinalityEpochRoster)?;
+        .map_err(|_| V2ContextBuildError::InvalidKagemushaMintFinalityEpochRoster)?;
     let context = wire::HeightContext {
         network_id: parent.height_context.network_id,
         protocol_version: wire::PROTOCOL_VERSION,
         height,
         epoch: election.epoch,
-        offline_cash_mint_finality_epoch_id,
-        offline_cash_mint_finality_epoch_roster: election.offline_cash_mint_finality_epoch_roster,
+        kagemusha_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster: election.kagemusha_mint_finality_epoch_roster,
         epoch_end_height: election.epoch_end_height,
         next_epoch_snapshot,
         mode: election.mode,
@@ -656,8 +656,8 @@ fn successor_election_inputs(
     let election = match parent.height_context.next_epoch_snapshot.as_ref() {
         Some(snapshot) => FrozenElectionInputs {
             epoch: snapshot.epoch,
-            offline_cash_mint_finality_epoch_roster: snapshot
-                .offline_cash_mint_finality_epoch_roster
+            kagemusha_mint_finality_epoch_roster: snapshot
+                .kagemusha_mint_finality_epoch_roster
                 .clone(),
             epoch_end_height: snapshot.epoch_end_height,
             mode: snapshot.mode,
@@ -666,9 +666,9 @@ fn successor_election_inputs(
         },
         None => FrozenElectionInputs {
             epoch: parent.height_context.epoch,
-            offline_cash_mint_finality_epoch_roster: parent
+            kagemusha_mint_finality_epoch_roster: parent
                 .height_context
-                .offline_cash_mint_finality_epoch_roster
+                .kagemusha_mint_finality_epoch_roster
                 .clone(),
             epoch_end_height: parent.height_context.epoch_end_height,
             mode: parent.height_context.mode,
@@ -823,17 +823,17 @@ pub(crate) fn finalized_next_epoch_snapshot(
     if height != election.epoch_end_height {
         return Ok(None);
     }
-    let offline_cash_mint_finality_epoch_roster = state
+    let kagemusha_mint_finality_epoch_roster = state
         .world()
-        .offline_cash_mint_finality_next_epoch_parameter()
-        .ok_or(V2ContextBuildError::MissingNextOfflineCashMintFinalityEpochId)?
+        .kagemusha_mint_finality_next_epoch_parameter()
+        .ok_or(V2ContextBuildError::MissingNextKagemushaMintFinalityEpochId)?
         .roster;
     finalized_next_epoch_snapshot_with_roster(
         state,
         network_id,
         height,
         election,
-        offline_cash_mint_finality_epoch_roster,
+        kagemusha_mint_finality_epoch_roster,
     )
     .map(Some)
 }
@@ -843,7 +843,7 @@ fn finalized_next_epoch_snapshot_with_roster(
     network_id: &NetworkId,
     height: wire::Height,
     election: &FrozenElectionInputs,
-    offline_cash_mint_finality_epoch_roster: iroha_data_model::isi::offline_cash_v1::OfflineCashMintFinalityEpochRosterV1,
+    kagemusha_mint_finality_epoch_roster: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
 ) -> Result<wire::finality::FinalizedNextEpochSnapshot, V2ContextBuildError> {
     let successor_height = height
         .checked_add(1)
@@ -852,14 +852,14 @@ fn finalized_next_epoch_snapshot_with_roster(
         .epoch
         .checked_add(1)
         .ok_or(V2ContextBuildError::EpochOverflow)?;
-    if offline_cash_mint_finality_epoch_roster.network_id != *network_id
-        || offline_cash_mint_finality_epoch_roster.epoch != epoch
+    if kagemusha_mint_finality_epoch_roster.network_id != *network_id
+        || kagemusha_mint_finality_epoch_roster.epoch != epoch
     {
-        return Err(V2ContextBuildError::InvalidOfflineCashMintFinalityEpochRoster);
+        return Err(V2ContextBuildError::InvalidKagemushaMintFinalityEpochRoster);
     }
-    let offline_cash_mint_finality_epoch_id = offline_cash_mint_finality_epoch_roster
+    let kagemusha_mint_finality_epoch_id = kagemusha_mint_finality_epoch_roster
         .finality_epoch_id()
-        .map_err(|_| V2ContextBuildError::InvalidOfflineCashMintFinalityEpochRoster)?;
+        .map_err(|_| V2ContextBuildError::InvalidKagemushaMintFinalityEpochRoster)?;
     let npos_params = if election.mode == wire::ConsensusMode::Npos {
         Some(
             super::v2_npos::committed_epoch_length_blocks(state.world()).map_err(|error| {
@@ -941,8 +941,8 @@ fn finalized_next_epoch_snapshot_with_roster(
     };
     Ok(wire::finality::FinalizedNextEpochSnapshot {
         epoch,
-        offline_cash_mint_finality_epoch_id,
-        offline_cash_mint_finality_epoch_roster,
+        kagemusha_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster,
         epoch_end_height,
         mode: election.mode,
         roster,
@@ -968,15 +968,15 @@ pub(crate) enum V2ContextBuildError {
     EpochOverflow,
     /// An epoch boundary omitted its committed next paired-Pasta roster.
     #[error(
-        "Sumeragi v2 epoch boundary is missing the committed Offline Cash V1 next-roster parameter"
+        "Sumeragi v2 epoch boundary is missing the committed Kagemusha V1 next-roster parameter"
     )]
-    MissingNextOfflineCashMintFinalityEpochId,
+    MissingNextKagemushaMintFinalityEpochId,
     /// Signed genesis supplied a next roster at a height which is not an epoch boundary.
-    #[error("signed Sumeragi v2 genesis supplied an unused next Offline Cash V1 roster")]
-    UnexpectedNextOfflineCashMintFinalityEpochRoster,
+    #[error("signed Sumeragi v2 genesis supplied an unused next Kagemusha V1 roster")]
+    UnexpectedNextKagemushaMintFinalityEpochRoster,
     /// A supplied paired-Pasta roster is malformed or disagrees with the elected epoch.
-    #[error("invalid Offline Cash mint-finality epoch roster")]
-    InvalidOfflineCashMintFinalityEpochRoster,
+    #[error("invalid Kagemusha mint-finality epoch roster")]
+    InvalidKagemushaMintFinalityEpochRoster,
     /// NPoS state has no finalized roster for the imminent epoch.
     #[error("Sumeragi v2 NPoS boundary is missing its finalized next-epoch roster")]
     MissingFinalizedEpochRoster,
@@ -1060,20 +1060,20 @@ mod tests {
     fn genesis(mode: wire::ConsensusMode, powers: &[u64], end: u64) -> wire::HeightContext {
         let roster = roster(powers);
         let network_id = test_network_id(0x41);
-        let offline_cash_mint_finality_epoch_roster =
-            crate::offline_cash_v1_test_fixtures::mint_finality_roster(network_id, 4, &roster);
+        let kagemusha_mint_finality_epoch_roster =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster(network_id, 4, &roster);
         let next_epoch_snapshot = (end == 1).then(|| {
             let next_roster = roster.clone();
-            let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-                crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+            let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+                crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
                     network_id,
                     5,
                     &next_roster,
                 );
             wire::finality::FinalizedNextEpochSnapshot {
                 epoch: 5,
-                offline_cash_mint_finality_epoch_id,
-                offline_cash_mint_finality_epoch_roster,
+                kagemusha_mint_finality_epoch_id,
+                kagemusha_mint_finality_epoch_roster,
                 epoch_end_height: 5,
                 mode,
                 quorum: wire::DualQuorum::from_roster(&next_roster).expect("next quorum"),
@@ -1086,7 +1086,7 @@ mod tests {
             network_id,
             election: FrozenElectionInputs {
                 epoch: 4,
-                offline_cash_mint_finality_epoch_roster,
+                kagemusha_mint_finality_epoch_roster,
                 epoch_end_height: end,
                 mode,
                 roster,
@@ -1232,8 +1232,8 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             let network_id = test_network_id(0x42);
-            let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-                crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+            let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+                crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
                     network_id, 0, &roster,
                 );
             let context = wire::HeightContext {
@@ -1248,8 +1248,8 @@ mod tests {
                 snapshot_bootstrap: None,
                 quorum: wire::DualQuorum::from_roster(&roster).expect("canonical quorum"),
                 roster,
-                offline_cash_mint_finality_epoch_id,
-                offline_cash_mint_finality_epoch_roster,
+                kagemusha_mint_finality_epoch_id,
+                kagemusha_mint_finality_epoch_roster,
                 nexus_amx_context_hash: Hash::new(b"signed genesis finality authority"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
@@ -1304,7 +1304,7 @@ mod tests {
                 &genesis,
                 &staged,
                 wire::ConsensusMode::Permissioned,
-                crate::offline_cash_v1_test_fixtures::genesis_context_parameters(),
+                crate::kagemusha_v1_test_fixtures::genesis_context_parameters(),
             ),
             Err(V2GenesisBootstrapError::EmptyVotingRoster)
         ));
@@ -1565,7 +1565,7 @@ mod tests {
             phase: wire::GlobalPhase::Commit,
             subject,
             execution_commitment:
-                wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                     Hash::new(b"context fixture parent state"),
                     Hash::new(b"context fixture post state"),
                     Hash::new(b"context fixture ordinary writes"),
@@ -1597,16 +1597,16 @@ mod tests {
         let parent_context = genesis(wire::ConsensusMode::Npos, &[1, 1, 1, 1], 1);
         let next_roster = roster(&[1, 1, 1, 1]);
         let next_epoch = parent_context.epoch + 1;
-        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
                 parent_context.network_id,
                 next_epoch,
                 &next_roster,
             );
         let snapshot = wire::finality::FinalizedNextEpochSnapshot {
             epoch: next_epoch,
-            offline_cash_mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             epoch_end_height: 5,
             mode: parent_context.mode,
             quorum: wire::DualQuorum::from_roster(&next_roster).expect("next quorum"),
@@ -1633,16 +1633,16 @@ mod tests {
         let boundary_context = genesis(wire::ConsensusMode::Npos, &[1, 1, 1, 1], 1);
         let next_pops = vec![vec![0x1A]; boundary_context.roster.len()];
         let next_epoch = boundary_context.epoch + 1;
-        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
                 boundary_context.network_id,
                 next_epoch,
                 &boundary_context.roster,
             );
         let snapshot = wire::finality::FinalizedNextEpochSnapshot {
             epoch: next_epoch,
-            offline_cash_mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             epoch_end_height: 9,
             mode: boundary_context.mode,
             roster: boundary_context.roster.clone(),
@@ -1744,15 +1744,15 @@ mod tests {
             .is_some(),
             "Pending is a durable schedule and becomes live at activation height"
         );
-        let offline_cash_mint_finality_epoch_roster =
-            crate::offline_cash_v1_test_fixtures::mint_finality_roster(
+        let kagemusha_mint_finality_epoch_roster =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster(
                 *expiring_view.network_id(),
                 4,
                 &roster,
             );
         let election = FrozenElectionInputs {
             epoch: 4,
-            offline_cash_mint_finality_epoch_roster,
+            kagemusha_mint_finality_epoch_roster,
             epoch_end_height: BOUNDARY_HEIGHT,
             mode: wire::ConsensusMode::Permissioned,
             roster,
@@ -1812,8 +1812,8 @@ mod tests {
         let election_roster = roster(&[1, 1, 1, 1]);
         let election = FrozenElectionInputs {
             epoch: 3,
-            offline_cash_mint_finality_epoch_roster:
-                crate::offline_cash_v1_test_fixtures::mint_finality_roster(
+            kagemusha_mint_finality_epoch_roster:
+                crate::kagemusha_v1_test_fixtures::mint_finality_roster(
                     *view.network_id(),
                     3,
                     &election_roster,
@@ -1836,8 +1836,8 @@ mod tests {
             network_id,
             election: FrozenElectionInputs {
                 epoch: 0,
-                offline_cash_mint_finality_epoch_roster:
-                    crate::offline_cash_v1_test_fixtures::mint_finality_roster(
+                kagemusha_mint_finality_epoch_roster:
+                    crate::kagemusha_v1_test_fixtures::mint_finality_roster(
                         network_id,
                         0,
                         &election_roster,

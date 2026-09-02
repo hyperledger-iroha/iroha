@@ -14,17 +14,17 @@ MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
 
-def test_csharp_native_contract_requires_offline_cash_v1() -> None:
+def test_csharp_native_contract_requires_kagemusha_v1() -> None:
     required = set(MODULE.REQUIRED_SYMBOLS["csharp"])
     assert {
-        "connect_norito_offline_cash_v1_payment_request_validate",
-        "connect_norito_offline_cash_v1_payment_validate",
-        "connect_norito_offline_cash_v1_acknowledgement_validate",
-        "connect_norito_offline_cash_v1_mint_credit_validate",
-        "connect_norito_offline_cash_v1_redemption_voucher_validate",
+        "connect_norito_kagemusha_v1_payment_request_validate",
+        "connect_norito_kagemusha_v1_payment_validate",
+        "connect_norito_kagemusha_v1_acknowledgement_validate",
+        "connect_norito_kagemusha_v1_mint_credit_validate",
+        "connect_norito_kagemusha_v1_redemption_voucher_validate",
     } <= required
 
 
 def test_native_artifact_checker_has_no_retired_protocol_surface() -> None:
     source = MODULE_PATH.read_text(encoding="utf-8").lower()
-    assert "offline_cash_v1" in source
+    assert "kagemusha_v1" in source

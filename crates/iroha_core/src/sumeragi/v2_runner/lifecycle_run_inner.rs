@@ -1861,8 +1861,8 @@ pub(super) fn run_non_pending_lifecycle_loop(
     global_beacon_partial_signer: Option<
         Arc<dyn crate::beacon::GlobalThresholdBeaconPartialSignerV1>,
     >,
-    offline_cash_mint_finality_authority: Option<
-        Arc<crate::zk::offline_cash_v1_recursion::OfflineCashMintFinalityLocalAuthorityV1>,
+    kagemusha_mint_finality_authority: Option<
+        Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>,
     >,
     network: crate::IrohaNetwork,
     block_rx: Arc<FairV2Ingress>,
@@ -2068,7 +2068,7 @@ pub(super) fn run_non_pending_lifecycle_loop(
             Arc::clone(&kura_replica_advert_refresh),
             exact_output_service_owner,
         )
-        .with_offline_cash_mint_finality_authority(offline_cash_mint_finality_authority.clone());
+        .with_kagemusha_mint_finality_authority(kagemusha_mint_finality_authority.clone());
         let mut preactivation = launch_non_pending_lifecycle_height(
             owner,
             launch_inputs,

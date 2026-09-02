@@ -16455,7 +16455,7 @@ pub(crate) mod valid {
                     power: 1,
                 })
                 .collect::<Vec<_>>();
-            let mint_finality_roster = crate::offline_cash_v1_test_fixtures::mint_finality_roster(
+            let mint_finality_roster = crate::kagemusha_v1_test_fixtures::mint_finality_roster(
                 state.network_id,
                 0,
                 &roster,
@@ -16472,8 +16472,8 @@ pub(crate) mod valid {
                 protocol_version: wire::PROTOCOL_VERSION,
                 height: 1,
                 epoch: 0,
-                offline_cash_mint_finality_epoch_id: mint_finality_epoch_id,
-                offline_cash_mint_finality_epoch_roster: mint_finality_roster,
+                kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
+                kagemusha_mint_finality_epoch_roster: mint_finality_roster,
                 epoch_end_height: u64::MAX,
                 next_epoch_snapshot: None,
                 mode: wire::ConsensusMode::Permissioned,
@@ -16506,7 +16506,7 @@ pub(crate) mod valid {
                 .encode_wire()
                 .expect("cache fixture parent has canonical executed bytes");
             let execution_commitment =
-                wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                     Hash::new(b"cache fixture parent state"),
                     Hash::new(b"cache fixture post state"),
                     Hash::new(b"cache fixture ordinary writes"),
@@ -16914,8 +16914,8 @@ pub(crate) mod valid {
                     },
                 )
                 .collect::<Vec<_>>();
-            let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-                crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+            let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+                crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
                     network_id, 7, &roster,
                 );
             let height_context = iroha_data_model::block::consensus_v2::HeightContext {
@@ -16938,8 +16938,8 @@ pub(crate) mod valid {
                 quorum: iroha_data_model::block::consensus_v2::DualQuorum::from_roster(&roster)
                     .expect("equal-vote fixture has a canonical quorum"),
                 roster,
-                offline_cash_mint_finality_epoch_id,
-                offline_cash_mint_finality_epoch_roster,
+                kagemusha_mint_finality_epoch_id,
+                kagemusha_mint_finality_epoch_roster,
                 nexus_amx_context_hash: Hash::new(b"equal-vote-merge-nexus-context"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: iroha_data_model::block::consensus_v2::DataAvailabilityLayout {
@@ -18512,8 +18512,8 @@ pub(crate) mod valid {
                 )
                 .collect::<Vec<_>>();
             let network_id = crate::sumeragi::synthetic_network_id("v2-artifact-bound-commit");
-            let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-                crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+            let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+                crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
                     network_id, 0, &roster,
                 );
             let context = iroha_data_model::block::consensus_v2::HeightContext {
@@ -18529,8 +18529,8 @@ pub(crate) mod valid {
                 quorum: iroha_data_model::block::consensus_v2::DualQuorum::from_roster(&roster)
                     .expect("fixture quorum"),
                 roster,
-                offline_cash_mint_finality_epoch_id,
-                offline_cash_mint_finality_epoch_roster,
+                kagemusha_mint_finality_epoch_id,
+                kagemusha_mint_finality_epoch_roster,
                 nexus_amx_context_hash: Hash::new(b"v2 artifact-bound commit context"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: iroha_data_model::block::consensus_v2::DataAvailabilityLayout {
@@ -18556,7 +18556,7 @@ pub(crate) mod valid {
                 view: signed.header().view_change_index(),
             };
             let execution =
-                iroha_data_model::block::consensus_v2::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                iroha_data_model::block::consensus_v2::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                     Hash::new(b"artifact-bound parent state"),
                     Hash::new(b"artifact-bound post state"),
                     Hash::new(b"artifact-bound ordinary writes"),
@@ -22968,8 +22968,8 @@ pub(crate) mod valid {
                 })
                 .collect::<Vec<_>>();
             let network_id = *state.network_id_ref();
-            let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-                crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+            let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+                crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
                     network_id, 0, &roster,
                 );
             let context = consensus_v2::HeightContext {
@@ -22984,8 +22984,8 @@ pub(crate) mod valid {
                 snapshot_bootstrap: Some(anchor),
                 quorum: consensus_v2::DualQuorum::from_roster(&roster).expect("fixture quorum"),
                 roster,
-                offline_cash_mint_finality_epoch_id,
-                offline_cash_mint_finality_epoch_roster,
+                kagemusha_mint_finality_epoch_id,
+                kagemusha_mint_finality_epoch_roster,
                 nexus_amx_context_hash: Hash::new(b"snapshot validation Nexus/AMX"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: consensus_v2::DataAvailabilityLayout {

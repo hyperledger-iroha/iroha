@@ -8,7 +8,7 @@ import Foundation
 /// certificate and ephemeral key to an application transcript. Radio adapters
 /// must never skip either verification step.
 public enum IrohaPeerNearbyV1 {
-    public static let serviceID = "org.hyperledger.iroha.offline.transfer.v1"
+    public static let serviceID = "org.hyperledger.iroha.kagemusha.transfer.v1"
     public static let bonjourService = "_F2EBA4BCB49B._tcp"
     public static let wireVersion: UInt8 = 1
     public static let maximumCertificateBytes = 16 * 1_024

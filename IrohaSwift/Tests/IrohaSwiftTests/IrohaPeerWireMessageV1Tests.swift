@@ -3,37 +3,32 @@ import XCTest
 
 final class IrohaPeerWireMessageV1Tests: XCTestCase {
 
-    func testOfflineCashPreTicketKindsPinCurrentV1Schemas() {
-        XCTAssertEqual(IrohaPeerWireKindV1.acceptanceIntentAuthorization.rawValue, 4)
-        XCTAssertEqual(IrohaPeerWireKindV1.acceptanceTicket.rawValue, 5)
+    func testKagemushaThreeMessageKindsPinCurrentV1Schemas() {
+        XCTAssertEqual(IrohaPeerWireKindV1.allCases.map(\.rawValue), [1, 2, 3])
         XCTAssertEqual(
-            IrohaPeerWireKindV1.acceptanceIntentAuthorization.requiredOfflineCashCanonicalSchema,
-            "iroha_data_model::offline::offline_cash_v1::OfflineCashAcceptanceIntentAuthorizationV1"
-        )
-        XCTAssertEqual(
-            IrohaPeerWireKindV1.acceptanceTicket.requiredOfflineCashCanonicalSchema,
-            "iroha_data_model::offline::offline_cash_v1::OfflineCashAcceptanceTicketV1"
+            IrohaPeerWireKindV1.payment.requiredKagemushaCanonicalSchema,
+            "iroha_data_model::kagemusha::kagemusha_v1::KagemushaPaymentV1"
         )
     }
 
     func testWireLimitHardCeilingsRejectLargerAllocationPolicies() {
         XCTAssertTrue(IrohaPeerWireLimitsV1.areValid(
             maximumCanonicalBytes: 7_936,
-            maximumOfflineCashEncodedBytes: 7_936
+            maximumKagemushaEncodedBytes: 7_936
         ))
         XCTAssertFalse(IrohaPeerWireLimitsV1.areValid(
             maximumCanonicalBytes: 7_937,
-            maximumOfflineCashEncodedBytes: 7_936
+            maximumKagemushaEncodedBytes: 7_936
         ))
         XCTAssertFalse(IrohaPeerWireLimitsV1.areValid(
             maximumCanonicalBytes: 7_936,
-            maximumOfflineCashEncodedBytes: 7_937
+            maximumKagemushaEncodedBytes: 7_937
         ))
     }
 
     func testEmptyCanonicalPayloadIsRejectedByProducerAndHeaderParser() throws {
         XCTAssertThrowsError(try IrohaPeerWireMessageV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             kind: .receiveRequest,
             schemaVersion: 1,
             canonicalPayload: Data()
@@ -42,10 +37,10 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
         }
 
         let valid = try IrohaPeerWireMessageV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             kind: .acknowledgement,
             schemaVersion: 1,
-            canonicalPayload: irohaPeerOfflineCashStructuralArchiveV1(
+            canonicalPayload: irohaPeerKagemushaStructuralArchiveV1(
                 kind: .acknowledgement,
                 payload: Data([0x01])
             )
@@ -59,12 +54,12 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
     }
 
     func testIPM1HeaderLayoutAndDomainSeparatedHashes() throws {
-        let canonical = irohaPeerOfflineCashStructuralArchiveV1(
+        let canonical = irohaPeerKagemushaStructuralArchiveV1(
             kind: .payment,
-            payload: Data("canonical-offlineCashV1-payload".utf8)
+            payload: Data("canonical-kagemushaV1-payload".utf8)
         )
         let message = try IrohaPeerWireMessageV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             kind: .payment,
             schemaVersion: 1,
             canonicalPayload: canonical
@@ -101,12 +96,12 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
     }
 
     func testPeerCompressionPolicyRequiresSavingsAndFewerShards() throws {
-        let compressible = irohaPeerOfflineCashStructuralArchiveV1(
+        let compressible = irohaPeerKagemushaStructuralArchiveV1(
             kind: .receiveRequest,
             payload: Data(repeating: 0x41, count: 1_024)
         )
         let compressed = try IrohaPeerWireMessageV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             kind: .receiveRequest,
             schemaVersion: 1,
             canonicalPayload: compressible,
@@ -124,12 +119,12 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
         )
 
         // Compression saves bytes here, but both forms still occupy one 256-byte shard.
-        let oneShard = irohaPeerOfflineCashStructuralArchiveV1(
+        let oneShard = irohaPeerKagemushaStructuralArchiveV1(
             kind: .receiveRequest,
             payload: Data(repeating: 0x41, count: 200)
         )
         let unchanged = try IrohaPeerWireMessageV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             kind: .receiveRequest,
             schemaVersion: 1,
             canonicalPayload: oneShard,
@@ -139,7 +134,7 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
         XCTAssertEqual(unchanged.encodedBody, oneShard)
 
         let disabled = try IrohaPeerWireMessageV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             kind: .receiveRequest,
             schemaVersion: 1,
             canonicalPayload: compressible,
@@ -149,12 +144,12 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
     }
 
     func testDecoderRejectsNonCanonicalZlibAndTrailingInput() throws {
-        let canonical = irohaPeerOfflineCashStructuralArchiveV1(
+        let canonical = irohaPeerKagemushaStructuralArchiveV1(
             kind: .payment,
             payload: Data(repeating: 0x41, count: 1_024)
         )
         let message = try IrohaPeerWireMessageV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             kind: .payment,
             schemaVersion: 1,
             canonicalPayload: canonical,
@@ -217,14 +212,14 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
     }
 
     func testProfileAndCanonicalLimitsAreEnforcedBeforeAllocation() throws {
-        XCTAssertEqual(IrohaPeerWireLimitsV1.peerV1.maximumOfflineCashEncodedBytes, 7_936)
-        let boundaryCanonical = irohaPeerOfflineCashStructuralArchiveV1(
+        XCTAssertEqual(IrohaPeerWireLimitsV1.peerV1.maximumKagemushaEncodedBytes, 7_936)
+        let boundaryCanonical = irohaPeerKagemushaStructuralArchiveV1(
             kind: .payment,
             payload: Data(repeating: 0xA5, count: 7_888)
         )
         XCTAssertEqual(boundaryCanonical.count, 7_936)
         let boundary = try IrohaPeerWireMessageV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             kind: .payment,
             schemaVersion: 1,
             canonicalPayload: boundaryCanonical
@@ -232,10 +227,10 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
         XCTAssertEqual(boundary.encodedBody.count, 7_936)
         XCTAssertEqual(try IrohaPeerWireMessageV1.decode(boundary.encoded), boundary)
         XCTAssertThrowsError(try IrohaPeerWireMessageV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             kind: .payment,
             schemaVersion: 1,
-            canonicalPayload: irohaPeerOfflineCashStructuralArchiveV1(
+            canonicalPayload: irohaPeerKagemushaStructuralArchiveV1(
                 kind: .payment,
                 payload: Data(repeating: 0xA5, count: 7_889)
             )
@@ -248,13 +243,13 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
 
         let tight = IrohaPeerWireLimitsV1(
             maximumCanonicalBytes: 1_024,
-            maximumOfflineCashEncodedBytes: 700
+            maximumKagemushaEncodedBytes: 700
         )
         XCTAssertThrowsError(try IrohaPeerWireMessageV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             kind: .payment,
             schemaVersion: 1,
-            canonicalPayload: irohaPeerOfflineCashStructuralArchiveV1(
+            canonicalPayload: irohaPeerKagemushaStructuralArchiveV1(
                 kind: .payment,
                 payload: Data(repeating: 1, count: 653)
             ),
@@ -266,20 +261,20 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
             )
         }
         XCTAssertNoThrow(try IrohaPeerWireMessageV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             kind: .payment,
             schemaVersion: 1,
-            canonicalPayload: irohaPeerOfflineCashStructuralArchiveV1(
+            canonicalPayload: irohaPeerKagemushaStructuralArchiveV1(
                 kind: .payment,
                 payload: Data(repeating: 1, count: 652)
             ),
             limits: tight
         ))
         XCTAssertThrowsError(try IrohaPeerWireMessageV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             kind: .payment,
             schemaVersion: 1,
-            canonicalPayload: irohaPeerOfflineCashStructuralArchiveV1(
+            canonicalPayload: irohaPeerKagemushaStructuralArchiveV1(
                 kind: .payment,
                 payload: Data(repeating: 1, count: 977)
             ),
@@ -326,15 +321,15 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
         }
     }
 
-    func testOfflineCashV1ProfileRequiresExactCanonicalEnvelope() throws {
-        let canonical = irohaPeerOfflineCashStructuralArchiveV1(
+    func testKagemushaV1ProfileRequiresExactCanonicalEnvelope() throws {
+        let canonical = irohaPeerKagemushaStructuralArchiveV1(
             kind: .receiveRequest,
             payload: Data([0x51])
         )
         XCTAssertEqual(canonical.count, 49)
         XCTAssertEqual(canonical.subdata(in: 40..<48), Data(repeating: 0, count: 8))
         let message = try IrohaPeerWireMessageV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             kind: .receiveRequest,
             schemaVersion: 1,
             canonicalPayload: canonical
@@ -373,58 +368,58 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
             bareSchema
         ] {
             XCTAssertThrowsError(try IrohaPeerWireMessageV1(
-                profile: .offlineCashV1,
+                profile: .kagemushaV1,
                 kind: .receiveRequest,
                 schemaVersion: 1,
                 canonicalPayload: invalid
             )) {
                 XCTAssertEqual(
                     $0 as? IrohaPeerWireMessageErrorV1,
-                    .invalidCanonicalPayload(profile: .offlineCashV1, kind: .receiveRequest)
+                    .invalidCanonicalPayload(profile: .kagemushaV1, kind: .receiveRequest)
                 )
             }
         }
         XCTAssertThrowsError(try IrohaPeerWireMessageV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             kind: .payment,
             schemaVersion: 1,
             canonicalPayload: canonical
         ))
 
-        let forged = rehashOfflineCashV1Message(message.encoded, canonical: wrongSchema)
+        let forged = rehashKagemushaV1Message(message.encoded, canonical: wrongSchema)
         XCTAssertThrowsError(try IrohaPeerWireMessageV1.decode(forged)) {
             XCTAssertEqual(
                 $0 as? IrohaPeerWireMessageErrorV1,
-                .invalidCanonicalPayload(profile: .offlineCashV1, kind: .receiveRequest)
+                .invalidCanonicalPayload(profile: .kagemushaV1, kind: .receiveRequest)
             )
         }
     }
 
     func testFirstReleaseProfileSchemaPairsAreEnforcedAtConstructionAndInspection() throws {
-        XCTAssertEqual(IrohaPeerWireProfileV1(rawValue: 1), .offlineCashV1)
+        XCTAssertEqual(IrohaPeerWireProfileV1(rawValue: 1), .kagemushaV1)
         XCTAssertNil(IrohaPeerWireProfileV1(rawValue: 2))
         XCTAssertNil(IrohaPeerWireProfileV1(rawValue: UInt16.max))
 
         XCTAssertThrowsError(try IrohaPeerWireMessageV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             kind: .payment,
             schemaVersion: 2,
-            canonicalPayload: irohaPeerOfflineCashStructuralArchiveV1(
+            canonicalPayload: irohaPeerKagemushaStructuralArchiveV1(
                 kind: .payment,
                 payload: Data([1])
             )
         )) { error in
             XCTAssertEqual(
                 error as? IrohaPeerWireMessageErrorV1,
-                .schemaVersionMismatch(profile: .offlineCashV1, expected: 1, actual: 2)
+                .schemaVersionMismatch(profile: .kagemushaV1, expected: 1, actual: 2)
             )
         }
 
         let current = try IrohaPeerWireMessageV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             kind: .payment,
             schemaVersion: 1,
-            canonicalPayload: irohaPeerOfflineCashStructuralArchiveV1(
+            canonicalPayload: irohaPeerKagemushaStructuralArchiveV1(
                 kind: .payment,
                 payload: Data([1])
             )
@@ -457,17 +452,17 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
         XCTAssertThrowsError(try IrohaPeerWireMessageV1.inspectHeader(wrongSchemaHeader)) { error in
             XCTAssertEqual(
                 error as? IrohaPeerWireMessageErrorV1,
-                .schemaVersionMismatch(profile: .offlineCashV1, expected: 1, actual: 2)
+                .schemaVersionMismatch(profile: .kagemushaV1, expected: 1, actual: 2)
             )
         }
     }
 
     private func makeMessage(bytes: Data) throws -> IrohaPeerWireMessageV1 {
         try IrohaPeerWireMessageV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             kind: .payment,
             schemaVersion: 1,
-            canonicalPayload: irohaPeerOfflineCashStructuralArchiveV1(
+            canonicalPayload: irohaPeerKagemushaStructuralArchiveV1(
                 kind: .payment,
                 payload: bytes
             )
@@ -505,7 +500,7 @@ final class IrohaPeerWireMessageV1Tests: XCTestCase {
         message.replaceSubrange(52..<84, with: Blake2b.hash256(preimage))
     }
 
-    private func rehashOfflineCashV1Message(
+    private func rehashKagemushaV1Message(
         _ encoded: Data,
         canonical: Data
     ) -> Data {

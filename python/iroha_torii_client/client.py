@@ -239,9 +239,9 @@ class TairaTestnetProfile:
     torii_base_url: str = "https://taira.sora.org"
     chain_id: str = "fc56984b-2be7-431d-840e-21514d1883f0"
     i105_discriminant: int = 369
-    offline_cash_asset_definition_id: str = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
-    offline_cash_asset_alias: str = "ds#boi.is"
-    offline_cash_asset_scale: int = 2
+    kagemusha_asset_definition_id: str = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
+    kagemusha_asset_alias: str = "ds#boi.is"
+    kagemusha_asset_scale: int = 2
     xor_asset_definition_id: str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
     xor_asset_alias: str = "xor#universal"
     xor_asset_scale: int = 9
@@ -852,9 +852,9 @@ __all__ = [
     "KaigiRelayDomainMetrics",
     "KaigiRelayDetail",
     "KaigiRelayHealthSnapshot",
-    "OfflineCashReadinessV1",
-    "OfflineCashOperationRejectionV1",
-    "UnverifiedOfflineCashOperationStatusV1",
+    "KagemushaReadinessV1",
+    "KagemushaOperationRejectionV1",
+    "UnverifiedKagemushaOperationStatusV1",
     "AppApiTransactionDraft",
     "SubscriptionPlanCreateResult",
     "SubscriptionPlanListItem",
@@ -1777,10 +1777,10 @@ class RuntimeUpgradeTxResponse:
 
 
 
-_OFFLINE_CAPABILITY_PATH = "/v1/offline/readiness"
-_OFFLINE_TOP_UP_PATH = "/v1/offline/top-up"
-_OFFLINE_REDEEM_PATH = "/v1/offline/redeem"
-_OFFLINE_OPERATION_PATH_PREFIX = "/v1/offline/operations/"
+_KAGEMUSHA_READINESS_PATH = "/v1/kagemusha/readiness"
+_KAGEMUSHA_TOP_UP_PATH = "/v1/kagemusha/top-up"
+_KAGEMUSHA_REDEEM_PATH = "/v1/kagemusha/redeem"
+_KAGEMUSHA_OPERATION_PATH_PREFIX = "/v1/kagemusha/operations/"
 _OFFLINE_ASSET_DEFINITION_ID_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{28}$")
 _OFFLINE_MAX_U32 = (1 << 32) - 1
 _OFFLINE_MAX_U64 = (1 << 64) - 1
@@ -1796,16 +1796,16 @@ _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT = (
 )
 _OFFLINE_HASH_LITERAL_RE = re.compile(r"^hash:([0-9A-F]{64})#([0-9A-F]{4})$")
 _OFFLINE_MAX_JSON_DEPTH = 128
-_OFFLINE_CASH_READINESS_MAX_BYTES_V1 = 4 * 1024
-_OFFLINE_CASH_TOP_UP_REQUEST_MAX_BYTES_V1 = 4 * 1024
-_OFFLINE_CASH_REDEMPTION_REQUEST_MAX_BYTES_V1 = 8 * 1024
-_OFFLINE_CASH_OPERATION_STATUS_JSON_MAX_BYTES_V1 = 16 * 1024 * 1024
-_OFFLINE_CASH_WIRE_VERSION = 1
-_OFFLINE_CASH_DEVICE_LIFECYCLE_VERSION = 1
-_OFFLINE_CASH_HANDOFF_CAPABILITY = "cash_handoff_v1"
+_KAGEMUSHA_READINESS_MAX_BYTES_V1 = 4 * 1024
+_KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1 = 4 * 1024
+_KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1 = 8 * 1024
+_KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1 = 16 * 1024 * 1024
+_KAGEMUSHA_WIRE_VERSION = 1
+_KAGEMUSHA_DEVICE_LIFECYCLE_VERSION = 1
+_KAGEMUSHA_HANDOFF_CAPABILITY = "kagemusha_handoff_v1"
 
 
-def _offline_cash_request_timeout(value: Optional[float], context: str) -> Optional[float]:
+def _kagemusha_request_timeout(value: Optional[float], context: str) -> Optional[float]:
     if value is not None and (
         isinstance(value, bool)
         or not isinstance(value, (int, float))
@@ -2075,38 +2075,38 @@ def taira_local_signing_context(deployed_network_id: str) -> ToriiLocalSigningCo
 
 
 @dataclass(frozen=True)
-class OfflineCashReadinessV1:
-    """Closed Offline Cash V1 readiness response."""
+class KagemushaReadinessV1:
+    """Closed Kagemusha V1 readiness response."""
 
-    cash_handoff_capability: str
+    kagemusha_handoff_capability: str
     wire_version: int
     device_lifecycle_version: int
     ready: bool
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "OfflineCashReadinessV1":
+    def from_payload(cls, payload: Mapping[str, Any]) -> "KagemushaReadinessV1":
         """Decode the exact universally compiled capability projection."""
 
-        context = "offline capability response"
+        context = "Kagemusha readiness response"
         record = _offline_mapping(payload, context)
         _offline_exact_object_fields(
             record,
             context,
             required=(
-                "cash_handoff_capability",
+                "kagemusha_handoff_capability",
                 "wire_version",
                 "device_lifecycle_version",
                 "ready",
             ),
         )
         capability = _offline_exact_string(
-            _offline_required(record, "cash_handoff_capability", context),
-            f"{context}.cash_handoff_capability",
+            _offline_required(record, "kagemusha_handoff_capability", context),
+            f"{context}.kagemusha_handoff_capability",
         )
-        if capability != _OFFLINE_CASH_HANDOFF_CAPABILITY:
+        if capability != _KAGEMUSHA_HANDOFF_CAPABILITY:
             raise RuntimeError(
-                f"{context}.cash_handoff_capability must be "
-                f"{_OFFLINE_CASH_HANDOFF_CAPABILITY}"
+                f"{context}.kagemusha_handoff_capability must be "
+                f"{_KAGEMUSHA_HANDOFF_CAPABILITY}"
             )
         wire_version = _offline_unsigned(
             _offline_required(record, "wire_version", context),
@@ -2114,10 +2114,10 @@ class OfflineCashReadinessV1:
             _OFFLINE_MAX_U32,
             positive=True,
         )
-        if wire_version != _OFFLINE_CASH_WIRE_VERSION:
+        if wire_version != _KAGEMUSHA_WIRE_VERSION:
             raise RuntimeError(
                 f"{context}.wire_version must be "
-                f"{_OFFLINE_CASH_WIRE_VERSION}"
+                f"{_KAGEMUSHA_WIRE_VERSION}"
             )
         device_lifecycle_version = _offline_unsigned(
             _offline_required(record, "device_lifecycle_version", context),
@@ -2125,25 +2125,25 @@ class OfflineCashReadinessV1:
             _OFFLINE_MAX_U32,
             positive=True,
         )
-        if device_lifecycle_version != _OFFLINE_CASH_DEVICE_LIFECYCLE_VERSION:
+        if device_lifecycle_version != _KAGEMUSHA_DEVICE_LIFECYCLE_VERSION:
             raise RuntimeError(
                 f"{context}.device_lifecycle_version must be "
-                f"{_OFFLINE_CASH_DEVICE_LIFECYCLE_VERSION}"
+                f"{_KAGEMUSHA_DEVICE_LIFECYCLE_VERSION}"
             )
         ready = _offline_required(record, "ready", context)
         if type(ready) is not bool:
             raise RuntimeError(f"{context}.ready must be a boolean")
         return cls(
-            cash_handoff_capability=_OFFLINE_CASH_HANDOFF_CAPABILITY,
-            wire_version=_OFFLINE_CASH_WIRE_VERSION,
-            device_lifecycle_version=_OFFLINE_CASH_DEVICE_LIFECYCLE_VERSION,
+            kagemusha_handoff_capability=_KAGEMUSHA_HANDOFF_CAPABILITY,
+            wire_version=_KAGEMUSHA_WIRE_VERSION,
+            device_lifecycle_version=_KAGEMUSHA_DEVICE_LIFECYCLE_VERSION,
             ready=ready,
         )
 
 
-_OFFLINE_OPERATION_KINDS = frozenset(("top_up", "redemption"))
-_OFFLINE_OPERATION_STATES = frozenset(("pending", "applied", "rejected"))
-_OFFLINE_REJECTION_CODES = frozenset(
+_KAGEMUSHA_OPERATION_KINDS = frozenset(("top_up", "redemption"))
+_KAGEMUSHA_OPERATION_STATES = frozenset(("pending", "applied", "rejected"))
+_KAGEMUSHA_REJECTION_CODES = frozenset(
     (
         "invalid_request",
         "unauthorized",
@@ -2159,7 +2159,7 @@ _OFFLINE_REJECTION_CODES = frozenset(
 
 
 @dataclass(frozen=True)
-class OfflineCashOperationRejectionV1:
+class KagemushaOperationRejectionV1:
     """Stable terminal failure metadata without free-form diagnostics."""
 
     code: str
@@ -2167,22 +2167,22 @@ class OfflineCashOperationRejectionV1:
 
 
 @dataclass(frozen=True)
-class UnverifiedOfflineCashOperationStatusV1:
+class UnverifiedKagemushaOperationStatusV1:
     """Structurally valid status whose applied monetary result remains private."""
 
     operation_id: bytes
     kind: str
     state: str
-    rejection: Optional[OfflineCashOperationRejectionV1]
+    rejection: Optional[KagemushaOperationRejectionV1]
     _source: Mapping[str, Any] = field(repr=False, compare=False)
 
     @classmethod
     def from_payload(
         cls, payload: Mapping[str, Any]
-    ) -> "UnverifiedOfflineCashOperationStatusV1":
+    ) -> "UnverifiedKagemushaOperationStatusV1":
         """Validate the closed outer operation envelope without trusting finality."""
 
-        context = "Offline Cash V1 operation status"
+        context = "Kagemusha V1 operation status"
         source = _snapshot_offline_json(payload, context)
         record = _offline_mapping(source, context)
         _offline_exact_object_fields(
@@ -2194,12 +2194,12 @@ class UnverifiedOfflineCashOperationStatusV1:
             raise RuntimeError(f"{context}.version must be 1")
         operation_id = _offline_fixed_bytes(record["operation_id"], f"{context}.operation_id")
         kind = _offline_tagged_unit(
-            record["kind"], "kind", _OFFLINE_OPERATION_KINDS, f"{context}.kind"
+            record["kind"], "kind", _KAGEMUSHA_OPERATION_KINDS, f"{context}.kind"
         )
         state = _offline_tagged_unit(
-            record["state"], "state", _OFFLINE_OPERATION_STATES, f"{context}.state"
+            record["state"], "state", _KAGEMUSHA_OPERATION_STATES, f"{context}.state"
         )
-        rejection: Optional[OfflineCashOperationRejectionV1] = None
+        rejection: Optional[KagemushaOperationRejectionV1] = None
         if state == "pending":
             if record["result"] is not None or record["rejection"] is not None:
                 raise RuntimeError(f"{context} pending state cannot contain a result or rejection")
@@ -2215,11 +2215,11 @@ class UnverifiedOfflineCashOperationStatusV1:
                 f"{context}.rejection",
                 required=("code", "detail_digest"),
             )
-            rejection = OfflineCashOperationRejectionV1(
+            rejection = KagemushaOperationRejectionV1(
                 code=_offline_tagged_unit(
                     rejected["code"],
                     "code",
-                    _OFFLINE_REJECTION_CODES,
+                    _KAGEMUSHA_REJECTION_CODES,
                     f"{context}.rejection.code",
                 ),
                 detail_digest=_offline_fixed_bytes(
@@ -2236,9 +2236,9 @@ class UnverifiedOfflineCashOperationStatusV1:
         """Release the full status only through a caller-pinned finality verifier."""
 
         if trust_anchor is None:
-            raise TypeError("Offline Cash V1 finality trust anchor is required")
+            raise TypeError("Kagemusha V1 finality trust anchor is required")
         if not callable(verifier):
-            raise TypeError("Offline Cash V1 finality verifier must be callable")
+            raise TypeError("Kagemusha V1 finality verifier must be callable")
         return verifier(_snapshot_offline_json(self._source, "operation status"), trust_anchor)
 
 
@@ -2267,13 +2267,13 @@ def _offline_tagged_unit(
 def _offline_operation_id_hex(value: Union[str, bytes, bytearray, memoryview]) -> str:
     if isinstance(value, str):
         if re.fullmatch(r"[0-9a-f]{64}", value) is None or value == "0" * 64:
-            raise ValueError("Offline Cash V1 operation ID must be 64 lowercase hexadecimal characters")
+            raise ValueError("Kagemusha V1 operation ID must be 64 lowercase hexadecimal characters")
         return value
     if not isinstance(value, (bytes, bytearray, memoryview)):
-        raise TypeError("Offline Cash V1 operation ID must be bytes-like or lowercase hexadecimal")
+        raise TypeError("Kagemusha V1 operation ID must be bytes-like or lowercase hexadecimal")
     raw = bytes(value)
     if len(raw) != 32 or not any(raw):
-        raise ValueError("Offline Cash V1 operation ID must be one nonzero 32-byte value")
+        raise ValueError("Kagemusha V1 operation ID must be one nonzero 32-byte value")
     return raw.hex()
 
 
@@ -5276,8 +5276,8 @@ class _SumeragiV2StatusParser:
             "parent_state_root",
             "post_state_root",
             "ordinary_writes_root",
-            "offline_cash_top_up_root",
-            "offline_cash_top_up_count",
+            "kagemusha_top_up_root",
+            "kagemusha_top_up_count",
             "native_amx_application_manifest_version",
             "native_amx_application_manifest_root",
             "native_amx_application_manifest_count",
@@ -5292,24 +5292,24 @@ class _SumeragiV2StatusParser:
         for required_field in ("lane_finality_manifest", "merge_carrier"):
             if required_field not in record:
                 raise RuntimeError(f"{context}.{required_field} is required")
-        offline_cash_top_up_count = cls._unsigned(
-            record.get("offline_cash_top_up_count"),
-            f"{context}.offline_cash_top_up_count",
+        kagemusha_top_up_count = cls._unsigned(
+            record.get("kagemusha_top_up_count"),
+            f"{context}.kagemusha_top_up_count",
             maximum=16,
         )
-        raw_offline_cash_top_up_root = record.get("offline_cash_top_up_root")
-        offline_cash_top_up_root = (
+        raw_kagemusha_top_up_root = record.get("kagemusha_top_up_root")
+        kagemusha_top_up_root = (
             None
-            if raw_offline_cash_top_up_root is None
+            if raw_kagemusha_top_up_root is None
             else cls._hash(
-                raw_offline_cash_top_up_root,
-                f"{context}.offline_cash_top_up_root",
+                raw_kagemusha_top_up_root,
+                f"{context}.kagemusha_top_up_root",
             )
         )
-        if (offline_cash_top_up_count == 0) != (offline_cash_top_up_root is None):
+        if (kagemusha_top_up_count == 0) != (kagemusha_top_up_root is None):
             raise RuntimeError(
-                f"{context}.offline_cash_top_up_root must be present exactly when "
-                "offline_cash_top_up_count is positive"
+                f"{context}.kagemusha_top_up_root must be present exactly when "
+                "kagemusha_top_up_count is positive"
             )
         native_manifest_version = cls._unsigned(
             record.get("native_amx_application_manifest_version"),
@@ -5386,8 +5386,8 @@ class _SumeragiV2StatusParser:
                 record.get("ordinary_writes_root"),
                 f"{context}.ordinary_writes_root",
             ),
-            offline_cash_top_up_root=offline_cash_top_up_root,
-            offline_cash_top_up_count=offline_cash_top_up_count,
+            kagemusha_top_up_root=kagemusha_top_up_root,
+            kagemusha_top_up_count=kagemusha_top_up_count,
             native_amx_application_manifest_version=native_manifest_version,
             native_amx_application_manifest_root=native_manifest_root,
             native_amx_application_manifest_count=native_manifest_count,
@@ -9361,114 +9361,114 @@ class ToriiClient(
         return self._parse_uaid_manifests_response(mapping, context="uaid manifests response")
 
     # ------------------------------------------------------------------
-    # Offline Cash V1 readiness
+    # Kagemusha V1 readiness
     # ------------------------------------------------------------------
-    def get_offline_cash_readiness(
+    def get_kagemusha_readiness(
         self, *, timeout: Optional[float] = None
-    ) -> OfflineCashReadinessV1:
-        """Fetch the exact Offline Cash V1 readiness response."""
+    ) -> KagemushaReadinessV1:
+        """Fetch the exact Kagemusha V1 readiness response."""
 
         response = self._request(
             "GET",
-            _OFFLINE_CAPABILITY_PATH,
+            _KAGEMUSHA_READINESS_PATH,
             headers={"Accept": "application/json"},
             stream=True,
             allow_redirects=False,
-            timeout=_offline_cash_request_timeout(timeout, "get_offline_cash_readiness"),
+            timeout=_kagemusha_request_timeout(timeout, "get_kagemusha_readiness"),
         )
         self._expect_status(
             response,
             {200},
-            maximum_body_bytes=_OFFLINE_CASH_READINESS_MAX_BYTES_V1,
-            context="Offline Cash V1 readiness",
+            maximum_body_bytes=_KAGEMUSHA_READINESS_MAX_BYTES_V1,
+            context="Kagemusha V1 readiness",
         )
         payload = self._offline_json_response(
             response,
-            "Offline Cash V1 readiness response",
-            maximum_body_bytes=_OFFLINE_CASH_READINESS_MAX_BYTES_V1,
+            "Kagemusha V1 readiness response",
+            maximum_body_bytes=_KAGEMUSHA_READINESS_MAX_BYTES_V1,
         )
-        return OfflineCashReadinessV1.from_payload(payload)
+        return KagemushaReadinessV1.from_payload(payload)
 
-    def submit_offline_cash_top_up(
+    def submit_kagemusha_top_up(
         self,
         request: Union[bytes, bytearray, memoryview],
         *,
         timeout: Optional[float] = None,
-    ) -> UnverifiedOfflineCashOperationStatusV1:
-        """Submit one exact canonical Offline Cash V1 top-up intent."""
+    ) -> UnverifiedKagemushaOperationStatusV1:
+        """Submit one exact canonical Kagemusha V1 top-up intent."""
 
         body, operation_id = _offline_command_body(
             request,
-            schema="iroha.torii.v1.offline_cash.top_up.request",
-            maximum=_OFFLINE_CASH_TOP_UP_REQUEST_MAX_BYTES_V1,
-            context="Offline Cash V1 top-up request",
+            schema="iroha.torii.v1.kagemusha.top_up.request",
+            maximum=_KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1,
+            context="Kagemusha V1 top-up request",
         )
-        return self._submit_offline_cash_operation(
-            _OFFLINE_TOP_UP_PATH,
+        return self._submit_kagemusha_operation(
+            _KAGEMUSHA_TOP_UP_PATH,
             "top_up",
             body,
             operation_id,
             timeout=timeout,
         )
 
-    def submit_offline_cash_redemption(
+    def submit_kagemusha_redemption(
         self,
         request: Union[bytes, bytearray, memoryview],
         *,
         timeout: Optional[float] = None,
-    ) -> UnverifiedOfflineCashOperationStatusV1:
-        """Submit one exact canonical Offline Cash V1 full or partial redemption intent."""
+    ) -> UnverifiedKagemushaOperationStatusV1:
+        """Submit one exact canonical Kagemusha V1 full or partial redemption intent."""
 
         body, operation_id = _offline_command_body(
             request,
-            schema="iroha.torii.v1.offline_cash.redeem.request",
-            maximum=_OFFLINE_CASH_REDEMPTION_REQUEST_MAX_BYTES_V1,
-            context="Offline Cash V1 redemption request",
+            schema="iroha.torii.v1.kagemusha.redeem.request",
+            maximum=_KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1,
+            context="Kagemusha V1 redemption request",
         )
-        return self._submit_offline_cash_operation(
-            _OFFLINE_REDEEM_PATH,
+        return self._submit_kagemusha_operation(
+            _KAGEMUSHA_REDEEM_PATH,
             "redemption",
             body,
             operation_id,
             timeout=timeout,
         )
 
-    def get_offline_cash_operation(
+    def get_kagemusha_operation(
         self,
         operation_id: Union[str, bytes, bytearray, memoryview],
         *,
         timeout: Optional[float] = None,
-    ) -> UnverifiedOfflineCashOperationStatusV1:
+    ) -> UnverifiedKagemushaOperationStatusV1:
         """Read one operation while withholding any unverified monetary result."""
 
         expected_id = _offline_operation_id_hex(operation_id)
         response = self._request(
             "GET",
-            f"{_OFFLINE_OPERATION_PATH_PREFIX}{expected_id}",
+            f"{_KAGEMUSHA_OPERATION_PATH_PREFIX}{expected_id}",
             headers={"Accept": "application/json"},
             stream=True,
             allow_retry=False,
             allow_redirects=False,
-            timeout=_offline_cash_request_timeout(timeout, "get_offline_cash_operation"),
+            timeout=_kagemusha_request_timeout(timeout, "get_kagemusha_operation"),
         )
         self._expect_status(
             response,
             {200},
-            maximum_body_bytes=_OFFLINE_CASH_OPERATION_STATUS_JSON_MAX_BYTES_V1,
-            context="Offline Cash V1 operation response",
+            maximum_body_bytes=_KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
+            context="Kagemusha V1 operation response",
         )
-        status = UnverifiedOfflineCashOperationStatusV1.from_payload(
+        status = UnverifiedKagemushaOperationStatusV1.from_payload(
             self._offline_json_response(
                 response,
-                "Offline Cash V1 operation response",
-                maximum_body_bytes=_OFFLINE_CASH_OPERATION_STATUS_JSON_MAX_BYTES_V1,
+                "Kagemusha V1 operation response",
+                maximum_body_bytes=_KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
             )
         )
         if status.operation_id.hex() != expected_id:
-            raise RuntimeError("Offline Cash V1 response operation ID does not match the resource")
+            raise RuntimeError("Kagemusha V1 response operation ID does not match the resource")
         return status
 
-    def _submit_offline_cash_operation(
+    def _submit_kagemusha_operation(
         self,
         path: str,
         kind: str,
@@ -9476,7 +9476,7 @@ class ToriiClient(
         operation_id: str,
         *,
         timeout: Optional[float],
-    ) -> UnverifiedOfflineCashOperationStatusV1:
+    ) -> UnverifiedKagemushaOperationStatusV1:
         response = self._request(
             "POST",
             path,
@@ -9489,23 +9489,23 @@ class ToriiClient(
             stream=True,
             allow_retry=False,
             allow_redirects=False,
-            timeout=_offline_cash_request_timeout(timeout, "submit_offline_cash_operation"),
+            timeout=_kagemusha_request_timeout(timeout, "submit_kagemusha_operation"),
         )
         self._expect_status(
             response,
             {200, 202},
-            maximum_body_bytes=_OFFLINE_CASH_OPERATION_STATUS_JSON_MAX_BYTES_V1,
-            context="Offline Cash V1 operation response",
+            maximum_body_bytes=_KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
+            context="Kagemusha V1 operation response",
         )
-        status = UnverifiedOfflineCashOperationStatusV1.from_payload(
+        status = UnverifiedKagemushaOperationStatusV1.from_payload(
             self._offline_json_response(
                 response,
-                "Offline Cash V1 operation response",
-                maximum_body_bytes=_OFFLINE_CASH_OPERATION_STATUS_JSON_MAX_BYTES_V1,
+                "Kagemusha V1 operation response",
+                maximum_body_bytes=_KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
             )
         )
         if status.operation_id.hex() != operation_id or status.kind != kind:
-            raise RuntimeError("Offline Cash V1 response does not match the submitted operation")
+            raise RuntimeError("Kagemusha V1 response does not match the submitted operation")
         return status
 
     @staticmethod

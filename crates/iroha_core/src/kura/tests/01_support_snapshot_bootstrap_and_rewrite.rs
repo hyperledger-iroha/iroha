@@ -728,8 +728,8 @@ fn v2_finality_artifact_for_block_with_keys_and_merge_carrier(
         "fixture finality artifacts must form a contiguous chain"
     );
     let network_id = test_network_id(b"kura-v2-finality-test");
-    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
+    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
     let context = HeightContext {
         network_id,
         protocol_version: PROTOCOL_VERSION,
@@ -742,8 +742,8 @@ fn v2_finality_artifact_for_block_with_keys_and_merge_carrier(
         snapshot_bootstrap: None,
         quorum: DualQuorum::from_roster(&roster).expect("valid fixture quorum"),
         roster,
-        offline_cash_mint_finality_epoch_id,
-        offline_cash_mint_finality_epoch_roster,
+        kagemusha_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster,
         nexus_amx_context_hash: Hash::new(b"kura finality nexus amx context"),
         execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
         da_layout: DataAvailabilityLayout {
@@ -1008,13 +1008,13 @@ fn assert_v2_commit_receipt_matches_artifact(
     assert_eq!(receipt.certificate(), artifact.commit_qc.as_ref());
     assert_eq!(receipt.artifact_hash(), HashOf::new(artifact));
 }
-fn offline_cash_finality_witness(
+fn kagemusha_finality_witness(
     height: u64,
     _evaluated_at_ms: u64,
 ) -> (ExecWitness, ExecutionCommitment) {
-    offline_cash_finality_witness_with_casting(height, &[])
+    kagemusha_finality_witness_with_casting(height, &[])
 }
-fn offline_cash_finality_witness_with_casting(
+fn kagemusha_finality_witness_with_casting(
     height: u64,
     casting_bindings: &[iroha_data_model::parliament_casting::ParliamentTimedOvnCastingContextBindingV1],
 ) -> (ExecWitness, ExecutionCommitment) {
@@ -1047,7 +1047,7 @@ fn offline_cash_finality_witness_with_casting(
     };
     let manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::empty(
         1,
-        Hash::new(b"Kura Offline Cash V1 fixture executed block wire placeholder"),
+        Hash::new(b"Kura Kagemusha V1 fixture executed block wire placeholder"),
     );
     let commitment =
         crate::sumeragi::exec::execution_commitment_from_witness_for_tests(&witness, &manifest)
@@ -1133,7 +1133,7 @@ fn parliament_frozen_casting_binding(
 }
 #[test]
 fn active_receiver_sidecar_decode_budget_is_protocol_bounded() {
-    let limits = offline_cash_finality_decode_limits(MAX_OFFLINE_CASH_FINALITY_SIDECAR_BYTES);
+    let limits = kagemusha_finality_decode_limits(MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES);
     assert_eq!(
         limits.max_sequence_elements(),
         usize::try_from(
@@ -1143,15 +1143,15 @@ fn active_receiver_sidecar_decode_budget_is_protocol_bounded() {
     );
     assert_eq!(
         limits.max_field_bytes(),
-        MAX_OFFLINE_CASH_FINALITY_SIDECAR_BYTES
+        MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES
     );
     assert_eq!(
         limits.max_total_allocated_bytes(),
-        MAX_OFFLINE_CASH_FINALITY_DECODE_ALLOCATED_BYTES
+        MAX_KAGEMUSHA_FINALITY_DECODE_ALLOCATED_BYTES
     );
     assert_eq!(
         limits.max_nesting_depth(),
-        MAX_OFFLINE_CASH_FINALITY_DECODE_DEPTH
+        MAX_KAGEMUSHA_FINALITY_DECODE_DEPTH
     );
 }
 #[test]
@@ -1163,10 +1163,10 @@ fn maximum_frozen_casting_set_fits_the_durable_sidecar_bound() {
         .collect::<Vec<_>>();
     assert!(bindings.iter().all(|binding| binding.is_valid()));
     let (witness, execution_commitment) =
-        offline_cash_finality_witness_with_casting(height, &bindings);
+        kagemusha_finality_witness_with_casting(height, &bindings);
     let kura = Kura::blank_kura_for_testing();
     let block = DummyBlocks::new().next();
-    kura.stage_offline_cash_finality_sidecar(
+    kura.stage_kagemusha_finality_sidecar(
         height,
         block.hash(),
         &witness,
@@ -1174,12 +1174,12 @@ fn maximum_frozen_casting_set_fits_the_durable_sidecar_bound() {
         &bindings,
     )
     .expect("maximum casting set fits the staged sidecar");
-    let encoded_len = std::fs::metadata(kura.offline_cash_finality_staging_path(height))
+    let encoded_len = std::fs::metadata(kura.kagemusha_finality_staging_path(height))
         .expect("maximum casting sidecar metadata")
         .len();
     assert!(
         encoded_len
-            <= u64::try_from(MAX_OFFLINE_CASH_FINALITY_SIDECAR_BYTES)
+            <= u64::try_from(MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES)
                 .expect("sidecar byte bound fits u64")
     );
 }
@@ -1611,7 +1611,7 @@ fn late_startup_inventory_install_hydrates_attached_telemetry() {
     assert_v2_finality_telemetry(&metrics, &artifact);
 }
 #[test]
-fn offline_cash_receipt_survives_finality_restart_and_retry() {
+fn kagemusha_receipt_survives_finality_restart_and_retry() {
     let temp_dir = TempDir::new().expect("create persistent Kura root");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
@@ -1622,10 +1622,10 @@ fn offline_cash_receipt_survives_finality_restart_and_retry() {
         Hash::prehashed([0xC0; Hash::LENGTH]),
         LaneLifecycleParameterV1::catalog_hash(&LaneCatalog::default()),
     )
-    .expect("bind persistent Offline Cash fixture to the configured primary lane");
+    .expect("bind persistent Kagemusha fixture to the configured primary lane");
     let block = DummyBlocks::new().next();
     let operation_id = [0xC1; 32];
-    let (mut witness, _) = offline_cash_finality_witness(1, 1);
+    let (mut witness, _) = kagemusha_finality_witness(1, 1);
     let network_id = test_network_id(b"kura-v2-finality-test");
     let asset = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("fixture domain"),
@@ -1635,17 +1635,17 @@ fn offline_cash_receipt_survives_finality_restart_and_retry() {
         iroha_crypto::Hash::new(b"kura-v2-finality-test-incarnation").into(),
     )
     .expect("fixture asset incarnation");
-    let reserve_receipt = iroha_data_model::isi::offline_cash_v1::OfflineCashReserveReceiptV1 {
-        version: iroha_data_model::isi::offline_cash_v1::OFFLINE_CASH_CHAIN_VERSION_V1,
+    let reserve_receipt = iroha_data_model::isi::kagemusha_v1::KagemushaReserveReceiptV1 {
+        version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
         operation_id,
-        kind: iroha_data_model::isi::offline_cash_v1::OfflineCashOperationKindV1::TopUp,
+        kind: iroha_data_model::isi::kagemusha_v1::KagemushaOperationKindV1::TopUp,
         request_digest: [0xC4; 32],
         mint_statement_digest: [0xC6; 32],
         network_id,
         asset: asset.clone(),
         asset_incarnation,
         scale: 0,
-        liability_pool_id: iroha_data_model::offline::offline_cash_liability_pool_id_v1(
+        liability_pool_id: iroha_data_model::kagemusha::kagemusha_liability_pool_id_v1(
             &network_id,
             &asset,
             asset_incarnation,
@@ -1659,7 +1659,7 @@ fn offline_cash_receipt_survives_finality_restart_and_retry() {
         committed_at_ms: 1,
     };
     witness.writes.push(ExecKv {
-        key: iroha_data_model::isi::offline_cash_v1::OfflineCashReserveReceiptWitnessV1::expected_key(
+        key: iroha_data_model::isi::kagemusha_v1::KagemushaReserveReceiptWitnessV1::expected_key(
             operation_id,
         ),
         value: norito::encode_canonical(&reserve_receipt)
@@ -1667,7 +1667,7 @@ fn offline_cash_receipt_survives_finality_restart_and_retry() {
     });
     let manifest = crate::sumeragi::exec::NativeAmxApplicationManifestV1::empty(
         1,
-        Hash::new(b"Kura Offline Cash receipt fixture executed block wire placeholder"),
+        Hash::new(b"Kura Kagemusha receipt fixture executed block wire placeholder"),
     );
     let mut execution_commitment =
         crate::sumeragi::exec::execution_commitment_from_witness_for_tests(&witness, &manifest)
@@ -1675,33 +1675,33 @@ fn offline_cash_receipt_survives_finality_restart_and_retry() {
     execution_commitment.executed_block_wire_len = u64::try_from(
         block
             .encode_wire()
-            .expect("canonical Offline Cash fixture wire")
+            .expect("canonical Kagemusha fixture wire")
             .len(),
     )
-    .expect("canonical Offline Cash fixture wire length fits u64");
+    .expect("canonical Kagemusha fixture wire length fits u64");
     execution_commitment.executed_block_wire_hash = block
         .executed_block_wire_hash()
-        .expect("canonical Offline Cash fixture executed wire");
+        .expect("canonical Kagemusha fixture executed wire");
     let artifact = v2_finality_artifact_for_block_with_execution(&block, execution_commitment);
-    kura.stage_offline_cash_finality_sidecar(
+    kura.stage_kagemusha_finality_sidecar(
         artifact.height,
         artifact.block_hash,
         &witness,
         execution_commitment,
         &[],
     )
-    .expect("stage Offline Cash witness before finality");
+    .expect("stage Kagemusha witness before finality");
     kura.store_block(Arc::clone(&block))
         .expect("persist authoritative block");
     let receipt = kura
         .store_v2_finality_artifact(&artifact)
         .expect("persist authoritative finality artifact");
-    kura.promote_offline_cash_finality_sidecar(&artifact, &receipt)
-        .expect("promote Offline Cash witness after finality");
+    kura.promote_kagemusha_finality_sidecar(&artifact, &receipt)
+        .expect("promote Kagemusha witness after finality");
     let expected_operation_finality = kura
-        .offline_cash_operation_finality_v1(artifact.height, operation_id)
-        .expect("read promoted Offline Cash receipt finality")
-        .expect("Offline Cash receipt exists");
+        .kagemusha_operation_finality_v1(artifact.height, operation_id)
+        .expect("read promoted Kagemusha receipt finality")
+        .expect("Kagemusha receipt exists");
     assert_eq!(
         expected_operation_finality.reserve_receipt_witness.receipt,
         reserve_receipt
@@ -1712,28 +1712,28 @@ fn offline_cash_receipt_survives_finality_restart_and_retry() {
             .verify(execution_commitment.ordinary_writes_root)
     );
     assert!(
-        kura.offline_cash_operation_finality_v1(artifact.height, [0xCF; 32])
+        kura.kagemusha_operation_finality_v1(artifact.height, [0xCF; 32])
             .expect("unknown operation lookup is valid")
             .is_none()
     );
     assert!(
-        kura.offline_cash_mint_outbox_entry_v1(operation_id)
+        kura.kagemusha_mint_outbox_entry_v1(operation_id)
             .expect("missing mint outbox is a valid pending state")
             .is_none()
     );
-    kura.promote_offline_cash_finality_sidecar(&artifact, &receipt)
+    kura.promote_kagemusha_finality_sidecar(&artifact, &receipt)
         .expect("exact promotion retry is idempotent");
     drop(kura);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("reopen persistent Kura");
     let recovered_operation_finality = reopened
-        .offline_cash_operation_finality_v1(artifact.height, operation_id)
-        .expect("read Offline Cash receipt finality after restart")
-        .expect("Offline Cash receipt finality survives restart");
+        .kagemusha_operation_finality_v1(artifact.height, operation_id)
+        .expect("read Kagemusha receipt finality after restart")
+        .expect("Kagemusha receipt finality survives restart");
     assert_eq!(recovered_operation_finality, expected_operation_finality);
     assert!(
         reopened
-            .offline_cash_mint_outbox_entry_v1(operation_id)
+            .kagemusha_mint_outbox_entry_v1(operation_id)
             .expect("missing mint outbox remains pending after restart")
             .is_none()
     );
@@ -1759,7 +1759,7 @@ fn parliament_casting_membership_survives_restart_and_tampering_fails_closed() {
     ];
     let requested_ballot = bindings[1].ballot_attempt_id;
     let (witness, mut execution_commitment) =
-        offline_cash_finality_witness_with_casting(height, &bindings);
+        kagemusha_finality_witness_with_casting(height, &bindings);
     execution_commitment.executed_block_wire_len = u64::try_from(
         block
             .encode_wire()
@@ -1771,7 +1771,7 @@ fn parliament_casting_membership_survives_restart_and_tampering_fails_closed() {
         .executed_block_wire_hash()
         .expect("canonical casting fixture executed wire");
     let artifact = v2_finality_artifact_for_block_with_execution(&block, execution_commitment);
-    kura.stage_offline_cash_finality_sidecar(
+    kura.stage_kagemusha_finality_sidecar(
         artifact.height,
         artifact.block_hash,
         &witness,
@@ -1784,7 +1784,7 @@ fn parliament_casting_membership_survives_restart_and_tampering_fails_closed() {
     let receipt = kura
         .store_v2_finality_artifact(&artifact)
         .expect("persist casting fixture finality");
-    kura.promote_offline_cash_finality_sidecar(&artifact, &receipt)
+    kura.promote_kagemusha_finality_sidecar(&artifact, &receipt)
         .expect("promote casting proof material");
 
     let expected = kura
@@ -1819,23 +1819,23 @@ fn parliament_casting_membership_survives_restart_and_tampering_fails_closed() {
     assert_eq!(recovered, expected);
     assert!(recovered.verify(execution_commitment.ordinary_writes_root));
 
-    let sidecar_path = reopened.offline_cash_finality_sidecar_path(height);
+    let sidecar_path = reopened.kagemusha_finality_sidecar_path(height);
     let (mut corrupted, _) = reopened
-        .decode_offline_cash_finality_sidecar(&sidecar_path)
+        .decode_kagemusha_finality_sidecar(&sidecar_path)
         .expect("decode durable casting sidecar")
         .expect("durable casting sidecar exists");
     corrupted.parliament_timed_ovn_casting_bindings[0].tle_key_transcript_hash[0] ^= 1;
     std::fs::write(&sidecar_path, corrupted.encode()).expect("corrupt retained casting binding");
     assert!(matches!(
         reopened.parliament_timed_ovn_finalized_casting_proof_v1(height, requested_ballot),
-        Err(Error::OfflineCashFinalitySidecar(_))
+        Err(Error::KagemushaFinalitySidecar(_))
     ));
 }
 #[test]
-fn offline_cash_finality_stage_rejects_commitment_and_path_substitution() {
+fn kagemusha_finality_stage_rejects_commitment_and_path_substitution() {
     let kura = Kura::blank_kura_for_testing();
     let block = DummyBlocks::new().next();
-    let (witness, mut execution_commitment) = offline_cash_finality_witness(1, 1);
+    let (witness, mut execution_commitment) = kagemusha_finality_witness(1, 1);
     execution_commitment.executed_block_wire_len = u64::try_from(
         block
             .encode_wire()
@@ -1849,18 +1849,18 @@ fn offline_cash_finality_stage_rejects_commitment_and_path_substitution() {
     let mut mismatched = execution_commitment;
     mismatched.ordinary_writes_root = Hash::new(b"substituted ordinary root");
     assert!(matches!(
-        kura.stage_offline_cash_finality_sidecar(1, block.hash(), &witness, mismatched, &[]),
-        Err(Error::OfflineCashFinalitySidecar(_))
+        kura.stage_kagemusha_finality_sidecar(1, block.hash(), &witness, mismatched, &[]),
+        Err(Error::KagemushaFinalitySidecar(_))
     ));
     assert!(
-        !kura.offline_cash_finality_staging_path(1).exists(),
+        !kura.kagemusha_finality_staging_path(1).exists(),
         "a commitment mismatch must not leave a stage"
     );
-    kura.stage_offline_cash_finality_sidecar(1, block.hash(), &witness, execution_commitment, &[])
+    kura.stage_kagemusha_finality_sidecar(1, block.hash(), &witness, execution_commitment, &[])
         .expect("stage canonical witness");
-    let stage_path = kura.offline_cash_finality_staging_path(1);
+    let stage_path = kura.kagemusha_finality_staging_path(1);
     let (mut staged, _) = kura
-        .decode_staged_offline_cash_finality(&stage_path)
+        .decode_staged_kagemusha_finality(&stage_path)
         .expect("read stage")
         .expect("stage exists");
     staged.validation_fee_policy_witness.value[0] ^= 1;
@@ -1872,11 +1872,11 @@ fn offline_cash_finality_stage_rejects_commitment_and_path_substitution() {
         .store_v2_finality_artifact(&artifact)
         .expect("persist finality artifact");
     assert!(matches!(
-        kura.promote_offline_cash_finality_sidecar(&artifact, &receipt),
-        Err(Error::OfflineCashFinalitySidecar(_))
+        kura.promote_kagemusha_finality_sidecar(&artifact, &receipt),
+        Err(Error::KagemushaFinalitySidecar(_))
     ));
     assert!(
-        !kura.offline_cash_finality_sidecar_path(1).exists(),
+        !kura.kagemusha_finality_sidecar_path(1).exists(),
         "mutated witness-derived path must never be promoted"
     );
 }
@@ -1902,8 +1902,8 @@ fn immutable_sidecar_publication_never_clobbers_a_racing_destination() {
 fn non_topup_finality_rejects_orphan_staged_and_final_sidecars() {
     let kura = Kura::blank_kura_for_testing();
     let block = DummyBlocks::new().next();
-    let (offline_cash_witness, mut execution_commitment) =
-        offline_cash_finality_witness(block.header().height().get(), 1);
+    let (kagemusha_witness, mut execution_commitment) =
+        kagemusha_finality_witness(block.header().height().get(), 1);
     execution_commitment.executed_block_wire_len = u64::try_from(
         block
             .encode_wire()
@@ -1915,10 +1915,10 @@ fn non_topup_finality_rejects_orphan_staged_and_final_sidecars() {
         .executed_block_wire_hash()
         .expect("canonical receiver-only fixture executed wire");
     let artifact = v2_finality_artifact_for_block_with_execution(&block, execution_commitment);
-    kura.stage_offline_cash_finality_sidecar(
+    kura.stage_kagemusha_finality_sidecar(
         artifact.height,
         artifact.block_hash,
-        &offline_cash_witness,
+        &kagemusha_witness,
         execution_commitment,
         &[],
     )
@@ -1928,22 +1928,22 @@ fn non_topup_finality_rejects_orphan_staged_and_final_sidecars() {
     let receipt = kura
         .store_v2_finality_artifact(&artifact)
         .expect("persist non-top-up finality");
-    let staging_dir = kura.offline_cash_finality_staging_dir();
+    let staging_dir = kura.kagemusha_finality_staging_dir();
     create_dir_all_with_context(&staging_dir).expect("create staging directory");
-    let staging_path = kura.offline_cash_finality_staging_path(artifact.height);
+    let staging_path = kura.kagemusha_finality_staging_path(artifact.height);
     std::fs::write(&staging_path, b"orphan-stage").expect("write orphan stage");
     assert!(matches!(
-        kura.promote_offline_cash_finality_sidecar(&artifact, &receipt),
-        Err(Error::OfflineCashFinalitySidecar(_))
+        kura.promote_kagemusha_finality_sidecar(&artifact, &receipt),
+        Err(Error::KagemushaFinalitySidecar(_))
     ));
     std::fs::remove_file(&staging_path).expect("remove orphan stage");
-    let final_dir = kura.offline_cash_finality_sidecar_dir();
+    let final_dir = kura.kagemusha_finality_sidecar_dir();
     create_dir_all_with_context(&final_dir).expect("create final directory");
-    let final_path = kura.offline_cash_finality_sidecar_path(artifact.height);
+    let final_path = kura.kagemusha_finality_sidecar_path(artifact.height);
     std::fs::write(&final_path, b"orphan-final").expect("write orphan final sidecar");
     assert!(matches!(
-        kura.promote_offline_cash_finality_sidecar(&artifact, &receipt),
-        Err(Error::OfflineCashFinalitySidecar(_))
+        kura.promote_kagemusha_finality_sidecar(&artifact, &receipt),
+        Err(Error::KagemushaFinalitySidecar(_))
     ));
 }
 #[test]
@@ -2865,7 +2865,7 @@ fn v2_finality_artifact_is_immutable_after_first_durable_write() {
     );
     let conflicting = v2_finality_artifact_for_block_with_execution(
         &block,
-        ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"conflicting Kura finality parent state"),
             Hash::new(b"conflicting Kura finality post state"),
             Hash::new(b"conflicting Kura finality ordinary writes"),

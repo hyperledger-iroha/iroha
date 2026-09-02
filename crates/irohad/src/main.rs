@@ -5310,7 +5310,7 @@ mod network_relay_tests {
                 phase: consensus_v2::GlobalPhase::Prepare,
                 subject: sample_v2_subject(),
                 execution_commitment:
-                    consensus_v2::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                    consensus_v2::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                         Hash::prehashed([0x64; 32]),
                         Hash::prehashed([0x65; 32]),
                         Hash::prehashed([0x66; 32]),
@@ -6338,11 +6338,11 @@ fn authorize_kura_runtime_start(
         (true, true) | (false, false) => Ok(()),
     }
 }
-fn install_offline_cash_v1_runtime_verifier(
+fn install_kagemusha_v1_runtime_verifier(
     state: &mut State,
     config: &Config,
 ) -> Result<(), String> {
-    let Some(files) = config.settlement.offline.proof_release.as_ref() else {
+    let Some(files) = config.settlement.kagemusha.proof_release.as_ref() else {
         return Ok(());
     };
     let read = |path: &Path, max_bytes, label| {
@@ -6351,31 +6351,31 @@ fn install_offline_cash_v1_runtime_verifier(
     };
     let manifest = read(
         &files.manifest,
-        iroha_data_model::offline::OFFLINE_CASH_RELEASE_MANIFEST_MAX_BYTES_V1,
-        "Offline Cash V1 release manifest",
+        iroha_data_model::kagemusha::KAGEMUSHA_RELEASE_MANIFEST_MAX_BYTES_V1,
+        "Kagemusha V1 release manifest",
     )?;
     let receipt = read(
         &files.validation_receipt,
-        iroha_data_model::offline::OFFLINE_CASH_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1,
-        "Offline Cash V1 validation receipt",
+        iroha_data_model::kagemusha::KAGEMUSHA_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1,
+        "Kagemusha V1 validation receipt",
     )?;
     let policy = read(
         &files.authority_policy,
-        iroha_data_model::offline::OFFLINE_CASH_RELEASE_AUTHORITY_POLICY_MAX_BYTES_V1,
-        "Offline Cash V1 authority policy",
+        iroha_data_model::kagemusha::KAGEMUSHA_RELEASE_AUTHORITY_POLICY_MAX_BYTES_V1,
+        "Kagemusha V1 authority policy",
     )?;
     let attestation = read(
         &files.attestation,
-        iroha_data_model::offline::OFFLINE_CASH_RELEASE_ATTESTATION_MAX_BYTES_V1,
-        "Offline Cash V1 release attestation",
+        iroha_data_model::kagemusha::KAGEMUSHA_RELEASE_ATTESTATION_MAX_BYTES_V1,
+        "Kagemusha V1 release attestation",
     )?;
     let profile = read(
         &files.recursive_profile,
-        iroha_core::smartcontracts::isi::offline::OFFLINE_CASH_RECURSIVE_PROFILE_MAX_BYTES_V1,
-        "Offline Cash V1 recursive verifier profile",
+        iroha_core::smartcontracts::isi::kagemusha::KAGEMUSHA_RECURSIVE_PROFILE_MAX_BYTES_V1,
+        "Kagemusha V1 recursive verifier profile",
     )?;
     let verifier =
-        iroha_core::smartcontracts::isi::offline::load_authenticated_offline_cash_v1_runtime_verifier(
+        iroha_core::smartcontracts::isi::kagemusha::load_authenticated_kagemusha_v1_runtime_verifier(
             &manifest,
             &receipt,
             &policy,
@@ -6383,7 +6383,7 @@ fn install_offline_cash_v1_runtime_verifier(
             &profile,
             &files.artifact_directory,
         )?;
-    state.install_offline_cash_v1_runtime_verifier(verifier);
+    state.install_kagemusha_v1_runtime_verifier(verifier);
     Ok(())
 }
 fn apply_state_runtime_config_before_snapshot_auth(
@@ -6403,7 +6403,7 @@ fn apply_state_runtime_config_before_snapshot_auth(
     state.set_gov(config.gov.clone());
     state.content = config.content.clone();
     state.set_settlement(config.settlement.clone());
-    install_offline_cash_v1_runtime_verifier(state, config)
+    install_kagemusha_v1_runtime_verifier(state, config)
 }
 fn apply_state_geometry_config_before_kura_replay(
     state: &mut State,
@@ -7732,9 +7732,9 @@ impl Iroha {
                         "emergency Fast restored governance is incompatible with configured governance: {error}"
                     ))
                 })?;
-            install_offline_cash_v1_runtime_verifier(&mut state, &config).map_err(|error| {
+            install_kagemusha_v1_runtime_verifier(&mut state, &config).map_err(|error| {
                 Report::new(StartError::InitKura).attach(format!(
-                    "failed to install the authenticated Offline Cash V1 runtime: {error}"
+                    "failed to install the authenticated Kagemusha V1 runtime: {error}"
                 ))
             })?;
         } else {
@@ -9157,8 +9157,8 @@ impl Iroha {
                 global_beacon_partial_signer: runtime_deps
                     .sumeragi_global_beacon_partial_signer
                     .clone(),
-                offline_cash_mint_finality_authority: runtime_deps
-                    .offline_cash_mint_finality_authority
+                kagemusha_mint_finality_authority: runtime_deps
+                    .kagemusha_mint_finality_authority
                     .clone(),
                 startup_replay_plan: v2_replay_plan,
                 startup_replay_inventory_guard,
@@ -16310,15 +16310,15 @@ mod tests {
                 std::num::NonZeroU64::new(7).expect("nonzero message cap");
             config.zk.sccp.max_pending_outbound_payload_bytes =
                 std::num::NonZeroU64::new(11).expect("nonzero byte cap");
-            let offline_asset_definition_id = AssetDefinitionId::derive_from_components(
+            let kagemusha_asset_definition_id = AssetDefinitionId::derive_from_components(
                 iroha_data_model::domain::DomainId::try_new("boi", "is")
-                    .expect("offline asset domain"),
-                "ds".parse().expect("offline asset name"),
+                    .expect("Kagemusha asset domain"),
+                "ds".parse().expect("Kagemusha asset name"),
             );
-            let offline_reserve_account_id = iroha_test_samples::ALICE_ID.clone();
-            config.settlement.offline.reserve_accounts.insert(
-                offline_asset_definition_id.clone(),
-                offline_reserve_account_id.clone(),
+            let kagemusha_reserve_account_id = iroha_test_samples::ALICE_ID.clone();
+            config.settlement.kagemusha.reserve_accounts.insert(
+                kagemusha_asset_definition_id.clone(),
+                kagemusha_reserve_account_id.clone(),
             );
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
@@ -16339,11 +16339,11 @@ mod tests {
             assert_eq!(
                 state
                     .settlement()
-                    .offline
+                    .kagemusha
                     .reserve_accounts
-                    .get(&offline_asset_definition_id),
-                Some(&offline_reserve_account_id),
-                "the exact Offline Cash reserve catalog must be installed before Kura replay",
+                    .get(&kagemusha_asset_definition_id),
+                Some(&kagemusha_reserve_account_id),
+                "the exact Kagemusha reserve catalog must be installed before Kura replay",
             );
         }
     }
@@ -16680,7 +16680,7 @@ mod tests {
                     phase: consensus_v2::GlobalPhase::Prepare,
                     subject: sample_v2_subject(),
                     execution_commitment:
-                        consensus_v2::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                        consensus_v2::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                             Hash::prehashed([marker; 32]),
                             Hash::prehashed([marker.wrapping_add(1); 32]),
                             Hash::prehashed([marker.wrapping_add(2); 32]),
@@ -18735,7 +18735,7 @@ mod tests {
             assert_eq!(state.committed_height(), before_height);
             assert_eq!(state.committed_block_hashes_snapshot(), before_hashes);
         }
-        struct OfflineSemanticGenesisFixture {
+        struct LocalSemanticGenesisFixture {
             config: Config,
             genesis: GenesisBlock,
             authority: AccountId,
@@ -18745,7 +18745,7 @@ mod tests {
         }
         fn offline_semantic_genesis_fixture(
             extra_instructions: impl IntoIterator<Item = InstructionBox>,
-        ) -> OfflineSemanticGenesisFixture {
+        ) -> LocalSemanticGenesisFixture {
             let mut config = sample_config();
             let chain_id = ChainId::from("offline-genesis-validation-test");
             let genesis_authority = iroha_crypto::KeyPair::try_from_seed(
@@ -18801,7 +18801,7 @@ mod tests {
             let (_, _, _, cadence_ms, _) =
                 consensus_caps_from_genesis(&genesis, &config_caps, &config.sumeragi)
                     .expect("canonical genesis consensus metadata");
-            OfflineSemanticGenesisFixture {
+            LocalSemanticGenesisFixture {
                 config,
                 genesis,
                 authority,

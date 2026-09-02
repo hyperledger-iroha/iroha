@@ -729,10 +729,10 @@ print(f"{digest} {size}")
             builder,
         )
         self.assertIn(
-            '"connect_norito_offline_cash_v1_payment_validate"', builder
+            '"connect_norito_kagemusha_v1_payment_validate"', builder
         )
         self.assertIn(
-            '"connect_norito_offline_cash_device_execute_v1"', builder
+            '"connect_norito_kagemusha_device_execute_v1"', builder
         )
         self.assertNotIn(
             "CONNECT_NORITO_BRIDGE_ABI_VERSION:[[:space:]]*u32",
@@ -803,7 +803,7 @@ print(f"{digest} {size}")
             }
             EXPECTED_REQUIRED_SYMBOLS = [
                 "connect_norito_bridge_abi_version",
-                "connect_norito_offline_cash_v1_payment_validate",
+                "connect_norito_kagemusha_v1_payment_validate",
             ]
             EXPECTED_FORBIDDEN_SYMBOLS = [
                 "connect_norito_forbidden_symbol"
@@ -818,7 +818,7 @@ print(f"{digest} {size}")
             self.assertEqual(arguments[:-1], ["-gUj"])
             return (
                 "_connect_norito_bridge_abi_version\n"
-                "_connect_norito_offline_cash_v1_payment_validate\n"
+                "_connect_norito_kagemusha_v1_payment_validate\n"
             )
 
         with (
@@ -847,7 +847,7 @@ print(f"{digest} {size}")
             }
             EXPECTED_REQUIRED_SYMBOLS = [
                 "connect_norito_bridge_abi_version",
-                "connect_norito_offline_cash_v1_payment_validate",
+                "connect_norito_kagemusha_v1_payment_validate",
             ]
             EXPECTED_FORBIDDEN_SYMBOLS = []
 
@@ -860,7 +860,7 @@ print(f"{digest} {size}")
             if arguments[:-1] == ["-gj"]:
                 return (
                     "_connect_norito_bridge_abi_version\n"
-                    "_connect_norito_offline_cash_v1_payment_validate\n"
+                    "_connect_norito_kagemusha_v1_payment_validate\n"
                 )
             self.assertEqual(arguments[:-1], ["-gUj"])
             return "_connect_norito_bridge_abi_version\n"
@@ -895,7 +895,7 @@ print(f"{digest} {size}")
             }
             EXPECTED_REQUIRED_SYMBOLS = [
                 "connect_norito_bridge_abi_version",
-                "connect_norito_offline_cash_v1_payment_validate",
+                "connect_norito_kagemusha_v1_payment_validate",
             ]
             EXPECTED_FORBIDDEN_SYMBOLS = [
                 "connect_norito_forbidden_symbol"
@@ -909,7 +909,7 @@ print(f"{digest} {size}")
                 ) + "\n"
             return (
                 "_connect_norito_bridge_abi_version\n"
-                "_connect_norito_offline_cash_v1_payment_validate\n"
+                "_connect_norito_kagemusha_v1_payment_validate\n"
             )
 
         def missing_export(tool: Path, arguments: list[str]) -> str:
@@ -918,7 +918,7 @@ print(f"{digest} {size}")
                 return " ".join(
                     NativePolicy.EXPECTED_SLICES[identifier]["architectures"]
                 ) + "\n"
-            return "_connect_norito_offline_cash_v1_payment_validate\n"
+            return "_connect_norito_kagemusha_v1_payment_validate\n"
 
         with (
             mock.patch.object(owner.sys, "platform", "darwin"),

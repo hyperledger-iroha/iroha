@@ -679,10 +679,10 @@ mod tests {
         );
     }
     #[test]
-    fn offline_defaults_need_no_operator_enablement_or_catalog() {
-        let offline = Offline::default();
-        assert!(offline.reserve_accounts.is_empty());
-        assert!(offline.proof_release.is_none());
+    fn kagemusha_defaults_need_no_operator_enablement_or_catalog() {
+        let kagemusha = Kagemusha::default();
+        assert!(kagemusha.reserve_accounts.is_empty());
+        assert!(kagemusha.proof_release.is_none());
     }
     fn default_v2_sumeragi() -> Sumeragi {
         super::sora_profile_tests::minimal_root().sumeragi

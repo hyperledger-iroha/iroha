@@ -638,7 +638,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'actual/torii_tx_history.rs',
         'actual/torii_http_transport.rs',
         'actual/torii_mcp_profile.rs',
-        'actual/offline.rs',
+        'actual/kagemusha.rs',
         'actual/tests.rs',
     ),
     'crates/iroha_config/src/parameters/actual/tests.rs': (
@@ -3090,7 +3090,7 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "sumeragi::v2_transport::tests::later_commit_qc_authenticates_the_exact_locked_body_origin",
     "block::consensus_v2::finality::tests::header_binding_requires_exact_origin_but_allows_later_certification",
     "block::consensus_v2::finality::tests::genesis_header_binding_accepts_a_later_first_proposal_origin",
-    "block::consensus_v2::tests::offline_cash_consensus_signature_envelope_roundtrips_and_rejects_drift",
+    "block::consensus_v2::tests::kagemusha_consensus_signature_envelope_roundtrips_and_rejects_drift",
     "block::consensus_v2::tests::height_context_identity_authenticates_the_parent_proposal_origin",
     "sumeragi_v2_runner::prepare_qc_split_tests::restart_scenario_uses_a_contention_tolerant_view_zero_deadline",
     "sumeragi::v2::tests::successor_core_context_preserves_the_parent_certificate_binding",

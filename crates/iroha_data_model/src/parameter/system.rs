@@ -51,7 +51,7 @@ impl core::fmt::Display for ConsensusFingerprint {
         write!(formatter, "0x{}", hex::encode(self.0))
     }
 }
-/// Consensus-state staging record for the next Offline Cash V1 Pasta roster.
+/// Consensus-state staging record for the next Kagemusha V1 Pasta roster.
 ///
 /// Validators read this value from the finalized world state before building
 /// an epoch-boundary height context. The old roster then authenticates the
@@ -70,20 +70,20 @@ impl core::fmt::Display for ConsensusFingerprint {
     derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
-pub struct OfflineCashMintFinalityNextEpochParameterV1 {
+pub struct KagemushaMintFinalityNextEpochParameterV1 {
     /// Full separately provisioned public roster for the next election epoch.
-    pub roster: crate::isi::offline_cash_v1::OfflineCashMintFinalityEpochRosterV1,
+    pub roster: crate::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
 }
-impl OfflineCashMintFinalityNextEpochParameterV1 {
+impl KagemushaMintFinalityNextEpochParameterV1 {
     /// Sole custom-parameter identity for the next roster.
-    pub const PARAMETER_ID_STR: &'static str = "offline_cash_mint_finality_next_epoch_v1";
+    pub const PARAMETER_ID_STR: &'static str = "kagemusha_mint_finality_next_epoch_v1";
 
     /// Construct the canonical custom-parameter identifier.
     #[must_use]
     pub fn parameter_id() -> CustomParameterId {
         Self::PARAMETER_ID_STR
             .parse()
-            .expect("valid Offline Cash V1 next-roster parameter identifier")
+            .expect("valid Kagemusha V1 next-roster parameter identifier")
     }
 
     /// Validate the complete public roster before it enters consensus state.
@@ -93,7 +93,7 @@ impl OfflineCashMintFinalityNextEpochParameterV1 {
     /// Returns the roster validation error unchanged.
     pub fn validate(
         &self,
-    ) -> Result<(), crate::isi::offline_cash_v1::OfflineCashIsiValidationErrorV1> {
+    ) -> Result<(), crate::isi::kagemusha_v1::KagemushaIsiValidationErrorV1> {
         self.roster.validate()
     }
 

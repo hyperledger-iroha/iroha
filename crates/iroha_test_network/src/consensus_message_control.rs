@@ -2413,7 +2413,7 @@ mod tests {
         }
     }
     fn descriptor_execution_commitment() -> ExecutionCommitment {
-        ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             CryptoHash::new(b"descriptor-parent-state"),
             CryptoHash::new(b"descriptor-post-state"),
             CryptoHash::new(b"descriptor-writes"),
@@ -3724,7 +3724,7 @@ mod tests {
             .get_mut("execution_commitment")
             .and_then(Value::as_object_mut)
             .expect("execution commitment")
-            .insert("offline_cash_top_up_count".to_owned(), Value::from(1_u64));
+            .insert("kagemusha_top_up_count".to_owned(), Value::from(1_u64));
         assert!(parse_held(&invalid_execution).is_err());
         let mut reordered = held_descriptor(ConsensusMessageControlKind::PrepareCertificate);
         reordered

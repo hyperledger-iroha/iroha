@@ -1,6 +1,6 @@
-# Offline Cash V1 Android hardware qualification matrix
+# Kagemusha V1 Android hardware qualification matrix
 
-This is the physical-device release gate for an Android Offline Cash V1
+This is the physical-device release gate for an Android Kagemusha V1
 hardware profile. A profile remains disabled until every required device row has
 fresh, signed evidence from the exact release candidate. Emulator, software-key,
 summary-only, or host-simulated results never satisfy the gate.

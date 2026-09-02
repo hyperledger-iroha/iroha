@@ -81,7 +81,7 @@ tasks.withType<Test>().configureEach {
         rootProject.layout.projectDirectory
             .dir("..")
             .dir("..")
-            .file("fixtures/offline/offline_cash_v1.json"),
+            .file("fixtures/offline/kagemusha_v1.json"),
     )
     inputs.file(
         rootProject.layout.projectDirectory

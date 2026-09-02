@@ -52,8 +52,8 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     MultisigResponse,
     NetworkTimeSnapshot,
     NetworkTimeStatus,
-    OfflineCashReadinessV1,
-    UnverifiedOfflineCashOperationStatusV1,
+    KagemushaReadinessV1,
+    UnverifiedKagemushaOperationStatusV1,
     SumeragiDiagnosticsStatus,
     SumeragiV2Status,
     ToriiCanonicalRequestAuth,
@@ -315,8 +315,8 @@ def _sumeragi_v2_status_payload() -> Dict[str, Any]:
         "parent_state_root": _canonical_hash(0x34),
         "post_state_root": _canonical_hash(0x35),
         "ordinary_writes_root": _canonical_hash(0x36),
-        "offline_cash_top_up_root": None,
-        "offline_cash_top_up_count": 0,
+        "kagemusha_top_up_root": None,
+        "kagemusha_top_up_count": 0,
         "native_amx_application_manifest_version": 1,
         "native_amx_application_manifest_root": _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT,
         "native_amx_application_manifest_count": 0,
@@ -8880,12 +8880,12 @@ def test_trigger_registration_deletion_and_query() -> None:
 
 
 @pytest.mark.parametrize("ready", [True, False])
-def test_get_offline_cash_readiness_is_exact_v1(ready: bool) -> None:
+def test_get_kagemusha_readiness_is_exact_v1(ready: bool) -> None:
     session = RecordingSession()
     session.queue(
         StubResponse(
             payload={
-                "cash_handoff_capability": "cash_handoff_v1",
+                "kagemusha_handoff_capability": "kagemusha_handoff_v1",
                 "wire_version": 1,
                 "device_lifecycle_version": 1,
                 "ready": ready,
@@ -8894,25 +8894,25 @@ def test_get_offline_cash_readiness_is_exact_v1(ready: bool) -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    readiness = client.get_offline_cash_readiness(timeout=12.5)
+    readiness = client.get_kagemusha_readiness(timeout=12.5)
 
-    assert readiness == OfflineCashReadinessV1(
-        cash_handoff_capability="cash_handoff_v1",
+    assert readiness == KagemushaReadinessV1(
+        kagemusha_handoff_capability="kagemusha_handoff_v1",
         wire_version=1,
         device_lifecycle_version=1,
         ready=ready,
     )
-    assert session.calls[0]["url"].endswith("/v1/offline/readiness")
+    assert session.calls[0]["url"].endswith("/v1/kagemusha/readiness")
     assert session.calls[0]["allow_redirects"] is False
     assert session.calls[0]["timeout"] == 12.5
 
 
-def test_get_offline_cash_readiness_rejects_non_v1_contract() -> None:
+def test_get_kagemusha_readiness_rejects_non_v1_contract() -> None:
     session = RecordingSession()
     session.queue(
         StubResponse(
             payload={
-                "cash_handoff_capability": "cash_handoff_v1",
+                "kagemusha_handoff_capability": "kagemusha_handoff_v1",
                 "wire_version": 1,
                 "device_lifecycle_version": 1,
                 "ready": True,
@@ -8922,7 +8922,7 @@ def test_get_offline_cash_readiness_rejects_non_v1_contract() -> None:
     )
 
     with pytest.raises(RuntimeError, match="unexpected"):
-        ToriiClient("http://node.test", session=session).get_offline_cash_readiness()
+        ToriiClient("http://node.test", session=session).get_kagemusha_readiness()
 
 
 def _offline_command_archive(schema: str, operation_id: bytes) -> bytes:
@@ -8935,7 +8935,7 @@ def _offline_command_archive(schema: str, operation_id: bytes) -> bytes:
     )
 
 
-def test_submit_and_get_offline_cash_operation_use_exact_v1_routes() -> None:
+def test_submit_and_get_kagemusha_operation_use_exact_v1_routes() -> None:
     operation_id = bytes((0x41,)) * 32
     pending = {
         "version": 1,
@@ -8950,30 +8950,30 @@ def test_submit_and_get_offline_cash_operation_use_exact_v1_routes() -> None:
     session.queue(StubResponse(payload=pending))
     client = ToriiClient("http://node.test", session=session)
     archive = _offline_command_archive(
-        "iroha.torii.v1.offline_cash.top_up.request", operation_id
+        "iroha.torii.v1.kagemusha.top_up.request", operation_id
     )
 
-    submitted = client.submit_offline_cash_top_up(archive)
-    fetched = client.get_offline_cash_operation(operation_id.hex())
+    submitted = client.submit_kagemusha_top_up(archive)
+    fetched = client.get_kagemusha_operation(operation_id.hex())
 
-    assert isinstance(submitted, UnverifiedOfflineCashOperationStatusV1)
+    assert isinstance(submitted, UnverifiedKagemushaOperationStatusV1)
     assert submitted.operation_id == operation_id
     assert submitted.kind == "top_up" and submitted.state == "pending"
     assert fetched == submitted
     post = session.calls[0]
-    assert post["url"].endswith("/v1/offline/top-up")
+    assert post["url"].endswith("/v1/kagemusha/top-up")
     assert post["headers"]["Content-Type"] == "application/x-norito"
     assert post["headers"]["Idempotency-Key"] == operation_id.hex()
     assert post["data"] == archive
     assert post["allow_redirects"] is False
     assert session.calls[1]["url"].endswith(
-        f"/v1/offline/operations/{operation_id.hex()}"
+        f"/v1/kagemusha/operations/{operation_id.hex()}"
     )
 
 
-def test_applied_offline_cash_result_requires_caller_pinned_verifier() -> None:
+def test_applied_kagemusha_result_requires_caller_pinned_verifier() -> None:
     operation_id = bytes((0x42,)) * 32
-    status = UnverifiedOfflineCashOperationStatusV1.from_payload(
+    status = UnverifiedKagemushaOperationStatusV1.from_payload(
         {
             "version": 1,
             "operation_id": list(operation_id),

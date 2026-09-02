@@ -1,2 +1,2 @@
-/// Namespace for reusable ABI-21 offline-cash UI built on IrohaSwift.
+/// Namespace for reusable ABI-21 kagemusha UI built on IrohaSwift.
 public enum IrohaSwiftTransferUI {}

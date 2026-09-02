@@ -61,7 +61,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('actual/torii_tx_history.rs'),
         Path('actual/torii_http_transport.rs'),
         Path('actual/torii_mcp_profile.rs'),
-        Path('actual/offline.rs'),
+        Path('actual/kagemusha.rs'),
         Path('actual/tests.rs'),
     ),
     Path('crates/iroha_config/src/parameters/actual/tests.rs'): (

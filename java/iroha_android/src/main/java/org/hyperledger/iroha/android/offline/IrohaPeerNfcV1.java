@@ -30,7 +30,7 @@ public final class IrohaPeerNfcV1 {
   public static final int MAXIMUM_CHUNK_BYTES = 4096;
   public static final int MAXIMUM_MESSAGE_BYTES =
       IrohaPeerWireMessageV1.HEADER_LENGTH
-          + IrohaPeerWireMessageV1.MAXIMUM_OFFLINE_CASH_ENCODED_BYTES;
+          + IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES;
   public static final int INFO_BYTES = 98;
   public static final int STATUS_BYTES = 174;
 

@@ -153,7 +153,7 @@ use iroha_data_model::{
     },
     parameter::{
         CustomParameterId, Parameters,
-        system::{OfflineCashMintFinalityNextEpochParameterV1, SumeragiNposParameters},
+        system::{KagemushaMintFinalityNextEpochParameterV1, SumeragiNposParameters},
     },
     peer::PeerId,
     permission::{Permission, Permissions},
@@ -363,8 +363,8 @@ use crate::{
         receipts::{DaReceiptCursorError, DaReceiptCursorIndex},
     },
     governance::parliament::ParliamentAttemptStateV1,
-    smartcontracts::isi::offline::offline_cash_v1_reserve::{
-        OfflineCashReserveOperationRecordV1, OfflineCashReservePoolV1,
+    smartcontracts::isi::kagemusha::kagemusha_v1_reserve::{
+        KagemushaReserveOperationRecordV1, KagemushaReservePoolV1,
     },
 };
 mod bounded_authority;
@@ -906,8 +906,8 @@ mod threshold_key_lifecycle_certificate_tests {
                 power: 1,
             })
             .collect::<Vec<_>>();
-        let offline_cash_mint_finality_epoch_roster =
-            crate::offline_cash_v1_test_fixtures::mint_finality_roster(
+        let kagemusha_mint_finality_epoch_roster =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster(
                 certificate.network_id,
                 0,
                 &election_roster,
@@ -917,7 +917,7 @@ mod threshold_key_lifecycle_certificate_tests {
                 network_id: certificate.network_id,
                 election: crate::sumeragi::v2_context::FrozenElectionInputs {
                     epoch: 0,
-                    offline_cash_mint_finality_epoch_roster,
+                    kagemusha_mint_finality_epoch_roster,
                     epoch_end_height: 8,
                     mode: ConsensusMode::Npos,
                     roster: election_roster,
@@ -979,15 +979,15 @@ mod threshold_key_lifecycle_certificate_tests {
         let successor_roster = sorted_roster();
         let network_id = network_id(0x63);
         let (successor_mint_finality_epoch_id, successor_mint_finality_epoch_roster) =
-            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
                 network_id,
                 1,
                 &successor_roster,
             );
         let successor_snapshot = FinalizedNextEpochSnapshot {
             epoch: 1,
-            offline_cash_mint_finality_epoch_id: successor_mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster: successor_mint_finality_epoch_roster,
+            kagemusha_mint_finality_epoch_id: successor_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster: successor_mint_finality_epoch_roster,
             epoch_end_height: 9,
             mode: ConsensusMode::Npos,
             validator_set_pops: vec![vec![0x61]; successor_roster.len()],
@@ -1001,8 +1001,8 @@ mod threshold_key_lifecycle_certificate_tests {
                 network_id,
                 election: crate::sumeragi::v2_context::FrozenElectionInputs {
                     epoch: 0,
-                    offline_cash_mint_finality_epoch_roster:
-                        crate::offline_cash_v1_test_fixtures::mint_finality_roster(
+                    kagemusha_mint_finality_epoch_roster:
+                        crate::kagemusha_v1_test_fixtures::mint_finality_roster(
                             network_id,
                             0,
                             &parent_roster,
@@ -1371,12 +1371,12 @@ macro_rules! with_world_overlay_fields {
             repo_agreements_by_counterparty,
             repo_agreements_by_custodian,
             settlement_receipts,
-            offline_cash_reserve_pools,
-            offline_cash_reserve_operations,
-            offline_cash_mint_credit_operations,
-            offline_cash_issuance_operations,
-            offline_cash_redemption_id_operations,
-            offline_cash_terminal_nullifier_operations,
+            kagemusha_reserve_pools,
+            kagemusha_reserve_operations,
+            kagemusha_mint_credit_operations,
+            kagemusha_issuance_operations,
+            kagemusha_redemption_id_operations,
+            kagemusha_terminal_nullifier_operations,
             public_lane_validators,
             public_lane_stake_shares,
             public_lane_rewards,
@@ -4877,19 +4877,19 @@ pub struct World {
     pub(crate) repo_agreements_by_custodian: Storage<AccountId, BTreeSet<RepoAgreementId>>,
     /// Successful settlement receipts keyed by their one-shot identifier.
     pub(crate) settlement_receipts: Storage<SettlementId, SettlementReceipt>,
-    /// Pooled Offline Cash V1 reserve totals keyed by network and asset.
-    pub(crate) offline_cash_reserve_pools: Storage<[u8; 32], OfflineCashReservePoolV1>,
-    /// Idempotent Offline Cash V1 operation records keyed by operation id.
-    pub(crate) offline_cash_reserve_operations:
-        Storage<[u8; 32], OfflineCashReserveOperationRecordV1>,
+    /// Pooled Kagemusha V1 reserve totals keyed by network and asset.
+    pub(crate) kagemusha_reserve_pools: Storage<[u8; 32], KagemushaReservePoolV1>,
+    /// Idempotent Kagemusha V1 operation records keyed by operation id.
+    pub(crate) kagemusha_reserve_operations:
+        Storage<[u8; 32], KagemushaReserveOperationRecordV1>,
     /// One-to-one index from mint credit id to top-up operation id.
-    pub(crate) offline_cash_mint_credit_operations: Storage<[u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_mint_credit_operations: Storage<[u8; 32], [u8; 32]>,
     /// One-to-one index from issuance commitment to top-up operation id.
-    pub(crate) offline_cash_issuance_operations: Storage<[u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_issuance_operations: Storage<[u8; 32], [u8; 32]>,
     /// One-to-one index from redemption id to redemption operation id.
-    pub(crate) offline_cash_redemption_id_operations: Storage<[u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_redemption_id_operations: Storage<[u8; 32], [u8; 32]>,
     /// One-to-one index from terminal nullifier to redemption operation id.
-    pub(crate) offline_cash_terminal_nullifier_operations: Storage<[u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_terminal_nullifier_operations: Storage<[u8; 32], [u8; 32]>,
     /// Public-lane validators keyed by `(lane_id, validator account id)`.
     #[norito(skip)]
     pub(crate) public_lane_validators: Storage<(LaneId, AccountId), PublicLaneValidatorRecord>,
@@ -5667,19 +5667,19 @@ pub struct WorldBlock<'world> {
         StorageBlock<'world, AccountId, BTreeSet<RepoAgreementId>>,
     /// Successful settlement receipts keyed by their one-shot identifier.
     pub(crate) settlement_receipts: StorageBlock<'world, SettlementId, SettlementReceipt>,
-    /// Pooled Offline Cash V1 reserve totals keyed by network and asset.
-    pub(crate) offline_cash_reserve_pools: StorageBlock<'world, [u8; 32], OfflineCashReservePoolV1>,
-    /// Idempotent Offline Cash V1 operation records keyed by operation id.
-    pub(crate) offline_cash_reserve_operations:
-        StorageBlock<'world, [u8; 32], OfflineCashReserveOperationRecordV1>,
+    /// Pooled Kagemusha V1 reserve totals keyed by network and asset.
+    pub(crate) kagemusha_reserve_pools: StorageBlock<'world, [u8; 32], KagemushaReservePoolV1>,
+    /// Idempotent Kagemusha V1 operation records keyed by operation id.
+    pub(crate) kagemusha_reserve_operations:
+        StorageBlock<'world, [u8; 32], KagemushaReserveOperationRecordV1>,
     /// One-to-one index from mint credit id to top-up operation id.
-    pub(crate) offline_cash_mint_credit_operations: StorageBlock<'world, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_mint_credit_operations: StorageBlock<'world, [u8; 32], [u8; 32]>,
     /// One-to-one index from issuance commitment to top-up operation id.
-    pub(crate) offline_cash_issuance_operations: StorageBlock<'world, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_issuance_operations: StorageBlock<'world, [u8; 32], [u8; 32]>,
     /// One-to-one index from redemption id to redemption operation id.
-    pub(crate) offline_cash_redemption_id_operations: StorageBlock<'world, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_redemption_id_operations: StorageBlock<'world, [u8; 32], [u8; 32]>,
     /// One-to-one index from terminal nullifier to redemption operation id.
-    pub(crate) offline_cash_terminal_nullifier_operations: StorageBlock<'world, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_terminal_nullifier_operations: StorageBlock<'world, [u8; 32], [u8; 32]>,
     /// Public lane validator registry.
     #[norito(skip)]
     pub(crate) public_lane_validators:
@@ -5980,26 +5980,26 @@ impl WorldBlock<'_> {
         collect_reverts!(self.global_beacon_active_session, GlobalBeaconActiveSession);
         collect_reverts!(self.global_beacon_latest_pulse, GlobalBeaconLatestPulse);
         collect_reverts!(self.global_beacon_pulses, GlobalBeaconPulse);
-        collect_reverts!(self.offline_cash_reserve_pools, OfflineCashReservePool);
+        collect_reverts!(self.kagemusha_reserve_pools, KagemushaReservePool);
         collect_reverts!(
-            self.offline_cash_reserve_operations,
-            OfflineCashReserveOperation
+            self.kagemusha_reserve_operations,
+            KagemushaReserveOperation
         );
         collect_reverts!(
-            self.offline_cash_mint_credit_operations,
-            OfflineCashMintCreditOperation
+            self.kagemusha_mint_credit_operations,
+            KagemushaMintCreditOperation
         );
         collect_reverts!(
-            self.offline_cash_issuance_operations,
-            OfflineCashIssuanceOperation
+            self.kagemusha_issuance_operations,
+            KagemushaIssuanceOperation
         );
         collect_reverts!(
-            self.offline_cash_redemption_id_operations,
-            OfflineCashRedemptionIdOperation
+            self.kagemusha_redemption_id_operations,
+            KagemushaRedemptionIdOperation
         );
         collect_reverts!(
-            self.offline_cash_terminal_nullifier_operations,
-            OfflineCashTerminalNullifierOperation
+            self.kagemusha_terminal_nullifier_operations,
+            KagemushaTerminalNullifierOperation
         );
         diff
     }
@@ -6103,26 +6103,26 @@ impl WorldBlock<'_> {
         collect_payload!(self.global_beacon_active_session, GlobalBeaconActiveSession);
         collect_payload!(self.global_beacon_latest_pulse, GlobalBeaconLatestPulse);
         collect_payload!(self.global_beacon_pulses, GlobalBeaconPulse);
-        collect_payload!(self.offline_cash_reserve_pools, OfflineCashReservePool);
+        collect_payload!(self.kagemusha_reserve_pools, KagemushaReservePool);
         collect_payload!(
-            self.offline_cash_reserve_operations,
-            OfflineCashReserveOperation
+            self.kagemusha_reserve_operations,
+            KagemushaReserveOperation
         );
         collect_payload!(
-            self.offline_cash_mint_credit_operations,
-            OfflineCashMintCreditOperation
+            self.kagemusha_mint_credit_operations,
+            KagemushaMintCreditOperation
         );
         collect_payload!(
-            self.offline_cash_issuance_operations,
-            OfflineCashIssuanceOperation
+            self.kagemusha_issuance_operations,
+            KagemushaIssuanceOperation
         );
         collect_payload!(
-            self.offline_cash_redemption_id_operations,
-            OfflineCashRedemptionIdOperation
+            self.kagemusha_redemption_id_operations,
+            KagemushaRedemptionIdOperation
         );
         collect_payload!(
-            self.offline_cash_terminal_nullifier_operations,
-            OfflineCashTerminalNullifierOperation
+            self.kagemusha_terminal_nullifier_operations,
+            KagemushaTerminalNullifierOperation
         );
         payload
     }
@@ -6370,12 +6370,12 @@ impl WorldBlock<'_> {
             repo_agreements_by_counterparty,
             repo_agreements_by_custodian,
             settlement_receipts,
-            offline_cash_reserve_pools,
-            offline_cash_reserve_operations,
-            offline_cash_mint_credit_operations,
-            offline_cash_issuance_operations,
-            offline_cash_redemption_id_operations,
-            offline_cash_terminal_nullifier_operations,
+            kagemusha_reserve_pools,
+            kagemusha_reserve_operations,
+            kagemusha_mint_credit_operations,
+            kagemusha_issuance_operations,
+            kagemusha_redemption_id_operations,
+            kagemusha_terminal_nullifier_operations,
             public_lane_validators,
             public_lane_stake_shares,
             public_lane_rewards,
@@ -7156,23 +7156,23 @@ pub struct WorldTransaction<'block, 'world> {
     /// Successful settlement receipts keyed by their one-shot identifier.
     pub(crate) settlement_receipts:
         StorageTransaction<'block, 'world, SettlementId, SettlementReceipt>,
-    /// Pooled Offline Cash V1 reserve totals keyed by network and asset.
-    pub(crate) offline_cash_reserve_pools:
-        StorageTransaction<'block, 'world, [u8; 32], OfflineCashReservePoolV1>,
-    /// Idempotent Offline Cash V1 operation records keyed by operation id.
-    pub(crate) offline_cash_reserve_operations:
-        StorageTransaction<'block, 'world, [u8; 32], OfflineCashReserveOperationRecordV1>,
+    /// Pooled Kagemusha V1 reserve totals keyed by network and asset.
+    pub(crate) kagemusha_reserve_pools:
+        StorageTransaction<'block, 'world, [u8; 32], KagemushaReservePoolV1>,
+    /// Idempotent Kagemusha V1 operation records keyed by operation id.
+    pub(crate) kagemusha_reserve_operations:
+        StorageTransaction<'block, 'world, [u8; 32], KagemushaReserveOperationRecordV1>,
     /// One-to-one index from mint credit id to top-up operation id.
-    pub(crate) offline_cash_mint_credit_operations:
+    pub(crate) kagemusha_mint_credit_operations:
         StorageTransaction<'block, 'world, [u8; 32], [u8; 32]>,
     /// One-to-one index from issuance commitment to top-up operation id.
-    pub(crate) offline_cash_issuance_operations:
+    pub(crate) kagemusha_issuance_operations:
         StorageTransaction<'block, 'world, [u8; 32], [u8; 32]>,
     /// One-to-one index from redemption id to redemption operation id.
-    pub(crate) offline_cash_redemption_id_operations:
+    pub(crate) kagemusha_redemption_id_operations:
         StorageTransaction<'block, 'world, [u8; 32], [u8; 32]>,
     /// One-to-one index from terminal nullifier to redemption operation id.
-    pub(crate) offline_cash_terminal_nullifier_operations:
+    pub(crate) kagemusha_terminal_nullifier_operations:
         StorageTransaction<'block, 'world, [u8; 32], [u8; 32]>,
     /// Public-lane validators keyed by lane and account.
     pub(crate) public_lane_validators:
@@ -9220,19 +9220,19 @@ pub struct WorldView<'world> {
         StorageView<'world, AccountId, BTreeSet<RepoAgreementId>>,
     /// Successful settlement receipts keyed by their one-shot identifier.
     pub(crate) settlement_receipts: StorageView<'world, SettlementId, SettlementReceipt>,
-    /// Pooled Offline Cash V1 reserve totals keyed by network and asset.
-    pub(crate) offline_cash_reserve_pools: StorageView<'world, [u8; 32], OfflineCashReservePoolV1>,
-    /// Idempotent Offline Cash V1 operation records keyed by operation id.
-    pub(crate) offline_cash_reserve_operations:
-        StorageView<'world, [u8; 32], OfflineCashReserveOperationRecordV1>,
+    /// Pooled Kagemusha V1 reserve totals keyed by network and asset.
+    pub(crate) kagemusha_reserve_pools: StorageView<'world, [u8; 32], KagemushaReservePoolV1>,
+    /// Idempotent Kagemusha V1 operation records keyed by operation id.
+    pub(crate) kagemusha_reserve_operations:
+        StorageView<'world, [u8; 32], KagemushaReserveOperationRecordV1>,
     /// One-to-one index from mint credit id to top-up operation id.
-    pub(crate) offline_cash_mint_credit_operations: StorageView<'world, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_mint_credit_operations: StorageView<'world, [u8; 32], [u8; 32]>,
     /// One-to-one index from issuance commitment to top-up operation id.
-    pub(crate) offline_cash_issuance_operations: StorageView<'world, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_issuance_operations: StorageView<'world, [u8; 32], [u8; 32]>,
     /// One-to-one index from redemption id to redemption operation id.
-    pub(crate) offline_cash_redemption_id_operations: StorageView<'world, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_redemption_id_operations: StorageView<'world, [u8; 32], [u8; 32]>,
     /// One-to-one index from terminal nullifier to redemption operation id.
-    pub(crate) offline_cash_terminal_nullifier_operations: StorageView<'world, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_terminal_nullifier_operations: StorageView<'world, [u8; 32], [u8; 32]>,
     /// Public-lane validators keyed by lane and account.
     pub(crate) public_lane_validators:
         StorageView<'world, (LaneId, AccountId), PublicLaneValidatorRecord>,
@@ -11350,9 +11350,9 @@ pub struct State {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration (repo defaults, collateral policies).
     pub settlement: iroha_config::parameters::actual::Settlement,
-    /// Authenticated Offline Cash V1 release/artifact resolution and recursive verification.
-    pub offline_cash_v1_runtime_verifier:
-        Arc<dyn crate::smartcontracts::isi::offline::OfflineCashV1RuntimeVerifier>,
+    /// Authenticated Kagemusha V1 release/artifact resolution and recursive verification.
+    pub kagemusha_v1_runtime_verifier:
+        Arc<dyn crate::smartcontracts::isi::kagemusha::KagemushaV1RuntimeVerifier>,
     /// Unified settlement engine for XOR quoting.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Display chain identifier from configuration, exposed through the display sysvar.
@@ -12241,9 +12241,9 @@ pub struct StateBlock<'state> {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration snapshot for this block.
     pub settlement: iroha_config::parameters::actual::Settlement,
-    /// Authenticated Offline Cash V1 release/artifact resolver snapshot for this block.
-    pub offline_cash_v1_runtime_verifier:
-        Arc<dyn crate::smartcontracts::isi::offline::OfflineCashV1RuntimeVerifier>,
+    /// Authenticated Kagemusha V1 release/artifact resolver snapshot for this block.
+    pub kagemusha_v1_runtime_verifier:
+        Arc<dyn crate::smartcontracts::isi::kagemusha::KagemushaV1RuntimeVerifier>,
     /// Settlement engine snapshot for this block.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Chain identifier for this block.
@@ -13484,9 +13484,9 @@ pub struct StateTransaction<'block, 'state> {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration snapshot for this transaction.
     pub settlement: iroha_config::parameters::actual::Settlement,
-    /// Authenticated Offline Cash V1 release/artifact resolver snapshot for this transaction.
-    pub offline_cash_v1_runtime_verifier:
-        Arc<dyn crate::smartcontracts::isi::offline::OfflineCashV1RuntimeVerifier>,
+    /// Authenticated Kagemusha V1 release/artifact resolver snapshot for this transaction.
+    pub kagemusha_v1_runtime_verifier:
+        Arc<dyn crate::smartcontracts::isi::kagemusha::KagemushaV1RuntimeVerifier>,
     /// Settlement engine snapshot for this transaction.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Display chain identifier snapshot exposed through the display sysvar.
@@ -13867,9 +13867,9 @@ pub struct StateView<'state> {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration snapshot for this view.
     pub settlement: iroha_config::parameters::actual::Settlement,
-    /// Authenticated Offline Cash V1 release/artifact resolver snapshot for this view.
-    pub offline_cash_v1_runtime_verifier:
-        Arc<dyn crate::smartcontracts::isi::offline::OfflineCashV1RuntimeVerifier>,
+    /// Authenticated Kagemusha V1 release/artifact resolver snapshot for this view.
+    pub kagemusha_v1_runtime_verifier:
+        Arc<dyn crate::smartcontracts::isi::kagemusha::KagemushaV1RuntimeVerifier>,
     /// Settlement engine snapshot for this view.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Chain identifier for this view.
@@ -20174,20 +20174,20 @@ macro_rules! world_ro_accessors {
             storage repo_agreements_by_custodian: AccountId => BTreeSet<RepoAgreementId>;
             /// Successful settlement receipts (read-only).
             storage settlement_receipts: SettlementId => SettlementReceipt;
-            /// Pooled Offline Cash V1 reserve totals (read-only).
-            storage offline_cash_reserve_pools:
-                [u8; 32] => OfflineCashReservePoolV1;
-            /// Idempotent Offline Cash V1 operation records (read-only).
-            storage offline_cash_reserve_operations:
-                [u8; 32] => OfflineCashReserveOperationRecordV1;
+            /// Pooled Kagemusha V1 reserve totals (read-only).
+            storage kagemusha_reserve_pools:
+                [u8; 32] => KagemushaReservePoolV1;
+            /// Idempotent Kagemusha V1 operation records (read-only).
+            storage kagemusha_reserve_operations:
+                [u8; 32] => KagemushaReserveOperationRecordV1;
             /// Mint-credit replay index (read-only).
-            storage offline_cash_mint_credit_operations: [u8; 32] => [u8; 32];
+            storage kagemusha_mint_credit_operations: [u8; 32] => [u8; 32];
             /// Issuance-commitment replay index (read-only).
-            storage offline_cash_issuance_operations: [u8; 32] => [u8; 32];
+            storage kagemusha_issuance_operations: [u8; 32] => [u8; 32];
             /// Redemption-id replay index (read-only).
-            storage offline_cash_redemption_id_operations: [u8; 32] => [u8; 32];
+            storage kagemusha_redemption_id_operations: [u8; 32] => [u8; 32];
             /// Terminal-nullifier replay index (read-only).
-            storage offline_cash_terminal_nullifier_operations: [u8; 32] => [u8; 32];
+            storage kagemusha_terminal_nullifier_operations: [u8; 32] => [u8; 32];
             /// Public lane validators keyed by `(lane_id, validator)` (read-only).
             storage public_lane_validators: (LaneId, AccountId) => PublicLaneValidatorRecord;
             /// Public lane stake shares keyed by `(lane_id, validator, staker)` (read-only).
@@ -20348,11 +20348,11 @@ pub trait WorldReadOnly {
     fn sumeragi_npos_parameters(&self) -> Option<SumeragiNposParameters> {
         sumeragi_npos_parameters_from_parameters(self.parameters())
     }
-    /// Decode the consensus-committed next Offline Cash V1 Pasta roster.
-    fn offline_cash_mint_finality_next_epoch_parameter(
+    /// Decode the consensus-committed next Kagemusha V1 Pasta roster.
+    fn kagemusha_mint_finality_next_epoch_parameter(
         &self,
-    ) -> Option<OfflineCashMintFinalityNextEpochParameterV1> {
-        offline_cash_mint_finality_next_epoch_parameter_from_parameters(self.parameters())
+    ) -> Option<KagemushaMintFinalityNextEpochParameterV1> {
+        kagemusha_mint_finality_next_epoch_parameter_from_parameters(self.parameters())
     }
     world_ro_accessors!(identity, declaration);
     /// Iterate registered identifier policies.
@@ -21862,12 +21862,12 @@ impl<'world> WorldBlock<'world> {
             repo_agreements_by_counterparty,
             repo_agreements_by_custodian,
             settlement_receipts,
-            offline_cash_reserve_pools,
-            offline_cash_reserve_operations,
-            offline_cash_mint_credit_operations,
-            offline_cash_issuance_operations,
-            offline_cash_redemption_id_operations,
-            offline_cash_terminal_nullifier_operations,
+            kagemusha_reserve_pools,
+            kagemusha_reserve_operations,
+            kagemusha_mint_credit_operations,
+            kagemusha_issuance_operations,
+            kagemusha_redemption_id_operations,
+            kagemusha_terminal_nullifier_operations,
             public_lane_validators,
             public_lane_stake_shares,
             public_lane_rewards,
@@ -22037,12 +22037,12 @@ impl<'world> WorldBlock<'world> {
         repo_agreements_by_counterparty.commit();
         repo_agreements_by_custodian.commit();
         settlement_receipts.commit();
-        offline_cash_reserve_pools.commit();
-        offline_cash_reserve_operations.commit();
-        offline_cash_mint_credit_operations.commit();
-        offline_cash_issuance_operations.commit();
-        offline_cash_redemption_id_operations.commit();
-        offline_cash_terminal_nullifier_operations.commit();
+        kagemusha_reserve_pools.commit();
+        kagemusha_reserve_operations.commit();
+        kagemusha_mint_credit_operations.commit();
+        kagemusha_issuance_operations.commit();
+        kagemusha_redemption_id_operations.commit();
+        kagemusha_terminal_nullifier_operations.commit();
         domain_committees.commit();
         domain_endorsement_policies.commit();
         domain_endorsements.commit();
@@ -22374,12 +22374,12 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     /// derived parameter defaults.
     pub fn apply_executor_data_model(&mut self, mut executor_data_model: ExecutorDataModel) {
         let npos_parameter_id = SumeragiNposParameters::parameter_id();
-        let offline_cash_next_roster_parameter_id =
-            OfflineCashMintFinalityNextEpochParameterV1::parameter_id();
+        let kagemusha_next_roster_parameter_id =
+            KagemushaMintFinalityNextEpochParameterV1::parameter_id();
         executor_data_model.parameters.remove(&npos_parameter_id);
         executor_data_model
             .parameters
-            .remove(&offline_cash_next_roster_parameter_id);
+            .remove(&kagemusha_next_roster_parameter_id);
         executor_data_model
             .parameters
             .retain(|_, parameter| !is_retired_sccp_registry_parameter(parameter));
@@ -22660,7 +22660,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         }
         let consensus_owned_ids = [
             SumeragiNposParameters::parameter_id(),
-            OfflineCashMintFinalityNextEpochParameterV1::parameter_id(),
+            KagemushaMintFinalityNextEpochParameterV1::parameter_id(),
         ];
         let prev_ids: BTreeSet<_> = prev_parameters
             .keys()
@@ -24530,12 +24530,12 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             soradns_last_publish_ms,
             soradns_history_len,
             settlement_receipts,
-            offline_cash_reserve_pools,
-            offline_cash_reserve_operations,
-            offline_cash_mint_credit_operations,
-            offline_cash_issuance_operations,
-            offline_cash_redemption_id_operations,
-            offline_cash_terminal_nullifier_operations,
+            kagemusha_reserve_pools,
+            kagemusha_reserve_operations,
+            kagemusha_mint_credit_operations,
+            kagemusha_issuance_operations,
+            kagemusha_redemption_id_operations,
+            kagemusha_terminal_nullifier_operations,
             public_lane_validators,
             public_lane_stake_shares,
             public_lane_rewards,
@@ -24719,12 +24719,12 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         soradns_last_publish_ms.apply();
         soradns_history_len.apply();
         settlement_receipts.apply();
-        offline_cash_reserve_pools.apply();
-        offline_cash_reserve_operations.apply();
-        offline_cash_mint_credit_operations.apply();
-        offline_cash_issuance_operations.apply();
-        offline_cash_redemption_id_operations.apply();
-        offline_cash_terminal_nullifier_operations.apply();
+        kagemusha_reserve_pools.apply();
+        kagemusha_reserve_operations.apply();
+        kagemusha_mint_credit_operations.apply();
+        kagemusha_issuance_operations.apply();
+        kagemusha_redemption_id_operations.apply();
+        kagemusha_terminal_nullifier_operations.apply();
         domain_committees.apply();
         domain_endorsement_policies.apply();
         domain_endorsements.apply();
@@ -27841,8 +27841,8 @@ impl State {
                 stripe_layout: iroha_config::parameters::defaults::content::default_stripe_layout(),
             },
             settlement: settlement_cfg,
-            offline_cash_v1_runtime_verifier: Arc::new(
-                crate::smartcontracts::isi::offline::RejectAllOfflineCashV1RuntimeVerifier,
+            kagemusha_v1_runtime_verifier: Arc::new(
+                crate::smartcontracts::isi::kagemusha::RejectAllKagemushaV1RuntimeVerifier,
             ),
             settlement_engine,
             #[cfg(feature = "telemetry")]
@@ -28606,7 +28606,7 @@ impl State {
             gov: self.gov.clone(),
             content: self.content.clone(),
             settlement: self.settlement.clone(),
-            offline_cash_v1_runtime_verifier: Arc::clone(&self.offline_cash_v1_runtime_verifier),
+            kagemusha_v1_runtime_verifier: Arc::clone(&self.kagemusha_v1_runtime_verifier),
             settlement_engine: self.settlement_engine.clone(),
             chain_id: self.chain_id.clone(),
             network_id: self.network_id,
@@ -29274,7 +29274,7 @@ impl State {
             gov: self.gov.clone(),
             content: self.content.clone(),
             settlement: self.settlement.clone(),
-            offline_cash_v1_runtime_verifier: Arc::clone(&self.offline_cash_v1_runtime_verifier),
+            kagemusha_v1_runtime_verifier: Arc::clone(&self.kagemusha_v1_runtime_verifier),
             settlement_engine: self.settlement_engine.clone(),
             chain_id: self.chain_id.clone(),
             network_id: self.network_id,
@@ -29409,7 +29409,7 @@ impl State {
             gov: self.gov.clone(),
             content: self.content.clone(),
             settlement: self.settlement.clone(),
-            offline_cash_v1_runtime_verifier: Arc::clone(&self.offline_cash_v1_runtime_verifier),
+            kagemusha_v1_runtime_verifier: Arc::clone(&self.kagemusha_v1_runtime_verifier),
             settlement_engine: self.settlement_engine.clone(),
             chain_id: self.chain_id.clone(),
             network_id: self.network_id,
@@ -30308,8 +30308,8 @@ impl State {
                 gov: self.gov.clone(),
                 content: self.content.clone(),
                 settlement: self.settlement.clone(),
-                offline_cash_v1_runtime_verifier: Arc::clone(
-                    &self.offline_cash_v1_runtime_verifier,
+                kagemusha_v1_runtime_verifier: Arc::clone(
+                    &self.kagemusha_v1_runtime_verifier,
                 ),
                 settlement_engine: self.settlement_engine.clone(),
                 chain_id: self.chain_id.clone(),
@@ -43939,11 +43939,11 @@ impl State {
     /// This is the sole production transition away from the fail-closed startup verifier. The
     /// concrete type prevents node startup code from granting monetary authority to an arbitrary
     /// host-side predicate.
-    pub fn install_offline_cash_v1_runtime_verifier(
+    pub fn install_kagemusha_v1_runtime_verifier(
         &mut self,
-        verifier: crate::smartcontracts::isi::offline::AuthenticatedOfflineCashV1RuntimeVerifier,
+        verifier: crate::smartcontracts::isi::kagemusha::AuthenticatedKagemushaV1RuntimeVerifier,
     ) {
-        self.offline_cash_v1_runtime_verifier = Arc::new(verifier);
+        self.kagemusha_v1_runtime_verifier = Arc::new(verifier);
     }
     /// Install ZK settings into an isolated, non-running State reconstruction.
     ///
@@ -45822,30 +45822,30 @@ fn sumeragi_npos_parameters_from_parameters(params: &Parameters) -> Option<Sumer
         }
     }
 }
-fn offline_cash_mint_finality_next_epoch_parameter_from_parameters(
+fn kagemusha_mint_finality_next_epoch_parameter_from_parameters(
     params: &Parameters,
-) -> Option<OfflineCashMintFinalityNextEpochParameterV1> {
-    let id = OfflineCashMintFinalityNextEpochParameterV1::parameter_id();
+) -> Option<KagemushaMintFinalityNextEpochParameterV1> {
+    let id = KagemushaMintFinalityNextEpochParameterV1::parameter_id();
     let custom = params.custom().get(&id)?;
-    if let Some(parsed) = OfflineCashMintFinalityNextEpochParameterV1::from_custom_parameter(custom)
+    if let Some(parsed) = KagemushaMintFinalityNextEpochParameterV1::from_custom_parameter(custom)
     {
         return Some(parsed);
     }
     let payload = custom.payload();
     let payload_preview: String = payload.get().chars().take(256).collect();
-    match payload.try_into_any_norito::<OfflineCashMintFinalityNextEpochParameterV1>() {
+    match payload.try_into_any_norito::<KagemushaMintFinalityNextEpochParameterV1>() {
         Ok(parsed) if parsed.validate().is_ok() => Some(parsed),
         Ok(parsed) => {
             warn!(
                 error = ?parsed.validate().expect_err("invalid branch checked above"),
-                "Rejected invalid Offline Cash V1 next-roster parameter; payload_preview={payload_preview}"
+                "Rejected invalid Kagemusha V1 next-roster parameter; payload_preview={payload_preview}"
             );
             None
         }
         Err(error) => {
             warn!(
                 ?error,
-                "Failed to decode Offline Cash V1 next-roster parameter; payload_preview={payload_preview}"
+                "Failed to decode Kagemusha V1 next-roster parameter; payload_preview={payload_preview}"
             );
             None
         }
@@ -49486,7 +49486,7 @@ impl<'state> StateBlock<'state> {
             gov: self.gov.clone(),
             content: self.content.clone(),
             settlement: self.settlement.clone(),
-            offline_cash_v1_runtime_verifier: Arc::clone(&self.offline_cash_v1_runtime_verifier),
+            kagemusha_v1_runtime_verifier: Arc::clone(&self.kagemusha_v1_runtime_verifier),
             settlement_engine: self.settlement_engine.clone(),
             chain_id: self.chain_id.clone(),
             network_id: self.network_id,

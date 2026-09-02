@@ -213,7 +213,7 @@ fn root_owned_bounded_reader_rejects_extended_attributes() {
         .join("reservation.norito");
     fs::write(&artifact, b"artifact").expect("write xattr-bearing artifact");
     let status = std::process::Command::new("/usr/bin/xattr")
-        .args(["-w", "com.sora.offline-cash-test", "present"])
+        .args(["-w", "com.sora.kagemusha-test", "present"])
         .arg(&artifact)
         .status()
         .expect("run xattr");

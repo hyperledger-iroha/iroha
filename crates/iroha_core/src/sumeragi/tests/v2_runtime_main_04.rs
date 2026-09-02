@@ -1367,7 +1367,7 @@ fn exact_authenticated_retransmission_preserves_capacity_fifo_and_cursor() {
             proposal_round: round,
             phase: wire::GlobalPhase::Prepare,
             subject,
-            execution_commitment: wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            execution_commitment: wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                 Hash::new(b"capacity parent state"),
                 Hash::new(b"capacity post state"),
                 Hash::new(b"capacity ordinary writes"),

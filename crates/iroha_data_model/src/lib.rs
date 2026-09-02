@@ -129,8 +129,8 @@ pub mod name;
 pub mod nexus;
 /// Non-fungible token structures and specs.
 pub mod nft;
-/// Offline allowance commitments, certificates, and transfer proofs.
-pub mod offline;
+/// Kagemusha hardware-backed cash commitments, proofs, and settlement models.
+pub mod kagemusha;
 /// Oracle feed schemas and deterministic committee helpers.
 pub mod oracle;
 /// Runtime parameter definitions and schema.

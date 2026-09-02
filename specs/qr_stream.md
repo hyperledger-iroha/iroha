@@ -11,8 +11,8 @@ and designed to be implemented across Swift, Android, and JavaScript with consis
 QR stream splits a binary payload into fixed-size chunks, adds optional XOR parity frames, and
 wraps each chunk in a CRC32-protected frame. A header frame carries the envelope metadata
 needed to reassemble the payload and verify its hash. Payloads are canonical
-`OfflineCashPaymentRequestV1`, `OfflineCashPaymentV1`, or
-`OfflineCashAcknowledgementV1` values; the `payload_kind` tag binds the schema
+`KagemushaPaymentRequestV1`, `KagemushaPaymentV1`, or
+`KagemushaAcknowledgementV1` values; the `payload_kind` tag binds the schema
 used to interpret the bytes.
 
 Key properties:
@@ -46,9 +46,9 @@ The envelope is encoded as a fixed 47-byte structure and is carried inside the h
 | Value | Meaning |
 |-------|---------|
 | `0` | `unspecified` |
-| `1` | `offline_cash_payment_request_v1` |
-| `2` | `offline_cash_payment_v1` |
-| `3` | `offline_cash_acknowledgement_v1` |
+| `1` | `kagemusha_payment_request_v1` |
+| `2` | `kagemusha_payment_v1` |
+| `3` | `kagemusha_acknowledgement_v1` |
 
 ## 3. Frame (`QrStreamFrame`)
 

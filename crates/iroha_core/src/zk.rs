@@ -46,12 +46,12 @@ use std::{
 pub mod confidential_v2;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod halo2_backend;
-/// Shared paired field-native Poseidon relations for Offline Cash V1.
-pub(crate) mod offline_cash_v1_poseidon;
-/// Fixed-profile paired-Pasta recursion and native accumulator decisions for Offline Cash V1.
-pub mod offline_cash_v1_recursion;
-/// Aggregate, hardware-guarded Offline Cash V1 host state machine.
-pub mod offline_cash_v1_state;
+/// Shared paired field-native Poseidon relations for Kagemusha V1.
+pub(crate) mod kagemusha_v1_poseidon;
+/// Fixed-profile paired-Pasta recursion and native accumulator decisions for Kagemusha V1.
+pub mod kagemusha_v1_recursion;
+/// Aggregate, hardware-guarded Kagemusha V1 host state machine.
+pub mod kagemusha_v1_state;
 /// Fixed opposite-field Pasta instructions used by paired Pasta recursion.
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod pasta_cycle_loader;

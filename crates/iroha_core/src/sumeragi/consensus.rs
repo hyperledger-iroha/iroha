@@ -234,7 +234,7 @@ mod tests {
                 .expect("test block bound must be non-zero"),
             mode: ConsensusGenesisModeParams::Permissioned,
             protocol_version: PROTO_VERSION,
-            v2_context: crate::offline_cash_v1_test_fixtures::genesis_context_parameters(),
+            v2_context: crate::kagemusha_v1_test_fixtures::genesis_context_parameters(),
         }
     }
     #[test]

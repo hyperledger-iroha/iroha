@@ -1748,8 +1748,8 @@ fn autonomous_lifecycle_live_carrier_hint_promotion_survives_restart() {
         }
     }
     roster.sort_by(|left, right| left.validator.cmp(&right.validator));
-    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
             network_id, epoch, &roster,
         );
     let context = HeightContext {
@@ -1773,8 +1773,8 @@ fn autonomous_lifecycle_live_carrier_hint_promotion_survives_restart() {
         ),
         quorum: DualQuorum::from_roster(&roster).expect("carrier-hint promotion quorum"),
         roster,
-        offline_cash_mint_finality_epoch_id,
-        offline_cash_mint_finality_epoch_roster,
+        kagemusha_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster,
         nexus_amx_context_hash: Hash::new(b"kura-carrier-hint-promotion-nexus"),
         execution_policy_hash: Hash::new(b"kura-carrier-hint-promotion-policy"),
         da_layout: DataAvailabilityLayout {

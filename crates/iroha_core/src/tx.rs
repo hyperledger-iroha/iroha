@@ -1078,8 +1078,8 @@ fn is_time_sensitive_instruction_type(type_id: TypeId) -> bool {
         };
     }
     matches_any_type!(
-        iroha_data_model::isi::offline_cash_v1::TopUpOfflineCashV1,
-        iroha_data_model::isi::offline_cash_v1::RedeemOfflineCashV1,
+        iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1,
+        iroha_data_model::isi::kagemusha_v1::RedeemKagemushaV1,
         iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1,
         iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1,
         iroha_data_model::isi::private_settlement::FinalizeAtomicPrivateSettlementV1,
@@ -8335,8 +8335,8 @@ pub mod tests {
     #[test]
     fn time_sensitive_type_table_covers_offline_and_governance_operations() {
         let classified = [
-            TypeId::of::<iroha_data_model::isi::offline_cash_v1::TopUpOfflineCashV1>(),
-            TypeId::of::<iroha_data_model::isi::offline_cash_v1::RedeemOfflineCashV1>(),
+            TypeId::of::<iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1>(),
+            TypeId::of::<iroha_data_model::isi::kagemusha_v1::RedeemKagemushaV1>(),
             TypeId::of::<iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1>(
             ),
             TypeId::of::<iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1>(

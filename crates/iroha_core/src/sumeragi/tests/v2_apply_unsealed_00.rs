@@ -425,8 +425,8 @@ impl ApplyFixture {
             })
             .collect::<Vec<_>>();
         let network_id = crate::sumeragi::synthetic_network_id("sumeragi-v2-apply-crash-test");
-        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
                 network_id, 0, &roster,
             );
         let mut context = wire::HeightContext {
@@ -441,8 +441,8 @@ impl ApplyFixture {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
-            offline_cash_mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"apply crash fixture Nexus/AMX"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::recommended_data_availability_layout(),
@@ -812,7 +812,7 @@ impl ApplyFixture {
                 .encode_wire()
                 .expect("encode exact executed block wire");
             let mut execution_commitment =
-                wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                     Hash::new(b"v2 apply reservation finality parent state"),
                     Hash::new(b"v2 apply reservation finality post state"),
                     Hash::new(b"v2 apply reservation finality ordinary writes"),

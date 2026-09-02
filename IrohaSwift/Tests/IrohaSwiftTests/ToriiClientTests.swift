@@ -12982,10 +12982,10 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetOfflineCapabilityParsesExactUniversalContractOnExactRoute() async throws {
+    func testGetKagemushaCapabilityParsesExactUniversalContractOnExactRoute() async throws {
         let payload = """
         {
-          "cash_handoff_capability": "cash_handoff_v1",
+          "kagemusha_handoff_capability": "kagemusha_handoff_v1",
           "wire_version": 1,
           "device_lifecycle_version": 1,
           "ready": true
@@ -12993,7 +12993,7 @@ final class ToriiClientTests: XCTestCase {
         """.data(using: .utf8)!
 
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/offline/readiness")
+            XCTAssertEqual(request.url?.path, "/v1/kagemusha/readiness")
             XCTAssertNil(request.url?.query)
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
             let response = HTTPURLResponse(
@@ -13005,24 +13005,24 @@ final class ToriiClientTests: XCTestCase {
             return (response, payload)
         }
 
-        let status = try await makeClient().getOfflineCapability()
-        XCTAssertEqual(status.cashHandoffCapability, "cash_handoff_v1")
+        let status = try await makeClient().getKagemushaCapability()
+        XCTAssertEqual(status.kagemushaHandoffCapability, "kagemusha_handoff_v1")
         XCTAssertEqual(status.wireVersion, 1)
         XCTAssertEqual(status.deviceLifecycleVersion, 1)
         XCTAssertTrue(status.ready)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetOfflineCapabilityRejectsNonUniversalClaims() async throws {
+    func testGetKagemushaCapabilityRejectsNonUniversalClaims() async throws {
         let invalidPayloads = [
-            #"{"mandatory":true,"cash_handoff_capability":"cash_handoff_v1","wire_version":1,"device_lifecycle_version":1,"ready":true}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v2","wire_version":1,"device_lifecycle_version":1,"ready":true}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","wire_version":2,"device_lifecycle_version":1,"ready":true}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","wire_version":1,"device_lifecycle_version":2,"ready":true}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","wire_version":1,"device_lifecycle_version":1,"ready":false}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","wire_version":1,"device_lifecycle_version":1,"ready":true,"assets":[]}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","wire_version":1,"device_lifecycle_version":1,"ready":true,"blockers":[]}"#,
-            #"{"cash_handoff_capability":"cash_handoff_v1","wire_version":1,"device_lifecycle_version":1,"ready":true,"future":true}"#,
+            #"{"mandatory":true,"kagemusha_handoff_capability":"kagemusha_handoff_v1","wire_version":1,"device_lifecycle_version":1,"ready":true}"#,
+            #"{"kagemusha_handoff_capability":"kagemusha_handoff_v2","wire_version":1,"device_lifecycle_version":1,"ready":true}"#,
+            #"{"kagemusha_handoff_capability":"kagemusha_handoff_v1","wire_version":2,"device_lifecycle_version":1,"ready":true}"#,
+            #"{"kagemusha_handoff_capability":"kagemusha_handoff_v1","wire_version":1,"device_lifecycle_version":2,"ready":true}"#,
+            #"{"kagemusha_handoff_capability":"kagemusha_handoff_v1","wire_version":1,"device_lifecycle_version":1,"ready":false}"#,
+            #"{"kagemusha_handoff_capability":"kagemusha_handoff_v1","wire_version":1,"device_lifecycle_version":1,"ready":true,"assets":[]}"#,
+            #"{"kagemusha_handoff_capability":"kagemusha_handoff_v1","wire_version":1,"device_lifecycle_version":1,"ready":true,"blockers":[]}"#,
+            #"{"kagemusha_handoff_capability":"kagemusha_handoff_v1","wire_version":1,"device_lifecycle_version":1,"ready":true,"future":true}"#,
         ]
 
         for payload in invalidPayloads {
@@ -13036,8 +13036,8 @@ final class ToriiClientTests: XCTestCase {
                 return (response, Data(payload.utf8))
             }
             do {
-                _ = try await makeClient().getOfflineCapability()
-                XCTFail("expected non-universal offline capability to fail")
+                _ = try await makeClient().getKagemushaCapability()
+                XCTFail("expected non-universal Kagemusha capability to fail")
             } catch {
                 // Exact universal discovery is fail-closed.
             }
@@ -13045,9 +13045,9 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetOfflineCapabilityRejectsDuplicateKeysInvalidUtf8AndOversizedBodies() async throws {
+    func testGetKagemushaCapabilityRejectsDuplicateKeysInvalidUtf8AndOversizedBodies() async throws {
         let payloads = [
-            Data(#"{"cash_handoff_capability":"cash_handoff_v1","wire_version":1,"device_lifecycle_version":1,"ready":true,"ready":true}"#.utf8),
+            Data(#"{"kagemusha_handoff_capability":"kagemusha_handoff_v1","wire_version":1,"device_lifecycle_version":1,"ready":true,"ready":true}"#.utf8),
             Data([0xff, 0xfe, 0xfd]),
             Data(repeating: UInt8(ascii: "x"), count: 256 * 1024 + 1),
         ]
@@ -13062,8 +13062,8 @@ final class ToriiClientTests: XCTestCase {
                 return (response, payload)
             }
             do {
-                _ = try await makeClient().getOfflineCapability()
-                XCTFail("expected malformed offline capability to fail")
+                _ = try await makeClient().getKagemushaCapability()
+                XCTFail("expected malformed Kagemusha capability to fail")
             } catch {
                 // Duplicate and non-UTF-8 JSON must never be accepted.
             }
@@ -13071,10 +13071,10 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testOfflineCapabilityRequiresJsonResponseMediaType() async throws {
+    func testKagemushaCapabilityRequiresJsonResponseMediaType() async throws {
         let payload = """
         {
-          "cash_handoff_capability": "cash_handoff_v1",
+          "kagemusha_handoff_capability": "kagemusha_handoff_v1",
           "wire_version": 1,
           "device_lifecycle_version": 1,
           "ready": true,
@@ -13097,7 +13097,7 @@ final class ToriiClientTests: XCTestCase {
                 return (response, payload)
             }
             do {
-                _ = try await makeClient().getOfflineCapability()
+                _ = try await makeClient().getKagemushaCapability()
                 XCTFail("expected invalid capability media type to fail")
             } catch {
                 XCTAssertTrue(
@@ -13743,7 +13743,7 @@ final class ToriiClientHeaderTests: XCTestCase {
             "version": 2,
             "circuit_id": "halo2/ipa::transfer_v2",
             "owner_manifest_id": "manifest-v2",
-            "namespace": "offline_cash_v1",
+            "namespace": "kagemusha_v1",
             "backend": "halo2/ipa",
             "curve": "pallas",
             "public_inputs_schema_hash": "fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3",
@@ -13777,7 +13777,7 @@ final class ToriiClientHeaderTests: XCTestCase {
         XCTAssertEqual(detail.id.name, "vk main")
         XCTAssertEqual(detail.record.version, 2)
         XCTAssertEqual(detail.record.ownerManifestId, "manifest-v2")
-        XCTAssertEqual(detail.record.namespace, "offline_cash_v1")
+        XCTAssertEqual(detail.record.namespace, "kagemusha_v1")
         XCTAssertEqual(detail.record.publicInputsSchemaHashHex,
                        "fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3")
         XCTAssertEqual(detail.record.inlineKey?.backend, "halo2/ipa")
@@ -13796,7 +13796,7 @@ final class ToriiClientHeaderTests: XCTestCase {
             "version": 3,
             "circuit_id": "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
             "owner_manifest_id": "confidential-v3",
-            "namespace": "offline_cash_v1",
+            "namespace": "kagemusha_v1",
             "backend": "halo2/ipa",
             "curve": "pallas",
             "public_inputs_schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -13846,7 +13846,7 @@ final class ToriiClientHeaderTests: XCTestCase {
             "version": 3,
             "circuit_id": "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
             "owner_manifest_id": "confidential-v3",
-            "namespace": "offline_cash_v1",
+            "namespace": "kagemusha_v1",
             "backend": "halo2/ipa",
             "curve": "pallas",
             "public_inputs_schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -17730,7 +17730,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "parent_state_root": nativeAmxTestHash(0xC1),
             "post_state_root": nativeAmxTestHash(0xC3),
             "ordinary_writes_root": nativeAmxTestHash(0xC5),
-            "offline_cash_top_up_count": 0,
+            "kagemusha_top_up_count": 0,
             "native_amx_application_manifest_version":
                 ToriiSumeragiV2ExecutionCommitment.canonicalNativeAmxApplicationManifestVersion,
             "native_amx_application_manifest_root":
@@ -17898,7 +17898,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "parent_state_root": nativeAmxTestHash(0xC1),
             "post_state_root": nativeAmxTestHash(0xC3),
             "ordinary_writes_root": nativeAmxTestHash(0xC5),
-            "offline_cash_top_up_count": 0,
+            "kagemusha_top_up_count": 0,
             "native_amx_application_manifest_version":
                 ToriiSumeragiV2ExecutionCommitment.canonicalNativeAmxApplicationManifestVersion,
             "native_amx_application_manifest_root": emptyRoot,
@@ -17937,15 +17937,15 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         XCTAssertThrowsError(try decode(missingRoot))
     }
 
-    func testSumeragiExecutionCommitmentAcceptsThousandOfflineCashTopUpsAndRejectsLegacyNames()
+    func testSumeragiExecutionCommitmentAcceptsThousandKagemushaTopUpsAndRejectsLegacyNames()
         throws
     {
         let base: [String: Any] = [
             "parent_state_root": nativeAmxTestHash(0xC1),
             "post_state_root": nativeAmxTestHash(0xC3),
             "ordinary_writes_root": nativeAmxTestHash(0xC5),
-            "offline_cash_top_up_root": nativeAmxTestHash(0xC9),
-            "offline_cash_top_up_count": 1_000,
+            "kagemusha_top_up_root": nativeAmxTestHash(0xC9),
+            "kagemusha_top_up_count": 1_000,
             "native_amx_application_manifest_version":
                 ToriiSumeragiV2ExecutionCommitment.canonicalNativeAmxApplicationManifestVersion,
             "native_amx_application_manifest_root":
@@ -17964,8 +17964,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
 
         let decoded = try decode(base)
-        XCTAssertEqual(decoded.offlineCashTopUpCount, 1_000)
-        XCTAssertEqual(decoded.offlineCashTopUpRoot, nativeAmxTestHash(0xC9))
+        XCTAssertEqual(decoded.kagemushaTopUpCount, 1_000)
+        XCTAssertEqual(decoded.kagemushaTopUpRoot, nativeAmxTestHash(0xC9))
 
         for legacyField in ["topup_anchor_root", "topup_anchor_count"] {
             var legacy = base
@@ -17985,7 +17985,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "parent_state_root": nativeAmxTestHash(0xC1),
             "post_state_root": nativeAmxTestHash(0xC3),
             "ordinary_writes_root": nativeAmxTestHash(0xC5),
-            "offline_cash_top_up_count": 0,
+            "kagemusha_top_up_count": 0,
             "native_amx_application_manifest_version": 1,
             "native_amx_application_manifest_root": emptyRoot,
             "native_amx_application_manifest_count": 0,
@@ -21940,7 +21940,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             )!
             let body = """
             {
-              "code": "offline_topup_finality_proof_unavailable",
+              "code": "kagemusha_topup_finality_proof_unavailable",
               "message": "The finalized proof is not available yet.",
               "details": {"retry_after_ms": 250}
             }

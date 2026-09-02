@@ -30,10 +30,10 @@ def test_privacy_wallet_worker_contract_is_a_base_export() -> None:
 
 def test_offline_capability_is_the_only_discovery_export() -> None:
     import iroha_python
-    from iroha_python import OfflineStatus
+    from iroha_python import KagemushaReadinessV1
 
-    assert "OfflineStatus" in iroha_python.__all__
-    assert OfflineStatus.__name__ == "OfflineStatus"
+    assert "KagemushaReadinessV1" in iroha_python.__all__
+    assert KagemushaReadinessV1.__name__ == "KagemushaReadinessV1"
     for retired in (
         "OfflineActiveTransferVerifier",
         "OfflineActiveTopUpShieldVerifier",

@@ -214,7 +214,7 @@ Total references: **780** · Unique variables: **176**
 - test: crates/iroha_data_model/src/nexus/manifest.rs:1309 — `let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/iroha_data_model/src/nexus/manifest.rs:1660 — `let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/iroha_data_model/src/nexus/manifest.rs:1714 — `let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))`
-- test: crates/iroha_data_model/src/offline/offline_cash_v1.rs:3495 — `env!("CARGO_MANIFEST_DIR"),`
+- test: crates/iroha_data_model/src/offline/kagemusha_v1.rs:3495 — `env!("CARGO_MANIFEST_DIR"),`
 - test: crates/iroha_data_model/src/qr_stream.rs:850 — `let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));`
 - test: crates/iroha_data_model/src/soranet/vpn.rs:4219 — `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FIXTURE_PATH)`
 - prod: crates/iroha_data_model/src/testing/axt.rs:14 — `env!("CARGO_MANIFEST_DIR"),`

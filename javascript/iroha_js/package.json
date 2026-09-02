@@ -20,10 +20,10 @@
       "import": "./dist/browser.js",
       "types": "./browser.d.ts"
     },
-    "./offline-cash-v1": {
-      "browser": "./dist/offlineCashV1.js",
-      "import": "./dist/offlineCashV1.js",
-      "types": "./offline-cash-v1.d.ts"
+    "./kagemusha-v1": {
+      "browser": "./dist/kagemushaV1.js",
+      "import": "./dist/kagemushaV1.js",
+      "types": "./kagemusha-v1.d.ts"
     },
     "./privacy-capabilities": {
       "browser": "./dist/privacyCapabilities.js",
@@ -133,8 +133,8 @@
       "browser": [
         "./browser.d.ts"
       ],
-      "offline-cash-v1": [
-        "./offline-cash-v1.d.ts"
+      "kagemusha-v1": [
+        "./kagemusha-v1.d.ts"
       ],
       "privacy-capabilities": [
         "./privacy-capabilities.d.ts"

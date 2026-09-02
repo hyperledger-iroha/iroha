@@ -18584,8 +18584,8 @@ pub(super) mod tests {
                 power,
             })
             .collect::<Vec<_>>();
-        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
                 network_id,
                 context_epoch,
                 &roster,
@@ -18624,7 +18624,7 @@ pub(super) mod tests {
                     ),
                 },
                 execution_commitment:
-                    wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                    wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                         Hash::new(b"lane-work parent state"),
                         Hash::new(b"lane-work post state"),
                         Hash::new(b"lane-work ordinary writes"),
@@ -18637,8 +18637,8 @@ pub(super) mod tests {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("dual quorum"),
             roster,
-            offline_cash_mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: super::super::v2_recovery::committed_nexus_amx_context_hash(
                 state.as_ref(),
             ),
@@ -25175,7 +25175,7 @@ pub(super) mod tests {
                 phase: wire::GlobalPhase::Commit,
                 subject,
                 execution_commitment:
-                    wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                    wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                         Hash::new(b"lane rollover parent state"),
                         Hash::new(b"lane rollover post state"),
                         Hash::new(b"lane rollover writes"),
@@ -25206,7 +25206,7 @@ pub(super) mod tests {
             adapter,
             keys,
             block,
-            wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                 Hash::new(b"historical request parent state"),
                 Hash::new(b"historical request post state"),
                 Hash::new(b"historical request writes"),
@@ -25335,7 +25335,7 @@ pub(super) mod tests {
                 payload_hash: Hash::new(&parent_wire),
             },
             execution_commitment:
-                wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                     Hash::new(b"lane-certificate parent state"),
                     Hash::new(b"lane-certificate parent post-state"),
                     Hash::new(b"lane-certificate parent writes"),

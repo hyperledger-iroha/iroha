@@ -87,7 +87,7 @@ use iroha_smart_contract::data_model::{
             RegisterVerifiedLaneRelay, StageFeeSponsorProgramRevision,
             UnenrollFeeSponsorBeneficiary, WithdrawFeeSponsorProgram,
         },
-        offline_cash_v1::{RedeemOfflineCashV1, TopUpOfflineCashV1},
+        kagemusha_v1::{RedeemKagemushaV1, TopUpKagemushaV1},
         repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
         settlement::SettlementInstructionBox,
         smart_contract_code::{
@@ -1019,11 +1019,11 @@ impl InstructionDispatch for InstructionBox {
             execute!(executor, isi);
         }
         // Core owns recursive-proof validation and reserve accounting. Forward both native
-        // Offline Cash V1 settlement instructions so those consensus-critical checks run.
-        if let Some(isi) = any.downcast_ref::<TopUpOfflineCashV1>() {
+        // Kagemusha V1 settlement instructions so those consensus-critical checks run.
+        if let Some(isi) = any.downcast_ref::<TopUpKagemushaV1>() {
             execute!(executor, isi);
         }
-        if let Some(isi) = any.downcast_ref::<RedeemOfflineCashV1>() {
+        if let Some(isi) = any.downcast_ref::<RedeemKagemushaV1>() {
             execute!(executor, isi);
         }
         // Core owns the signature, chain/client binding, canonical policy,
@@ -2712,7 +2712,7 @@ pub mod domain {
             | AnyPermission::CanSetHijiriParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
-            | AnyPermission::CanManageOfflineReserve(_)
+            | AnyPermission::CanManageKagemushaReserve(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
@@ -3182,7 +3182,7 @@ pub mod account {
             | AnyPermission::CanSetHijiriParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
-            | AnyPermission::CanManageOfflineReserve(_)
+            | AnyPermission::CanManageKagemushaReserve(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
@@ -3489,7 +3489,7 @@ pub mod asset_definition {
             | AnyPermission::CanSetHijiriParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
-            | AnyPermission::CanManageOfflineReserve(_)
+            | AnyPermission::CanManageKagemushaReserve(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
@@ -4887,7 +4887,7 @@ pub mod trigger {
             | AnyPermission::CanSetHijiriParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
-            | AnyPermission::CanManageOfflineReserve(_)
+            | AnyPermission::CanManageKagemushaReserve(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanRegisterNft(_)
             | AnyPermission::CanUnregisterNft(_)

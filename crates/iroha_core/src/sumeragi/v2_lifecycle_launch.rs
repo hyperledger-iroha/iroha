@@ -103,8 +103,8 @@ pub(in crate::sumeragi) struct ProductionLifecycleLaunchInputsV1 {
     effect_queue: EffectQueueConfig,
     local_peer: PeerId,
     local_validator: Option<wire::ValidatorIndex>,
-    offline_cash_mint_finality_authority:
-        Option<Arc<crate::zk::offline_cash_v1_recursion::OfflineCashMintFinalityLocalAuthorityV1>>,
+    kagemusha_mint_finality_authority:
+        Option<Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>>,
     key_pair: KeyPair,
     network: IrohaNetwork,
     state: Arc<State>,
@@ -148,7 +148,7 @@ impl ProductionLifecycleLaunchInputsV1 {
             effect_queue,
             local_peer,
             local_validator,
-            offline_cash_mint_finality_authority: None,
+            kagemusha_mint_finality_authority: None,
             key_pair,
             network,
             state,
@@ -164,15 +164,15 @@ impl ProductionLifecycleLaunchInputsV1 {
         }
     }
     /// Attach the separately provisioned Pasta epoch authority used only for
-    /// top-up-bearing Offline Cash V1 Commit votes.
+    /// top-up-bearing Kagemusha V1 Commit votes.
     #[must_use]
-    pub(in crate::sumeragi) fn with_offline_cash_mint_finality_authority(
+    pub(in crate::sumeragi) fn with_kagemusha_mint_finality_authority(
         mut self,
         authority: Option<
-            Arc<crate::zk::offline_cash_v1_recursion::OfflineCashMintFinalityLocalAuthorityV1>,
+            Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>,
         >,
     ) -> Self {
-        self.offline_cash_mint_finality_authority = authority;
+        self.kagemusha_mint_finality_authority = authority;
         self
     }
 }
@@ -2931,7 +2931,7 @@ impl ProductionLifecycleOwnerV1 {
             validator_set_pops,
             inputs.local_peer,
             inputs.local_validator,
-            inputs.offline_cash_mint_finality_authority,
+            inputs.kagemusha_mint_finality_authority,
             inputs.key_pair,
             inputs.network,
             body_store,

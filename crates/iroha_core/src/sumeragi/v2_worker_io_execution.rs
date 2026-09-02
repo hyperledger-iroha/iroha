@@ -150,7 +150,7 @@ fn sign_consensus_task(
     task: ConsensusSignTask,
     restore_outbound_payload: bool,
 ) -> Result<V2IoCompletion, String> {
-    sign_consensus_task_with_offline_cash_authority(
+    sign_consensus_task_with_kagemusha_authority(
         body_store,
         context,
         key_pair,
@@ -159,12 +159,12 @@ fn sign_consensus_task(
         restore_outbound_payload,
     )
 }
-fn sign_consensus_task_with_offline_cash_authority(
+fn sign_consensus_task_with_kagemusha_authority(
     body_store: &V2BodyStore,
     context: &wire::HeightContext,
     key_pair: &KeyPair,
-    offline_cash_authority: Option<
-        &crate::zk::offline_cash_v1_recursion::OfflineCashMintFinalityLocalAuthorityV1,
+    kagemusha_authority: Option<
+        &crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1,
     >,
     task: ConsensusSignTask,
     restore_outbound_payload: bool,
@@ -179,12 +179,12 @@ fn sign_consensus_task_with_offline_cash_authority(
         super::v2::SignRequest::Vote(vote) => (vote.signature_preimage(), None),
         super::v2::SignRequest::TimeoutVote(vote) => (vote.signature_preimage(), None),
     };
-    let signature = sign_consensus_request_with_offline_cash_authority(
+    let signature = sign_consensus_request_with_kagemusha_authority(
         context,
         key_pair,
         task.request(),
         &preimage,
-        offline_cash_authority,
+        kagemusha_authority,
     )?;
     Ok(V2IoCompletion::Signature {
         work_id: task.id(),
@@ -198,16 +198,16 @@ fn sign_recovered_lifecycle_task(
     key_pair: &KeyPair,
     task: RecoveredLifecycleSignTaskV1,
 ) -> Result<RecoveredLifecycleSignWorkerResultV1, String> {
-    sign_recovered_lifecycle_task_with_offline_cash_authority(
+    sign_recovered_lifecycle_task_with_kagemusha_authority(
         body_store, context, key_pair, None, task,
     )
 }
-fn sign_recovered_lifecycle_task_with_offline_cash_authority(
+fn sign_recovered_lifecycle_task_with_kagemusha_authority(
     body_store: &V2BodyStore,
     context: &wire::HeightContext,
     key_pair: &KeyPair,
-    offline_cash_authority: Option<
-        &crate::zk::offline_cash_v1_recursion::OfflineCashMintFinalityLocalAuthorityV1,
+    kagemusha_authority: Option<
+        &crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1,
     >,
     task: RecoveredLifecycleSignTaskV1,
 ) -> Result<RecoveredLifecycleSignWorkerResultV1, String> {
@@ -221,12 +221,12 @@ fn sign_recovered_lifecycle_task_with_offline_cash_authority(
         super::v2::SignRequest::Vote(vote) => (vote.signature_preimage(), None),
         super::v2::SignRequest::TimeoutVote(vote) => (vote.signature_preimage(), None),
     };
-    let signature = sign_consensus_request_with_offline_cash_authority(
+    let signature = sign_consensus_request_with_kagemusha_authority(
         context,
         key_pair,
         &task.request,
         &preimage,
-        offline_cash_authority,
+        kagemusha_authority,
     )?;
     Ok(RecoveredLifecycleSignWorkerResultV1 {
         task,
@@ -234,13 +234,13 @@ fn sign_recovered_lifecycle_task_with_offline_cash_authority(
         outbound_payload,
     })
 }
-fn sign_consensus_request_with_offline_cash_authority(
+fn sign_consensus_request_with_kagemusha_authority(
     context: &wire::HeightContext,
     key_pair: &KeyPair,
     request: &super::v2::SignRequest,
     preimage: &[u8],
-    offline_cash_authority: Option<
-        &crate::zk::offline_cash_v1_recursion::OfflineCashMintFinalityLocalAuthorityV1,
+    kagemusha_authority: Option<
+        &crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1,
     >,
 ) -> Result<Vec<u8>, String> {
     let bls_signature = Signature::try_new(key_pair.private_key(), preimage)
@@ -258,34 +258,34 @@ fn sign_consensus_request_with_offline_cash_authority(
         return Ok(bls_signature);
     }
     let carries_mint_or_rotation_authority = context.next_epoch_snapshot.is_some()
-        || vote.execution_commitment.offline_cash_top_up_count != 0
-        || vote.execution_commitment.offline_cash_top_up_root.is_some();
+        || vote.execution_commitment.kagemusha_top_up_count != 0
+        || vote.execution_commitment.kagemusha_top_up_root.is_some();
     if !carries_mint_or_rotation_authority {
         return Ok(bls_signature);
     }
-    let authority = offline_cash_authority.ok_or_else(|| {
-        "Offline Cash V1 top-up or epoch-boundary Commit vote requires a provisioned Pasta epoch authority"
+    let authority = kagemusha_authority.ok_or_else(|| {
+        "Kagemusha V1 top-up or epoch-boundary Commit vote requires a provisioned Pasta epoch authority"
             .to_owned()
     })?;
     let message =
-        crate::zk::offline_cash_v1_recursion::build_offline_cash_mint_finality_seal_message_v1(
+        crate::zk::kagemusha_v1_recursion::build_kagemusha_mint_finality_seal_message_v1(
             authority.epoch(),
             context,
             vote,
         )
         .map_err(|error| error.to_string())?
         .ok_or_else(|| {
-            "Offline Cash V1 authoritative Commit vote produced no mint-finality statement"
+            "Kagemusha V1 authoritative Commit vote produced no mint-finality statement"
                 .to_owned()
         })?;
-    let seal = crate::zk::offline_cash_v1_recursion::sign_offline_cash_mint_finality_seal_v1(
+    let seal = crate::zk::kagemusha_v1_recursion::sign_kagemusha_mint_finality_seal_v1(
         authority.signer(),
         &message,
     )
     .map_err(|error| error.to_string())?;
-    let auxiliary = super::v2::encode_offline_cash_commit_vote_seal_share_v1(message, seal);
-    wire::encode_offline_cash_consensus_signature_envelope_v1(
-        wire::OFFLINE_CASH_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1,
+    let auxiliary = super::v2::encode_kagemusha_commit_vote_seal_share_v1(message, seal);
+    wire::encode_kagemusha_consensus_signature_envelope_v1(
+        wire::KAGEMUSHA_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1,
         &bls_signature,
         &auxiliary,
     )

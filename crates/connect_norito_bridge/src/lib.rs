@@ -45,11 +45,11 @@ use iroha_data_model::{
     metadata::Metadata,
     name::Name,
     nexus::DataSpaceId,
-    offline::{
-        OfflineCashAcceptanceIntentAuthorizationV1, OfflineCashAcceptanceTicketV1,
-        OfflineCashAcknowledgementV1, OfflineCashMintAuthorizationV1, OfflineCashMintCreditV1,
-        OfflineCashNoCommitClosureV1, OfflineCashPaymentRequestV1, OfflineCashPaymentV1,
-        OfflineCashRedemptionVoucherV1, validate_offline_cash_complete_exchange_shape_v1,
+    kagemusha::{
+        KagemushaAcceptanceIntentAuthorizationV1, KagemushaAcceptanceTicketV1,
+        KagemushaAcknowledgementV1, KagemushaMintAuthorizationV1, KagemushaMintCreditV1,
+        KagemushaNoCommitClosureV1, KagemushaPaymentRequestV1, KagemushaPaymentV1,
+        KagemushaRedemptionVoucherV1, validate_kagemusha_complete_exchange_shape_v1,
     },
     privacy::{
         PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1,
@@ -268,8 +268,8 @@ const ERR_SORAFS_REFERENCE: c_int = -114;
 const ERR_ACCOUNT_ADDRESS: c_int = -200;
 const ERR_ASSET_ID_PARSE: c_int = -301;
 const ERR_JSON_SERIALIZE: c_int = -304;
-const ERR_OFFLINE_CASH_V1: c_int = -311;
-const ERR_OFFLINE_CASH_DEVICE_UNAVAILABLE_V1: c_int = -312;
+const ERR_KAGEMUSHA_V1: c_int = -311;
+const ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1: c_int = -312;
 const ERR_DA_PROOF_SUMMARY: c_int = -401;
 const ERR_MULTISIG_SPEC: c_int = -402;
 const ERR_VERIFYING_KEY_ID: c_int = -403;
@@ -289,17 +289,17 @@ const ERR_PARLIAMENT_TIMED_OVN: c_int = -505;
 const ERR_VALIDATION_FEE_HIJIRI_QUOTE: c_int = -506;
 const ERR_PRIVATE_SETTLEMENT_RESPONSE: c_int = -507;
 
-/// Exact capability mask required by the Offline Cash V1 secure-device frame.
+/// Exact capability mask required by the Kagemusha V1 secure-device frame.
 ///
 /// The frame stores this value in a `u32`, while the governed hardware profile
 /// and its circuit-visible credential use the same complete lower sixteen bits.
-pub const CONNECT_NORITO_OFFLINE_CASH_DEVICE_REQUIRED_CAPABILITIES_V1: u32 =
-    iroha_data_model::offline::OFFLINE_CASH_HARDWARE_REQUIRED_CAPABILITIES_V1 as u32;
+pub const CONNECT_NORITO_KAGEMUSHA_DEVICE_REQUIRED_CAPABILITIES_V1: u32 =
+    iroha_data_model::kagemusha::KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1 as u32;
 
-/// Closed operation-code inventory in the Offline Cash V1 secure-device command frame.
+/// Closed operation-code inventory in the Kagemusha V1 secure-device command frame.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OfflineCashDeviceLifecycleOperationV1 {
+pub enum KagemushaDeviceLifecycleOperationV1 {
     /// Read the active compact hardware credential and profile reference.
     ReadActiveHardwareCredential = 1,
     /// Prepare a proof-bearing acceptance-intent authorization.
@@ -350,7 +350,7 @@ pub enum OfflineCashDeviceLifecycleOperationV1 {
     RotateHardwareEpoch = 24,
 }
 
-impl OfflineCashDeviceLifecycleOperationV1 {
+impl KagemushaDeviceLifecycleOperationV1 {
     /// All V1 operations in canonical wire-code order.
     pub const ALL: [Self; 24] = [
         Self::ReadActiveHardwareCredential,
@@ -416,10 +416,10 @@ impl OfflineCashDeviceLifecycleOperationV1 {
     }
 }
 
-/// Closed status-code inventory in the Offline Cash V1 secure-device response frame.
+/// Closed status-code inventory in the Kagemusha V1 secure-device response frame.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OfflineCashDeviceLifecycleStatusV1 {
+pub enum KagemushaDeviceLifecycleStatusV1 {
     /// The authenticated operation completed successfully.
     Success = 0,
     /// The service or pre-reservation capacity is unavailable.
@@ -444,7 +444,7 @@ pub enum OfflineCashDeviceLifecycleStatusV1 {
     RecoveryRequired = 10,
 }
 
-impl OfflineCashDeviceLifecycleStatusV1 {
+impl KagemushaDeviceLifecycleStatusV1 {
     /// All V1 statuses in canonical wire-code order.
     pub const ALL: [Self; 11] = [
         Self::Success,
@@ -503,7 +503,7 @@ enum BridgeError {
     InvalidRootHint,
     AssetId,
     JsonSerialize,
-    OfflineCashV1,
+    KagemushaV1,
     UnsupportedAlgorithm,
     MetadataTarget,
     MetadataKey,
@@ -550,7 +550,7 @@ impl BridgeError {
             BridgeError::InvalidRootHint => ERR_INVALID_ROOT_HINT,
             BridgeError::AssetId => ERR_ASSET_ID_PARSE,
             BridgeError::JsonSerialize => ERR_JSON_SERIALIZE,
-            BridgeError::OfflineCashV1 => ERR_OFFLINE_CASH_V1,
+            BridgeError::KagemushaV1 => ERR_KAGEMUSHA_V1,
             BridgeError::UnsupportedAlgorithm => ERR_UNSUPPORTED_ALGORITHM,
             BridgeError::MetadataTarget => ERR_METADATA_TARGET,
             BridgeError::MetadataKey => ERR_METADATA_KEY,
@@ -587,7 +587,7 @@ pub unsafe extern "C" fn connect_norito_bridge_abi_version() -> u32 {
     CONNECT_NORITO_BRIDGE_ABI_VERSION
 }
 
-unsafe fn read_offline_cash_v1_bytes<'a>(
+unsafe fn read_kagemusha_v1_bytes<'a>(
     ptr: *const c_uchar,
     len: c_ulong,
     maximum: usize,
@@ -595,53 +595,53 @@ unsafe fn read_offline_cash_v1_bytes<'a>(
     if ptr.is_null() {
         return Err(BridgeError::NullPtr);
     }
-    let len = usize::try_from(len).map_err(|_| BridgeError::OfflineCashV1)?;
+    let len = usize::try_from(len).map_err(|_| BridgeError::KagemushaV1)?;
     if len == 0 || len > maximum {
-        return Err(BridgeError::OfflineCashV1);
+        return Err(BridgeError::KagemushaV1);
     }
     Ok(unsafe { slice::from_raw_parts(ptr, len) })
 }
 
-unsafe fn read_offline_cash_v1_text<'a>(
+unsafe fn read_kagemusha_v1_text<'a>(
     ptr: *const c_char,
     len: c_ulong,
     maximum: usize,
 ) -> BridgeResult<&'a str> {
-    let bytes = unsafe { read_offline_cash_v1_bytes(ptr.cast(), len, maximum) }?;
-    std::str::from_utf8(bytes).map_err(|_| BridgeError::OfflineCashV1)
+    let bytes = unsafe { read_kagemusha_v1_bytes(ptr.cast(), len, maximum) }?;
+    std::str::from_utf8(bytes).map_err(|_| BridgeError::KagemushaV1)
 }
 
-fn validate_offline_cash_v1_aggregate_input_lengths(
+fn validate_kagemusha_v1_aggregate_input_lengths(
     lengths: &[c_ulong],
     maximum: usize,
 ) -> BridgeResult<()> {
     let total = lengths.iter().try_fold(0_usize, |total, length| {
-        let length = usize::try_from(*length).map_err(|_| BridgeError::OfflineCashV1)?;
-        total.checked_add(length).ok_or(BridgeError::OfflineCashV1)
+        let length = usize::try_from(*length).map_err(|_| BridgeError::KagemushaV1)?;
+        total.checked_add(length).ok_or(BridgeError::KagemushaV1)
     })?;
     if total > maximum {
-        return Err(BridgeError::OfflineCashV1);
+        return Err(BridgeError::KagemushaV1);
     }
     Ok(())
 }
 
-/// Validate one exact bounded canonical Offline Cash V1 payment request.
+/// Validate one exact bounded canonical Kagemusha V1 payment request.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_cash_v1_payment_request_validate(
+pub unsafe extern "C" fn connect_norito_kagemusha_v1_payment_request_validate(
     request_ptr: *const c_uchar,
     request_len: c_ulong,
 ) -> c_int {
     (|| {
         let bytes = unsafe {
-            read_offline_cash_v1_bytes(
+            read_kagemusha_v1_bytes(
                 request_ptr,
                 request_len,
-                iroha_data_model::offline::OFFLINE_CASH_PAYMENT_REQUEST_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1,
             )
         }?;
-        OfflineCashPaymentRequestV1::decode_canonical_exact(bytes)
+        KagemushaPaymentRequestV1::decode_canonical_exact(bytes)
             .map(|_| ())
-            .map_err(|_| BridgeError::OfflineCashV1)
+            .map_err(|_| BridgeError::KagemushaV1)
     })()
     .map_or_else(BridgeError::code, |()| 0)
 }
@@ -650,7 +650,7 @@ pub unsafe extern "C" fn connect_norito_offline_cash_v1_payment_request_validate
 ///
 /// This codec boundary does not authenticate a proof release or grant reservation authority.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_cash_v1_acceptance_intent_authorization_validate(
+pub unsafe extern "C" fn connect_norito_kagemusha_v1_acceptance_intent_authorization_validate(
     request_ptr: *const c_uchar,
     request_len: c_ulong,
     authorization_ptr: *const c_uchar,
@@ -658,27 +658,27 @@ pub unsafe extern "C" fn connect_norito_offline_cash_v1_acceptance_intent_author
 ) -> c_int {
     (|| {
         let request_bytes = unsafe {
-            read_offline_cash_v1_bytes(
+            read_kagemusha_v1_bytes(
                 request_ptr,
                 request_len,
-                iroha_data_model::offline::OFFLINE_CASH_PAYMENT_REQUEST_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1,
             )
         }?;
         let authorization_bytes = unsafe {
-            read_offline_cash_v1_bytes(
+            read_kagemusha_v1_bytes(
                 authorization_ptr,
                 authorization_len,
-                iroha_data_model::offline::OFFLINE_CASH_ACCEPTANCE_INTENT_AUTHORIZATION_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_ACCEPTANCE_INTENT_AUTHORIZATION_MAX_BYTES_V1,
             )
         }?;
-        let request = OfflineCashPaymentRequestV1::decode_canonical_exact(request_bytes)
-            .map_err(|_| BridgeError::OfflineCashV1)?;
-        OfflineCashAcceptanceIntentAuthorizationV1::decode_canonical_shape_exact_against(
+        let request = KagemushaPaymentRequestV1::decode_canonical_exact(request_bytes)
+            .map_err(|_| BridgeError::KagemushaV1)?;
+        KagemushaAcceptanceIntentAuthorizationV1::decode_canonical_shape_exact_against(
             authorization_bytes,
             &request,
         )
         .map(|_| ())
-        .map_err(|_| BridgeError::OfflineCashV1)
+        .map_err(|_| BridgeError::KagemushaV1)
     })()
     .map_or_else(BridgeError::code, |()| 0)
 }
@@ -687,7 +687,7 @@ pub unsafe extern "C" fn connect_norito_offline_cash_v1_acceptance_intent_author
 ///
 /// This codec boundary does not reserve receiver capacity or grant monetary authority.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_cash_v1_acceptance_ticket_validate(
+pub unsafe extern "C" fn connect_norito_kagemusha_v1_acceptance_ticket_validate(
     request_ptr: *const c_uchar,
     request_len: c_ulong,
     authorization_ptr: *const c_uchar,
@@ -697,74 +697,74 @@ pub unsafe extern "C" fn connect_norito_offline_cash_v1_acceptance_ticket_valida
 ) -> c_int {
     (|| {
         let request_bytes = unsafe {
-            read_offline_cash_v1_bytes(
+            read_kagemusha_v1_bytes(
                 request_ptr,
                 request_len,
-                iroha_data_model::offline::OFFLINE_CASH_PAYMENT_REQUEST_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1,
             )
         }?;
         let authorization_bytes = unsafe {
-            read_offline_cash_v1_bytes(
+            read_kagemusha_v1_bytes(
                 authorization_ptr,
                 authorization_len,
-                iroha_data_model::offline::OFFLINE_CASH_ACCEPTANCE_INTENT_AUTHORIZATION_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_ACCEPTANCE_INTENT_AUTHORIZATION_MAX_BYTES_V1,
             )
         }?;
         let ticket_bytes = unsafe {
-            read_offline_cash_v1_bytes(
+            read_kagemusha_v1_bytes(
                 ticket_ptr,
                 ticket_len,
-                iroha_data_model::offline::OFFLINE_CASH_ACCEPTANCE_TICKET_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_ACCEPTANCE_TICKET_MAX_BYTES_V1,
             )
         }?;
-        let request = OfflineCashPaymentRequestV1::decode_canonical_exact(request_bytes)
-            .map_err(|_| BridgeError::OfflineCashV1)?;
+        let request = KagemushaPaymentRequestV1::decode_canonical_exact(request_bytes)
+            .map_err(|_| BridgeError::KagemushaV1)?;
         let authorization =
-            OfflineCashAcceptanceIntentAuthorizationV1::decode_canonical_shape_exact_against(
+            KagemushaAcceptanceIntentAuthorizationV1::decode_canonical_shape_exact_against(
                 authorization_bytes,
                 &request,
             )
-            .map_err(|_| BridgeError::OfflineCashV1)?;
-        OfflineCashAcceptanceTicketV1::decode_canonical_shape_exact_against(
+            .map_err(|_| BridgeError::KagemushaV1)?;
+        KagemushaAcceptanceTicketV1::decode_canonical_shape_exact_against(
             ticket_bytes,
             &request,
             &authorization.intent(),
         )
         .map(|_| ())
-        .map_err(|_| BridgeError::OfflineCashV1)
+        .map_err(|_| BridgeError::KagemushaV1)
     })()
     .map_or_else(BridgeError::code, |()| 0)
 }
 
-/// Validate one self-contained, exact, bounded Offline Cash V1 no-commit closure.
+/// Validate one self-contained, exact, bounded Kagemusha V1 no-commit closure.
 ///
 /// This codec boundary checks every embedded request, authorization, ticket, and proof-shape
 /// binding. It does not authenticate a proof release or grant cancellation authority.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_cash_v1_no_commit_closure_validate(
+pub unsafe extern "C" fn connect_norito_kagemusha_v1_no_commit_closure_validate(
     closure_ptr: *const c_uchar,
     closure_len: c_ulong,
 ) -> c_int {
     (|| {
         let bytes = unsafe {
-            read_offline_cash_v1_bytes(
+            read_kagemusha_v1_bytes(
                 closure_ptr,
                 closure_len,
-                iroha_data_model::offline::OFFLINE_CASH_NO_COMMIT_CLOSURE_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_NO_COMMIT_CLOSURE_MAX_BYTES_V1,
             )
         }?;
-        OfflineCashNoCommitClosureV1::decode_canonical_shape_exact(bytes)
+        KagemushaNoCommitClosureV1::decode_canonical_shape_exact(bytes)
             .map(|_| ())
-            .map_err(|_| BridgeError::OfflineCashV1)
+            .map_err(|_| BridgeError::KagemushaV1)
     })()
     .map_or_else(BridgeError::code, |()| 0)
 }
 
-/// Validate one exact bounded canonical Offline Cash V1 payment shape against its request.
+/// Validate one exact bounded canonical Kagemusha V1 payment shape against its request.
 ///
 /// This codec boundary does not authenticate a proof release or grant monetary authority.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_cash_v1_payment_validate(
+pub unsafe extern "C" fn connect_norito_kagemusha_v1_payment_validate(
     request_ptr: *const c_uchar,
     request_len: c_ulong,
     payment_ptr: *const c_uchar,
@@ -772,33 +772,33 @@ pub unsafe extern "C" fn connect_norito_offline_cash_v1_payment_validate(
 ) -> c_int {
     (|| {
         let request_bytes = unsafe {
-            read_offline_cash_v1_bytes(
+            read_kagemusha_v1_bytes(
                 request_ptr,
                 request_len,
-                iroha_data_model::offline::OFFLINE_CASH_PAYMENT_REQUEST_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1,
             )
         }?;
         let payment_bytes = unsafe {
-            read_offline_cash_v1_bytes(
+            read_kagemusha_v1_bytes(
                 payment_ptr,
                 payment_len,
-                iroha_data_model::offline::OFFLINE_CASH_PAYMENT_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_MAX_BYTES_V1,
             )
         }?;
-        let request = OfflineCashPaymentRequestV1::decode_canonical_exact(request_bytes)
-            .map_err(|_| BridgeError::OfflineCashV1)?;
-        OfflineCashPaymentV1::decode_canonical_shape_exact_against(payment_bytes, &request)
+        let request = KagemushaPaymentRequestV1::decode_canonical_exact(request_bytes)
+            .map_err(|_| BridgeError::KagemushaV1)?;
+        KagemushaPaymentV1::decode_canonical_shape_exact_against(payment_bytes, &request)
             .map(|_| ())
-            .map_err(|_| BridgeError::OfflineCashV1)
+            .map_err(|_| BridgeError::KagemushaV1)
     })()
     .map_or_else(BridgeError::code, |()| 0)
 }
 
-/// Validate one exact bounded Offline Cash V1 acknowledgement shape against its session.
+/// Validate one exact bounded Kagemusha V1 acknowledgement shape against its session.
 ///
 /// This codec boundary does not authenticate a proof release or grant monetary authority.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_cash_v1_acknowledgement_validate(
+pub unsafe extern "C" fn connect_norito_kagemusha_v1_acknowledgement_validate(
     request_ptr: *const c_uchar,
     request_len: c_ulong,
     payment_ptr: *const c_uchar,
@@ -808,49 +808,49 @@ pub unsafe extern "C" fn connect_norito_offline_cash_v1_acknowledgement_validate
 ) -> c_int {
     (|| {
         let request_bytes = unsafe {
-            read_offline_cash_v1_bytes(
+            read_kagemusha_v1_bytes(
                 request_ptr,
                 request_len,
-                iroha_data_model::offline::OFFLINE_CASH_PAYMENT_REQUEST_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1,
             )
         }?;
         let payment_bytes = unsafe {
-            read_offline_cash_v1_bytes(
+            read_kagemusha_v1_bytes(
                 payment_ptr,
                 payment_len,
-                iroha_data_model::offline::OFFLINE_CASH_PAYMENT_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_MAX_BYTES_V1,
             )
         }?;
         let acknowledgement_bytes = unsafe {
-            read_offline_cash_v1_bytes(
+            read_kagemusha_v1_bytes(
                 acknowledgement_ptr,
                 acknowledgement_len,
-                iroha_data_model::offline::OFFLINE_CASH_ACKNOWLEDGEMENT_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_ACKNOWLEDGEMENT_MAX_BYTES_V1,
             )
         }?;
-        let request = OfflineCashPaymentRequestV1::decode_canonical_exact(request_bytes)
-            .map_err(|_| BridgeError::OfflineCashV1)?;
+        let request = KagemushaPaymentRequestV1::decode_canonical_exact(request_bytes)
+            .map_err(|_| BridgeError::KagemushaV1)?;
         let payment =
-            OfflineCashPaymentV1::decode_canonical_shape_exact_against(payment_bytes, &request)
-                .map_err(|_| BridgeError::OfflineCashV1)?;
-        OfflineCashAcknowledgementV1::decode_canonical_shape_exact_against(
+            KagemushaPaymentV1::decode_canonical_shape_exact_against(payment_bytes, &request)
+                .map_err(|_| BridgeError::KagemushaV1)?;
+        KagemushaAcknowledgementV1::decode_canonical_shape_exact_against(
             acknowledgement_bytes,
             &request,
             &payment,
         )
         .map(|_| ())
-        .map_err(|_| BridgeError::OfflineCashV1)
+        .map_err(|_| BridgeError::KagemushaV1)
     })()
     .map_or_else(BridgeError::code, |()| 0)
 }
 
-/// Validate all five exact canonical Offline Cash V1 transport messages as one exchange.
+/// Validate all five exact canonical Kagemusha V1 transport messages as one exchange.
 ///
 /// The authoritative data-model validator enforces both aggregate transport caps and requires the
 /// standalone authorization intent and ticket to be the exact values embedded by the payment.
 /// This remains a codec/shape boundary and grants no monetary authority.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_cash_v1_complete_exchange_validate(
+pub unsafe extern "C" fn connect_norito_kagemusha_v1_complete_exchange_validate(
     request_ptr: *const c_uchar,
     request_len: c_ulong,
     authorization_ptr: *const c_uchar,
@@ -863,7 +863,7 @@ pub unsafe extern "C" fn connect_norito_offline_cash_v1_complete_exchange_valida
     acknowledgement_len: c_ulong,
 ) -> c_int {
     (|| {
-        validate_offline_cash_v1_aggregate_input_lengths(
+        validate_kagemusha_v1_aggregate_input_lengths(
             &[
                 request_len,
                 authorization_len,
@@ -871,67 +871,67 @@ pub unsafe extern "C" fn connect_norito_offline_cash_v1_complete_exchange_valida
                 payment_len,
                 acknowledgement_len,
             ],
-            iroha_data_model::offline::OFFLINE_CASH_COMPLETE_EXCHANGE_MAX_BYTES_V1,
+            iroha_data_model::kagemusha::KAGEMUSHA_COMPLETE_EXCHANGE_MAX_BYTES_V1,
         )?;
         let request_bytes = unsafe {
-            read_offline_cash_v1_bytes(
+            read_kagemusha_v1_bytes(
                 request_ptr,
                 request_len,
-                iroha_data_model::offline::OFFLINE_CASH_PAYMENT_REQUEST_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1,
             )
         }?;
         let authorization_bytes = unsafe {
-            read_offline_cash_v1_bytes(
+            read_kagemusha_v1_bytes(
                 authorization_ptr,
                 authorization_len,
-                iroha_data_model::offline::OFFLINE_CASH_ACCEPTANCE_INTENT_AUTHORIZATION_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_ACCEPTANCE_INTENT_AUTHORIZATION_MAX_BYTES_V1,
             )
         }?;
         let ticket_bytes = unsafe {
-            read_offline_cash_v1_bytes(
+            read_kagemusha_v1_bytes(
                 ticket_ptr,
                 ticket_len,
-                iroha_data_model::offline::OFFLINE_CASH_ACCEPTANCE_TICKET_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_ACCEPTANCE_TICKET_MAX_BYTES_V1,
             )
         }?;
         let payment_bytes = unsafe {
-            read_offline_cash_v1_bytes(
+            read_kagemusha_v1_bytes(
                 payment_ptr,
                 payment_len,
-                iroha_data_model::offline::OFFLINE_CASH_PAYMENT_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_MAX_BYTES_V1,
             )
         }?;
         let acknowledgement_bytes = unsafe {
-            read_offline_cash_v1_bytes(
+            read_kagemusha_v1_bytes(
                 acknowledgement_ptr,
                 acknowledgement_len,
-                iroha_data_model::offline::OFFLINE_CASH_ACKNOWLEDGEMENT_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_ACKNOWLEDGEMENT_MAX_BYTES_V1,
             )
         }?;
-        let request = OfflineCashPaymentRequestV1::decode_canonical_exact(request_bytes)
-            .map_err(|_| BridgeError::OfflineCashV1)?;
+        let request = KagemushaPaymentRequestV1::decode_canonical_exact(request_bytes)
+            .map_err(|_| BridgeError::KagemushaV1)?;
         let authorization =
-            OfflineCashAcceptanceIntentAuthorizationV1::decode_canonical_shape_exact_against(
+            KagemushaAcceptanceIntentAuthorizationV1::decode_canonical_shape_exact_against(
                 authorization_bytes,
                 &request,
             )
-            .map_err(|_| BridgeError::OfflineCashV1)?;
-        let ticket = OfflineCashAcceptanceTicketV1::decode_canonical_shape_exact_against(
+            .map_err(|_| BridgeError::KagemushaV1)?;
+        let ticket = KagemushaAcceptanceTicketV1::decode_canonical_shape_exact_against(
             ticket_bytes,
             &request,
             &authorization.intent(),
         )
-        .map_err(|_| BridgeError::OfflineCashV1)?;
+        .map_err(|_| BridgeError::KagemushaV1)?;
         let payment =
-            OfflineCashPaymentV1::decode_canonical_shape_exact_against(payment_bytes, &request)
-                .map_err(|_| BridgeError::OfflineCashV1)?;
-        let acknowledgement = OfflineCashAcknowledgementV1::decode_canonical_shape_exact_against(
+            KagemushaPaymentV1::decode_canonical_shape_exact_against(payment_bytes, &request)
+                .map_err(|_| BridgeError::KagemushaV1)?;
+        let acknowledgement = KagemushaAcknowledgementV1::decode_canonical_shape_exact_against(
             acknowledgement_bytes,
             &request,
             &payment,
         )
-        .map_err(|_| BridgeError::OfflineCashV1)?;
-        validate_offline_cash_complete_exchange_shape_v1(
+        .map_err(|_| BridgeError::KagemushaV1)?;
+        validate_kagemusha_complete_exchange_shape_v1(
             &request,
             &authorization,
             &ticket,
@@ -939,53 +939,53 @@ pub unsafe extern "C" fn connect_norito_offline_cash_v1_complete_exchange_valida
             &acknowledgement,
         )
         .map(|_| ())
-        .map_err(|_| BridgeError::OfflineCashV1)
+        .map_err(|_| BridgeError::KagemushaV1)
     })()
     .map_or_else(BridgeError::code, |()| 0)
 }
 
-/// Validate one exact bounded canonical Offline Cash V1 pre-debit mint authorization.
+/// Validate one exact bounded canonical Kagemusha V1 pre-debit mint authorization.
 ///
 /// This codec boundary does not authenticate a proof release or grant debit authority.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_cash_v1_mint_authorization_validate(
+pub unsafe extern "C" fn connect_norito_kagemusha_v1_mint_authorization_validate(
     authorization_ptr: *const c_uchar,
     authorization_len: c_ulong,
 ) -> c_int {
     (|| {
         let bytes = unsafe {
-            read_offline_cash_v1_bytes(
+            read_kagemusha_v1_bytes(
                 authorization_ptr,
                 authorization_len,
-                iroha_data_model::offline::OFFLINE_CASH_MINT_AUTHORIZATION_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_MINT_AUTHORIZATION_MAX_BYTES_V1,
             )
         }?;
-        OfflineCashMintAuthorizationV1::decode_canonical_shape_exact(bytes)
+        KagemushaMintAuthorizationV1::decode_canonical_shape_exact(bytes)
             .map(|_| ())
-            .map_err(|_| BridgeError::OfflineCashV1)
+            .map_err(|_| BridgeError::KagemushaV1)
     })()
     .map_or_else(BridgeError::code, |()| 0)
 }
 
-/// Validate one exact bounded canonical Offline Cash V1 reserve mint-credit shape.
+/// Validate one exact bounded canonical Kagemusha V1 reserve mint-credit shape.
 ///
 /// This codec boundary does not authenticate a proof release or grant monetary authority.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_cash_v1_mint_credit_validate(
+pub unsafe extern "C" fn connect_norito_kagemusha_v1_mint_credit_validate(
     credit_ptr: *const c_uchar,
     credit_len: c_ulong,
 ) -> c_int {
     (|| {
         let bytes = unsafe {
-            read_offline_cash_v1_bytes(
+            read_kagemusha_v1_bytes(
                 credit_ptr,
                 credit_len,
-                iroha_data_model::offline::OFFLINE_CASH_MINT_CREDIT_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_MINT_CREDIT_MAX_BYTES_V1,
             )
         }?;
-        OfflineCashMintCreditV1::decode_canonical_shape_exact(bytes)
+        KagemushaMintCreditV1::decode_canonical_shape_exact(bytes)
             .map(|_| ())
-            .map_err(|_| BridgeError::OfflineCashV1)
+            .map_err(|_| BridgeError::KagemushaV1)
     })()
     .map_or_else(BridgeError::code, |()| 0)
 }
@@ -995,7 +995,7 @@ pub unsafe extern "C" fn connect_norito_offline_cash_v1_mint_credit_validate(
 /// This codec boundary checks canonical shape and digest binding only. It does not authenticate
 /// either proof or mutate payer, reserve, or recipient state.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_cash_v1_mint_credit_against_authorization_validate(
+pub unsafe extern "C" fn connect_norito_kagemusha_v1_mint_credit_against_authorization_validate(
     authorization_ptr: *const c_uchar,
     authorization_len: c_ulong,
     credit_ptr: *const c_uchar,
@@ -1003,80 +1003,80 @@ pub unsafe extern "C" fn connect_norito_offline_cash_v1_mint_credit_against_auth
 ) -> c_int {
     (|| {
         let authorization_bytes = unsafe {
-            read_offline_cash_v1_bytes(
+            read_kagemusha_v1_bytes(
                 authorization_ptr,
                 authorization_len,
-                iroha_data_model::offline::OFFLINE_CASH_MINT_AUTHORIZATION_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_MINT_AUTHORIZATION_MAX_BYTES_V1,
             )
         }?;
         let credit_bytes = unsafe {
-            read_offline_cash_v1_bytes(
+            read_kagemusha_v1_bytes(
                 credit_ptr,
                 credit_len,
-                iroha_data_model::offline::OFFLINE_CASH_MINT_CREDIT_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_MINT_CREDIT_MAX_BYTES_V1,
             )
         }?;
         let authorization =
-            OfflineCashMintAuthorizationV1::decode_canonical_shape_exact(authorization_bytes)
-                .map_err(|_| BridgeError::OfflineCashV1)?;
-        let credit = OfflineCashMintCreditV1::decode_canonical_shape_exact(credit_bytes)
-            .map_err(|_| BridgeError::OfflineCashV1)?;
+            KagemushaMintAuthorizationV1::decode_canonical_shape_exact(authorization_bytes)
+                .map_err(|_| BridgeError::KagemushaV1)?;
+        let credit = KagemushaMintCreditV1::decode_canonical_shape_exact(credit_bytes)
+            .map_err(|_| BridgeError::KagemushaV1)?;
         credit
             .validate_shape_against_authorization(&authorization)
-            .map_err(|_| BridgeError::OfflineCashV1)
+            .map_err(|_| BridgeError::KagemushaV1)
     })()
     .map_or_else(BridgeError::code, |()| 0)
 }
 
-/// Validate one exact bounded canonical Offline Cash V1 redemption-voucher shape.
+/// Validate one exact bounded canonical Kagemusha V1 redemption-voucher shape.
 ///
 /// This codec boundary does not authenticate a proof release or grant monetary authority.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_cash_v1_redemption_voucher_validate(
+pub unsafe extern "C" fn connect_norito_kagemusha_v1_redemption_voucher_validate(
     voucher_ptr: *const c_uchar,
     voucher_len: c_ulong,
 ) -> c_int {
     (|| {
         let bytes = unsafe {
-            read_offline_cash_v1_bytes(
+            read_kagemusha_v1_bytes(
                 voucher_ptr,
                 voucher_len,
-                iroha_data_model::offline::OFFLINE_CASH_REDEMPTION_VOUCHER_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_REDEMPTION_VOUCHER_MAX_BYTES_V1,
             )
         }?;
-        OfflineCashRedemptionVoucherV1::decode_canonical_shape_exact(bytes)
+        KagemushaRedemptionVoucherV1::decode_canonical_shape_exact(bytes)
             .map(|_| ())
-            .map_err(|_| BridgeError::OfflineCashV1)
+            .map_err(|_| BridgeError::KagemushaV1)
     })()
     .map_or_else(BridgeError::code, |()| 0)
 }
 
-/// Validate one exact canonical `oc1:` Offline Cash V1 payment request.
+/// Validate one exact canonical `kgm1:` Kagemusha V1 payment request.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_cash_v1_payment_request_text_validate(
+pub unsafe extern "C" fn connect_norito_kagemusha_v1_payment_request_text_validate(
     request_ptr: *const c_char,
     request_len: c_ulong,
 ) -> c_int {
     (|| {
         let text = unsafe {
-            read_offline_cash_v1_text(
+            read_kagemusha_v1_text(
                 request_ptr,
                 request_len,
-                iroha_data_model::offline::OFFLINE_CASH_PAYMENT_REQUEST_TEXT_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_TEXT_MAX_BYTES_V1,
             )
         }?;
-        OfflineCashPaymentRequestV1::decode_text_exact(text)
+        KagemushaPaymentRequestV1::decode_text_exact(text)
             .map(|_| ())
-            .map_err(|_| BridgeError::OfflineCashV1)
+            .map_err(|_| BridgeError::KagemushaV1)
     })()
     .map_or_else(BridgeError::code, |()| 0)
 }
 
-/// Validate one exact canonical `oc1:` acceptance authorization against its text request.
+/// Validate one exact canonical `kgm1:` acceptance authorization against its text request.
 ///
 /// This codec boundary does not authenticate a proof release or grant reservation authority.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_cash_v1_acceptance_intent_authorization_text_validate(
+pub unsafe extern "C" fn connect_norito_kagemusha_v1_acceptance_intent_authorization_text_validate(
     request_ptr: *const c_char,
     request_len: c_ulong,
     authorization_ptr: *const c_char,
@@ -1084,36 +1084,36 @@ pub unsafe extern "C" fn connect_norito_offline_cash_v1_acceptance_intent_author
 ) -> c_int {
     (|| {
         let request_text = unsafe {
-            read_offline_cash_v1_text(
+            read_kagemusha_v1_text(
                 request_ptr,
                 request_len,
-                iroha_data_model::offline::OFFLINE_CASH_PAYMENT_REQUEST_TEXT_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_TEXT_MAX_BYTES_V1,
             )
         }?;
         let authorization_text = unsafe {
-            read_offline_cash_v1_text(
+            read_kagemusha_v1_text(
                 authorization_ptr,
                 authorization_len,
-                iroha_data_model::offline::OFFLINE_CASH_ACCEPTANCE_INTENT_AUTHORIZATION_TEXT_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_ACCEPTANCE_INTENT_AUTHORIZATION_TEXT_MAX_BYTES_V1,
             )
         }?;
-        let request = OfflineCashPaymentRequestV1::decode_text_exact(request_text)
-            .map_err(|_| BridgeError::OfflineCashV1)?;
-        OfflineCashAcceptanceIntentAuthorizationV1::decode_text_shape_exact_against(
+        let request = KagemushaPaymentRequestV1::decode_text_exact(request_text)
+            .map_err(|_| BridgeError::KagemushaV1)?;
+        KagemushaAcceptanceIntentAuthorizationV1::decode_text_shape_exact_against(
             authorization_text,
             &request,
         )
         .map(|_| ())
-        .map_err(|_| BridgeError::OfflineCashV1)
+        .map_err(|_| BridgeError::KagemushaV1)
     })()
     .map_or_else(BridgeError::code, |()| 0)
 }
 
-/// Validate one exact canonical `oc1:` acceptance ticket against its text context.
+/// Validate one exact canonical `kgm1:` acceptance ticket against its text context.
 ///
 /// This codec boundary does not reserve receiver capacity or grant monetary authority.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_cash_v1_acceptance_ticket_text_validate(
+pub unsafe extern "C" fn connect_norito_kagemusha_v1_acceptance_ticket_text_validate(
     request_ptr: *const c_char,
     request_len: c_ulong,
     authorization_ptr: *const c_char,
@@ -1123,72 +1123,72 @@ pub unsafe extern "C" fn connect_norito_offline_cash_v1_acceptance_ticket_text_v
 ) -> c_int {
     (|| {
         let request_text = unsafe {
-            read_offline_cash_v1_text(
+            read_kagemusha_v1_text(
                 request_ptr,
                 request_len,
-                iroha_data_model::offline::OFFLINE_CASH_PAYMENT_REQUEST_TEXT_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_TEXT_MAX_BYTES_V1,
             )
         }?;
         let authorization_text = unsafe {
-            read_offline_cash_v1_text(
+            read_kagemusha_v1_text(
                 authorization_ptr,
                 authorization_len,
-                iroha_data_model::offline::OFFLINE_CASH_ACCEPTANCE_INTENT_AUTHORIZATION_TEXT_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_ACCEPTANCE_INTENT_AUTHORIZATION_TEXT_MAX_BYTES_V1,
             )
         }?;
         let ticket_text = unsafe {
-            read_offline_cash_v1_text(
+            read_kagemusha_v1_text(
                 ticket_ptr,
                 ticket_len,
-                iroha_data_model::offline::OFFLINE_CASH_ACCEPTANCE_TICKET_TEXT_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_ACCEPTANCE_TICKET_TEXT_MAX_BYTES_V1,
             )
         }?;
-        let request = OfflineCashPaymentRequestV1::decode_text_exact(request_text)
-            .map_err(|_| BridgeError::OfflineCashV1)?;
+        let request = KagemushaPaymentRequestV1::decode_text_exact(request_text)
+            .map_err(|_| BridgeError::KagemushaV1)?;
         let authorization =
-            OfflineCashAcceptanceIntentAuthorizationV1::decode_text_shape_exact_against(
+            KagemushaAcceptanceIntentAuthorizationV1::decode_text_shape_exact_against(
                 authorization_text,
                 &request,
             )
-            .map_err(|_| BridgeError::OfflineCashV1)?;
-        OfflineCashAcceptanceTicketV1::decode_text_shape_exact_against(
+            .map_err(|_| BridgeError::KagemushaV1)?;
+        KagemushaAcceptanceTicketV1::decode_text_shape_exact_against(
             ticket_text,
             &request,
             &authorization.intent(),
         )
         .map(|_| ())
-        .map_err(|_| BridgeError::OfflineCashV1)
+        .map_err(|_| BridgeError::KagemushaV1)
     })()
     .map_or_else(BridgeError::code, |()| 0)
 }
 
-/// Validate one self-contained, exact canonical `oc1:` Offline Cash V1 no-commit closure.
+/// Validate one self-contained, exact canonical `kgm1:` Kagemusha V1 no-commit closure.
 ///
 /// This codec boundary checks every embedded request, authorization, ticket, and proof-shape
 /// binding. It does not authenticate a proof release or grant cancellation authority.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_cash_v1_no_commit_closure_text_validate(
+pub unsafe extern "C" fn connect_norito_kagemusha_v1_no_commit_closure_text_validate(
     closure_ptr: *const c_char,
     closure_len: c_ulong,
 ) -> c_int {
     (|| {
         let text = unsafe {
-            read_offline_cash_v1_text(
+            read_kagemusha_v1_text(
                 closure_ptr,
                 closure_len,
-                iroha_data_model::offline::OFFLINE_CASH_NO_COMMIT_CLOSURE_TEXT_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_NO_COMMIT_CLOSURE_TEXT_MAX_BYTES_V1,
             )
         }?;
-        OfflineCashNoCommitClosureV1::decode_text_shape_exact(text)
+        KagemushaNoCommitClosureV1::decode_text_shape_exact(text)
             .map(|_| ())
-            .map_err(|_| BridgeError::OfflineCashV1)
+            .map_err(|_| BridgeError::KagemushaV1)
     })()
     .map_or_else(BridgeError::code, |()| 0)
 }
 
-/// Validate one exact canonical `oc1:` Offline Cash V1 payment against its text request.
+/// Validate one exact canonical `kgm1:` Kagemusha V1 payment against its text request.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_cash_v1_payment_text_validate(
+pub unsafe extern "C" fn connect_norito_kagemusha_v1_payment_text_validate(
     request_ptr: *const c_char,
     request_len: c_ulong,
     payment_ptr: *const c_char,
@@ -1196,31 +1196,31 @@ pub unsafe extern "C" fn connect_norito_offline_cash_v1_payment_text_validate(
 ) -> c_int {
     (|| {
         let request_text = unsafe {
-            read_offline_cash_v1_text(
+            read_kagemusha_v1_text(
                 request_ptr,
                 request_len,
-                iroha_data_model::offline::OFFLINE_CASH_PAYMENT_REQUEST_TEXT_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_TEXT_MAX_BYTES_V1,
             )
         }?;
         let payment_text = unsafe {
-            read_offline_cash_v1_text(
+            read_kagemusha_v1_text(
                 payment_ptr,
                 payment_len,
-                iroha_data_model::offline::OFFLINE_CASH_PAYMENT_TEXT_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_TEXT_MAX_BYTES_V1,
             )
         }?;
-        let request = OfflineCashPaymentRequestV1::decode_text_exact(request_text)
-            .map_err(|_| BridgeError::OfflineCashV1)?;
-        OfflineCashPaymentV1::decode_text_exact_against(payment_text, &request)
+        let request = KagemushaPaymentRequestV1::decode_text_exact(request_text)
+            .map_err(|_| BridgeError::KagemushaV1)?;
+        KagemushaPaymentV1::decode_text_exact_against(payment_text, &request)
             .map(|_| ())
-            .map_err(|_| BridgeError::OfflineCashV1)
+            .map_err(|_| BridgeError::KagemushaV1)
     })()
     .map_or_else(BridgeError::code, |()| 0)
 }
 
-/// Validate one exact canonical `oc1:` Offline Cash V1 acknowledgement and its text context.
+/// Validate one exact canonical `kgm1:` Kagemusha V1 acknowledgement and its text context.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_cash_v1_acknowledgement_text_validate(
+pub unsafe extern "C" fn connect_norito_kagemusha_v1_acknowledgement_text_validate(
     request_ptr: *const c_char,
     request_len: c_ulong,
     payment_ptr: *const c_char,
@@ -1230,48 +1230,48 @@ pub unsafe extern "C" fn connect_norito_offline_cash_v1_acknowledgement_text_val
 ) -> c_int {
     (|| {
         let request_text = unsafe {
-            read_offline_cash_v1_text(
+            read_kagemusha_v1_text(
                 request_ptr,
                 request_len,
-                iroha_data_model::offline::OFFLINE_CASH_PAYMENT_REQUEST_TEXT_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_TEXT_MAX_BYTES_V1,
             )
         }?;
         let payment_text = unsafe {
-            read_offline_cash_v1_text(
+            read_kagemusha_v1_text(
                 payment_ptr,
                 payment_len,
-                iroha_data_model::offline::OFFLINE_CASH_PAYMENT_TEXT_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_TEXT_MAX_BYTES_V1,
             )
         }?;
         let acknowledgement_text = unsafe {
-            read_offline_cash_v1_text(
+            read_kagemusha_v1_text(
                 acknowledgement_ptr,
                 acknowledgement_len,
-                iroha_data_model::offline::OFFLINE_CASH_ACKNOWLEDGEMENT_TEXT_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_ACKNOWLEDGEMENT_TEXT_MAX_BYTES_V1,
             )
         }?;
-        let request = OfflineCashPaymentRequestV1::decode_text_exact(request_text)
-            .map_err(|_| BridgeError::OfflineCashV1)?;
-        let payment = OfflineCashPaymentV1::decode_text_exact_against(payment_text, &request)
-            .map_err(|_| BridgeError::OfflineCashV1)?;
-        OfflineCashAcknowledgementV1::decode_text_exact_against(
+        let request = KagemushaPaymentRequestV1::decode_text_exact(request_text)
+            .map_err(|_| BridgeError::KagemushaV1)?;
+        let payment = KagemushaPaymentV1::decode_text_exact_against(payment_text, &request)
+            .map_err(|_| BridgeError::KagemushaV1)?;
+        KagemushaAcknowledgementV1::decode_text_exact_against(
             acknowledgement_text,
             &request,
             &payment,
         )
         .map(|_| ())
-        .map_err(|_| BridgeError::OfflineCashV1)
+        .map_err(|_| BridgeError::KagemushaV1)
     })()
     .map_or_else(BridgeError::code, |()| 0)
 }
 
-/// Validate all five exact canonical `oc1:` Offline Cash V1 messages as one exchange.
+/// Validate all five exact canonical `kgm1:` Kagemusha V1 messages as one exchange.
 ///
 /// The authoritative data-model validator enforces aggregate raw/text caps and requires the
 /// standalone authorization intent and ticket to be the exact values embedded by the payment.
 /// This remains a codec/shape boundary and grants no monetary authority.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_cash_v1_complete_exchange_text_validate(
+pub unsafe extern "C" fn connect_norito_kagemusha_v1_complete_exchange_text_validate(
     request_ptr: *const c_char,
     request_len: c_ulong,
     authorization_ptr: *const c_char,
@@ -1284,7 +1284,7 @@ pub unsafe extern "C" fn connect_norito_offline_cash_v1_complete_exchange_text_v
     acknowledgement_len: c_ulong,
 ) -> c_int {
     (|| {
-        validate_offline_cash_v1_aggregate_input_lengths(
+        validate_kagemusha_v1_aggregate_input_lengths(
             &[
                 request_len,
                 authorization_len,
@@ -1292,66 +1292,66 @@ pub unsafe extern "C" fn connect_norito_offline_cash_v1_complete_exchange_text_v
                 payment_len,
                 acknowledgement_len,
             ],
-            iroha_data_model::offline::OFFLINE_CASH_COMPLETE_TEXT_EXCHANGE_MAX_BYTES_V1,
+            iroha_data_model::kagemusha::KAGEMUSHA_COMPLETE_TEXT_EXCHANGE_MAX_BYTES_V1,
         )?;
         let request_text = unsafe {
-            read_offline_cash_v1_text(
+            read_kagemusha_v1_text(
                 request_ptr,
                 request_len,
-                iroha_data_model::offline::OFFLINE_CASH_PAYMENT_REQUEST_TEXT_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_TEXT_MAX_BYTES_V1,
             )
         }?;
         let authorization_text = unsafe {
-            read_offline_cash_v1_text(
+            read_kagemusha_v1_text(
                 authorization_ptr,
                 authorization_len,
-                iroha_data_model::offline::OFFLINE_CASH_ACCEPTANCE_INTENT_AUTHORIZATION_TEXT_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_ACCEPTANCE_INTENT_AUTHORIZATION_TEXT_MAX_BYTES_V1,
             )
         }?;
         let ticket_text = unsafe {
-            read_offline_cash_v1_text(
+            read_kagemusha_v1_text(
                 ticket_ptr,
                 ticket_len,
-                iroha_data_model::offline::OFFLINE_CASH_ACCEPTANCE_TICKET_TEXT_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_ACCEPTANCE_TICKET_TEXT_MAX_BYTES_V1,
             )
         }?;
         let payment_text = unsafe {
-            read_offline_cash_v1_text(
+            read_kagemusha_v1_text(
                 payment_ptr,
                 payment_len,
-                iroha_data_model::offline::OFFLINE_CASH_PAYMENT_TEXT_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_TEXT_MAX_BYTES_V1,
             )
         }?;
         let acknowledgement_text = unsafe {
-            read_offline_cash_v1_text(
+            read_kagemusha_v1_text(
                 acknowledgement_ptr,
                 acknowledgement_len,
-                iroha_data_model::offline::OFFLINE_CASH_ACKNOWLEDGEMENT_TEXT_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_ACKNOWLEDGEMENT_TEXT_MAX_BYTES_V1,
             )
         }?;
-        let request = OfflineCashPaymentRequestV1::decode_text_exact(request_text)
-            .map_err(|_| BridgeError::OfflineCashV1)?;
+        let request = KagemushaPaymentRequestV1::decode_text_exact(request_text)
+            .map_err(|_| BridgeError::KagemushaV1)?;
         let authorization =
-            OfflineCashAcceptanceIntentAuthorizationV1::decode_text_shape_exact_against(
+            KagemushaAcceptanceIntentAuthorizationV1::decode_text_shape_exact_against(
                 authorization_text,
                 &request,
             )
-            .map_err(|_| BridgeError::OfflineCashV1)?;
-        let ticket = OfflineCashAcceptanceTicketV1::decode_text_shape_exact_against(
+            .map_err(|_| BridgeError::KagemushaV1)?;
+        let ticket = KagemushaAcceptanceTicketV1::decode_text_shape_exact_against(
             ticket_text,
             &request,
             &authorization.intent(),
         )
-        .map_err(|_| BridgeError::OfflineCashV1)?;
-        let payment = OfflineCashPaymentV1::decode_text_exact_against(payment_text, &request)
-            .map_err(|_| BridgeError::OfflineCashV1)?;
-        let acknowledgement = OfflineCashAcknowledgementV1::decode_text_exact_against(
+        .map_err(|_| BridgeError::KagemushaV1)?;
+        let payment = KagemushaPaymentV1::decode_text_exact_against(payment_text, &request)
+            .map_err(|_| BridgeError::KagemushaV1)?;
+        let acknowledgement = KagemushaAcknowledgementV1::decode_text_exact_against(
             acknowledgement_text,
             &request,
             &payment,
         )
-        .map_err(|_| BridgeError::OfflineCashV1)?;
-        validate_offline_cash_complete_exchange_shape_v1(
+        .map_err(|_| BridgeError::KagemushaV1)?;
+        validate_kagemusha_complete_exchange_shape_v1(
             &request,
             &authorization,
             &ticket,
@@ -1359,53 +1359,53 @@ pub unsafe extern "C" fn connect_norito_offline_cash_v1_complete_exchange_text_v
             &acknowledgement,
         )
         .map(|_| ())
-        .map_err(|_| BridgeError::OfflineCashV1)
+        .map_err(|_| BridgeError::KagemushaV1)
     })()
     .map_or_else(BridgeError::code, |()| 0)
 }
 
-/// Validate one exact canonical `oc1:` Offline Cash V1 pre-debit mint authorization.
+/// Validate one exact canonical `kgm1:` Kagemusha V1 pre-debit mint authorization.
 ///
 /// This codec boundary does not authenticate a proof release or grant debit authority.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_cash_v1_mint_authorization_text_validate(
+pub unsafe extern "C" fn connect_norito_kagemusha_v1_mint_authorization_text_validate(
     authorization_ptr: *const c_char,
     authorization_len: c_ulong,
 ) -> c_int {
     (|| {
         let text = unsafe {
-            read_offline_cash_v1_text(
+            read_kagemusha_v1_text(
                 authorization_ptr,
                 authorization_len,
-                iroha_data_model::offline::OFFLINE_CASH_MINT_AUTHORIZATION_TEXT_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_MINT_AUTHORIZATION_TEXT_MAX_BYTES_V1,
             )
         }?;
-        OfflineCashMintAuthorizationV1::decode_text_shape_exact(text)
+        KagemushaMintAuthorizationV1::decode_text_shape_exact(text)
             .map(|_| ())
-            .map_err(|_| BridgeError::OfflineCashV1)
+            .map_err(|_| BridgeError::KagemushaV1)
     })()
     .map_or_else(BridgeError::code, |()| 0)
 }
 
-/// Validate one exact canonical `oc1:` Offline Cash V1 mint-credit shape.
+/// Validate one exact canonical `kgm1:` Kagemusha V1 mint-credit shape.
 ///
 /// This codec boundary does not authenticate a proof release or grant monetary authority.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_cash_v1_mint_credit_text_validate(
+pub unsafe extern "C" fn connect_norito_kagemusha_v1_mint_credit_text_validate(
     credit_ptr: *const c_char,
     credit_len: c_ulong,
 ) -> c_int {
     (|| {
         let text = unsafe {
-            read_offline_cash_v1_text(
+            read_kagemusha_v1_text(
                 credit_ptr,
                 credit_len,
-                iroha_data_model::offline::OFFLINE_CASH_MINT_CREDIT_TEXT_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_MINT_CREDIT_TEXT_MAX_BYTES_V1,
             )
         }?;
-        OfflineCashMintCreditV1::decode_text_shape_exact(text)
+        KagemushaMintCreditV1::decode_text_shape_exact(text)
             .map(|_| ())
-            .map_err(|_| BridgeError::OfflineCashV1)
+            .map_err(|_| BridgeError::KagemushaV1)
     })()
     .map_or_else(BridgeError::code, |()| 0)
 }
@@ -1415,7 +1415,7 @@ pub unsafe extern "C" fn connect_norito_offline_cash_v1_mint_credit_text_validat
 /// This codec boundary checks canonical shape and digest binding only. It does not authenticate
 /// either proof or mutate payer, reserve, or recipient state.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_cash_v1_mint_credit_against_authorization_text_validate(
+pub unsafe extern "C" fn connect_norito_kagemusha_v1_mint_credit_against_authorization_text_validate(
     authorization_ptr: *const c_char,
     authorization_len: c_ulong,
     credit_ptr: *const c_char,
@@ -1423,60 +1423,60 @@ pub unsafe extern "C" fn connect_norito_offline_cash_v1_mint_credit_against_auth
 ) -> c_int {
     (|| {
         let authorization_text = unsafe {
-            read_offline_cash_v1_text(
+            read_kagemusha_v1_text(
                 authorization_ptr,
                 authorization_len,
-                iroha_data_model::offline::OFFLINE_CASH_MINT_AUTHORIZATION_TEXT_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_MINT_AUTHORIZATION_TEXT_MAX_BYTES_V1,
             )
         }?;
         let credit_text = unsafe {
-            read_offline_cash_v1_text(
+            read_kagemusha_v1_text(
                 credit_ptr,
                 credit_len,
-                iroha_data_model::offline::OFFLINE_CASH_MINT_CREDIT_TEXT_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_MINT_CREDIT_TEXT_MAX_BYTES_V1,
             )
         }?;
         let authorization =
-            OfflineCashMintAuthorizationV1::decode_text_shape_exact(authorization_text)
-                .map_err(|_| BridgeError::OfflineCashV1)?;
-        let credit = OfflineCashMintCreditV1::decode_text_shape_exact(credit_text)
-            .map_err(|_| BridgeError::OfflineCashV1)?;
+            KagemushaMintAuthorizationV1::decode_text_shape_exact(authorization_text)
+                .map_err(|_| BridgeError::KagemushaV1)?;
+        let credit = KagemushaMintCreditV1::decode_text_shape_exact(credit_text)
+            .map_err(|_| BridgeError::KagemushaV1)?;
         credit
             .validate_shape_against_authorization(&authorization)
-            .map_err(|_| BridgeError::OfflineCashV1)
+            .map_err(|_| BridgeError::KagemushaV1)
     })()
     .map_or_else(BridgeError::code, |()| 0)
 }
 
-/// Validate one exact canonical `oc1:` Offline Cash V1 redemption-voucher shape.
+/// Validate one exact canonical `kgm1:` Kagemusha V1 redemption-voucher shape.
 ///
 /// This codec boundary does not authenticate a proof release or grant monetary authority.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_cash_v1_redemption_voucher_text_validate(
+pub unsafe extern "C" fn connect_norito_kagemusha_v1_redemption_voucher_text_validate(
     voucher_ptr: *const c_char,
     voucher_len: c_ulong,
 ) -> c_int {
     (|| {
         let text = unsafe {
-            read_offline_cash_v1_text(
+            read_kagemusha_v1_text(
                 voucher_ptr,
                 voucher_len,
-                iroha_data_model::offline::OFFLINE_CASH_REDEMPTION_VOUCHER_TEXT_MAX_BYTES_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_REDEMPTION_VOUCHER_TEXT_MAX_BYTES_V1,
             )
         }?;
-        OfflineCashRedemptionVoucherV1::decode_text_shape_exact(text)
+        KagemushaRedemptionVoucherV1::decode_text_shape_exact(text)
             .map(|_| ())
-            .map_err(|_| BridgeError::OfflineCashV1)
+            .map_err(|_| BridgeError::KagemushaV1)
     })()
     .map_or_else(BridgeError::code, |()| 0)
 }
 
-/// Query the optional audited Offline Cash V1 device service.
+/// Query the optional audited Kagemusha V1 device service.
 ///
 /// The generic bridge intentionally ships no software implementation. It returns unavailable
 /// unless a platform-qualified build replaces this symbol with its non-forking hardware service.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_cash_device_capabilities_v1(
+pub unsafe extern "C" fn connect_norito_kagemusha_device_capabilities_v1(
     output_ptr: *mut c_uchar,
     output_capacity: usize,
 ) -> c_int {
@@ -1487,14 +1487,14 @@ pub unsafe extern "C" fn connect_norito_offline_cash_device_capabilities_v1(
         return ERR_BUFFER_TOO_SMALL;
     }
     unsafe { ptr::write_bytes(output_ptr, 0, 96) };
-    ERR_OFFLINE_CASH_DEVICE_UNAVAILABLE_V1
+    ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1
 }
 
-/// Execute one bounded command on the optional audited Offline Cash V1 device service.
+/// Execute one bounded command on the optional audited Kagemusha V1 device service.
 ///
 /// The generic bridge has no monetary software fallback and therefore always returns unavailable.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_cash_device_execute_v1(
+pub unsafe extern "C" fn connect_norito_kagemusha_device_execute_v1(
     command_ptr: *const c_uchar,
     command_len: usize,
     output_ptr: *mut c_uchar,
@@ -1510,9 +1510,9 @@ pub unsafe extern "C" fn connect_norito_offline_cash_device_execute_v1(
     }
     const MAX_COMMAND_BYTES_V1: usize = 80 + 64 * 1024;
     if command_len < 80 || command_len > MAX_COMMAND_BYTES_V1 || output_capacity < 116 {
-        return ERR_OFFLINE_CASH_V1;
+        return ERR_KAGEMUSHA_V1;
     }
-    ERR_OFFLINE_CASH_DEVICE_UNAVAILABLE_V1
+    ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1
 }
 #[cfg(any(
     test,
@@ -9845,7 +9845,7 @@ pub use platform_jni::*;
     target_os = "windows"
 ))]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCashDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeCapabilitiesV1(
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeCapabilitiesV1(
     _env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jbyteArray {
@@ -9860,7 +9860,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCashDeviceL
     target_os = "windows"
 ))]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_OfflineCashDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeExecuteV1(
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeExecuteV1(
     env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
     command: jni::objects::JByteArray<'_>,
@@ -11589,50 +11589,50 @@ mod tests {
     use std::{ffi::CString, mem::MaybeUninit};
 
     #[test]
-    fn offline_cash_device_bridge_v1_numeric_inventory_is_closed_and_header_exact() {
+    fn kagemusha_device_bridge_v1_numeric_inventory_is_closed_and_header_exact() {
         assert_eq!(
-            CONNECT_NORITO_OFFLINE_CASH_DEVICE_REQUIRED_CAPABILITIES_V1,
+            CONNECT_NORITO_KAGEMUSHA_DEVICE_REQUIRED_CAPABILITIES_V1,
             0x0000_ffff,
         );
         assert_eq!(
-            OfflineCashDeviceLifecycleOperationV1::ALL.map(|operation| operation.code()),
+            KagemushaDeviceLifecycleOperationV1::ALL.map(|operation| operation.code()),
             [
                 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
                 24,
             ],
         );
-        for operation in OfflineCashDeviceLifecycleOperationV1::ALL {
+        for operation in KagemushaDeviceLifecycleOperationV1::ALL {
             assert_eq!(
-                OfflineCashDeviceLifecycleOperationV1::from_code(operation.code()),
+                KagemushaDeviceLifecycleOperationV1::from_code(operation.code()),
                 Some(operation),
             );
         }
         for unknown in [0, 25, u8::MAX] {
             assert_eq!(
-                OfflineCashDeviceLifecycleOperationV1::from_code(unknown),
+                KagemushaDeviceLifecycleOperationV1::from_code(unknown),
                 None,
             );
         }
 
         assert_eq!(
-            OfflineCashDeviceLifecycleStatusV1::ALL.map(|status| status.code()),
+            KagemushaDeviceLifecycleStatusV1::ALL.map(|status| status.code()),
             [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
         );
-        for status in OfflineCashDeviceLifecycleStatusV1::ALL {
+        for status in KagemushaDeviceLifecycleStatusV1::ALL {
             assert_eq!(
-                OfflineCashDeviceLifecycleStatusV1::from_code(status.code()),
+                KagemushaDeviceLifecycleStatusV1::from_code(status.code()),
                 Some(status),
             );
         }
         for unknown in [11, u8::MAX] {
-            assert_eq!(OfflineCashDeviceLifecycleStatusV1::from_code(unknown), None,);
+            assert_eq!(KagemushaDeviceLifecycleStatusV1::from_code(unknown), None,);
         }
 
         let compact_header: String = include_str!("../include/connect_norito_bridge.h")
             .split_whitespace()
             .collect();
         assert!(compact_header.contains(
-            "CONNECT_NORITO_OFFLINE_CASH_DEVICE_REQUIRED_CAPABILITIES_V1UINT32_C(0x0000FFFF)"
+            "CONNECT_NORITO_KAGEMUSHA_DEVICE_REQUIRED_CAPABILITIES_V1UINT32_C(0x0000FFFF)"
         ));
         let capability_names = [
             "EXACT_NEXT_PREDECESSOR_CONSUMPTION",
@@ -11654,7 +11654,7 @@ mod tests {
         ];
         for (bit, name) in capability_names.iter().enumerate() {
             assert!(compact_header.contains(&format!(
-                "CONNECT_NORITO_OFFLINE_CASH_DEVICE_CAPABILITY_{name}_V1=1u<<{bit}"
+                "CONNECT_NORITO_KAGEMUSHA_DEVICE_CAPABILITY_{name}_V1=1u<<{bit}"
             )));
         }
         let operation_names = [
@@ -11686,7 +11686,7 @@ mod tests {
         for (index, name) in operation_names.iter().enumerate() {
             let code = index + 1;
             assert!(compact_header.contains(&format!(
-                "CONNECT_NORITO_OFFLINE_CASH_DEVICE_OPERATION_{name}_V1={code}"
+                "CONNECT_NORITO_KAGEMUSHA_DEVICE_OPERATION_{name}_V1={code}"
             )));
         }
         let status_names = [
@@ -11704,33 +11704,33 @@ mod tests {
         ];
         for (code, name) in status_names.iter().enumerate() {
             assert!(compact_header.contains(&format!(
-                "CONNECT_NORITO_OFFLINE_CASH_DEVICE_STATUS_{name}_V1={code}"
+                "CONNECT_NORITO_KAGEMUSHA_DEVICE_STATUS_{name}_V1={code}"
             )));
         }
     }
 
     #[test]
-    fn stock_offline_cash_device_bridge_v1_remains_unavailable_for_every_operation() {
+    fn stock_kagemusha_device_bridge_v1_remains_unavailable_for_every_operation() {
         let mut capabilities = [0xa5_u8; 96];
         assert_eq!(
             unsafe {
-                connect_norito_offline_cash_device_capabilities_v1(
+                connect_norito_kagemusha_device_capabilities_v1(
                     capabilities.as_mut_ptr(),
                     capabilities.len(),
                 )
             },
-            ERR_OFFLINE_CASH_DEVICE_UNAVAILABLE_V1,
+            ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1,
         );
         assert_eq!(capabilities, [0_u8; 96]);
 
         let mut command = [0_u8; 80];
         let mut output = [0xa5_u8; 116];
-        for operation in OfflineCashDeviceLifecycleOperationV1::ALL {
+        for operation in KagemushaDeviceLifecycleOperationV1::ALL {
             command[10] = operation.code();
             let mut output_len = usize::MAX;
             assert_eq!(
                 unsafe {
-                    connect_norito_offline_cash_device_execute_v1(
+                    connect_norito_kagemusha_device_execute_v1(
                         command.as_ptr(),
                         command.len(),
                         output.as_mut_ptr(),
@@ -11738,18 +11738,18 @@ mod tests {
                         &mut output_len,
                     )
                 },
-                ERR_OFFLINE_CASH_DEVICE_UNAVAILABLE_V1,
+                ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1,
             );
             assert_eq!(output_len, 0);
         }
     }
 
-    fn offline_cash_v1_fixture_v2() -> JsonValue {
+    fn kagemusha_v1_fixture_v2() -> JsonValue {
         let fixture: JsonValue = norito::json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../fixtures/offline/offline_cash_v1.json"
+            "/../../fixtures/offline/kagemusha_v1.json"
         )))
-        .expect("shared Offline Cash V1 fixture JSON");
+        .expect("shared Kagemusha V1 fixture JSON");
         assert_eq!(
             fixture.get("fixture_version").and_then(JsonValue::as_u64),
             Some(2),
@@ -11758,7 +11758,7 @@ mod tests {
         fixture
     }
 
-    fn offline_cash_v1_fixture_raw(fixture: &JsonValue, name: &str) -> Vec<u8> {
+    fn kagemusha_v1_fixture_raw(fixture: &JsonValue, name: &str) -> Vec<u8> {
         let hex = fixture
             .get(name)
             .and_then(JsonValue::as_object)
@@ -11768,18 +11768,18 @@ mod tests {
         hex::decode(hex).unwrap_or_else(|error| panic!("decode fixture {name}: {error}"))
     }
 
-    fn offline_cash_v1_fixture_text(fixture: &JsonValue, name: &str) -> Vec<u8> {
+    fn kagemusha_v1_fixture_text(fixture: &JsonValue, name: &str) -> Vec<u8> {
         fixture
             .get(name)
             .and_then(JsonValue::as_object)
-            .and_then(|entry| entry.get("oc1"))
+            .and_then(|entry| entry.get("kgm1"))
             .and_then(JsonValue::as_str)
-            .unwrap_or_else(|| panic!("fixture entry {name} must carry oc1"))
+            .unwrap_or_else(|| panic!("fixture entry {name} must carry kgm1"))
             .as_bytes()
             .to_vec()
     }
 
-    fn resign_offline_cash_v1_fixture_ticket(ticket: &mut OfflineCashAcceptanceTicketV1) {
+    fn resign_kagemusha_v1_fixture_ticket(ticket: &mut KagemushaAcceptanceTicketV1) {
         use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _};
 
         let signing_key =
@@ -11790,7 +11790,7 @@ mod tests {
                 .expect("fixture ticket signing bytes"),
         );
         let signature = signature.normalize_s().unwrap_or(signature);
-        ticket.signature = iroha_data_model::offline::OfflineCashDeviceSignatureV1::from_raw_bytes(
+        ticket.signature = iroha_data_model::kagemusha::KagemushaDeviceSignatureV1::from_raw_bytes(
             signature.to_bytes().as_ref(),
         )
         .expect("canonical fixture ticket signature");
@@ -11802,21 +11802,21 @@ mod tests {
     }
 
     #[test]
-    fn offline_cash_v1_bridge_accepts_native_fixture_v2_recovery_and_complete_exchange() {
-        let fixture = offline_cash_v1_fixture_v2();
-        let request = offline_cash_v1_fixture_raw(&fixture, "payment_request");
+    fn kagemusha_v1_bridge_accepts_native_fixture_v2_recovery_and_complete_exchange() {
+        let fixture = kagemusha_v1_fixture_v2();
+        let request = kagemusha_v1_fixture_raw(&fixture, "payment_request");
         let authorization =
-            offline_cash_v1_fixture_raw(&fixture, "acceptance_intent_authorization");
-        let ticket = offline_cash_v1_fixture_raw(&fixture, "acceptance_ticket");
-        let closure = offline_cash_v1_fixture_raw(&fixture, "no_commit_closure");
-        let payment = offline_cash_v1_fixture_raw(&fixture, "payment");
-        let acknowledgement = offline_cash_v1_fixture_raw(&fixture, "acknowledgement");
-        let mint_authorization = offline_cash_v1_fixture_raw(&fixture, "mint_authorization");
-        let mint_credit = offline_cash_v1_fixture_raw(&fixture, "mint_credit");
+            kagemusha_v1_fixture_raw(&fixture, "acceptance_intent_authorization");
+        let ticket = kagemusha_v1_fixture_raw(&fixture, "acceptance_ticket");
+        let closure = kagemusha_v1_fixture_raw(&fixture, "no_commit_closure");
+        let payment = kagemusha_v1_fixture_raw(&fixture, "payment");
+        let acknowledgement = kagemusha_v1_fixture_raw(&fixture, "acknowledgement");
+        let mint_authorization = kagemusha_v1_fixture_raw(&fixture, "mint_authorization");
+        let mint_credit = kagemusha_v1_fixture_raw(&fixture, "mint_credit");
 
         assert_eq!(
             unsafe {
-                connect_norito_offline_cash_v1_no_commit_closure_validate(
+                connect_norito_kagemusha_v1_no_commit_closure_validate(
                     closure.as_ptr(),
                     closure.len() as c_ulong,
                 )
@@ -11825,7 +11825,7 @@ mod tests {
         );
         assert_eq!(
             unsafe {
-                connect_norito_offline_cash_v1_complete_exchange_validate(
+                connect_norito_kagemusha_v1_complete_exchange_validate(
                     request.as_ptr(),
                     request.len() as c_ulong,
                     authorization.as_ptr(),
@@ -11842,7 +11842,7 @@ mod tests {
         );
         assert_eq!(
             unsafe {
-                connect_norito_offline_cash_v1_mint_credit_against_authorization_validate(
+                connect_norito_kagemusha_v1_mint_credit_against_authorization_validate(
                     mint_authorization.as_ptr(),
                     mint_authorization.len() as c_ulong,
                     mint_credit.as_ptr(),
@@ -11852,19 +11852,19 @@ mod tests {
             0,
         );
 
-        let request = offline_cash_v1_fixture_text(&fixture, "payment_request");
+        let request = kagemusha_v1_fixture_text(&fixture, "payment_request");
         let authorization =
-            offline_cash_v1_fixture_text(&fixture, "acceptance_intent_authorization");
-        let ticket = offline_cash_v1_fixture_text(&fixture, "acceptance_ticket");
-        let closure = offline_cash_v1_fixture_text(&fixture, "no_commit_closure");
-        let payment = offline_cash_v1_fixture_text(&fixture, "payment");
-        let acknowledgement = offline_cash_v1_fixture_text(&fixture, "acknowledgement");
-        let mint_authorization = offline_cash_v1_fixture_text(&fixture, "mint_authorization");
-        let mint_credit = offline_cash_v1_fixture_text(&fixture, "mint_credit");
+            kagemusha_v1_fixture_text(&fixture, "acceptance_intent_authorization");
+        let ticket = kagemusha_v1_fixture_text(&fixture, "acceptance_ticket");
+        let closure = kagemusha_v1_fixture_text(&fixture, "no_commit_closure");
+        let payment = kagemusha_v1_fixture_text(&fixture, "payment");
+        let acknowledgement = kagemusha_v1_fixture_text(&fixture, "acknowledgement");
+        let mint_authorization = kagemusha_v1_fixture_text(&fixture, "mint_authorization");
+        let mint_credit = kagemusha_v1_fixture_text(&fixture, "mint_credit");
 
         assert_eq!(
             unsafe {
-                connect_norito_offline_cash_v1_no_commit_closure_text_validate(
+                connect_norito_kagemusha_v1_no_commit_closure_text_validate(
                     closure.as_ptr().cast(),
                     closure.len() as c_ulong,
                 )
@@ -11873,7 +11873,7 @@ mod tests {
         );
         assert_eq!(
             unsafe {
-                connect_norito_offline_cash_v1_complete_exchange_text_validate(
+                connect_norito_kagemusha_v1_complete_exchange_text_validate(
                     request.as_ptr().cast(),
                     request.len() as c_ulong,
                     authorization.as_ptr().cast(),
@@ -11890,7 +11890,7 @@ mod tests {
         );
         assert_eq!(
             unsafe {
-                connect_norito_offline_cash_v1_mint_credit_against_authorization_text_validate(
+                connect_norito_kagemusha_v1_mint_credit_against_authorization_text_validate(
                     mint_authorization.as_ptr().cast(),
                     mint_authorization.len() as c_ulong,
                     mint_credit.as_ptr().cast(),
@@ -11902,51 +11902,51 @@ mod tests {
     }
 
     #[test]
-    fn offline_cash_v1_bridge_rejects_untrusted_recovery_buffers_and_aggregate_overruns() {
+    fn kagemusha_v1_bridge_rejects_untrusted_recovery_buffers_and_aggregate_overruns() {
         let byte = 0_u8;
         assert_eq!(
-            unsafe { connect_norito_offline_cash_v1_no_commit_closure_validate(ptr::null(), 1) },
+            unsafe { connect_norito_kagemusha_v1_no_commit_closure_validate(ptr::null(), 1) },
             ERR_NULL_PTR,
         );
         assert_eq!(
-            unsafe { connect_norito_offline_cash_v1_no_commit_closure_validate(&byte, 0) },
-            ERR_OFFLINE_CASH_V1,
+            unsafe { connect_norito_kagemusha_v1_no_commit_closure_validate(&byte, 0) },
+            ERR_KAGEMUSHA_V1,
         );
         assert_eq!(
             unsafe {
-                connect_norito_offline_cash_v1_no_commit_closure_validate(
+                connect_norito_kagemusha_v1_no_commit_closure_validate(
                     &byte,
-                    (iroha_data_model::offline::OFFLINE_CASH_NO_COMMIT_CLOSURE_MAX_BYTES_V1 + 1)
+                    (iroha_data_model::kagemusha::KAGEMUSHA_NO_COMMIT_CLOSURE_MAX_BYTES_V1 + 1)
                         as c_ulong,
                 )
             },
-            ERR_OFFLINE_CASH_V1,
+            ERR_KAGEMUSHA_V1,
         );
         let invalid_utf8 = [0xFF_u8];
         assert_eq!(
             unsafe {
-                connect_norito_offline_cash_v1_no_commit_closure_text_validate(
+                connect_norito_kagemusha_v1_no_commit_closure_text_validate(
                     invalid_utf8.as_ptr().cast(),
                     invalid_utf8.len() as c_ulong,
                 )
             },
-            ERR_OFFLINE_CASH_V1,
+            ERR_KAGEMUSHA_V1,
         );
 
         let raw_maxima = [
-            iroha_data_model::offline::OFFLINE_CASH_PAYMENT_REQUEST_MAX_BYTES_V1,
-            iroha_data_model::offline::OFFLINE_CASH_ACCEPTANCE_INTENT_AUTHORIZATION_MAX_BYTES_V1,
-            iroha_data_model::offline::OFFLINE_CASH_ACCEPTANCE_TICKET_MAX_BYTES_V1,
-            iroha_data_model::offline::OFFLINE_CASH_PAYMENT_MAX_BYTES_V1,
-            iroha_data_model::offline::OFFLINE_CASH_ACKNOWLEDGEMENT_MAX_BYTES_V1,
+            iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1,
+            iroha_data_model::kagemusha::KAGEMUSHA_ACCEPTANCE_INTENT_AUTHORIZATION_MAX_BYTES_V1,
+            iroha_data_model::kagemusha::KAGEMUSHA_ACCEPTANCE_TICKET_MAX_BYTES_V1,
+            iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_MAX_BYTES_V1,
+            iroha_data_model::kagemusha::KAGEMUSHA_ACKNOWLEDGEMENT_MAX_BYTES_V1,
         ];
         assert!(
             raw_maxima.iter().sum::<usize>()
-                > iroha_data_model::offline::OFFLINE_CASH_COMPLETE_EXCHANGE_MAX_BYTES_V1
+                > iroha_data_model::kagemusha::KAGEMUSHA_COMPLETE_EXCHANGE_MAX_BYTES_V1
         );
         assert_eq!(
             unsafe {
-                connect_norito_offline_cash_v1_complete_exchange_validate(
+                connect_norito_kagemusha_v1_complete_exchange_validate(
                     &byte,
                     raw_maxima[0] as c_ulong,
                     &byte,
@@ -11959,22 +11959,22 @@ mod tests {
                     raw_maxima[4] as c_ulong,
                 )
             },
-            ERR_OFFLINE_CASH_V1,
+            ERR_KAGEMUSHA_V1,
         );
         let text_maxima = [
-            iroha_data_model::offline::OFFLINE_CASH_PAYMENT_REQUEST_TEXT_MAX_BYTES_V1,
-            iroha_data_model::offline::OFFLINE_CASH_ACCEPTANCE_INTENT_AUTHORIZATION_TEXT_MAX_BYTES_V1,
-            iroha_data_model::offline::OFFLINE_CASH_ACCEPTANCE_TICKET_TEXT_MAX_BYTES_V1,
-            iroha_data_model::offline::OFFLINE_CASH_PAYMENT_TEXT_MAX_BYTES_V1,
-            iroha_data_model::offline::OFFLINE_CASH_ACKNOWLEDGEMENT_TEXT_MAX_BYTES_V1,
+            iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_TEXT_MAX_BYTES_V1,
+            iroha_data_model::kagemusha::KAGEMUSHA_ACCEPTANCE_INTENT_AUTHORIZATION_TEXT_MAX_BYTES_V1,
+            iroha_data_model::kagemusha::KAGEMUSHA_ACCEPTANCE_TICKET_TEXT_MAX_BYTES_V1,
+            iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_TEXT_MAX_BYTES_V1,
+            iroha_data_model::kagemusha::KAGEMUSHA_ACKNOWLEDGEMENT_TEXT_MAX_BYTES_V1,
         ];
         assert!(
             text_maxima.iter().sum::<usize>()
-                > iroha_data_model::offline::OFFLINE_CASH_COMPLETE_TEXT_EXCHANGE_MAX_BYTES_V1
+                > iroha_data_model::kagemusha::KAGEMUSHA_COMPLETE_TEXT_EXCHANGE_MAX_BYTES_V1
         );
         assert_eq!(
             unsafe {
-                connect_norito_offline_cash_v1_complete_exchange_text_validate(
+                connect_norito_kagemusha_v1_complete_exchange_text_validate(
                     (&byte as *const u8).cast(),
                     text_maxima[0] as c_ulong,
                     (&byte as *const u8).cast(),
@@ -11987,30 +11987,30 @@ mod tests {
                     text_maxima[4] as c_ulong,
                 )
             },
-            ERR_OFFLINE_CASH_V1,
+            ERR_KAGEMUSHA_V1,
         );
     }
 
     #[test]
-    fn offline_cash_v1_bridge_rejects_context_substitution_and_mint_misbinding() {
-        let fixture = offline_cash_v1_fixture_v2();
-        let request_bytes = offline_cash_v1_fixture_raw(&fixture, "payment_request");
+    fn kagemusha_v1_bridge_rejects_context_substitution_and_mint_misbinding() {
+        let fixture = kagemusha_v1_fixture_v2();
+        let request_bytes = kagemusha_v1_fixture_raw(&fixture, "payment_request");
         let authorization_bytes =
-            offline_cash_v1_fixture_raw(&fixture, "acceptance_intent_authorization");
-        let ticket_bytes = offline_cash_v1_fixture_raw(&fixture, "acceptance_ticket");
-        let closure_bytes = offline_cash_v1_fixture_raw(&fixture, "no_commit_closure");
-        let payment_bytes = offline_cash_v1_fixture_raw(&fixture, "payment");
-        let acknowledgement_bytes = offline_cash_v1_fixture_raw(&fixture, "acknowledgement");
+            kagemusha_v1_fixture_raw(&fixture, "acceptance_intent_authorization");
+        let ticket_bytes = kagemusha_v1_fixture_raw(&fixture, "acceptance_ticket");
+        let closure_bytes = kagemusha_v1_fixture_raw(&fixture, "no_commit_closure");
+        let payment_bytes = kagemusha_v1_fixture_raw(&fixture, "payment");
+        let acknowledgement_bytes = kagemusha_v1_fixture_raw(&fixture, "acknowledgement");
 
-        let request = OfflineCashPaymentRequestV1::decode_canonical_exact(&request_bytes)
+        let request = KagemushaPaymentRequestV1::decode_canonical_exact(&request_bytes)
             .expect("fixture request");
         let authorization =
-            OfflineCashAcceptanceIntentAuthorizationV1::decode_canonical_shape_exact_against(
+            KagemushaAcceptanceIntentAuthorizationV1::decode_canonical_shape_exact_against(
                 &authorization_bytes,
                 &request,
             )
             .expect("fixture authorization");
-        let ticket = OfflineCashAcceptanceTicketV1::decode_canonical_shape_exact_against(
+        let ticket = KagemushaAcceptanceTicketV1::decode_canonical_shape_exact_against(
             &ticket_bytes,
             &request,
             &authorization.intent(),
@@ -12019,7 +12019,7 @@ mod tests {
 
         let mut substituted_ticket = ticket.clone();
         substituted_ticket.acceptance_ticket_id[0] ^= 1;
-        resign_offline_cash_v1_fixture_ticket(&mut substituted_ticket);
+        resign_kagemusha_v1_fixture_ticket(&mut substituted_ticket);
         substituted_ticket
             .validate_shape_against(&request, &authorization.intent())
             .expect("independently valid substituted ticket");
@@ -12027,7 +12027,7 @@ mod tests {
             norito::encode_canonical(&substituted_ticket).expect("encode substituted ticket");
         assert_eq!(
             unsafe {
-                connect_norito_offline_cash_v1_complete_exchange_validate(
+                connect_norito_kagemusha_v1_complete_exchange_validate(
                     request_bytes.as_ptr(),
                     request_bytes.len() as c_ulong,
                     authorization_bytes.as_ptr(),
@@ -12040,7 +12040,7 @@ mod tests {
                     acknowledgement_bytes.len() as c_ulong,
                 )
             },
-            ERR_OFFLINE_CASH_V1,
+            ERR_KAGEMUSHA_V1,
         );
 
         let mut substituted_authorization = authorization.clone();
@@ -12059,7 +12059,7 @@ mod tests {
             .intent()
             .canonical_digest_against(&request)
             .expect("substituted intent digest");
-        resign_offline_cash_v1_fixture_ticket(&mut substituted_authorization_ticket);
+        resign_kagemusha_v1_fixture_ticket(&mut substituted_authorization_ticket);
         substituted_authorization_ticket
             .validate_shape_against(&request, &substituted_authorization.intent())
             .expect("ticket bound to substituted authorization");
@@ -12068,7 +12068,7 @@ mod tests {
                 .expect("encode substituted authorization ticket");
         assert_eq!(
             unsafe {
-                connect_norito_offline_cash_v1_complete_exchange_validate(
+                connect_norito_kagemusha_v1_complete_exchange_validate(
                     request_bytes.as_ptr(),
                     request_bytes.len() as c_ulong,
                     substituted_authorization_bytes.as_ptr(),
@@ -12081,11 +12081,11 @@ mod tests {
                     acknowledgement_bytes.len() as c_ulong,
                 )
             },
-            ERR_OFFLINE_CASH_V1,
+            ERR_KAGEMUSHA_V1,
         );
 
         let mut invalid_closure =
-            OfflineCashNoCommitClosureV1::decode_canonical_shape_exact(&closure_bytes)
+            KagemushaNoCommitClosureV1::decode_canonical_shape_exact(&closure_bytes)
                 .expect("fixture no-commit closure");
         invalid_closure.statement.intent_authorization_digest[0] ^= 1;
         invalid_closure.proof.semantic_digest = invalid_closure
@@ -12096,32 +12096,32 @@ mod tests {
             norito::encode_canonical(&invalid_closure).expect("encode invalid closure");
         assert_eq!(
             unsafe {
-                connect_norito_offline_cash_v1_no_commit_closure_validate(
+                connect_norito_kagemusha_v1_no_commit_closure_validate(
                     invalid_closure_bytes.as_ptr(),
                     invalid_closure_bytes.len() as c_ulong,
                 )
             },
-            ERR_OFFLINE_CASH_V1,
+            ERR_KAGEMUSHA_V1,
         );
         let invalid_closure_text = format!(
             "{}{}",
-            iroha_data_model::offline::OFFLINE_CASH_TEXT_PREFIX_V1,
+            iroha_data_model::kagemusha::KAGEMUSHA_TEXT_PREFIX_V1,
             b64gp::URL_SAFE_NO_PAD.encode(&invalid_closure_bytes),
         );
         assert_eq!(
             unsafe {
-                connect_norito_offline_cash_v1_no_commit_closure_text_validate(
+                connect_norito_kagemusha_v1_no_commit_closure_text_validate(
                     invalid_closure_text.as_ptr().cast(),
                     invalid_closure_text.len() as c_ulong,
                 )
             },
-            ERR_OFFLINE_CASH_V1,
+            ERR_KAGEMUSHA_V1,
         );
 
-        let mint_authorization_bytes = offline_cash_v1_fixture_raw(&fixture, "mint_authorization");
-        let mint_credit_bytes = offline_cash_v1_fixture_raw(&fixture, "mint_credit");
+        let mint_authorization_bytes = kagemusha_v1_fixture_raw(&fixture, "mint_authorization");
+        let mint_credit_bytes = kagemusha_v1_fixture_raw(&fixture, "mint_credit");
         let mut substituted_mint_authorization =
-            OfflineCashMintAuthorizationV1::decode_canonical_shape_exact(&mint_authorization_bytes)
+            KagemushaMintAuthorizationV1::decode_canonical_shape_exact(&mint_authorization_bytes)
                 .expect("fixture mint authorization");
         substituted_mint_authorization.proof.eq_proof[0] ^= 1;
         substituted_mint_authorization
@@ -12132,30 +12132,30 @@ mod tests {
                 .expect("encode substituted mint authorization");
         assert_eq!(
             unsafe {
-                connect_norito_offline_cash_v1_mint_credit_against_authorization_validate(
+                connect_norito_kagemusha_v1_mint_credit_against_authorization_validate(
                     substituted_mint_authorization_bytes.as_ptr(),
                     substituted_mint_authorization_bytes.len() as c_ulong,
                     mint_credit_bytes.as_ptr(),
                     mint_credit_bytes.len() as c_ulong,
                 )
             },
-            ERR_OFFLINE_CASH_V1,
+            ERR_KAGEMUSHA_V1,
         );
         let substituted_mint_authorization_text = substituted_mint_authorization
             .encode_text_shape()
             .expect("encode substituted mint authorization text")
             .into_bytes();
-        let mint_credit_text = offline_cash_v1_fixture_text(&fixture, "mint_credit");
+        let mint_credit_text = kagemusha_v1_fixture_text(&fixture, "mint_credit");
         assert_eq!(
             unsafe {
-                connect_norito_offline_cash_v1_mint_credit_against_authorization_text_validate(
+                connect_norito_kagemusha_v1_mint_credit_against_authorization_text_validate(
                     substituted_mint_authorization_text.as_ptr().cast(),
                     substituted_mint_authorization_text.len() as c_ulong,
                     mint_credit_text.as_ptr().cast(),
                     mint_credit_text.len() as c_ulong,
                 )
             },
-            ERR_OFFLINE_CASH_V1,
+            ERR_KAGEMUSHA_V1,
         );
     }
 
@@ -12251,7 +12251,7 @@ mod tests {
         }
     }
     #[test]
-    fn offline_cash_recipient_parser_requires_the_explicit_taira_discriminant() {
+    fn kagemusha_recipient_parser_requires_the_explicit_taira_discriminant() {
         const TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
         const SORA_CHAIN_DISCRIMINANT: u16 = 753;
         let key_pair = KeyPair::try_from_seed(vec![0x39; 32], Algorithm::Ed25519)

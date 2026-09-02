@@ -1925,7 +1925,7 @@ fn transfer_allows_exact_cap_and_preserves_usage_on_rejected_overage() {
     assert_eq!(record_after_rejection.usages[0].bucket_start_ms, 86_400_000);
 }
 #[test]
-fn transfer_rejects_configured_offline_reserve_source() {
+fn transfer_rejects_configured_kagemusha_reserve_source() {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
@@ -1959,7 +1959,7 @@ fn transfer_rejects_configured_offline_reserve_source() {
     let mut state = State::new(world, kura, query_store);
     state
         .settlement
-        .offline
+        .kagemusha
         .reserve_accounts
         .insert(asset_def_id.clone(), ALICE_ID.clone());
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -1969,7 +1969,7 @@ fn transfer_rejects_configured_offline_reserve_source() {
         .execute(&ALICE_ID, &mut stx)
         .expect_err("generic transfer from escrow source must be rejected");
     assert!(
-        err.to_string().contains("Offline Cash reserve account"),
+        err.to_string().contains("Kagemusha reserve account"),
         "unexpected error: {err}"
     );
     let source_balance = stx
@@ -1986,12 +1986,12 @@ fn transfer_rejects_configured_offline_reserve_source() {
     );
 }
 #[test]
-fn transfer_rejects_deterministically_derived_offline_reserve_source() {
+fn transfer_rejects_deterministically_derived_kagemusha_reserve_source() {
     let chain_id: iroha_data_model::ChainId = "testnet".parse().expect("chain id");
     let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
         iroha_data_model::block::BlockHeader,
     >::from_untyped_unchecked(
-        iroha_crypto::Hash::new(b"offline-escrow-source-test-network"),
+        iroha_crypto::Hash::new(b"kagemusha-reserve-source-test-network"),
     ));
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let asset_def_id: AssetDefinitionId =
@@ -1999,7 +1999,7 @@ fn transfer_rejects_deterministically_derived_offline_reserve_source() {
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
-    let escrow_account = crate::smartcontracts::isi::domain::isi::offline_cash_reserve_account_id(
+    let escrow_account = crate::smartcontracts::isi::domain::isi::kagemusha_reserve_account_id(
         &network_id,
         &asset_def_id,
     );
@@ -2036,7 +2036,7 @@ fn transfer_rejects_deterministically_derived_offline_reserve_source() {
     );
     state
         .settlement
-        .offline
+        .kagemusha
         .reserve_accounts
         .insert(asset_def_id.clone(), BOB_ID.clone());
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -2046,7 +2046,7 @@ fn transfer_rejects_deterministically_derived_offline_reserve_source() {
         .execute(&escrow_account, &mut stx)
         .expect_err("deterministically derived escrow source must be rejected");
     assert!(
-        err.to_string().contains("Offline Cash reserve account"),
+        err.to_string().contains("Kagemusha reserve account"),
         "unexpected error: {err}"
     );
     let source_balance = stx
@@ -2063,19 +2063,19 @@ fn transfer_rejects_deterministically_derived_offline_reserve_source() {
     );
 }
 #[test]
-fn burn_rejects_offline_reserve_for_owner_and_delegated_authority() {
+fn burn_rejects_kagemusha_reserve_for_owner_and_delegated_authority() {
     let chain_id: iroha_data_model::ChainId = "testnet".parse().expect("chain id");
     let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
         iroha_data_model::block::BlockHeader,
     >::from_untyped_unchecked(
-        iroha_crypto::Hash::new(b"offline-reserve-burn-test-network"),
+        iroha_crypto::Hash::new(b"kagemusha-reserve-burn-test-network"),
     ));
     let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
     let asset_definition_id = AssetDefinitionId::derive_from_components(
         domain_id.clone(),
         "rose".parse().expect("asset name"),
     );
-    let reserve_account = crate::smartcontracts::isi::domain::isi::offline_cash_reserve_account_id(
+    let reserve_account = crate::smartcontracts::isi::domain::isi::kagemusha_reserve_account_id(
         &network_id,
         &asset_definition_id,
     );
@@ -2104,7 +2104,7 @@ fn burn_rejects_offline_reserve_for_owner_and_delegated_authority() {
     );
     state
         .settlement
-        .offline
+        .kagemusha
         .reserve_accounts
         .insert(asset_definition_id, reserve_account);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -2114,9 +2114,9 @@ fn burn_rejects_offline_reserve_for_owner_and_delegated_authority() {
     for authority in [ALICE_ID.clone(), BOB_ID.clone()] {
         let error = Burn::asset_quantity(1_u32, reserve_asset_id.clone())
             .execute(&authority, &mut transaction)
-            .expect_err("generic burn must never debit Offline Cash reserve custody");
+            .expect_err("generic burn must never debit Kagemusha reserve custody");
         assert!(
-            error.to_string().contains("Offline Cash reserve account"),
+            error.to_string().contains("Kagemusha reserve account"),
             "unexpected reserve-burn rejection for {authority}: {error}"
         );
         assert_eq!(

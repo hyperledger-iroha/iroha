@@ -461,7 +461,7 @@ impl<C: CurveAffine> Evaluator<C> {
                             // One degree-sized sigma chunk is the final input needed for
                             // each set relation. Transform and consume one chunk at a time
                             // rather than retaining one n-element coset for every equality
-                            // column. The compact Offline Cash shape therefore keeps two sigma
+                            // column. The compact Kagemusha shape therefore keeps two sigma
                             // cosets live here instead of eleven.
                             let mut set_delta_start = delta_start;
                             for (

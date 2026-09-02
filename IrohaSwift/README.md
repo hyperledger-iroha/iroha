@@ -14,7 +14,7 @@ let torii = TairaTestnetProfile.makeClient(deployedNetworkId: networkId)
 
 Features:
 - Torii HTTP client (balances, transactions, explorer instructions/transactions/RWAs, subscriptions, VPN quote/session/receipt flows, pipeline recovery, time service, ZK attachments, contracts)
-- Offline Cash V1 aggregate-balance wallet orchestration, cash models, proof binding helpers, and universal capability discovery through `/v1/offline/readiness`
+- Kagemusha V1 aggregate-balance wallet orchestration, payment models, proof binding helpers, and universal capability discovery through `/v1/kagemusha/readiness`
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
 - Norito envelope encoder (header + CRC64-XZ)
 - Required Native NoritoBridge integration (`dist/NoritoBridge.xcframework`) powering transfer/mint/burn builders and JSON inspection helpers
@@ -25,9 +25,9 @@ Features:
 - Runtime capability helpers (`ToriiClient.getNodeCapabilities`, `getRuntimeMetrics`, `getRuntimeAbiActive`) mirroring the Torii `/v1/node/capabilities` and `/v1/runtime/*` surfaces
 - Verifying key registry read/mutation/event helpers (`ToriiClient.getVerifyingKey`, `listVerifyingKeys`, `registerVerifyingKey`, `updateVerifyingKey`, `streamVerifyingKeyEvents`) covering `/v1/zk/vk` operations
 
-### Offline Cash V1 wallet
+### Kagemusha V1 wallet
 
-`OfflineCashWalletV1.open(provider:)` accepts only a provider attesting the complete
+`KagemushaWalletV1.open(provider:)` accepts only a provider attesting the complete
 non-forking hardware contract. The wallet stages incoming payments before returning
 their durable acknowledgement, treats exact delivery duplicates idempotently, folds
 an opaque durable inbox prefix without a note-count limit, and drains pending credits
@@ -37,15 +37,15 @@ Apps can call `foldNextPendingCredit()` from their background-work scheduler and
 `foldAllPendingCredits()` at explicit synchronization points.
 
 The monetary sequence is epoch-local. When it reaches its `u128` maximum, the wallet
-requires a hardware-authorized offline epoch rotation, resets the new epoch's sequence
+requires a hardware-authorized Kagemusha epoch rotation, resets the new epoch's sequence
 to zero, and resumes folding or spending. This avoids stranding funds at counter
 rollover without weakening exact-next checks inside an epoch.
 
 There is intentionally no built-in software provider. Secure Enclave and App Attest
 signatures alone do not supply an atomic rollback-resistant monetary journal, exact-next
-counter, multi-credit inbox, durable outbox, trusted commit time, and offline epoch
+counter, multi-credit inbox, durable outbox, trusted commit time, and Kagemusha epoch
 rotation. Unless an audited secure backend supplies that entire contract through
-`OfflineCashHardwareProviderV1`, Apple clients remain online-only.
+`KagemushaHardwareProviderV1`, Apple clients remain online-only.
 
 The DA read/proof surface is fully typed. Use `getDaProofPolicies`,
 `listDaCommitments`, `proveDaCommitment`, `verifyDaCommitment`,
@@ -144,7 +144,7 @@ keys used by the rails you enable (replace only the human-readable strings):
 ```xml
 <!-- Info.plist: needed only when the app captures QR with the camera. -->
 <key>NSCameraUsageDescription</key>
-<string>Scan an offline-transfer QR code.</string>
+<string>Scan a Kagemusha QR code.</string>
 
 <!-- Info.plist: Google Nearby. Keep the Bonjour service exact. -->
 <key>NSBonjourServices</key>
@@ -152,13 +152,13 @@ keys used by the rails you enable (replace only the human-readable strings):
     <string>_F2EBA4BCB49B._tcp</string>
 </array>
 <key>NSBluetoothAlwaysUsageDescription</key>
-<string>Discover a nearby device for an offline transfer.</string>
+<string>Discover a nearby device for a Kagemusha transfer.</string>
 <key>NSLocalNetworkUsageDescription</key>
-<string>Exchange an offline transfer with a nearby device.</string>
+<string>Exchange a Kagemusha transfer with a nearby device.</string>
 
 <!-- Info.plist: Core NFC reader mode. Keep the AID exact. -->
 <key>NFCReaderUsageDescription</key>
-<string>Exchange an offline transfer over NFC.</string>
+<string>Exchange a Kagemusha transfer over NFC.</string>
 <key>com.apple.developer.nfc.readersession.iso7816.select-identifiers</key>
 <array>
     <string>F0504B45504B524E464301</string>
@@ -227,7 +227,7 @@ The builder always compiles all five target libraries into the one caller-select
 uses the root `Cargo.lock`, and fails closed if `xcodebuild` cannot package them.
 There is no skip-build, preserved-target, alternate-lock, or manual-packaging mode.
 
-The Offline Cash V1 pull-request lane preserves that build envelope while avoiding a
+The Kagemusha V1 pull-request lane preserves that build envelope while avoiding a
 hosted-runner timeout: five isolated macOS jobs each build one attested target
 library, and the sole Swift assembler accepts them only when their independent
 archive digests and exact source, lock, toolchain, SDK, deployment-target, and
@@ -521,13 +521,13 @@ helpers used by `generateSigningKey()` / `signingKey(fromSeed:)`; `Keypair`
 convenience APIs are Ed25519-only while native-backed algorithms use
 `NoritoBridge`.
 
-### Offline peer transport V1
+### Kagemusha peer transport V1
 
-`OfflineCashV1` is the sole peer-payment namespace. It carries canonical
+`KagemushaV1` is the sole peer-payment namespace. It carries canonical
 payment requests, payments, acknowledgements, mint credits, and redemption
-vouchers through bounded Norito archives or `oc1:` text. QR, NFC, and Nearby
+vouchers through bounded Norito archives or `kgm1:` text. QR, NFC, and Nearby
 all use the same canonical bytes from
-`../fixtures/offline/offline_cash_v1.json`; no transport has a second codec.
+`../fixtures/offline/kagemusha_v1.json`; no transport has a second codec.
 Public proofs and payment envelopes remain constant-size as aggregate history
 grows, and there is no hop, input, origin, ancestry, or proof-depth field.
 
@@ -1350,7 +1350,7 @@ if #available(iOS 15.0, macOS 12.0, *) {
 ```
 
 Generic shield, shielded-transfer, and unshield instructions are not part of
-the first-release SDK surface. Wallets use the typed, proof-bound Offline Cash V1
+the first-release SDK surface. Wallets use the typed, proof-bound Kagemusha V1
 top-up and redemption flows; the underlying proof codecs remain available to
 those flows without exposing generic transaction builders.
 

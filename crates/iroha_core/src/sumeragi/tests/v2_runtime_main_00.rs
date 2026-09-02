@@ -214,7 +214,7 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
     );
     let mut conflicting_lock = protected_lock;
     conflicting_lock.execution_commitment =
-        wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"conflicting EnterView parent state"),
             Hash::new(b"conflicting EnterView post state"),
             Hash::new(b"conflicting EnterView ordinary writes"),
@@ -253,7 +253,7 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
         payload_hash: Hash::new(b"conflicting diagnostic payload"),
         ..first_vote.subject
     };
-    second_vote.execution_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+    second_vote.execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"conflicting diagnostic parent state"),
         Hash::new(b"conflicting diagnostic post state"),
         Hash::new(b"conflicting diagnostic ordinary writes"),
@@ -312,7 +312,7 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
     );
     let mut changed_statement = certificate;
     changed_statement.execution_commitment =
-        wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"changed candidate parent state"),
             Hash::new(b"changed candidate post state"),
             Hash::new(b"changed candidate ordinary writes"),
@@ -463,7 +463,7 @@ fn certified_body_pipeline_retains_statement_and_owner_across_stage_kinds() {
     );
     let mut wrong_certificate = certificate;
     wrong_certificate.execution_commitment =
-        wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"foreign pipeline parent state"),
             Hash::new(b"foreign pipeline post state"),
             Hash::new(b"foreign pipeline ordinary writes"),
@@ -621,7 +621,7 @@ fn body_pipeline_acquires_commit_authority_monotonically_under_one_owner() {
     rejects(changed_context, commit.subject, "context drift");
     let mut changed_commitment = commit;
     changed_commitment.execution_commitment =
-        wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"foreign refinement parent state"),
             Hash::new(b"foreign refinement post state"),
             Hash::new(b"foreign refinement ordinary writes"),
@@ -692,7 +692,7 @@ fn fetch_authority_relation_is_monotonic_and_recognizes_stale_carriers() {
     );
     let mut changed_commitment = prepare;
     changed_commitment.execution_commitment =
-        Some(wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        Some(wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"foreign fetch parent state"),
             Hash::new(b"foreign fetch post state"),
             Hash::new(b"foreign fetch writes"),
@@ -736,7 +736,7 @@ fn candidate_statement_binds_manifest_by_exact_consensus_coordinates() {
         manifest.round,
         Some(manifest.subject),
         Some(wire::GlobalPhase::Commit),
-        Some(wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        Some(wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"manifest parent state"),
             Hash::new(b"manifest post state"),
             Hash::new(b"manifest writes"),
@@ -951,7 +951,7 @@ fn observe_enter_view_for_test(
         proposal_round: manifest.round,
         phase: wire::GlobalPhase::Prepare,
         subject: manifest.subject,
-        execution_commitment: wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        execution_commitment: wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"runtime EnterView parent state"),
             Hash::new(b"runtime EnterView post state"),
             Hash::new(b"runtime EnterView ordinary writes"),

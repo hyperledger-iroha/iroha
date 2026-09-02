@@ -852,7 +852,7 @@
       "kotlin/gradle/wrapper/gradle-wrapper.jar",
       "kotlin/gradle/wrapper/gradle-wrapper.properties",
       "kotlin/gradlew",
-      "kotlin/offline-wallet-android/build.gradle.kts",
+      "kotlin/kagemusha-wallet-android/build.gradle.kts",
       "kotlin/settings.gradle.kts"
     ],
     "kotlin-production": [
@@ -1515,7 +1515,7 @@
       "IrohaSwift/Sources/IrohaSwift/NoritoJSON.swift",
       "IrohaSwift/Sources/IrohaSwift/NoritoRpcClient.swift",
       "IrohaSwift/Sources/IrohaSwift/NumericV1.swift",
-      "IrohaSwift/Sources/IrohaSwift/OfflineCashDeviceLifecycleBridgeV1.swift",
+      "IrohaSwift/Sources/IrohaSwift/KagemushaDeviceLifecycleBridgeV1.swift",
       "IrohaSwift/Sources/IrohaSwift/OfflineDeviceAttestation.swift",
       "IrohaSwift/Sources/IrohaSwift/ParliamentTimedOvnKeychainSeed.swift",
       "IrohaSwift/Sources/IrohaSwift/PendingTransactionQueue.swift",

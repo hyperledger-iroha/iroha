@@ -93,8 +93,8 @@ impl RecoveryFixture {
             })
             .collect::<Vec<_>>();
         let network_id = crate::sumeragi::synthetic_network_id(network);
-        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
                 network_id, 1, &roster,
             );
         let context = wire::HeightContext {
@@ -110,8 +110,8 @@ impl RecoveryFixture {
             quorum: wire::DualQuorum::from_roster(&roster)
                 .expect("four-validator durable Ready-Fetch quorum"),
             roster,
-            offline_cash_mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"durable Ready-Fetch nexus context"),
             execution_policy_hash: Hash::new(b"durable Ready-Fetch execution policy"),
             da_layout: wire::DataAvailabilityLayout {
@@ -218,7 +218,7 @@ impl RecoveryFixture {
             .store(manifest.clone(), body)
             .expect("fsync durable Ready-Fetch body");
         let execution_commitment =
-            wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                 Hash::new([marker, 1]),
                 Hash::new([marker, 2]),
                 Hash::new([marker, 3]),
@@ -406,7 +406,7 @@ impl RecoveryFixture {
             view,
         };
         let execution_commitment =
-            wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                 Hash::new([marker, 0xB1]),
                 Hash::new([marker, 0xB2]),
                 Hash::new([marker, 0xB3]),

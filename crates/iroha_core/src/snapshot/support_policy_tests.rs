@@ -101,8 +101,8 @@ fn canonical_snapshot_v2_phase_vote_evidence(network_id: NetworkId) -> Evidence 
             power: 1,
         })
         .collect::<Vec<_>>();
-    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
+    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
     let context = wire_v2::HeightContext {
         network_id,
         protocol_version: wire_v2::PROTOCOL_VERSION,
@@ -116,8 +116,8 @@ fn canonical_snapshot_v2_phase_vote_evidence(network_id: NetworkId) -> Evidence 
         quorum: wire_v2::DualQuorum::from_roster(&roster)
             .expect("equal-power snapshot evidence quorum"),
         roster,
-        offline_cash_mint_finality_epoch_id,
-        offline_cash_mint_finality_epoch_roster,
+        kagemusha_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster,
         nexus_amx_context_hash: Hash::new(b"snapshot evidence context"),
         execution_policy_hash: Hash::new(b"snapshot evidence execution policy"),
         da_layout: wire_v2::DataAvailabilityLayout {
@@ -145,7 +145,7 @@ fn canonical_snapshot_v2_phase_vote_evidence(network_id: NetworkId) -> Evidence 
         view: 0,
     };
     let execution_commitment =
-        wire_v2::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        wire_v2::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"snapshot evidence parent state"),
             Hash::new(b"snapshot evidence post state"),
             Hash::new(b"snapshot evidence ordinary writes"),
@@ -291,15 +291,15 @@ fn signed_complete_wire_finality_for_snapshot_blocks(
         })
         .collect::<Vec<_>>();
     let execution_commitment_template =
-        ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"snapshot eviction parent state"),
             Hash::new(b"snapshot eviction post state"),
             Hash::new(b"snapshot eviction ordinary writes"),
             1,
             Hash::new(b"snapshot eviction executed block wire placeholder"),
         );
-    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(*network_id, 0, &roster);
+    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(*network_id, 0, &roster);
     let mut parent: Option<V2FinalityArtifact> = None;
     let mut artifacts = Vec::with_capacity(blocks.len());
     for block in blocks {
@@ -316,8 +316,8 @@ fn signed_complete_wire_finality_for_snapshot_blocks(
             snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("snapshot-eviction fixture quorum"),
             roster: roster.clone(),
-            offline_cash_mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster: offline_cash_mint_finality_epoch_roster
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster: kagemusha_mint_finality_epoch_roster
                 .clone(),
             nexus_amx_context_hash: Hash::new(b"snapshot eviction nexus context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),

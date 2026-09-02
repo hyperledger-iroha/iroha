@@ -863,13 +863,13 @@ impl ModerationStrictTransactionIngressV1 for ToriiModerationStrictTransactionIn
                     Err(ModerationStrictIngressFailureV1::Ambiguous)
                 }
                 iroha_core::queue::Error::PlanJournalDurabilityRejected { .. }
-                | iroha_core::queue::Error::OfflineCashV1OperationIndexInconsistent { .. }
+                | iroha_core::queue::Error::KagemushaV1OperationIndexInconsistent { .. }
                 | iroha_core::queue::Error::UnresolvedRoute { .. } => {
                     Err(ModerationStrictIngressFailureV1::Unavailable)
                 }
                 iroha_core::queue::Error::Expired
-                | iroha_core::queue::Error::OfflineCashV1OperationCarrierRejected { .. }
-                | iroha_core::queue::Error::OfflineCashV1OperationIdConflict { .. }
+                | iroha_core::queue::Error::KagemushaV1OperationCarrierRejected { .. }
+                | iroha_core::queue::Error::KagemushaV1OperationIdConflict { .. }
                 | iroha_core::queue::Error::UnregisteredAuthority { .. }
                 | iroha_core::queue::Error::Governance(_)
                 | iroha_core::queue::Error::GovernanceNotPermitted { .. }

@@ -98,7 +98,7 @@ function assertRetiredInstructionRejected(operation, variant) {
     assert.equal(error?.name, "TypeError", variant);
     assert.equal(
       error?.message,
-      `zk.${variant} is retired in ABI V1; use the typed OfflineCashV1 flow`,
+      `zk.${variant} is retired in ABI V1; use the typed KagemushaV1 flow`,
       variant,
     );
     return true;

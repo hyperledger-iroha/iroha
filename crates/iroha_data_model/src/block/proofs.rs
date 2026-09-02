@@ -581,15 +581,15 @@ mod tests {
             .collect::<Vec<_>>();
         let network_id = test_network_id();
         let mint_finality_roster =
-            crate::isi::offline_cash_v1::OfflineCashMintFinalityEpochRosterV1 {
-                version: crate::isi::offline_cash_v1::OFFLINE_CASH_CHAIN_VERSION_V1,
+            crate::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+                version: crate::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
                 network_id,
                 epoch: 0,
                 validators: roster
                     .iter()
                     .enumerate()
                     .map(|(index, validator)| {
-                        crate::isi::offline_cash_v1::OfflineCashMintFinalityValidatorKeysV1 {
+                        crate::isi::kagemusha_v1::KagemushaMintFinalityValidatorKeysV1 {
                             validator: validator.validator.clone(),
                             eq_proof_public_key: [u8::try_from(index + 1)
                                 .expect("small fixture roster");
@@ -609,8 +609,8 @@ mod tests {
             protocol_version: PROTOCOL_VERSION,
             height: block.header().height().get(),
             epoch: 0,
-            offline_cash_mint_finality_epoch_id: mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster: mint_finality_roster,
+            kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster: mint_finality_roster,
             epoch_end_height: u64::MAX,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Permissioned,
@@ -739,7 +739,7 @@ mod tests {
             u64::try_from(executed_block_wire.len()).expect("fixture wire length fits u64");
         let executed_block_wire_hash = Hash::new(&executed_block_wire);
         let execution_commitment =
-            ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                 Hash::new(b"trusted proof parent state"),
                 Hash::new(b"trusted proof post state"),
                 Hash::new(b"trusted proof ordinary writes"),
@@ -875,7 +875,7 @@ mod tests {
         let (block, _, external_hash, _) = authenticated_block_with_scheduled_entry();
         let wrong_executed_block_wire = b"different finalized executed block wire";
         let wrong_execution_commitment =
-            ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                 Hash::new(b"wrong-wire parent state"),
                 Hash::new(b"wrong-wire post state"),
                 Hash::new(b"wrong-wire ordinary writes"),
@@ -946,7 +946,7 @@ mod tests {
             .encode_wire()
             .expect("misaligned fixture wire still encodes");
         let execution_commitment =
-            ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                 Hash::new(b"misaligned proof parent state"),
                 Hash::new(b"misaligned proof post state"),
                 Hash::new(b"misaligned proof ordinary writes"),

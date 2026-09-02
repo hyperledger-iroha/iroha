@@ -269,8 +269,8 @@ fn gas_for_kaigi_proof_verification(
         .saturating_add(zk_gas_per_nullifier().saturating_mul(nullifiers))
         .saturating_add(zk_gas_per_commitment().saturating_mul(commitments))
 }
-fn gas_for_offline_cash_v1_redemption(
-    redeem: &dm_isi::offline_cash_v1::RedeemOfflineCashV1,
+fn gas_for_kagemusha_v1_redemption(
+    redeem: &dm_isi::kagemusha_v1::RedeemKagemushaV1,
 ) -> u64 {
     let proof = &redeem.request.voucher.proof;
     let proof_bytes = proof
@@ -606,8 +606,8 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
     if let Some(verify) = any.downcast_ref::<dm_isi::zk::VerifyProof>() {
         return gas_for_proof_attachment(&verify.attachment, 0, 0);
     }
-    if let Some(redeem) = any.downcast_ref::<dm_isi::offline_cash_v1::RedeemOfflineCashV1>() {
-        return gas_for_offline_cash_v1_redemption(redeem);
+    if let Some(redeem) = any.downcast_ref::<dm_isi::kagemusha_v1::RedeemKagemushaV1>() {
+        return gas_for_kagemusha_v1_redemption(redeem);
     }
     if let Some(ballot) = any.downcast_ref::<dm_isi::zk::SubmitBallot>() {
         return gas_for_proof_attachment(&ballot.ballot_proof, 1, 0);
@@ -679,8 +679,8 @@ pub fn confidential_gas_cost(instr: &InstructionBox) -> u64 {
     if let Some(verify) = any.downcast_ref::<dm_isi::zk::VerifyProof>() {
         return gas_for_proof_attachment(&verify.attachment, 0, 0);
     }
-    if let Some(redeem) = any.downcast_ref::<dm_isi::offline_cash_v1::RedeemOfflineCashV1>() {
-        return gas_for_offline_cash_v1_redemption(redeem);
+    if let Some(redeem) = any.downcast_ref::<dm_isi::kagemusha_v1::RedeemKagemushaV1>() {
+        return gas_for_kagemusha_v1_redemption(redeem);
     }
     if let Some(ballot) = any.downcast_ref::<dm_isi::zk::SubmitBallot>() {
         return gas_for_proof_attachment(&ballot.ballot_proof, 1, 0);

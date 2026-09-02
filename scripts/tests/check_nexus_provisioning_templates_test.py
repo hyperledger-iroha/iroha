@@ -97,20 +97,20 @@ def test_checked_in_generated_profile_inline_secret_fails(tmp_path: pathlib.Path
         guard.validate_repository(tmp_path)
 
 
-def test_taira_offline_cash_inline_secret_fails(tmp_path: pathlib.Path) -> None:
+def test_taira_kagemusha_inline_secret_fails(tmp_path: pathlib.Path) -> None:
     _write_repository(tmp_path)
     target = tmp_path / guard.DEPLOYMENT_SERVER_TEMPLATES[0]
     target.write_text(
         _server()
         + '''\
 
-[torii.offline_cash_v1_commands]
+[torii.kagemusha_v1_commands]
 enabled = true
 private_key = "runtime-secret"
 ''',
         encoding="utf-8",
     )
-    with pytest.raises(guard.ProvisioningTemplateError, match="offline_cash_v1_commands"):
+    with pytest.raises(guard.ProvisioningTemplateError, match="kagemusha_v1_commands"):
         guard.validate_repository(tmp_path)
 
 

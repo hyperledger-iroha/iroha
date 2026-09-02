@@ -17,7 +17,7 @@ rotation and revocation, sealed-CAS durability where state is retained, failover
 and recovery evidence, and independent review.
 
 This provider-neutral policy covers ordinary node, client, and consensus
-signing. The optional Offline Cash monetary device service is deliberately
+signing. The optional Kagemusha monetary device service is deliberately
 separate: offline spending requires a governed, qualified non-forking hardware
 profile and never permits software fallback.
 
@@ -973,20 +973,20 @@ profile and never permits software fallback.
   review from the immutable release source. Focused security suites are green;
   they do not substitute for this release qualification.
 
-## Offline Cash V1 release completion
+## Kagemusha V1 release completion
 
 - Seal the implemented hard cut across the specification, formal model, Core,
   Torii, CLI, native bridge, SDKs, fixtures, and generated artifacts.
-  `OfflineCashV1` and `oc1:` must remain the only public protocol and text
+  `KagemushaV1` and `kgm1:` must remain the only public protocol and text
   transport; reject any reintroduction of legacy decoders, aliases, migrations,
   note inventories, public state heads, or hop/input/origin/receipt/fan-in/
   proof-depth/history admission caps.
 - Candidate-qualify the implemented hidden `u128` aggregate balance and fixed
   paired-Pasta `Bootstrap`, `MintFold`, `SendSplit`, `ReceiveFold`,
   `RedeemSplit`, `Rotate`, terminal-wrapper, and no-commit-closure relations.
-  Implement the missing Core `SuiteUpgrade` preview/apply orchestration and a
-  positive authenticated bridge lifecycle regression before treating all
-  seven aggregate-state relations as end-to-end complete. Define a
+  Complete a positive authenticated verifier-changing `Rotate` lifecycle
+  regression before treating all six aggregate-state relations as end-to-end
+  complete. Define a
   threshold-authenticated target-release bridge that binds the exact old/new
   release, manifest, suite, verifying-key, protocol, profile, and policy
   mapping; preserve every monetary, lane, device-key, replay-root, and hardware
@@ -3307,7 +3307,7 @@ workflows remain excluded from the first release.
   Core consensus-preimage and peer-trust gossip fixtures, Sumeragi vNext
   rechain/view-change and local commit-vote fixtures, merge-committee
   signature helper, oracle observation, SoraDNS,
-  Offline Cash certificate, Soracloud provenance, and contract-manifest
+  Kagemusha certificate, Soracloud provenance, and contract-manifest
   provenance tests now cover both malformed-`R` encodings from valid
   signatures, Torii DA receipt-log,
   transaction-batch deterministic precheck, signed-query routing, Soracloud

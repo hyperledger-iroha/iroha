@@ -167,9 +167,9 @@ test(
     const health = await client.getHealth();
     assert.ok(health, "health snapshot should be present");
 
-    const offlineCapability = await client.getOfflineCapability();
-    assert.deepEqual(offlineCapability, {
-      cash_handoff_capability: "cash_handoff_v1",
+    const kagemushaReadiness = await client.getKagemushaReadiness();
+    assert.deepEqual(kagemushaReadiness, {
+      kagemusha_handoff_capability: "kagemusha_handoff_v1",
       wire_version: 1,
       device_lifecycle_version: 1,
       ready: true,
@@ -4876,7 +4876,7 @@ function shouldSkipTriggerEndpoints(error) {
   );
 }
 
-function isOfflineApiUnavailableError(error) {
+function isKagemushaApiUnavailableError(error) {
   if (!(error instanceof Error)) {
     return false;
   }

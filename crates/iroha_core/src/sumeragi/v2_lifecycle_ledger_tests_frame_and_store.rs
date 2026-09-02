@@ -146,7 +146,7 @@ fn recovered_validate_parent_matches_only_its_exact_durable_body_frame() {
     );
     let round = durable.round();
     let subject = durable.subject();
-    let commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+    let commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"parent state"),
         Hash::new(b"post state"),
         Hash::new(b"ordinary writes"),

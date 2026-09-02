@@ -7757,30 +7757,30 @@ fn parse_world(
     let global_beacon_pulses = take_required(&mut map, "global_beacon_pulses")?;
     let repo_agreements = take_required(&mut map, "repo_agreements")?;
     let settlement_receipts = take_required(&mut map, "settlement_receipts")?;
-    let offline_cash_reserve_pools: Storage<
+    let kagemusha_reserve_pools: Storage<
         [u8; 32],
-        crate::smartcontracts::isi::offline::offline_cash_v1_reserve::OfflineCashReservePoolV1,
-    > = take_required(&mut map, "offline_cash_reserve_pools")?;
-    let offline_cash_reserve_operations: Storage<
+        crate::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::KagemushaReservePoolV1,
+    > = take_required(&mut map, "kagemusha_reserve_pools")?;
+    let kagemusha_reserve_operations: Storage<
         [u8; 32],
-        crate::smartcontracts::isi::offline::offline_cash_v1_reserve::OfflineCashReserveOperationRecordV1,
-    > = take_required(&mut map, "offline_cash_reserve_operations")?;
-    let offline_cash_mint_credit_operations: Storage<[u8; 32], [u8; 32]> =
-        take_required(&mut map, "offline_cash_mint_credit_operations")?;
-    let offline_cash_issuance_operations: Storage<[u8; 32], [u8; 32]> =
-        take_required(&mut map, "offline_cash_issuance_operations")?;
-    let offline_cash_redemption_id_operations: Storage<[u8; 32], [u8; 32]> =
-        take_required(&mut map, "offline_cash_redemption_id_operations")?;
-    let offline_cash_terminal_nullifier_operations: Storage<[u8; 32], [u8; 32]> =
-        take_required(&mut map, "offline_cash_terminal_nullifier_operations")?;
+        crate::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::KagemushaReserveOperationRecordV1,
+    > = take_required(&mut map, "kagemusha_reserve_operations")?;
+    let kagemusha_mint_credit_operations: Storage<[u8; 32], [u8; 32]> =
+        take_required(&mut map, "kagemusha_mint_credit_operations")?;
+    let kagemusha_issuance_operations: Storage<[u8; 32], [u8; 32]> =
+        take_required(&mut map, "kagemusha_issuance_operations")?;
+    let kagemusha_redemption_id_operations: Storage<[u8; 32], [u8; 32]> =
+        take_required(&mut map, "kagemusha_redemption_id_operations")?;
+    let kagemusha_terminal_nullifier_operations: Storage<[u8; 32], [u8; 32]> =
+        take_required(&mut map, "kagemusha_terminal_nullifier_operations")?;
     {
-        let pools = offline_cash_reserve_pools.view();
-        let operations = offline_cash_reserve_operations.view();
-        let mint_credits = offline_cash_mint_credit_operations.view();
-        let issuances = offline_cash_issuance_operations.view();
-        let redemptions = offline_cash_redemption_id_operations.view();
-        let nullifiers = offline_cash_terminal_nullifier_operations.view();
-        crate::smartcontracts::isi::offline::offline_cash_v1_reserve::validate_persisted_reserve_entries_v1(
+        let pools = kagemusha_reserve_pools.view();
+        let operations = kagemusha_reserve_operations.view();
+        let mint_credits = kagemusha_mint_credit_operations.view();
+        let issuances = kagemusha_issuance_operations.view();
+        let redemptions = kagemusha_redemption_id_operations.view();
+        let nullifiers = kagemusha_terminal_nullifier_operations.view();
+        crate::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::validate_persisted_reserve_entries_v1(
             pools.iter(),
             operations.iter(),
             mint_credits.iter(),
@@ -7789,17 +7789,17 @@ fn parse_world(
             nullifiers.iter(),
         )
         .map_err(|error| json::Error::InvalidField {
-            field: "offline_cash_reserve_pools".to_owned(),
-            message: format!("invalid Offline Cash V1 reserve snapshot: {error}"),
+            field: "kagemusha_reserve_pools".to_owned(),
+            message: format!("invalid Kagemusha V1 reserve snapshot: {error}"),
         })?;
         let assets = assets.view();
-        crate::smartcontracts::isi::offline::offline_cash_v1_reserve::validate_persisted_reserve_custody_v1(
+        crate::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::validate_persisted_reserve_custody_v1(
             pools.iter().map(|(_, pool)| pool),
             assets.iter(),
         )
         .map_err(|error| json::Error::InvalidField {
-            field: "offline_cash_reserve_pools".to_owned(),
-            message: format!("invalid Offline Cash V1 reserve custody snapshot: {error}"),
+            field: "kagemusha_reserve_pools".to_owned(),
+            message: format!("invalid Kagemusha V1 reserve custody snapshot: {error}"),
         })?;
     }
     let lane_relay_emergency_validators =
@@ -8044,12 +8044,12 @@ fn parse_world(
         repo_agreements_by_counterparty: Storage::default(),
         repo_agreements_by_custodian: Storage::default(),
         settlement_receipts,
-        offline_cash_reserve_pools,
-        offline_cash_reserve_operations,
-        offline_cash_mint_credit_operations,
-        offline_cash_issuance_operations,
-        offline_cash_redemption_id_operations,
-        offline_cash_terminal_nullifier_operations,
+        kagemusha_reserve_pools,
+        kagemusha_reserve_operations,
+        kagemusha_mint_credit_operations,
+        kagemusha_issuance_operations,
+        kagemusha_redemption_id_operations,
+        kagemusha_terminal_nullifier_operations,
         domain_committees,
         domain_endorsement_policies,
         domain_endorsements,
@@ -8764,8 +8764,8 @@ fn build_state(
         gov: default_governance(),
         content: default_content_cfg(),
         settlement: iroha_config::parameters::actual::Settlement::default(),
-        offline_cash_v1_runtime_verifier: Arc::new(
-            crate::smartcontracts::isi::offline::RejectAllOfflineCashV1RuntimeVerifier,
+        kagemusha_v1_runtime_verifier: Arc::new(
+            crate::smartcontracts::isi::kagemusha::RejectAllKagemushaV1RuntimeVerifier,
         ),
         settlement_engine: SettlementEngine::new_roadmap_default(),
         chain_id,

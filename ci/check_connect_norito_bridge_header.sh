@@ -77,30 +77,30 @@ def require(pattern: str, text: str, label: str) -> None:
 
 
 OFFLINE_EXPORTS = {
-    "connect_norito_offline_cash_v1_payment_request_validate",
-    "connect_norito_offline_cash_v1_acceptance_intent_authorization_validate",
-    "connect_norito_offline_cash_v1_acceptance_ticket_validate",
-    "connect_norito_offline_cash_v1_no_commit_closure_validate",
-    "connect_norito_offline_cash_v1_payment_validate",
-    "connect_norito_offline_cash_v1_acknowledgement_validate",
-    "connect_norito_offline_cash_v1_complete_exchange_validate",
-    "connect_norito_offline_cash_v1_mint_authorization_validate",
-    "connect_norito_offline_cash_v1_mint_credit_validate",
-    "connect_norito_offline_cash_v1_mint_credit_against_authorization_validate",
-    "connect_norito_offline_cash_v1_redemption_voucher_validate",
-    "connect_norito_offline_cash_v1_payment_request_text_validate",
-    "connect_norito_offline_cash_v1_acceptance_intent_authorization_text_validate",
-    "connect_norito_offline_cash_v1_acceptance_ticket_text_validate",
-    "connect_norito_offline_cash_v1_no_commit_closure_text_validate",
-    "connect_norito_offline_cash_v1_payment_text_validate",
-    "connect_norito_offline_cash_v1_acknowledgement_text_validate",
-    "connect_norito_offline_cash_v1_complete_exchange_text_validate",
-    "connect_norito_offline_cash_v1_mint_authorization_text_validate",
-    "connect_norito_offline_cash_v1_mint_credit_text_validate",
-    "connect_norito_offline_cash_v1_mint_credit_against_authorization_text_validate",
-    "connect_norito_offline_cash_v1_redemption_voucher_text_validate",
-    "connect_norito_offline_cash_device_capabilities_v1",
-    "connect_norito_offline_cash_device_execute_v1",
+    "connect_norito_kagemusha_v1_payment_request_validate",
+    "connect_norito_kagemusha_v1_acceptance_intent_authorization_validate",
+    "connect_norito_kagemusha_v1_acceptance_ticket_validate",
+    "connect_norito_kagemusha_v1_no_commit_closure_validate",
+    "connect_norito_kagemusha_v1_payment_validate",
+    "connect_norito_kagemusha_v1_acknowledgement_validate",
+    "connect_norito_kagemusha_v1_complete_exchange_validate",
+    "connect_norito_kagemusha_v1_mint_authorization_validate",
+    "connect_norito_kagemusha_v1_mint_credit_validate",
+    "connect_norito_kagemusha_v1_mint_credit_against_authorization_validate",
+    "connect_norito_kagemusha_v1_redemption_voucher_validate",
+    "connect_norito_kagemusha_v1_payment_request_text_validate",
+    "connect_norito_kagemusha_v1_acceptance_intent_authorization_text_validate",
+    "connect_norito_kagemusha_v1_acceptance_ticket_text_validate",
+    "connect_norito_kagemusha_v1_no_commit_closure_text_validate",
+    "connect_norito_kagemusha_v1_payment_text_validate",
+    "connect_norito_kagemusha_v1_acknowledgement_text_validate",
+    "connect_norito_kagemusha_v1_complete_exchange_text_validate",
+    "connect_norito_kagemusha_v1_mint_authorization_text_validate",
+    "connect_norito_kagemusha_v1_mint_credit_text_validate",
+    "connect_norito_kagemusha_v1_mint_credit_against_authorization_text_validate",
+    "connect_norito_kagemusha_v1_redemption_voucher_text_validate",
+    "connect_norito_kagemusha_device_capabilities_v1",
+    "connect_norito_kagemusha_device_execute_v1",
 }
 PRIVACY_EXPORTS = {
     "iroha_privacy_compiled_profile_catalog_v1",
@@ -374,8 +374,8 @@ def c_parameter_names(name: str) -> list[str]:
     return parameter_names(match.group(1), False)
 
 
-exact("Rust Offline Cash", OFFLINE_EXPORTS, rust_exports("connect_norito_offline_cash_"))
-exact("C Offline Cash", OFFLINE_EXPORTS, header_exports("connect_norito_offline_cash_"))
+exact("Rust Kagemusha", OFFLINE_EXPORTS, rust_exports("connect_norito_kagemusha_"))
+exact("C Kagemusha", OFFLINE_EXPORTS, header_exports("connect_norito_kagemusha_"))
 exact("Rust privacy", PRIVACY_EXPORTS, rust_exports("iroha_privacy_"))
 exact("C privacy", PRIVACY_EXPORTS, header_exports("iroha_privacy_"))
 exact(
@@ -454,11 +454,11 @@ require(
     "bridge ABI binding",
 )
 for rust_name, value, header_name in (
-    ("ERR_OFFLINE_CASH_V1", "-311", "CONNECT_NORITO_ERR_OFFLINE_CASH_V1"),
+    ("ERR_KAGEMUSHA_V1", "-311", "CONNECT_NORITO_ERR_KAGEMUSHA_V1"),
     (
-        "ERR_OFFLINE_CASH_DEVICE_UNAVAILABLE_V1",
+        "ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1",
         "-312",
-        "CONNECT_NORITO_ERR_OFFLINE_CASH_DEVICE_UNAVAILABLE_V1",
+        "CONNECT_NORITO_ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1",
     ),
     ("ERR_PARLIAMENT_TIMED_OVN", "-505", "CONNECT_NORITO_ERR_PARLIAMENT_TIMED_OVN"),
     (
@@ -525,7 +525,7 @@ if umbrella.strip() != """// Umbrella header for NoritoBridge
 
 print(
     "[connect-norito-header] ABI 23 synchronized: "
-    f"{len(OFFLINE_EXPORTS)} Offline Cash, {len(PRIVACY_EXPORTS)} privacy, "
+    f"{len(OFFLINE_EXPORTS)} Kagemusha, {len(PRIVACY_EXPORTS)} privacy, "
     f"{len(SORAFS_REFERENCE_EXPORTS)} SoraFS, {len(DETACHED_EXPORTS)} detached, "
     f"{len(PARLIAMENT_EXPORTS)} Parliament, {len(HIJIRI_EXPORTS)} Hijiri, "
     f"{len(PRIVATE_SETTLEMENT_EXPORTS)} private-settlement, and "
@@ -656,23 +656,23 @@ if [[ "${MODE}" == --self-test-* ]]; then
       ;;
     --self-test-missing-offline-header-symbol)
       replace_once "${tmp_header}" \
-        "connect_norito_offline_cash_v1_payment_validate" \
-        "removed_offline_cash_v1_payment_validate"
+        "connect_norito_kagemusha_v1_payment_validate" \
+        "removed_kagemusha_v1_payment_validate"
       ;;
     --self-test-missing-offline-rust-symbol)
       replace_once "${tmp_rust}" \
-        "connect_norito_offline_cash_v1_payment_validate" \
-        "removed_offline_cash_v1_payment_validate"
+        "connect_norito_kagemusha_v1_payment_validate" \
+        "removed_kagemusha_v1_payment_validate"
       ;;
     --self-test-bad-offline-signature)
       replace_regex_once "${tmp_header}" \
-        '(connect_norito_offline_cash_v1_payment_validate\s*\([^;]*?)unsigned long payment_len' \
+        '(connect_norito_kagemusha_v1_payment_validate\s*\([^;]*?)unsigned long payment_len' \
         '\g<1>uint32_t payment_len'
       ;;
     --self-test-bad-offline-error-code)
       replace_once "${tmp_header}" \
-        "#define CONNECT_NORITO_ERR_OFFLINE_CASH_V1 -311" \
-        "#define CONNECT_NORITO_ERR_OFFLINE_CASH_V1 -310"
+        "#define CONNECT_NORITO_ERR_KAGEMUSHA_V1 -311" \
+        "#define CONNECT_NORITO_ERR_KAGEMUSHA_V1 -310"
       ;;
     --self-test-missing-privacy-header-symbol)
       replace_once "${tmp_header}" \

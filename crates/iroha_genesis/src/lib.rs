@@ -4191,7 +4191,7 @@ impl GenesisBuilder {
     /// Construct [`GenesisBuilder`] with an executor upgrade.
     ///
     /// Before building, callers must provide the separately provisioned
-    /// Offline Cash V1 Pasta roster through
+    /// Kagemusha V1 Pasta roster through
     /// [`Self::with_sumeragi_v2_context_parameters`].
     pub fn new(chain: ChainId, executor: impl Into<PathBuf>, ivm_dir: impl Into<PathBuf>) -> Self {
         Self {
@@ -4211,7 +4211,7 @@ impl GenesisBuilder {
     /// Construct [`GenesisBuilder`] without an executor upgrade.
     ///
     /// Before building, callers must provide the separately provisioned
-    /// Offline Cash V1 Pasta roster through
+    /// Kagemusha V1 Pasta roster through
     /// [`Self::with_sumeragi_v2_context_parameters`].
     pub fn new_without_executor(chain: ChainId, ivm_dir: impl Into<PathBuf>) -> Self {
         Self {
@@ -4396,7 +4396,7 @@ impl GenesisBuilder {
     ///
     /// # Errors
     ///
-    /// Fails unless the separately provisioned Offline Cash V1 Pasta roster
+    /// Fails unless the separately provisioned Kagemusha V1 Pasta roster
     /// has been supplied as part of the signed Sumeragi v2 context parameters.
     pub fn build_raw(self) -> Result<RawGenesisTransaction> {
         let mut parameter_snapshot = Parameters::default();
@@ -4423,7 +4423,7 @@ impl GenesisBuilder {
         let sumeragi_v2 = self.sumeragi_v2.ok_or_else(|| {
             eyre!(
                 "genesis builder requires explicit signed Sumeragi v2 context parameters, \
-                 including the Offline Cash V1 Pasta finality roster"
+                 including the Kagemusha V1 Pasta finality roster"
             )
         })?;
         Ok(RawGenesisTransaction {

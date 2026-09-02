@@ -193,7 +193,7 @@ fn authenticated_serve_request(
             proposal_round: round,
             phase,
             subject,
-            execution_commitment: wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            execution_commitment: wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                 Hash::new(b"Serve fixture parent state"),
                 Hash::new(b"Serve fixture post state"),
                 Hash::new(b"Serve fixture ordinary writes"),
@@ -778,12 +778,12 @@ fn saturated_completion_runtime_preserves_bounded_body_pipeline_ownership() {
         "rejected publication must preserve the prior bounded owner set"
     );
 }
-fn fixture_offline_cash_mint_finality_roster(
+fn fixture_kagemusha_mint_finality_roster(
     network_id: iroha_data_model::NetworkId,
     epoch: u64,
     roster: &[wire::ValidatorPower],
     seed_base: u8,
-) -> iroha_data_model::isi::offline_cash_v1::OfflineCashMintFinalityEpochRosterV1 {
+) -> iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
     let validators = roster
         .iter()
         .enumerate()
@@ -792,7 +792,7 @@ fn fixture_offline_cash_mint_finality_roster(
                 seed_base.wrapping_add(u8::try_from(index).expect("fixture index fits u8"));
                 32
             ];
-            crate::zk::offline_cash_v1_recursion::derive_offline_cash_mint_finality_validator_keys_v1(
+            crate::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                 &seed,
                 network_id,
                 epoch,
@@ -801,8 +801,8 @@ fn fixture_offline_cash_mint_finality_roster(
             .expect("derive deterministic fixture Pasta keys")
         })
         .collect();
-    iroha_data_model::isi::offline_cash_v1::OfflineCashMintFinalityEpochRosterV1 {
-        version: iroha_data_model::isi::offline_cash_v1::OFFLINE_CASH_CHAIN_VERSION_V1,
+    iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+        version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
         epoch,
         validators,
@@ -826,9 +826,9 @@ pub(in crate::sumeragi) fn fixture() -> (ProductionV2Services, Vec<KeyPair>) {
         })
         .collect::<Vec<_>>();
     let network_id = crate::sumeragi::synthetic_network_id("v2-worker-test");
-    let offline_cash_mint_finality_epoch_roster =
-        fixture_offline_cash_mint_finality_roster(network_id, 0, &roster, 0xA0);
-    let offline_cash_mint_finality_epoch_id = offline_cash_mint_finality_epoch_roster
+    let kagemusha_mint_finality_epoch_roster =
+        fixture_kagemusha_mint_finality_roster(network_id, 0, &roster, 0xA0);
+    let kagemusha_mint_finality_epoch_id = kagemusha_mint_finality_epoch_roster
         .finality_epoch_id()
         .expect("derive fixture mint-finality epoch ID");
     let context = wire::HeightContext {
@@ -836,8 +836,8 @@ pub(in crate::sumeragi) fn fixture() -> (ProductionV2Services, Vec<KeyPair>) {
         protocol_version: wire::PROTOCOL_VERSION,
         height: 1,
         epoch: 0,
-        offline_cash_mint_finality_epoch_id,
-        offline_cash_mint_finality_epoch_roster,
+        kagemusha_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster,
         epoch_end_height: u64::MAX,
         next_epoch_snapshot: None,
         mode: wire::ConsensusMode::Permissioned,

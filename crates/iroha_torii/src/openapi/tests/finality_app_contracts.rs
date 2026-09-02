@@ -258,9 +258,9 @@ fn bridge_finality_v2_schemas_are_exact_closed_and_bounded() {
     let wire_len = contract_property(&schemas, "SumeragiV2ExecutionCommitment", "executed_block_wire_len");
     assert_eq!(wire_len.get("format").and_then(Value::as_str), Some("uint64"));
     assert_eq!(wire_len.get("minimum").and_then(Value::as_u64), Some(1));
-    let topups = contract_property(&schemas, "SumeragiV2ExecutionCommitment", "offline_cash_top_up_count");
+    let topups = contract_property(&schemas, "SumeragiV2ExecutionCommitment", "kagemusha_top_up_count");
     assert_eq!(topups.get("minimum").and_then(Value::as_u64), Some(0));
-    assert!(topups.get("maximum").is_none(), "block bytes, not a special Offline Cash count cap, bound top-ups");
+    assert!(topups.get("maximum").is_none(), "block bytes, not a special Kagemusha count cap, bound top-ups");
     let execution = contract_schema(&schemas, "SumeragiV2ExecutionCommitment");
     assert_eq!(execution.get("oneOf").and_then(Value::as_array).map(Vec::len), Some(2));
     assert_eq!(contract_property(&schemas, "SumeragiV2ExecutionCommitment", "native_amx_application_manifest_version").get("const").and_then(Value::as_u64), Some(u64::from(iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION)));
@@ -382,7 +382,7 @@ fn bridge_finality_schema_matches_norito_json_and_decoder_rejects_v1_fields() {
         );
     }
     assert!(execution.get("executed_block_wire_len").and_then(Value::as_u64).is_some_and(|length| length > 0));
-    assert_eq!(execution.get("offline_cash_top_up_count").and_then(Value::as_u64), Some(0));
+    assert_eq!(execution.get("kagemusha_top_up_count").and_then(Value::as_u64), Some(0));
     assert_eq!(execution.get("native_amx_application_manifest_version").and_then(Value::as_u64), Some(u64::from(iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION)));
     assert_eq!(execution.get("native_amx_application_manifest_count").and_then(Value::as_u64), Some(0));
     let empty_root = norito::json::to_value(&iroha_data_model::block::consensus_v2::native_amx_application_manifest_empty_root()).expect("serialize empty root");

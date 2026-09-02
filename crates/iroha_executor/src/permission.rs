@@ -167,7 +167,7 @@ declare_permissions! {
     iroha_executor_data_model::permission::parameter::{CanSetHijiriParameters},
     iroha_executor_data_model::permission::sccp::{CanManageSccpGovernance},
     iroha_executor_data_model::permission::sccp::{CanProposeSccpRouteGovernance},
-    iroha_executor_data_model::permission::offline::{CanManageOfflineReserve},
+    iroha_executor_data_model::permission::kagemusha::{CanManageKagemushaReserve},
     iroha_executor_data_model::permission::role::{CanManageRoles},
     iroha_executor_data_model::permission::trigger::{CanRegisterTrigger},
     iroha_executor_data_model::permission::trigger::{CanRegisterGlobalDataTrigger},
@@ -242,7 +242,7 @@ impl AnyPermission {
                 | Self::CanReadAllLedgerData(_)
                 | Self::CanReadRestrictedDataspace(_)
                 | Self::CanRegisterGlobalDataTrigger(_)
-                | Self::CanManageOfflineReserve(_)
+                | Self::CanManageKagemushaReserve(_)
                 | Self::CanManageRoles(_)
                 | Self::CanUpgradeExecutor(_)
                 | Self::CanRegisterSmartContractCode(_)
@@ -1057,11 +1057,11 @@ mod sccp {
         }
     }
 }
-mod offline {
-    //! Pass conditions for offline cash reserve settlement.
+mod kagemusha {
+    //! Pass conditions for Kagemusha reserve settlement.
     use super::*;
-    use iroha_executor_data_model::permission::offline::CanManageOfflineReserve;
-    impl_validate_grant_revoke_via!(OnlyGenesis::from => CanManageOfflineReserve,);
+    use iroha_executor_data_model::permission::kagemusha::CanManageKagemushaReserve;
+    impl_validate_grant_revoke_via!(OnlyGenesis::from => CanManageKagemushaReserve,);
 }
 pub mod asset {
     //! Module with pass conditions for asset related tokens
@@ -1963,7 +1963,7 @@ mod tests {
         },
     };
     use iroha_crypto::{Hash, PublicKey};
-    use iroha_executor_data_model::permission::offline::CanManageOfflineReserve;
+    use iroha_executor_data_model::permission::kagemusha::CanManageKagemushaReserve;
     use iroha_executor_data_model::permission::{
         account::{
             AccountAliasPermissionScope, CanDelegateAccountAliasResolution, CanResolveAccountAlias,
@@ -2305,13 +2305,13 @@ mod tests {
         test_override::replace_permissions(previous);
     }
     #[test]
-    fn governed_offline_permissions_are_immutable_after_genesis() {
+    fn governed_kagemusha_permissions_are_immutable_after_genesis() {
         let banking_authority = make_account_id();
         let context = make_context(&banking_authority, 2);
         let results = [(
-            "CanManageOfflineReserve",
-            CanManageOfflineReserve.validate_grant(&banking_authority, &context, &Iroha),
-            CanManageOfflineReserve.validate_revoke(&banking_authority, &context, &Iroha),
+            "CanManageKagemushaReserve",
+            CanManageKagemushaReserve.validate_grant(&banking_authority, &context, &Iroha),
+            CanManageKagemushaReserve.validate_revoke(&banking_authority, &context, &Iroha),
         )];
         for (name, grant, revoke) in results {
             for result in [grant, revoke] {
@@ -2329,13 +2329,13 @@ mod tests {
         }
     }
     #[test]
-    fn governed_offline_permissions_can_only_be_seeded_in_genesis() {
+    fn governed_kagemusha_permissions_can_only_be_seeded_in_genesis() {
         let genesis_authority = make_account_id();
         let context = make_context(&genesis_authority, 1);
         let results = [(
-            "CanManageOfflineReserve",
-            CanManageOfflineReserve.validate_grant(&genesis_authority, &context, &Iroha),
-            CanManageOfflineReserve.validate_revoke(&genesis_authority, &context, &Iroha),
+            "CanManageKagemushaReserve",
+            CanManageKagemushaReserve.validate_grant(&genesis_authority, &context, &Iroha),
+            CanManageKagemushaReserve.validate_revoke(&genesis_authority, &context, &Iroha),
         )];
         for (name, grant, revoke) in results {
             assert!(grant.is_ok(), "genesis must grant {name}: {grant:?}");

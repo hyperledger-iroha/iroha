@@ -720,7 +720,7 @@ fn initial_executor_denies_deployment_permission_grant_revoke_and_malformed_payl
     assert_eq!(stored, BTreeSet::from([canonical]));
 }
 #[test]
-fn initial_executor_denies_post_genesis_governed_offline_self_grants() {
+fn initial_executor_denies_post_genesis_governed_kagemusha_self_grants() {
     let authority = checked_account_id();
     let account = Account::new(authority.clone()).build(&authority);
     let state = State::new_for_testing(
@@ -730,7 +730,7 @@ fn initial_executor_denies_post_genesis_governed_offline_self_grants() {
     );
     let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
     let mut state_transaction = block.transaction();
-    for name in ["CanManageOfflineReserve"] {
+    for name in ["CanManageKagemushaReserve"] {
         let permission = Permission::new(name.to_owned(), Json::new(()));
         let instruction = Grant::account_permission(permission.clone(), authority.clone()).into();
         let error = super::Executor::Initial

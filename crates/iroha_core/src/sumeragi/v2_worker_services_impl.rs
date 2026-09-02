@@ -1112,8 +1112,8 @@ impl ProductionV2Services {
         validator_set_pops: Vec<Vec<u8>>,
         local_peer: PeerId,
         local_validator: Option<wire::ValidatorIndex>,
-        offline_cash_mint_finality_authority: Option<
-            Arc<crate::zk::offline_cash_v1_recursion::OfflineCashMintFinalityLocalAuthorityV1>,
+        kagemusha_mint_finality_authority: Option<
+            Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>,
         >,
         key_pair: KeyPair,
         network: IrohaNetwork,
@@ -1147,7 +1147,7 @@ impl ProductionV2Services {
             validator_set_pops,
             local_peer,
             local_validator,
-            offline_cash_mint_finality_authority,
+            kagemusha_mint_finality_authority,
             key_pair,
             network,
             body_store,
@@ -1173,8 +1173,8 @@ impl ProductionV2Services {
         validator_set_pops: Vec<Vec<u8>>,
         local_peer: PeerId,
         local_validator: Option<wire::ValidatorIndex>,
-        offline_cash_mint_finality_authority: Option<
-            Arc<crate::zk::offline_cash_v1_recursion::OfflineCashMintFinalityLocalAuthorityV1>,
+        kagemusha_mint_finality_authority: Option<
+            Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>,
         >,
         key_pair: KeyPair,
         network: IrohaNetwork,
@@ -1257,7 +1257,7 @@ impl ProductionV2Services {
             context.clone(),
             key_pair.clone(),
             local_validator,
-            offline_cash_mint_finality_authority,
+            kagemusha_mint_finality_authority,
             auxiliary_io_capacity,
             consensus_io_capacity,
             reply_route_source_capacity,

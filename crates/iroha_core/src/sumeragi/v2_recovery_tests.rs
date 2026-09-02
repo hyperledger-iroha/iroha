@@ -72,8 +72,8 @@ fn verified_context_for_policy_state(
             power: 1,
         })
         .collect::<Vec<_>>();
-    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
+    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
     let context = wire::HeightContext {
         network_id,
         protocol_version: wire::PROTOCOL_VERSION,
@@ -86,8 +86,8 @@ fn verified_context_for_policy_state(
         snapshot_bootstrap: None,
         quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
         roster,
-        offline_cash_mint_finality_epoch_id,
-        offline_cash_mint_finality_epoch_roster,
+        kagemusha_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster,
         nexus_amx_context_hash: Hash::new(b"recovery fixture Nexus/AMX"),
         execution_policy_hash: committed_execution_policy_hash(policy_state)
             .expect("derive fixture execution policy"),
@@ -414,7 +414,7 @@ fn commit_to_state(state: &State, block: &CommittedBlock, context: &wire::Height
     state_block.commit().expect("commit synthetic state block");
 }
 fn execution_commitment(seed: u8) -> wire::ExecutionCommitment {
-    wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+    wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new([seed, 1]),
         Hash::new([seed, 2]),
         Hash::new([seed, 3]),
@@ -1036,15 +1036,15 @@ fn startup_plan_rejects_poisoned_height_two_that_ignores_npos_transition() {
     parent_context.mode = wire::ConsensusMode::Npos;
     parent_context.epoch_end_height = 1;
     let (transitioned_mint_finality_epoch_id, transitioned_mint_finality_epoch_roster) =
-        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
             parent_context.network_id,
             1,
             &transitioned_roster,
         );
     parent_context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
         epoch: 1,
-        offline_cash_mint_finality_epoch_id: transitioned_mint_finality_epoch_id,
-        offline_cash_mint_finality_epoch_roster: transitioned_mint_finality_epoch_roster,
+        kagemusha_mint_finality_epoch_id: transitioned_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster: transitioned_mint_finality_epoch_roster,
         epoch_end_height: 10,
         mode: wire::ConsensusMode::Npos,
         roster: transitioned_roster,
@@ -1075,7 +1075,7 @@ fn startup_plan_rejects_poisoned_height_two_that_ignores_npos_transition() {
         .collect::<Vec<_>>();
     let attacker_quorum = wire::DualQuorum::from_roster(&attacker_roster).expect("attacker quorum");
     let (attacker_mint_finality_epoch_id, attacker_mint_finality_epoch_roster) =
-        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
             parent_context.network_id,
             1,
             &attacker_roster,
@@ -1092,8 +1092,8 @@ fn startup_plan_rejects_poisoned_height_two_that_ignores_npos_transition() {
         snapshot_bootstrap: None,
         quorum: attacker_quorum,
         roster: attacker_roster,
-        offline_cash_mint_finality_epoch_id: attacker_mint_finality_epoch_id,
-        offline_cash_mint_finality_epoch_roster: attacker_mint_finality_epoch_roster,
+        kagemusha_mint_finality_epoch_id: attacker_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster: attacker_mint_finality_epoch_roster,
         nexus_amx_context_hash: parent_context.nexus_amx_context_hash,
         execution_policy_hash: parent_context.execution_policy_hash,
         da_layout: parent_context.da_layout,
@@ -1663,15 +1663,15 @@ fn successor_pops_are_copied_only_from_the_durable_parent_artifact() {
     boundary_context.epoch_end_height = boundary_context.height;
     let next_epoch = boundary_context.epoch + 1;
     let (next_mint_finality_epoch_id, next_mint_finality_epoch_roster) =
-        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
             boundary_context.network_id,
             next_epoch,
             &next_roster,
         );
     boundary_context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
         epoch: next_epoch,
-        offline_cash_mint_finality_epoch_id: next_mint_finality_epoch_id,
-        offline_cash_mint_finality_epoch_roster: next_mint_finality_epoch_roster,
+        kagemusha_mint_finality_epoch_id: next_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster: next_mint_finality_epoch_roster,
         epoch_end_height: u64::MAX,
         mode: boundary_context.mode,
         quorum: wire::DualQuorum::from_roster(&next_roster).expect("valid next-epoch quorum"),

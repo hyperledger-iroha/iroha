@@ -2085,56 +2085,56 @@ pub mod extractors {
             decode_body_as_norito_or_json::<T>(&body, format).map(NoritoJson)
         }
     }
-    /// Schema-specific body and decode limits for public Offline API requests.
+    /// Schema-specific body and decode limits for public Kagemusha API requests.
     #[cfg(feature = "app_api")]
-    trait OfflineCanonicalNoritoSchema:
+    trait KagemushaCanonicalNoritoSchemaV1:
         NoritoSerialize + for<'de> NoritoDeserialize<'de> + Sized
     {
         /// Exact protocol body ceiling, in canonical framed bytes.
         const MAX_BODY_BYTES: usize;
         /// Decode the canonical body and enforce every schema invariant.
-        fn decode_validated(body: &[u8]) -> Result<Self, OfflineCanonicalNoritoDecodeError>;
+        fn decode_validated(body: &[u8]) -> Result<Self, KagemushaCanonicalNoritoDecodeError>;
     }
     #[cfg(feature = "app_api")]
-    impl OfflineCanonicalNoritoSchema for iroha_torii_shared::offline_api::OfflineCashTopUpRequestV1 {
+    impl KagemushaCanonicalNoritoSchemaV1 for iroha_torii_shared::kagemusha_api::KagemushaTopUpRequestV1 {
         const MAX_BODY_BYTES: usize =
-            iroha_torii_shared::offline_api::OFFLINE_CASH_TOP_UP_REQUEST_MAX_BYTES_V1;
+            iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1;
 
-        fn decode_validated(body: &[u8]) -> Result<Self, OfflineCanonicalNoritoDecodeError> {
-            iroha_torii_shared::offline_api::decode_offline_cash_top_up_request_v1(body)
-                .map_err(OfflineCanonicalNoritoDecodeError::from_offline_cash_api)
+        fn decode_validated(body: &[u8]) -> Result<Self, KagemushaCanonicalNoritoDecodeError> {
+            iroha_torii_shared::kagemusha_api::decode_kagemusha_top_up_request_v1(body)
+                .map_err(KagemushaCanonicalNoritoDecodeError::from_kagemusha_api)
         }
     }
     #[cfg(feature = "app_api")]
-    impl OfflineCanonicalNoritoSchema
-        for iroha_torii_shared::offline_api::OfflineCashRedemptionRequestV1
+    impl KagemushaCanonicalNoritoSchemaV1
+        for iroha_torii_shared::kagemusha_api::KagemushaRedemptionRequestV1
     {
         const MAX_BODY_BYTES: usize =
-            iroha_torii_shared::offline_api::OFFLINE_CASH_REDEMPTION_REQUEST_MAX_BYTES_V1;
+            iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1;
 
-        fn decode_validated(body: &[u8]) -> Result<Self, OfflineCanonicalNoritoDecodeError> {
-            iroha_torii_shared::offline_api::decode_offline_cash_redemption_request_v1(body)
-                .map_err(OfflineCanonicalNoritoDecodeError::from_offline_cash_api)
+        fn decode_validated(body: &[u8]) -> Result<Self, KagemushaCanonicalNoritoDecodeError> {
+            iroha_torii_shared::kagemusha_api::decode_kagemusha_redemption_request_v1(body)
+                .map_err(KagemushaCanonicalNoritoDecodeError::from_kagemusha_api)
         }
     }
     #[cfg(feature = "app_api")]
     #[derive(Debug)]
-    enum OfflineCanonicalNoritoDecodeError {
+    enum KagemushaCanonicalNoritoDecodeError {
         Empty,
         TooLarge { actual: usize, maximum: usize },
         Norito(norito::Error),
-        Invalid(iroha_torii_shared::offline_api::OfflineCashApiErrorV1),
+        Invalid(iroha_torii_shared::kagemusha_api::KagemushaApiErrorV1),
     }
     #[cfg(feature = "app_api")]
-    impl OfflineCanonicalNoritoDecodeError {
-        fn from_offline_cash_api(
-            error: iroha_torii_shared::offline_api::OfflineCashApiErrorV1,
+    impl KagemushaCanonicalNoritoDecodeError {
+        fn from_kagemusha_api(
+            error: iroha_torii_shared::kagemusha_api::KagemushaApiErrorV1,
         ) -> Self {
             match error {
-                iroha_torii_shared::offline_api::OfflineCashApiErrorV1::Codec(error) => {
+                iroha_torii_shared::kagemusha_api::KagemushaApiErrorV1::Codec(error) => {
                     Self::Norito(error)
                 }
-                iroha_torii_shared::offline_api::OfflineCashApiErrorV1::EncodedSizeExceeded {
+                iroha_torii_shared::kagemusha_api::KagemushaApiErrorV1::EncodedSizeExceeded {
                     actual,
                     max,
                 } => Self::TooLarge {
@@ -2146,46 +2146,46 @@ pub mod extractors {
         }
     }
     #[cfg(feature = "app_api")]
-    fn validate_offline_canonical_norito_body_len(
+    fn validate_kagemusha_canonical_norito_body_len(
         actual: usize,
         maximum: usize,
-    ) -> Result<(), OfflineCanonicalNoritoDecodeError> {
+    ) -> Result<(), KagemushaCanonicalNoritoDecodeError> {
         if actual == 0 {
-            return Err(OfflineCanonicalNoritoDecodeError::Empty);
+            return Err(KagemushaCanonicalNoritoDecodeError::Empty);
         }
         if actual > maximum {
-            return Err(OfflineCanonicalNoritoDecodeError::TooLarge { actual, maximum });
+            return Err(KagemushaCanonicalNoritoDecodeError::TooLarge { actual, maximum });
         }
         Ok(())
     }
     #[cfg(feature = "app_api")]
-    fn decode_offline_canonical_norito<T: OfflineCanonicalNoritoSchema>(
+    fn decode_kagemusha_canonical_norito<T: KagemushaCanonicalNoritoSchemaV1>(
         body: &[u8],
-    ) -> Result<T, OfflineCanonicalNoritoDecodeError> {
-        validate_offline_canonical_norito_body_len(body.len(), T::MAX_BODY_BYTES)?;
+    ) -> Result<T, KagemushaCanonicalNoritoDecodeError> {
+        validate_kagemusha_canonical_norito_body_len(body.len(), T::MAX_BODY_BYTES)?;
         T::decode_validated(body)
     }
     #[cfg(feature = "app_api")]
     #[allow(clippy::result_large_err)]
-    fn offline_canonical_norito_rejection<T: 'static>(
-        error: OfflineCanonicalNoritoDecodeError,
+    fn kagemusha_canonical_norito_rejection<T: 'static>(
+        error: KagemushaCanonicalNoritoDecodeError,
     ) -> Response {
         match error {
-            OfflineCanonicalNoritoDecodeError::Empty => typed_request_rejection(
+            KagemushaCanonicalNoritoDecodeError::Empty => typed_request_rejection(
                 StatusCode::BAD_REQUEST,
                 "request_norito_invalid",
-                "Offline Norito request body must not be empty.",
+                "Kagemusha Norito request body must not be empty.",
             ),
-            OfflineCanonicalNoritoDecodeError::TooLarge { actual, maximum } => {
+            KagemushaCanonicalNoritoDecodeError::TooLarge { actual, maximum } => {
                 typed_request_rejection(
                     StatusCode::PAYLOAD_TOO_LARGE,
                     "request_payload_too_large",
                     format!(
-                        "Offline Norito request body is {actual} bytes; maximum is {maximum} bytes."
+                        "Kagemusha Norito request body is {actual} bytes; maximum is {maximum} bytes."
                     ),
                 )
             }
-            OfflineCanonicalNoritoDecodeError::Norito(error) => {
+            KagemushaCanonicalNoritoDecodeError::Norito(error) => {
                 record_payload_decode_failure::<T>(&error);
                 typed_request_rejection(
                     StatusCode::BAD_REQUEST,
@@ -2193,26 +2193,26 @@ pub mod extractors {
                     format!("Invalid canonical offline Norito body: {error}"),
                 )
             }
-            OfflineCanonicalNoritoDecodeError::Invalid(error) => typed_request_rejection(
+            KagemushaCanonicalNoritoDecodeError::Invalid(error) => typed_request_rejection(
                 StatusCode::BAD_REQUEST,
                 "request_norito_invalid",
-                format!("Invalid Offline Cash V1 request: {error}"),
+                format!("Invalid Kagemusha V1 request: {error}"),
             ),
         }
     }
-    /// Extractor for one canonical, schema-bounded Offline API Norito request.
+    /// Extractor for one canonical, schema-bounded Kagemusha API Norito request.
     #[cfg(feature = "app_api")]
     #[derive(Clone, Copy, Debug)]
-    pub(crate) struct OfflineNorito<T>(
+    pub(crate) struct KagemushaNorito<T>(
         /// Decoded canonical request.
         pub(crate) T,
     );
     #[cfg(feature = "app_api")]
-    impl<S, T> FromRequest<S> for OfflineNorito<T>
+    impl<S, T> FromRequest<S> for KagemushaNorito<T>
     where
         Bytes: FromRequest<S, Rejection = axum::extract::rejection::BytesRejection>,
         S: Send + Sync,
-        T: OfflineCanonicalNoritoSchema + Send + 'static,
+        T: KagemushaCanonicalNoritoSchemaV1 + Send + 'static,
     {
         type Rejection = Response;
         async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
@@ -2220,9 +2220,9 @@ pub mod extractors {
             let body = Bytes::from_request(req, state)
                 .await
                 .map_err(typed_body_rejection)?;
-            decode_offline_canonical_norito::<T>(&body)
-                .map(OfflineNorito)
-                .map_err(offline_canonical_norito_rejection::<T>)
+            decode_kagemusha_canonical_norito::<T>(&body)
+                .map(KagemushaNorito)
+                .map_err(kagemusha_canonical_norito_rejection::<T>)
         }
     }
     /// Extractor for one canonical native-Norito request body.
@@ -2637,19 +2637,19 @@ pub mod extractors {
             assert_eq!(oversized_error.status(), StatusCode::PAYLOAD_TOO_LARGE);
         }
         #[cfg(feature = "app_api")]
-        impl OfflineCanonicalNoritoSchema for Vec<u64> {
+        impl KagemushaCanonicalNoritoSchemaV1 for Vec<u64> {
             const MAX_BODY_BYTES: usize = 4 * 1024;
 
-            fn decode_validated(body: &[u8]) -> Result<Self, OfflineCanonicalNoritoDecodeError> {
+            fn decode_validated(body: &[u8]) -> Result<Self, KagemushaCanonicalNoritoDecodeError> {
                 norito::decode_canonical_with_limits(
                     body,
                     norito::canonical_decode_limits(body.len()),
                 )
-                .map_err(OfflineCanonicalNoritoDecodeError::Norito)
+                .map_err(KagemushaCanonicalNoritoDecodeError::Norito)
             }
         }
         #[cfg(feature = "app_api")]
-        fn offline_ingress_account(seed: u8) -> iroha_data_model::account::AccountId {
+        fn kagemusha_ingress_account(seed: u8) -> iroha_data_model::account::AccountId {
             use iroha_crypto::{Algorithm, KeyPair};
 
             iroha_data_model::account::AccountId::new(
@@ -2659,17 +2659,17 @@ pub mod extractors {
             )
         }
         #[cfg(feature = "app_api")]
-        fn offline_ingress_network() -> iroha_data_model::NetworkId {
+        fn kagemusha_ingress_network() -> iroha_data_model::NetworkId {
             use iroha_crypto::{Hash, HashOf};
 
             iroha_data_model::NetworkId::from_genesis_hash(HashOf::<
                 iroha_data_model::block::BlockHeader,
             >::from_untyped_unchecked(
-                Hash::new(b"offline-cash-v1-ingress-test-network"),
+                Hash::new(b"kagemusha-v1-ingress-test-network"),
             ))
         }
         #[cfg(feature = "app_api")]
-        fn offline_ingress_asset() -> iroha_data_model::asset::AssetDefinitionId {
+        fn kagemusha_ingress_asset() -> iroha_data_model::asset::AssetDefinitionId {
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 iroha_data_model::domain::DomainId::try_new("offline", "universal")
                     .expect("fixture domain"),
@@ -2677,89 +2677,89 @@ pub mod extractors {
             )
         }
         #[cfg(feature = "app_api")]
-        fn offline_ingress_device_public_key(
+        fn kagemusha_ingress_device_public_key(
             key: &p256::ecdsa::SigningKey,
-        ) -> iroha_data_model::offline::OfflineCashDevicePublicKeyV1 {
+        ) -> iroha_data_model::kagemusha::KagemushaDevicePublicKeyV1 {
             use p256::elliptic_curve::sec1::ToEncodedPoint as _;
 
-            iroha_data_model::offline::OfflineCashDevicePublicKeyV1::from_sec1_bytes(
+            iroha_data_model::kagemusha::KagemushaDevicePublicKeyV1::from_sec1_bytes(
                 key.verifying_key().to_encoded_point(false).as_bytes(),
             )
             .expect("canonical P-256 device key")
         }
         #[cfg(feature = "app_api")]
-        fn offline_ingress_top_up_fixture()
-        -> iroha_torii_shared::offline_api::OfflineCashTopUpRequestV1 {
-            use iroha_data_model::offline::{
-                OFFLINE_CASH_ENCRYPTED_CREDIT_MAX_BYTES_V1, offline_cash_device_key_reference_v1,
-                offline_cash_liability_pool_id_v1,
+        fn kagemusha_ingress_top_up_fixture()
+        -> iroha_torii_shared::kagemusha_api::KagemushaTopUpRequestV1 {
+            use iroha_data_model::kagemusha::{
+                KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1, kagemusha_device_key_reference_v1,
+                kagemusha_liability_pool_id_v1,
             };
-            let recipient_public_key = offline_ingress_device_public_key(
+            let recipient_public_key = kagemusha_ingress_device_public_key(
                 &p256::ecdsa::SigningKey::from_slice(&[0x41; 32]).expect("fixture P-256 key"),
             );
-            let network_id = offline_ingress_network();
-            let asset = offline_ingress_asset();
-            iroha_torii_shared::offline_api::OfflineCashTopUpRequestV1 {
-                version: iroha_torii_shared::offline_api::OFFLINE_CASH_CHAIN_VERSION_V1,
+            let network_id = kagemusha_ingress_network();
+            let asset = kagemusha_ingress_asset();
+            iroha_torii_shared::kagemusha_api::KagemushaTopUpRequestV1 {
+                version: iroha_torii_shared::kagemusha_api::KAGEMUSHA_CHAIN_VERSION_V1,
                 operation_id: [0x42; 32],
                 issuance_commitment: [0; 32],
                 credit_id: [0; 32],
                 release_id: [0x43; 32],
                 network_id,
-                liability_pool_id: offline_cash_liability_pool_id_v1(&network_id, &asset)
+                liability_pool_id: kagemusha_liability_pool_id_v1(&network_id, &asset)
                     .expect("canonical liability pool"),
                 asset,
                 scale: 4,
                 amount: 50_000,
-                payer: offline_ingress_account(0x44),
-                recipient: offline_ingress_account(0x45),
+                payer: kagemusha_ingress_account(0x44),
+                recipient: kagemusha_ingress_account(0x45),
                 recipient_lane_id: [0x46; 32],
-                recipient_key_reference: offline_cash_device_key_reference_v1(
+                recipient_key_reference: kagemusha_device_key_reference_v1(
                     &recipient_public_key,
                 ),
                 recipient_public_key,
                 recipient_hardware_policy_id: [0x47; 32],
                 credit_commitment: [0x48; 32],
-                encrypted_credit: vec![0x49; OFFLINE_CASH_ENCRYPTED_CREDIT_MAX_BYTES_V1],
+                encrypted_credit: vec![0x49; KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1],
                 artifact_manifest_digest: [0x4A; 32],
             }
             .seal_identifiers()
-            .expect("seal Offline Cash V1 top-up identifiers")
+            .expect("seal Kagemusha V1 top-up identifiers")
         }
         #[cfg(feature = "app_api")]
-        fn offline_ingress_redemption_fixture()
-        -> iroha_torii_shared::offline_api::OfflineCashRedemptionRequestV1 {
-            use iroha_data_model::offline::{
-                OFFLINE_CASH_CURRENT_PROOFS_MAX_BYTES_V1,
-                OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1, OFFLINE_CASH_PARITY_PROOF_MAX_BYTES_V1,
-                OFFLINE_CASH_WIRE_VERSION_V1, OfflineCashDeviceSignatureV1,
-                OfflineCashPairedProofV1, OfflineCashRedemptionStatementV1,
-                OfflineCashRedemptionVoucherV1, offline_cash_device_key_reference_v1,
-                offline_cash_liability_pool_id_v1,
+        fn kagemusha_ingress_redemption_fixture()
+        -> iroha_torii_shared::kagemusha_api::KagemushaRedemptionRequestV1 {
+            use iroha_data_model::kagemusha::{
+                KAGEMUSHA_CURRENT_PROOFS_MAX_BYTES_V1,
+                KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1, KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1,
+                KAGEMUSHA_WIRE_VERSION_V1, KagemushaDeviceSignatureV1,
+                KagemushaPairedProofV1, KagemushaRedemptionStatementV1,
+                KagemushaRedemptionVoucherV1, kagemusha_device_key_reference_v1,
+                kagemusha_liability_pool_id_v1,
             };
             use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
 
             assert_eq!(
-                OFFLINE_CASH_PARITY_PROOF_MAX_BYTES_V1 * 2,
-                OFFLINE_CASH_CURRENT_PROOFS_MAX_BYTES_V1
+                KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1 * 2,
+                KAGEMUSHA_CURRENT_PROOFS_MAX_BYTES_V1
             );
             let sender_key = SigningKey::from_slice(&[0x51; 32]).expect("fixture P-256 key");
-            let sender_public_key = offline_ingress_device_public_key(&sender_key);
-            let network_id = offline_ingress_network();
-            let asset = offline_ingress_asset();
-            let statement = OfflineCashRedemptionStatementV1 {
-                version: OFFLINE_CASH_WIRE_VERSION_V1,
+            let sender_public_key = kagemusha_ingress_device_public_key(&sender_key);
+            let network_id = kagemusha_ingress_network();
+            let asset = kagemusha_ingress_asset();
+            let statement = KagemushaRedemptionStatementV1 {
+                version: KAGEMUSHA_WIRE_VERSION_V1,
                 release_id: [0x52; 32],
                 network_id,
                 asset: asset.clone(),
                 scale: 4,
                 amount: 12_000,
-                liability_pool_id: offline_cash_liability_pool_id_v1(&network_id, &asset)
+                liability_pool_id: kagemusha_liability_pool_id_v1(&network_id, &asset)
                     .expect("canonical liability pool"),
-                beneficiary: offline_ingress_account(0x53),
+                beneficiary: kagemusha_ingress_account(0x53),
                 sender_lane_id: [0x54; 32],
                 sender_hardware_epoch_id: [0x55; 32],
-                sender_key_reference: offline_cash_device_key_reference_v1(&sender_public_key),
+                sender_key_reference: kagemusha_device_key_reference_v1(&sender_public_key),
                 sender_hardware_policy_id: [0x56; 32],
                 sender_before_sequence: 10,
                 sender_after_sequence: 11,
@@ -2773,10 +2773,10 @@ pub mod extractors {
             }
             .seal_transition([0x5A; 32])
             .expect("seal redemption transition");
-            let mut voucher = OfflineCashRedemptionVoucherV1 {
-                version: OFFLINE_CASH_WIRE_VERSION_V1,
-                proof: OfflineCashPairedProofV1 {
-                    version: OFFLINE_CASH_WIRE_VERSION_V1,
+            let mut voucher = KagemushaRedemptionVoucherV1 {
+                version: KAGEMUSHA_WIRE_VERSION_V1,
+                proof: KagemushaPairedProofV1 {
+                    version: KAGEMUSHA_WIRE_VERSION_V1,
                     eq_protocol_digest: [0x5B; 32],
                     ep_protocol_digest: [0x5C; 32],
                     semantic_digest: statement
@@ -2787,17 +2787,17 @@ pub mod extractors {
                     eq_deferred_audit: [0x15; 32],
                     ep_deferred_audit: [0x16; 32],
                     predecessor_state:
-                        iroha_data_model::offline::OfflineCashPastaStateCommitmentV1::ZERO,
+                        iroha_data_model::kagemusha::KagemushaPastaStateCommitmentV1::ZERO,
                     successor_state:
-                        iroha_data_model::offline::OfflineCashPastaStateCommitmentV1::ZERO,
-                    eq_proof: vec![0x5D; OFFLINE_CASH_PARITY_PROOF_MAX_BYTES_V1],
-                    ep_proof: vec![0x5E; OFFLINE_CASH_PARITY_PROOF_MAX_BYTES_V1],
-                    eq_history: vec![0x5F; OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1],
-                    ep_history: vec![0x60; OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1],
+                        iroha_data_model::kagemusha::KagemushaPastaStateCommitmentV1::ZERO,
+                    eq_proof: vec![0x5D; KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1],
+                    ep_proof: vec![0x5E; KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1],
+                    eq_history: vec![0x5F; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+                    ep_history: vec![0x60; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
                 },
                 statement,
                 sender_public_key,
-                signature: OfflineCashDeviceSignatureV1::from_raw_bytes(&[1; 64])
+                signature: KagemushaDeviceSignatureV1::from_raw_bytes(&[1; 64])
                     .expect("placeholder scalar signature"),
                 artifact_manifest_digest: [0x61; 32],
             };
@@ -2808,16 +2808,16 @@ pub mod extractors {
             );
             let signature = signature.normalize_s().unwrap_or(signature);
             voucher.signature =
-                OfflineCashDeviceSignatureV1::from_raw_bytes(signature.to_bytes().as_ref())
+                KagemushaDeviceSignatureV1::from_raw_bytes(signature.to_bytes().as_ref())
                     .expect("canonical low-S signature");
-            let request = iroha_torii_shared::offline_api::OfflineCashRedemptionRequestV1 {
-                version: iroha_torii_shared::offline_api::OFFLINE_CASH_CHAIN_VERSION_V1,
+            let request = iroha_torii_shared::kagemusha_api::KagemushaRedemptionRequestV1 {
+                version: iroha_torii_shared::kagemusha_api::KAGEMUSHA_CHAIN_VERSION_V1,
                 operation_id: [0x62; 32],
                 voucher,
             };
             request
                 .validate()
-                .expect("valid Offline Cash V1 redemption");
+                .expect("valid Kagemusha V1 redemption");
             request
         }
         #[derive(Clone, Debug, PartialEq, crate::json_macros::JsonDeserialize)]
@@ -3947,7 +3947,7 @@ pub mod extractors {
             }
         }
         #[test]
-        fn offline_cash_v1_command_content_type_is_canonical_norito_only() {
+        fn kagemusha_v1_command_content_type_is_canonical_norito_only() {
             let mut headers = axum::http::HeaderMap::new();
             headers.insert(
                 CONTENT_TYPE,
@@ -3967,7 +3967,7 @@ pub mod extractors {
                 );
                 assert_eq!(
                     super::super::norito_request_content_type(&headers)
-                        .expect_err("Offline Cash commands have one wire representation")
+                        .expect_err("Kagemusha commands have one wire representation")
                         .status(),
                     StatusCode::UNSUPPORTED_MEDIA_TYPE,
                     "content_type={raw}"
@@ -3976,11 +3976,11 @@ pub mod extractors {
         }
         #[cfg(feature = "app_api")]
         #[test]
-        fn offline_norito_decoder_accepts_only_the_canonical_layout() {
+        fn kagemusha_norito_decoder_accepts_only_the_canonical_layout() {
             let value = vec![3_u64, 5, 8, 13, 21];
             let canonical = norito::encode_canonical(&value).expect("encode canonical fixture");
             assert_eq!(
-                decode_offline_canonical_norito::<Vec<u64>>(&canonical)
+                decode_kagemusha_canonical_norito::<Vec<u64>>(&canonical)
                     .expect("decode canonical fixture"),
                 value
             );
@@ -3992,8 +3992,8 @@ pub mod extractors {
             };
             assert_ne!(alternate, canonical);
             assert!(matches!(
-                decode_offline_canonical_norito::<Vec<u64>>(&alternate),
-                Err(OfflineCanonicalNoritoDecodeError::Norito(
+                decode_kagemusha_canonical_norito::<Vec<u64>>(&alternate),
+                Err(KagemushaCanonicalNoritoDecodeError::Norito(
                     norito::Error::NonCanonicalEncoding
                 ))
             ));
@@ -4001,21 +4001,21 @@ pub mod extractors {
                 norito::to_compressed_bytes(&value, Some(norito::CompressionConfig::default()))
                     .expect("encode compressed fixture");
             assert!(matches!(
-                decode_offline_canonical_norito::<Vec<u64>>(&compressed),
-                Err(OfflineCanonicalNoritoDecodeError::Norito(
+                decode_kagemusha_canonical_norito::<Vec<u64>>(&compressed),
+                Err(KagemushaCanonicalNoritoDecodeError::Norito(
                     norito::Error::NonCanonicalEncoding
                 ))
             ));
             let mut trailing = canonical;
             trailing.push(0);
             assert!(matches!(
-                decode_offline_canonical_norito::<Vec<u64>>(&trailing),
-                Err(OfflineCanonicalNoritoDecodeError::Norito(_))
+                decode_kagemusha_canonical_norito::<Vec<u64>>(&trailing),
+                Err(KagemushaCanonicalNoritoDecodeError::Norito(_))
             ));
         }
         #[cfg(feature = "app_api")]
         #[test]
-        fn offline_norito_decoder_rejects_forged_counts_before_allocation() {
+        fn kagemusha_norito_decoder_rejects_forged_counts_before_allocation() {
             const FORGED_LENGTH: u64 = 1 << 40;
             let frame = norito::core::frame_bare_with_header_flags::<Vec<u64>>(
                 &FORGED_LENGTH.to_le_bytes(),
@@ -4023,8 +4023,8 @@ pub mod extractors {
             )
             .expect("frame forged count with a valid checksum");
             assert!(matches!(
-                decode_offline_canonical_norito::<Vec<u64>>(&frame),
-                Err(OfflineCanonicalNoritoDecodeError::Norito(
+                decode_kagemusha_canonical_norito::<Vec<u64>>(&frame),
+                Err(KagemushaCanonicalNoritoDecodeError::Norito(
                     norito::Error::SequenceLengthExceeded { .. }
                         | norito::Error::TotalElementsExceeded { .. }
                         | norito::Error::TotalAllocationExceeded { .. }
@@ -4043,66 +4043,66 @@ pub mod extractors {
             )
             .expect("frame forged allocation with a valid checksum");
             assert!(matches!(
-                decode_offline_canonical_norito::<Vec<u64>>(&allocation_frame),
-                Err(OfflineCanonicalNoritoDecodeError::Norito(
+                decode_kagemusha_canonical_norito::<Vec<u64>>(&allocation_frame),
+                Err(KagemushaCanonicalNoritoDecodeError::Norito(
                     norito::Error::TotalAllocationExceeded { .. }
                 ))
             ));
         }
         #[cfg(feature = "app_api")]
         #[test]
-        fn offline_norito_body_caps_are_exact_and_fail_one_byte_over() {
+        fn kagemusha_norito_body_caps_are_exact_and_fail_one_byte_over() {
             assert_eq!(
-                <iroha_torii_shared::offline_api::OfflineCashTopUpRequestV1 as OfflineCanonicalNoritoSchema>::MAX_BODY_BYTES,
-                iroha_torii_shared::offline_api::OFFLINE_CASH_TOP_UP_REQUEST_MAX_BYTES_V1,
+                <iroha_torii_shared::kagemusha_api::KagemushaTopUpRequestV1 as KagemushaCanonicalNoritoSchemaV1>::MAX_BODY_BYTES,
+                iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1,
                 "the top-up extractor and shared decoder use one protocol cap"
             );
             assert_eq!(
-                <iroha_torii_shared::offline_api::OfflineCashRedemptionRequestV1 as OfflineCanonicalNoritoSchema>::MAX_BODY_BYTES,
-                iroha_torii_shared::offline_api::OFFLINE_CASH_REDEMPTION_REQUEST_MAX_BYTES_V1,
+                <iroha_torii_shared::kagemusha_api::KagemushaRedemptionRequestV1 as KagemushaCanonicalNoritoSchemaV1>::MAX_BODY_BYTES,
+                iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1,
                 "the redemption extractor and shared decoder use one protocol cap"
             );
             for maximum in [
-                iroha_torii_shared::offline_api::OFFLINE_CASH_TOP_UP_REQUEST_MAX_BYTES_V1,
-                iroha_torii_shared::offline_api::OFFLINE_CASH_REDEMPTION_REQUEST_MAX_BYTES_V1,
+                iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1,
+                iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1,
             ] {
                 assert!(
-                    validate_offline_canonical_norito_body_len(maximum, maximum).is_ok(),
+                    validate_kagemusha_canonical_norito_body_len(maximum, maximum).is_ok(),
                     "the exact protocol body cap must be accepted"
                 );
                 assert!(matches!(
-                    validate_offline_canonical_norito_body_len(maximum + 1, maximum),
-                    Err(OfflineCanonicalNoritoDecodeError::TooLarge {
+                    validate_kagemusha_canonical_norito_body_len(maximum + 1, maximum),
+                    Err(KagemushaCanonicalNoritoDecodeError::TooLarge {
                         actual,
                         maximum: rejected_maximum
                     }) if actual == maximum + 1 && rejected_maximum == maximum
                 ));
             }
             assert!(matches!(
-                validate_offline_canonical_norito_body_len(0, 1),
-                Err(OfflineCanonicalNoritoDecodeError::Empty)
+                validate_kagemusha_canonical_norito_body_len(0, 1),
+                Err(KagemushaCanonicalNoritoDecodeError::Empty)
             ));
         }
         #[cfg(feature = "app_api")]
         #[test]
-        fn offline_norito_boundary_shaped_v1_requests_use_shared_validation() {
+        fn kagemusha_norito_boundary_shaped_v1_requests_use_shared_validation() {
             fn assert_bounded_roundtrip<T>(value: &T)
             where
-                T: OfflineCanonicalNoritoSchema + core::fmt::Debug + PartialEq,
+                T: KagemushaCanonicalNoritoSchemaV1 + core::fmt::Debug + PartialEq,
             {
                 let canonical =
-                    norito::encode_canonical(value).expect("encode canonical Offline DTO");
+                    norito::encode_canonical(value).expect("encode canonical Kagemusha DTO");
                 assert!(
                     canonical.len() <= T::MAX_BODY_BYTES,
-                    "representative Offline DTO exceeds its exact route cap"
+                    "representative Kagemusha DTO exceeds its exact route cap"
                 );
-                let decoded = decode_offline_canonical_norito::<T>(&canonical)
-                    .expect("valid Offline Cash V1 DTO must pass the shared validator");
+                let decoded = decode_kagemusha_canonical_norito::<T>(&canonical)
+                    .expect("valid Kagemusha V1 DTO must pass the shared validator");
                 assert_eq!(&decoded, value);
             }
-            let top_up = offline_ingress_top_up_fixture();
+            let top_up = kagemusha_ingress_top_up_fixture();
             assert_bounded_roundtrip(&top_up);
-            let redemption = offline_ingress_redemption_fixture();
+            let redemption = kagemusha_ingress_redemption_fixture();
             assert_bounded_roundtrip(&redemption);
 
             let mut invalid_top_up = top_up;
@@ -4110,30 +4110,30 @@ pub mod extractors {
             let invalid = norito::encode_canonical(&invalid_top_up)
                 .expect("encode structurally decodable invalid top-up");
             assert!(matches!(
-                decode_offline_canonical_norito::<
-                    iroha_torii_shared::offline_api::OfflineCashTopUpRequestV1,
+                decode_kagemusha_canonical_norito::<
+                    iroha_torii_shared::kagemusha_api::KagemushaTopUpRequestV1,
                 >(&invalid),
-                Err(OfflineCanonicalNoritoDecodeError::Invalid(_))
+                Err(KagemushaCanonicalNoritoDecodeError::Invalid(_))
             ));
         }
         #[cfg(feature = "app_api")]
         #[tokio::test]
-        async fn offline_norito_http_extractor_accepts_boundary_redemption_and_rejects_invalid_forms()
+        async fn kagemusha_norito_http_extractor_accepts_boundary_redemption_and_rejects_invalid_forms()
          {
-            use iroha_torii_shared::offline_api::OfflineCashRedemptionRequestV1;
+            use iroha_torii_shared::kagemusha_api::KagemushaRedemptionRequestV1;
 
-            let redeem = offline_ingress_redemption_fixture();
+            let redeem = kagemusha_ingress_redemption_fixture();
             let canonical =
                 norito::encode_canonical(&redeem).expect("encode maximum-shaped redeem request");
             assert!(
                 canonical.len()
-                    <= <OfflineCashRedemptionRequestV1 as OfflineCanonicalNoritoSchema>::MAX_BODY_BYTES
+                    <= <KagemushaRedemptionRequestV1 as KagemushaCanonicalNoritoSchemaV1>::MAX_BODY_BYTES
             );
             let canonical_request = Request::builder()
                 .header(CONTENT_TYPE, super::super::NORITO_MIME_TYPE)
                 .body(Body::from(canonical))
                 .expect("canonical HTTP request");
-            let extracted = OfflineNorito::<OfflineCashRedemptionRequestV1>::from_request(
+            let extracted = KagemushaNorito::<KagemushaRedemptionRequestV1>::from_request(
                 canonical_request,
                 &(),
             )
@@ -4149,7 +4149,7 @@ pub mod extractors {
                         .expect("encode oversized paired-proof request"),
                 ))
                 .expect("oversized paired-proof HTTP request");
-            let rejection = OfflineNorito::<OfflineCashRedemptionRequestV1>::from_request(
+            let rejection = KagemushaNorito::<KagemushaRedemptionRequestV1>::from_request(
                 oversized_request,
                 &(),
             )
@@ -4163,7 +4163,7 @@ pub mod extractors {
                 .header(CONTENT_TYPE, super::super::NORITO_MIME_TYPE)
                 .body(Body::from(compressed))
                 .expect("compressed HTTP request");
-            let rejection = OfflineNorito::<OfflineCashRedemptionRequestV1>::from_request(
+            let rejection = KagemushaNorito::<KagemushaRedemptionRequestV1>::from_request(
                 compressed_request,
                 &(),
             )

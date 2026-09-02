@@ -165,9 +165,9 @@ mantissa plus an explicit scale. Higher-level ledger helpers additionally
 accept `Decimal` because it is a lossless host value and normalize it before
 calling the codec.
 
-## Offline Cash V1
+## Kagemusha V1
 
-`OfflineCashV1` is the sole typed Python codec/orchestration namespace for the
+`KagemushaV1` is the sole typed Python codec/orchestration namespace for the
 five-message request, proof-bearing acceptance authorization, one-use ticket,
 unlinkable payment, and acknowledgement exchange. It also covers mint
 authorization/credit binding and typed encrypted-credit opening, AAD, and
@@ -175,7 +175,7 @@ envelope values. Governed sender recovery uses the fully cross-bound,
 16,384-byte `NoCommitClosure` canonical wire; its proof remains native-verified.
 Requests support `single_exact`, `partial_until_total`,
 `bounded_multi_payment`, and `open_receive`; `open_receive` has no cumulative
-payment-count ceiling. Canonical Norito and unpadded `oc1:` parsers enforce
+payment-count ceiling. Canonical Norito and unpadded `kgm1:` parsers enforce
 per-message and composed-exchange bounds before decoding.
 
 Monetary proving, signing, encryption, decryption, and secure-device state
@@ -452,7 +452,7 @@ signing_client.register_zk_asset_and_wait(
 ```
 
 Asset registration binds the optional confidential shield and unshield
-verifier roles. Offline Cash V1 uses its own reserve-backed mint-fold and
+verifier roles. Kagemusha V1 uses its own reserve-backed mint-fold and
 redemption-voucher protocol rather than those confidential-asset instructions.
 
 ## Dataspace lifecycle helpers

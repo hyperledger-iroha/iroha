@@ -19,7 +19,7 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "node",
     target: "node18",
     // The first-release simplification audit measured a 1,082,470-byte eager
-    // closure before moving Norito-heavy validation, OfflineCashV1, SCCP, and route
+    // closure before moving Norito-heavy validation, KagemushaV1, SCCP, and route
     // governance behind the existing optional boundary. The reviewed eager path
     // is now 814,534 bytes (-24.8%); the 797 KiB ceiling leaves 1,594 bytes while
     // every deferred closure remains independently inventoried below. The small

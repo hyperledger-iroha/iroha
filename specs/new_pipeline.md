@@ -1864,16 +1864,16 @@ CRDT/commutative precompiles (optional)
 
 ---
 
-## Offline Cash V1 (protocol-bound aggregate balance)
+## Kagemusha V1 (protocol-bound aggregate balance)
 
 The first release does not expose generic deposit, transfer, or withdrawal
-instructions. Its sole offline-cash settlement surface is:
+instructions. Its sole kagemusha settlement surface is:
 
-- `TopUpOfflineCashV1`, which atomically debits the payer, credits the sole
+- `TopUpKagemushaV1`, which atomically debits the payer, credits the sole
   reserve for `(network, asset)`, and fixes one hardware-bound mint credit;
 - device-to-device `SendSplit` and `ReceiveFold`, which move value between
   recursively proven aggregate balances without touching consensus state; and
-- `RedeemOfflineCashV1`, which verifies a hardware-bound full or partial
+- `RedeemKagemushaV1`, which verifies a hardware-bound full or partial
   redemption voucher, consumes one terminal nullifier, debits the reserve, and
   credits the beneficiary atomically.
 

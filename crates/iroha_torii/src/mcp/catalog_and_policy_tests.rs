@@ -4189,16 +4189,16 @@ fn musubi_v1_fixture_routes_match_catalog_openapi_and_mcp() {
     );
 }
 #[test]
-fn offline_lifecycle_routes_are_available_to_operator_mcp_tools() {
+fn kagemusha_routes_are_available_to_operator_mcp_tools() {
     let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
     cfg.profile = ToriiMcpProfile::Operator;
     cfg.expose_operator_routes = true;
     let tools = build_tool_specs(&cfg);
     for path in [
-        iroha_torii_shared::route_catalog::offline::READINESS_PATH,
-        iroha_torii_shared::route_catalog::offline::TOP_UP_PATH,
-        iroha_torii_shared::route_catalog::offline::REDEEM_PATH,
-        iroha_torii_shared::route_catalog::offline::OPERATION_PATH,
+        iroha_torii_shared::route_catalog::kagemusha::READINESS_PATH,
+        iroha_torii_shared::route_catalog::kagemusha::TOP_UP_PATH,
+        iroha_torii_shared::route_catalog::kagemusha::REDEEM_PATH,
+        iroha_torii_shared::route_catalog::kagemusha::OPERATION_PATH,
     ] {
         assert!(
             tools.iter().any(|tool| {
@@ -4401,15 +4401,15 @@ fn audited_faucet_handshake_allowlist_requires_exact_name_method_and_path() {
     }
 }
 #[test]
-fn tool_registry_honors_universal_offline_mcp_projection() {
+fn tool_registry_honors_universal_kagemusha_mcp_projection() {
     let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
     cfg.profile = ToriiMcpProfile::Operator;
     cfg.expose_operator_routes = true;
     let tools = build_tool_specs(&cfg);
-    for route in route_catalog::offline::ROUTES {
+    for route in route_catalog::kagemusha::ROUTES {
         let method = match route.method() {
             CatalogHttpMethod::Any => {
-                panic!("offline routes must never use protocol-wide ANY matching")
+                panic!("Kagemusha routes must never use protocol-wide ANY matching")
             }
             CatalogHttpMethod::Get => Method::GET,
             CatalogHttpMethod::Post => Method::POST,

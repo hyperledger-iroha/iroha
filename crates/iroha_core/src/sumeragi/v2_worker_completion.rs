@@ -1195,8 +1195,8 @@ impl V2IoHandle {
         context: wire::HeightContext,
         key_pair: KeyPair,
         local_validator: Option<wire::ValidatorIndex>,
-        offline_cash_mint_finality_authority: Option<
-            Arc<crate::zk::offline_cash_v1_recursion::OfflineCashMintFinalityLocalAuthorityV1>,
+        kagemusha_mint_finality_authority: Option<
+            Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>,
         >,
         auxiliary_queue_capacity: usize,
         consensus_queue_capacity: usize,
@@ -1292,13 +1292,13 @@ impl V2IoHandle {
                                         task,
                                         restore_outbound_payload,
                                     } => {
-                                        sign_consensus_task_with_offline_cash_authority(
+                                        sign_consensus_task_with_kagemusha_authority(
                                             body_store
                                                 .as_ref()
                                                 .expect("body store remains live before Retire"),
                                             &context,
                                             &key_pair,
-                                            offline_cash_mint_finality_authority.as_deref(),
+                                            kagemusha_mint_finality_authority.as_deref(),
                                             task,
                                             restore_outbound_payload,
                                         )
@@ -1418,13 +1418,13 @@ impl V2IoHandle {
                                             }
                                         }),
                                     V2IoCommand::RecoveredLifecycleSign(task) => {
-                                        sign_recovered_lifecycle_task_with_offline_cash_authority(
+                                        sign_recovered_lifecycle_task_with_kagemusha_authority(
                                             body_store
                                                 .as_ref()
                                                 .expect("body store remains live before Retire"),
                                             &context,
                                             &key_pair,
-                                            offline_cash_mint_finality_authority.as_deref(),
+                                            kagemusha_mint_finality_authority.as_deref(),
                                             task,
                                         )
                                         .map(|result| {

@@ -203,7 +203,7 @@ regex = "1.11.0"
 http = "1.3.1"
 halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch", "multicore"] }
 ff = "0.13.1"
-# Offline Cash V1's paired-Pasta recursive backend uses the Axiom Poseidon
+# Kagemusha V1's paired-Pasta recursive backend uses the Axiom Poseidon
 # transcript and IPA verifier in production. These revisions are pinned by the
 # workspace lockfile so consensus verification never depends on a test-only
 # feature surface.

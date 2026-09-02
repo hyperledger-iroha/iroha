@@ -20140,7 +20140,7 @@ pub mod isi {
             for asset_definition_id in remove_asset_definitions {
                 state_transaction
                     .settlement
-                    .offline
+                    .kagemusha
                     .reserve_accounts
                     .remove(&asset_definition_id);
                 state_transaction
@@ -20648,13 +20648,13 @@ pub mod isi {
                                 }
                             }
                             if next.id()
-                                == &iroha_data_model::parameter::system::OfflineCashMintFinalityNextEpochParameterV1::parameter_id()
+                                == &iroha_data_model::parameter::system::KagemushaMintFinalityNextEpochParameterV1::parameter_id()
                             {
-                                let staged = iroha_data_model::parameter::system::OfflineCashMintFinalityNextEpochParameterV1::from_custom_parameter(&next)
+                                let staged = iroha_data_model::parameter::system::KagemushaMintFinalityNextEpochParameterV1::from_custom_parameter(&next)
                                     .ok_or_else(|| {
                                         InstructionExecutionError::InvalidParameter(
                                             InvalidParameterError::SmartContract(
-                                                "invalid Offline Cash V1 next mint-finality roster parameter"
+                                                "invalid Kagemusha V1 next mint-finality roster parameter"
                                                     .to_owned(),
                                             ),
                                         )
@@ -20666,11 +20666,11 @@ pub mod isi {
                                     .custom()
                                     .get(next.id())
                                 {
-                                    let previous = iroha_data_model::parameter::system::OfflineCashMintFinalityNextEpochParameterV1::from_custom_parameter(previous_custom)
+                                    let previous = iroha_data_model::parameter::system::KagemushaMintFinalityNextEpochParameterV1::from_custom_parameter(previous_custom)
                                         .ok_or_else(|| {
                                             InstructionExecutionError::InvalidParameter(
                                                 InvalidParameterError::SmartContract(
-                                                    "installed Offline Cash V1 next mint-finality roster parameter is invalid"
+                                                    "installed Kagemusha V1 next mint-finality roster parameter is invalid"
                                                         .to_owned(),
                                                 ),
                                             )
@@ -20680,7 +20680,7 @@ pub mod isi {
                                     {
                                         return Err(InstructionExecutionError::InvalidParameter(
                                             InvalidParameterError::SmartContract(
-                                                "Offline Cash V1 next mint-finality roster cannot change network or roll back its epoch"
+                                                "Kagemusha V1 next mint-finality roster cannot change network or roll back its epoch"
                                                     .to_owned(),
                                             ),
                                         ));
@@ -33271,7 +33271,7 @@ seiyaku GovernanceLifecycle {
                 "asset definition should remain after rejected unregister"
             );
         });
-        world_test!(unregister_domain_removes_offline_reserve_mappings_for_domain_asset_definitions {
+        world_test!(unregister_domain_removes_kagemusha_reserve_mappings_for_domain_asset_definitions {
             let state = blank_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "world").expect("domain id parses");
@@ -33280,11 +33280,11 @@ seiyaku GovernanceLifecycle {
                 .expect_execute(&ALICE_ID, &mut stx, "register cleanup domain");
             let reward_def = AssetDefinitionId::derive_from_components(
                 domain_id.clone(),
-                "offline".parse().unwrap(),
+                "kagemusha".parse().unwrap(),
             );
             Register::asset_definition(NewAssetDefinition {
                 id: reward_def.clone(),
-                name: "offline".to_owned(),
+                name: "Kagemusha".to_owned(),
                 description: None,
                 alias: None,
                 spec: NumericSpec::integer(),
@@ -33295,38 +33295,38 @@ seiyaku GovernanceLifecycle {
                 owning_domain: None,
             })
             .expect_execute(&ALICE_ID, &mut stx, "register cleanup-domain asset definition");
-            let escrow = crate::smartcontracts::isi::domain::isi::offline_cash_reserve_account_id(
+            let escrow = crate::smartcontracts::isi::domain::isi::kagemusha_reserve_account_id(
                 stx.network_id(),
                 &reward_def,
             );
             stx.settlement
-                .offline
+                .kagemusha
                 .reserve_accounts
                 .insert(reward_def.clone(), escrow);
             assert!(
                 stx.settlement
-                    .offline
+                    .kagemusha
                     .reserve_accounts
                     .get(&reward_def)
                     .is_some(),
-                "Offline Cash reserve mapping should exist before domain unregister"
+                "Kagemusha reserve mapping should exist before domain unregister"
             );
             Unregister::domain(domain_id.clone())
-                .expect_execute(&ALICE_ID, &mut stx, "domain unregister should remove domain-local Offline Cash reserve mapping");
+                .expect_execute(&ALICE_ID, &mut stx, "domain unregister should remove domain-local Kagemusha reserve mapping");
             assert!(
                 stx.settlement
-                    .offline
+                    .kagemusha
                     .reserve_accounts
                     .get(&reward_def)
                     .is_none(),
-                "Offline Cash reserve mapping should be removed with domain asset definitions"
+                "Kagemusha reserve mapping should be removed with domain asset definitions"
             );
             assert!(
                 stx.world.domains.get(&domain_id).is_none(),
                 "domain should be removed"
             );
         });
-        world_test!(unregister_domain_preserves_accounts_with_active_settlement_oracle_and_offline_state {
+        world_test!(unregister_domain_preserves_accounts_with_active_settlement_oracle_and_kagemusha_state {
             let state = blank_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "world").expect("domain id parses");

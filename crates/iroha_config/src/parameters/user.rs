@@ -8630,20 +8630,20 @@ impl Queue {
 /// User-level configuration container for `Settlement`.
 #[derive(Debug, ReadConfig, Clone, Default)]
 pub struct Settlement {
-    /// Offline Cash V1 runtime-state configuration.
+    /// Kagemusha V1 runtime-state configuration.
     #[config(nested)]
-    pub offline: Offline,
+    pub kagemusha: Kagemusha,
     /// Router configuration (shadow price, buffers).
     #[config(nested)]
     pub router: Router,
 }
-/// User-level Offline Cash V1 proof-release configuration.
+/// User-level Kagemusha V1 proof-release configuration.
 ///
 /// The six paths are all-or-none. Their contents do not become monetary authority merely by
 /// being configured: startup threshold-authenticates the release and rechecks every artifact's
 /// content address and compiled protocol identity.
 #[derive(Debug, ReadConfig, Clone, Default)]
-pub struct Offline {
+pub struct Kagemusha {
     /// Canonical Norito release manifest.
     pub release_manifest_path: Option<PathBuf>,
     /// Canonical Norito internal qualification receipt.
@@ -8813,14 +8813,14 @@ impl Settlement {
     /// Convert this user configuration into the runtime representation.
     pub fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Settlement {
         actual::Settlement {
-            offline: self.offline.parse(emitter),
+            kagemusha: self.kagemusha.parse(emitter),
             router: self.router.parse(emitter),
         }
     }
 }
-impl Offline {
+impl Kagemusha {
     /// Validate the all-or-none release file set and construct runtime configuration.
-    pub fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Offline {
+    pub fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Kagemusha {
         let paths = [
             self.release_manifest_path.is_some(),
             self.validation_receipt_path.is_some(),
@@ -8833,7 +8833,7 @@ impl Offline {
             if paths.iter().all(|present| !present) {
                 None
             } else if paths.iter().all(|present| *present) {
-                Some(actual::OfflineCashV1ProofReleaseFiles {
+                Some(actual::KagemushaV1ProofReleaseFiles {
                     manifest: self
                         .release_manifest_path
                         .expect("all release paths were checked present"),
@@ -8855,11 +8855,11 @@ impl Offline {
                 })
             } else {
                 emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
-                    "settlement.offline proof-release paths must be configured all together",
+                    "settlement.kagemusha proof-release paths must be configured all together",
                 ));
                 None
             };
-        actual::Offline {
+        actual::Kagemusha {
             reserve_accounts: BTreeMap::new(),
             proof_release,
         }
@@ -14577,13 +14577,13 @@ pub struct Torii {
     /// Maximum proof-bearing request bodies buffered concurrently before handler admission.
     ///
     /// This aggregate gate also covers SCCP bridge proof/message submissions and
-    /// Offline Cash V1 top-up/redemption command bodies.
+    /// Kagemusha V1 top-up/redemption command bodies.
     #[config(default = "defaults::torii::PROOF_BODY_MAX_INFLIGHT")]
     pub proof_body_max_inflight: NonZeroUsize,
     /// Absolute deadline for reading one admitted proof-bearing request body (milliseconds).
     ///
     /// This deadline also applies to SCCP bridge proof/message submissions and
-    /// Offline Cash V1 top-up/redemption command bodies.
+    /// Kagemusha V1 top-up/redemption command bodies.
     #[config(
         default = "DurationMs(std::time::Duration::from_millis(defaults::torii::PROOF_BODY_READ_TIMEOUT_MS))"
     )]
@@ -14894,8 +14894,8 @@ pub struct Torii {
     pub account_onboarding: Option<AccountOnboarding>,
     /// Optional faucet configuration for app API endpoints.
     pub faucet: Option<ToriiFaucet>,
-    /// Optional Offline Cash V1 command-submission authority for app API endpoints.
-    pub offline_cash_v1_commands: Option<ToriiOfflineCashV1Commands>,
+    /// Optional Kagemusha V1 command-submission authority for app API endpoints.
+    pub kagemusha_v1_commands: Option<ToriiKagemushaV1Commands>,
     /// Optional RAM-LFE runtime configuration for app API endpoints.
     pub ram_lfe: Option<ToriiRamLfe>,
     /// Optional transaction-history visibility/auth configuration for direct wallet reads.
@@ -14937,8 +14937,8 @@ impl core::fmt::Debug for Torii {
             )
             .field("faucet_configured", &self.faucet.is_some())
             .field(
-                "offline_cash_v1_commands",
-                &RedactedConfigSecret::present(self.offline_cash_v1_commands.is_some()),
+                "kagemusha_v1_commands",
+                &RedactedConfigSecret::present(self.kagemusha_v1_commands.is_some()),
             )
             .field(
                 "ram_lfe_program_count",
@@ -16174,8 +16174,8 @@ impl Torii {
                 .account_onboarding
                 .and_then(|config| config.parse(emitter)),
             faucet: self.faucet.and_then(|config| config.parse(emitter)),
-            offline_cash_v1_commands: self
-                .offline_cash_v1_commands
+            kagemusha_v1_commands: self
+                .kagemusha_v1_commands
                 .and_then(|config| config.parse(emitter)),
             ram_lfe: self.ram_lfe.and_then(|config| config.parse(emitter)),
             tx_history: self.tx_history.map(|config| config.parse(emitter)),
@@ -18522,7 +18522,7 @@ impl AccountOnboarding {
             "CanManagePeers",
             "CanManageLaneRelayEmergency",
             "CanResolveEscrowDispute",
-            "CanManageOfflineReserve",
+            "CanManageKagemushaReserve",
             "CanSetParameters",
             "CanSetHijiriParameters",
             "CanManageSccpGovernance",
@@ -19041,33 +19041,33 @@ impl ToriiFaucet {
         }
     }
 }
-/// Offline Cash V1 command-submission configuration for app-facing Offline Cash V1 routes.
+/// Kagemusha V1 command-submission configuration for app-facing Kagemusha V1 routes.
 ///
 /// The whole table is optional. When present, every policy and capacity field is required.
 #[derive(Debug, Clone, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-pub struct ToriiOfflineCashV1Commands {
-    /// Private key for the account submitting typed Offline Cash V1 instructions.
+pub struct ToriiKagemushaV1Commands {
+    /// Private key for the account submitting typed Kagemusha V1 instructions.
     pub private_key: Option<PrivateKey>,
-    /// Owner-held file containing the Offline Cash V1 command submitter's private key.
+    /// Owner-held file containing the Kagemusha V1 command submitter's private key.
     pub private_key_file: Option<WithOrigin<PathBuf>>,
     /// Minimum live XOR balance required for the self-funded command authority.
     ///
     /// This has no default: enabling the command service requires an explicit,
     /// positive operational funding floor.
     pub minimum_xor_balance: Quantity,
-    /// Maximum value accepted for one Offline Cash V1 command.
+    /// Maximum value accepted for one Kagemusha V1 command.
     pub max_tx_value: Quantity,
     /// Maximum number of admitted and in-flight operations retained in memory.
     pub operation_registry_max_entries: usize,
     /// Maximum canonical bytes reserved by admitted and in-flight operations.
     pub operation_registry_max_bytes: usize,
 }
-impl ToriiOfflineCashV1Commands {
+impl ToriiKagemushaV1Commands {
     fn parse(
         self,
         emitter: &mut Emitter<ParseError>,
-    ) -> Option<actual::ToriiOfflineCashV1Commands> {
+    ) -> Option<actual::ToriiKagemushaV1Commands> {
         let Self {
             private_key,
             private_key_file,
@@ -19080,13 +19080,13 @@ impl ToriiOfflineCashV1Commands {
             (Some(_), Some(_)) => {
                 emit_torii_config_error(
                     emitter,
-                    "torii.offline_cash_v1_commands.private_key and torii.offline_cash_v1_commands.private_key_file are mutually exclusive",
+                    "torii.kagemusha_v1_commands.private_key and torii.kagemusha_v1_commands.private_key_file are mutually exclusive",
                 );
                 None
             }
             (Some(private_key), None) => Some(private_key),
             (None, Some(file)) => {
-                match read_private_key_file(file, "torii.offline_cash_v1_commands.private_key_file")
+                match read_private_key_file(file, "torii.kagemusha_v1_commands.private_key_file")
                 {
                     Ok((private_key, _)) => Some(private_key),
                     Err(error) => {
@@ -19098,7 +19098,7 @@ impl ToriiOfflineCashV1Commands {
             (None, None) => {
                 emit_torii_config_error(
                     emitter,
-                    "exactly one of torii.offline_cash_v1_commands.private_key or torii.offline_cash_v1_commands.private_key_file is required",
+                    "exactly one of torii.kagemusha_v1_commands.private_key or torii.kagemusha_v1_commands.private_key_file is required",
                 );
                 None
             }
@@ -19109,7 +19109,7 @@ impl ToriiOfflineCashV1Commands {
                 Err(error) => {
                     emit_torii_config_error(
                         emitter,
-                        format!("invalid torii.offline_cash_v1_commands.private_key: {error}"),
+                        format!("invalid torii.kagemusha_v1_commands.private_key: {error}"),
                     );
                     return None;
                 }
@@ -19119,14 +19119,14 @@ impl ToriiOfflineCashV1Commands {
                 Ok(_) => {
                     emit_torii_config_error(
                         emitter,
-                        "torii.offline_cash_v1_commands.private_key must use ed25519 or secp256k1",
+                        "torii.kagemusha_v1_commands.private_key must use ed25519 or secp256k1",
                     );
                     None
                 }
                 Err(error) => {
                     emit_torii_config_error(
                         emitter,
-                        format!("invalid torii.offline_cash_v1_commands.public_key: {error}"),
+                        format!("invalid torii.kagemusha_v1_commands.public_key: {error}"),
                     );
                     None
                 }
@@ -19136,38 +19136,38 @@ impl ToriiOfflineCashV1Commands {
         if !minimum_xor_balance_valid {
             emit_torii_config_error(
                 emitter,
-                "torii.offline_cash_v1_commands.minimum_xor_balance must be greater than zero",
+                "torii.kagemusha_v1_commands.minimum_xor_balance must be greater than zero",
             );
         }
         let max_tx_value_valid = !max_tx_value.is_zero();
         if !max_tx_value_valid {
             emit_torii_config_error(
                 emitter,
-                "torii.offline_cash_v1_commands.max_tx_value must be greater than zero",
+                "torii.kagemusha_v1_commands.max_tx_value must be greater than zero",
             );
         }
         let operation_registry_max_entries = NonZeroUsize::new(operation_registry_max_entries);
         if operation_registry_max_entries.is_none() {
             emit_torii_config_error(
                 emitter,
-                "torii.offline_cash_v1_commands.operation_registry_max_entries must be greater than zero",
+                "torii.kagemusha_v1_commands.operation_registry_max_entries must be greater than zero",
             );
         }
         let operation_registry_max_bytes = NonZeroUsize::new(operation_registry_max_bytes);
         if operation_registry_max_bytes.is_none() {
             emit_torii_config_error(
                 emitter,
-                "torii.offline_cash_v1_commands.operation_registry_max_bytes must be greater than zero",
+                "torii.kagemusha_v1_commands.operation_registry_max_bytes must be greater than zero",
             );
         } else if operation_registry_max_bytes.is_some_and(|limit| {
             limit.get()
-                < defaults::torii::offline_cash_v1_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY
+                < defaults::torii::kagemusha_v1_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY
         }) {
             emit_torii_config_error(
                 emitter,
                 format!(
-                    "torii.offline_cash_v1_commands.operation_registry_max_bytes must be at least {}",
-                    defaults::torii::offline_cash_v1_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY
+                    "torii.kagemusha_v1_commands.operation_registry_max_bytes must be at least {}",
+                    defaults::torii::kagemusha_v1_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY
                 ),
             );
             return None;
@@ -19188,7 +19188,7 @@ impl ToriiOfflineCashV1Commands {
         else {
             return None;
         };
-        Some(actual::ToriiOfflineCashV1Commands {
+        Some(actual::ToriiKagemushaV1Commands {
             authority: AccountId::new(key_pair.public_key().clone()),
             key_pair,
             minimum_xor_balance,
@@ -19202,8 +19202,8 @@ impl ToriiOfflineCashV1Commands {
 #[path = "user/torii_faucet_tests.rs"]
 mod torii_faucet_tests;
 #[cfg(test)]
-#[path = "user/torii_offline_cash_v1_commands_tests.rs"]
-mod torii_offline_cash_v1_commands_tests;
+#[path = "user/torii_kagemusha_v1_commands_tests.rs"]
+mod torii_kagemusha_v1_commands_tests;
 /// RAM-LFE runtime configuration.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -34110,7 +34110,7 @@ impl IsoCurrencyAsset {
     }
 }
 #[cfg(test)]
-mod offline_cfg_tests {
+mod configuration_regression_tests {
     use super::*;
     use core::str::FromStr;
     use iroha_data_model::DomainId;
@@ -35280,15 +35280,15 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         config.network.soranet_vpn.operator_private_key = Some(private_key.clone());
         config.torii.receipt_public_key = Some(key_pair.public_key().clone());
         config.torii.receipt_private_key = Some(private_key.clone());
-        config.torii.offline_cash_v1_commands = Some(super::ToriiOfflineCashV1Commands {
+        config.torii.kagemusha_v1_commands = Some(super::ToriiKagemushaV1Commands {
             private_key: Some(private_key.clone()),
             private_key_file: None,
             minimum_xor_balance: Quantity::from(1_u64),
-            max_tx_value: defaults::torii::offline_cash_v1_commands::max_tx_value(),
+            max_tx_value: defaults::torii::kagemusha_v1_commands::max_tx_value(),
             operation_registry_max_entries:
-                defaults::torii::offline_cash_v1_commands::OPERATION_REGISTRY_MAX_ENTRIES,
+                defaults::torii::kagemusha_v1_commands::OPERATION_REGISTRY_MAX_ENTRIES,
             operation_registry_max_bytes:
-                defaults::torii::offline_cash_v1_commands::OPERATION_REGISTRY_MAX_BYTES,
+                defaults::torii::kagemusha_v1_commands::OPERATION_REGISTRY_MAX_BYTES,
         });
         config.torii.ram_lfe = Some(super::ToriiRamLfe {
             programs: vec![super::ToriiRamLfeProgram {
@@ -35311,12 +35311,12 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             ("SoraNet VPN", format!("{:?}", config.network.soranet_vpn)),
             ("torii receipt", format!("{:?}", config.torii)),
             (
-                "Offline Cash V1 commands",
+                "Kagemusha V1 commands",
                 format!(
                     "{:?}",
                     config
                         .torii
-                        .offline_cash_v1_commands
+                        .kagemusha_v1_commands
                         .as_ref()
                         .expect("configured commands")
                 ),
@@ -35350,8 +35350,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             ),
             ("actual Torii", format!("{:?}", actual.torii)),
             (
-                "actual Offline Cash V1 commands",
-                format!("{:?}", actual.torii.offline_cash_v1_commands),
+                "actual Kagemusha V1 commands",
+                format!("{:?}", actual.torii.kagemusha_v1_commands),
             ),
             ("actual RAM-LFE", format!("{:?}", actual.torii.ram_lfe)),
         ] {
@@ -35580,7 +35580,7 @@ policy_digest_hex = "{policy_digest_hex}"
         table
     }
     #[test]
-    fn legacy_offline_enablement_and_catalog_keys_are_rejected() {
+    fn pre_release_settlement_enablement_and_catalog_keys_are_rejected() {
         for (key, value) in [
             ("enabled", Value::Boolean(false)),
             ("escrow_required", Value::Boolean(true)),
@@ -35597,7 +35597,7 @@ policy_digest_hex = "{policy_digest_hex}"
                 Value::Table(Table::from_iter([(key.into(), value)])),
             );
             let error = actual::Root::from_toml_source(TomlSource::inline(table))
-                .expect_err("retired offline enablement keys must be rejected");
+                .expect_err("retired pre-release settlement keys must be rejected");
             assert!(
                 format!("{error:?}").contains(key),
                 "unexpected error: {error:?}"
@@ -35605,10 +35605,10 @@ policy_digest_hex = "{policy_digest_hex}"
         }
     }
     #[test]
-    fn absent_offline_switch_preserves_offline_cash_v1_command_middleware() {
+    fn kagemusha_v1_command_middleware_needs_no_feature_switch() {
         let mut table = base_table();
         let key_pair = KeyPair::try_from_seed(
-            b"iroha:config:test:offline-independent-command-service".to_vec(),
+            b"iroha:config:test:kagemusha-command-service".to_vec(),
             Algorithm::Ed25519,
         )
         .expect("fixture seed derives command-service keypair");
@@ -35620,7 +35620,7 @@ policy_digest_hex = "{policy_digest_hex}"
             .and_then(Value::as_table_mut)
             .expect("torii table");
         torii.insert(
-            "offline_cash_v1_commands".into(),
+            "kagemusha_v1_commands".into(),
             Value::Table(Table::from_iter([
                 ("private_key".into(), Value::String(private_key)),
                 ("minimum_xor_balance".into(), Value::String("1".into())),
@@ -35636,8 +35636,8 @@ policy_digest_hex = "{policy_digest_hex}"
             ])),
         );
         let actual = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect("offline-independent command middleware must remain configured");
-        assert!(actual.torii.offline_cash_v1_commands.is_some());
+            .expect("Kagemusha command middleware must remain configured");
+        assert!(actual.torii.kagemusha_v1_commands.is_some());
     }
     #[test]
     fn zk_prover_scan_budget_must_fit_one_maximum_body() {
@@ -35682,10 +35682,10 @@ policy_digest_hex = "{policy_digest_hex}"
     include!("user/verified_source_ingress_tests.rs");
     include!("user/iso_bridge_store_memory_tests.rs");
     #[test]
-    fn offline_cash_v1_commands_reject_redundant_enabled_switch() {
+    fn kagemusha_v1_commands_reject_redundant_enabled_switch() {
         let mut table = base_table();
         let key_pair = KeyPair::try_from_seed(
-            b"iroha:config:test:offline-cash-v1-enabled-retired".to_vec(),
+            b"iroha:config:test:kagemusha-v1-enabled-retired".to_vec(),
             Algorithm::Ed25519,
         )
         .expect("fixture seed derives command-service keypair");
@@ -35697,7 +35697,7 @@ policy_digest_hex = "{policy_digest_hex}"
             .and_then(Value::as_table_mut)
             .expect("torii table");
         torii.insert(
-            "offline_cash_v1_commands".into(),
+            "kagemusha_v1_commands".into(),
             Value::Table(Table::from_iter([
                 ("private_key".into(), Value::String(private_key)),
                 ("minimum_xor_balance".into(), Value::String("1".into())),
@@ -35723,14 +35723,14 @@ policy_digest_hex = "{policy_digest_hex}"
         );
     }
     #[test]
-    fn enabled_offline_cash_v1_commands_keep_malformed_subordinates_strict() {
+    fn enabled_kagemusha_v1_commands_keep_malformed_subordinates_strict() {
         let mut table = base_table();
         let torii = table
             .get_mut("torii")
             .and_then(Value::as_table_mut)
             .expect("torii table");
         torii.insert(
-            "offline_cash_v1_commands".into(),
+            "kagemusha_v1_commands".into(),
             Value::Table(Table::from_iter([
                 ("private_key".into(), Value::Integer(7)),
                 ("minimum_xor_balance".into(), Value::Array(Vec::new())),
@@ -35740,7 +35740,7 @@ policy_digest_hex = "{policy_digest_hex}"
             .expect_err("enabled command service must validate subordinate types");
     }
     #[test]
-    fn absent_offline_switch_does_not_mask_malformed_settlement_parent() {
+    fn absence_of_pre_release_switch_does_not_mask_malformed_settlement_parent() {
         let mut table = base_table();
         table.insert(
             "settlement".into(),
@@ -39364,8 +39364,8 @@ max_bytes_per_minute = 262144
     include!("user/runtime_tail_tests.rs");
 }
 #[cfg(test)]
-#[path = "user/offline_cash_v1_settlement_tests.rs"]
-mod offline_cash_v1_settlement_tests;
+#[path = "user/kagemusha_v1_settlement_tests.rs"]
+mod kagemusha_v1_settlement_tests;
 #[cfg(test)]
 #[path = "user/settlement_router_tests.rs"]
 mod settlement_router_tests;

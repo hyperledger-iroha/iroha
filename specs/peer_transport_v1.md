@@ -1,25 +1,25 @@
-# Offline Cash V1 peer transport
+# Kagemusha V1 peer transport
 
-Offline Cash V1 has one transport-neutral five-message exchange:
+Kagemusha V1 has one transport-neutral five-message exchange:
 
 1. the receiver emits `PaymentRequestV1`;
 2. the sender emits a release-bound proof-bearing
-   `OfflineCashAcceptanceIntentAuthorizationV1`;
+   `KagemushaAcceptanceIntentAuthorizationV1`;
 3. after verifying that proof and reserving capacity, receiver hardware emits
-   one exact-amount `OfflineCashAcceptanceTicketV1`;
+   one exact-amount `KagemushaAcceptanceTicketV1`;
 4. the sender commits an irreversible receiver-bound credit and emits
    `PaymentV1`; and
 5. the receiver durably stages the exact payment and emits
    `AcknowledgementV1`.
 
-An authenticated `OfflineCashNoCommitClosureV1` is a separate recovery
+An authenticated `KagemushaNoCommitClosureV1` is a separate recovery
 envelope, not a sixth message in the normal payment exchange. It embeds the
 exact request, the original sender authorization, the exact issued ticket, and
 the proof that closes that intent without committing a payment. Its bindings
 prevent a closure from being replayed across a different request,
 authorization, ticket, release, suite, verifying-key set, or artifact manifest.
 
-All binary values are canonical Norito. Text transport is exactly `oc1:` followed
+All binary values are canonical Norito. Text transport is exactly `kgm1:` followed
 by unpadded base64url of one canonical binary value. There are no alternate
 profiles, compatibility discriminators, legacy prefixes, or heuristic decoders.
 
@@ -60,14 +60,14 @@ the sender successor.
 Bounds protect parsers and physical transports; none depends on balance history,
 receipt count, fan-in, origins, hops, ancestry, or proof depth.
 
-| Value | Canonical binary maximum | `oc1:` text maximum |
+| Value | Canonical binary maximum | `kgm1:` text maximum |
 | --- | ---: | ---: |
 | `PaymentRequestV1` | 1,024 bytes | 1,370 bytes |
-| `OfflineCashAcceptanceIntentAuthorizationV1` | 7,936 bytes | 10,586 bytes |
-| `OfflineCashAcceptanceTicketV1` | 1,024 bytes | 1,370 bytes |
+| `KagemushaAcceptanceIntentAuthorizationV1` | 7,936 bytes | 10,586 bytes |
+| `KagemushaAcceptanceTicketV1` | 1,024 bytes | 1,370 bytes |
 | `PaymentV1` | 7,936 bytes | 10,586 bytes |
 | `AcknowledgementV1` | 512 bytes | 687 bytes |
-| `OfflineCashNoCommitClosureV1` recovery envelope | 16,384 bytes | 21,850 bytes |
+| `KagemushaNoCommitClosureV1` recovery envelope | 16,384 bytes | 21,850 bytes |
 | terminal request/payment/ack trio | 9,211 bytes | 12,288 bytes |
 | pre-ticket request/authorization/ticket absolute cap | 9,984 bytes | 13,326 bytes |
 | complete five-message absolute cap | 18,171 bytes | 24,244 bytes |
@@ -86,12 +86,12 @@ all normal-exchange totals.
 
 Decoders enforce the applicable byte ceiling before allocation, require the
 canonical frame and exact V1 type, reject trailing bytes, and then run semantic
-validation. A lower implementation transport limit is not an Offline Cash
+validation. A lower implementation transport limit is not an Kagemusha
 profile and cannot be advertised as offline-capable.
 
 ## QR
 
-A QR implementation carries each independently framed `oc1:` value directly
+A QR implementation carries each independently framed `kgm1:` value directly
 when it fits one symbol.
 For animated QR, frames contain a session ID, value kind, total encoded length,
 offset, frame payload, and checksum. The receiver accepts frames in any order,
@@ -107,7 +107,7 @@ concerns. Reassembly uses the same overlap/conflict rules as animated QR and mus
 not acknowledge a payment before the device's irreversible inbox stage completes.
 
 Transport encryption does not replace the recipient-only canonical
-`OfflineCashEncryptedCreditEnvelopeV1`, recursive proof, or hardware
+`KagemushaEncryptedCreditEnvelopeV1`, recursive proof, or hardware
 authorization. Plaintext transport metadata must not contain balance openings,
 replay-index contents, stable proof audits, or journal material.
 

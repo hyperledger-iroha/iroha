@@ -211,7 +211,7 @@ fn bridge_finality_chain_fixture() -> (
         height: height.get(),
         view: 0,
     };
-    let execution_commitment = ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+    let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"client finality fixture parent state"),
         Hash::new(b"client finality fixture post state"),
         Hash::new(b"client finality fixture ordinary writes"),
@@ -277,7 +277,7 @@ fn bridge_finality_chain_fixture() -> (
         height: successor_height.get(),
         view: 0,
     };
-    let successor_execution_commitment = ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+    let successor_execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"client finality successor parent state"),
         Hash::new(b"client finality successor post state"),
         Hash::new(b"client finality successor ordinary writes"),

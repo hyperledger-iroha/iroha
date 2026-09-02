@@ -23,8 +23,8 @@ mod merkle;
 #[cfg(feature = "pqc")]
 mod mldsa_seed;
 mod multihash;
-/// Qualified-provider cryptography for Offline Cash V1 credit envelopes.
-pub mod offline_cash;
+/// Qualified-provider cryptography for Kagemusha V1 credit envelopes.
+pub mod kagemusha;
 /// Lane privacy commitment registry (NX-10).
 pub mod privacy;
 mod protocol_key;

@@ -1592,7 +1592,7 @@ fn record_production_merge_candidate_for_persistence_retry(
             .expect("hash persistence-retry finalized predecessor"),
     };
     predecessor_qc.execution_commitment =
-        wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"persistence-retry predecessor parent state"),
             Hash::new(b"persistence-retry predecessor post state"),
             Hash::new(b"persistence-retry predecessor writes"),
@@ -1724,7 +1724,7 @@ fn record_production_merge_candidate_for_persistence_retry(
     let executed_block_wire = block
         .encode_wire()
         .expect("encode persistence-retry carrier");
-    let mut execution_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+    let mut execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         parent_state_root,
         post_state_root,
         Hash::new(b"v2 merge retry ordinary writes"),

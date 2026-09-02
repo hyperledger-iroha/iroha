@@ -458,7 +458,7 @@ fn queued_store_terminal_adopts_authority_upgrade_under_incumbent_owner() {
         proposal_round: manifest.round,
         phase: wire::GlobalPhase::Commit,
         subject: manifest.subject,
-        execution_commitment: wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        execution_commitment: wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"terminal upgrade parent state"),
             Hash::new(b"terminal upgrade post state"),
             Hash::new(b"terminal upgrade writes"),

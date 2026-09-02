@@ -777,10 +777,10 @@ fn v2_commit_authority_hash(artifact: &V2FinalityArtifact) -> Hash {
         .encode(),
     )
 }
-/// Immutable Kura proofs for one block's Offline Cash, validation-fee, and
+/// Immutable Kura proofs for one block's Kagemusha, validation-fee, and
 /// Parliament casting writes, authenticated by its exact finality artifact.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub struct OfflineCashFinalitySidecarV1 {
+pub struct KagemushaFinalitySidecarV1 {
     /// Sidecar version.
     pub version: u16,
     /// Canonical block height.
@@ -799,15 +799,15 @@ pub struct OfflineCashFinalitySidecarV1 {
     pub parliament_timed_ovn_casting_witness: ParliamentTimedOvnCastingWitnessProofV1,
     /// Exact bounded compact leaves needed to build historical membership proofs.
     pub parliament_timed_ovn_casting_bindings: Vec<ParliamentTimedOvnCastingContextBindingV1>,
-    /// Canonically ordered Offline Cash V1 reserve-receipt inclusion proofs.
-    pub offline_cash_reserve_receipts: Vec<OfflineCashReserveReceiptWitnessV1>,
+    /// Canonically ordered Kagemusha V1 reserve-receipt inclusion proofs.
+    pub kagemusha_reserve_receipts: Vec<KagemushaReserveReceiptWitnessV1>,
 }
-impl OfflineCashFinalitySidecarV1 {
+impl KagemushaFinalitySidecarV1 {
     /// Current sidecar version.
     pub const VERSION: u16 = 1;
 }
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-struct StagedOfflineCashFinalitySidecarV1 {
+struct StagedKagemushaFinalitySidecarV1 {
     version: u16,
     height: u64,
     block_hash: HashOf<BlockHeader>,
@@ -816,22 +816,22 @@ struct StagedOfflineCashFinalitySidecarV1 {
     validation_fee_policy_witness: ValidationFeePolicyWitnessProofV1,
     parliament_timed_ovn_casting_witness: ParliamentTimedOvnCastingWitnessProofV1,
     parliament_timed_ovn_casting_bindings: Vec<ParliamentTimedOvnCastingContextBindingV1>,
-    offline_cash_reserve_receipts: Vec<OfflineCashReserveReceiptWitnessV1>,
+    kagemusha_reserve_receipts: Vec<KagemushaReserveReceiptWitnessV1>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-struct OfflineCashMintOutboxEntryV1 {
+struct KagemushaMintOutboxEntryV1 {
     version: u16,
     operation_id: [u8; 32],
-    result: OfflineCashTopUpResultV1,
+    result: KagemushaTopUpResultV1,
     result_wire_hash: Hash,
     finality_artifact_hash: HashOf<V2FinalityArtifact>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-struct OfflineCashMintAuthorityCheckpointEntryV1 {
+struct KagemushaMintAuthorityCheckpointEntryV1 {
     version: u16,
     release_id: [u8; 32],
     authority_head: [u8; 32],
-    checkpoint: crate::zk::offline_cash_v1_recursion::OfflineCashMintAuthorityCheckpointV1,
+    checkpoint: crate::zk::kagemusha_v1_recursion::KagemushaMintAuthorityCheckpointV1,
     checkpoint_wire_hash: Hash,
 }
 impl CommitManifest {

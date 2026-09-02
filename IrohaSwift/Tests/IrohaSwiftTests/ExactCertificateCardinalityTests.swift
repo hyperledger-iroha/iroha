@@ -17,7 +17,7 @@ final class ExactCertificateCardinalityTests: XCTestCase {
             "parent_state_root": hashLiteral,
             "post_state_root": hashLiteral,
             "ordinary_writes_root": hashLiteral,
-            "offline_cash_top_up_count": 0,
+            "kagemusha_top_up_count": 0,
             "native_amx_application_manifest_version": 1,
             "native_amx_application_manifest_root":
                 ToriiSumeragiV2ExecutionCommitment.nativeAmxApplicationManifestEmptyRoot,

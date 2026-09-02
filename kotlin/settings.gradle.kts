@@ -14,7 +14,7 @@ apply(from = "../gradle/mobile-sdk-external-android-build.settings.gradle.kts")
 
 include(":core-jvm")
 include(":client-android")
-include(":offline-wallet-android")
+include(":kagemusha-wallet-android")
 
 // The candidate evidence lab is an intentionally non-shipping Android
 // application.  It is absent from the normal project graph (and therefore

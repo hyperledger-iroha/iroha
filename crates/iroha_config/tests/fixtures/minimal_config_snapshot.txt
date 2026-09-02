@@ -1579,7 +1579,7 @@ Root {
         },
         account_onboarding: None,
         faucet: None,
-        offline_cash_v1_commands: None,
+        kagemusha_v1_commands: None,
         ram_lfe: None,
         tx_history: None,
         recipient_lookup: ToriiRecipientLookup {
@@ -2904,7 +2904,7 @@ Root {
         ],
     },
     settlement: Settlement {
-        offline: Offline {
+        kagemusha: Kagemusha {
             reserve_accounts: {},
             proof_release: None,
         },

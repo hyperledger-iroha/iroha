@@ -776,8 +776,8 @@ function createSumeragiV2StatusPayload(overrides = {}) {
     parent_state_root: fakeSumeragiHash(0x34),
     post_state_root: fakeSumeragiHash(0x35),
     ordinary_writes_root: fakeSumeragiHash(0x36),
-    offline_cash_top_up_root: null,
-    offline_cash_top_up_count: 0,
+    kagemusha_top_up_root: null,
+    kagemusha_top_up_count: 0,
     native_amx_application_manifest_version: 1,
     native_amx_application_manifest_root:
       NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT,
@@ -12112,21 +12112,21 @@ test("getSumeragiStatusTyped requires exact lane-finality and merge projections"
 test("getSumeragiStatusTyped accepts aggregate top-up commitments beyond the retired cap", async () => {
   const payload = createSumeragiV2StatusPayload();
   const commitment = payload.last_commit_qc.certificate.execution_commitment;
-  commitment.offline_cash_top_up_root = fakeSumeragiHash(0x38);
-  commitment.offline_cash_top_up_count = 1_000;
+  commitment.kagemusha_top_up_root = fakeSumeragiHash(0x38);
+  commitment.kagemusha_top_up_count = 1_000;
 
   const parsed = await sumeragiClientForPayload(payload).getSumeragiStatusTyped();
   assert.equal(
-    parsed.last_commit_qc.certificate.execution_commitment.offline_cash_top_up_count,
+    parsed.last_commit_qc.certificate.execution_commitment.kagemusha_top_up_count,
     1_000,
   );
 
   const missingRoot = createSumeragiV2StatusPayload();
   delete missingRoot.last_commit_qc.certificate.execution_commitment
-    .offline_cash_top_up_root;
+    .kagemusha_top_up_root;
   await assert.rejects(
     () => sumeragiClientForPayload(missingRoot).getSumeragiStatusTyped(),
-    /offline_cash_top_up_root is required/u,
+    /kagemusha_top_up_root is required/u,
   );
 
   const legacy = createSumeragiV2StatusPayload();

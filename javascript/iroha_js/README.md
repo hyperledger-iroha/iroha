@@ -178,9 +178,9 @@ validator options use the exact TypeScript camelCase names; snake_case option
 aliases and alternate `payload`/`noritoBytes` byte fields are rejected before
 native dispatch. Fixture-bundle and Governance DAG block entries use `bytes`.
 
-## Offline cash SDK boundary
+## Kagemusha SDK boundary
 
-The JavaScript package exposes the sole `OfflineCashV1` namespace. It models
+The JavaScript package exposes the sole `KagemushaV1` namespace. It models
 the five-message request, proof-bearing acceptance authorization, one-use
 ticket, unlinkable payment, and acknowledgement exchange, plus mint
 authorization/credit binding and typed encrypted-credit opening, AAD, and
@@ -188,7 +188,7 @@ envelope codecs. Governed sender recovery uses the fully cross-bound,
 16,384-byte `NoCommitClosure` canonical wire; its proof remains native-verified.
 Each request binds one positive exact amount. Every distinct valid payment
 against the same request remains protocol-acceptable; invoice deduplication is
-application policy. Strict canonical Norito and unpadded `oc1:` decoders enforce
+application policy. Strict canonical Norito and unpadded `kgm1:` decoders enforce
 the raw/text message and composed-exchange caps before allocation.
 
 The namespace is codec and orchestration support only. Monetary proving,
@@ -196,8 +196,8 @@ signing, encryption, decryption, and hardware state changes must come from the
 release-pinned native implementation. No public predecessor/successor link or
 software money-crypto fallback is exposed.
 
-`getOfflineCapability` reads the universally compiled four-field readiness
-projection: `cash_handoff_v1`, wire version `1`, secure-device lifecycle
+`getKagemushaReadiness` reads the universally compiled four-field readiness
+projection: `kagemusha_handoff_v1`, wire version `1`, secure-device lifecycle
 version `1`, and `ready: true`. Monetary transitions still require a qualified
 non-forking hardware profile; successful transport decoding alone grants no
 monetary authority.
@@ -3348,7 +3348,7 @@ part of the portable registry tarball.
 Node.js clients can register confidential assets and schedule policy
 transitions without hand-writing Norito payloads. ABI V1 does not expose
 generic shield, transfer, or unshield instructions: wallets use the typed,
-proof-bound `OfflineCashV1` mint and redemption operations described above.
+proof-bound `KagemushaV1` mint and redemption operations described above.
 The underlying confidential proof helpers remain available for those typed flows.
 
 ```js
@@ -4146,7 +4146,7 @@ Asset and RWA quantities use the stricter `QuantityInput` surface:
 `number` is deliberately rejected, and strings are never trimmed or rewritten;
 for example `"1"` is valid while `" 1"`, `"01"`, `"+1"`, and `"1.0"` are not.
 
-`OfflineCashV1` exposes canonical wire encoding and verification, not a software
+`KagemushaV1` exposes canonical wire encoding and verification, not a software
 prover or a software fallback for device authority. Peer-transfer keys and
 state transitions remain hardware-bound; applications must obtain transition
 proofs from a qualified wallet implementation.

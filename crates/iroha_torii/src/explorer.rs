@@ -30,7 +30,7 @@ use iroha_data_model::{
         RevokeBox, SetAssetKeyValue, SetKeyValueBox, SetParameter, TransferAssetBatch, TransferBox,
         UnregisterBox, Upgrade,
         mint_burn::BurnBox,
-        offline_cash_v1::{RedeemOfflineCashV1, TopUpOfflineCashV1},
+        kagemusha_v1::{RedeemKagemushaV1, TopUpKagemushaV1},
         runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
     },
     metadata::Metadata,
@@ -913,8 +913,8 @@ pub(crate) enum ExplorerInstructionKind {
     SetParameter,
     Upgrade,
     Log,
-    OfflineCashTopUp,
-    OfflineCashRedemption,
+    KagemushaTopUp,
+    KagemushaRedemption,
     Custom,
 }
 impl ExplorerInstructionKind {
@@ -933,8 +933,8 @@ impl ExplorerInstructionKind {
             Self::SetParameter => "SetParameter",
             Self::Upgrade => "Upgrade",
             Self::Log => "Log",
-            Self::OfflineCashTopUp => "OfflineCashTopUp",
-            Self::OfflineCashRedemption => "OfflineCashRedemption",
+            Self::KagemushaTopUp => "KagemushaTopUp",
+            Self::KagemushaRedemption => "KagemushaRedemption",
             Self::Custom => "Custom",
         }
     }
@@ -956,8 +956,10 @@ impl std::str::FromStr for ExplorerInstructionKind {
             "setparameter" | "set_parameter" => Ok(Self::SetParameter),
             "upgrade" => Ok(Self::Upgrade),
             "log" => Ok(Self::Log),
-            "offlinecashtopup" | "offline_cash_top_up" => Ok(Self::OfflineCashTopUp),
-            "offlinecashredemption" | "offline_cash_redemption" => Ok(Self::OfflineCashRedemption),
+            "kagemushatopup" | "kagemusha_top_up" => Ok(Self::KagemushaTopUp),
+            "kagemusharedemption" | "kagemusha_redemption" => {
+                Ok(Self::KagemushaRedemption)
+            }
             "custom" => Ok(Self::Custom),
             _ => Err(()),
         }
@@ -1061,10 +1063,10 @@ pub(crate) fn instruction_kind(instruction: &InstructionBox) -> ExplorerInstruct
                 ExplorerInstructionKind::Upgrade
             } else if any.downcast_ref::<Log>().is_some() {
                 ExplorerInstructionKind::Log
-            } else if any.downcast_ref::<TopUpOfflineCashV1>().is_some() {
-                ExplorerInstructionKind::OfflineCashTopUp
-            } else if any.downcast_ref::<RedeemOfflineCashV1>().is_some() {
-                ExplorerInstructionKind::OfflineCashRedemption
+            } else if any.downcast_ref::<TopUpKagemushaV1>().is_some() {
+                ExplorerInstructionKind::KagemushaTopUp
+            } else if any.downcast_ref::<RedeemKagemushaV1>().is_some() {
+                ExplorerInstructionKind::KagemushaRedemption
             } else {
                 ExplorerInstructionKind::Custom
             }
@@ -1183,9 +1185,9 @@ fn structured_instruction_payload(
         ExplorerInstructionKind::SetParameter => set_parameter_payload(instruction),
         ExplorerInstructionKind::Upgrade => upgrade_payload(instruction),
         ExplorerInstructionKind::Log => log_payload(instruction),
-        ExplorerInstructionKind::OfflineCashTopUp => offline_cash_top_up_payload(instruction),
-        ExplorerInstructionKind::OfflineCashRedemption => {
-            offline_cash_redemption_payload(instruction)
+        ExplorerInstructionKind::KagemushaTopUp => kagemusha_top_up_payload(instruction),
+        ExplorerInstructionKind::KagemushaRedemption => {
+            kagemusha_redemption_payload(instruction)
         }
         ExplorerInstructionKind::Custom => custom_payload(instruction),
     }
@@ -1362,8 +1364,8 @@ fn log_payload(instruction: &InstructionBox) -> Option<Value> {
     let value = json::to_value(log).ok()?;
     Some(instruction_variant_value("Log", value))
 }
-fn offline_cash_top_up_payload(instruction: &InstructionBox) -> Option<Value> {
-    let isi = instruction.as_any().downcast_ref::<TopUpOfflineCashV1>()?;
+fn kagemusha_top_up_payload(instruction: &InstructionBox) -> Option<Value> {
+    let isi = instruction.as_any().downcast_ref::<TopUpKagemushaV1>()?;
     let request = &isi.request;
     let mut value = Map::new();
     value.insert(
@@ -1387,12 +1389,12 @@ fn offline_cash_top_up_payload(instruction: &InstructionBox) -> Option<Value> {
         Value::String(hex::encode(request.operation_id)),
     );
     Some(instruction_variant_value(
-        "OfflineCashTopUp",
+        "KagemushaTopUp",
         Value::Object(value),
     ))
 }
-fn offline_cash_redemption_payload(instruction: &InstructionBox) -> Option<Value> {
-    let isi = instruction.as_any().downcast_ref::<RedeemOfflineCashV1>()?;
+fn kagemusha_redemption_payload(instruction: &InstructionBox) -> Option<Value> {
+    let isi = instruction.as_any().downcast_ref::<RedeemKagemushaV1>()?;
     let request = &isi.request;
     let mut value = Map::new();
     value.insert(
@@ -1420,7 +1422,7 @@ fn offline_cash_redemption_payload(instruction: &InstructionBox) -> Option<Value
         Value::String(hex::encode(request.operation_id)),
     );
     Some(instruction_variant_value(
-        "OfflineCashRedemption",
+        "KagemushaRedemption",
         Value::Object(value),
     ))
 }
@@ -2694,30 +2696,30 @@ mod tests {
     use super::*;
     use nonzero_ext::nonzero;
     #[test]
-    fn instruction_kind_filter_accepts_offline_cash_v1_camelcase_and_snake_case() {
+    fn instruction_kind_filter_accepts_kagemusha_v1_camelcase_and_snake_case() {
         assert_eq!(
-            "OfflineCashTopUp"
+            "KagemushaTopUp"
                 .parse::<ExplorerInstructionKind>()
-                .expect("Offline Cash V1 top-up kind"),
-            ExplorerInstructionKind::OfflineCashTopUp
+                .expect("Kagemusha V1 top-up kind"),
+            ExplorerInstructionKind::KagemushaTopUp
         );
         assert_eq!(
-            "offline_cash_top_up"
+            "kagemusha_top_up"
                 .parse::<ExplorerInstructionKind>()
-                .expect("Offline Cash V1 top-up kind"),
-            ExplorerInstructionKind::OfflineCashTopUp
+                .expect("Kagemusha V1 top-up kind"),
+            ExplorerInstructionKind::KagemushaTopUp
         );
         assert_eq!(
-            "OfflineCashRedemption"
+            "KagemushaRedemption"
                 .parse::<ExplorerInstructionKind>()
-                .expect("Offline Cash V1 redemption kind"),
-            ExplorerInstructionKind::OfflineCashRedemption
+                .expect("Kagemusha V1 redemption kind"),
+            ExplorerInstructionKind::KagemushaRedemption
         );
         assert_eq!(
-            "offline_cash_redemption"
+            "kagemusha_redemption"
                 .parse::<ExplorerInstructionKind>()
-                .expect("Offline Cash V1 redemption kind"),
-            ExplorerInstructionKind::OfflineCashRedemption
+                .expect("Kagemusha V1 redemption kind"),
+            ExplorerInstructionKind::KagemushaRedemption
         );
     }
     #[test]

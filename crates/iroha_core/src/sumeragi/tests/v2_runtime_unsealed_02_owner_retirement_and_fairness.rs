@@ -21,7 +21,7 @@ fn decision_retirement_releases_queued_leader_wire_runtime_owner() {
         runtime.leader_wire_runtime_receipts.get(&ordinal),
         Some(&fixture.receipt)
     );
-    let commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+    let commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"leader-wire Decision state root"),
         Hash::new(b"leader-wire Decision event root"),
         Hash::new(b"leader-wire Decision reject root"),
@@ -1484,7 +1484,7 @@ fn decision_commitment_mismatch_fails_closed_before_retirement() {
         HashOf::new(&manifest),
     );
     let validated = ValidatedBodyReceipt::for_test(durable.clone());
-    let conflicting_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+    let conflicting_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"decision mismatch parent state"),
         Hash::new(b"decision mismatch post state"),
         Hash::new(b"decision mismatch ordinary writes"),
@@ -1668,7 +1668,7 @@ fn unbound_direct_prepare_and_commit_votes_are_recoverable_from_durable_validati
             runtime.can_admit_network_message(&signed_vote),
             "the retained fair-ingress {phase:?} vote becomes drainable after validation"
         );
-        let conflicting_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        let conflicting_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"conflicting early vote parent state"),
             Hash::new(b"conflicting early vote post state"),
             Hash::new(b"conflicting early vote ordinary writes"),

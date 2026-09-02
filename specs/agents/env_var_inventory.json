@@ -1072,7 +1072,7 @@
         {
           "context": "env!(\"CARGO_MANIFEST_DIR\"),",
           "line": 3495,
-          "path": "crates/iroha_data_model/src/offline/offline_cash_v1.rs",
+          "path": "crates/iroha_data_model/src/offline/kagemusha_v1.rs",
           "scope": "test"
         },
         {

@@ -142,7 +142,7 @@ index 1381ca6cd..ca6955640 100644
 +    fn encode_offline_spend_receipt_payload_matches_native() {
 +        use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 +        use base64::Engine as _;
-+        use iroha_data_model::offline::{
++        use iroha_data_model::kagemusha::{
 +            AppleAppAttestProof, OfflineAllowanceCommitment, OfflinePlatformProof,
 +            OfflineSpendReceipt, OfflineWalletCertificate, OfflineWalletPolicy,
 +        };

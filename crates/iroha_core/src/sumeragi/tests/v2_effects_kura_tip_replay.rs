@@ -1929,7 +1929,7 @@ fn apply_retransmissions_reuse_one_work_slot() {
     assert!(!executor.status().fail_closed);
     let mut conflicting = fixture.qc(wire::GlobalPhase::Commit);
     conflicting.execution_commitment =
-        wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"conflicting terminal parent state"),
             Hash::new(b"conflicting terminal post state"),
             Hash::new(b"conflicting terminal ordinary writes"),
@@ -2050,7 +2050,7 @@ fn apply_retransmission_after_durable_finality_does_not_schedule_a_second_write(
     assert!(!executor.status().fail_closed);
     let mut conflicting = fixture.qc(wire::GlobalPhase::Commit);
     conflicting.execution_commitment =
-        wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"conflicting terminal parent state"),
             Hash::new(b"conflicting terminal post state"),
             Hash::new(b"conflicting terminal ordinary writes"),
@@ -2256,7 +2256,7 @@ fn enter_view_rejects_a_protected_lock_with_a_conflicting_execution_commitment()
     timeout.groups[0].highest_prepare_qc = Some(highest.clone());
     let mut conflicting = highest;
     conflicting.execution_commitment =
-        wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"conflicting EnterView parent state"),
             Hash::new(b"conflicting EnterView post state"),
             Hash::new(b"conflicting EnterView ordinary writes"),
@@ -2550,8 +2550,8 @@ fn serialized_runtime_rebinds_busy_deferred_body_completion_before_service() {
         })
         .collect::<Vec<_>>();
     let network_id = crate::sumeragi::synthetic_network_id("serialized-body-rebind-test");
-    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
+    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
     let context = wire::HeightContext {
         network_id,
         protocol_version: wire::PROTOCOL_VERSION,
@@ -2564,8 +2564,8 @@ fn serialized_runtime_rebinds_busy_deferred_body_completion_before_service() {
         snapshot_bootstrap: None,
         quorum: wire::DualQuorum::from_roster(&roster).expect("quorum"),
         roster,
-        offline_cash_mint_finality_epoch_id,
-        offline_cash_mint_finality_epoch_roster,
+        kagemusha_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster,
         nexus_amx_context_hash: Hash::new(b"serialized rebind nexus context"),
         execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
         da_layout: wire::DataAvailabilityLayout {

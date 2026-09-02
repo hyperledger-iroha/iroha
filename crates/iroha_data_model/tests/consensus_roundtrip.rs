@@ -18,9 +18,9 @@ use iroha_data_model::{
             SumeragiV2StatusPhase, TimeoutVote, ValidationError, ValidatorPower,
         },
     },
-    isi::offline_cash_v1::{
-        OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterV1,
-        OfflineCashMintFinalityValidatorKeysV1,
+    isi::kagemusha_v1::{
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
+        KagemushaMintFinalityValidatorKeysV1,
     },
     nexus::{DataSpaceId, LaneId},
     peer::PeerId,
@@ -53,16 +53,16 @@ fn mint_finality_roster(
     network_id: NetworkId,
     epoch: u64,
     roster: &[ValidatorPower],
-) -> OfflineCashMintFinalityEpochRosterV1 {
-    OfflineCashMintFinalityEpochRosterV1 {
-        version: OFFLINE_CASH_CHAIN_VERSION_V1,
+) -> KagemushaMintFinalityEpochRosterV1 {
+    KagemushaMintFinalityEpochRosterV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
         epoch,
         validators: roster
             .iter()
             .enumerate()
             .map(
-                |(index, validator)| OfflineCashMintFinalityValidatorKeysV1 {
+                |(index, validator)| KagemushaMintFinalityValidatorKeysV1 {
                     validator: validator.validator.clone(),
                     eq_proof_public_key: [u8::try_from(index + 1).expect("small fixture roster");
                         32],
@@ -284,8 +284,8 @@ fn rng_evidence(rng: &mut DeterministicRng) -> Evidence {
         protocol_version: V2_PROTOCOL_VERSION,
         height,
         epoch,
-        offline_cash_mint_finality_epoch_id: mint_finality_epoch_id,
-        offline_cash_mint_finality_epoch_roster: mint_finality_roster,
+        kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster: mint_finality_roster,
         epoch_end_height: height,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Permissioned,
@@ -394,7 +394,7 @@ fn rng_sumeragi_v2_qc_response(rng: &mut DeterministicRng) -> SumeragiV2QcRespon
                 payload_hash: rng_hash(rng),
             },
             execution_commitment:
-                ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                     rng_hash(rng),
                     rng_hash(rng),
                     rng_hash(rng),

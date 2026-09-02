@@ -65,7 +65,7 @@ fn make_phase_vote_evidence(height: u64, seed: u8) -> Evidence {
         height,
         view: 0,
     };
-    let execution_commitment = ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+    let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"evidence list parent state"),
         Hash::new(b"evidence list post state"),
         Hash::new(b"evidence list ordinary writes"),

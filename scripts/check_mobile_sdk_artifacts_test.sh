@@ -17,18 +17,18 @@ bash -n "$CHECK_SCRIPT"
 "$CHECK_SCRIPT" --help >/dev/null
 
 expected_symbols=(
-  connect_norito_offline_cash_v1_payment_request_validate
-  connect_norito_offline_cash_v1_payment_validate
-  connect_norito_offline_cash_v1_acknowledgement_validate
-  connect_norito_offline_cash_v1_mint_credit_validate
-  connect_norito_offline_cash_v1_redemption_voucher_validate
-  connect_norito_offline_cash_v1_payment_request_text_validate
-  connect_norito_offline_cash_v1_payment_text_validate
-  connect_norito_offline_cash_v1_acknowledgement_text_validate
-  connect_norito_offline_cash_v1_mint_credit_text_validate
-  connect_norito_offline_cash_v1_redemption_voucher_text_validate
-  connect_norito_offline_cash_device_capabilities_v1
-  connect_norito_offline_cash_device_execute_v1
+  connect_norito_kagemusha_v1_payment_request_validate
+  connect_norito_kagemusha_v1_payment_validate
+  connect_norito_kagemusha_v1_acknowledgement_validate
+  connect_norito_kagemusha_v1_mint_credit_validate
+  connect_norito_kagemusha_v1_redemption_voucher_validate
+  connect_norito_kagemusha_v1_payment_request_text_validate
+  connect_norito_kagemusha_v1_payment_text_validate
+  connect_norito_kagemusha_v1_acknowledgement_text_validate
+  connect_norito_kagemusha_v1_mint_credit_text_validate
+  connect_norito_kagemusha_v1_redemption_voucher_text_validate
+  connect_norito_kagemusha_device_capabilities_v1
+  connect_norito_kagemusha_device_execute_v1
 )
 
 for symbol in "${expected_symbols[@]}"; do

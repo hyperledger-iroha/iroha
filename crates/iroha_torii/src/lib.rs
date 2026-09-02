@@ -64,7 +64,7 @@ mod identifier_resolution;
 mod iso_profile;
 mod ledger_state_finality;
 #[cfg(feature = "app_api")]
-mod offline_commands;
+mod kagemusha_commands;
 mod operator_auth;
 mod operator_signatures;
 #[cfg(feature = "app_api")]
@@ -2719,8 +2719,8 @@ struct AppState {
     proof_egress_limiter: limits::RateLimiter,
     proof_body_inflight: Arc<tokio::sync::Semaphore>,
     #[cfg(feature = "app_api")]
-    /// Byte-weighted working-set capacity for proof-bearing offline commands.
-    offline_command_memory_inflight: ByteWeightedMemoryPool,
+    /// Byte-weighted working-set capacity for proof-bearing Kagemusha commands.
+    kagemusha_command_memory_inflight: ByteWeightedMemoryPool,
     soracloud_public_rate_limiter: limits::RateLimiter,
     soracloud_mutation_rate_limiter: limits::RateLimiter,
     soracloud_mutation_inflight: Arc<tokio::sync::Semaphore>,
@@ -2893,7 +2893,7 @@ struct AppState {
     #[cfg(feature = "app_api")]
     sorafs_appeal_settlement_submitter: Option<SoraFsAppealSettlementSubmitter>,
     #[cfg(feature = "app_api")]
-    offline_commands: Option<Arc<offline_commands::OfflineCommandRuntime>>,
+    kagemusha_commands: Option<Arc<kagemusha_commands::KagemushaCommandRuntime>>,
     #[cfg(feature = "app_api")]
     account_onboarding: Option<AccountOnboardingSigner>,
     vpn_relay_trust: Option<Arc<VpnRelayTrust>>,
@@ -5566,7 +5566,7 @@ mod preauth_connection_lifetime_tests {
         );
     }
     #[tokio::test]
-    async fn offline_command_authentication_precedes_media_and_idempotency_validation() {
+    async fn kagemusha_command_authentication_precedes_media_and_idempotency_validation() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         async fn error_code(response: Response) -> String {
             let body = response
@@ -5586,7 +5586,7 @@ mod preauth_connection_lifetime_tests {
         let handler_calls = Arc::new(AtomicUsize::new(0));
         let router = Router::new()
             .route(
-                route_catalog::offline::TOP_UP.path(),
+                route_catalog::kagemusha::TOP_UP.path(),
                 axum::routing::post({
                     let handler_calls = Arc::clone(&handler_calls);
                     move || {
@@ -5600,7 +5600,7 @@ mod preauth_connection_lifetime_tests {
             )
             .layer(axum::middleware::from_fn_with_state(
                 Arc::clone(&app),
-                enforce_offline_command_prebody_admission,
+                enforce_kagemusha_command_prebody_admission,
             ))
             .layer(axum::middleware::from_fn(capture_response_format))
             .layer(axum::middleware::from_fn(coalesce_accept_headers))
@@ -5613,19 +5613,19 @@ mod preauth_connection_lifetime_tests {
                 enforce_preauth,
             ))
             .layer(axum::middleware::from_fn(enforce_typed_error_contract));
-        let offline_request =
+        let kagemusha_request =
             |token_count: usize, content_type: &'static str, accept: &'static str| {
                 let mut request = Request::builder()
                     .method(axum::http::Method::POST)
-                    .uri(route_catalog::offline::TOP_UP.path())
+                    .uri(route_catalog::kagemusha::TOP_UP.path())
                     .header(header::ACCEPT, accept)
                     .header(header::CONTENT_TYPE, content_type)
                     .body(Body::from("{malformed-json"))
-                    .expect("offline command request");
+                    .expect("Kagemusha command request");
                 request
                     .extensions_mut()
                     .insert(MatchedRouteMetadata::from_descriptor(
-                        route_catalog::offline::TOP_UP,
+                        route_catalog::kagemusha::TOP_UP,
                     ));
                 for _ in 0..token_count {
                     request
@@ -5640,7 +5640,7 @@ mod preauth_connection_lifetime_tests {
             .expect("occupy the HTTP pre-auth slot");
         let at_capacity = router
             .clone()
-            .oneshot(offline_request(
+            .oneshot(kagemusha_request(
                 0,
                 "application/json; charset==utf-8",
                 "application/json;q=2",
@@ -5652,7 +5652,7 @@ mod preauth_connection_lifetime_tests {
         drop(occupying_guard);
         let missing = router
             .clone()
-            .oneshot(offline_request(
+            .oneshot(kagemusha_request(
                 0,
                 "application/json; charset==utf-8",
                 "application/json;q=2",
@@ -5663,7 +5663,7 @@ mod preauth_connection_lifetime_tests {
         assert!(missing.headers().contains_key(header::WWW_AUTHENTICATE));
         assert_eq!(error_code(missing).await, "api_token_required");
         let mut missing_with_duplicate_content_type =
-            offline_request(0, "application/json", "application/json");
+            kagemusha_request(0, "application/json", "application/json");
         missing_with_duplicate_content_type.headers_mut().append(
             header::CONTENT_TYPE,
             HeaderValue::from_static("application/x-norito"),
@@ -5677,7 +5677,7 @@ mod preauth_connection_lifetime_tests {
         assert_eq!(error_code(missing).await, "api_token_required");
         let duplicate = router
             .clone()
-            .oneshot(offline_request(
+            .oneshot(kagemusha_request(
                 2,
                 "application/json; charset==utf-8",
                 "application/json;q=2",
@@ -5689,7 +5689,7 @@ mod preauth_connection_lifetime_tests {
         assert_eq!(error_code(duplicate).await, "api_token_required");
         let invalid_accept = router
             .clone()
-            .oneshot(offline_request(
+            .oneshot(kagemusha_request(
                 1,
                 "application/x-norito",
                 "application/json;q=2",
@@ -5698,7 +5698,7 @@ mod preauth_connection_lifetime_tests {
             .expect("invalid-Accept response");
         assert_eq!(invalid_accept.status(), StatusCode::NOT_ACCEPTABLE);
         assert_eq!(error_code(invalid_accept).await, "response_not_acceptable");
-        let mut non_ascii_accept = offline_request(1, "application/x-norito", "application/json");
+        let mut non_ascii_accept = kagemusha_request(1, "application/x-norito", "application/json");
         non_ascii_accept.headers_mut().append(
             header::ACCEPT,
             HeaderValue::from_bytes(&[0xff]).expect("opaque Accept fixture"),
@@ -5711,7 +5711,7 @@ mod preauth_connection_lifetime_tests {
         assert_eq!(invalid_accept.status(), StatusCode::NOT_ACCEPTABLE);
         assert_eq!(error_code(invalid_accept).await, "response_not_acceptable");
         let mut duplicate_content_type =
-            offline_request(1, "application/x-norito", "application/json");
+            kagemusha_request(1, "application/x-norito", "application/json");
         duplicate_content_type.headers_mut().append(
             header::CONTENT_TYPE,
             HeaderValue::from_static("application/x-norito"),
@@ -5727,7 +5727,7 @@ mod preauth_connection_lifetime_tests {
             "request_content_type_invalid"
         );
         let mut non_ascii_content_type =
-            offline_request(1, "application/x-norito", "application/json");
+            kagemusha_request(1, "application/x-norito", "application/json");
         non_ascii_content_type.headers_mut().insert(
             header::CONTENT_TYPE,
             HeaderValue::from_bytes(&[0xff]).expect("opaque Content-Type fixture"),
@@ -5744,7 +5744,7 @@ mod preauth_connection_lifetime_tests {
         );
         let json_content_type = router
             .clone()
-            .oneshot(offline_request(1, "application/json", "application/json"))
+            .oneshot(kagemusha_request(1, "application/json", "application/json"))
             .await
             .expect("JSON content-type response");
         assert_eq!(
@@ -5756,7 +5756,7 @@ mod preauth_connection_lifetime_tests {
             "request_content_type_unsupported"
         );
         let missing_idempotency_key = router
-            .oneshot(offline_request(
+            .oneshot(kagemusha_request(
                 1,
                 "application/x-norito",
                 "application/json",
@@ -6972,8 +6972,8 @@ fn has_dot_segment(path: &str) -> bool {
             || segment.eq_ignore_ascii_case("%2e%2e")
     })
 }
-fn has_percent_encoded_offline_operation_id(path: &str) -> bool {
-    const PREFIX: &str = "/v1/offline/operations/";
+fn has_percent_encoded_kagemusha_operation_id(path: &str) -> bool {
+    const PREFIX: &str = "/v1/kagemusha/operations/";
     path.strip_prefix(PREFIX)
         .is_some_and(|operation_id| !operation_id.contains('/') && operation_id.contains('%'))
 }
@@ -7005,7 +7005,7 @@ async fn enforce_strict_request_target(
         || path.contains('\\')
         || has_percent_encoded_separator(path)
         || has_dot_segment(path)
-        || has_percent_encoded_offline_operation_id(path)
+        || has_percent_encoded_kagemusha_operation_id(path)
         || has_percent_encoded_operator_credential_id(path)
         || has_percent_encoded_governance_selector(path)
     {
@@ -7039,26 +7039,26 @@ async fn enforce_strict_request_target(
     append_vary_accept(response.headers_mut());
     Ok(response)
 }
-async fn enforce_offline_cache_policy(
+async fn enforce_kagemusha_cache_policy(
     req: axum::http::Request<Body>,
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
-    const OPERATION_PREFIX: &str = "/v1/offline/operations/";
-    const READINESS_PATH: &str = "/v1/offline/readiness";
-    const TOP_UP_PATH: &str = "/v1/offline/top-up";
-    const REDEEM_PATH: &str = "/v1/offline/redeem";
+    const OPERATION_PREFIX: &str = "/v1/kagemusha/operations/";
+    const READINESS_PATH: &str = "/v1/kagemusha/readiness";
+    const TOP_UP_PATH: &str = "/v1/kagemusha/top-up";
+    const REDEEM_PATH: &str = "/v1/kagemusha/redeem";
     let route = req.extensions().get::<MatchedRouteMetadata>();
     let operation_status = route.is_some_and(|route| {
-        route.stable_route_id() == route_catalog::offline::OPERATION.stable_route_id()
+        route.stable_route_id() == route_catalog::kagemusha::OPERATION.stable_route_id()
     }) || req.uri().path().starts_with(OPERATION_PREFIX);
     let readiness = route.is_some_and(|route| {
-        route.stable_route_id() == route_catalog::offline::READINESS.stable_route_id()
+        route.stable_route_id() == route_catalog::kagemusha::READINESS.stable_route_id()
     }) || req.uri().path() == READINESS_PATH
-        || req.uri().path().starts_with("/v1/offline/readiness/");
+        || req.uri().path().starts_with("/v1/kagemusha/readiness/");
     let command = route.is_some_and(|route| {
         let id = route.stable_route_id();
-        id == route_catalog::offline::TOP_UP.stable_route_id()
-            || id == route_catalog::offline::REDEEM.stable_route_id()
+        id == route_catalog::kagemusha::TOP_UP.stable_route_id()
+            || id == route_catalog::kagemusha::REDEEM.stable_route_id()
     }) || matches!(req.uri().path(), TOP_UP_PATH | REDEEM_PATH);
     let mut response = next.run(req).await;
     let policy = if operation_status || command {
@@ -7955,7 +7955,7 @@ async fn catch_handler_panics(
 /// Attach catalog metadata after Axum has selected a route template.
 ///
 /// `MatchedPath` is a router template (for example
-/// `/v1/offline/operations/{operation_id}`), never the concrete request URI.
+/// `/v1/kagemusha/operations/{operation_id}`), never the concrete request URI.
 /// The metadata is copied to the response so outer middleware can observe it
 /// without buffering or reconstructing the consumed request.
 async fn attach_matched_route_metadata(
@@ -8989,8 +8989,8 @@ mod strict_request_target_tests {
     include!("tests/lib_strict_request_targets.rs");
 }
 #[cfg(test)]
-mod offline_cache_policy_tests {
-    use super::enforce_offline_cache_policy;
+mod kagemusha_cache_policy_tests {
+    use super::enforce_kagemusha_cache_policy;
     use axum::{
         Router,
         body::Body,
@@ -9004,7 +9004,7 @@ mod offline_cache_policy_tests {
     async fn every_operation_status_outcome_is_no_store() {
         let router = Router::new()
             .route(
-                "/v1/offline/operations/{operation_id}",
+                "/v1/kagemusha/operations/{operation_id}",
                 get(|Path(operation_id): Path<String>| async move {
                     match operation_id.as_str() {
                         "invalid" => StatusCode::BAD_REQUEST,
@@ -9015,7 +9015,7 @@ mod offline_cache_policy_tests {
                 }),
             )
             .route(
-                "/v1/offline/readiness",
+                "/v1/kagemusha/readiness",
                 get(|| async move {
                     (
                         [(header::CACHE_CONTROL, "public, max-age=86400")],
@@ -9025,7 +9025,7 @@ mod offline_cache_policy_tests {
                 }),
             )
             .route(
-                "/v1/offline/top-up",
+                "/v1/kagemusha/top-up",
                 post(|| async {
                     (
                         [(header::CACHE_CONTROL, "public, max-age=86400")],
@@ -9034,7 +9034,7 @@ mod offline_cache_policy_tests {
                 }),
             )
             .route(
-                "/v1/offline/redeem",
+                "/v1/kagemusha/redeem",
                 post(|| async {
                     (
                         [(header::CACHE_CONTROL, "public, max-age=86400")],
@@ -9043,7 +9043,7 @@ mod offline_cache_policy_tests {
                 }),
             )
             .route("/health", get(|| async { StatusCode::NOT_FOUND }))
-            .layer(axum::middleware::from_fn(enforce_offline_cache_policy));
+            .layer(axum::middleware::from_fn(enforce_kagemusha_cache_policy));
         for (operation_id, status) in [
             ("known", StatusCode::OK),
             ("invalid", StatusCode::BAD_REQUEST),
@@ -9054,7 +9054,7 @@ mod offline_cache_policy_tests {
                 .clone()
                 .oneshot(
                     Request::builder()
-                        .uri(format!("/v1/offline/operations/{operation_id}"))
+                        .uri(format!("/v1/kagemusha/operations/{operation_id}"))
                         .body(Body::empty())
                         .expect("request"),
                 )
@@ -9071,7 +9071,7 @@ mod offline_cache_policy_tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/v1/offline/readiness")
+                    .uri("/v1/kagemusha/readiness")
                     .body(Body::empty())
                     .expect("request"),
             )
@@ -9088,7 +9088,7 @@ mod offline_cache_policy_tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/v1/offline/readiness?asset_definition_id=legacy")
+                    .uri("/v1/kagemusha/readiness?asset_definition_id=legacy")
                     .body(Body::empty())
                     .expect("request"),
             )
@@ -9102,8 +9102,8 @@ mod offline_cache_policy_tests {
             ))
         );
         for (path, status) in [
-            ("/v1/offline/top-up", StatusCode::ACCEPTED),
-            ("/v1/offline/redeem", StatusCode::SERVICE_UNAVAILABLE),
+            ("/v1/kagemusha/top-up", StatusCode::ACCEPTED),
+            ("/v1/kagemusha/redeem", StatusCode::SERVICE_UNAVAILABLE),
         ] {
             let response = router
                 .clone()
@@ -9376,7 +9376,7 @@ mod response_negotiation_middleware_tests {
         request
             .extensions_mut()
             .insert(MatchedRouteMetadata::from_descriptor(
-                route_catalog::offline::READINESS,
+                route_catalog::kagemusha::READINESS,
             ));
         let response = router.oneshot(request).await.expect("response");
         assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
@@ -9801,17 +9801,17 @@ mod typed_error_contract_tests {
                 get(|| async {
                     Error::AppQueryValidation {
                         code: "operation_id_invalid",
-                        message: "Offline operation id must be non-zero.".to_owned(),
+                        message: "Kagemusha operation id must be non-zero.".to_owned(),
                     }
                     .into_response()
                 }),
             )
             .route(
-                "/forbidden-offline-auth",
+                "/forbidden-kagemusha-auth",
                 get(|| async {
                     Error::AppForbidden {
-                        code: "offline_auth_header_unsupported",
-                        message: "Offline commands authenticate through their signed request body; X-Iroha canonical auth headers are not accepted.".to_owned(),
+                        code: "kagemusha_auth_header_unsupported",
+                        message: "Kagemusha commands authenticate through their signed request body; X-Iroha canonical auth headers are not accepted.".to_owned(),
                     }
                     .into_response()
                 }),
@@ -9821,7 +9821,7 @@ mod typed_error_contract_tests {
                 get(|| async {
                     Error::AppConflict {
                         code: "operation_id_conflict",
-                        message: "Offline operation id is already bound to a different request."
+                        message: "Kagemusha operation id is already bound to a different request."
                             .to_owned(),
                     }
                     .into_response()
@@ -9831,8 +9831,8 @@ mod typed_error_contract_tests {
                 "/missing-operation",
                 get(|| async {
                     Error::AppNotFound {
-                        code: "offline_operation_not_found",
-                        message: "Offline operation is unknown on this Torii node.".to_owned(),
+                        code: "kagemusha_operation_not_found",
+                        message: "Kagemusha operation is unknown on this Torii node.".to_owned(),
                     }
                     .into_response()
                 }),
@@ -9869,25 +9869,25 @@ mod typed_error_contract_tests {
                     "/invalid-operation",
                     StatusCode::BAD_REQUEST,
                     "operation_id_invalid",
-                    "Offline operation id must be non-zero.",
+                    "Kagemusha operation id must be non-zero.",
                 ),
                 (
-                    "/forbidden-offline-auth",
+                    "/forbidden-kagemusha-auth",
                     StatusCode::FORBIDDEN,
-                    "offline_auth_header_unsupported",
-                    "Offline commands authenticate through their signed request body; X-Iroha canonical auth headers are not accepted.",
+                    "kagemusha_auth_header_unsupported",
+                    "Kagemusha commands authenticate through their signed request body; X-Iroha canonical auth headers are not accepted.",
                 ),
                 (
                     "/conflicting-operation",
                     StatusCode::CONFLICT,
                     "operation_id_conflict",
-                    "Offline operation id is already bound to a different request.",
+                    "Kagemusha operation id is already bound to a different request.",
                 ),
                 (
                     "/missing-operation",
                     StatusCode::NOT_FOUND,
-                    "offline_operation_not_found",
-                    "Offline operation is unknown on this Torii node.",
+                    "kagemusha_operation_not_found",
+                    "Kagemusha operation is unknown on this Torii node.",
                 ),
                 (
                     "/missing-asset",
@@ -9943,7 +9943,7 @@ mod typed_error_contract_tests {
                 .clone()
                 .oneshot(
                     Request::builder()
-                        .uri("/retired/v1/offline/operations/deadbeef")
+                        .uri("/retired/v1/kagemusha/operations/deadbeef")
                         .header(header::ACCEPT, accept)
                         .body(Body::empty())
                         .expect("request"),
@@ -9953,7 +9953,7 @@ mod typed_error_contract_tests {
             assert_eq!(response.status(), StatusCode::NOT_FOUND);
             assert!(
                 !response.headers().contains_key("x-iroha-reject-code"),
-                "an unmatched route must not claim offline_operation_not_found; accept={accept}"
+                "an unmatched route must not claim kagemusha_operation_not_found; accept={accept}"
             );
             let body = body_bytes(response).await;
             let envelope: ErrorEnvelope = if accept == "application/json" {
@@ -11721,7 +11721,7 @@ async fn collect_proof_body_with_deadline(
     .await
 }
 #[cfg(feature = "app_api")]
-async fn collect_offline_command_body_with_deadline(
+async fn collect_kagemusha_command_body_with_deadline(
     request: axum::http::Request<Body>,
     max_bytes: usize,
     deadline: Duration,
@@ -11731,11 +11731,11 @@ async fn collect_offline_command_body_with_deadline(
         max_bytes,
         deadline,
         BoundedBodyReadMessages {
-            context: "offline command request body",
-            too_large: "offline command request body exceeds the route byte limit",
-            protocol_error: "offline command request body stream ended with a protocol error",
+            context: "Kagemusha command request body",
+            too_large: "Kagemusha command request body exceeds the route byte limit",
+            protocol_error: "Kagemusha command request body stream ended with a protocol error",
             timeout:
-                "offline command request body was not completed before the absolute read deadline",
+                "Kagemusha command request body was not completed before the absolute read deadline",
         },
     )
     .await
@@ -14675,44 +14675,44 @@ async fn handler_repo_agreements_query(
     .await
 }
 #[cfg(feature = "app_api")]
-const fn offline_top_up_body_limit(transaction_max_content_len: usize) -> usize {
+const fn kagemusha_top_up_body_limit(transaction_max_content_len: usize) -> usize {
     if transaction_max_content_len
-        < iroha_torii_shared::offline_api::OFFLINE_CASH_TOP_UP_REQUEST_MAX_BYTES_V1
+        < iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1
     {
         transaction_max_content_len
     } else {
-        iroha_torii_shared::offline_api::OFFLINE_CASH_TOP_UP_REQUEST_MAX_BYTES_V1
+        iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1
     }
 }
 #[cfg(feature = "app_api")]
-const fn offline_redeem_body_limit(transaction_max_content_len: usize) -> usize {
+const fn kagemusha_redeem_body_limit(transaction_max_content_len: usize) -> usize {
     if transaction_max_content_len
-        < iroha_torii_shared::offline_api::OFFLINE_CASH_REDEMPTION_REQUEST_MAX_BYTES_V1
+        < iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1
     {
         transaction_max_content_len
     } else {
-        iroha_torii_shared::offline_api::OFFLINE_CASH_REDEMPTION_REQUEST_MAX_BYTES_V1
+        iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1
     }
 }
 #[cfg(feature = "app_api")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct OfflineCommandBodyPolicy {
+struct KagemushaCommandBodyPolicy {
     route_hint: &'static str,
     max_body_bytes: usize,
 }
 #[cfg(feature = "app_api")]
-impl OfflineCommandBodyPolicy {
+impl KagemushaCommandBodyPolicy {
     fn top_up(transaction_max_content_len: usize) -> Self {
         Self {
-            route_hint: "v1/offline/top-up",
-            max_body_bytes: offline_top_up_body_limit(transaction_max_content_len),
+            route_hint: "v1/kagemusha/top-up",
+            max_body_bytes: kagemusha_top_up_body_limit(transaction_max_content_len),
         }
     }
 
     fn redeem(transaction_max_content_len: usize) -> Self {
         Self {
-            route_hint: "v1/offline/redeem",
-            max_body_bytes: offline_redeem_body_limit(transaction_max_content_len),
+            route_hint: "v1/kagemusha/redeem",
+            max_body_bytes: kagemusha_redeem_body_limit(transaction_max_content_len),
         }
     }
 
@@ -14736,32 +14736,32 @@ impl OfflineCommandBodyPolicy {
     }
 }
 #[cfg(feature = "app_api")]
-fn offline_command_memory_pool_bytes(transaction_max_content_len: usize) -> Option<usize> {
+fn kagemusha_command_memory_pool_bytes(transaction_max_content_len: usize) -> Option<usize> {
     Some(
-        OfflineCommandBodyPolicy::top_up(transaction_max_content_len)
+        KagemushaCommandBodyPolicy::top_up(transaction_max_content_len)
             .maximum_working_set_bytes()?
             .max(
-                OfflineCommandBodyPolicy::redeem(transaction_max_content_len)
+                KagemushaCommandBodyPolicy::redeem(transaction_max_content_len)
                     .maximum_working_set_bytes()?,
             ),
     )
 }
 #[cfg(feature = "app_api")]
-fn encode_offline_capability_representation(
-    payload: &iroha_torii_shared::offline_api::OfflineCashReadinessV1,
+fn encode_kagemusha_readiness_representation(
+    payload: &iroha_torii_shared::kagemusha_api::KagemushaReadinessV1,
     format: crate::utils::ResponseFormat,
 ) -> Result<(&'static str, Vec<u8>), Error> {
     match format {
         crate::utils::ResponseFormat::Json => norito::json::to_vec(payload)
             .map(|bytes| ("application/json", bytes))
             .map_err(|source| Error::SerializationFailure {
-                context: "offline_capability",
+                context: "kagemusha_readiness",
                 source: Box::new(source),
             }),
         crate::utils::ResponseFormat::Norito => norito::to_bytes(payload)
             .map(|bytes| (crate::utils::NORITO_MIME_TYPE, bytes))
             .map_err(|source| Error::SerializationFailure {
-                context: "offline_capability",
+                context: "kagemusha_readiness",
                 source: Box::new(source),
             }),
     }
@@ -14773,7 +14773,7 @@ fn strong_etag_for_representation(bytes: &[u8]) -> String {
 }
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_readiness(
+async fn handler_kagemusha_readiness(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     uri: axum::http::Uri,
@@ -14781,15 +14781,15 @@ async fn handler_offline_readiness(
 ) -> Result<AxResponse, Error> {
     if uri.query().is_some() {
         return Err(Error::AppQueryValidation {
-            code: "offline_capability_query_unsupported",
-            message: "Offline capability discovery does not accept query parameters.".to_owned(),
+            code: "kagemusha_readiness_query_unsupported",
+            message: "Kagemusha capability discovery does not accept query parameters.".to_owned(),
         });
     }
-    check_access(&app, &headers, Some(remote.ip()), "v1/offline/readiness").await?;
-    let payload = universal_offline_capability_status();
+    check_access(&app, &headers, Some(remote.ip()), "v1/kagemusha/readiness").await?;
+    let payload = universal_kagemusha_readiness_v1();
     let response_format = crate::utils::current_response_format();
     let (content_type, representation) =
-        encode_offline_capability_representation(&payload, response_format)?;
+        encode_kagemusha_readiness_representation(&payload, response_format)?;
     let etag = strong_etag_for_representation(&representation);
     let cache_control = axum::http::HeaderValue::from_static("private, max-age=0, must-revalidate");
     if headers
@@ -14821,7 +14821,7 @@ async fn handler_offline_readiness(
         .status(axum::http::StatusCode::OK)
         .header(axum::http::header::CONTENT_TYPE, content_type)
         .body(axum::body::Body::from(representation))
-        .expect("build pre-encoded offline capability response");
+        .expect("build pre-encoded Kagemusha readiness response");
     response
         .headers_mut()
         .insert(axum::http::header::CACHE_CONTROL, cache_control);
@@ -14834,7 +14834,7 @@ async fn handler_offline_readiness(
     Ok(response)
 }
 #[cfg(all(test, feature = "app_api"))]
-mod universal_offline_capability_tests {
+mod universal_kagemusha_readiness_tests {
     use super::*;
     use axum::{
         body::{Body, Bytes},
@@ -14844,12 +14844,12 @@ mod universal_offline_capability_tests {
     use std::{sync::Arc, time::Duration};
     use tower::ServiceExt as _;
 
-    fn configured_offline_command_runtime() -> Arc<offline_commands::OfflineCommandRuntime> {
+    fn configured_kagemusha_command_runtime() -> Arc<kagemusha_commands::KagemushaCommandRuntime> {
         let key_pair =
             iroha_crypto::KeyPair::try_from_seed(vec![0x4f; 32], iroha_crypto::Algorithm::Ed25519)
-                .expect("derive offline command admission fixture key");
-        Arc::new(offline_commands::OfflineCommandRuntime::from_config(
-            iroha_config::parameters::actual::ToriiOfflineCashV1Commands {
+                .expect("derive Kagemusha command admission fixture key");
+        Arc::new(kagemusha_commands::KagemushaCommandRuntime::from_config(
+            iroha_config::parameters::actual::ToriiKagemushaV1Commands {
                 authority: iroha_data_model::account::AccountId::new(
                     key_pair.public_key().clone(),
                 ),
@@ -14857,36 +14857,36 @@ mod universal_offline_capability_tests {
                 minimum_xor_balance: iroha_primitives::numeric::Quantity::from(1_u32),
                 max_tx_value: iroha_primitives::numeric::Quantity::from(1_u32),
                 operation_registry_max_entries: std::num::NonZeroUsize::new(1)
-                    .expect("positive offline command registry entry limit"),
+                    .expect("positive Kagemusha command registry entry limit"),
                 operation_registry_max_bytes: std::num::NonZeroUsize::new(
-                    iroha_config::parameters::defaults::torii::offline_cash_v1_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY,
+                    iroha_config::parameters::defaults::torii::kagemusha_v1_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY,
                 )
-                .expect("positive offline command registry byte limit"),
+                .expect("positive Kagemusha command registry byte limit"),
             },
         ))
     }
 
     #[test]
     fn universal_capability_is_ready_and_asset_neutral() {
-        let capability = universal_offline_capability_status();
-        assert_eq!(capability.cash_handoff_capability, "cash_handoff_v1");
+        let capability = universal_kagemusha_readiness_v1();
+        assert_eq!(capability.kagemusha_handoff_capability, "kagemusha_handoff_v1");
         assert_eq!(capability.wire_version, 1);
         assert_eq!(capability.device_lifecycle_version, 1);
         assert!(capability.ready);
-        let (json_content_type, json) = encode_offline_capability_representation(
+        let (json_content_type, json) = encode_kagemusha_readiness_representation(
             &capability,
             crate::utils::ResponseFormat::Json,
         )
-        .expect("encode universal offline capability as JSON");
+        .expect("encode universal Kagemusha readiness as JSON");
         assert_eq!(json_content_type, "application/json");
-        let decoded: iroha_torii_shared::offline_api::OfflineCashReadinessV1 =
+        let decoded: iroha_torii_shared::kagemusha_api::KagemushaReadinessV1 =
             norito::json::from_slice(&json).expect("decode universal capability JSON");
         assert_eq!(decoded, capability);
-        let (norito_content_type, norito) = encode_offline_capability_representation(
+        let (norito_content_type, norito) = encode_kagemusha_readiness_representation(
             &capability,
             crate::utils::ResponseFormat::Norito,
         )
-        .expect("encode universal offline capability as Norito");
+        .expect("encode universal Kagemusha readiness as Norito");
         assert_eq!(norito_content_type, crate::utils::NORITO_MIME_TYPE);
         assert!(!norito.is_empty());
         assert_ne!(
@@ -14896,7 +14896,7 @@ mod universal_offline_capability_tests {
         );
     }
     #[tokio::test]
-    async fn node_probes_do_not_depend_on_offline_application_state() {
+    async fn node_probes_do_not_depend_on_kagemusha_application_state() {
         let app = super::mk_app_state_for_tests();
         let readiness = handler_readyz(axum::extract::State(app)).await;
         assert_eq!(readiness.status(), axum::http::StatusCode::OK);
@@ -14914,26 +14914,26 @@ mod universal_offline_capability_tests {
     #[test]
     fn command_body_limits_remain_protocol_specific() {
         let top_up_protocol_max =
-            iroha_torii_shared::offline_api::OFFLINE_CASH_TOP_UP_REQUEST_MAX_BYTES_V1;
+            iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1;
         let redeem_protocol_max =
-            iroha_torii_shared::offline_api::OFFLINE_CASH_REDEMPTION_REQUEST_MAX_BYTES_V1;
-        assert_eq!(offline_top_up_body_limit(usize::MAX), top_up_protocol_max);
-        assert_eq!(offline_redeem_body_limit(usize::MAX), redeem_protocol_max);
-        assert_eq!(offline_top_up_body_limit(1024), 1024);
-        assert_eq!(offline_redeem_body_limit(1024), 1024);
+            iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1;
+        assert_eq!(kagemusha_top_up_body_limit(usize::MAX), top_up_protocol_max);
+        assert_eq!(kagemusha_redeem_body_limit(usize::MAX), redeem_protocol_max);
+        assert_eq!(kagemusha_top_up_body_limit(1024), 1024);
+        assert_eq!(kagemusha_redeem_body_limit(1024), 1024);
     }
     #[test]
-    fn offline_command_memory_pool_admits_each_maximum_working_set() {
+    fn kagemusha_command_memory_pool_admits_each_maximum_working_set() {
         let listener_limit = usize::try_from(defaults::torii::MAX_CONTENT_LEN.get())
             .expect("default listener limit fits usize");
         let pool = ByteWeightedMemoryPool::new(
-            offline_command_memory_pool_bytes(listener_limit)
-                .expect("offline command working sets fit usize"),
+            kagemusha_command_memory_pool_bytes(listener_limit)
+                .expect("Kagemusha command working sets fit usize"),
         )
-        .expect("offline command pool geometry");
+        .expect("Kagemusha command pool geometry");
         for policy in [
-            OfflineCommandBodyPolicy::top_up(listener_limit),
-            OfflineCommandBodyPolicy::redeem(listener_limit),
+            KagemushaCommandBodyPolicy::top_up(listener_limit),
+            KagemushaCommandBodyPolicy::redeem(listener_limit),
         ] {
             let parts = policy
                 .working_set_parts(policy.max_body_bytes)
@@ -14947,79 +14947,79 @@ mod universal_offline_capability_tests {
         }
     }
     #[tokio::test]
-    async fn disabled_offline_commands_reject_before_body_or_resource_admission() {
+    async fn disabled_kagemusha_commands_reject_before_body_or_resource_admission() {
         let mut app = super::mk_app_state_for_tests();
         let state = Arc::get_mut(&mut app).expect("unique offline admission app state");
-        assert!(state.offline_commands.is_none());
+        assert!(state.kagemusha_commands.is_none());
         state.proof_body_inflight = Arc::new(tokio::sync::Semaphore::new(1));
-        let memory_capacity = state.offline_command_memory_inflight.capacity_bytes();
+        let memory_capacity = state.kagemusha_command_memory_inflight.capacity_bytes();
 
         let body_guard = Arc::clone(&app.proof_body_inflight)
             .try_acquire_owned()
             .expect("occupy the offline body admission permit");
         let memory_guard = app
-            .offline_command_memory_inflight
+            .kagemusha_command_memory_inflight
             .try_acquire_parts([memory_capacity, 0])
-            .expect("occupy the offline command memory pool");
+            .expect("occupy the Kagemusha command memory pool");
         let router = Router::new()
             .route(
-                route_catalog::offline::TOP_UP.path(),
+                route_catalog::kagemusha::TOP_UP.path(),
                 axum::routing::post(|| async { StatusCode::NO_CONTENT }),
             )
             .layer(axum::middleware::from_fn_with_state(
                 Arc::clone(&app),
-                enforce_offline_command_prebody_admission,
+                enforce_kagemusha_command_prebody_admission,
             ));
         let body = Body::from_stream(futures::stream::poll_fn(
             |_context| -> std::task::Poll<Option<Result<Bytes, std::convert::Infallible>>> {
-                panic!("disabled offline command admission polled the request body")
+                panic!("disabled Kagemusha command admission polled the request body")
             },
         ));
         let mut request = Request::builder()
             .method(axum::http::Method::POST)
-            .uri(route_catalog::offline::TOP_UP.path())
+            .uri(route_catalog::kagemusha::TOP_UP.path())
             .header(header::CONTENT_TYPE, crate::utils::NORITO_MIME_TYPE)
             .header(header::CONTENT_LENGTH, "1")
             .header("idempotency-key", "00".repeat(32))
             .body(body)
-            .expect("disabled offline command request");
+            .expect("disabled Kagemusha command request");
         request
             .extensions_mut()
             .insert(MatchedRouteMetadata::from_descriptor(
-                route_catalog::offline::TOP_UP,
+                route_catalog::kagemusha::TOP_UP,
             ));
 
         let response = router
             .oneshot(request)
             .await
-            .expect("disabled offline command response");
+            .expect("disabled Kagemusha command response");
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
             response.headers().get("x-iroha-reject-code"),
             Some(&axum::http::HeaderValue::from_static(
-                "offline_service_unavailable"
+                "kagemusha_service_unavailable"
             ))
         );
         assert_eq!(app.proof_body_inflight.available_permits(), 0);
-        assert_eq!(app.offline_command_memory_inflight.available_bytes(), 0);
+        assert_eq!(app.kagemusha_command_memory_inflight.available_bytes(), 0);
 
         drop(memory_guard);
         drop(body_guard);
         assert_eq!(app.proof_body_inflight.available_permits(), 1);
         assert_eq!(
-            app.offline_command_memory_inflight.available_bytes(),
+            app.kagemusha_command_memory_inflight.available_bytes(),
             memory_capacity
         );
     }
     #[tokio::test]
-    async fn offline_command_resource_leases_precede_body_polling_and_cover_handler_work() {
+    async fn kagemusha_command_resource_leases_precede_body_polling_and_cover_handler_work() {
         let mut app = super::mk_app_state_for_tests();
         let state = Arc::get_mut(&mut app).expect("unique offline admission app state");
-        state.offline_commands = Some(configured_offline_command_runtime());
+        state.kagemusha_commands = Some(configured_kagemusha_command_runtime());
         state.proof_body_inflight = Arc::new(tokio::sync::Semaphore::new(1));
         state.proof_limits.body_read_timeout = Duration::from_secs(1);
-        let memory_capacity = state.offline_command_memory_inflight.capacity_bytes();
-        let memory_available = state.offline_command_memory_inflight.available_bytes();
+        let memory_capacity = state.kagemusha_command_memory_inflight.capacity_bytes();
+        let memory_available = state.kagemusha_command_memory_inflight.available_bytes();
         assert_eq!(memory_available, memory_capacity);
 
         let entered = Arc::new(tokio::sync::Notify::new());
@@ -15029,16 +15029,16 @@ mod universal_offline_capability_tests {
         let handler_release = Arc::clone(&release);
         let router = Router::new()
             .route(
-                route_catalog::offline::TOP_UP.path(),
+                route_catalog::kagemusha::TOP_UP.path(),
                 axum::routing::post(
-                    move |Extension(_lease): Extension<OfflineCommandBodyAdmissionLease>| {
+                    move |Extension(_lease): Extension<KagemushaCommandBodyAdmissionLease>| {
                         let app = Arc::clone(&handler_app);
                         let entered = Arc::clone(&handler_entered);
                         let release = Arc::clone(&handler_release);
                         async move {
                             assert_eq!(app.proof_body_inflight.available_permits(), 0);
                             assert!(
-                                app.offline_command_memory_inflight.available_bytes()
+                                app.kagemusha_command_memory_inflight.available_bytes()
                                     < memory_capacity
                             );
                             entered.notify_one();
@@ -15050,21 +15050,21 @@ mod universal_offline_capability_tests {
             )
             .layer(axum::middleware::from_fn_with_state(
                 Arc::clone(&app),
-                enforce_offline_command_prebody_admission,
+                enforce_kagemusha_command_prebody_admission,
             ));
         let request = |body: Body| {
             let mut request = Request::builder()
                 .method(axum::http::Method::POST)
-                .uri(route_catalog::offline::TOP_UP.path())
+                .uri(route_catalog::kagemusha::TOP_UP.path())
                 .header(header::CONTENT_TYPE, crate::utils::NORITO_MIME_TYPE)
                 .header(header::CONTENT_LENGTH, "1")
                 .header("idempotency-key", "00".repeat(32))
                 .body(body)
-                .expect("offline command request");
+                .expect("Kagemusha command request");
             request
                 .extensions_mut()
                 .insert(MatchedRouteMetadata::from_descriptor(
-                    route_catalog::offline::TOP_UP,
+                    route_catalog::kagemusha::TOP_UP,
                 ));
             request
         };
@@ -15074,16 +15074,16 @@ mod universal_offline_capability_tests {
             first_router
                 .oneshot(request(Body::from("x")))
                 .await
-                .expect("first offline command response")
+                .expect("first Kagemusha command response")
         });
         tokio::time::timeout(Duration::from_secs(1), entered.notified())
             .await
-            .expect("first offline command reaches handler");
+            .expect("first Kagemusha command reaches handler");
 
         let body_that_must_not_be_polled = || {
             Body::from_stream(futures::stream::poll_fn(
                 |_context| -> std::task::Poll<Option<Result<Bytes, std::convert::Infallible>>> {
-                    panic!("saturated offline command admission polled the request body")
+                    panic!("saturated Kagemusha command admission polled the request body")
                 },
             ))
         };
@@ -15096,19 +15096,19 @@ mod universal_offline_capability_tests {
 
         release.notify_one();
         assert_eq!(
-            first.await.expect("first offline command task").status(),
+            first.await.expect("first Kagemusha command task").status(),
             StatusCode::NO_CONTENT
         );
         assert_eq!(app.proof_body_inflight.available_permits(), 1);
         assert_eq!(
-            app.offline_command_memory_inflight.available_bytes(),
+            app.kagemusha_command_memory_inflight.available_bytes(),
             memory_available
         );
 
         let memory_guard = app
-            .offline_command_memory_inflight
+            .kagemusha_command_memory_inflight
             .try_acquire_parts([memory_capacity, 0])
-            .expect("occupy the complete offline command memory pool");
+            .expect("occupy the complete Kagemusha command memory pool");
         let saturated = router
             .clone()
             .oneshot(request(body_that_must_not_be_polled()))
@@ -15118,7 +15118,7 @@ mod universal_offline_capability_tests {
         assert_eq!(app.proof_body_inflight.available_permits(), 1);
         drop(memory_guard);
         assert_eq!(
-            app.offline_command_memory_inflight.available_bytes(),
+            app.kagemusha_command_memory_inflight.available_bytes(),
             memory_available
         );
 
@@ -15132,35 +15132,35 @@ mod universal_offline_capability_tests {
         assert_eq!(mismatched.status(), StatusCode::BAD_REQUEST);
         assert_eq!(app.proof_body_inflight.available_permits(), 1);
         assert_eq!(
-            app.offline_command_memory_inflight.available_bytes(),
+            app.kagemusha_command_memory_inflight.available_bytes(),
             memory_available
         );
     }
 }
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_redeem(
+async fn handler_kagemusha_redeem(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
-    crate::utils::extractors::OfflineNorito(request): crate::utils::extractors::OfflineNorito<
-        iroha_torii_shared::offline_api::OfflineCashRedemptionRequestV1,
+    crate::utils::extractors::KagemushaNorito(request): crate::utils::extractors::KagemushaNorito<
+        iroha_torii_shared::kagemusha_api::KagemushaRedemptionRequestV1,
     >,
 ) -> Result<AxResponse, Error> {
-    offline_commands::handle_redeem(app, &headers, request).await
+    kagemusha_commands::handle_redeem(app, &headers, request).await
 }
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_top_up(
+async fn handler_kagemusha_top_up(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
-    crate::utils::extractors::OfflineNorito(request): crate::utils::extractors::OfflineNorito<
-        iroha_torii_shared::offline_api::OfflineCashTopUpRequestV1,
+    crate::utils::extractors::KagemushaNorito(request): crate::utils::extractors::KagemushaNorito<
+        iroha_torii_shared::kagemusha_api::KagemushaTopUpRequestV1,
     >,
 ) -> Result<AxResponse, Error> {
-    offline_commands::handle_top_up(app, &headers, request).await
+    kagemusha_commands::handle_top_up(app, &headers, request).await
 }
 #[cfg(feature = "app_api")]
-async fn enforce_offline_command_prebody_admission(
+async fn enforce_kagemusha_command_prebody_admission(
     State(app): State<SharedAppState>,
     req: axum::http::Request<Body>,
     next: Next,
@@ -15169,11 +15169,11 @@ async fn enforce_offline_command_prebody_admission(
         .extensions()
         .get::<MatchedRouteMetadata>()
         .and_then(|route| match route.stable_route_id() {
-            id if id == route_catalog::offline::TOP_UP.stable_route_id() => Some(
-                OfflineCommandBodyPolicy::top_up(app.transaction_max_content_len),
+            id if id == route_catalog::kagemusha::TOP_UP.stable_route_id() => Some(
+                KagemushaCommandBodyPolicy::top_up(app.transaction_max_content_len),
             ),
-            id if id == route_catalog::offline::REDEEM.stable_route_id() => Some(
-                OfflineCommandBodyPolicy::redeem(app.transaction_max_content_len),
+            id if id == route_catalog::kagemusha::REDEEM.stable_route_id() => Some(
+                KagemushaCommandBodyPolicy::redeem(app.transaction_max_content_len),
             ),
             _ => None,
         });
@@ -15197,7 +15197,7 @@ async fn enforce_offline_command_prebody_admission(
     if let Err(response) = crate::utils::norito_request_content_type(&headers) {
         return Ok(response);
     }
-    if let Err(error) = offline_commands::validate_command_headers_before_body(&headers) {
+    if let Err(error) = kagemusha_commands::validate_command_headers_before_body(&headers) {
         return Ok(error.into_response());
     }
     let declared_content_length =
@@ -15207,7 +15207,7 @@ async fn enforce_offline_command_prebody_admission(
                 return Ok((
                     StatusCode::PAYLOAD_TOO_LARGE,
                     format!(
-                        "offline command request body exceeds the {}-byte route limit",
+                        "Kagemusha command request body exceeds the {}-byte route limit",
                         policy.max_body_bytes
                     ),
                 )
@@ -15216,7 +15216,7 @@ async fn enforce_offline_command_prebody_admission(
             Err(BoundedContentLengthError::Invalid) => {
                 return Ok((
                     StatusCode::BAD_REQUEST,
-                    "invalid or ambiguous offline command Content-Length",
+                    "invalid or ambiguous Kagemusha command Content-Length",
                 )
                     .into_response());
             }
@@ -15236,14 +15236,14 @@ async fn enforce_offline_command_prebody_admission(
         // bodies with a contradictory exact hint before admission or polling.
         return Ok((
             StatusCode::BAD_REQUEST,
-            "offline command Content-Length does not match the request body framing",
+            "Kagemusha command Content-Length does not match the request body framing",
         )
             .into_response());
     }
-    if app.offline_commands.is_none() {
+    if app.kagemusha_commands.is_none() {
         return Ok(Error::AppServiceUnavailable {
-            code: "offline_service_unavailable",
-            message: "Offline operation signing is not configured on this Torii node.".to_owned(),
+            code: "kagemusha_service_unavailable",
+            message: "Kagemusha operation signing is not configured on this Torii node.".to_owned(),
         }
         .into_response());
     }
@@ -15251,8 +15251,8 @@ async fn enforce_offline_command_prebody_admission(
         Ok(permit) => permit,
         Err(_) => {
             return Ok(Error::AppServiceUnavailable {
-                code: "offline_command_body_admission_saturated",
-                message: "Offline command body admission is saturated; retry later.".to_owned(),
+                code: "kagemusha_command_body_admission_saturated",
+                message: "Kagemusha command body admission is saturated; retry later.".to_owned(),
             }
             .into_response());
         }
@@ -15263,26 +15263,26 @@ async fn enforce_offline_command_prebody_admission(
     let charged_body_bytes = declared_content_length.unwrap_or(policy.max_body_bytes);
     let Some(working_set_parts) = policy.working_set_parts(charged_body_bytes) else {
         return Ok(Error::AppServiceUnavailable {
-            code: "offline_command_admission_configuration_invalid",
-            message: "Offline command body admission cannot represent the configured route limit."
+            code: "kagemusha_command_admission_configuration_invalid",
+            message: "Kagemusha command body admission cannot represent the configured route limit."
                 .to_owned(),
         }
         .into_response());
     };
     let memory_permit = match app
-        .offline_command_memory_inflight
+        .kagemusha_command_memory_inflight
         .try_acquire_parts(working_set_parts)
     {
         Some(permit) => permit,
         None => {
             return Ok(Error::AppServiceUnavailable {
-                code: "offline_command_memory_admission_saturated",
-                message: "Offline command memory admission is saturated; retry later.".to_owned(),
+                code: "kagemusha_command_memory_admission_saturated",
+                message: "Kagemusha command memory admission is saturated; retry later.".to_owned(),
             }
             .into_response());
         }
     };
-    let mut req = match collect_offline_command_body_with_deadline(
+    let mut req = match collect_kagemusha_command_body_with_deadline(
         req,
         policy.max_body_bytes,
         app.proof_limits.body_read_timeout,
@@ -15300,11 +15300,11 @@ async fn enforce_offline_command_prebody_admission(
     if declared_content_length.is_some_and(|declared| Some(declared) != actual_body_bytes) {
         return Ok((
             StatusCode::BAD_REQUEST,
-            "offline command Content-Length does not match the received body",
+            "Kagemusha command Content-Length does not match the received body",
         )
             .into_response());
     }
-    let lease = OfflineCommandBodyAdmissionLease::new(body_permit, memory_permit);
+    let lease = KagemushaCommandBodyAdmissionLease::new(body_permit, memory_permit);
     req.extensions_mut().insert(lease.clone());
     let response = next.run(req).await;
     drop(lease);
@@ -15312,22 +15312,22 @@ async fn enforce_offline_command_prebody_admission(
 }
 #[cfg(feature = "app_api")]
 #[derive(Clone)]
-struct OfflineCommandBodyAdmissionLease {
-    _permits: Arc<OfflineCommandBodyAdmissionPermits>,
+struct KagemushaCommandBodyAdmissionLease {
+    _permits: Arc<KagemushaCommandBodyAdmissionPermits>,
 }
 #[cfg(feature = "app_api")]
-struct OfflineCommandBodyAdmissionPermits {
+struct KagemushaCommandBodyAdmissionPermits {
     _body: tokio::sync::OwnedSemaphorePermit,
     _memory: tokio::sync::OwnedSemaphorePermit,
 }
 #[cfg(feature = "app_api")]
-impl OfflineCommandBodyAdmissionLease {
+impl KagemushaCommandBodyAdmissionLease {
     fn new(
         body: tokio::sync::OwnedSemaphorePermit,
         memory: tokio::sync::OwnedSemaphorePermit,
     ) -> Self {
         Self {
-            _permits: Arc::new(OfflineCommandBodyAdmissionPermits {
+            _permits: Arc::new(KagemushaCommandBodyAdmissionPermits {
                 _body: body,
                 _memory: memory,
             }),
@@ -15336,7 +15336,7 @@ impl OfflineCommandBodyAdmissionLease {
 }
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_operation_status(
+async fn handler_kagemusha_operation_status(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
@@ -15346,10 +15346,10 @@ async fn handler_offline_operation_status(
         &app,
         &headers,
         Some(remote.ip()),
-        "v1/offline/operations/{operation_id}",
+        "v1/kagemusha/operations/{operation_id}",
     )
     .await?;
-    offline_commands::handle_operation_status(&app, &operation_id)
+    kagemusha_commands::handle_operation_status(&app, &operation_id)
 }
 #[cfg(feature = "app_api")]
 #[derive(JsonDeserialize)]
@@ -18303,14 +18303,14 @@ async fn handler_peers(
     Ok(routing::handle_peers(&app.online_peers, format))
 }
 #[cfg(feature = "app_api")]
-fn universal_offline_capability_status() -> iroha_torii_shared::offline_api::OfflineCashReadinessV1
+fn universal_kagemusha_readiness_v1() -> iroha_torii_shared::kagemusha_api::KagemushaReadinessV1
 {
-    iroha_torii_shared::offline_api::OfflineCashReadinessV1 {
-        cash_handoff_capability: iroha_data_model::offline::OFFLINE_CASH_HANDOFF_CAPABILITY_V1
+    iroha_torii_shared::kagemusha_api::KagemushaReadinessV1 {
+        kagemusha_handoff_capability: iroha_data_model::kagemusha::KAGEMUSHA_HANDOFF_CAPABILITY_V1
             .to_owned(),
-        wire_version: iroha_data_model::offline::OFFLINE_CASH_WIRE_VERSION_V1,
+        wire_version: iroha_data_model::kagemusha::KAGEMUSHA_WIRE_VERSION_V1,
         device_lifecycle_version:
-            iroha_data_model::offline::OFFLINE_CASH_DEVICE_LIFECYCLE_VERSION_V1,
+            iroha_data_model::kagemusha::KAGEMUSHA_DEVICE_LIFECYCLE_VERSION_V1,
         ready: true,
     }
 }
@@ -18325,7 +18325,7 @@ async fn handler_health(
 }
 /// GET `/readyz` — ordinary node admission readiness.
 ///
-/// Offline wallet UI capability is universal and never participates in this
+/// Kagemusha wallet UI capability is universal and never participates in this
 /// probe. Future ordinary chain-readiness checks belong here.
 async fn handler_readyz(State(app): State<SharedAppState>) -> AxResponse {
     if app.kura.emergency_fast_startup_enabled() {
@@ -47613,7 +47613,7 @@ pub struct Torii {
     #[cfg(feature = "app_api")]
     sorafs_appeal_settlement_submitter: Option<SoraFsAppealSettlementSubmitter>,
     #[cfg(feature = "app_api")]
-    offline_commands: Option<Arc<offline_commands::OfflineCommandRuntime>>,
+    kagemusha_commands: Option<Arc<kagemusha_commands::KagemushaCommandRuntime>>,
     #[cfg(feature = "app_api")]
     account_onboarding: Option<AccountOnboardingSigner>,
     vpn_relay_trust: Option<Arc<VpnRelayTrust>>,
@@ -50660,16 +50660,16 @@ impl Torii {
     fn add_app_api_routes(&self, builder: &mut RouterBuilder) {
         let app_state = builder.state().clone();
         let transaction_max_content_len = self.transaction_max_content_len;
-        let offline_top_up_body_limit_bytes =
-            offline_top_up_body_limit(transaction_max_content_len);
-        let offline_redeem_body_limit_bytes =
-            offline_redeem_body_limit(transaction_max_content_len);
+        let kagemusha_top_up_body_limit_bytes =
+            kagemusha_top_up_body_limit(transaction_max_content_len);
+        let kagemusha_redeem_body_limit_bytes =
+            kagemusha_redeem_body_limit(transaction_max_content_len);
         mount_catalog_route_rows!(
-            builder, offline;
-            READINESS => public_get(handler_offline_readiness);
-            TOP_UP => limited_canonical_signed_post(handler_offline_top_up, offline_top_up_body_limit_bytes);
-            REDEEM => limited_canonical_signed_post(handler_offline_redeem, offline_redeem_body_limit_bytes);
-            OPERATION => public_get(handler_offline_operation_status);
+            builder, kagemusha;
+            READINESS => public_get(handler_kagemusha_readiness);
+            TOP_UP => limited_canonical_signed_post(handler_kagemusha_top_up, kagemusha_top_up_body_limit_bytes);
+            REDEEM => limited_canonical_signed_post(handler_kagemusha_redeem, kagemusha_redeem_body_limit_bytes);
+            OPERATION => public_get(handler_kagemusha_operation_status);
         );
         mount_catalog_route_rows!(
             builder, application_api;
@@ -51564,7 +51564,7 @@ impl Torii {
                 iroha_config::parameters::actual::SorafsAppealFinanceSettlement::default();
             config.account_onboarding = None;
             config.faucet = None;
-            config.offline_cash_v1_commands = None;
+            config.kagemusha_v1_commands = None;
             config.ram_lfe = None;
             config.tx_history = None;
             config.peer_telemetry_urls.clear();
@@ -52875,10 +52875,10 @@ impl Torii {
         })
         .transpose()?;
         #[cfg(feature = "app_api")]
-        let offline_commands = config
-            .offline_cash_v1_commands
+        let kagemusha_commands = config
+            .kagemusha_v1_commands
             .clone()
-            .map(offline_commands::OfflineCommandRuntime::from_config)
+            .map(kagemusha_commands::KagemushaCommandRuntime::from_config)
             .map(Arc::new);
         #[cfg(feature = "app_api")]
         let identifier_resolver = config
@@ -53214,7 +53214,7 @@ impl Torii {
             #[cfg(feature = "app_api")]
             sorafs_appeal_settlement_submitter,
             #[cfg(feature = "app_api")]
-            offline_commands,
+            kagemusha_commands,
             #[cfg(feature = "app_api")]
             account_onboarding,
             vpn_relay_trust,
@@ -53426,12 +53426,12 @@ impl Torii {
             })?;
         #[cfg(feature = "app_api")]
         {
-            let offline_command_memory_inflight = ByteWeightedMemoryPool::new(
-                offline_command_memory_pool_bytes(torii_proxy_max_response_bytes).ok_or_else(
+            let kagemusha_command_memory_inflight = ByteWeightedMemoryPool::new(
+                kagemusha_command_memory_pool_bytes(torii_proxy_max_response_bytes).ok_or_else(
                     || {
                         ToriiBuildError::invalid_configuration(
                             "max_content_len",
-                            "offline command body limits do not fit the platform address space",
+                            "Kagemusha command body limits do not fit the platform address space",
                         )
                     },
                 )?,
@@ -53439,21 +53439,21 @@ impl Torii {
             .ok_or_else(|| {
                 ToriiBuildError::invalid_configuration(
                     "max_content_len",
-                    "offline command memory pool does not fit weighted semaphore geometry",
+                    "Kagemusha command memory pool does not fit weighted semaphore geometry",
                 )
             })?;
-            let redemption_parts = OfflineCommandBodyPolicy::redeem(torii_proxy_max_response_bytes)
-                .working_set_parts(offline_redeem_body_limit(torii_proxy_max_response_bytes))
+            let redemption_parts = KagemushaCommandBodyPolicy::redeem(torii_proxy_max_response_bytes)
+                .working_set_parts(kagemusha_redeem_body_limit(torii_proxy_max_response_bytes))
                 .ok_or_else(|| {
                     ToriiBuildError::invalid_configuration(
                         "max_content_len",
-                        "offline redemption working set does not fit the platform address space",
+                        "Kagemusha redemption working set does not fit the platform address space",
                     )
                 })?;
-            if !offline_command_memory_inflight.can_reserve_parts(redemption_parts) {
+            if !kagemusha_command_memory_inflight.can_reserve_parts(redemption_parts) {
                 return Err(ToriiBuildError::invalid_configuration(
                     "max_content_len",
-                    "offline command memory pool cannot admit one maximum-size redemption",
+                    "Kagemusha command memory pool cannot admit one maximum-size redemption",
                 ));
             }
         }
@@ -53883,34 +53883,34 @@ impl Torii {
                 )
             })?;
         #[cfg(feature = "app_api")]
-        let offline_command_memory_inflight = ByteWeightedMemoryPool::new(
-            offline_command_memory_pool_bytes(torii_proxy_max_response_bytes).ok_or_else(|| {
+        let kagemusha_command_memory_inflight = ByteWeightedMemoryPool::new(
+            kagemusha_command_memory_pool_bytes(torii_proxy_max_response_bytes).ok_or_else(|| {
                 ToriiBuildError::invalid_configuration(
                     "max_content_len",
-                    "offline command body limits do not fit the platform address space",
+                    "Kagemusha command body limits do not fit the platform address space",
                 )
             })?,
         )
         .ok_or_else(|| {
             ToriiBuildError::invalid_configuration(
                 "max_content_len",
-                "offline command memory pool does not fit weighted semaphore geometry",
+                "Kagemusha command memory pool does not fit weighted semaphore geometry",
             )
         })?;
         #[cfg(feature = "app_api")]
-        if !offline_command_memory_inflight.can_reserve_parts(
-            OfflineCommandBodyPolicy::redeem(torii_proxy_max_response_bytes)
-                .working_set_parts(offline_redeem_body_limit(torii_proxy_max_response_bytes))
+        if !kagemusha_command_memory_inflight.can_reserve_parts(
+            KagemushaCommandBodyPolicy::redeem(torii_proxy_max_response_bytes)
+                .working_set_parts(kagemusha_redeem_body_limit(torii_proxy_max_response_bytes))
                 .ok_or_else(|| {
                     ToriiBuildError::invalid_configuration(
                         "max_content_len",
-                        "offline redemption working set does not fit the platform address space",
+                        "Kagemusha redemption working set does not fit the platform address space",
                     )
                 })?,
         ) {
             return Err(ToriiBuildError::invalid_configuration(
                 "max_content_len",
-                "offline command memory pool cannot admit one maximum-size redemption",
+                "Kagemusha command memory pool cannot admit one maximum-size redemption",
             ));
         }
         let query_fanout_working_set_bytes = query_memory.fanout_working_set_bytes.min(
@@ -54036,7 +54036,7 @@ impl Torii {
             proof_egress_limiter: self.proof_egress_limiter.clone(),
             proof_body_inflight,
             #[cfg(feature = "app_api")]
-            offline_command_memory_inflight,
+            kagemusha_command_memory_inflight,
             soracloud_public_rate_limiter: self.soracloud_public_rate_limiter.clone(),
             soracloud_mutation_rate_limiter: self.soracloud_mutation_rate_limiter.clone(),
             soracloud_mutation_inflight,
@@ -54223,7 +54223,7 @@ impl Torii {
             #[cfg(feature = "app_api")]
             sorafs_appeal_settlement_submitter: self.sorafs_appeal_settlement_submitter.clone(),
             #[cfg(feature = "app_api")]
-            offline_commands: self.offline_commands.clone(),
+            kagemusha_commands: self.kagemusha_commands.clone(),
             #[cfg(feature = "app_api")]
             account_onboarding: self.account_onboarding.clone(),
             vpn_relay_trust: self.vpn_relay_trust.clone(),
@@ -54386,12 +54386,12 @@ impl Torii {
             .layer(axum::middleware::from_fn(enforce_route_timeout));
         #[cfg(feature = "app_api")]
         {
-            // Offline command admission inspects request bodies inside the
+            // Kagemusha command admission inspects request bodies inside the
             // listener-wide credential gates. SoraCloud commands use sealed
             // route-local authentication installed during catalog mounting.
             router = router.layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
-                enforce_offline_command_prebody_admission,
+                enforce_kagemusha_command_prebody_admission,
             ));
             // App admission stays inside authentication but outside body extractors.
             router = router.layer(axum::middleware::from_fn_with_state(
@@ -54452,12 +54452,12 @@ impl Torii {
         // Normalize every JSON response, including errors returned before
         // handler selection, to the required UTF-8 media type.
         let router = router.layer(axum::middleware::from_fn(enforce_json_utf8_charset));
-        // Offline command and operation-status responses, plus readiness
+        // Kagemusha command and operation-status responses, plus readiness
         // failures, are never cacheable, including early validation,
         // authorization, not-found, and recovery failures. Successful
         // readiness responses receive the exact private revalidation policy
         // even if an inner layer supplied a conflicting cache directive.
-        let router = router.layer(axum::middleware::from_fn(enforce_offline_cache_policy));
+        let router = router.layer(axum::middleware::from_fn(enforce_kagemusha_cache_policy));
         // Metrics wrap every response-producing layer, including CORS,
         // malformed headers, authentication, request-size, rate-limit,
         // timeout, and panic paths.
@@ -56665,41 +56665,41 @@ pub enum Error {
     /// Torii server terminated with an error
     FailedExit,
 }
-fn offline_reject_code_from_message(message: &str) -> Option<&str> {
-    use iroha_data_model::offline::OFFLINE_CASH_V1_REJECTION_REASON_PREFIX;
-    let start = message.find(OFFLINE_CASH_V1_REJECTION_REASON_PREFIX)?;
-    let rest = &message[start + OFFLINE_CASH_V1_REJECTION_REASON_PREFIX.len()..];
+fn kagemusha_reject_code_from_message(message: &str) -> Option<&str> {
+    use iroha_data_model::kagemusha::KAGEMUSHA_V1_REJECTION_REASON_PREFIX;
+    let start = message.find(KAGEMUSHA_V1_REJECTION_REASON_PREFIX)?;
+    let rest = &message[start + KAGEMUSHA_V1_REJECTION_REASON_PREFIX.len()..];
     let (label, _) = rest.split_once(':')?;
     if label.is_empty() { None } else { Some(label) }
 }
-fn offline_reject_code_from_query_fail(
+fn kagemusha_reject_code_from_query_fail(
     fail: &iroha_data_model::query::error::QueryExecutionFail,
 ) -> Option<&str> {
     use iroha_data_model::query::error::QueryExecutionFail as Q;
     match fail {
-        Q::Conversion(message) => offline_reject_code_from_message(message),
+        Q::Conversion(message) => kagemusha_reject_code_from_message(message),
         _ => None,
     }
 }
-fn offline_reject_code_from_instruction_fail(
+fn kagemusha_reject_code_from_instruction_fail(
     fail: &iroha_data_model::isi::error::InstructionExecutionError,
 ) -> Option<&str> {
     use iroha_data_model::isi::error::InstructionExecutionError as I;
     match fail {
-        I::Conversion(message) => offline_reject_code_from_message(message),
-        I::InvariantViolation(message) => offline_reject_code_from_message(message.as_ref()),
-        I::Query(fail) => offline_reject_code_from_query_fail(fail),
+        I::Conversion(message) => kagemusha_reject_code_from_message(message),
+        I::InvariantViolation(message) => kagemusha_reject_code_from_message(message.as_ref()),
+        I::Query(fail) => kagemusha_reject_code_from_query_fail(fail),
         _ => None,
     }
 }
-fn offline_reject_code_from_validation_fail(
+fn kagemusha_reject_code_from_validation_fail(
     fail: &iroha_data_model::ValidationFail,
 ) -> Option<&str> {
     use iroha_data_model::ValidationFail as V;
     match fail {
-        V::NotPermitted(message) => offline_reject_code_from_message(message),
-        V::QueryFailed(fail) => offline_reject_code_from_query_fail(fail),
-        V::InstructionFailed(fail) => offline_reject_code_from_instruction_fail(fail),
+        V::NotPermitted(message) => kagemusha_reject_code_from_message(message),
+        V::QueryFailed(fail) => kagemusha_reject_code_from_query_fail(fail),
+        V::InstructionFailed(fail) => kagemusha_reject_code_from_instruction_fail(fail),
         _ => None,
     }
 }
@@ -56746,14 +56746,14 @@ impl IntoResponse for Error {
                         format,
                     );
                 }
-                let offline_reason =
-                    offline_reject_code_from_validation_fail(&err).map(str::to_owned);
+                let kagemusha_reason =
+                    kagemusha_reject_code_from_validation_fail(&err).map(str::to_owned);
                 let axt = match &err {
                     iroha_data_model::ValidationFail::AxtReject(ctx) => Some(ctx.clone()),
                     _ => None,
                 };
                 let mut details = ErrorDetails {
-                    reject_code: offline_reason.clone(),
+                    reject_code: kagemusha_reason.clone(),
                     ..Default::default()
                 };
                 details.axt = axt.as_ref().map(|ctx| AxtErrorDetails {
@@ -56816,7 +56816,7 @@ impl IntoResponse for Error {
                     }
                 }
                 if headers.get("x-iroha-reject-code").is_none() {
-                    if let Some(code) = offline_reason {
+                    if let Some(code) = kagemusha_reason {
                         if let Ok(header) = HeaderValue::from_str(&code) {
                             headers.insert(HeaderName::from_static("x-iroha-reject-code"), header);
                         }

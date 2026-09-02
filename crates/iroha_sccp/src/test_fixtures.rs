@@ -105,14 +105,14 @@ fn sccp_mint_finality_roster_test_fixture_v1(
     network_id: iroha_data_model::NetworkId,
     epoch: u64,
     roster: &[ValidatorPower],
-) -> iroha_data_model::isi::offline_cash_v1::OfflineCashMintFinalityEpochRosterV1 {
-    use iroha_data_model::isi::offline_cash_v1::{
-        OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterV1,
-        OfflineCashMintFinalityValidatorKeysV1,
+) -> iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+    use iroha_data_model::isi::kagemusha_v1::{
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
+        KagemushaMintFinalityValidatorKeysV1,
     };
 
-    OfflineCashMintFinalityEpochRosterV1 {
-        version: OFFLINE_CASH_CHAIN_VERSION_V1,
+    KagemushaMintFinalityEpochRosterV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
         epoch,
         validators: roster
@@ -132,7 +132,7 @@ fn sccp_mint_finality_roster_test_fixture_v1(
                 eq_proof_public_key.copy_from_slice(eq_encoded.as_ref());
                 let mut ep_proof_public_key = [0_u8; 32];
                 ep_proof_public_key.copy_from_slice(ep_encoded.as_ref());
-                OfflineCashMintFinalityValidatorKeysV1 {
+                KagemushaMintFinalityValidatorKeysV1 {
                     validator: validator.validator.clone(),
                     eq_proof_public_key,
                     ep_proof_public_key,
@@ -915,9 +915,9 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
         max_chunk_count: 8,
     };
     let network_id = sccp_taira_finality_network_id_v1();
-    let offline_cash_mint_finality_epoch_roster =
+    let kagemusha_mint_finality_epoch_roster =
         sccp_mint_finality_roster_test_fixture_v1(network_id, 0, &roster);
-    let offline_cash_mint_finality_epoch_id = offline_cash_mint_finality_epoch_roster
+    let kagemusha_mint_finality_epoch_id = kagemusha_mint_finality_epoch_roster
         .finality_epoch_id()
         .expect("valid deterministic SCCP mint-finality roster");
     let context = match (height, block_header.prev_block_hash(), parent) {
@@ -937,8 +937,8 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
             execution_policy_hash: Hash::new(b"exact SCCP fixture execution policy"),
             da_layout,
             leader_seed: [0x5a; 32],
-            offline_cash_mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
         },
         (2, Some(parent_hash), Some(parent)) => {
             assert_exact_finalized_block_fixture(parent);
@@ -971,10 +971,10 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
                 execution_policy_hash: parent_context.execution_policy_hash,
                 da_layout: parent_context.da_layout,
                 leader_seed: parent_context.leader_seed,
-                offline_cash_mint_finality_epoch_id: parent_context
-                    .offline_cash_mint_finality_epoch_id,
-                offline_cash_mint_finality_epoch_roster: parent_context
-                    .offline_cash_mint_finality_epoch_roster
+                kagemusha_mint_finality_epoch_id: parent_context
+                    .kagemusha_mint_finality_epoch_id,
+                kagemusha_mint_finality_epoch_roster: parent_context
+                    .kagemusha_mint_finality_epoch_roster
                     .clone(),
             }
         }
@@ -999,7 +999,7 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
         proposal_round: round,
         phase: GlobalPhase::Commit,
         subject,
-        execution_commitment: ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        execution_commitment: ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"exact SCCP fixture parent state"),
             Hash::new(b"exact SCCP fixture post state"),
             Hash::new(b"exact SCCP fixture ordinary writes"),
@@ -1365,10 +1365,10 @@ mod tests {
         let context = &default_finality.finality_artifact.height_context;
         assert_eq!(
             context
-                .offline_cash_mint_finality_epoch_roster
+                .kagemusha_mint_finality_epoch_roster
                 .finality_epoch_id(),
-            Ok(context.offline_cash_mint_finality_epoch_id),
-            "the SCCP fixture must carry a self-authenticating Offline Cash mint-finality roster"
+            Ok(context.kagemusha_mint_finality_epoch_id),
+            "the SCCP fixture must carry a self-authenticating Kagemusha mint-finality roster"
         );
         assert!(
             context
@@ -1376,7 +1376,7 @@ mod tests {
                 .iter()
                 .map(|validator| &validator.validator)
                 .eq(context
-                    .offline_cash_mint_finality_epoch_roster
+                    .kagemusha_mint_finality_epoch_roster
                     .validators
                     .iter()
                     .map(|validator| &validator.validator)),
@@ -1458,24 +1458,24 @@ mod tests {
             finality
                 .finality_artifact
                 .height_context
-                .offline_cash_mint_finality_epoch_id,
+                .kagemusha_mint_finality_epoch_id,
             parent
                 .proof()
                 .finality_artifact
                 .height_context
-                .offline_cash_mint_finality_epoch_id,
+                .kagemusha_mint_finality_epoch_id,
             "an in-epoch successor must inherit the exact Pasta authority identifier"
         );
         assert_eq!(
             finality
                 .finality_artifact
                 .height_context
-                .offline_cash_mint_finality_epoch_roster,
+                .kagemusha_mint_finality_epoch_roster,
             parent
                 .proof()
                 .finality_artifact
                 .height_context
-                .offline_cash_mint_finality_epoch_roster,
+                .kagemusha_mint_finality_epoch_roster,
             "an in-epoch successor must inherit the exact Pasta authority roster"
         );
         assert_eq!(

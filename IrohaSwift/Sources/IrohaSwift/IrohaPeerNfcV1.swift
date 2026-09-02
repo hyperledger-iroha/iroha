@@ -15,7 +15,7 @@ public enum IrohaPeerNfcV1 {
     public static let hashBytes = 32
     public static let maximumChunkBytes = 4_096
     public static let maximumMessageBytes =
-        IrohaPeerWireMessageV1.headerBytes + OfflineCashWireV1.maximumPaymentBytes
+        IrohaPeerWireMessageV1.headerBytes + KagemushaWireV1.maximumPaymentBytes
     public static let infoBytes = 98
     public static let statusBytes = 174
 

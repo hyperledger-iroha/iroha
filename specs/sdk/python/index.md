@@ -81,10 +81,10 @@ print(assets, txs, holders)
 
 The first-release HTTP lifecycle consists of exactly four canonical routes:
 
-- `GET /v1/offline/readiness`
-- `POST /v1/offline/top-up`
-- `POST /v1/offline/redeem`
-- `GET /v1/offline/operations/{operation_id}`
+- `GET /v1/kagemusha/readiness`
+- `POST /v1/kagemusha/top-up`
+- `POST /v1/kagemusha/redeem`
+- `GET /v1/kagemusha/operations/{operation_id}`
 
 POSTs send the typed request directly as canonical Norito and return `202
 Accepted` with a typed operation reference and `Location`. They do not accept
@@ -99,18 +99,18 @@ evaluate an asset or dataspace.
 from iroha_python import ToriiClient
 
 client = ToriiClient("https://torii.sora.example")
-capability = client.get_offline_capability()
+capability = client.get_kagemusha_readiness()
 print(
     "offline UI capability",
     capability.ready,
-    capability.cash_handoff_capability,
+    capability.kagemusha_handoff_capability,
     capability.wire_version,
     capability.device_lifecycle_version,
 )
 ```
 
 The closed response contains exactly
-`cash_handoff_capability="cash_handoff_v1"`, wire version `1`, secure-device
+`kagemusha_handoff_capability="kagemusha_handoff_v1"`, wire version `1`, secure-device
 lifecycle version `1`, and `ready=True`. It deliberately contains no hop or
 history bound. Wallet/device peer handoff must not depend on network
 discovery. Missing proof material for a particular online top-up or redemption

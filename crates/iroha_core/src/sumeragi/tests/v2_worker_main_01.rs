@@ -2207,7 +2207,7 @@ fn routing_vote(service: &ProductionV2Services, view: u64, phase: wire::GlobalPh
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"routing vote block")),
             payload_hash: Hash::new(b"routing vote payload"),
         },
-        execution_commitment: wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        execution_commitment: wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"routing vote parent state"),
             Hash::new(b"routing vote post state"),
             Hash::new(b"routing vote ordinary writes"),
@@ -2945,7 +2945,7 @@ fn certified_fetch_task(
         proposal_round: round,
         phase: wire::GlobalPhase::Prepare,
         subject,
-        execution_commitment: wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        execution_commitment: wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"fetch fixture parent state"),
             Hash::new(b"fetch fixture post state"),
             Hash::new(b"fetch fixture writes"),
@@ -4677,7 +4677,7 @@ fn zero_top_up_epoch_boundary_commit_signs_next_pasta_roster() {
     let (service, keys) = fixture();
     let mut context = service.context.clone();
     context.epoch_end_height = context.height;
-    let next_mint_roster = fixture_offline_cash_mint_finality_roster(
+    let next_mint_roster = fixture_kagemusha_mint_finality_roster(
         context.network_id,
         context.epoch + 1,
         &context.roster,
@@ -4688,8 +4688,8 @@ fn zero_top_up_epoch_boundary_commit_signs_next_pasta_roster() {
         .expect("derive next mint-finality roster ID");
     context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
         epoch: context.epoch + 1,
-        offline_cash_mint_finality_epoch_id: next_mint_id,
-        offline_cash_mint_finality_epoch_roster: next_mint_roster,
+        kagemusha_mint_finality_epoch_id: next_mint_id,
+        kagemusha_mint_finality_epoch_roster: next_mint_roster,
         epoch_end_height: context.height + 8,
         mode: context.mode,
         roster: context.roster.clone(),
@@ -4715,7 +4715,7 @@ fn zero_top_up_epoch_boundary_commit_signs_next_pasta_roster() {
         payload_hash: Hash::new(b"boundary payload"),
     };
     let ordinary_writes_root = Hash::new(b"boundary ordinary writes");
-    let execution_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+    let execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"boundary parent state"),
         ordinary_writes_root,
         ordinary_writes_root,
@@ -4732,13 +4732,13 @@ fn zero_top_up_epoch_boundary_commit_signs_next_pasta_roster() {
         signature: Vec::new(),
     };
     let authority =
-        crate::zk::offline_cash_v1_recursion::OfflineCashMintFinalityLocalAuthorityV1::new(
-            std::sync::Arc::new(context.offline_cash_mint_finality_epoch_roster.clone()),
+        crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1::new(
+            std::sync::Arc::new(context.kagemusha_mint_finality_epoch_roster.clone()),
             zeroize::Zeroizing::new([0xA0; 32]),
             0,
         )
         .expect("bind fixture Pasta signing authority");
-    let signature = sign_consensus_request_with_offline_cash_authority(
+    let signature = sign_consensus_request_with_kagemusha_authority(
         &context,
         &keys[0],
         &super::super::v2::SignRequest::Vote(vote.clone()),
@@ -4746,17 +4746,17 @@ fn zero_top_up_epoch_boundary_commit_signs_next_pasta_roster() {
         Some(&authority),
     )
     .expect("sign boundary Commit vote");
-    let parts = wire::decode_offline_cash_consensus_signature_envelope_v1(&signature)
+    let parts = wire::decode_kagemusha_consensus_signature_envelope_v1(&signature)
         .expect("decode signature framing")
-        .expect("boundary vote carries an Offline Cash envelope");
-    let share = crate::zk::offline_cash_v1_recursion::decode_offline_cash_mint_finality_seal_share_v1(
+        .expect("boundary vote carries an Kagemusha envelope");
+    let share = crate::zk::kagemusha_v1_recursion::decode_kagemusha_mint_finality_seal_share_v1(
         parts.auxiliary_payload,
     )
     .expect("decode boundary seal share");
-    assert_eq!(share.message.offline_cash_top_up_count, 0);
+    assert_eq!(share.message.kagemusha_top_up_count, 0);
     assert_eq!(share.message.next_finality_epoch_id, Some(next_mint_id));
-    crate::zk::offline_cash_v1_recursion::verify_offline_cash_mint_finality_seal_share_v1(
-        &context.offline_cash_mint_finality_epoch_roster,
+    crate::zk::kagemusha_v1_recursion::verify_kagemusha_mint_finality_seal_share_v1(
+        &context.kagemusha_mint_finality_epoch_roster,
         &context,
         &vote,
         &share,

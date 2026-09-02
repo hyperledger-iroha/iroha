@@ -13,7 +13,7 @@ enum class IrohaPeerPayloadProfile(
     val code: Int,
     val requiredSchemaVersion: Int,
 ) {
-    OFFLINE_CASH_V1(1, 1);
+    KAGEMUSHA_V1(1, 1);
 
     companion object {
         @JvmStatic fun fromCode(code: Int): IrohaPeerPayloadProfile? =
@@ -21,13 +21,11 @@ enum class IrohaPeerPayloadProfile(
     }
 }
 
-/** Stable five-message Offline Cash V1 exchange identifiers carried by IPM1. */
+/** Stable three-message Kagemusha V1 exchange identifiers carried by IPM1. */
 enum class IrohaPeerPayloadKind(val code: Int) {
     RECEIVE_REQUEST(1),
-    ACCEPTANCE_INTENT_AUTHORIZATION(2),
-    ACCEPTANCE_TICKET(3),
-    PAYMENT(4),
-    ACKNOWLEDGEMENT(5);
+    PAYMENT(2),
+    ACKNOWLEDGEMENT(3);
 
     companion object {
         @JvmStatic fun fromCode(code: Int): IrohaPeerPayloadKind? =
@@ -53,12 +51,12 @@ enum class IrohaPeerWireCompressionPolicyV1 {
 
 /** Allocation limits shared byte-for-byte by all peer V1 transports. */
 class IrohaPeerWireLimitsV1 @JvmOverloads constructor(
-    val maximumCanonicalBytes: Int = OfflineCashWireV1.MAXIMUM_PAYMENT_BYTES,
-    val maximumOfflineCashEncodedBytes: Int = OfflineCashWireV1.MAXIMUM_PAYMENT_BYTES,
+    val maximumCanonicalBytes: Int = KagemushaWireV1.MAXIMUM_PAYMENT_BYTES,
+    val maximumKagemushaEncodedBytes: Int = KagemushaWireV1.MAXIMUM_PAYMENT_BYTES,
 ) {
     init {
-        require(maximumCanonicalBytes in 1..OfflineCashWireV1.MAXIMUM_PAYMENT_BYTES)
-        require(maximumOfflineCashEncodedBytes in 1..OfflineCashWireV1.MAXIMUM_PAYMENT_BYTES)
+        require(maximumCanonicalBytes in 1..KagemushaWireV1.MAXIMUM_PAYMENT_BYTES)
+        require(maximumKagemushaEncodedBytes in 1..KagemushaWireV1.MAXIMUM_PAYMENT_BYTES)
     }
 
     companion object {
@@ -112,18 +110,14 @@ private fun validateTypedCanonicalPayload(
     kind: IrohaPeerPayloadKind,
     bytes: ByteArray,
 ) {
-    if (profile != IrohaPeerPayloadProfile.OFFLINE_CASH_V1) return
+    if (profile != IrohaPeerPayloadProfile.KAGEMUSHA_V1) return
     val schema = when (kind) {
         IrohaPeerPayloadKind.RECEIVE_REQUEST ->
-            "iroha_data_model::offline::offline_cash_v1::OfflineCashPaymentRequestV1"
-        IrohaPeerPayloadKind.ACCEPTANCE_INTENT_AUTHORIZATION ->
-            "iroha_data_model::offline::offline_cash_v1::OfflineCashAcceptanceIntentAuthorizationV1"
-        IrohaPeerPayloadKind.ACCEPTANCE_TICKET ->
-            "iroha_data_model::offline::offline_cash_v1::OfflineCashAcceptanceTicketV1"
+            "iroha_data_model::kagemusha::kagemusha_v1::KagemushaPaymentRequestV1"
         IrohaPeerPayloadKind.PAYMENT ->
-            "iroha_data_model::offline::offline_cash_v1::OfflineCashPaymentV1"
+            "iroha_data_model::kagemusha::kagemusha_v1::KagemushaPaymentV1"
         IrohaPeerPayloadKind.ACKNOWLEDGEMENT ->
-            "iroha_data_model::offline::offline_cash_v1::OfflineCashAcknowledgementV1"
+            "iroha_data_model::kagemusha::kagemusha_v1::KagemushaAcknowledgementV1"
     }
     val requiredPadding = when (kind) {
         IrohaPeerPayloadKind.ACKNOWLEDGEMENT -> 0
@@ -140,11 +134,11 @@ private fun validateTypedCanonicalPayload(
                 header.encode().contentEquals(
                     bytes.copyOfRange(0, NoritoHeader.HEADER_LENGTH),
                 ),
-        ) { "Offline Cash V1 payload must use canonical compact Norito framing" }
+        ) { "Kagemusha V1 payload must use canonical compact Norito framing" }
         header.validateChecksum(decoded.payload)
     } catch (failure: RuntimeException) {
         throw IllegalArgumentException(
-            "Invalid Offline Cash V1 payload for ${kind.name.lowercase()}",
+            "Invalid Kagemusha V1 payload for ${kind.name.lowercase()}",
             failure,
         )
     }
@@ -237,8 +231,8 @@ class IrohaPeerWireMessageV1 private constructor(
     companion object {
         const val VERSION = 1
         const val HEADER_LENGTH = 84
-        const val MAXIMUM_CANONICAL_BYTES = OfflineCashWireV1.MAXIMUM_PAYMENT_BYTES
-        const val MAXIMUM_OFFLINE_CASH_ENCODED_BYTES = OfflineCashWireV1.MAXIMUM_PAYMENT_BYTES
+        const val MAXIMUM_CANONICAL_BYTES = KagemushaWireV1.MAXIMUM_PAYMENT_BYTES
+        const val MAXIMUM_KAGEMUSHA_ENCODED_BYTES = KagemushaWireV1.MAXIMUM_PAYMENT_BYTES
         private val MAGIC = "IPM1".toByteArray(Charsets.US_ASCII)
         private val CANONICAL_DOMAIN = "IROHA-PEER-PAYLOAD-V1\u0000".toByteArray(Charsets.UTF_8)
         private val MESSAGE_DOMAIN = "IROHA-PEER-MESSAGE-V1\u0000".toByteArray(Charsets.UTF_8)
@@ -271,7 +265,7 @@ class IrohaPeerWireMessageV1 private constructor(
             val canonicalLength = checkedLength(data.readU32(12), limits.maximumCanonicalBytes)
             val encodedLength = checkedLength(
                 data.readU32(16),
-                limits.maximumOfflineCashEncodedBytes,
+                limits.maximumKagemushaEncodedBytes,
             )
             require(data.size == HEADER_LENGTH + encodedLength) { "Peer message length mismatch" }
             require(encoding != IrohaPeerContentEncodingV1.ZLIB ||
@@ -334,7 +328,7 @@ class IrohaPeerWireMessageV1 private constructor(
             val canonicalLength = checkedLength(data.readU32(12), limits.maximumCanonicalBytes)
             val encodedLength = checkedLength(
                 data.readU32(16),
-                limits.maximumOfflineCashEncodedBytes,
+                limits.maximumKagemushaEncodedBytes,
             )
             require(encoding != IrohaPeerContentEncodingV1.NONE || canonicalLength == encodedLength) {
                 "Malformed IPM1 header"
@@ -376,7 +370,7 @@ class IrohaPeerWireMessageV1 private constructor(
             require(payload.byteCount <= limits.maximumCanonicalBytes) {
                 "Peer canonical payload exceeds its bound"
             }
-            val maximumEncoded = limits.maximumOfflineCashEncodedBytes
+            val maximumEncoded = limits.maximumKagemushaEncodedBytes
             val digest = canonicalHash(payload)
             val canonical = payload.bytes
             val compressed = if (policy == IrohaPeerWireCompressionPolicyV1.PEER_OPTIMIZED) {
@@ -505,8 +499,8 @@ class IrohaPeerWireMessageV1 private constructor(
     )
 }
 
-/** Bounded handoff adapter for the sole canonical Offline Cash V1 wire values. */
-object IrohaPeerOfflineCashAdapterV1 {
+/** Bounded handoff adapter for the sole canonical Kagemusha V1 wire values. */
+object IrohaPeerKagemushaAdapterV1 {
     const val ARCHIVE_SCHEMA_VERSION = 1
 
     @JvmStatic
@@ -521,7 +515,7 @@ object IrohaPeerOfflineCashAdapterV1 {
         val bytes = canonicalPayload.copyOf()
         return try {
             IrohaPeerWireMessageV1(IrohaPeerCanonicalPayload(
-                IrohaPeerPayloadProfile.OFFLINE_CASH_V1,
+                IrohaPeerPayloadProfile.KAGEMUSHA_V1,
                 kind,
                 ARCHIVE_SCHEMA_VERSION,
                 bytes,
@@ -534,11 +528,11 @@ object IrohaPeerOfflineCashAdapterV1 {
     @JvmStatic
     fun decode(message: IrohaPeerWireMessageV1): ByteArray {
         val payload = message.canonicalPayload
-        require(payload.profile == IrohaPeerPayloadProfile.OFFLINE_CASH_V1) {
+        require(payload.profile == IrohaPeerPayloadProfile.KAGEMUSHA_V1) {
             "Unexpected peer payload profile"
         }
         require(payload.schemaVersion == ARCHIVE_SCHEMA_VERSION) {
-            "Unsupported Offline Cash V1 archive schema"
+            "Unsupported Kagemusha V1 archive schema"
         }
         return payload.bytes
     }

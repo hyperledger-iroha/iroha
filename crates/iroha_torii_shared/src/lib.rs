@@ -14,15 +14,15 @@ pub mod da;
 pub mod governance_proposal_api;
 /// Shared MCP wire constants for Torii and repository clients.
 pub mod mcp;
-/// Public Torii DTOs for the offline cash lifecycle.
-pub mod offline_api;
+/// Public Torii DTOs for the Kagemusha lifecycle.
+pub mod kagemusha_api;
 /// Public Torii DTOs for authenticated SORA Parliament draft and read routes.
 pub mod parliament_api;
 /// Stable cross-SDK signing transcript for exact prepared transactions.
 pub mod prepared_transaction;
 /// Public and restricted DTOs for atomic private cross-dataspace settlement.
 pub mod private_settlement_api;
-/// Shared QR Code encoder used by Torii and CLI offline flows.
+/// Shared QR Code encoder used by Torii and CLI device-handoff flows.
 pub mod qr;
 /// Canonical Torii route metadata and projection helpers.
 pub mod route_catalog;
@@ -342,12 +342,12 @@ pub mod uri {
     //! URI that Torii uses to route incoming requests.
     /// Query URI is used to handle incoming Query requests.
     pub const QUERY: &str = "/v1/query";
-    /// URI used to evaluate offline-payment readiness.
-    pub const OFFLINE_READINESS: &str = crate::route_catalog::offline::READINESS_PATH;
-    /// URI used to submit an online-to-offline top-up operation.
-    pub const OFFLINE_TOP_UP: &str = crate::route_catalog::offline::TOP_UP_PATH;
-    /// URI used to submit an offline redemption operation.
-    pub const OFFLINE_REDEEM: &str = crate::route_catalog::offline::REDEEM_PATH;
+    /// URI used to evaluate Kagemusha readiness.
+    pub const KAGEMUSHA_READINESS: &str = crate::route_catalog::kagemusha::READINESS_PATH;
+    /// URI used to submit a Kagemusha top-up operation.
+    pub const KAGEMUSHA_TOP_UP: &str = crate::route_catalog::kagemusha::TOP_UP_PATH;
+    /// URI used to submit a Kagemusha redemption operation.
+    pub const KAGEMUSHA_REDEEM: &str = crate::route_catalog::kagemusha::REDEEM_PATH;
     /// URI used to fetch a finality-bound current validation-fee registry.
     pub const VALIDATION_FEE_CURRENT_POLICY_PROOF: &str =
         crate::route_catalog::runtime_governance::VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH;
@@ -391,8 +391,8 @@ pub mod uri {
     /// URI used to draft one strict native validation-fee Parliament proposal.
     pub const VALIDATION_FEE_PROPOSAL_DRAFT: &str =
         crate::route_catalog::runtime_governance::VALIDATION_FEE_PROPOSAL_DRAFT_PATH;
-    /// URI used to fetch an offline operation by ID.
-    pub const OFFLINE_OPERATION: &str = crate::route_catalog::offline::OPERATION_PATH;
+    /// URI used to fetch a Kagemusha operation by ID.
+    pub const KAGEMUSHA_OPERATION: &str = crate::route_catalog::kagemusha::OPERATION_PATH;
     /// Transaction URI is used to handle incoming signed transaction requests.
     pub const TRANSACTION: &str = "/v1/pipeline/transactions";
     /// Transaction entrypoint URI is used to handle sealed and non-external submissions.

@@ -81,18 +81,14 @@ public final class IrohaPeerCanonicalPayload {
       final IrohaPeerPayloadProfile profile,
       final IrohaPeerPayloadKind kind,
       final byte[] bytes) {
-    if (profile != IrohaPeerPayloadProfile.OFFLINE_CASH_V1) return;
+    if (profile != IrohaPeerPayloadProfile.KAGEMUSHA_V1) return;
     final String schema = switch (kind) {
       case RECEIVE_REQUEST ->
-          "iroha_data_model::offline::offline_cash_v1::OfflineCashPaymentRequestV1";
-      case ACCEPTANCE_INTENT_AUTHORIZATION ->
-          "iroha_data_model::offline::offline_cash_v1::OfflineCashAcceptanceIntentAuthorizationV1";
-      case ACCEPTANCE_TICKET ->
-          "iroha_data_model::offline::offline_cash_v1::OfflineCashAcceptanceTicketV1";
+          "iroha_data_model::kagemusha::kagemusha_v1::KagemushaPaymentRequestV1";
       case PAYMENT ->
-          "iroha_data_model::offline::offline_cash_v1::OfflineCashPaymentV1";
+          "iroha_data_model::kagemusha::kagemusha_v1::KagemushaPaymentV1";
       case ACKNOWLEDGEMENT ->
-          "iroha_data_model::offline::offline_cash_v1::OfflineCashAcknowledgementV1";
+          "iroha_data_model::kagemusha::kagemusha_v1::KagemushaAcknowledgementV1";
     };
     final int requiredPadding = kind == IrohaPeerPayloadKind.ACKNOWLEDGEMENT ? 0 : 8;
     try {
@@ -107,11 +103,11 @@ public final class IrohaPeerCanonicalPayload {
                   == NoritoHeader.HEADER_LENGTH + requiredPadding + decoded.payload().length
               && Arrays.equals(
                   header.encode(), Arrays.copyOfRange(bytes, 0, NoritoHeader.HEADER_LENGTH)),
-          "Offline Cash V1 payload must use canonical compact Norito framing");
+          "Kagemusha V1 payload must use canonical compact Norito framing");
       header.validateChecksum(decoded.payload());
     } catch (RuntimeException failure) {
       throw new IllegalArgumentException(
-          "Invalid Offline Cash V1 payload for " + kind, failure);
+          "Invalid Kagemusha V1 payload for " + kind, failure);
     }
   }
 }

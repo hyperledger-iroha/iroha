@@ -8376,7 +8376,7 @@ const INITIAL_GENESIS_ONLY_PERMISSION_NAMES: &[&str] = &[
     "CanReadAllLedgerData",
     "CanReadRestrictedDataspace",
     "CanManageFxCorridors",
-    "CanManageOfflineReserve",
+    "CanManageKagemushaReserve",
 ];
 fn initial_permission_is_genesis_only(permission: &Permission) -> bool {
     INITIAL_GENESIS_ONLY_PERMISSION_NAMES.contains(&permission.name().as_ref())
@@ -9582,10 +9582,10 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     ) {
         return true;
     }
-    // Offline Cash V1 execution is guarded by exact native checks in Core.
+    // Kagemusha V1 execution is guarded by exact native checks in Core.
     if is_any!(
-        iroha_data_model::isi::offline_cash_v1::TopUpOfflineCashV1,
-        iroha_data_model::isi::offline_cash_v1::RedeemOfflineCashV1,
+        iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1,
+        iroha_data_model::isi::kagemusha_v1::RedeemKagemushaV1,
     ) {
         return true;
     }
@@ -10751,7 +10751,7 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanManageConfidentialParams",
     "CanManageSccpGovernance",
     "CanProposeSccpRouteGovernance",
-    "CanManageOfflineReserve",
+    "CanManageKagemushaReserve",
     "CanManageRoles",
     "CanUpgradeExecutor",
     "CanRegisterSmartContractCode",
@@ -12525,8 +12525,8 @@ mod tests {
         let network_id = NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; 32])),
         );
-        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
                 network_id, 0, &roster,
             );
         let context = HeightContext {
@@ -12541,8 +12541,8 @@ mod tests {
             snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
-            offline_cash_mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"Initial executor evidence nexus context"),
             execution_policy_hash: Hash::new(b"Initial executor evidence execution policy"),
             da_layout: DataAvailabilityLayout {
@@ -14345,12 +14345,12 @@ mod tests {
         let administrator_account = Account::new(administrator.clone()).build(&administrator);
         let ordinary_permission: Permission =
             executor_permission::parameter::CanSetParameters.into();
-        let offline_permission: Permission =
-            executor_permission::offline::CanManageOfflineReserve.into();
+        let kagemusha_permission: Permission =
+            executor_permission::kagemusha::CanManageKagemushaReserve.into();
         let mut world = World::with([], [attacker_account, administrator_account], []);
         world.account_permissions.insert(
             administrator.clone(),
-            BTreeSet::from([ordinary_permission.clone(), offline_permission.clone()]),
+            BTreeSet::from([ordinary_permission.clone(), kagemusha_permission.clone()]),
         );
         let state = state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
@@ -14362,10 +14362,10 @@ mod tests {
         )
         .execute(&administrator, &mut state_transaction)
         .expect("seed ordinary role fixture");
-        let offline_role: RoleId = "initial_executor_offline_role".parse().expect("role id");
+        let kagemusha_role: RoleId = "initial_executor_kagemusha_role".parse().expect("role id");
         Register::role(
-            Role::new(offline_role.clone(), administrator.clone())
-                .add_permission(offline_permission.clone()),
+            Role::new(kagemusha_role.clone(), administrator.clone())
+                .add_permission(kagemusha_permission.clone()),
         )
         .execute(&administrator, &mut state_transaction)
         .expect("seed governed role fixture");
@@ -14410,8 +14410,8 @@ mod tests {
                 .any(|permission| permission == &ordinary_permission)
         );
         for instruction in [
-            Grant::account_permission(offline_permission.clone(), attacker.clone()).into(),
-            Grant::account_role(offline_role.clone(), attacker.clone()).into(),
+            Grant::account_permission(kagemusha_permission.clone(), attacker.clone()).into(),
+            Grant::account_role(kagemusha_role.clone(), attacker.clone()).into(),
         ] {
             super::Executor::Initial
                 .execute_instruction(&mut state_transaction, &administrator, instruction)
@@ -14424,12 +14424,12 @@ mod tests {
                 .world
                 .account_permissions_iter(&attacker)
                 .expect("attacker permissions")
-                .any(|permission| permission == &offline_permission)
+                .any(|permission| permission == &kagemusha_permission)
         );
         assert!(!authority_has_role(
             &state_transaction.world,
             &attacker,
-            &offline_role
+            &kagemusha_role
         ));
     }
     #[test]

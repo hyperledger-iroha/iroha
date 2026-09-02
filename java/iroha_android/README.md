@@ -136,21 +136,21 @@ fields and tags, and current Native AMX V2 evidence. The parsers reject
 status/diagnostics swaps, legacy receipt shapes, unordered or oversized Native
 participant rows, and inconsistent carrier identities.
 
-## Offline Cash V1 (Java)
+## Kagemusha V1 (Java)
 
-`OfflineCashV1` is the only offline-payment API. Java and Kotlin encode
+`KagemushaV1` is the only Kagemusha payment API. Java and Kotlin encode
 identical payment request, payment, acknowledgement, mint credit, and
-redemption voucher archives, with `oc1:` as the sole text transport. QR,
-NFC, and Nearby consume `../../fixtures/offline/offline_cash_v1.json`.
+redemption voucher archives, with `kgm1:` as the sole text transport. QR,
+NFC, and Nearby consume `../../fixtures/offline/kagemusha_v1.json`.
 Public wire size and verification work do not grow with balance history.
 
-`OfflineCashWalletV1` mirrors the canonical Kotlin aggregate wallet. It requires an
-`OfflineCashHardwareProviderV1` implementing the complete non-forking journal, exact-next counter,
+`KagemushaWalletV1` mirrors the canonical Kotlin aggregate wallet. It requires an
+`KagemushaHardwareProviderV1` implementing the complete non-forking journal, exact-next counter,
 trusted-time, recovery, inbox, outbox, and rotation contract. Staging returns a durable ACK, sends
 and redemptions synchronously fold every pending credit, and missing ACKs leave only a byte-identical
 retry record while the sender successor stays usable. Stock platform keystores are online-only and
 never trigger a software fallback.
-Managed Offline Cash X25519 types enforce only the canonical 32-byte nonzero wire shape. They do
+Managed Kagemusha X25519 types enforce only the canonical 32-byte nonzero wire shape. They do
 not perform scalar multiplication or low-order probing; the shared native core authenticates
 canonical X25519 elements during object and complete-exchange validation before monetary use.
 Both the logical sequence and hardware journal revision are per epoch. Exact-successor rotation

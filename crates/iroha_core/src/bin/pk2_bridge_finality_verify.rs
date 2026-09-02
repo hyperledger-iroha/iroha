@@ -1389,7 +1389,7 @@ mod tests {
             payload_hash: genesis_payload_hash,
         };
         let execution_commitment =
-            ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                 Hash::new(b"parent state"),
                 Hash::new(b"post state"),
                 Hash::new(b"ordinary writes"),

@@ -12,21 +12,21 @@ mod tests {
         network_id: NetworkId,
         epoch: u64,
         roster: &[ValidatorPower],
-    ) -> crate::isi::offline_cash_v1::OfflineCashMintFinalityEpochRosterV1 {
-        use crate::isi::offline_cash_v1::{
-            OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterV1,
-            OfflineCashMintFinalityValidatorKeysV1,
+    ) -> crate::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+        use crate::isi::kagemusha_v1::{
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
+            KagemushaMintFinalityValidatorKeysV1,
         };
 
-        OfflineCashMintFinalityEpochRosterV1 {
-            version: OFFLINE_CASH_CHAIN_VERSION_V1,
+        KagemushaMintFinalityEpochRosterV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
             network_id,
             epoch,
             validators: roster
                 .iter()
                 .enumerate()
                 .map(
-                    |(index, validator)| OfflineCashMintFinalityValidatorKeysV1 {
+                    |(index, validator)| KagemushaMintFinalityValidatorKeysV1 {
                         validator: validator.validator.clone(),
                         eq_proof_public_key: [u8::try_from(index + 1)
                             .expect("small fixture roster");
@@ -124,7 +124,7 @@ mod tests {
         let executed_block_wire_len =
             u64::try_from(executed_block_wire.len()).expect("fixture wire length fits u64");
         let executed = Hash::new(executed_block_wire);
-        let post = ExecutionCommitment::offline_cash_post_state_root_v1(2, ordinary, topup);
+        let post = ExecutionCommitment::kagemusha_post_state_root_v1(2, ordinary, topup);
         let canonical = ExecutionCommitment::new_without_merge_carrier(
             parent,
             post,
@@ -169,7 +169,7 @@ mod tests {
         );
         let wider_count = 17;
         let wider_post =
-            ExecutionCommitment::offline_cash_post_state_root_v1(wider_count, ordinary, topup);
+            ExecutionCommitment::kagemusha_post_state_root_v1(wider_count, ordinary, topup);
         assert!(
             ExecutionCommitment::new_without_merge_carrier(
                 parent,
@@ -195,8 +195,8 @@ mod tests {
             parent_state_root: Hash,
             post_state_root: Hash,
             ordinary_writes_root: Hash,
-            offline_cash_top_up_root: Option<Hash>,
-            offline_cash_top_up_count: u32,
+            kagemusha_top_up_root: Option<Hash>,
+            kagemusha_top_up_count: u32,
             executed_block_wire_hash: Hash,
         }
         #[derive(Encode)]
@@ -204,8 +204,8 @@ mod tests {
             parent_state_root: Hash,
             post_state_root: Hash,
             ordinary_writes_root: Hash,
-            offline_cash_top_up_root: Option<Hash>,
-            offline_cash_top_up_count: u32,
+            kagemusha_top_up_root: Option<Hash>,
+            kagemusha_top_up_count: u32,
             native_amx_application_manifest_version: u16,
             native_amx_application_manifest_root: Hash,
             native_amx_application_manifest_count: u32,
@@ -221,7 +221,7 @@ mod tests {
             u64::try_from(executed_block_wire.len()).expect("fixture wire length fits u64");
         let executed = Hash::new(executed_block_wire);
         let root = Hash::new(b"native manifest non-empty root");
-        let empty = ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        let empty = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             parent,
             post,
             ordinary,
@@ -238,8 +238,8 @@ mod tests {
             parent_state_root: parent,
             post_state_root: post,
             ordinary_writes_root: ordinary,
-            offline_cash_top_up_root: None,
-            offline_cash_top_up_count: 0,
+            kagemusha_top_up_root: None,
+            kagemusha_top_up_count: 0,
             executed_block_wire_hash: executed,
         }
         .encode();
@@ -252,8 +252,8 @@ mod tests {
             parent_state_root: parent,
             post_state_root: post,
             ordinary_writes_root: ordinary,
-            offline_cash_top_up_root: None,
-            offline_cash_top_up_count: 0,
+            kagemusha_top_up_root: None,
+            kagemusha_top_up_count: 0,
             native_amx_application_manifest_version: NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
             native_amx_application_manifest_root: native_amx_application_manifest_empty_root(),
             native_amx_application_manifest_count: 0,
@@ -392,7 +392,7 @@ mod tests {
     fn genesis_context_json_uses_explicit_policy_hash_names_only() {
         let context = context(&[1, 1, 1, 1]);
         let parameters = SumeragiV2GenesisContextParameters::recommended(
-            context.offline_cash_mint_finality_epoch_roster,
+            context.kagemusha_mint_finality_epoch_roster,
             None,
         );
         let json = norito::json::to_json(&parameters).expect("serialize v2 genesis context");
@@ -447,8 +447,8 @@ mod tests {
             protocol_version: PROTOCOL_VERSION,
             height: 1,
             epoch: 2,
-            offline_cash_mint_finality_epoch_id: mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster: mint_finality_roster,
+            kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster: mint_finality_roster,
             epoch_end_height: 100,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Npos,
@@ -1102,8 +1102,8 @@ mod tests {
                 parent_state_root: Hash::new(b"parent state"),
                 post_state_root: Hash::new(b"post state"),
                 ordinary_writes_root: Hash::new(b"ordinary writes"),
-                offline_cash_top_up_root: None,
-                offline_cash_top_up_count: 1,
+                kagemusha_top_up_root: None,
+                kagemusha_top_up_count: 1,
                 native_amx_application_manifest_version: NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
                 native_amx_application_manifest_root: native_amx_application_manifest_empty_root(),
                 native_amx_application_manifest_count: 0,
@@ -1190,8 +1190,8 @@ mod tests {
             .expect("valid next-epoch mint-finality roster");
         context.next_epoch_snapshot = Some(finality::FinalizedNextEpochSnapshot {
             epoch: context.epoch + 1,
-            offline_cash_mint_finality_epoch_id: next_mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster: next_mint_finality_roster,
+            kagemusha_mint_finality_epoch_id: next_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster: next_mint_finality_roster,
             epoch_end_height: 41,
             mode: context.mode,
             quorum: DualQuorum::from_roster(&next_roster).expect("valid next-epoch quorum"),
@@ -2903,21 +2903,21 @@ mod tests {
     }
 
     #[test]
-    fn offline_cash_consensus_signature_envelope_roundtrips_and_rejects_drift() {
+    fn kagemusha_consensus_signature_envelope_roundtrips_and_rejects_drift() {
         let bls = [0xA5; 96];
         let auxiliary = [0x5A; 384];
-        let encoded = encode_offline_cash_consensus_signature_envelope_v1(
-            OFFLINE_CASH_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1,
+        let encoded = encode_kagemusha_consensus_signature_envelope_v1(
+            KAGEMUSHA_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1,
             &bls,
             &auxiliary,
         )
         .expect("bounded envelope");
-        let decoded = decode_offline_cash_consensus_signature_envelope_v1(&encoded)
+        let decoded = decode_kagemusha_consensus_signature_envelope_v1(&encoded)
             .expect("canonical envelope")
             .expect("reserved envelope");
         assert_eq!(
             decoded.kind,
-            OFFLINE_CASH_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1
+            KAGEMUSHA_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1
         );
         assert_eq!(decoded.bls_signature, bls);
         assert_eq!(decoded.auxiliary_payload, auxiliary);
@@ -2925,17 +2925,17 @@ mod tests {
         let mut wrong_kind = encoded.clone();
         wrong_kind[16] = 99;
         assert_eq!(
-            decode_offline_cash_consensus_signature_envelope_v1(&wrong_kind),
-            Err(ValidationError::InvalidOfflineCashSignatureEnvelope)
+            decode_kagemusha_consensus_signature_envelope_v1(&wrong_kind),
+            Err(ValidationError::InvalidKagemushaSignatureEnvelope)
         );
         let mut wrong_length = encoded;
         wrong_length[19..23].copy_from_slice(&1_u32.to_le_bytes());
         assert_eq!(
-            decode_offline_cash_consensus_signature_envelope_v1(&wrong_length),
-            Err(ValidationError::InvalidOfflineCashSignatureEnvelope)
+            decode_kagemusha_consensus_signature_envelope_v1(&wrong_length),
+            Err(ValidationError::InvalidKagemushaSignatureEnvelope)
         );
         assert_eq!(
-            decode_offline_cash_consensus_signature_envelope_v1(&bls),
+            decode_kagemusha_consensus_signature_envelope_v1(&bls),
             Ok(None)
         );
     }

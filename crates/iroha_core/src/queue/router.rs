@@ -32,7 +32,7 @@ use iroha_data_model::{
             SetMusubiPackageMaintainerRoleV1, SetMusubiPackageMetadataV1,
             SetMusubiRegistryPolicyV1, SetMusubiReleaseYankV1,
         },
-        offline_cash_v1::{RedeemOfflineCashV1, TopUpOfflineCashV1},
+        kagemusha_v1::{RedeemKagemushaV1, TopUpKagemushaV1},
         private_settlement::{
             AbortAtomicPrivateSettlementV1, ActivatePrivateSettlementPoolV1,
             FinalizeAtomicPrivateSettlementV1,
@@ -5322,10 +5322,10 @@ fn multisig_propose_transaction_dataspace_target_with_world_and_fx_overlay<W: Wo
         .or_else(|| account_dataspace_target(Some(world), &propose.account, ledger_time_ms)))
 }
 fn confidential_asset_definition_target(any: &dyn std::any::Any) -> Option<&AssetDefinitionId> {
-    if let Some(top_up) = any.downcast_ref::<TopUpOfflineCashV1>() {
+    if let Some(top_up) = any.downcast_ref::<TopUpKagemushaV1>() {
         return Some(&top_up.request.asset);
     }
-    if let Some(redemption) = any.downcast_ref::<RedeemOfflineCashV1>() {
+    if let Some(redemption) = any.downcast_ref::<RedeemKagemushaV1>() {
         return Some(&redemption.request.voucher.statement.lifecycle.asset);
     }
     None

@@ -30,7 +30,7 @@ static COMPILED_OPENAPI_SPEC: LazyLock<Value> = LazyLock::new(|| {
             .expect("package-local Torii OpenAPI authority must contain a paths object");
         retain_catalog_openapi_operations(paths, crate::router::builder::compiled_route_features());
     }
-    install_offline_cash_v1_contract(&mut document);
+    install_kagemusha_v1_contract(&mut document);
     remove_hard_retired_schemas(&mut document);
     document
 });
@@ -242,7 +242,7 @@ fn ensure_catalog_security_schemes(document: &mut Value) {
 /// feature projection is exposed by a running node. It intentionally removes every lineage,
 /// note-inventory, anchor-drawdown, hop-count, and compatibility component instead of publishing
 /// aliases for them.
-fn install_offline_cash_v1_contract(document: &mut Value) {
+fn install_kagemusha_v1_contract(document: &mut Value) {
     {
         let paths = document
             .as_object_mut()
@@ -250,74 +250,74 @@ fn install_offline_cash_v1_contract(document: &mut Value) {
             .and_then(Value::as_object_mut)
             .expect("package-local Torii OpenAPI authority must contain a paths object");
 
-        let readiness = offline_operation_mut(paths, "/v1/offline/readiness", "get");
+        let readiness = kagemusha_operation_mut(paths, "/v1/kagemusha/readiness", "get");
         readiness.insert(
             "description".to_owned(),
             Value::from(
-                "Report the sole Offline Cash V1 aggregate-balance capability. The protocol has no hop, ancestry, origin, input, fan-in, or proof-depth admission limit.",
+                "Report the sole Kagemusha V1 aggregate-balance capability. The protocol has no hop, ancestry, origin, input, fan-in, or proof-depth admission limit.",
             ),
         );
-        set_offline_response_schema(
+        set_kagemusha_response_schema(
             readiness,
             "200",
-            "OfflineCashReadinessV1",
-            iroha_torii_shared::offline_api::OFFLINE_CASH_READINESS_MAX_BYTES_V1,
-            iroha_torii_shared::offline_api::OFFLINE_CASH_READINESS_MAX_BYTES_V1,
+            "KagemushaReadinessV1",
+            iroha_torii_shared::kagemusha_api::KAGEMUSHA_READINESS_MAX_BYTES_V1,
+            iroha_torii_shared::kagemusha_api::KAGEMUSHA_READINESS_MAX_BYTES_V1,
         );
 
-        let top_up = offline_operation_mut(paths, "/v1/offline/top-up", "post");
+        let top_up = kagemusha_operation_mut(paths, "/v1/kagemusha/top-up", "post");
         top_up.insert(
             "description".to_owned(),
             Value::from(
-                "Atomically debit online funds, increase the asset's pooled Offline Cash V1 reserve, and create one device-bound aggregate mint credit.",
+                "Atomically debit online funds, increase the asset's pooled Kagemusha V1 reserve, and create one device-bound aggregate mint credit.",
             ),
         );
-        set_offline_norito_request(
+        set_kagemusha_norito_request(
             top_up,
-            iroha_torii_shared::offline_api::OFFLINE_CASH_TOP_UP_REQUEST_SCHEMA_NAME_V1,
-            iroha_torii_shared::offline_api::OFFLINE_CASH_TOP_UP_REQUEST_MAX_BYTES_V1,
+            iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_NAME_V1,
+            iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1,
         );
-        set_offline_response_schema(
+        set_kagemusha_response_schema(
             top_up,
             "202",
-            "OfflineCashOperationStatusV1",
-            iroha_torii_shared::offline_api::OFFLINE_CASH_OPERATION_STATUS_MAX_BYTES_V1,
-            iroha_torii_shared::offline_api::OFFLINE_CASH_OPERATION_STATUS_JSON_MAX_BYTES_V1,
+            "KagemushaOperationStatusV1",
+            iroha_torii_shared::kagemusha_api::KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V1,
+            iroha_torii_shared::kagemusha_api::KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
         );
 
-        let redeem = offline_operation_mut(paths, "/v1/offline/redeem", "post");
+        let redeem = kagemusha_operation_mut(paths, "/v1/kagemusha/redeem", "post");
         redeem.insert(
             "description".to_owned(),
             Value::from(
                 "Verify one full or partial aggregate-balance redemption voucher, consume its terminal nullifier, debit the pooled reserve, and credit the beneficiary atomically.",
             ),
         );
-        set_offline_norito_request(
+        set_kagemusha_norito_request(
             redeem,
-            iroha_torii_shared::offline_api::OFFLINE_CASH_REDEMPTION_REQUEST_SCHEMA_NAME_V1,
-            iroha_torii_shared::offline_api::OFFLINE_CASH_REDEMPTION_REQUEST_MAX_BYTES_V1,
+            iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_SCHEMA_NAME_V1,
+            iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1,
         );
-        set_offline_response_schema(
+        set_kagemusha_response_schema(
             redeem,
             "202",
-            "OfflineCashOperationStatusV1",
-            iroha_torii_shared::offline_api::OFFLINE_CASH_OPERATION_STATUS_MAX_BYTES_V1,
-            iroha_torii_shared::offline_api::OFFLINE_CASH_OPERATION_STATUS_JSON_MAX_BYTES_V1,
+            "KagemushaOperationStatusV1",
+            iroha_torii_shared::kagemusha_api::KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V1,
+            iroha_torii_shared::kagemusha_api::KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
         );
 
-        let status = offline_operation_mut(paths, "/v1/offline/operations/{operation_id}", "get");
+        let status = kagemusha_operation_mut(paths, "/v1/kagemusha/operations/{operation_id}", "get");
         status.insert(
             "description".to_owned(),
             Value::from(
-                "Return one idempotent Offline Cash V1 reserve operation. Applied results carry consensus finality and an exact ordinary-write receipt witness; clients authenticate them against an independently pinned context.",
+                "Return one idempotent Kagemusha V1 reserve operation. Applied results carry consensus finality and an exact ordinary-write receipt witness; clients authenticate them against an independently pinned context.",
             ),
         );
-        set_offline_response_schema(
+        set_kagemusha_response_schema(
             status,
             "200",
-            "OfflineCashOperationStatusV1",
-            iroha_torii_shared::offline_api::OFFLINE_CASH_OPERATION_STATUS_MAX_BYTES_V1,
-            iroha_torii_shared::offline_api::OFFLINE_CASH_OPERATION_STATUS_JSON_MAX_BYTES_V1,
+            "KagemushaOperationStatusV1",
+            iroha_torii_shared::kagemusha_api::KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V1,
+            iroha_torii_shared::kagemusha_api::KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
         );
     }
 
@@ -329,7 +329,7 @@ fn install_offline_cash_v1_contract(document: &mut Value) {
         .and_then(Value::as_object_mut)
         .expect("package-local Torii OpenAPI authority must contain component schemas");
     schemas.insert(
-        "OfflineCashBytes32V1".to_owned(),
+        "KagemushaBytes32V1".to_owned(),
         norito::json!({
             "description": "Exactly 32 unsigned bytes.",
             "type": "array",
@@ -339,13 +339,13 @@ fn install_offline_cash_v1_contract(document: &mut Value) {
         }),
     );
     schemas.insert(
-        "OfflineCashReadinessV1".to_owned(),
+        "KagemushaReadinessV1".to_owned(),
         norito::json!({
             "type": "object",
             "additionalProperties": false,
-            "required": ["cash_handoff_capability", "wire_version", "device_lifecycle_version", "ready"],
+            "required": ["kagemusha_handoff_capability", "wire_version", "device_lifecycle_version", "ready"],
             "properties": {
-                "cash_handoff_capability": { "type": "string", "const": "cash_handoff_v1" },
+                "kagemusha_handoff_capability": { "type": "string", "const": "kagemusha_handoff_v1" },
                 "wire_version": { "type": "integer", "const": 1 },
                 "device_lifecycle_version": { "type": "integer", "const": 1 },
                 "ready": { "type": "boolean" }
@@ -353,15 +353,15 @@ fn install_offline_cash_v1_contract(document: &mut Value) {
         }),
     );
     schemas.insert(
-        "OfflineCashOperationKindV1".to_owned(),
+        "KagemushaOperationKindV1".to_owned(),
         norito::json!({ "type": "string", "enum": ["top_up", "redemption"] }),
     );
     schemas.insert(
-        "OfflineCashOperationStateV1".to_owned(),
+        "KagemushaOperationStateV1".to_owned(),
         norito::json!({ "type": "string", "enum": ["pending", "applied", "rejected"] }),
     );
     schemas.insert(
-        "OfflineCashOperationRejectionCodeV1".to_owned(),
+        "KagemushaOperationRejectionCodeV1".to_owned(),
         norito::json!({
             "type": "string",
             "enum": [
@@ -372,28 +372,28 @@ fn install_offline_cash_v1_contract(document: &mut Value) {
         }),
     );
     schemas.insert(
-        "OfflineCashOperationRejectionV1".to_owned(),
+        "KagemushaOperationRejectionV1".to_owned(),
         norito::json!({
             "type": "object",
             "additionalProperties": false,
             "required": ["code", "detail_digest"],
             "properties": {
-                "code": { "$ref": "#/components/schemas/OfflineCashOperationRejectionCodeV1" },
-                "detail_digest": { "$ref": "#/components/schemas/OfflineCashBytes32V1" }
+                "code": { "$ref": "#/components/schemas/KagemushaOperationRejectionCodeV1" },
+                "detail_digest": { "$ref": "#/components/schemas/KagemushaBytes32V1" }
             }
         }),
     );
     schemas.insert(
-        "OfflineCashOperationResultV1".to_owned(),
+        "KagemushaOperationResultV1".to_owned(),
         norito::json!({
             "description": "A constant-shape top-up or redemption result carrying its exact request, pooled-reserve receipt, consensus finality, and—only for top-up—the byte-identical mint credit.",
             "type": "object",
             "additionalProperties": false,
             "required": ["kind", "result"],
             "properties": {
-                "kind": { "$ref": "#/components/schemas/OfflineCashOperationKindV1" },
+                "kind": { "$ref": "#/components/schemas/KagemushaOperationKindV1" },
                 "result": {
-                    "description": "The canonical typed OfflineCashTopUpResultV1 or OfflineCashRedemptionResultV1 value.",
+                    "description": "The canonical typed KagemushaTopUpResultV1 or KagemushaRedemptionResultV1 value.",
                     "type": "string",
                     "format": "byte"
                 }
@@ -401,25 +401,25 @@ fn install_offline_cash_v1_contract(document: &mut Value) {
         }),
     );
     schemas.insert(
-        "OfflineCashOperationStatusV1".to_owned(),
+        "KagemushaOperationStatusV1".to_owned(),
         norito::json!({
             "type": "object",
             "additionalProperties": false,
             "required": ["version", "operation_id", "kind", "state", "result", "rejection"],
             "properties": {
                 "version": { "type": "integer", "const": 1 },
-                "operation_id": { "$ref": "#/components/schemas/OfflineCashBytes32V1" },
-                "kind": { "$ref": "#/components/schemas/OfflineCashOperationKindV1" },
-                "state": { "$ref": "#/components/schemas/OfflineCashOperationStateV1" },
+                "operation_id": { "$ref": "#/components/schemas/KagemushaBytes32V1" },
+                "kind": { "$ref": "#/components/schemas/KagemushaOperationKindV1" },
+                "state": { "$ref": "#/components/schemas/KagemushaOperationStateV1" },
                 "result": {
                     "oneOf": [
-                        { "$ref": "#/components/schemas/OfflineCashOperationResultV1" },
+                        { "$ref": "#/components/schemas/KagemushaOperationResultV1" },
                         { "type": "null" }
                     ]
                 },
                 "rejection": {
                     "oneOf": [
-                        { "$ref": "#/components/schemas/OfflineCashOperationRejectionV1" },
+                        { "$ref": "#/components/schemas/KagemushaOperationRejectionV1" },
                         { "type": "null" }
                     ]
                 }
@@ -428,16 +428,16 @@ fn install_offline_cash_v1_contract(document: &mut Value) {
     );
 }
 
-fn offline_operation_mut<'a>(paths: &'a mut Map, path: &str, method: &str) -> &'a mut Map {
+fn kagemusha_operation_mut<'a>(paths: &'a mut Map, path: &str, method: &str) -> &'a mut Map {
     paths
         .get_mut(path)
         .and_then(Value::as_object_mut)
         .and_then(|path_item| path_item.get_mut(method))
         .and_then(Value::as_object_mut)
-        .unwrap_or_else(|| panic!("cataloged Offline Cash V1 operation {method} {path} is missing"))
+        .unwrap_or_else(|| panic!("cataloged Kagemusha V1 operation {method} {path} is missing"))
 }
 
-fn set_offline_norito_request(operation: &mut Map, schema_name: &str, maximum_bytes: usize) {
+fn set_kagemusha_norito_request(operation: &mut Map, schema_name: &str, maximum_bytes: usize) {
     operation.insert(
         "requestBody".to_owned(),
         norito::json!({
@@ -456,7 +456,7 @@ fn set_offline_norito_request(operation: &mut Map, schema_name: &str, maximum_by
     );
 }
 
-fn set_offline_response_schema(
+fn set_kagemusha_response_schema(
     operation: &mut Map,
     status: &str,
     component: &str,
@@ -468,12 +468,12 @@ fn set_offline_response_schema(
         .and_then(Value::as_object_mut)
         .and_then(|responses| responses.get_mut(status))
         .and_then(Value::as_object_mut)
-        .unwrap_or_else(|| panic!("Offline Cash V1 response {status} is missing"));
+        .unwrap_or_else(|| panic!("Kagemusha V1 response {status} is missing"));
     let content = response
         .entry("content".to_owned())
         .or_insert_with(|| Value::Object(Map::new()))
         .as_object_mut()
-        .expect("Offline Cash V1 response content must be an object");
+        .expect("Kagemusha V1 response content must be an object");
     for (media_type, maximum_bytes) in [
         ("application/json", maximum_json_bytes),
         ("application/x-norito", maximum_norito_bytes),
@@ -527,11 +527,11 @@ fn remove_hard_retired_schemas(document: &mut Value) {
         "SoraHfPlacementRecordV1",
         "SoraModelHostViolationKindV1",
         "SoraModelHostViolationEvidenceRecordV1",
-        "OfflineReadiness",
-        "OfflineReadinessBlocker",
-        "OfflineActiveTransferVerifier",
-        "OfflineActiveTopUpShieldVerifier",
-        "OfflineAuthenticatedArtifactSet",
+        "KagemushaReadiness",
+        "KagemushaReadinessBlocker",
+        "KagemushaActiveTransferVerifier",
+        "KagemushaActiveTopUpShieldVerifier",
+        "KagemushaAuthenticatedArtifactSet",
     ] {
         schemas.remove(schema);
     }
@@ -587,29 +587,29 @@ mod tests {
         "18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|",
         "1844674407370955161[0-4]|18446744073709551615)$"
     );
-    const OFFLINE_COMMAND_COMMON_BAD_REQUEST_REJECT_CODES: &[&str] = &[
+    const KAGEMUSHA_COMMAND_COMMON_BAD_REQUEST_REJECT_CODES: &[&str] = &[
         "idempotency_key_invalid",
         "idempotency_key_missing",
         "operation_id_invalid",
-        "offline_amount_exceeds_limit",
-        "offline_asset_not_found",
-        "offline_asset_scale_invalid",
-        "offline_asset_scale_mismatch",
-        "offline_authorization_invalid",
-        "offline_hardware_authorization_invalid",
-        "offline_wrong_network",
+        "kagemusha_amount_exceeds_limit",
+        "kagemusha_asset_not_found",
+        "kagemusha_asset_scale_invalid",
+        "kagemusha_asset_scale_mismatch",
+        "kagemusha_authorization_invalid",
+        "kagemusha_hardware_authorization_invalid",
+        "kagemusha_wrong_network",
     ];
-    const OFFLINE_TOP_UP_BAD_REQUEST_REJECT_CODES: &[&str] = &[
-        "offline_top_up_invalid",
-        "offline_confidential_state_unavailable",
-        "offline_topup_shield_verifier_unavailable",
-        "offline_topup_shield_verifier_mismatch",
-        "offline_confidential_state_invalid",
-        "offline_topup_tree_full",
-        "offline_topup_state_conflict",
-        "offline_topup_snapshot_stale",
+    const KAGEMUSHA_TOP_UP_BAD_REQUEST_REJECT_CODES: &[&str] = &[
+        "kagemusha_top_up_invalid",
+        "kagemusha_confidential_state_unavailable",
+        "kagemusha_topup_shield_verifier_unavailable",
+        "kagemusha_topup_shield_verifier_mismatch",
+        "kagemusha_confidential_state_invalid",
+        "kagemusha_topup_tree_full",
+        "kagemusha_topup_state_conflict",
+        "kagemusha_topup_snapshot_stale",
     ];
-    const OFFLINE_REDEEM_BAD_REQUEST_REJECT_CODES: &[&str] = &["offline_redeem_invalid"];
+    const KAGEMUSHA_REDEEM_BAD_REQUEST_REJECT_CODES: &[&str] = &["kagemusha_redeem_invalid"];
     const TRANSACTION_ACCEPTANCE_BAD_REQUEST_REJECT_CODES: &[&str] = &[
         "transaction_rejected",
         "PRTRY:NTS_UNHEALTHY",
@@ -621,7 +621,7 @@ mod tests {
         "PRTRY:TX_SIGNATURE_UNKNOWN_SIGNER",
         "PRTRY:TX_SIGNATURE_INSUFFICIENT",
         "ED07",
-        "PRTRY:OFFLINE_CASH_V1_OPERATION_CARRIER_REJECTED",
+        "PRTRY:KAGEMUSHA_V1_OPERATION_CARRIER_REJECTED",
         "PRTRY:ROUTE_UNRESOLVED",
     ];
     const TRANSACTION_SUBMISSION_FORBIDDEN_REJECT_CODES: &[&str] = &[
@@ -633,7 +633,7 @@ mod tests {
     const TRANSACTION_SUBMISSION_CONFLICT_REJECT_CODES: &[&str] = &[
         "PRTRY:ALREADY_COMMITTED",
         "PRTRY:ALREADY_ENQUEUED",
-        "PRTRY:OFFLINE_CASH_V1_OPERATION_ID_CONFLICT",
+        "PRTRY:KAGEMUSHA_V1_OPERATION_ID_CONFLICT",
     ];
     const TRANSACTION_SUBMISSION_RATE_LIMIT_REJECT_CODES: &[&str] = &[
         "PRTRY:QUEUE_FULL",
@@ -645,57 +645,57 @@ mod tests {
         "route_unavailable",
         "PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE",
         "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN",
-        "PRTRY:OFFLINE_CASH_V1_OPERATION_INDEX_INCONSISTENT",
+        "PRTRY:KAGEMUSHA_V1_OPERATION_INDEX_INCONSISTENT",
     ];
-    const OFFLINE_COMMAND_FORBIDDEN_REJECT_CODES: &[&str] = &[
-        "offline_auth_header_unsupported",
+    const KAGEMUSHA_COMMAND_FORBIDDEN_REJECT_CODES: &[&str] = &[
+        "kagemusha_auth_header_unsupported",
         "PRTRY:QUEUE_GOVERNANCE_REJECTED",
         "PRTRY:QUEUE_LANE_COMPLIANCE_DENIED",
         "PRTRY:QUEUE_LANE_PRIVACY_PROOF_REJECTED",
         "PRTRY:NEXUS_FEE_ADMISSION_REJECTED",
     ];
-    const OFFLINE_COMMAND_CONFLICT_REJECT_CODES: &[&str] = &[
+    const KAGEMUSHA_COMMAND_CONFLICT_REJECT_CODES: &[&str] = &[
         "idempotency_key_conflict",
         "operation_id_conflict",
-        "offline_operation_retry_exhausted",
+        "kagemusha_operation_retry_exhausted",
         "PRTRY:ALREADY_COMMITTED",
         "PRTRY:ALREADY_ENQUEUED",
-        "PRTRY:OFFLINE_CASH_V1_OPERATION_ID_CONFLICT",
+        "PRTRY:KAGEMUSHA_V1_OPERATION_ID_CONFLICT",
     ];
-    const OFFLINE_COMMAND_RATE_LIMIT_REJECT_CODES: &[&str] = &[
+    const KAGEMUSHA_COMMAND_RATE_LIMIT_REJECT_CODES: &[&str] = &[
         "PRTRY:QUEUE_FULL",
         "PRTRY:QUEUE_LATENCY",
         "PRTRY:QUEUE_RATE",
     ];
-    const OFFLINE_COMMAND_UNAVAILABLE_REJECT_CODES: &[&str] = &[
-        "offline_service_unavailable",
-        "offline_not_ready",
-        "offline_command_authority_not_ready",
-        "offline_command_fee_asset_not_ready",
-        "offline_command_authority_unfunded",
-        "offline_command_body_admission_saturated",
-        "offline_command_memory_admission_saturated",
-        "offline_command_admission_configuration_invalid",
-        "offline_operation_capacity_exhausted",
-        "offline_operation_admission_inconsistent",
-        "offline_operation_pending_unavailable",
-        "offline_operation_history_unavailable",
-        "offline_operation_evidence_inconsistent",
-        "offline_recursive_release_invalid",
-        "offline_recursive_release_outside_issuance_window",
+    const KAGEMUSHA_COMMAND_UNAVAILABLE_REJECT_CODES: &[&str] = &[
+        "kagemusha_service_unavailable",
+        "kagemusha_not_ready",
+        "kagemusha_command_authority_not_ready",
+        "kagemusha_command_fee_asset_not_ready",
+        "kagemusha_command_authority_unfunded",
+        "kagemusha_command_body_admission_saturated",
+        "kagemusha_command_memory_admission_saturated",
+        "kagemusha_command_admission_configuration_invalid",
+        "kagemusha_operation_capacity_exhausted",
+        "kagemusha_operation_admission_inconsistent",
+        "kagemusha_operation_pending_unavailable",
+        "kagemusha_operation_history_unavailable",
+        "kagemusha_operation_evidence_inconsistent",
+        "kagemusha_recursive_release_invalid",
+        "kagemusha_recursive_release_outside_issuance_window",
     ];
-    const OFFLINE_OPERATION_STATUS_UNAVAILABLE_REJECT_CODES: &[&str] = &[
-        "offline_service_unavailable",
-        "offline_operation_pending_unavailable",
-        "offline_operation_history_unavailable",
-        "offline_operation_evidence_inconsistent",
-        "offline_topup_finality_proof_unavailable",
+    const KAGEMUSHA_OPERATION_STATUS_UNAVAILABLE_REJECT_CODES: &[&str] = &[
+        "kagemusha_service_unavailable",
+        "kagemusha_operation_pending_unavailable",
+        "kagemusha_operation_history_unavailable",
+        "kagemusha_operation_evidence_inconsistent",
+        "kagemusha_topup_finality_proof_unavailable",
     ];
-    fn offline_command_bad_request_reject_codes(operation_id: &str) -> Vec<&'static str> {
-        let mut codes = OFFLINE_COMMAND_COMMON_BAD_REQUEST_REJECT_CODES.to_vec();
+    fn kagemusha_command_bad_request_reject_codes(operation_id: &str) -> Vec<&'static str> {
+        let mut codes = KAGEMUSHA_COMMAND_COMMON_BAD_REQUEST_REJECT_CODES.to_vec();
         match operation_id {
-            "offlineTopUp" => codes.extend_from_slice(OFFLINE_TOP_UP_BAD_REQUEST_REJECT_CODES),
-            "offlineRedeem" => codes.extend_from_slice(OFFLINE_REDEEM_BAD_REQUEST_REJECT_CODES),
+            "offlineTopUp" => codes.extend_from_slice(KAGEMUSHA_TOP_UP_BAD_REQUEST_REJECT_CODES),
+            "offlineRedeem" => codes.extend_from_slice(KAGEMUSHA_REDEEM_BAD_REQUEST_REJECT_CODES),
             _ => panic!("unexpected offline command operation id"),
         }
         codes.extend_from_slice(TRANSACTION_ACCEPTANCE_BAD_REQUEST_REJECT_CODES);
@@ -1274,7 +1274,7 @@ mod tests {
                     let component = reference
                         .strip_prefix(COMPONENT_SCHEMA_REF_PREFIX)
                         .unwrap_or_else(|| {
-                            panic!("Offline schema has a non-component reference: {reference}")
+                            panic!("Kagemusha schema has a non-component reference: {reference}")
                         });
                     refs.insert(component.to_owned());
                 }
@@ -2789,13 +2789,13 @@ mod tests {
             );
         }
         assert_eq!(
-            property_ref(schemas, "OfflineUnshieldPublicInputs", "network_tag"),
-            "#/components/schemas/OfflineFixed32Bytes"
+            property_ref(schemas, "KagemushaUnshieldPublicInputs", "network_tag"),
+            "#/components/schemas/KagemushaFixed32Bytes"
         );
         assert!(
-            !schemas["OfflineUnshieldPublicInputs"]["properties"]
+            !schemas["KagemushaUnshieldPublicInputs"]["properties"]
                 .as_object()
-                .expect("OfflineUnshieldPublicInputs properties")
+                .expect("KagemushaUnshieldPublicInputs properties")
                 .contains_key("chain_tag")
         );
         for name in openapi_contract_strings(
@@ -4315,7 +4315,7 @@ mod tests {
                             .and_then(Value::as_object)
                             .unwrap_or_else(|| panic!("{variant} OpenAPI paths"));
                         assert!(
-                            paths.contains_key("/v1/offline/readiness"),
+                            paths.contains_key("/v1/kagemusha/readiness"),
                             "universal offline capability route missing from {variant} OpenAPI",
                         );
                     }
@@ -4688,7 +4688,7 @@ mod tests {
         }
         assert!(!paths.contains_key("/v1/attestation/issue"));
         let topup_post = paths
-            .get("/v1/offline/top-up")
+            .get("/v1/kagemusha/top-up")
             .and_then(Value::as_object)
             .and_then(|path| path.get("post"))
             .and_then(Value::as_object)
@@ -4697,9 +4697,9 @@ mod tests {
             .get("description")
             .and_then(Value::as_str)
             .expect("offline top-up description");
-        assert!(topup_description.contains("pooled Offline Cash V1 reserve"));
+        assert!(topup_description.contains("pooled Kagemusha V1 reserve"));
         let redeem_post = paths
-            .get("/v1/offline/redeem")
+            .get("/v1/kagemusha/redeem")
             .and_then(Value::as_object)
             .and_then(|path| path.get("post"))
             .and_then(Value::as_object)
@@ -4714,7 +4714,7 @@ mod tests {
             .and_then(Value::as_object)
             .and_then(|body| body.get("content"))
             .and_then(Value::as_object)
-            .expect("Offline Cash V1 top-up request content");
+            .expect("Kagemusha V1 top-up request content");
         assert_eq!(
             topup_request_content
                 .keys()
@@ -4732,20 +4732,20 @@ mod tests {
             topup_norito_schema
                 .get("x-iroha-norito-schema")
                 .and_then(Value::as_str),
-            Some(iroha_torii_shared::offline_api::OFFLINE_CASH_TOP_UP_REQUEST_SCHEMA_NAME_V1)
+            Some(iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_NAME_V1)
         );
         assert_eq!(
             topup_norito_schema
                 .get("x-iroha-max-bytes")
                 .and_then(Value::as_u64),
-            Some(iroha_torii_shared::offline_api::OFFLINE_CASH_TOP_UP_REQUEST_MAX_BYTES_V1 as u64)
+            Some(iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1 as u64)
         );
         let redeem_request_content = redeem_post
             .get("requestBody")
             .and_then(Value::as_object)
             .and_then(|body| body.get("content"))
             .and_then(Value::as_object)
-            .expect("Offline Cash V1 redeem request content");
+            .expect("Kagemusha V1 redeem request content");
         assert_eq!(
             redeem_request_content
                 .keys()
@@ -4763,14 +4763,14 @@ mod tests {
             redeem_norito_schema
                 .get("x-iroha-norito-schema")
                 .and_then(Value::as_str),
-            Some(iroha_torii_shared::offline_api::OFFLINE_CASH_REDEMPTION_REQUEST_SCHEMA_NAME_V1)
+            Some(iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_SCHEMA_NAME_V1)
         );
         assert_eq!(
             redeem_norito_schema
                 .get("x-iroha-max-bytes")
                 .and_then(Value::as_u64),
             Some(
-                iroha_torii_shared::offline_api::OFFLINE_CASH_REDEMPTION_REQUEST_MAX_BYTES_V1
+                iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1
                     as u64
             )
         );
@@ -4788,7 +4788,7 @@ mod tests {
         assert!(accepted_headers.contains_key("Retry-After"));
     }
     #[test]
-    fn generated_spec_exposes_only_offline_cash_v1() {
+    fn generated_spec_exposes_only_kagemusha_v1() {
         let document = generate_spec();
         let paths = document
             .get("paths")
@@ -4798,26 +4798,26 @@ mod tests {
 
         assert_eq!(
             schemas
-                .get("OfflineCashReadinessV1")
+                .get("KagemushaReadinessV1")
                 .and_then(Value::as_object)
                 .and_then(|schema| schema.get("required"))
                 .and_then(Value::as_array)
                 .map(Vec::len),
             Some(4)
         );
-        assert!(schemas.contains_key("OfflineCashOperationStatusV1"));
+        assert!(schemas.contains_key("KagemushaOperationStatusV1"));
         assert!(
             schemas
                 .keys()
-                .all(|name| !name.starts_with("OfflineRecipient"))
+                .all(|name| !name.starts_with("KagemushaRecipient"))
         );
 
-        let readiness = paths["/v1/offline/readiness"]["get"]
+        let readiness = paths["/v1/kagemusha/readiness"]["get"]
             .as_object()
             .expect("readiness operation");
         assert_eq!(
-            operation_response_schema_ref(readiness, "200", "/v1/offline/readiness"),
-            "#/components/schemas/OfflineCashReadinessV1"
+            operation_response_schema_ref(readiness, "200", "/v1/kagemusha/readiness"),
+            "#/components/schemas/KagemushaReadinessV1"
         );
         assert!(
             readiness["description"]
@@ -4827,14 +4827,14 @@ mod tests {
 
         for (path, request_schema, request_maximum) in [
             (
-                "/v1/offline/top-up",
-                iroha_torii_shared::offline_api::OFFLINE_CASH_TOP_UP_REQUEST_SCHEMA_NAME_V1,
-                iroha_torii_shared::offline_api::OFFLINE_CASH_TOP_UP_REQUEST_MAX_BYTES_V1,
+                "/v1/kagemusha/top-up",
+                iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_NAME_V1,
+                iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1,
             ),
             (
-                "/v1/offline/redeem",
-                iroha_torii_shared::offline_api::OFFLINE_CASH_REDEMPTION_REQUEST_SCHEMA_NAME_V1,
-                iroha_torii_shared::offline_api::OFFLINE_CASH_REDEMPTION_REQUEST_MAX_BYTES_V1,
+                "/v1/kagemusha/redeem",
+                iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_SCHEMA_NAME_V1,
+                iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1,
             ),
         ] {
             let operation = paths[path]["post"].as_object().expect("offline operation");
@@ -4846,7 +4846,7 @@ mod tests {
             );
             assert_eq!(
                 operation_response_schema_ref(operation, "202", path),
-                "#/components/schemas/OfflineCashOperationStatusV1"
+                "#/components/schemas/KagemushaOperationStatusV1"
             );
         }
     }
@@ -6198,7 +6198,7 @@ mod tests {
         );
         acceptance_codes.extend([
             "ED07",
-            "PRTRY:OFFLINE_CASH_V1_OPERATION_CARRIER_REJECTED",
+            "PRTRY:KAGEMUSHA_V1_OPERATION_CARRIER_REJECTED",
             "PRTRY:ROUTE_UNRESOLVED",
         ]);
         assert_eq!(
@@ -6206,15 +6206,15 @@ mod tests {
             TRANSACTION_ACCEPTANCE_BAD_REQUEST_REJECT_CODES
         );
         assert_eq!(
-            &OFFLINE_COMMAND_FORBIDDEN_REJECT_CODES[1..],
+            &KAGEMUSHA_COMMAND_FORBIDDEN_REJECT_CODES[1..],
             TRANSACTION_SUBMISSION_FORBIDDEN_REJECT_CODES
         );
         assert_eq!(
-            &OFFLINE_COMMAND_CONFLICT_REJECT_CODES[3..],
+            &KAGEMUSHA_COMMAND_CONFLICT_REJECT_CODES[3..],
             TRANSACTION_SUBMISSION_CONFLICT_REJECT_CODES
         );
         assert_eq!(
-            OFFLINE_COMMAND_RATE_LIMIT_REJECT_CODES,
+            KAGEMUSHA_COMMAND_RATE_LIMIT_REJECT_CODES,
             TRANSACTION_SUBMISSION_RATE_LIMIT_REJECT_CODES
         );
         let forbidden = [

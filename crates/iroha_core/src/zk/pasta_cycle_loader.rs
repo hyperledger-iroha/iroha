@@ -1,4 +1,4 @@
-//! Fixed Pasta-cycle field and curve instructions for Offline Cash V1 recursion.
+//! Fixed Pasta-cycle field and curve instructions for Kagemusha V1 recursion.
 //!
 //! This is the reviewed fixed-width loader shared by both parities. Curve-base
 //! arithmetic stays native to the containing Pasta circuit, while the proof
@@ -36,11 +36,11 @@ use snark_verifier::{
     system::halo2::transcript::halo2::NativeEncoding,
 };
 use std::{cell::RefCell, collections::BTreeMap, marker::PhantomData, ops::Deref, rc::Rc};
-/// Domain absorbed by the Offline Cash V1 deferred-equation audit sponge.
-pub(super) const OFFLINE_CASH_DEFERRED_AUDIT_POSEIDON_DOMAIN_V1: &[u8] =
-    b"iroha:offline-cash:v1:deferred-equation-audit";
-/// Version encoded by the Offline Cash deferred-equation commitment.
-pub(super) const OFFLINE_CASH_DEFERRED_AUDIT_VERSION_V1: u32 = 1;
+/// Domain absorbed by the Kagemusha V1 deferred-equation audit sponge.
+pub(super) const KAGEMUSHA_DEFERRED_AUDIT_POSEIDON_DOMAIN_V1: &[u8] =
+    b"iroha:kagemusha:v1:deferred-equation-audit";
+/// Version encoded by the Kagemusha deferred-equation commitment.
+pub(super) const KAGEMUSHA_DEFERRED_AUDIT_VERSION_V1: u32 = 1;
 /// Encode a Poseidon domain and version injectively as native field elements.
 pub(super) fn pasta_poseidon_domain_elements_v1<F: ff::PrimeField>(
     domain: &[u8],
@@ -63,15 +63,15 @@ pub(super) fn pasta_poseidon_domain_elements_v1<F: ff::PrimeField>(
 pub(super) const LIMB_BITS: usize = 86;
 /// Both Pasta fields fit in three 86-bit limbs.
 pub(super) const LIMBS: usize = 3;
-const OFFLINE_CASH_IPA_ACCUMULATOR_WIRE_VERSION_V1: u64 = 1;
+const KAGEMUSHA_IPA_ACCUMULATOR_WIRE_VERSION_V1: u64 = 1;
 
-fn offline_cash_ipa_accumulator_tagged_limb_count_v1(rounds: u32) -> Result<usize, String> {
+fn kagemusha_ipa_accumulator_tagged_limb_count_v1(rounds: u32) -> Result<usize, String> {
     usize::try_from(rounds)
         .ok()
         .and_then(|rounds| rounds.checked_add(1))
         .and_then(|values| values.checked_mul(2))
         .and_then(|limbs| limbs.checked_add(2))
-        .ok_or_else(|| "Offline Cash IPA accumulator limb count overflow".to_owned())
+        .ok_or_else(|| "Kagemusha IPA accumulator limb count overflow".to_owned())
 }
 type Outer<C> = <C as CurveAffine>::Base;
 type Inner<C> = <C as CurveAffine>::ScalarExt;
@@ -604,7 +604,7 @@ where
         if points.len() != source_indices.len()
             || self.source_values.len() != self.poseidon_elements.len()
         {
-            return Err("Offline Cash V1 reciprocal source map shape mismatch".to_owned());
+            return Err("Kagemusha V1 reciprocal source map shape mismatch".to_owned());
         }
         let mut previous = None;
         let mut mapped = Vec::with_capacity(points.len() * 2);
@@ -613,7 +613,7 @@ where
                 || previous.is_some_and(|previous| previous >= source_index)
                 || point.to_bytes().as_ref() != self.source_values[source_index].to_bytes().as_ref()
             {
-                return Err("Offline Cash V1 reciprocal source map is invalid".to_owned());
+                return Err("Kagemusha V1 reciprocal source map is invalid".to_owned());
             }
             previous = Some(source_index);
             mapped.extend(self.poseidon_elements[source_index].iter().cloned());
@@ -746,8 +746,8 @@ where
             (state.sources.len(), state.equations.clone())
         };
         let mut elements = pasta_poseidon_domain_elements_v1::<Inner<C>>(
-            OFFLINE_CASH_DEFERRED_AUDIT_POSEIDON_DOMAIN_V1,
-            OFFLINE_CASH_DEFERRED_AUDIT_VERSION_V1,
+            KAGEMUSHA_DEFERRED_AUDIT_POSEIDON_DOMAIN_V1,
+            KAGEMUSHA_DEFERRED_AUDIT_VERSION_V1,
         )
         .into_iter()
         .map(|value| ctx.main().load_constant(value))
@@ -784,7 +784,7 @@ where
                     return Err(Error::Transcript(
                         std::io::ErrorKind::InvalidData,
                         format!(
-                            "Offline Cash V1 equation {equation_index} source index is invalid"
+                            "Kagemusha V1 equation {equation_index} source index is invalid"
                         ),
                     ));
                 }
@@ -831,7 +831,7 @@ where
         if bool::from(point.value.is_identity()) {
             return Err(Error::Transcript(
                 std::io::ErrorKind::InvalidData,
-                "identity point cannot enter a Offline Cash commitment".to_owned(),
+                "identity point cannot enter a Kagemusha commitment".to_owned(),
             ));
         }
         let source_index = if let Some(source_index) = point.source_index {
@@ -865,7 +865,7 @@ where
         if bool::from(point.value.is_identity()) {
             return Err(Error::Transcript(
                 std::io::ErrorKind::InvalidData,
-                "identity point cannot be a Offline Cash accumulated output".to_owned(),
+                "identity point cannot be a Kagemusha accumulated output".to_owned(),
             ));
         }
         let source_index = if let Some(source_index) = point.source_index {
@@ -905,7 +905,7 @@ where
         folded_generator: &DeferredScalarPoint<C>,
     ) -> Result<Vec<AssignedValue<Inner<C>>>, Error> {
         let expected_len =
-            offline_cash_ipa_accumulator_tagged_limb_count_v1(authenticated_round_count)
+            kagemusha_ipa_accumulator_tagged_limb_count_v1(authenticated_round_count)
                 .map_err(Error::AssertionFailure)?;
         if usize::try_from(authenticated_round_count).ok() != Some(round_challenges.len()) {
             return Err(Error::InvalidInstances);
@@ -918,7 +918,7 @@ where
         let gate = self.scalar.clone();
         let mut limbs = Vec::with_capacity(expected_len);
         limbs.push(ctx.main().load_constant(Inner::<C>::from(u64::from(
-            OFFLINE_CASH_IPA_ACCUMULATOR_WIRE_VERSION_V1,
+            KAGEMUSHA_IPA_ACCUMULATOR_WIRE_VERSION_V1,
         ))));
         limbs.push(
             ctx.main()
@@ -957,7 +957,7 @@ where
         assert!(
             !bool::from(when_true.value.is_identity())
                 && !bool::from(when_false.value.is_identity()),
-            "identity cannot enter Offline Cash accumulated-point selection"
+            "identity cannot enter Kagemusha accumulated-point selection"
         );
         self.scalar.assert_bit(ctx.main(), selector);
         let not_selector = self.scalar.not(ctx.main(), selector);
@@ -1207,7 +1207,7 @@ where
         if bool::from(point.value.is_identity()) {
             return Err(Error::Transcript(
                 std::io::ErrorKind::InvalidData,
-                "identity point cannot enter the Offline Cash Poseidon transcript".to_owned(),
+                "identity point cannot enter the Kagemusha Poseidon transcript".to_owned(),
             ));
         }
         if let Some(source_index) = point.source_index {
@@ -1458,7 +1458,7 @@ where
         // shape. `FpChip::mul` already returns a proper-limb `ProperCrtUint` with the same residue
         // invariant as the old trailing carry operations, so multiplying that result by one and
         // adding zero only rematerializes it into new cells. Removing those identity operations
-        // intentionally changes the circuit/VK shape; every authenticated Offline Cash artifact must
+        // intentionally changes the circuit/VK shape; every authenticated Kagemusha artifact must
         // be regenerated when this branch changes.
         if let [(coefficient, lhs, rhs)] = values
             && *coefficient == Inner::<C>::ONE
@@ -1612,7 +1612,7 @@ where
                 .any(|point| bool::from(point.is_identity()))
             || witness.equations.iter().any(Vec::is_empty)
         {
-            return Err("Offline Cash deferred point witness is empty or non-canonical".to_owned());
+            return Err("Kagemusha deferred point witness is empty or non-canonical".to_owned());
         }
         let sources = witness
             .sources
@@ -1630,7 +1630,7 @@ where
                     || previous.is_some_and(|previous| previous >= *source_index)
                 {
                     return Err(
-                        "Offline Cash deferred point equation source order is invalid".to_owned(),
+                        "Kagemusha deferred point equation source order is invalid".to_owned(),
                     );
                 }
                 previous = Some(*source_index);
@@ -1687,7 +1687,7 @@ where
             || selectors.len() != audit.equations.len()
             || audit.equations.iter().any(Vec::is_empty)
         {
-            return Err("Offline Cash V1 deferred-equation batch shape is invalid".to_owned());
+            return Err("Kagemusha V1 deferred-equation batch shape is invalid".to_owned());
         }
         let challenge = self.deferred_batch_challenge_v1(ctx, audit_digest)?;
         let mut power = self.scalar.field.load_constant(ctx.main(), Inner::<C>::ONE);
@@ -1701,7 +1701,7 @@ where
             for (source_index, coefficient) in equation {
                 if *source_index >= audit.sources.len() {
                     return Err(
-                        "Offline Cash V1 deferred-equation source index is invalid".to_owned()
+                        "Kagemusha V1 deferred-equation source index is invalid".to_owned()
                     );
                 }
                 let weighted = self
@@ -1794,7 +1794,7 @@ where
     ) -> Result<Integer<C>, String> {
         let integer = fe_to_biguint(value.value());
         if integer.bits() > u64::try_from(bit_len).expect("fixed bit length fits u64") {
-            return Err("Offline Cash compact Poseidon element exceeds its bound".to_owned());
+            return Err("Kagemusha compact Poseidon element exceeds its bound".to_owned());
         }
         let assigned = self
             .scalar
@@ -1840,11 +1840,11 @@ where
             || gate_tags.len() != audit.equations.len()
             || selectors.len() != audit.equations.len()
         {
-            return Err("Offline Cash V1 deferred-audit selector shape mismatch".to_owned());
+            return Err("Kagemusha V1 deferred-audit selector shape mismatch".to_owned());
         }
         let mut elements = pasta_poseidon_domain_elements_v1::<Inner<C>>(
-            OFFLINE_CASH_DEFERRED_AUDIT_POSEIDON_DOMAIN_V1,
-            OFFLINE_CASH_DEFERRED_AUDIT_VERSION_V1,
+            KAGEMUSHA_DEFERRED_AUDIT_POSEIDON_DOMAIN_V1,
+            KAGEMUSHA_DEFERRED_AUDIT_VERSION_V1,
         )
         .into_iter()
         .map(|value| self.scalar.field.load_constant(ctx.main(), value))
@@ -1886,7 +1886,7 @@ where
             ));
             for (source_index, coefficient) in equation {
                 if *source_index >= audit.sources.len() {
-                    return Err("Offline Cash V1 deferred-audit source index is invalid".to_owned());
+                    return Err("Kagemusha V1 deferred-audit source index is invalid".to_owned());
                 }
                 elements.push(self.scalar.field.load_constant(
                     ctx.main(),
@@ -2124,7 +2124,7 @@ where
     }
 }
 
-/// Evaluate the fixed Offline Cash transcript Poseidon sponge over reciprocal non-native
+/// Evaluate the fixed Kagemusha transcript Poseidon sponge over reciprocal non-native
 /// scalar elements and return its constrained digest.
 pub(super) fn constrain_reciprocal_poseidon_v1<'chip, C>(
     ctx: &mut SinglePhaseCoreManager<C::Base>,

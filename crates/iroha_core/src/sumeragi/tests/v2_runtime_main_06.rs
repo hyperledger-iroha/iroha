@@ -340,7 +340,7 @@ fn queued_fetch_completion_keeps_incumbent_and_rejects_conflicting_authority() {
     );
     let mut conflicting_prepare = prepare;
     conflicting_prepare.execution_commitment =
-        wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"conflicting queued parent state"),
             Hash::new(b"conflicting queued post state"),
             Hash::new(b"conflicting queued writes"),
@@ -707,7 +707,7 @@ fn busy_deferred_store_completion_keeps_incumbent_and_rejects_conflicting_author
     assert!(!runtime.fail_closed);
     let mut conflicting_prepare = prepare;
     conflicting_prepare.execution_commitment =
-        wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"conflicting deferred parent state"),
             Hash::new(b"conflicting deferred post state"),
             Hash::new(b"conflicting deferred writes"),
@@ -1337,7 +1337,7 @@ fn network_admission_uses_exact_normal_and_progress_reservations() {
         block_hash: HashOf::from_untyped_unchecked(Hash::new(b"runtime-test-block")),
         payload_hash: Hash::new(b"runtime-test-payload"),
     };
-    let execution_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+    let execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"runtime parent state"),
         Hash::new(b"runtime post state"),
         Hash::new(b"runtime ordinary writes"),

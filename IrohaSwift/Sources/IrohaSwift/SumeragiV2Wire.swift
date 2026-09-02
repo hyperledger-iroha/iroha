@@ -231,8 +231,8 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
     public let parentStateRoot: SumeragiV2Hash
     public let postStateRoot: SumeragiV2Hash
     public let ordinaryWritesRoot: SumeragiV2Hash
-    public let offlineCashTopUpRoot: SumeragiV2Hash?
-    public let offlineCashTopUpCount: UInt32
+    public let kagemushaTopUpRoot: SumeragiV2Hash?
+    public let kagemushaTopUpCount: UInt32
     public let nativeAmxApplicationManifestVersion: UInt16
     public let nativeAmxApplicationManifestRoot: SumeragiV2Hash
     public let nativeAmxApplicationManifestCount: UInt32
@@ -245,8 +245,8 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
         parentStateRoot: SumeragiV2Hash,
         postStateRoot: SumeragiV2Hash,
         ordinaryWritesRoot: SumeragiV2Hash,
-        offlineCashTopUpRoot: SumeragiV2Hash?,
-        offlineCashTopUpCount: UInt32,
+        kagemushaTopUpRoot: SumeragiV2Hash?,
+        kagemushaTopUpCount: UInt32,
         nativeAmxApplicationManifestVersion: UInt16,
         nativeAmxApplicationManifestRoot: SumeragiV2Hash,
         nativeAmxApplicationManifestCount: UInt32,
@@ -255,20 +255,20 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
         executedBlockWireLen: UInt64,
         executedBlockWireHash: SumeragiV2Hash
     ) throws {
-        guard (offlineCashTopUpCount == 0) == (offlineCashTopUpRoot == nil) else {
+        guard (kagemushaTopUpCount == 0) == (kagemushaTopUpRoot == nil) else {
             throw SumeragiV2WireError.invalid(
-                "execution commitment offline-cash top-up count and root presence disagree"
+                "execution commitment kagemusha top-up count and root presence disagree"
             )
         }
-        if let offlineCashTopUpRoot {
-            let expectedPostStateRoot = Self.offlineCashTopUpPostStateRoot(
-                count: offlineCashTopUpCount,
+        if let kagemushaTopUpRoot {
+            let expectedPostStateRoot = Self.kagemushaTopUpPostStateRoot(
+                count: kagemushaTopUpCount,
                 ordinaryWritesRoot: ordinaryWritesRoot,
-                offlineCashTopUpRoot: offlineCashTopUpRoot
+                kagemushaTopUpRoot: kagemushaTopUpRoot
             )
             guard postStateRoot.bytes == expectedPostStateRoot else {
                 throw SumeragiV2WireError.invalid(
-                    "execution commitment post-state root does not match its offline-cash top-up projection"
+                    "execution commitment post-state root does not match its kagemusha top-up projection"
                 )
             }
         }
@@ -300,8 +300,8 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
         self.parentStateRoot = parentStateRoot
         self.postStateRoot = postStateRoot
         self.ordinaryWritesRoot = ordinaryWritesRoot
-        self.offlineCashTopUpRoot = offlineCashTopUpRoot
-        self.offlineCashTopUpCount = offlineCashTopUpCount
+        self.kagemushaTopUpRoot = kagemushaTopUpRoot
+        self.kagemushaTopUpCount = kagemushaTopUpCount
         self.nativeAmxApplicationManifestVersion = nativeAmxApplicationManifestVersion
         self.nativeAmxApplicationManifestRoot = nativeAmxApplicationManifestRoot
         self.nativeAmxApplicationManifestCount = nativeAmxApplicationManifestCount
@@ -316,8 +316,8 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
             parentStateRoot.bytes,
             postStateRoot.bytes,
             ordinaryWritesRoot.bytes,
-            sumeragiV2Option(offlineCashTopUpRoot?.bytes),
-            sumeragiV2U32(offlineCashTopUpCount),
+            sumeragiV2Option(kagemushaTopUpRoot?.bytes),
+            sumeragiV2U32(kagemushaTopUpCount),
             sumeragiV2U16(nativeAmxApplicationManifestVersion),
             nativeAmxApplicationManifestRoot.bytes,
             sumeragiV2U32(nativeAmxApplicationManifestCount),
@@ -336,12 +336,12 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
             ordinaryWritesRoot: SumeragiV2Hash(
                 reader.field("execution commitment ordinary writes")
             ),
-            offlineCashTopUpRoot: sumeragiV2DecodeOption(
-                reader.field("execution commitment offline-cash top-up root"),
+            kagemushaTopUpRoot: sumeragiV2DecodeOption(
+                reader.field("execution commitment kagemusha top-up root"),
                 decode: SumeragiV2Hash.init
             ),
-            offlineCashTopUpCount: sumeragiV2DecodeU32(
-                reader.field("execution commitment offline-cash top-up count")
+            kagemushaTopUpCount: sumeragiV2DecodeU32(
+                reader.field("execution commitment kagemusha top-up count")
             ),
             nativeAmxApplicationManifestVersion: sumeragiV2DecodeU16(
                 reader.field("execution commitment Native AMX application-manifest version")
@@ -371,16 +371,16 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
         return value
     }
 
-    private static func offlineCashTopUpPostStateRoot(
+    private static func kagemushaTopUpPostStateRoot(
         count: UInt32,
         ordinaryWritesRoot: SumeragiV2Hash,
-        offlineCashTopUpRoot: SumeragiV2Hash
+        kagemushaTopUpRoot: SumeragiV2Hash
     ) -> Data {
-        var preimage = Data("iroha:offline-cash:v1:post-state-root".utf8)
+        var preimage = Data("iroha:kagemusha:v1:post-state-root".utf8)
         preimage.append(0)
         preimage.append(sumeragiV2U32(count))
         preimage.append(ordinaryWritesRoot.bytes)
-        preimage.append(offlineCashTopUpRoot.bytes)
+        preimage.append(kagemushaTopUpRoot.bytes)
         return IrohaHash.hash(preimage)
     }
 

@@ -9638,32 +9638,32 @@ public struct ToriiVerifyingKeyDetail: Decodable, Sendable {
 
 }
 
-/// Asset-neutral offline protocol capability advertised by every app-api node.
+/// Asset-neutral Kagemusha protocol capability advertised by every app-api node.
 ///
-/// A conforming node exposes the sole Offline Cash wire/lifecycle V1
+/// A conforming node exposes the sole Kagemusha wire/lifecycle V1
 /// interface, independent of assets, dataspaces, and transaction history.
-public struct ToriiOfflineStatus: Decodable, Sendable, Equatable {
-    public let cashHandoffCapability: String
+public struct ToriiKagemushaStatus: Decodable, Sendable, Equatable {
+    public let kagemushaHandoffCapability: String
     public let wireVersion: UInt32
     public let deviceLifecycleVersion: UInt32
     public let ready: Bool
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case cashHandoffCapability = "cash_handoff_capability"
+        case kagemushaHandoffCapability = "kagemusha_handoff_capability"
         case wireVersion = "wire_version"
         case deviceLifecycleVersion = "device_lifecycle_version"
         case ready
     }
 
     public init(from decoder: Decoder) throws {
-        try ToriiOfflineCapabilityValidation.rejectUnknownFields(
+        try ToriiKagemushaCapabilityValidation.rejectUnknownFields(
             from: decoder,
             allowed: Set(CodingKeys.allCases.map(\.stringValue))
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let decodedCapability = try container.decode(
             String.self,
-            forKey: .cashHandoffCapability
+            forKey: .kagemushaHandoffCapability
         )
         let decodedWireVersion = try container.decode(
             UInt32.self,
@@ -9675,11 +9675,11 @@ public struct ToriiOfflineStatus: Decodable, Sendable, Equatable {
         )
         let decodedReady = try container.decode(Bool.self, forKey: .ready)
 
-        guard decodedCapability == OfflineCashWireV1.handoffCapability else {
+        guard decodedCapability == KagemushaWireV1.handoffCapability else {
             throw DecodingError.dataCorruptedError(
-                forKey: .cashHandoffCapability,
+                forKey: .kagemushaHandoffCapability,
                 in: container,
-                debugDescription: "cash_handoff_capability must be cash_handoff_v1"
+                debugDescription: "kagemusha_handoff_capability must be kagemusha_handoff_v1"
             )
         }
         guard decodedWireVersion == 1 else {
@@ -9700,18 +9700,18 @@ public struct ToriiOfflineStatus: Decodable, Sendable, Equatable {
             throw DecodingError.dataCorruptedError(
                 forKey: .ready,
                 in: container,
-                debugDescription: "ready must be true for universal offline capability"
+                debugDescription: "ready must be true for universal Kagemusha capability"
             )
         }
 
-        cashHandoffCapability = decodedCapability
+        kagemushaHandoffCapability = decodedCapability
         wireVersion = decodedWireVersion
         deviceLifecycleVersion = decodedDeviceLifecycleVersion
         ready = decodedReady
     }
 }
 
-private enum ToriiOfflineCapabilityValidation {
+private enum ToriiKagemushaCapabilityValidation {
     private struct RawCodingKey: CodingKey {
         let stringValue: String
         let intValue: Int? = nil
@@ -9729,7 +9729,7 @@ private enum ToriiOfflineCapabilityValidation {
             throw DecodingError.dataCorruptedError(
                 forKey: unknown,
                 in: fields,
-                debugDescription: "Unsupported offline capability field \(unknown.stringValue)"
+                debugDescription: "Unsupported Kagemusha capability field \(unknown.stringValue)"
             )
         }
     }
@@ -21860,7 +21860,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     private static let defaultListPageSize = 100
     private static let feeQuoteResponseMaximumBytes = 64 * 1024
     private static let feeSponsorProgramResponseMaximumBytes = 64 * 1024
-    private static let offlineCapabilityResponseMaximumBytes = 256 * 1024
+    private static let kagemushaCapabilityResponseMaximumBytes = 256 * 1024
     private static let sccpCapabilitiesResponseMaximumBytes = 64 * 1024
     private static let sccpRecentMessagesResponseMaximumBytes = 8 * 1024 * 1024
     private static let sccpDiscoveryResponseMaximumBytes = 64 * 1024 * 1024
@@ -26654,13 +26654,13 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeUTF8String(from: data, context: "health")
     }
 
-    public func getOfflineCapability() async throws -> ToriiOfflineStatus {
-        let request = try makeRequest(path: "/v1/offline/readiness",
+    public func getKagemushaCapability() async throws -> ToriiKagemushaStatus {
+        let request = try makeRequest(path: "/v1/kagemusha/readiness",
                                       headers: ["Accept": "application/json"])
         let (data, response) = try await sendBoundedSccpResponse(
             request,
-            context: "Offline capability",
-            maximumBytes: Self.offlineCapabilityResponseMaximumBytes
+            context: "Kagemusha capability",
+            maximumBytes: Self.kagemushaCapabilityResponseMaximumBytes
         )
         try ensureStatus(response, equals: 200, responseBody: data)
         try ensureResponseMediaType(response, equals: "application/json")
@@ -26671,10 +26671,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(in: data)
         } catch {
             throw ToriiClientError.invalidPayload(
-                "Offline capability response must be valid UTF-8 JSON without duplicate object keys"
+                "Kagemusha capability response must be valid UTF-8 JSON without duplicate object keys"
             )
         }
-        return try decodeJSON(ToriiOfflineStatus.self, from: data)
+        return try decodeJSON(ToriiKagemushaStatus.self, from: data)
     }
 
     public func getMetrics(asText: Bool = false) async throws -> ToriiMetricsResponse {

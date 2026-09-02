@@ -23,10 +23,10 @@ public sealed class ToriiIntegrationSmokeTests
     }
 
     [Fact]
-    public async Task LiveTairaOfflineCashCapabilityIsExactAndReadOnly()
+    public async Task LiveTairaKagemushaCapabilityIsExactAndReadOnly()
     {
         if (!string.Equals(
-                Environment.GetEnvironmentVariable("IROHA_TAIRA_OFFLINE_CASH_READ_ONLY"),
+                Environment.GetEnvironmentVariable("IROHA_TAIRA_KAGEMUSHA_READ_ONLY"),
                 "1",
                 StringComparison.Ordinal))
         {
@@ -40,9 +40,9 @@ public sealed class ToriiIntegrationSmokeTests
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
             TestContext.Current.CancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(20));
-        var capability = await client.GetOfflineCapabilityAsync(timeout.Token);
+        var capability = await client.GetKagemushaReadinessAsync(timeout.Token);
 
-        Assert.Equal("cash_handoff_v1", capability.CashHandoffCapability);
+        Assert.Equal("kagemusha_handoff_v1", capability.KagemushaHandoffCapability);
         Assert.Equal(1u, capability.WireVersion);
         Assert.Equal(1u, capability.DeviceLifecycleVersion);
         Assert.True(capability.Ready);
@@ -73,13 +73,13 @@ public sealed class ToriiIntegrationSmokeTests
     [InlineData("https://taira.sora.org/v1")]
     [InlineData("https://taira.sora.org?query=1")]
     [InlineData("https://taira.sora.org#fragment")]
-    public void TairaOfflineCashReadOnlyProbeRejectsNonOriginRoots(string raw)
+    public void TairaKagemushaReadOnlyProbeRejectsNonOriginRoots(string raw)
     {
         Assert.Throws<InvalidOperationException>(() => RequireCredentialFreeHttpsOrigin(raw));
     }
 
     [Fact]
-    public void TairaOfflineCashReadOnlyProbeAcceptsCredentialFreeHttpsOrigin()
+    public void TairaKagemushaReadOnlyProbeAcceptsCredentialFreeHttpsOrigin()
     {
         Assert.Equal(
             new Uri("https://taira.sora.org"),
@@ -112,12 +112,12 @@ public sealed class ToriiIntegrationSmokeTests
                 CanonicalRequestCredentials = canonicalCredentials,
             });
 
-        var offlineCapability = await client.GetOfflineCapabilityAsync(
+        var kagemushaReadiness = await client.GetKagemushaReadinessAsync(
             TestContext.Current.CancellationToken);
-        Assert.Equal("cash_handoff_v1", offlineCapability.CashHandoffCapability);
-        Assert.Equal(1u, offlineCapability.WireVersion);
-        Assert.Equal(1u, offlineCapability.DeviceLifecycleVersion);
-        Assert.True(offlineCapability.Ready);
+        Assert.Equal("kagemusha_handoff_v1", kagemushaReadiness.KagemushaHandoffCapability);
+        Assert.Equal(1u, kagemushaReadiness.WireVersion);
+        Assert.Equal(1u, kagemushaReadiness.DeviceLifecycleVersion);
+        Assert.True(kagemushaReadiness.Ready);
 
         var capabilities = await client.GetNodeCapabilitiesAsync(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(1, capabilities.AbiVersion);

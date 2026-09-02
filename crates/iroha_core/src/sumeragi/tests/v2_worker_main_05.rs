@@ -2410,7 +2410,7 @@ fn entered_view_publishes_the_exact_protected_commit_vote_cut() {
         proposal_round: protected_round,
         phase: wire::GlobalPhase::Commit,
         subject: protected_subject,
-        execution_commitment: wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        execution_commitment: wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"live protected Commit parent state"),
             Hash::new(b"live protected Commit post state"),
             Hash::new(b"live protected Commit writes"),
@@ -2582,7 +2582,7 @@ fn pipeline_release_tracks_only_successfully_queued_durable_prepare_intent() {
         height: service.context.height,
         view: 0,
     };
-    let execution_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+    let execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"worker prepared parent state"),
         Hash::new(b"worker prepared post state"),
         Hash::new(b"worker prepared ordinary writes"),

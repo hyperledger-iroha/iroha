@@ -606,13 +606,13 @@ pub mod escrow {
         pub struct CanResolveEscrowDispute;
     }
 }
-/// Permission tokens covering offline cash settlement.
-pub mod offline {
+/// Permission tokens covering Kagemusha settlement.
+pub mod kagemusha {
     use super::*;
     permission! {
-        /// Permission to manage native Offline Cash reserve issuance and settlement.
+        /// Permission to manage native Kagemusha reserve issuance and settlement.
         #[derive(Copy)]
-        pub struct CanManageOfflineReserve;
+        pub struct CanManageKagemushaReserve;
     }
 }
 /// Permission tokens covering NFT operations.
