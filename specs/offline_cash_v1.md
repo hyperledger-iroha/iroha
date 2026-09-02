@@ -37,7 +37,7 @@ The fixed relations are:
 - `Bootstrap`: establish a hardware-bound zero balance;
 - `MintFold`: add one finalized reserve-backed mint credit;
 - `SendSplit`: subtract a positive receiver-bound credit;
-- `ReceiveFoldBatch`: fold 1--16 staged credits;
+- `ReceiveFold`: fold one staged credit;
 - `RedeemSplit`: subtract a positive terminal voucher;
 - `Rotate`: carry the whole state into the exact next hardware epoch; and
 - `SuiteUpgrade`: carry the whole state through a recursively verified
@@ -48,13 +48,11 @@ exactly one successor, including a zero-balance successor. Additions,
 subtractions, sequences, and counters use checked arithmetic. Any pre-commit
 failure leaves the predecessor spendable and unchanged.
 
-`ReceiveFoldBatch` always has sixteen slots and an `active_count` in `1..=16`.
-Active slots are distinct, verify the complete credit and terminal commit
-wrapper, prove replay nonmembership, and update the replay root in slot order.
-Inactive slots are canonical padding. One checked addition commits the batch
-total. This keeps public state and proof size constant without a cumulative
-receipt limit. Wallets batch in the background and synchronously drain enough
-staged value before a send or redemption.
+`ReceiveFold` verifies one complete credit and terminal commit wrapper, proves
+replay nonmembership, updates the replay root, and performs one checked balance
+addition. Wallets repeat the same constant-shape transition in the background
+and synchronously drain enough staged value before a send or redemption. There
+is no count-based backlog rejection or cumulative receipt limit.
 
 ## Hardware admission
 
@@ -99,20 +97,14 @@ optional mobile ABI is defined in
 
 ## Requests, tickets, and capacity
 
-`PaymentRequestV1` is a signed receiver policy. It binds the authenticated
-release, network, the exact `AxtAssetIncarnationV1` token and asset scale,
-pooled-reserve identity, recipient account, complete compact hardware
-credential, request ID, validity window, and one of four closed
-`OfflineCashPaymentRequestModeV1` variants:
-
-- `SingleExact { amount }`: exactly one ticket and one payment for that amount;
-- `PartialUntilTotal { total_amount }`: positive exact-amount tickets whose
-  cumulatively issued amount never exceeds `total_amount`;
-- `BoundedMultiPayment { max_payments, per_payment }`: at most the declared
-  positive number of one-use tickets and therefore payments, each satisfying
-  its `OfflineCashAmountPolicyV1 { minimum_amount, maximum_amount }`;
-- `OpenReceive { per_payment }`: any number of distinct payments, each
-  satisfying that inclusive amount interval and backed by its own ticket.
+`PaymentRequestV1` is a signed exact-payment invitation. It binds the
+authenticated release, network, the exact `AxtAssetIncarnationV1` token and
+asset scale, pooled-reserve identity, recipient account, complete compact
+hardware credential, one positive exact amount, request ID, and validity
+window. It does not bind the receiver's current aggregate-state head and does
+not carry a request mode, cumulative total, payment-count ceiling, or amount
+interval. Any number of distinct valid payments may use the same request; an
+application may separately decide whether those payments satisfy an invoice.
 
 Before requesting receiver capacity, the sender creates a compact canonical
 `OfflineCashAcceptanceIntentV1`. It binds the exact signed request digest, a
@@ -124,8 +116,8 @@ manifest. Both proof parities hide the sender profile and credential while
 proving membership in that release's enabled-profile set, sufficient private
 balance, and a qualified one-use predecessor authorization for the exact
 request and amount. The receiver's authenticated native verifier must verify
-that proof before hardware persists an intent, consumes request budget, or
-reserves inbox bytes. The compact intent alone has no reservation authority.
+that proof before hardware persists an intent or reserves inbox bytes. The
+compact intent alone has no reservation authority.
 
 The final wrapper opens `sender_one_time_commitment` only as a private witness
 and proves that it authorizes the exact private predecessor consumed by sender
@@ -135,28 +127,19 @@ the compact intent whose digest is signed by the ticket; the proof-bearing
 authorization is a distinct pre-ticket message.
 
 Receiver hardware processes the verified authorization and ticket issuance as
-one atomic private-ledger operation. `SingleExact` consumes its sole exact-amount slot;
-`PartialUntilTotal` adds the ticket amount only if the checked cumulative issued
-amount remains within the total; `BoundedMultiPayment` increments its issued
-ticket count only within `max_payments` and checks the interval; and
-`OpenReceive` checks the interval without imposing a cumulative count or amount
-limit. All four modes record the exact intent digest and terminal
-intent-to-ticket decision so the same intent cannot issue twice or resolve to a
-different ticket. Resolved `OpenReceive` entries may be compacted into an
-authenticated exact-decision accumulator, with paged nodes outside hardware,
-but compaction must preserve duplicate/conflict answers and cannot introduce a
-historical count bound. Issued amount/count capacity is not credited back
-because a ticket expires or merely appears unused. Relocation and compaction
-preserve the same decision. Only a separate authenticated no-commit closure
-may remove an unresolved ticket from the amount/count ledger, and only after
+one atomic private-ledger operation. It checks that the intent amount equals
+the request amount and records the terminal intent-to-ticket decision so the
+same intent cannot issue twice or resolve to different ticket bytes. Distinct
+intents against the same request are independent and never consume a
+request-local count or amount budget. Resolved decisions may be compacted into
+an authenticated exact-decision accumulator, with paged nodes outside
+hardware, but compaction must preserve duplicate/conflict answers and cannot
+introduce a historical count bound. A ticket's physical inbox reservation is
+not reclaimed merely because the ticket expires or appears unused. Relocation
+and compaction preserve the same decision. Only a separate authenticated
+no-commit closure may release an unresolved physical reservation, after
 proving that the exact authorized predecessor and bound sender intent never
 reached terminal hardware commit.
-Consumed tickets always remain counted; absent that proof, the reservation and
-ledger entry remain.
-
-`OpenReceive` is reusable and has no historical count limit. Resource limits
-may stop a new issuance before it commits, but accumulated intent, ticket, or
-receipt history is never a protocol admission limit.
 
 Before a sender can prepare, receiver hardware atomically applies that private
 request ledger, allocates physical inbox space, and issues one one-use,
@@ -166,7 +149,6 @@ exact-amount `OfflineCashAcceptanceTicketV1`. The ticket binds:
 request_id and request digest
 acceptance_ticket_id
 exact AcceptanceIntentV1 digest and exact amount
-request mode
 asset identity, exact AxtAssetIncarnationV1 token, and scale
 reserved_inbox_bytes
 recipient one-time encryption key
@@ -201,6 +183,23 @@ recorded. A missing acknowledgement does not roll back the successor or stop it
 from being spent; it only retains the retry record and can prevent a later send
 from starting when physical capacity is exhausted.
 
+`OfflineCashDurableCapacityV1` rejects lane configuration below 298,640 inbox
+bytes or 90,274 outbox bytes. The inbox value covers one complete recoverable
+receive operation. The outbox value is Core's implementation-storage floor for
+one maximum live payment or redemption slot, including typed state and its
+byte-identical retry encoding; it is not the public `reserved_outbox_bytes`
+value. Additional concurrent live records require additional storage, and
+neither floor is a protocol history limit.
+
+Staging and folding convert, rather than reacquire, precommitted capacity.
+Core derives the complete pending-credit, retained-receipt, and consumed-index
+projection, releases the folded ticket on a private ticket-book successor,
+recomputes the exact meters once against the pre-fold committed ceiling, and
+only then installs that successor. Candidate persistence, hardware commit, wrapper
+installation, exposure, and retry likewise consume the sender's original
+reservation; no terminal stage performs a second capacity admission. A failed
+unrelated admission leaves the canonical durable bytes unchanged.
+
 ## Prepare, prove, commit, and delivery
 
 `SendSplit` and `RedeemSplit` use the same recoverable state machine:
@@ -231,6 +230,12 @@ from starting when physical capacity is exhausted.
    or redemption voucher in the outbox.
 6. **Expose.** Only the final installed envelope may be sent or submitted.
 
+For `SendSplit` and `RedeemSplit`, the transition proof statement's
+`effect_digest` equals the canonical semantic digest of the exact prepared
+public projection, including its opaque commit evidence. Core checks this
+binding before candidate persistence, so changing commit evidence is rejected
+even when the amount, lifecycle, and transition nullifier still match.
+
 A crash before step 4 can resume or abandon the prepared record without
 consuming the predecessor. A crash during or after step 4 recovers the one
 terminal certificate and the sealed candidate, regenerates byte-identical
@@ -248,13 +253,14 @@ passes non-forgeable internal typestates between stages. Callers cannot replace
 those checks with self-described release, profile, verifier-key, or proof bytes.
 
 Canonical Norito remains the sole transport encoding, but a transport archive
-is not a circuit transcript. The CommitWrapper-bound semantic digests use
-explicit fixed-width V1 transcripts: acceptance intent (114 bytes), intent
-authorization statement (244), no-commit statement (498), outbox reservation
-(56), commit-certificate ID preimage (238), and commit certificate (270).
-Integers and enum tags in those transcripts are unsigned little-endian values;
-fixed digests are copied as their raw 32 bytes in the field order defined by
-the data model. Each result is
+is not a circuit transcript. CommitWrapper-bound semantic hashing uses explicit
+fixed-width V1 layouts: acceptance intent (114 bytes), intent authorization
+statement (244), no-commit statement (498), outbox reservation (56), the commit
+evidence fragment embedded in a certificate (36), commit-certificate ID
+preimage (238), and commit certificate (270). Integers and enum tags in those
+layouts are unsigned little-endian values; fixed digests are copied as their
+raw 32 bytes in the field order defined by the data model. Each outer semantic
+digest or certificate ID is
 `SHA256(domain || 0x00 || u64_le(transcript_length) || transcript)`. SDKs must
 consume the same fixture vectors and may not substitute a Norito header,
 padding, or checksum for any of these circuit inputs. This separation does not
@@ -474,14 +480,20 @@ independently bounded authorization and ticket. The
 release report records exact proof/envelope bytes, circuit rows, verifier-key
 size, proving and verification latency, peak memory, energy, and sustained
 folding under thermal throttling at depths 8, 64, 1,024, and beyond.
+`MintAuthorization` and `MintCredit` report one canonical paired wire proof and
+remain subject to the 6,528-byte ceiling. `PlatformCredential` and
+`GuardBundle` instead report separate raw Eq and Ep internal-proof samples:
+each length must exactly match its authenticated compiled protocol and each
+evidence file is resource-capped at 64 MiB. That evidence ceiling grants no
+additional wire capacity.
 
 The signed release receipt contains one strictly ordered typed measurement for
 all seven aggregate-state relations, the release-wide
 `AcceptanceIntentAuthorization` relation, the distinct final commit-wrapper
 circuit, and the `MintAuthorization`, `MintCredit`, `PlatformCredential`, and
 `GuardBundle` helper circuits;
-all sixteen `ReceiveFoldBatch` occupancies; the four required recursive-depth
-fixtures; every enabled hardware profile; and every closed acceptance case.
+the four required recursive-depth fixtures; every enabled hardware profile;
+and every closed acceptance case.
 The manifest's enabled profile list must exactly equal the receipt's qualified
 profile list. Aggregate maxima, non-zero report digests, or a profile count are
 not substitutes for those complete records; the release tool verifies every
@@ -496,11 +508,15 @@ The acceptance suite includes:
 - every crash boundary in prepare/prove/commit/wrap/recovery;
 - delayed delivery across ordinary suite and credential rotation;
 - clock rollback, lease expiry, hardware-epoch rotation, and counter rollover;
-- invoice overpayment and all reusable-request modes;
+- shuffled concurrent exact payments against one reusable request, including
+  delayed delivery and application-level invoice deduplication;
 - transcript unlinkability and predecessor double-successor conflict detection;
 - X25519 low-order/zero-DH rejection, AEAD/AAD substitution, and deterministic
   injected-randomness seal/open KATs;
 - reserve underflow and concurrent redemption;
+- a four-validator settlement corridor covering finalized top-up, peer
+  transfer, full and partial redemption, terminal-nullifier deduplication, and
+  reserve/liability conservation;
 - animated-QR loss/reordering recovery, with static QR only for messages that
   genuinely fit its bound; and
 - physical qualified-hardware tests in airplane mode covering restart, power

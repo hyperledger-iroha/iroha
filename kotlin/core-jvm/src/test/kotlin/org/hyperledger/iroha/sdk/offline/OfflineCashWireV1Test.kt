@@ -18,27 +18,10 @@ import kotlin.test.assertTrue
 
 class OfflineCashWireV1Test {
     @Test
-    fun `all four reusable request modes round trip canonically`() {
-        val modes = listOf(
-            OfflineCashPaymentRequestModeV1.SingleExact(BigInteger.valueOf(10)),
-            OfflineCashPaymentRequestModeV1.PartialUntilTotal(BigInteger.valueOf(40)),
-            OfflineCashPaymentRequestModeV1.BoundedMultiPayment(
-                3,
-                OfflineCashAmountPolicyV1(BigInteger.ONE, BigInteger.TEN),
-            ),
-            OfflineCashPaymentRequestModeV1.OpenReceive(
-                OfflineCashAmountPolicyV1(BigInteger.valueOf(2), BigInteger.valueOf(20)),
-            ),
-        )
-        modes.forEach { mode ->
-            val raw = OfflineCashNoritoV1.encodePaymentRequestModeShape(mode)
-            assertContentEquals(
-                raw,
-                OfflineCashNoritoV1.encodePaymentRequestModeShape(
-                    OfflineCashNoritoV1.decodePaymentRequestModeShapeExact(raw),
-                ),
-            )
-        }
+    fun `one exact positive request amount round trips canonically`() {
+        val request = OfflineCashV1TestSupport.request(BigInteger.TEN)
+        val raw = OfflineCashNoritoV1.encodePaymentRequestShape(request)
+        assertEquals(BigInteger.TEN, OfflineCashNoritoV1.decodePaymentRequestShapeExact(raw).amount)
     }
 
     @Test
@@ -158,10 +141,10 @@ class OfflineCashWireV1Test {
     }
 
     @Test
-    fun `native generated v2 fixture round trips every transported value`() {
+    fun `native generated V1 fixture round trips every transported value`() {
         val fixture = sharedFixtureText()
-        assertTrue(Regex("\\\"fixture_version\\\"\\s*:\\s*2").containsMatchIn(fixture))
-        val raw = REQUIRED_V2_FIXTURE_VALUES.associateWith { name ->
+        assertTrue(Regex("\\\"fixture_version\\\"\\s*:\\s*1").containsMatchIn(fixture))
+        val raw = REQUIRED_CANONICAL_FIXTURE_VALUES.associateWith { name ->
             fixtureValue(fixture, name, "norito_hex").hexBytes()
         }
 
@@ -220,7 +203,7 @@ class OfflineCashWireV1Test {
             "credit_opening" to OfflineCashNoritoV1.encodeCreditOpeningShape(opening),
         )
 
-        REQUIRED_V2_FIXTURE_VALUES.forEach { name ->
+        REQUIRED_CANONICAL_FIXTURE_VALUES.forEach { name ->
             assertContentEquals(raw.getValue(name), reencoded.getValue(name), name)
         }
     }
@@ -384,6 +367,68 @@ class OfflineCashWireV1Test {
     }
 
     @Test
+    fun `signed JVM carriers preserve the full Rust unsigned transcript domain`() {
+        val profile = OfflineCashV1TestSupport.profile
+        val boundaryProfile = OfflineCashHardwareProfileV1(
+            version = profile.version,
+            protocolVersion = profile.protocolVersion,
+            hardwareProfileId = profile.hardwareProfileId(),
+            providerId = profile.providerId(),
+            platformClass = profile.platformClass,
+            productClassDigest = profile.productClassDigest(),
+            firmwarePolicyDigest = profile.firmwarePolicyDigest(),
+            enrollmentAttestationVerifierDigest = profile.enrollmentAttestationVerifierDigest(),
+            attestationTrustRootsDigest = profile.attestationTrustRootsDigest(),
+            allowedSuiteCommitment = profile.allowedSuiteCommitment(),
+            policyEpoch = Long.MIN_VALUE,
+            governanceCredentialPublicKey = profile.governanceCredentialPublicKey,
+            capabilityMask = profile.capabilityMask,
+            qualificationReportDigest = profile.qualificationReportDigest(),
+            validFromMs = Long.MAX_VALUE,
+            expiresAtMs = Long.MIN_VALUE,
+        )
+        val boundaryProfileRaw = OfflineCashNoritoV1.encodeHardwareProfileShape(boundaryProfile)
+        val decodedProfile = OfflineCashNoritoV1.decodeHardwareProfileShapeExact(boundaryProfileRaw)
+        assertEquals(Long.MIN_VALUE, decodedProfile.policyEpoch)
+        assertEquals(Long.MAX_VALUE, decodedProfile.validFromMs)
+        assertEquals(Long.MIN_VALUE, decodedProfile.expiresAtMs)
+        assertContentEquals(boundaryProfileRaw, OfflineCashNoritoV1.encodeHardwareProfileShape(decodedProfile))
+
+        val boundaryReservation = OfflineCashOutboxReservationV1(
+            OfflineCashV1TestSupport.bytes(0xd1),
+            OfflineCashOperationKindV1.SEND_SPLIT,
+            -1,
+            Long.MAX_VALUE,
+            Long.MIN_VALUE,
+        )
+        assertContentEquals(
+            "fc904c99266ca1728181789f606b6e421b90a04fe99edb1c8bc236f73b063b0e".hexBytes(),
+            OfflineCashNoritoV1.outboxReservationCommitmentShape(boundaryReservation),
+        )
+
+        val boundaryCertificate = OfflineCashCommitCertificateV1(
+            1,
+            OfflineCashV1TestSupport.bytes(0xc1),
+            OfflineCashV1TestSupport.bytes(0xc2),
+            OfflineCashV1TestSupport.bytes(0xc3),
+            OfflineCashV1TestSupport.bytes(0xc4),
+            OfflineCashV1TestSupport.bytes(0xc5),
+            OfflineCashCommitEvidenceV1.TrustedTime(OfflineCashV1TestSupport.bytes(0xc6)),
+            OfflineCashV1TestSupport.bytes(0xc7),
+            Long.MIN_VALUE,
+            OfflineCashV1TestSupport.bytes(0xc8),
+        )
+        assertContentEquals(
+            "b1fe2841e59c24eda16d2509e124bcf786199e9238cb5c168d0559aebe32cdc3".hexBytes(),
+            OfflineCashNoritoV1.expectedCommitCertificateIdShape(boundaryCertificate),
+        )
+        assertContentEquals(
+            "d8f7d13446aa7c0704894c4563c93cb468829d9e17aa7e17dcb70eb939ecc275".hexBytes(),
+            OfflineCashNoritoV1.commitCertificateDigestShape(boundaryCertificate),
+        )
+    }
+
+    @Test
     fun `typed opening AAD envelope and X25519 shape guards stay codec only`() {
         val opening = OfflineCashCreditOpeningV1(
             1,
@@ -498,16 +543,13 @@ class OfflineCashWireV1Test {
     fun `generated fixture honors the first release hard cut`() {
         val fixture = sharedFixtureText()
         val raw = fixtureValue(fixture, "payment_request", "norito_hex").hexBytes()
-        if (Regex("\\\"fixture_version\\\"\\s*:\\s*2").containsMatchIn(fixture)) {
-            assertContentEquals(
-                raw,
-                OfflineCashNoritoV1.encodePaymentRequestShape(
-                    OfflineCashNoritoV1.decodePaymentRequestShapeExact(raw),
-                ),
-            )
-        } else {
-            assertFailsWith<IllegalArgumentException> { OfflineCashNoritoV1.decodePaymentRequestShapeExact(raw) }
-        }
+        assertTrue(Regex("\\\"fixture_version\\\"\\s*:\\s*1").containsMatchIn(fixture))
+        assertContentEquals(
+            raw,
+            OfflineCashNoritoV1.encodePaymentRequestShape(
+                OfflineCashNoritoV1.decodePaymentRequestShapeExact(raw),
+            ),
+        )
     }
 
     @Test
@@ -587,7 +629,7 @@ class OfflineCashWireV1Test {
     }
 
     private companion object {
-        val REQUIRED_V2_FIXTURE_VALUES = listOf(
+        val REQUIRED_CANONICAL_FIXTURE_VALUES = listOf(
             "payment_request",
             "acceptance_intent_authorization",
             "acceptance_ticket",

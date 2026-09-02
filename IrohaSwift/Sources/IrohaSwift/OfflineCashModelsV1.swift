@@ -331,39 +331,6 @@ public struct OfflineCashHardwareCredentialV1: Equatable, Sendable {
   }
 }
 
-/// Inclusive per-payment amount interval.
-public struct OfflineCashAmountPolicyV1: Equatable, Sendable {
-  public let minimumAmount: OfflineCashUInt128V1
-  public let maximumAmount: OfflineCashUInt128V1
-
-  public init(minimumAmount: OfflineCashUInt128V1, maximumAmount: OfflineCashUInt128V1) throws {
-    guard !minimumAmount.isZero,
-      offlineCashCompare(minimumAmount, maximumAmount) != .orderedDescending
-    else { throw offlineCashInvalid("amountPolicy") }
-    self.minimumAmount = minimumAmount
-    self.maximumAmount = maximumAmount
-  }
-}
-
-/// Closed receiver request mode; every payment still needs a distinct ticket.
-public enum OfflineCashPaymentRequestModeV1: Equatable, Sendable {
-  case singleExact(amount: OfflineCashUInt128V1)
-  case partialUntilTotal(totalAmount: OfflineCashUInt128V1)
-  case boundedMultiPayment(maxPayments: UInt32, perPayment: OfflineCashAmountPolicyV1)
-  case openReceive(perPayment: OfflineCashAmountPolicyV1)
-
-  public func accepts(_ amount: OfflineCashUInt128V1) -> Bool {
-    switch self {
-    case .singleExact(let required): amount == required
-    case .partialUntilTotal(let total):
-      !amount.isZero && offlineCashCompare(amount, total) != .orderedDescending
-    case .boundedMultiPayment(let maxPayments, let policy):
-      maxPayments > 0 && offlineCashAmount(amount, isWithin: policy)
-    case .openReceive(let policy): offlineCashAmount(amount, isWithin: policy)
-    }
-  }
-}
-
 /// Sender-selected, compact one-use intent.
 public struct OfflineCashAcceptanceIntentV1: Equatable, Sendable {
   public let version: UInt16
@@ -535,7 +502,6 @@ public struct OfflineCashAcceptanceTicketV1: Equatable, Sendable {
   public let asset: OfflineCashAssetDefinitionIDV1
   public let assetIncarnation: OfflineCashAssetIncarnationV1
   public let scale: UInt32
-  public let requestMode: OfflineCashPaymentRequestModeV1
   public let intentDigest: Data
   public let exactAmount: OfflineCashUInt128V1
   public let reservedInboxBytes: UInt32
@@ -550,14 +516,14 @@ public struct OfflineCashAcceptanceTicketV1: Equatable, Sendable {
     version: UInt16 = 1, networkID: Data, requestID: Data, requestDigest: Data,
     acceptanceTicketID: Data, asset: OfflineCashAssetDefinitionIDV1,
     assetIncarnation: OfflineCashAssetIncarnationV1, scale: UInt32,
-    requestMode: OfflineCashPaymentRequestModeV1, intentDigest: Data,
+    intentDigest: Data,
     exactAmount: OfflineCashUInt128V1, reservedInboxBytes: UInt32,
     recipientOneTimeKey: OfflineCashX25519PublicKeyV1, hardwareProfileID: Data,
     policyEpoch: UInt64, issuedAtMS: UInt64, expiresAtMS: UInt64,
     signature: OfflineCashDeviceSignatureV1
   ) throws {
     try offlineCashHeader(version, networkID, scale)
-    guard !exactAmount.isZero, requestMode.accepts(exactAmount),
+    guard !exactAmount.isZero,
       reservedInboxBytes >= OfflineCashWireV1.minimumReservedInboxBytes,
       policyEpoch > 0, expiresAtMS > issuedAtMS
     else { throw offlineCashInvalid("acceptanceTicket") }
@@ -570,7 +536,6 @@ public struct OfflineCashAcceptanceTicketV1: Equatable, Sendable {
     self.asset = asset
     self.assetIncarnation = assetIncarnation
     self.scale = scale
-    self.requestMode = requestMode
     self.intentDigest = try offlineCashDigest(intentDigest, "intentDigest")
     self.exactAmount = exactAmount
     self.reservedInboxBytes = reservedInboxBytes
@@ -665,7 +630,7 @@ public enum OfflineCashOperationKindV1: UInt32, CaseIterable, Sendable {
   case bootstrap = 0
   case mintFold = 1
   case sendSplit = 2
-  case receiveFoldBatch = 3
+  case receiveFold = 3
   case redeemSplit = 4
   case suiteUpgrade = 5
   case rotate = 6
@@ -710,7 +675,7 @@ public struct OfflineCashLifecycleBindingV1: Equatable, Sendable {
       validOperationFields =
         requestID == zero && acceptanceTicketID == zero
         && offlineCashIsDigest(creditID) && offlineCashIsDigest(ciphertextDigest)
-    case .bootstrap, .receiveFoldBatch, .redeemSplit, .suiteUpgrade, .rotate:
+    case .bootstrap, .receiveFold, .redeemSplit, .suiteUpgrade, .rotate:
       validOperationFields = [requestID, acceptanceTicketID, creditID, ciphertextDigest]
         .allSatisfy { $0 == zero }
     }
@@ -765,7 +730,7 @@ public struct OfflineCashOutboxReservationV1: Equatable, Sendable {
       minimum = UInt32(OfflineCashWireV1.minimumPaymentOutboxBytes)
     case .redeemSplit:
       minimum = UInt32(OfflineCashWireV1.minimumRedemptionOutboxBytes)
-    case .bootstrap, .mintFold, .receiveFoldBatch, .suiteUpgrade, .rotate:
+    case .bootstrap, .mintFold, .receiveFold, .suiteUpgrade, .rotate:
       throw offlineCashInvalid("outboxReservation.operationKind")
     }
     guard reservedOutboxBytes >= minimum, issuedAtMS < expiresAtMS else {
@@ -865,7 +830,7 @@ public struct OfflineCashCommitWrapperProofV1: Equatable, Sendable {
   }
 }
 
-/// Receiver-created reusable request; every actual payment uses a distinct ticket.
+/// Receiver-created exact-amount request; every actual payment uses a distinct ticket.
 public struct OfflineCashPaymentRequestV1: Equatable, Sendable {
   public let version: UInt16
   public let releaseID: Data
@@ -875,7 +840,7 @@ public struct OfflineCashPaymentRequestV1: Equatable, Sendable {
   public let scale: UInt32
   public let liabilityPoolID: Data
   public let recipient: OfflineCashAccountIDV1
-  public let requestMode: OfflineCashPaymentRequestModeV1
+  public let amount: OfflineCashUInt128V1
   public let hardwareCredential: OfflineCashHardwareCredentialV1
   public let requestID: Data
   public let issuedAtMS: UInt64
@@ -886,12 +851,12 @@ public struct OfflineCashPaymentRequestV1: Equatable, Sendable {
     version: UInt16 = 1, releaseID: Data, networkID: Data,
     asset: OfflineCashAssetDefinitionIDV1, assetIncarnation: OfflineCashAssetIncarnationV1,
     scale: UInt32, liabilityPoolID: Data, recipient: OfflineCashAccountIDV1,
-    requestMode: OfflineCashPaymentRequestModeV1,
+    amount: OfflineCashUInt128V1,
     hardwareCredential: OfflineCashHardwareCredentialV1, requestID: Data,
     issuedAtMS: UInt64, expiresAtMS: UInt64, signature: OfflineCashDeviceSignatureV1
   ) throws {
     try offlineCashHeader(version, networkID, scale)
-    guard hardwareCredential.networkID == networkID, expiresAtMS > issuedAtMS,
+    guard !amount.isZero, hardwareCredential.networkID == networkID, expiresAtMS > issuedAtMS,
       expiresAtMS - issuedAtMS <= OfflineCashWireV1.requestMaximumTTLMS,
       expiresAtMS <= hardwareCredential.expiresAtMS
     else { throw offlineCashInvalid("paymentRequest") }
@@ -903,7 +868,7 @@ public struct OfflineCashPaymentRequestV1: Equatable, Sendable {
     self.scale = scale
     self.liabilityPoolID = try offlineCashDigest(liabilityPoolID, "liabilityPoolID")
     self.recipient = recipient
-    self.requestMode = requestMode
+    self.amount = amount
     self.hardwareCredential = hardwareCredential
     self.requestID = try offlineCashDigest(requestID, "requestID")
     self.issuedAtMS = issuedAtMS
@@ -1276,21 +1241,4 @@ func offlineCashHeader(_ version: UInt16, _ networkID: Data, _ scale: UInt32) th
   guard version == 1, networkID.count == 32, networkID.contains(where: { $0 != 0 }),
     scale <= OfflineCashWireV1.maximumAssetScale
   else { throw offlineCashInvalid("header") }
-}
-
-private func offlineCashCompare(
-  _ lhs: OfflineCashUInt128V1, _ rhs: OfflineCashUInt128V1
-) -> ComparisonResult {
-  for (left, right) in zip(lhs.littleEndianBytes.reversed(), rhs.littleEndianBytes.reversed()) {
-    if left < right { return .orderedAscending }
-    if left > right { return .orderedDescending }
-  }
-  return .orderedSame
-}
-
-private func offlineCashAmount(
-  _ amount: OfflineCashUInt128V1, isWithin policy: OfflineCashAmountPolicyV1
-) -> Bool {
-  offlineCashCompare(amount, policy.minimumAmount) != .orderedAscending
-    && offlineCashCompare(amount, policy.maximumAmount) != .orderedDescending
 }

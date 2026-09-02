@@ -21,6 +21,12 @@ pub const OFFLINE_CASH_STATE_PROVING_KEY_MAX_BYTES_V1: u64 = 48_234_934;
 pub const OFFLINE_CASH_HELPER_PROVING_KEY_MAX_BYTES_V1: u64 = 64 * 1024 * 1024;
 /// Maximum processed verifying-key bytes for one role and parity.
 pub const OFFLINE_CASH_VERIFYING_KEY_MAX_BYTES_V1: u64 = 64 * 1024;
+/// Maximum raw proof-evidence bytes for one internal helper parity.
+///
+/// This is a release-evidence resource ceiling, not an offline-payment
+/// transport allowance. The authenticated compiled protocol fixes the exact
+/// admissible length below this ceiling.
+pub const OFFLINE_CASH_INTERNAL_HELPER_PROOF_EVIDENCE_MAX_BYTES_V1: u32 = 64 * 1024 * 1024;
 /// Maximum complete preinstalled offline artifact package.
 pub const OFFLINE_CASH_ARTIFACT_SET_MAX_BYTES_V1: u64 = 512 * 1024 * 1024;
 /// Maximum whole-process resident memory during proving or verification.
@@ -31,8 +37,6 @@ pub const OFFLINE_CASH_REPRODUCIBLE_BUILD_COUNT_V1: u8 = 2;
 pub const OFFLINE_CASH_MIN_QUALIFIED_HANDOFFS_V1: u32 = 1_024;
 /// Minimum independent credits folded and spent by the aggregate-balance KAT.
 pub const OFFLINE_CASH_MIN_QUALIFIED_AGGREGATED_CREDITS_V1: u32 = 1_000;
-/// Exact padded receive-fold width that release evidence must exercise.
-pub const OFFLINE_CASH_RECEIVE_FOLD_BATCH_WIDTH_V1: u8 = 16;
 /// Minimum credits folded during the thermal-throttling qualification run.
 pub const OFFLINE_CASH_MIN_THERMAL_FOLDED_CREDITS_V1: u32 = 1_000;
 /// Minimum parser-fuzz cases represented by the validation report.
@@ -293,8 +297,8 @@ pub enum OfflineCashQualifiedRelationV1 {
     MintFold,
     /// Split one payment from the aggregate balance.
     SendSplit,
-    /// Fold a padded batch of one through sixteen received credits.
-    ReceiveFoldBatch,
+    /// Fold one received credit into the aggregate balance.
+    ReceiveFold,
     /// Split an online redemption from the aggregate balance.
     RedeemSplit,
     /// Rotate the hardware credential without changing value.
@@ -357,6 +361,10 @@ impl OfflineCashQualifiedHelperCircuitV1 {
             ),
         }
     }
+
+    const fn uses_internal_proof_evidence(self) -> bool {
+        matches!(self, Self::PlatformCredential | Self::GuardBundle)
+    }
 }
 
 /// Release-bound compiled protocol identity for one helper circuit.
@@ -372,6 +380,17 @@ pub struct OfflineCashHelperProtocolV1 {
     /// Compiled Ep/Fq protocol digest.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub ep_protocol_digest: [u8; 32],
+    /// Exact raw Eq/Fp proof bytes for an internal-only helper.
+    ///
+    /// This is zero for `MintAuthorization` and `MintCredit`, whose public wire
+    /// values remain governed by the V1 parity, current-proof, and canonical
+    /// paired-proof transport ceilings.
+    pub eq_proof_bytes: u32,
+    /// Exact raw Ep/Fq proof bytes for an internal-only helper.
+    ///
+    /// This is zero for `MintAuthorization` and `MintCredit`. A nonzero value
+    /// is an authenticated compiled-protocol property, not a transport cap.
+    pub ep_proof_bytes: u32,
 }
 
 /// Real-circuit qualification for one non-state helper circuit.
@@ -395,7 +414,23 @@ pub struct OfflineCashHelperQualificationV1 {
     pub eq_circuit_rows: u32,
     /// Ep/Fq rows synthesized with `k = 16`.
     pub ep_circuit_rows: u32,
-    /// Exact complete paired-proof bytes observed for the helper.
+    /// Exact raw Eq/Fp proof bytes observed for an internal-only helper.
+    ///
+    /// This is zero when `complete_proof_bytes` measures a canonical paired
+    /// wire value for `MintAuthorization` or `MintCredit`.
+    pub eq_proof_bytes: u32,
+    /// Exact raw Ep/Fq proof bytes observed for an internal-only helper.
+    ///
+    /// This is zero when `complete_proof_bytes` measures a canonical paired
+    /// wire value for `MintAuthorization` or `MintCredit`.
+    pub ep_proof_bytes: u32,
+    /// Complete proof bytes observed for the helper.
+    ///
+    /// For `MintAuthorization` and `MintCredit`, this is the canonical paired
+    /// wire value and must fit the 6,528-byte transport ceiling. For
+    /// `PlatformCredential` and `GuardBundle`, this is exactly the checked sum
+    /// of the separately observed raw Eq/Fp and Ep/Fq internal proof lengths;
+    /// it is deliberately not interpreted as a paired-wire length.
     pub complete_proof_bytes: u32,
     /// Slowest qualifying p95 proof generation, in milliseconds.
     pub prove_p95_ms: u32,
@@ -415,7 +450,7 @@ impl OfflineCashQualifiedRelationV1 {
         Self::Bootstrap,
         Self::MintFold,
         Self::SendSplit,
-        Self::ReceiveFoldBatch,
+        Self::ReceiveFold,
         Self::RedeemSplit,
         Self::Rotate,
         Self::SuiteUpgrade,
@@ -480,19 +515,6 @@ pub struct OfflineCashRelationQualificationV1 {
     pub report: OfflineCashEvidenceFileV1,
 }
 
-/// Exact receiver-batch occupancy exercised by a real padded fold proof.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct OfflineCashReceiveFoldOccupancyV1 {
-    /// Number of real credits in the padded sixteen-slot relation.
-    pub occupancy: u8,
-    /// Complete paired-proof bytes observed at this occupancy.
-    pub complete_proof_bytes: u32,
-    /// Exact occupancy-specific report.
-    pub report: OfflineCashEvidenceFileV1,
-}
-
 /// One real recursive-depth qualification run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -534,11 +556,11 @@ pub struct OfflineCashAggregateBalanceQualificationV1 {
 pub struct OfflineCashThermalQualificationV1 {
     /// Credits folded during the sustained run.
     pub folded_credits: u32,
-    /// Slowest qualifying p95 batch-fold proof, in milliseconds.
+    /// Slowest qualifying p95 single-credit receive-fold proof, in milliseconds.
     pub fold_p95_ms: u32,
     /// Largest whole-process RSS observed, in bytes.
     pub process_rss_bytes: u64,
-    /// Largest batch-fold energy observed, in millijoules.
+    /// Largest single-credit receive-fold energy observed, in millijoules.
     pub operation_energy_millijoules: u64,
     /// Exact thermal-run report.
     pub report: OfflineCashEvidenceFileV1,
@@ -570,8 +592,6 @@ pub struct OfflineCashProfileQualificationV1 {
     pub relations: Vec<OfflineCashRelationQualificationV1>,
     /// Exactly the four required helper circuits in protocol order.
     pub helper_circuits: Vec<OfflineCashHelperQualificationV1>,
-    /// Exactly occupancies one through sixteen in ascending order.
-    pub receive_fold_occupancies: Vec<OfflineCashReceiveFoldOccupancyV1>,
     /// Exactly depths 8, 64, 1,024, and one greater depth, in ascending order.
     pub recursive_depths: Vec<OfflineCashRecursiveDepthQualificationV1>,
     /// At least 1,000 independent credits folded and spent as one payment.
@@ -623,16 +643,16 @@ pub enum OfflineCashAcceptanceCaseV1 {
     EpochAndCounterRollover,
     /// Emergency profile suspension preserves online redemption/recovery.
     SuspensionOnlineRecovery,
-    /// Single-exact requests accept exactly one payment of the bound amount.
-    SingleExact,
-    /// Exact invoices reject overpayment.
-    InvoiceOverpayment,
-    /// Partial-until-total requests enforce their aggregate amount.
-    PartialUntilTotal,
-    /// Bounded multi-payment requests enforce their payment count.
-    BoundedMultiPayment,
-    /// Open-receive requests accept unbounded distinct one-use tickets.
-    OpenReceiveReuse,
+    /// Every request, intent, ticket, and payment binds the same positive exact amount.
+    ExactAmountBinding,
+    /// Any request, intent, ticket, or payment amount mismatch fails closed.
+    WrongAmountRejection,
+    /// Distinct valid payments against the same request are all accepted.
+    DistinctPaymentsSameRequest,
+    /// Concurrent distinct payments against the same request remain independently valid.
+    ConcurrentPaymentsSameRequest,
+    /// Invoice deduplication remains outside protocol admission.
+    InvoiceDeduplicationApplicationPolicy,
     /// Reused or mismatched acceptance tickets fail closed.
     AcceptanceTicketReplay,
     /// Public transcripts do not expose or link predecessor/successor commitments.
@@ -702,11 +722,11 @@ impl OfflineCashAcceptanceCaseV1 {
         Self::LeaseExpiry,
         Self::EpochAndCounterRollover,
         Self::SuspensionOnlineRecovery,
-        Self::SingleExact,
-        Self::InvoiceOverpayment,
-        Self::PartialUntilTotal,
-        Self::BoundedMultiPayment,
-        Self::OpenReceiveReuse,
+        Self::ExactAmountBinding,
+        Self::WrongAmountRejection,
+        Self::DistinctPaymentsSameRequest,
+        Self::ConcurrentPaymentsSameRequest,
+        Self::InvoiceDeduplicationApplicationPolicy,
         Self::AcceptanceTicketReplay,
         Self::TranscriptUnlinkability,
         Self::ReserveUnderflow,
@@ -1195,7 +1215,23 @@ fn validate_helper_protocols(protocols: &[OfflineCashHelperProtocolV1]) -> bool 
                     && digest_is_nonzero(protocol.eq_protocol_digest)
                     && digest_is_nonzero(protocol.ep_protocol_digest)
                     && protocol.eq_protocol_digest != protocol.ep_protocol_digest
+                    && if expected.uses_internal_proof_evidence() {
+                        valid_internal_helper_proof_length(protocol.eq_proof_bytes)
+                            && valid_internal_helper_proof_length(protocol.ep_proof_bytes)
+                            && protocol
+                                .eq_proof_bytes
+                                .checked_add(protocol.ep_proof_bytes)
+                                .is_some()
+                    } else {
+                        protocol.eq_proof_bytes == 0 && protocol.ep_proof_bytes == 0
+                    }
             })
+}
+
+const fn valid_internal_helper_proof_length(length: u32) -> bool {
+    length != 0
+        && length <= OFFLINE_CASH_INTERNAL_HELPER_PROOF_EVIDENCE_MAX_BYTES_V1
+        && length % 32 == 0
 }
 
 fn protocol_digests_are_unique(
@@ -1550,6 +1586,17 @@ fn validate_profile_qualification(
         .zip(OfflineCashQualifiedHelperCircuitV1::ALL)
     {
         let (expected_eq_vk, expected_ep_vk) = expected_helper.expected_vk_roles();
+        let valid_proof_measurement = if expected_helper.uses_internal_proof_evidence() {
+            helper.eq_proof_bytes == protocol.eq_proof_bytes
+                && helper.ep_proof_bytes == protocol.ep_proof_bytes
+                && helper.eq_proof_bytes.checked_add(helper.ep_proof_bytes)
+                    == Some(helper.complete_proof_bytes)
+        } else {
+            helper.eq_proof_bytes == 0
+                && helper.ep_proof_bytes == 0
+                && helper.complete_proof_bytes != 0
+                && helper.complete_proof_bytes <= proof_max
+        };
         if helper.helper != expected_helper
             || protocol.helper != expected_helper
             || helper.eq_protocol_digest != protocol.eq_protocol_digest
@@ -1561,8 +1608,7 @@ fn validate_profile_qualification(
             || helper.eq_circuit_rows > maximum_circuit_rows
             || helper.ep_circuit_rows == 0
             || helper.ep_circuit_rows > maximum_circuit_rows
-            || helper.complete_proof_bytes == 0
-            || helper.complete_proof_bytes > proof_max
+            || !valid_proof_measurement
             || helper.prove_p95_ms == 0
             || helper.prove_p95_ms > OFFLINE_CASH_PROVE_P95_MAX_MS_V1
             || helper.verify_p95_ms == 0
@@ -1571,22 +1617,6 @@ fn validate_profile_qualification(
             || helper.process_rss_bytes > OFFLINE_CASH_PROCESS_RSS_MAX_BYTES_V1
             || helper.operation_energy_millijoules == 0
             || !validate_evidence_file(helper.report)
-        {
-            return Err(invalid());
-        }
-    }
-
-    if qualification.receive_fold_occupancies.len()
-        != usize::from(OFFLINE_CASH_RECEIVE_FOLD_BATCH_WIDTH_V1)
-    {
-        return Err(invalid());
-    }
-    for (index, occupancy) in qualification.receive_fold_occupancies.iter().enumerate() {
-        let expected = u8::try_from(index + 1).expect("sixteen occupancies fit u8");
-        if occupancy.occupancy != expected
-            || occupancy.complete_proof_bytes == 0
-            || occupancy.complete_proof_bytes > proof_max
-            || !validate_evidence_file(occupancy.report)
         {
             return Err(invalid());
         }

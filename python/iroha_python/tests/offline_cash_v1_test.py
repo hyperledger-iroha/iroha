@@ -59,7 +59,7 @@ NetworkId = sys.modules[f"{_PURE_PACKAGE}.crypto"].NetworkId
 _FIXTURE = json.loads(
     (Path(__file__).resolve().parents[3] / "fixtures/offline/offline_cash_v1.json").read_text()
 )
-_V2_KEYS = (
+_CANONICAL_FIXTURE_KEYS = (
     "payment_request",
     "acceptance_intent_authorization",
     "acceptance_ticket",
@@ -76,10 +76,7 @@ _V2_KEYS = (
     "terminal_trio",
     "complete_five_message",
 )
-_IS_V2_FIXTURE = _FIXTURE.get("fixture_version") == 2
-_HAS_V2_FIXTURE = _IS_V2_FIXTURE and all(
-    key in _FIXTURE for key in _V2_KEYS
-)
+_HAS_CANONICAL_FIXTURE = all(key in _FIXTURE for key in _CANONICAL_FIXTURE_KEYS)
 _FIXTURE_TRANSPORT_KINDS = {
     "payment_request": "payment_request",
     "acceptance_intent_authorization": "acceptance_intent_authorization",
@@ -250,7 +247,7 @@ def _base_context() -> dict[str, object]:
     }
 
 
-def _request(request_mode: object) -> object:
+def _request(amount: int = 5) -> object:
     context = _base_context()
     return OfflineCashV1.PaymentRequest(
         version=1,
@@ -263,7 +260,7 @@ def _request(request_mode: object) -> object:
             context["network_id"], context["asset"], context["incarnation"]
         ),
         recipient=context["account"],
-        request_mode=request_mode,
+        amount=amount,
         hardware_credential=context["credential"],
         request_id=_bytes(9),
         issued_at_ms=100,
@@ -321,7 +318,6 @@ def _pre_ticket(
         asset=request.asset,
         asset_incarnation=request.asset_incarnation,
         scale=request.scale,
-        request_mode=request.request_mode,
         intent_digest=OfflineCashV1.acceptance_intent_digest(intent),
         exact_amount=exact_amount,
         reserved_inbox_bytes=8960,
@@ -403,37 +399,22 @@ def test_strict_oc1_transport_enforces_current_caps() -> None:
             OfflineCashV1.decode_text("payment_request", invalid)
 
 
-def test_all_four_request_modes_round_trip_and_open_receive_has_no_count_ceiling() -> None:
-    interval = OfflineCashV1.AmountPolicy(minimum_amount=1, maximum_amount=9)
-    modes = (
-        OfflineCashV1.PaymentRequestMode.single_exact(5),
-        OfflineCashV1.PaymentRequestMode.partial_until_total(10),
-        OfflineCashV1.PaymentRequestMode.bounded_multi_payment(3, interval),
-        OfflineCashV1.PaymentRequestMode.open_receive(interval),
-    )
-    for mode in modes:
-        request = _request(mode)
-        raw = OfflineCashV1.encode_payment_request(request)
-        assert len(raw) <= 1024
-        decoded = OfflineCashV1.decode_payment_request(raw)
-        assert decoded.request_mode.mode == mode.mode
-        assert OfflineCashV1.encode_payment_request(decoded) == raw
-    assert not hasattr(modes[-1].policy, "max_payments")
-    with pytest.raises(TypeError):
-        OfflineCashV1.OpenReceiveRequest(per_payment=interval, max_payments=1)
+def test_exact_positive_request_amount_round_trips() -> None:
+    request = _request(5)
+    raw = OfflineCashV1.encode_payment_request(request)
+    assert len(raw) <= 1024
+    decoded = OfflineCashV1.decode_payment_request(raw)
+    assert decoded.amount == 5
+    assert OfflineCashV1.encode_payment_request(decoded) == raw
     with pytest.raises(OfflineCashV1.Error):
         OfflineCashV1.decode_payment_request(_bytes(1, 1025))
-    canonical = OfflineCashV1.encode_payment_request(_request(modes[0]))
+    canonical = OfflineCashV1.encode_payment_request(_request())
     with pytest.raises(OfflineCashV1.Error):
         OfflineCashV1.decode_payment_request(canonical + b"\0")
 
 
 def test_proof_authorization_and_one_use_ticket_form_pre_ticket_exchange() -> None:
-    request = _request(
-        OfflineCashV1.PaymentRequestMode.open_receive(
-            OfflineCashV1.AmountPolicy(minimum_amount=1, maximum_amount=9)
-        )
-    )
+    request = _request()
     intent, authorization, ticket = _pre_ticket(request)
     authorization_raw = OfflineCashV1.encode_acceptance_intent_authorization(
         authorization, request
@@ -451,7 +432,7 @@ def test_proof_authorization_and_one_use_ticket_form_pre_ticket_exchange() -> No
 
 
 def test_no_commit_recovery_closure_is_canonical_cross_bound_and_bounded() -> None:
-    request = _request(OfflineCashV1.PaymentRequestMode.single_exact(5))
+    request = _request()
     _intent, authorization, ticket = _pre_ticket(request)
     closure = _no_commit_closure(request, authorization, ticket)
     raw = OfflineCashV1.encode_no_commit_closure(closure)
@@ -519,7 +500,7 @@ def test_no_commit_recovery_closure_is_canonical_cross_bound_and_bounded() -> No
 
 
 def test_circuit_bound_semantic_hashes_use_exact_fixed_transcripts() -> None:
-    request = _request(OfflineCashV1.PaymentRequestMode.single_exact(5))
+    request = _request()
     intent, authorization, ticket = _pre_ticket(request)
     closure = _no_commit_closure(request, authorization, ticket)
     intent_transcript = _intent_semantic_transcript(intent)
@@ -745,17 +726,9 @@ def test_retired_links_and_software_money_crypto_are_absent() -> None:
     assert OfflineCashV1.maximum_session_text_bytes == 12288
 
 
-@pytest.mark.skipif(_IS_V2_FIXTURE, reason="native v2 fixture is now available")
-def test_predecessor_era_fixture_is_explicitly_rejected_until_v2_regeneration() -> None:
-    assert _FIXTURE.get("fixture_version") != 2
-    assert any(key not in _FIXTURE for key in _V2_KEYS)
-    with pytest.raises(OfflineCashV1.Error):
-        OfflineCashV1.decode_payment_request(bytes.fromhex(_FIXTURE["payment_request"]["norito_hex"]))
-
-
-@pytest.mark.skipif(not _IS_V2_FIXTURE, reason="awaiting native-generated fixture_version 2")
-def test_native_generated_v2_fixture_round_trips_all_transported_values() -> None:
-    assert _HAS_V2_FIXTURE, "fixture_version 2 must contain the complete canonical key set"
+def test_native_generated_v1_fixture_round_trips_all_transported_values() -> None:
+    assert _FIXTURE.get("fixture_version") == 1
+    assert _HAS_CANONICAL_FIXTURE, "fixture_version 1 must contain the complete canonical key set"
     def raw(name: str) -> bytes:
         entry = _FIXTURE[name]
         assert entry["raw_bytes"] == len(bytes.fromhex(entry["norito_hex"]))

@@ -90,7 +90,7 @@ internal object OfflineCashV1TestSupport {
         )
 
     fun request(
-        mode: OfflineCashPaymentRequestModeV1 = OfflineCashPaymentRequestModeV1.SingleExact(BigInteger.valueOf(25)),
+        amount: BigInteger = BigInteger.valueOf(25),
     ): OfflineCashPaymentRequestV1 = OfflineCashPaymentRequestV1(
         version = 1,
         releaseId = qualification.releaseId(),
@@ -100,7 +100,7 @@ internal object OfflineCashV1TestSupport {
         scale = 4,
         liabilityPoolId = liabilityPool,
         recipient = account,
-        requestMode = mode,
+        amount = amount,
         hardwareCredential = credential,
         requestId = bytes(0x53),
         issuedAtMs = 1_000,
@@ -146,7 +146,6 @@ internal object OfflineCashV1TestSupport {
         asset = request.asset,
         assetIncarnation = request.assetIncarnation,
         scale = request.scale,
-        requestMode = request.requestMode,
         intentDigest = OfflineCashNoritoV1.acceptanceIntentDigest(authorization.statement.intent, request),
         exactAmount = authorization.statement.intent.exactAmount,
         reservedInboxBytes = OfflineCashWireV1.ACCEPTANCE_TICKET_MIN_RESERVED_INBOX_BYTES,

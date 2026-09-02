@@ -96,7 +96,7 @@ impl OfflineCashOperationRelationWitnessV1 {
             OfflineCashOperationV1::Bootstrap => 0,
             OfflineCashOperationV1::MintFold => 1,
             OfflineCashOperationV1::SendSplit => 2,
-            OfflineCashOperationV1::ReceiveFoldBatch => 3,
+            OfflineCashOperationV1::ReceiveFold => 3,
             OfflineCashOperationV1::RedeemSplit => 4,
             OfflineCashOperationV1::SuiteUpgrade => 5,
             OfflineCashOperationV1::Rotate => 6,
@@ -512,7 +512,7 @@ mod tests {
                 witness.hardware_epoch_after = 7;
                 witness.replay_root_before = OfflineCashPastaStateCommitmentV1::ZERO;
             }
-            OfflineCashOperationV1::MintFold | OfflineCashOperationV1::ReceiveFoldBatch => {
+            OfflineCashOperationV1::MintFold | OfflineCashOperationV1::ReceiveFold => {
                 witness.amount = 5;
                 witness.balance_after = 14;
                 witness.replay_root_after = root(0x32);
@@ -536,7 +536,7 @@ mod tests {
             OfflineCashOperationV1::Bootstrap,
             OfflineCashOperationV1::MintFold,
             OfflineCashOperationV1::SendSplit,
-            OfflineCashOperationV1::ReceiveFoldBatch,
+            OfflineCashOperationV1::ReceiveFold,
             OfflineCashOperationV1::RedeemSplit,
             OfflineCashOperationV1::SuiteUpgrade,
             OfflineCashOperationV1::Rotate,

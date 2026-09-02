@@ -29,7 +29,9 @@ public final class OfflineCashDeviceLifecycleBridgeV1 {
    */
   public enum Operation {
     READ_ACTIVE_HARDWARE_CREDENTIAL,
-    RESERVE_INBOX_BYTES_AND_ISSUE_ACCEPTANCE_TICKET,
+    PREPARE_ACCEPTANCE_INTENT_AUTHORIZATION,
+    RECOVER_ACCEPTANCE_INTENT_AUTHORIZATION,
+    VERIFY_AUTHORIZATION_RESERVE_INBOX_AND_ISSUE_ACCEPTANCE_TICKET,
     RECOVER_ACCEPTANCE_TICKET,
     STAGE_INBOUND_PAYMENT,
     RECOVER_STAGED_INBOUND_PAYMENT,
@@ -44,6 +46,12 @@ public final class OfflineCashDeviceLifecycleBridgeV1 {
     SIGN_RECEIVE_ACKNOWLEDGEMENT,
     RELEASE_OUTBOX_ENTRY,
     READ_TRUSTED_TIME_OR_LEASE,
+    PREPARE_MINT_AUTHORIZATION,
+    RECOVER_MINT_AUTHORIZATION,
+    VERIFY_AUTHORIZATION_AND_STAGE_MINT_CREDIT,
+    FOLD_RECEIVE,
+    READ_PENDING_CREDIT_WATERMARK,
+    ROTATE_HARDWARE_EPOCH,
   }
 
   /** Exact secure-backend capabilities shared with the Kotlin bridge. */
@@ -89,6 +97,7 @@ public final class OfflineCashDeviceLifecycleBridgeV1 {
     CONFLICT,
     CORRUPT,
     MALFORMED_REQUEST,
+    RECOVERY_REQUIRED,
   }
 
   /** Defensively copied native secure-backend identity. */

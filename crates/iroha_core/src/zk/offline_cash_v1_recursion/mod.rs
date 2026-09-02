@@ -26,6 +26,7 @@ mod mint_helper;
 mod native_backend;
 mod relation;
 mod state_relation;
+mod transport_decider;
 
 #[cfg(all(test, feature = "zk-halo2-ipa"))]
 mod real_handoff_qualification_tests;
@@ -150,10 +151,10 @@ use iroha_data_model::isi::OfflineCashRedemptionRequestV1;
 use iroha_data_model::nexus::AxtAssetIncarnationV1;
 use iroha_data_model::offline::{
     OFFLINE_CASH_ASSET_SCALE_MAX_V1, OFFLINE_CASH_HELPER_PROVING_KEY_MAX_BYTES_V1,
-    OFFLINE_CASH_RECEIVE_FOLD_BATCH_WIDTH_V1, OFFLINE_CASH_VERIFYING_KEY_MAX_BYTES_V1,
-    OFFLINE_CASH_WIRE_VERSION_V1, OfflineCashArtifactBindingV1, OfflineCashArtifactRoleV1,
-    OfflineCashAuthenticatedReleaseV1, OfflineCashCommitWrapperProofV1,
-    OfflineCashLifecycleBindingV1, OfflineCashMintCreditStatementV1, OfflineCashMintCreditV1,
+    OFFLINE_CASH_VERIFYING_KEY_MAX_BYTES_V1, OFFLINE_CASH_WIRE_VERSION_V1,
+    OfflineCashArtifactBindingV1, OfflineCashArtifactRoleV1, OfflineCashAuthenticatedReleaseV1,
+    OfflineCashCommitWrapperProofV1, OfflineCashLifecycleBindingV1,
+    OfflineCashMintCreditStatementV1, OfflineCashMintCreditV1,
     OfflineCashNoCommitClosureStatementV1, OfflineCashNoCommitClosureV1,
     OfflineCashOperationKindV1, OfflineCashPairedProofV1, OfflineCashPastaStateCommitmentV1,
     OfflineCashQualifiedHelperCircuitV1, OfflineCashRedemptionStatementV1,
@@ -188,7 +189,7 @@ pub(crate) const OFFLINE_CASH_IPA_POSEIDON_SECURE_MDS_V1: usize = 0;
 /// Exact BGH19 fold transcript bytes for one `k = 16` parity.
 pub const OFFLINE_CASH_IPA_FOLD_PROOF_BYTES_V1: usize =
     (OFFLINE_CASH_RECURSION_IPA_K_V1 as usize * 2 + 8) * 32;
-/// Exact sparse-Merkle path depth needed by `ReceiveFoldBatch`.
+/// Exact sparse-Merkle path depth needed by `ReceiveFold`.
 pub const OFFLINE_CASH_REPLAY_PATH_DEPTH_V1: usize = 256;
 
 const GUARD_STATEMENT_DIGEST_DOMAIN: &[u8] = b"iroha:offline-cash:v1:normalized-guard-statement\0";
@@ -220,8 +221,8 @@ pub enum OfflineCashOperationV1 {
     MintFold,
     /// Subtract value and emit one receiver-bound credit.
     SendSplit,
-    /// Consume one through sixteen staged credits and update the exact replay root.
-    ReceiveFoldBatch,
+    /// Consume one staged credit and update the exact replay root.
+    ReceiveFold,
     /// Subtract value and emit one terminal redemption voucher.
     RedeemSplit,
     /// Bridge the complete private monetary state to a governed successor suite.
@@ -235,7 +236,7 @@ impl From<OfflineCashTransitionKindV1> for OfflineCashOperationV1 {
         match value {
             OfflineCashTransitionKindV1::MintFold => Self::MintFold,
             OfflineCashTransitionKindV1::SendSplit => Self::SendSplit,
-            OfflineCashTransitionKindV1::ReceiveFoldBatch => Self::ReceiveFoldBatch,
+            OfflineCashTransitionKindV1::ReceiveFold => Self::ReceiveFold,
             OfflineCashTransitionKindV1::RedeemSplit => Self::RedeemSplit,
             OfflineCashTransitionKindV1::SuiteUpgrade => Self::SuiteUpgrade,
             OfflineCashTransitionKindV1::Rotate => Self::Rotate,
@@ -249,7 +250,7 @@ impl From<OfflineCashOperationKindV1> for OfflineCashOperationV1 {
             OfflineCashOperationKindV1::Bootstrap => Self::Bootstrap,
             OfflineCashOperationKindV1::MintFold => Self::MintFold,
             OfflineCashOperationKindV1::SendSplit => Self::SendSplit,
-            OfflineCashOperationKindV1::ReceiveFoldBatch => Self::ReceiveFoldBatch,
+            OfflineCashOperationKindV1::ReceiveFold => Self::ReceiveFold,
             OfflineCashOperationKindV1::RedeemSplit => Self::RedeemSplit,
             OfflineCashOperationKindV1::SuiteUpgrade => Self::SuiteUpgrade,
             OfflineCashOperationKindV1::Rotate => Self::Rotate,
@@ -263,7 +264,7 @@ impl From<OfflineCashOperationV1> for OfflineCashOperationKindV1 {
             OfflineCashOperationV1::Bootstrap => Self::Bootstrap,
             OfflineCashOperationV1::MintFold => Self::MintFold,
             OfflineCashOperationV1::SendSplit => Self::SendSplit,
-            OfflineCashOperationV1::ReceiveFoldBatch => Self::ReceiveFoldBatch,
+            OfflineCashOperationV1::ReceiveFold => Self::ReceiveFold,
             OfflineCashOperationV1::RedeemSplit => Self::RedeemSplit,
             OfflineCashOperationV1::SuiteUpgrade => Self::SuiteUpgrade,
             OfflineCashOperationV1::Rotate => Self::Rotate,
@@ -292,10 +293,6 @@ pub struct OfflineCashGuardContextV1 {
     pub sender_one_time_authorization_digest: DigestV1,
     /// Governed old-suite to new-suite authorization, nonzero only for `SuiteUpgrade`.
     pub suite_upgrade_authorization_digest: DigestV1,
-    /// Number of active credits in the fixed 16-slot receive relation.
-    pub receive_active_count: u8,
-    /// Digest of the active-prefix receive batch, nonzero only for `ReceiveFoldBatch`.
-    pub receive_batch_binding_digest: DigestV1,
     /// Digest of the hardware-sealed transition intent and canonical inputs.
     pub transition_intent_digest: DigestV1,
     /// Digest of the operation-specific effect for bootstrap, or the exact Core effect for a
@@ -329,19 +326,12 @@ impl OfflineCashGuardContextV1 {
         }
 
         let is_no_commit_closure = operation == OfflineCashOperationV1::SendSplit && amount == 0;
-        let is_receive_batch = operation == OfflineCashOperationV1::ReceiveFoldBatch;
         let uses_outbox = matches!(
             operation,
             OfflineCashOperationV1::SendSplit | OfflineCashOperationV1::RedeemSplit
         );
-        if is_receive_batch
-            != (self.receive_active_count > 0
-                && self.receive_active_count <= OFFLINE_CASH_RECEIVE_FOLD_BATCH_WIDTH_V1
-                && self.receive_batch_binding_digest != [0; 32])
-            || (!is_receive_batch
-                && (self.receive_active_count != 0 || self.receive_batch_binding_digest != [0; 32]))
-            || (operation == OfflineCashOperationV1::SuiteUpgrade)
-                != (self.suite_upgrade_authorization_digest != [0; 32])
+        if (operation == OfflineCashOperationV1::SuiteUpgrade)
+            != (self.suite_upgrade_authorization_digest != [0; 32])
             || is_no_commit_closure != (self.sender_one_time_authorization_digest != [0; 32])
             || uses_outbox != (self.precommit_binding_digest != [0; 32])
         {
@@ -354,7 +344,7 @@ impl OfflineCashGuardContextV1 {
         let inbox_is_present = self.durable_inbox_effect_digest != [0; 32] && !inbox_is_empty;
         let outbox_is_present = self.durable_outbox_effect_digest != [0; 32] && !outbox_is_empty;
         let valid_effects = match operation {
-            OfflineCashOperationV1::MintFold | OfflineCashOperationV1::ReceiveFoldBatch => {
+            OfflineCashOperationV1::MintFold | OfflineCashOperationV1::ReceiveFold => {
                 inbox_is_present && outbox_is_empty
             }
             OfflineCashOperationV1::SendSplit | OfflineCashOperationV1::RedeemSplit => {
@@ -492,10 +482,6 @@ pub struct OfflineCashNormalizedGuardStatementV1 {
     pub sender_one_time_authorization_digest: DigestV1,
     /// Governed suite-upgrade authorization, nonzero only for `SuiteUpgrade`.
     pub suite_upgrade_authorization_digest: DigestV1,
-    /// Number of active entries in the fixed 16-slot receive relation.
-    pub receive_active_count: u8,
-    /// Digest of the fixed-shape receive batch, nonzero only for `ReceiveFoldBatch`.
-    pub receive_batch_binding_digest: DigestV1,
     /// Digest of the hardware-sealed transition intent.
     pub transition_intent_digest: DigestV1,
     /// Digest of the operation-specific transition effect.
@@ -570,7 +556,8 @@ impl OfflineCashNormalizedGuardStatementV1 {
         {
             return Err(OfflineCashRecursionErrorV1::InvalidTransitionStatement);
         }
-        let is_peer = operation == OfflineCashOperationV1::SendSplit && !is_no_commit_closure;
+        let is_peer = (operation == OfflineCashOperationV1::SendSplit && !is_no_commit_closure)
+            || operation == OfflineCashOperationV1::ReceiveFold;
         if is_peer != (proof.peer_credit_id != [0; 32])
             || is_peer != (proof.peer_recipient_lane_id != [0; 32])
         {
@@ -583,18 +570,8 @@ impl OfflineCashNormalizedGuardStatementV1 {
         if uses_outbox != (proof.precommit_binding_digest != [0; 32]) {
             return Err(OfflineCashRecursionErrorV1::InvalidTransitionStatement);
         }
-        let is_receive_batch = operation == OfflineCashOperationV1::ReceiveFoldBatch;
-        if is_receive_batch
-            != (proof.receive_active_count > 0
-                && proof.receive_active_count <= OFFLINE_CASH_RECEIVE_FOLD_BATCH_WIDTH_V1
-                && proof.receive_batch_binding_digest != [0; 32])
-            || (!is_receive_batch
-                && (proof.receive_active_count != 0
-                    || proof.receive_batch_binding_digest != [0; 32]))
-            || proof.receive_active_count != context.receive_active_count
-            || proof.receive_batch_binding_digest != context.receive_batch_binding_digest
-            || (operation == OfflineCashOperationV1::SuiteUpgrade)
-                != (proof.suite_upgrade_authorization_digest != [0; 32])
+        if (operation == OfflineCashOperationV1::SuiteUpgrade)
+            != (proof.suite_upgrade_authorization_digest != [0; 32])
             || proof.suite_upgrade_authorization_digest
                 != context.suite_upgrade_authorization_digest
             || (operation == OfflineCashOperationV1::SuiteUpgrade)
@@ -703,8 +680,6 @@ impl OfflineCashNormalizedGuardStatementV1 {
             terminal_commit_binding_digest: [0; 32],
             sender_one_time_authorization_digest: context.sender_one_time_authorization_digest,
             suite_upgrade_authorization_digest: proof.suite_upgrade_authorization_digest,
-            receive_active_count: proof.receive_active_count,
-            receive_batch_binding_digest: proof.receive_batch_binding_digest,
             transition_intent_digest: context.transition_intent_digest,
             transition_effect_digest: proof.effect_digest,
             recovery_record_digest: context.recovery_record_digest,
@@ -851,8 +826,6 @@ impl OfflineCashNormalizedGuardStatementV1 {
             terminal_commit_binding_digest: [0; 32],
             sender_one_time_authorization_digest: [0; 32],
             suite_upgrade_authorization_digest: [0; 32],
-            receive_active_count: 0,
-            receive_batch_binding_digest: [0; 32],
             transition_intent_digest: context.transition_intent_digest,
             transition_effect_digest: context.transition_effect_digest,
             recovery_record_digest: context.recovery_record_digest,
@@ -999,27 +972,22 @@ impl OfflineCashNormalizedGuardStatementV1 {
         {
             return Err(OfflineCashRecursionErrorV1::InvalidTransitionStatement);
         }
-        let is_peer = self.operation == OfflineCashOperationV1::SendSplit && !is_no_commit_closure;
+        let is_peer = (self.operation == OfflineCashOperationV1::SendSplit
+            && !is_no_commit_closure)
+            || self.operation == OfflineCashOperationV1::ReceiveFold;
         if is_peer != (self.peer_credit_id != [0; 32])
             || is_peer != (self.peer_recipient_lane_id != [0; 32])
         {
             return Err(OfflineCashRecursionErrorV1::InvalidTransitionStatement);
         }
-        let is_receive_batch = self.operation == OfflineCashOperationV1::ReceiveFoldBatch;
         let uses_outbox = matches!(
             self.operation,
             OfflineCashOperationV1::SendSplit | OfflineCashOperationV1::RedeemSplit
         );
         let is_terminal = self.terminal_commit_binding_digest != [0; 32];
         let has_sender_authorization = self.sender_one_time_authorization_digest != [0; 32];
-        if is_receive_batch
-            != (self.receive_active_count > 0
-                && self.receive_active_count <= OFFLINE_CASH_RECEIVE_FOLD_BATCH_WIDTH_V1
-                && self.receive_batch_binding_digest != [0; 32])
-            || (!is_receive_batch
-                && (self.receive_active_count != 0 || self.receive_batch_binding_digest != [0; 32]))
-            || (self.operation == OfflineCashOperationV1::SuiteUpgrade)
-                != (self.suite_upgrade_authorization_digest != [0; 32])
+        if (self.operation == OfflineCashOperationV1::SuiteUpgrade)
+            != (self.suite_upgrade_authorization_digest != [0; 32])
             || (self.operation == OfflineCashOperationV1::SuiteUpgrade)
                 != (self.predecessor_suite_id != self.successor_suite_id
                     && self.predecessor_vk_digest != self.successor_vk_digest)
@@ -1112,7 +1080,7 @@ impl OfflineCashNormalizedGuardStatementV1 {
         let inbox_is_present = self.durable_inbox_effect_digest != [0; 32] && !inbox_is_empty;
         let outbox_is_present = self.durable_outbox_effect_digest != [0; 32] && !outbox_is_empty;
         let valid = match self.operation {
-            OfflineCashOperationV1::MintFold | OfflineCashOperationV1::ReceiveFoldBatch => {
+            OfflineCashOperationV1::MintFold | OfflineCashOperationV1::ReceiveFold => {
                 inbox_is_present && outbox_is_empty
             }
             OfflineCashOperationV1::SendSplit | OfflineCashOperationV1::RedeemSplit => {
@@ -1243,7 +1211,7 @@ impl OfflineCashRecursivePublicOutputV1 {
             }
             OfflineCashOperationV1::Bootstrap
             | OfflineCashOperationV1::MintFold
-            | OfflineCashOperationV1::ReceiveFoldBatch
+            | OfflineCashOperationV1::ReceiveFold
             | OfflineCashOperationV1::SuiteUpgrade
             | OfflineCashOperationV1::Rotate => {
                 return Err(OfflineCashRecursionErrorV1::InvalidPublicOutput);
@@ -1256,7 +1224,7 @@ impl OfflineCashRecursivePublicOutputV1 {
 const INCOMING_PROOF_BINDING_DOMAIN_V1: &[u8] =
     b"iroha:offline-cash:v1:incoming-commit-wrapper-binding";
 
-/// Bind an accepted sender wrapper before inserting its credit in a receive batch.
+/// Bind an accepted sender wrapper before inserting its credit in a receive fold.
 ///
 /// The digest contains only unlinkable public wrapper outputs. Private sender predecessor and
 /// successor heads never enter receiver storage, transport, or public circuit instances.

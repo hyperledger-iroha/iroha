@@ -25,6 +25,11 @@ VERIFIER = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = VERIFIER
 SPEC.loader.exec_module(VERIFIER)
 
+INTERNAL_HELPER_PROOF_LENGTHS = {
+    "platform_credential": (8_000, 8_032),
+    "guard_bundle": (12_000, 12_032),
+}
+
 
 def _digest(value: int) -> str:
     return f"{value:064x}"
@@ -86,6 +91,7 @@ class EvidenceFixture:
     kinds: dict[str, str]
     commands: list[dict[str, Any]]
     proof_paths: list[str]
+    internal_proof_paths: dict[str, tuple[str, str]]
     raw_paths: list[str]
     text_paths: list[str]
 
@@ -258,6 +264,7 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
         kinds={},
         commands=[],
         proof_paths=[],
+        internal_proof_paths={},
         raw_paths=[],
         text_paths=[],
     )
@@ -363,14 +370,20 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
     state_ep = _digest(2)
     wrapper_eq = _digest(3)
     wrapper_ep = _digest(4)
-    helper_protocols = [
-        {
-            "helper": helper,
-            "eq_protocol_digest": _digest(5 + index * 2),
-            "ep_protocol_digest": _digest(6 + index * 2),
-        }
-        for index, helper in enumerate(VERIFIER.HELPERS)
-    ]
+    helper_protocols = []
+    for index, helper in enumerate(VERIFIER.HELPERS):
+        eq_proof_bytes, ep_proof_bytes = INTERNAL_HELPER_PROOF_LENGTHS.get(
+            helper, (0, 0)
+        )
+        helper_protocols.append(
+            {
+                "helper": helper,
+                "eq_protocol_digest": _digest(5 + index * 2),
+                "ep_protocol_digest": _digest(6 + index * 2),
+                "eq_proof_bytes": eq_proof_bytes,
+                "ep_proof_bytes": ep_proof_bytes,
+            }
+        )
     protocols = {
         "state_eq_protocol_digest": state_eq,
         "state_ep_protocol_digest": state_ep,
@@ -504,12 +517,31 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
 
     helper_rows: list[dict[str, Any]] = []
     for index, helper in enumerate(VERIFIER.HELPERS, start=1):
-        proof = f"samples/helper-{index:02d}.proof"
-        fixture.write(proof, bytes([20 + index]) * (120 + index), "proof")
-        fixture.proof_paths.append(proof)
         protocol = helper_protocols[index - 1]
         eq_role = f"{helper}_vk_eq"
         ep_role = f"{helper}_vk_ep"
+        if helper in VERIFIER.INTERNAL_PROOF_HELPERS:
+            eq_proof = f"samples/helper-{index:02d}.eq.proof"
+            ep_proof = f"samples/helper-{index:02d}.ep.proof"
+            fixture.write(
+                eq_proof,
+                bytes([20 + index]) * protocol["eq_proof_bytes"],
+                "internal_proof",
+            )
+            fixture.write(
+                ep_proof,
+                bytes([30 + index]) * protocol["ep_proof_bytes"],
+                "internal_proof",
+            )
+            fixture.internal_proof_paths[helper] = (eq_proof, ep_proof)
+            proof_fields = {"eq_proof": eq_proof, "ep_proof": ep_proof}
+            proof_inputs = [eq_proof, ep_proof]
+        else:
+            proof = f"samples/helper-{index:02d}.proof"
+            fixture.write(proof, bytes([20 + index]) * (120 + index), "proof")
+            fixture.proof_paths.append(proof)
+            proof_fields = {"proof": proof}
+            proof_inputs = [proof]
         report_path = add_report(
             f"reports/profile/helper-{index:02d}.json",
             "iroha.offline_cash_v1.helper_qualification_report",
@@ -522,36 +554,15 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
                 "ep_verifying_key": artifact_paths[ep_role],
                 "eq_circuit_rows": 10_000,
                 "ep_circuit_rows": 10_001,
-                "proof": proof,
+                **proof_fields,
                 "prove_p95_ms": 500,
                 "verify_p95_ms": 50,
                 "process_rss_bytes": 64 * 1024 * 1024,
                 "operation_energy_millijoules": 100,
             },
-            [proof, artifact_paths[eq_role], artifact_paths[ep_role]],
+            [*proof_inputs, artifact_paths[eq_role], artifact_paths[ep_role]],
         )
         helper_rows.append({"helper": helper, "report": report_path})
-
-    occupancy_rows: list[dict[str, Any]] = []
-    for occupancy in range(1, 17):
-        proof = f"samples/occupancy-{occupancy:02d}.proof"
-        fixture.write(proof, bytes([40 + occupancy]) * (140 + occupancy), "proof")
-        fixture.proof_paths.append(proof)
-        report_path = add_report(
-            f"reports/profile/occupancy-{occupancy:02d}.json",
-            "iroha.offline_cash_v1.receive_fold_occupancy_report",
-            {
-                "hardware_profile_id": profile_id,
-                "occupancy": occupancy,
-                "eq_protocol_digest": state_eq,
-                "ep_protocol_digest": state_ep,
-                "eq_verifying_key": artifact_paths["state_vk_eq"],
-                "ep_verifying_key": artifact_paths["state_vk_ep"],
-                "proof": proof,
-            },
-            [proof, artifact_paths["state_vk_eq"], artifact_paths["state_vk_ep"]],
-        )
-        occupancy_rows.append({"occupancy": occupancy, "report": report_path})
 
     depth_rows: list[dict[str, Any]] = []
     for depth in (8, 64, 1024, 1025):
@@ -736,7 +747,6 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
                 "qualification_report": qualification_path,
                 "relations": relation_rows,
                 "helpers": helper_rows,
-                "receive_fold_occupancies": occupancy_rows,
                 "recursive_depths": depth_rows,
                 "aggregate_balance": aggregate_path,
                 "thermal": thermal_path,
@@ -808,7 +818,12 @@ def test_valid_closure_derives_complete_projection_deterministically(tmp_path: P
     assert [row["helper"] for row in profile["helper_circuits"]] == list(
         VERIFIER.HELPERS
     )
-    assert [row["occupancy"] for row in profile["receive_fold_occupancies"]] == list(range(1, 17))
+    for helper in profile["helper_circuits"][2:]:
+        expected_eq, expected_ep = INTERNAL_HELPER_PROOF_LENGTHS[helper["helper"]]
+        assert helper["eq_proof_bytes"] == expected_eq
+        assert helper["ep_proof_bytes"] == expected_ep
+        assert helper["complete_proof_bytes"] == expected_eq + expected_ep
+        assert helper["complete_proof_bytes"] > VERIFIER.PAIRED_PROOF_MAX_BYTES
     assert [row["depth"] for row in profile["recursive_depths"]] == [8, 64, 1024, 1025]
     assert [row["verified_handoffs"] for row in profile["recursive_depths"]] == [8, 64, 1024, 1025]
     assert profile["aggregate_balance"]["independent_payments"] == 1000
@@ -838,6 +853,13 @@ def test_exact_proof_raw_and_text_limits_are_admitted(tmp_path: Path) -> None:
     fixture = _fixture(tmp_path)
     fixture.write(fixture.proof_paths[0], b"P" * 6_528, "proof")
     fixture.resign_commands_for_file(fixture.proof_paths[0])
+    wire_helper_row = fixture.manifest["profiles"][0]["helpers"][0]
+    wire_helper_report = json.loads(
+        fixture.path(wire_helper_row["report"]).read_text()
+    )
+    wire_helper_proof = wire_helper_report["proof"]
+    fixture.write(wire_helper_proof, b"H" * 6_528, "proof")
+    fixture.resign_commands_for_file(wire_helper_proof)
     for relative in fixture.raw_paths:
         fixture.write(relative, b"R" * 9_211, "raw_session")
         fixture.resign_commands_for_file(relative)
@@ -849,6 +871,9 @@ def test_exact_proof_raw_and_text_limits_are_admitted(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     profile = json.loads(result.stdout)["receipt_projection"]["profile_qualifications"][0]
     assert profile["relations"][0]["complete_proof_bytes"] == 6_528
+    assert profile["helper_circuits"][0]["complete_proof_bytes"] == 6_528
+    assert profile["helper_circuits"][0]["eq_proof_bytes"] == 0
+    assert profile["helper_circuits"][0]["ep_proof_bytes"] == 0
     assert {row["raw_session_bytes"] for row in profile["recursive_depths"]} == {9_211}
     assert {row["text_session_bytes"] for row in profile["recursive_depths"]} == {12_288}
 
@@ -873,12 +898,54 @@ def test_exact_size_gates_reject_one_byte_over(
     assert str(limit) in result.stderr or "exceeds" in result.stderr
 
 
+@pytest.mark.parametrize("helper", sorted(VERIFIER.INTERNAL_PROOF_HELPERS))
+def test_internal_helper_proof_evidence_must_match_each_pinned_parity(
+    tmp_path: Path, helper: str
+) -> None:
+    fixture = _fixture(tmp_path)
+    eq_proof, _ = fixture.internal_proof_paths[helper]
+    fixture.write(
+        eq_proof,
+        fixture.path(eq_proof).read_bytes() + (b"X" * 32),
+        "internal_proof",
+    )
+    fixture.resign_commands_for_file(eq_proof)
+    fixture.refresh_files()
+    result = _run(fixture)
+    assert result.returncode == 1
+    assert "release-pinned per-parity lengths" in result.stderr
+
+
+@pytest.mark.parametrize("bad_length", [0, 8_001])
+def test_internal_helper_protocol_rejects_zero_or_unaligned_exact_lengths(
+    tmp_path: Path, bad_length: int
+) -> None:
+    fixture = _fixture(tmp_path)
+    fixture.manifest["protocols"]["helper_protocols"][2][
+        "eq_proof_bytes"
+    ] = bad_length
+    fixture.resign_all_for_candidate_context()
+    fixture.refresh_files()
+    result = _run(fixture)
+    assert result.returncode == 1
+    assert "nonzero 32-byte multiples" in result.stderr
+
+
+def test_wire_helper_cannot_declare_an_internal_exact_length(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    fixture.manifest["protocols"]["helper_protocols"][0]["eq_proof_bytes"] = 32
+    fixture.resign_all_for_candidate_context()
+    fixture.refresh_files()
+    result = _run(fixture)
+    assert result.returncode == 1
+    assert "paired-wire helper" in result.stderr
+
+
 @pytest.mark.parametrize(
     "matrix",
     [
         "relations",
         "helpers",
-        "receive_fold_occupancies",
         "recursive_depths",
         "acceptance_cases",
     ],
@@ -944,7 +1011,7 @@ def test_undeclared_files_symlinks_and_hardlinks_are_rejected(tmp_path: Path) ->
 
 def test_one_measurement_sample_cannot_alias_two_matrix_cells(tmp_path: Path) -> None:
     fixture = _fixture(tmp_path)
-    first, second = fixture.manifest["profiles"][0]["receive_fold_occupancies"][:2]
+    first, second = fixture.manifest["profiles"][0]["recursive_depths"][:2]
     first_report = json.loads(fixture.path(first["report"]).read_text())
     second_report = json.loads(fixture.path(second["report"]).read_text())
     old_proof = second_report["proof"]

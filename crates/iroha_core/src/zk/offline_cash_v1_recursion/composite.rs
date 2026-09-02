@@ -78,7 +78,6 @@ const PARENT_EQUATION_TAG: u32 = 1;
 const INCOMING_CREDIT_EQUATION_TAG: u32 = 2;
 const GUARD_BUNDLE_EQUATION_TAG: u32 = 3;
 const MINT_FINALITY_EQUATION_TAG: u32 = 4;
-const RECEIVE_BATCH_BINDING_DOMAIN_V1: &[u8] = b"iroha:offline-cash:v1:receive-fold-batch\0";
 const SUITE_UPGRADE_BRIDGE_DOMAIN_V1: &[u8] = b"iroha:offline-cash:v1:suite-upgrade-bridge\0";
 
 /// Exact old-to-new recursive verifier bridge authorized for one `SuiteUpgrade`.
@@ -160,7 +159,7 @@ impl OfflineCashSuiteUpgradeBridgeWitnessV1 {
     }
 }
 
-/// One Eq/Fp incoming sender proof slot consumed by `ReceiveFoldBatch`.
+/// The Eq/Fp incoming sender proof consumed by `ReceiveFold`.
 ///
 /// Inactive positions carry the release-pinned valid padding proof and history; only their
 /// semantic slot data are canonical zero. This keeps proof verification shape fixed.
@@ -172,7 +171,7 @@ pub(super) struct OfflineCashRecursiveIncomingEqWitnessV1<'a> {
     pub(super) merge_fold_proof: &'a OfflineCashEqFoldProofV1,
 }
 
-/// One Ep/Fq incoming sender proof slot consumed by `ReceiveFoldBatch`.
+/// The Ep/Fq incoming sender proof consumed by `ReceiveFold`.
 pub(super) struct OfflineCashRecursiveIncomingEpWitnessV1<'a> {
     pub(super) instances: &'a [Vec<Fq>],
     pub(super) proof: &'a [u8],
@@ -225,7 +224,7 @@ where
     pub(super) incoming_protocol: &'a PlonkProtocol<C>,
     pub(super) incoming_eq_protocol_digest: DigestV1,
     pub(super) incoming_ep_protocol_digest: DigestV1,
-    pub(super) incoming_slots: &'a [OfflineCashRecursiveIncomingParityWitnessV1<'a, C>],
+    pub(super) incoming: OfflineCashRecursiveIncomingParityWitnessV1<'a, C>,
     pub(super) guard_protocol: &'a PlonkProtocol<C>,
     pub(super) guard_proof: &'a [u8],
     pub(super) guard_history: &'a IpaAccumulator<C, NativeLoader>,
@@ -257,10 +256,8 @@ pub(super) struct OfflineCashRecursiveStateWitnessV1<'a> {
     pub(super) ep_parent_fold_proof: &'a OfflineCashEpFoldProofV1,
     pub(super) eq_incoming_protocol: &'a PlonkProtocol<EqAffine>,
     pub(super) ep_incoming_protocol: &'a PlonkProtocol<EpAffine>,
-    pub(super) eq_incoming_slots: &'a [OfflineCashRecursiveIncomingEqWitnessV1<'a>;
-            state_relation::OFFLINE_CASH_RECEIVE_FOLD_BATCH_WIDTH_V1],
-    pub(super) ep_incoming_slots: &'a [OfflineCashRecursiveIncomingEpWitnessV1<'a>;
-            state_relation::OFFLINE_CASH_RECEIVE_FOLD_BATCH_WIDTH_V1],
+    pub(super) eq_incoming: OfflineCashRecursiveIncomingEqWitnessV1<'a>,
+    pub(super) ep_incoming: OfflineCashRecursiveIncomingEpWitnessV1<'a>,
     pub(super) eq_successor_history: &'a OfflineCashEqAccumulatorV1,
     pub(super) ep_successor_history: &'a OfflineCashEpAccumulatorV1,
     pub(super) eq_guard_protocol: &'a PlonkProtocol<EqAffine>,
@@ -417,16 +414,16 @@ pub(super) fn build_offline_cash_recursive_state_pair_v1(
         .ep_predecessor_history
         .to_native()
         .map_err(|error| error.to_string())?;
-    let eq_incoming_histories = witness
-        .eq_incoming_slots
-        .iter()
-        .map(|slot| slot.history.to_native().map_err(|error| error.to_string()))
-        .collect::<Result<Vec<_>, _>>()?;
-    let ep_incoming_histories = witness
-        .ep_incoming_slots
-        .iter()
-        .map(|slot| slot.history.to_native().map_err(|error| error.to_string()))
-        .collect::<Result<Vec<_>, _>>()?;
+    let eq_incoming_history = witness
+        .eq_incoming
+        .history
+        .to_native()
+        .map_err(|error| error.to_string())?;
+    let ep_incoming_history = witness
+        .ep_incoming
+        .history
+        .to_native()
+        .map_err(|error| error.to_string())?;
     let eq_guard_history = witness
         .eq_guard_history
         .to_native()
@@ -453,34 +450,20 @@ pub(super) fn build_offline_cash_recursive_state_pair_v1(
         witness.ep_incoming_protocol,
         OfflineCashPastaParityV1::Ep,
     )?;
-    let eq_incoming_slots = witness
-        .eq_incoming_slots
-        .iter()
-        .zip(&eq_incoming_histories)
-        .map(
-            |(slot, history)| OfflineCashRecursiveIncomingParityWitnessV1 {
-                instances: slot.instances,
-                proof: slot.proof,
-                history,
-                history_fold_proof: slot.history_fold_proof.as_bytes(),
-                merge_fold_proof: slot.merge_fold_proof.as_bytes(),
-            },
-        )
-        .collect::<Vec<_>>();
-    let ep_incoming_slots = witness
-        .ep_incoming_slots
-        .iter()
-        .zip(&ep_incoming_histories)
-        .map(
-            |(slot, history)| OfflineCashRecursiveIncomingParityWitnessV1 {
-                instances: slot.instances,
-                proof: slot.proof,
-                history,
-                history_fold_proof: slot.history_fold_proof.as_bytes(),
-                merge_fold_proof: slot.merge_fold_proof.as_bytes(),
-            },
-        )
-        .collect::<Vec<_>>();
+    let eq_incoming = OfflineCashRecursiveIncomingParityWitnessV1 {
+        instances: witness.eq_incoming.instances,
+        proof: witness.eq_incoming.proof,
+        history: &eq_incoming_history,
+        history_fold_proof: witness.eq_incoming.history_fold_proof.as_bytes(),
+        merge_fold_proof: witness.eq_incoming.merge_fold_proof.as_bytes(),
+    };
+    let ep_incoming = OfflineCashRecursiveIncomingParityWitnessV1 {
+        instances: witness.ep_incoming.instances,
+        proof: witness.ep_incoming.proof,
+        history: &ep_incoming_history,
+        history_fold_proof: witness.ep_incoming.history_fold_proof.as_bytes(),
+        merge_fold_proof: witness.ep_incoming.merge_fold_proof.as_bytes(),
+    };
     let (mut eq_builder, eq_sha, eq_output) = build_scalar_half::<EqAffine>(
         witness.state.clone(),
         witness.guard_relation.clone(),
@@ -497,7 +480,7 @@ pub(super) fn build_offline_cash_recursive_state_pair_v1(
             incoming_protocol: witness.eq_incoming_protocol,
             incoming_eq_protocol_digest: eq_incoming_protocol_digest,
             incoming_ep_protocol_digest: ep_incoming_protocol_digest,
-            incoming_slots: &eq_incoming_slots,
+            incoming: eq_incoming,
             guard_protocol: witness.eq_guard_protocol,
             guard_proof: witness.eq_guard_proof,
             guard_history: &eq_guard_history,
@@ -528,7 +511,7 @@ pub(super) fn build_offline_cash_recursive_state_pair_v1(
             incoming_protocol: witness.ep_incoming_protocol,
             incoming_eq_protocol_digest: eq_incoming_protocol_digest,
             incoming_ep_protocol_digest: ep_incoming_protocol_digest,
-            incoming_slots: &ep_incoming_slots,
+            incoming: ep_incoming,
             guard_protocol: witness.ep_guard_protocol,
             guard_proof: witness.ep_guard_proof,
             guard_history: &ep_guard_history,
@@ -714,6 +697,11 @@ where
         operation,
         halo2_base::QuantumCell::Constant(C::ScalarExt::ONE),
     );
+    let receive = range.gate().is_equal(
+        builder.main(0),
+        operation,
+        halo2_base::QuantumCell::Constant(C::ScalarExt::from(3)),
+    );
     let suite_upgrade = range.gate().is_equal(
         builder.main(0),
         operation,
@@ -802,124 +790,92 @@ where
         return Err("Offline Cash predecessor verifier emitted no equations".to_owned());
     }
 
-    if witness.incoming_slots.len() != state_relation::OFFLINE_CASH_RECEIVE_FOLD_BATCH_WIDTH_V1 {
-        return Err("Offline Cash incoming sender batch has wrong fixed width".to_owned());
-    }
     // Incoming monetary authority is the release-pinned terminal CommitWrapper verifier. Its
     // complete protocol is embedded as circuit constants, just like the terminal wrapper's own
     // nested protocols; it is deliberately independent of the predecessor state protocol.
     let incoming_protocol = witness.incoming_protocol.loaded(&loader);
-    let mut state_history = base_successor_history;
-    let mut incoming_equation_spans = Vec::with_capacity(witness.incoming_slots.len());
-    let mut previous_incoming_end = parent_end;
-    for (index, (slot, assigned_slot)) in witness
-        .incoming_slots
+    let slot = &witness.incoming;
+    let assigned_credit = &assigned_state.receive_credit;
+    validate_incoming_commit_wrapper_shape_v1(
+        &witness.incoming_protocol.num_instance,
+        slot.instances.iter().map(Vec::len),
+    )
+    .map_err(|error| format!("Offline Cash incoming sender proof: {error}"))?;
+    let incoming_instances = slot
+        .instances
         .iter()
-        .zip(&assigned_state.receive_slots)
-        .enumerate()
-    {
-        validate_incoming_commit_wrapper_shape_v1(
-            &witness.incoming_protocol.num_instance,
-            slot.instances.iter().map(Vec::len),
-        )
-        .map_err(|error| format!("Offline Cash incoming sender proof slot {index}: {error}"))?;
-        let incoming_instances = slot
-            .instances
-            .iter()
-            .map(|column| {
-                column
-                    .iter()
-                    .map(|value| loader.assign_scalar(*value))
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-        let incoming_current = verify_ordinary_proof_v1(
-            &loader,
-            succinct_vk,
-            &incoming_protocol,
-            &incoming_instances,
-            slot.proof,
-        )
-        .map_err(|error| {
-            format!("failed to verify incoming sender proof slot {index}: {error:?}")
-        })?;
-        let incoming_column = incoming_instances.first().ok_or_else(|| {
-            format!("Offline Cash incoming sender public column {index} is absent")
-        })?;
-        let incoming_history = load_native_accumulator(&loader, slot.history).map_err(|error| {
-            format!("failed to load incoming sender history slot {index}: {error:?}")
-        })?;
-        let incoming_history_limbs = incoming_column
-            .get(COMMIT_WRAPPER_PUBLIC_PREFIX_COUNT_V1..)
-            .ok_or_else(|| format!("Offline Cash incoming sender history {index} is absent"))?
-            .iter()
-            .map(|value| *value.assigned())
-            .collect::<Vec<_>>();
-        bind_accumulator_limbs(&loader, &incoming_history, &incoming_history_limbs).map_err(
-            |error| format!("failed to bind incoming sender history slot {index}: {error:?}"),
-        )?;
+        .map(|column| {
+            column
+                .iter()
+                .map(|value| loader.assign_scalar(*value))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let incoming_current = verify_ordinary_proof_v1(
+        &loader,
+        succinct_vk,
+        &incoming_protocol,
+        &incoming_instances,
+        slot.proof,
+    )
+    .map_err(|error| format!("failed to verify incoming sender proof: {error:?}"))?;
+    let incoming_column = incoming_instances
+        .first()
+        .ok_or_else(|| "Offline Cash incoming sender public column is absent".to_owned())?;
+    let incoming_history = load_native_accumulator(&loader, slot.history)
+        .map_err(|error| format!("failed to load incoming sender history: {error:?}"))?;
+    let incoming_history_limbs = incoming_column
+        .get(COMMIT_WRAPPER_PUBLIC_PREFIX_COUNT_V1..)
+        .ok_or_else(|| "Offline Cash incoming sender history is absent".to_owned())?
+        .iter()
+        .map(|value| *value.assigned())
+        .collect::<Vec<_>>();
+    bind_accumulator_limbs(&loader, &incoming_history, &incoming_history_limbs)
+        .map_err(|error| format!("failed to bind incoming sender history: {error:?}"))?;
 
-        constrain_incoming_scalar_if_v1(
-            &loader,
-            &mut sha_jobs,
-            incoming_column,
-            &assigned_state,
-            assigned_slot,
-            witness.incoming_eq_protocol_digest,
-            witness.incoming_ep_protocol_digest,
-        )?;
-        constrain_incoming_common_binding_v1(
-            &loader,
-            &mut sha_jobs,
-            incoming_column,
-            assigned_slot.incoming_proof_binding_digest,
-            assigned_slot.active,
-        )?;
-        let incoming_complete = verify_fold(
-            &loader,
-            succinct_vk,
-            &[incoming_current, incoming_history],
-            slot.history_fold_proof,
-        )
-        .map_err(|error| {
-            format!("failed to fold incoming sender history slot {index}: {error:?}")
-        })?;
-        let merged_history = verify_fold(
-            &loader,
-            succinct_vk,
-            &[state_history.clone(), incoming_complete],
-            slot.merge_fold_proof,
-        )
-        .map_err(|error| {
-            format!("failed to merge incoming sender history slot {index}: {error:?}")
-        })?;
-        state_history = select_accumulator_v1(
-            &loader,
-            &merged_history,
-            &state_history,
-            assigned_slot.active,
-        )
-        .map_err(|error| {
-            format!("failed to select ReceiveFoldBatch history slot {index}: {error:?}")
-        })?;
-        let slot_end = loader.ecc_chip().equation_count();
-        if slot_end <= previous_incoming_end {
-            return Err(format!(
-                "Offline Cash incoming sender verifier slot {index} emitted no equations"
-            ));
-        }
-        incoming_equation_spans.push((
-            slot_end - previous_incoming_end,
-            assigned_slot.active,
-            state.receive_slots.get(index).is_some_and(Option::is_some),
-        ));
-        previous_incoming_end = slot_end;
-    }
-    let incoming_end = previous_incoming_end;
+    constrain_incoming_scalar_if_v1(
+        &loader,
+        &mut sha_jobs,
+        incoming_column,
+        &assigned_state,
+        assigned_credit,
+        receive,
+        witness.incoming_eq_protocol_digest,
+        witness.incoming_ep_protocol_digest,
+    )?;
+    constrain_incoming_common_binding_v1(
+        &loader,
+        &mut sha_jobs,
+        incoming_column,
+        assigned_credit.incoming_proof_binding_digest,
+        receive,
+    )?;
+    let incoming_complete = verify_fold(
+        &loader,
+        succinct_vk,
+        &[incoming_current, incoming_history],
+        slot.history_fold_proof,
+    )
+    .map_err(|error| format!("failed to fold incoming sender history: {error:?}"))?;
+    let merged_history = verify_fold(
+        &loader,
+        succinct_vk,
+        &[base_successor_history.clone(), incoming_complete],
+        slot.merge_fold_proof,
+    )
+    .map_err(|error| format!("failed to merge incoming sender history: {error:?}"))?;
+    let state_history =
+        select_accumulator_v1(&loader, &merged_history, &base_successor_history, receive)
+            .map_err(|error| format!("failed to select ReceiveFold history: {error:?}"))?;
+    let incoming_end = loader.ecc_chip().equation_count();
     if incoming_end <= parent_end {
         return Err("Offline Cash incoming sender verifier emitted no equations".to_owned());
     }
-    constrain_receive_batch_binding_v1(&loader, &mut sha_jobs, &assigned_state)?;
+    let incoming_equation_spans = vec![(
+        incoming_end - parent_end,
+        receive,
+        state.receive_credit.is_some(),
+    )];
 
     if witness.guard_protocol.num_instance != [GUARD_RECURSIVE_PUBLIC_INSTANCE_COUNT_V1] {
         return Err("Offline Cash GuardBundle proof has wrong public shape".to_owned());
@@ -1249,7 +1205,8 @@ fn constrain_incoming_scalar_if_v1<'chip, C>(
     jobs: &mut PastaSha256JobsV1<C::ScalarExt>,
     incoming: &[DeferredScalar<'chip, C>],
     state: &state_relation::OfflineCashAssignedStateRelationV1<C::ScalarExt>,
-    slot: &state_relation::OfflineCashAssignedReceiveFoldSlotV1<C::ScalarExt>,
+    credit: &state_relation::OfflineCashAssignedReceiveFoldCreditV1<C::ScalarExt>,
+    enabled: AssignedValue<C::ScalarExt>,
     incoming_eq_protocol_digest: DigestV1,
     incoming_ep_protocol_digest: DigestV1,
 ) -> Result<(), String>
@@ -1266,25 +1223,25 @@ where
         loader,
         *incoming[wrapper_public_instance::OPERATION].assigned(),
         send_tag,
-        slot.active,
+        enabled,
     );
     constrain_loader_equal_if_v1(
         loader,
         *incoming[wrapper_public_instance::AMOUNT].assigned(),
-        slot.amount,
-        slot.active,
+        credit.amount,
+        enabled,
     );
     constrain_loader_equal_if_v1(
         loader,
         *incoming[wrapper_public_instance::PROTOCOL_VERSION].assigned(),
         state.successor.protocol_version,
-        slot.active,
+        enabled,
     );
     constrain_loader_equal_if_v1(
         loader,
         *incoming[wrapper_public_instance::ASSET_SCALE].assigned(),
         state.successor.scale,
-        slot.active,
+        enabled,
     );
     for (offset, expected) in [
         (wrapper_public_instance::SUITE_LO, state.successor.suite_id),
@@ -1308,12 +1265,7 @@ where
         ),
     ] {
         for (index, expected) in (offset..offset + 2).zip(expected) {
-            constrain_loader_equal_if_v1(
-                loader,
-                *incoming[index].assigned(),
-                expected,
-                slot.active,
-            );
+            constrain_loader_equal_if_v1(loader, *incoming[index].assigned(), expected, enabled);
         }
     }
 
@@ -1330,12 +1282,7 @@ where
         let expected = crate::zk::offline_cash_v1_poseidon::digest_limbs::<C::ScalarExt>(digest);
         for (index, expected) in (offset..offset + 2).zip(expected) {
             let expected = loader.ctx_mut().main().load_constant(expected);
-            constrain_loader_equal_if_v1(
-                loader,
-                *incoming[index].assigned(),
-                expected,
-                slot.active,
-            );
+            constrain_loader_equal_if_v1(loader, *incoming[index].assigned(), expected, enabled);
         }
     }
 
@@ -1353,7 +1300,7 @@ where
         certificate_low_zero,
         certificate_high_zero,
     );
-    let active_authorization = gate.mul(loader.ctx_mut().main(), certificate_zero, slot.active);
+    let active_authorization = gate.mul(loader.ctx_mut().main(), certificate_zero, enabled);
     gate.assert_is_const(
         loader.ctx_mut().main(),
         &active_authorization,
@@ -1363,7 +1310,7 @@ where
     let mut message = constant_bytes(TERMINAL_SEND_OUTPUT_BINDING_DOMAIN_V1);
     message.extend(constant_bytes(&1_u16.to_le_bytes()));
     let mut ctx = loader.ctx_mut();
-    for value in slot.credit_id.into_iter().chain(slot.recipient_lane_id) {
+    for value in credit.credit_id.into_iter().chain(credit.recipient_lane_id) {
         let bits = PastaSha256BitV1::decompose(ctx.main(), &gate, value, 128);
         for byte_bits in bits.chunks_exact(8) {
             message.push(PastaSha256ByteV1::from_bits_le(
@@ -1391,7 +1338,7 @@ where
             }
         }
     }
-    let amount_bits = PastaSha256BitV1::decompose(ctx.main(), &gate, slot.amount, 128);
+    let amount_bits = PastaSha256BitV1::decompose(ctx.main(), &gate, credit.amount, 128);
     for byte_bits in amount_bits.chunks_exact(8) {
         message.push(PastaSha256ByteV1::from_bits_le(
             ctx.main(),
@@ -1405,7 +1352,7 @@ where
     for (actual, index) in output_binding.into_iter().zip(
         wrapper_public_instance::OUTPUT_BINDING_LO..wrapper_public_instance::OUTPUT_BINDING_LO + 2,
     ) {
-        constrain_loader_equal_if_v1(loader, actual, *incoming[index].assigned(), slot.active);
+        constrain_loader_equal_if_v1(loader, actual, *incoming[index].assigned(), enabled);
     }
     Ok(())
 }
@@ -1578,56 +1525,6 @@ where
     Ok(())
 }
 
-fn constrain_receive_batch_binding_v1<C>(
-    loader: &DeferredLoader<'_, C>,
-    jobs: &mut PastaSha256JobsV1<C::ScalarExt>,
-    state: &state_relation::OfflineCashAssignedStateRelationV1<C::ScalarExt>,
-) -> Result<(), String>
-where
-    C: CurveAffineExt,
-    C::Base: BigPrimeField,
-    C::ScalarExt: OfflineCashPoseidonFieldV1,
-{
-    let gate = halo2_base::gates::GateChip::default();
-    let mut ctx = loader.ctx_mut();
-    let mut message = constant_bytes(RECEIVE_BATCH_BINDING_DOMAIN_V1);
-    macro_rules! append_le_bytes {
-        ($value:expr, $bits:expr) => {{
-            let bits = PastaSha256BitV1::decompose(ctx.main(), &gate, $value, $bits);
-            for byte_bits in bits.chunks_exact(8) {
-                message.push(PastaSha256ByteV1::from_bits_le(
-                    ctx.main(),
-                    &gate,
-                    byte_bits,
-                ));
-            }
-        }};
-    }
-    append_le_bytes!(state.receive_active_count, 8);
-    for slot in &state.receive_slots {
-        append_le_bytes!(slot.amount, 128);
-        for digest in [
-            slot.credit_id,
-            slot.recipient_lane_id,
-            slot.incoming_proof_binding_digest,
-            slot.envelope_digest,
-        ] {
-            for limb in digest {
-                append_le_bytes!(limb, 128);
-            }
-        }
-    }
-    let digest = hash(ctx.main(), jobs, message)?;
-    let actual = digest_limbs_assigned(ctx.main(), &digest);
-    let count_is_zero = gate.is_zero(ctx.main(), state.receive_active_count);
-    let enabled = gate.not(ctx.main(), count_is_zero);
-    drop(ctx);
-    for (actual, expected) in actual.into_iter().zip(state.receive_batch_binding_digest) {
-        constrain_loader_equal_if_v1(loader, actual, expected, enabled);
-    }
-    Ok(())
-}
-
 fn constrain_state_guard_binding_v1<F: OfflineCashPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     state: &state_relation::OfflineCashAssignedStateRelationV1<F>,
@@ -1640,7 +1537,6 @@ fn constrain_state_guard_binding_v1<F: OfflineCashPoseidonFieldV1>(
         (state.amount, guard.amount),
         (state.successor.scale, guard.asset_scale),
         (state.successor.policy_epoch, guard.policy_epoch),
-        (state.receive_active_count, guard.receive_active_count),
         (state.predecessor.sequence, guard.predecessor_sequence),
         (state.successor.sequence, guard.successor_sequence),
         (
@@ -1697,10 +1593,6 @@ fn constrain_state_guard_binding_v1<F: OfflineCashPoseidonFieldV1>(
         (
             state.suite_upgrade_authorization_digest,
             guard.suite_upgrade_authorization_digest,
-        ),
-        (
-            state.receive_batch_binding_digest,
-            guard.receive_batch_binding_digest,
         ),
         (state.transition_effect_digest, guard.transition_effect),
     ];

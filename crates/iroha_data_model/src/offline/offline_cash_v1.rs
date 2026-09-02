@@ -281,7 +281,6 @@ const SUITE_COMMITMENT_DOMAIN: &[u8] = b"iroha:offline-cash:v1:suite-commitment"
 const HARDWARE_CREDENTIAL_ID_DOMAIN: &[u8] = b"iroha:offline-cash:v1:hardware-credential-id";
 const HARDWARE_CREDENTIAL_SIGNING_DOMAIN: &[u8] =
     b"iroha:offline-cash:v1:hardware-credential-signing";
-const REQUEST_MODE_DIGEST_DOMAIN: &[u8] = b"iroha:offline-cash:v1:request-mode";
 const ACCEPTANCE_INTENT_DIGEST_DOMAIN: &[u8] = b"iroha:offline-cash:v1:acceptance-intent";
 const ACCEPTANCE_INTENT_AUTHORIZATION_STATEMENT_DIGEST_DOMAIN: &[u8] =
     b"iroha:offline-cash:v1:acceptance-intent-authorization-statement";
@@ -887,86 +886,13 @@ pub struct OfflineCashHardwareCredentialV1 {
     pub governance_signature: OfflineCashDeviceSignatureV1,
 }
 
-/// Inclusive per-payment amount interval authorized by a reusable request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct OfflineCashAmountPolicyV1 {
-    /// Smallest positive payment amount accepted by this policy.
-    pub minimum_amount: u128,
-    /// Largest payment amount accepted by this policy.
-    pub maximum_amount: u128,
-}
-
-/// Exact amount payload for [`OfflineCashPaymentRequestModeV1::SingleExact`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct OfflineCashSingleExactRequestV1 {
-    /// Required payment amount.
-    pub amount: u128,
-}
-
-/// Total payload for [`OfflineCashPaymentRequestModeV1::PartialUntilTotal`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct OfflineCashPartialUntilTotalRequestV1 {
-    /// Aggregate invoice total; it is not a protocol history limit.
-    pub total_amount: u128,
-}
-
-/// Count and amount payload for [`OfflineCashPaymentRequestModeV1::BoundedMultiPayment`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct OfflineCashBoundedMultiPaymentRequestV1 {
-    /// Positive request-local payment count bound.
-    pub max_payments: u32,
-    /// Amount interval for each independently ticketed payment.
-    pub per_payment: OfflineCashAmountPolicyV1,
-}
-
-/// Per-payment payload for [`OfflineCashPaymentRequestModeV1::OpenReceive`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct OfflineCashOpenReceiveRequestV1 {
-    /// Amount interval for each independently ticketed payment.
-    pub per_payment: OfflineCashAmountPolicyV1,
-}
-
-/// Closed Offline Cash V1 receiver-request mode.
-///
-/// Every actual sender commitment consumes a distinct one-use
-/// [`OfflineCashAcceptanceTicketV1`]. Consequently `OpenReceive` permits an
-/// unbounded cumulative number of payments without making a ticket reusable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(
-    tag = "mode",
-    content = "policy",
-    rename_all = "snake_case",
-    deny_unknown_fields
-)]
-pub enum OfflineCashPaymentRequestModeV1 {
-    /// Exactly one payment of the stated amount.
-    SingleExact(OfflineCashSingleExactRequestV1),
-    /// Distinct tickets may authorize partial payments until this total is reached.
-    PartialUntilTotal(OfflineCashPartialUntilTotalRequestV1),
-    /// At most the stated number of tickets/payments under one request.
-    BoundedMultiPayment(OfflineCashBoundedMultiPaymentRequestV1),
-    /// Arbitrarily many independently ticketed payments under one request.
-    OpenReceive(OfflineCashOpenReceiveRequestV1),
-}
-
 /// Sender-selected one-use intent presented before receiver capacity is reserved.
 ///
 /// The random commitment is opened only inside the final wrapper, which proves
 /// that it names the exact private predecessor consumed by sender hardware. No
 /// sender key, credential, lane, epoch, counter, predecessor, or successor is
 /// exposed. Receiver hardware atomically records the intent while applying the
-/// request-mode ledger and issuing the corresponding exact-amount ticket.
+/// physical inbox reservation and issuing the corresponding exact-amount ticket.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
@@ -1015,8 +941,8 @@ pub struct OfflineCashAcceptanceIntentAuthorizationStatementV1 {
 
 /// Proof-bearing sender capability checked before receiver reservation.
 ///
-/// Receiver hardware must not consume request budget or guaranteed inbox
-/// capacity from the compact intent alone. The authenticated native verifier
+/// Receiver hardware must not persist an intent decision or reserve guaranteed
+/// inbox capacity from the compact intent alone. The authenticated native verifier
 /// first proves that qualified non-forking sender hardware reserved a one-use
 /// predecessor authorization for the exact request and amount. This envelope
 /// is exchanged before ticket issuance; the later payment embeds only the
@@ -1146,8 +1072,6 @@ pub struct OfflineCashAcceptanceTicketV1 {
     pub asset_incarnation: AxtAssetIncarnationV1,
     /// Authoritative asset scale.
     pub scale: u32,
-    /// Request mode repeated verbatim to prevent mode substitution.
-    pub request_mode: OfflineCashPaymentRequestModeV1,
     /// Digest of the exact sender intent atomically recorded at issuance.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub intent_digest: [u8; 32],
@@ -1270,8 +1194,8 @@ pub enum OfflineCashOperationKindV1 {
     MintFold,
     /// Produce one receiver-bound payment credit.
     SendSplit,
-    /// Fold a padded fixed-shape batch of one through sixteen credits.
-    ReceiveFoldBatch,
+    /// Fold exactly one receiver-bound credit into the aggregate balance.
+    ReceiveFold,
     /// Produce one online redemption voucher.
     RedeemSplit,
     /// Rotate verifier suites through a recursively verified bridge.
@@ -1545,8 +1469,8 @@ pub struct OfflineCashPaymentRequestV1 {
     pub liability_pool_id: [u8; 32],
     /// Recipient account identity.
     pub recipient: AccountId,
-    /// Reusable request policy; every payment still requires a distinct ticket.
-    pub request_mode: OfflineCashPaymentRequestModeV1,
+    /// Exact positive amount authorized by every payment made against this request.
+    pub amount: u128,
     /// Compact qualified-hardware credential authorizing this request and its tickets.
     pub hardware_credential: OfflineCashHardwareCredentialV1,
     /// Unique recipient nonce.
@@ -1916,7 +1840,7 @@ struct PaymentRequestSigningPreimageV1 {
     scale: u32,
     liability_pool_id: [u8; 32],
     recipient: AccountId,
-    request_mode: OfflineCashPaymentRequestModeV1,
+    amount: u128,
     hardware_credential_id: [u8; 32],
     request_id: [u8; 32],
     issued_at_ms: u64,
@@ -2039,7 +1963,6 @@ struct AcceptanceTicketSigningPreimageV1 {
     asset: AssetDefinitionId,
     asset_incarnation: AxtAssetIncarnationV1,
     scale: u32,
-    request_mode: OfflineCashPaymentRequestModeV1,
     intent_digest: [u8; 32],
     exact_amount: u128,
     reserved_inbox_bytes: u32,
@@ -2188,7 +2111,7 @@ const fn offline_cash_operation_kind_tag_v1(operation: OfflineCashOperationKindV
         OfflineCashOperationKindV1::Bootstrap => 0,
         OfflineCashOperationKindV1::MintFold => 1,
         OfflineCashOperationKindV1::SendSplit => 2,
-        OfflineCashOperationKindV1::ReceiveFoldBatch => 3,
+        OfflineCashOperationKindV1::ReceiveFold => 3,
         OfflineCashOperationKindV1::RedeemSplit => 4,
         OfflineCashOperationKindV1::SuiteUpgrade => 5,
         OfflineCashOperationKindV1::Rotate => 6,
@@ -3370,78 +3293,11 @@ impl OfflineCashHardwareCredentialV1 {
     }
 }
 
-impl OfflineCashAmountPolicyV1 {
-    /// Validate a non-empty inclusive amount interval.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when zero or an inverted interval is present.
-    pub fn validate(self) -> Result<(), OfflineCashValidationErrorV1> {
-        if self.minimum_amount == 0 || self.minimum_amount > self.maximum_amount {
-            return Err(invalid("offline_cash.amount_policy"));
-        }
-        Ok(())
-    }
-
-    /// Return whether this interval authorizes `amount`.
-    #[must_use]
-    pub const fn contains(self, amount: u128) -> bool {
-        amount >= self.minimum_amount && amount <= self.maximum_amount
-    }
-}
-
-impl OfflineCashPaymentRequestModeV1 {
-    /// Validate the mode's positive amount/count policy.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for zero amounts/counts or malformed per-payment ranges.
-    pub fn validate(self) -> Result<(), OfflineCashValidationErrorV1> {
-        match self {
-            Self::SingleExact(policy) if policy.amount > 0 => Ok(()),
-            Self::PartialUntilTotal(policy) if policy.total_amount > 0 => Ok(()),
-            Self::BoundedMultiPayment(policy) if policy.max_payments > 0 => {
-                policy.per_payment.validate()
-            }
-            Self::OpenReceive(policy) => policy.per_payment.validate(),
-            _ => Err(invalid("offline_cash.request_mode")),
-        }
-    }
-
-    /// Return whether this request mode permits one exact ticket amount.
-    ///
-    /// This is the stateless per-ticket predicate only. Receiver hardware must
-    /// additionally apply its atomic private request ledger so a collection of
-    /// unresolved and consumed tickets cannot exceed a total or count bound.
-    #[must_use]
-    pub const fn accepts_exact_amount(self, amount: u128) -> bool {
-        if amount == 0 {
-            return false;
-        }
-        match self {
-            Self::SingleExact(request) => amount == request.amount,
-            Self::PartialUntilTotal(request) => amount <= request.total_amount,
-            Self::BoundedMultiPayment(request) => request.per_payment.contains(amount),
-            Self::OpenReceive(request) => request.per_payment.contains(amount),
-        }
-    }
-
-    /// Return the canonical digest repeated by tickets and proofs.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the mode is invalid or cannot be encoded.
-    pub fn canonical_digest(self) -> Result<[u8; 32], OfflineCashValidationErrorV1> {
-        self.validate()?;
-        digest_encoded(REQUEST_MODE_DIGEST_DOMAIN, &self)
-    }
-}
-
 impl OfflineCashAcceptanceIntentV1 {
     /// Validate this one-use sender intent against the exact signed request.
     ///
-    /// This is a shape check. Receiver hardware must atomically reserve the
-    /// amount/count in its private request-mode ledger when it issues a ticket.
+    /// This is a shape check. Receiver hardware must atomically reserve physical
+    /// inbox capacity when it issues a ticket.
     ///
     /// # Errors
     ///
@@ -3456,7 +3312,7 @@ impl OfflineCashAcceptanceIntentV1 {
             || self.request_digest != request.canonical_digest()?
             || self.intent_id == [0; 32]
             || self.sender_one_time_commitment == [0; 32]
-            || !request.request_mode.accepts_exact_amount(self.exact_amount)
+            || self.exact_amount != request.amount
         {
             return Err(invalid("offline_cash.acceptance_intent.binding"));
         }
@@ -3606,7 +3462,7 @@ impl OfflineCashAcceptanceIntentAuthorizationV1 {
     /// This is deliberately a shape and cross-field check only. Receiver
     /// hardware must authenticate the release and artifact manifest, then
     /// cryptographically verify both proof parities before it records the
-    /// intent or reserves request budget and inbox capacity.
+    /// intent or reserves inbox capacity for it.
     ///
     /// # Errors
     ///
@@ -3874,7 +3730,6 @@ impl OfflineCashAcceptanceTicketV1 {
                 asset: self.asset.clone(),
                 asset_incarnation: self.asset_incarnation,
                 scale: self.scale,
-                request_mode: self.request_mode,
                 intent_digest: self.intent_digest,
                 exact_amount: self.exact_amount,
                 reserved_inbox_bytes: self.reserved_inbox_bytes,
@@ -3895,7 +3750,7 @@ impl OfflineCashAcceptanceTicketV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error for any request, mode, amount, capacity, expiry,
+    /// Returns an error for any request, amount, capacity, expiry,
     /// credential, or hardware-signature mismatch.
     pub fn validate_shape_against(
         &self,
@@ -3915,7 +3770,6 @@ impl OfflineCashAcceptanceTicketV1 {
             || self.asset != request.asset
             || self.asset_incarnation != request.asset_incarnation
             || self.scale != request.scale
-            || self.request_mode != request.request_mode
             || self.hardware_profile_id != request.hardware_credential.hardware_profile_id
             || self.policy_epoch != request.hardware_credential.policy_epoch
             || self.issued_at_ms < request.issued_at_ms
@@ -3923,7 +3777,7 @@ impl OfflineCashAcceptanceTicketV1 {
             || self.issued_at_ms >= self.expires_at_ms
             || self.reserved_inbox_bytes
                 < OFFLINE_CASH_ACCEPTANCE_TICKET_MIN_RESERVED_INBOX_BYTES_V1
-            || !request.request_mode.accepts_exact_amount(self.exact_amount)
+            || self.exact_amount != request.amount
         {
             return Err(invalid("offline_cash.acceptance_ticket.request_binding"));
         }
@@ -4440,7 +4294,7 @@ impl OfflineCashAggregateStateCommitmentV1 {
 /// Encode the exact canonical recipient-request bytes authorized by hardware.
 ///
 /// This constructor is the single cross-crate signing contract. The request
-/// binds the reusable mode and compact hardware credential; the one-use
+/// binds one exact positive amount and compact hardware credential; the one-use
 /// capacity reservation is signed separately as an acceptance ticket.
 ///
 /// # Errors
@@ -4456,7 +4310,7 @@ pub fn offline_cash_payment_request_signing_bytes_v1(
     scale: u32,
     liability_pool_id: [u8; 32],
     recipient: &AccountId,
-    request_mode: OfflineCashPaymentRequestModeV1,
+    amount: u128,
     hardware_credential_id: [u8; 32],
     request_id: [u8; 32],
     issued_at_ms: u64,
@@ -4473,7 +4327,7 @@ pub fn offline_cash_payment_request_signing_bytes_v1(
             scale,
             liability_pool_id,
             recipient: recipient.clone(),
-            request_mode,
+            amount,
             hardware_credential_id,
             request_id,
             issued_at_ms,
@@ -4498,7 +4352,7 @@ impl OfflineCashPaymentRequestV1 {
             self.scale,
             self.liability_pool_id,
             &self.recipient,
-            self.request_mode,
+            self.amount,
             self.hardware_credential.credential_id,
             self.request_id,
             self.issued_at_ms,
@@ -4595,7 +4449,9 @@ impl OfflineCashPaymentRequestV1 {
         self.asset_incarnation
             .validate()
             .map_err(|_| invalid("offline_cash.request.asset_incarnation"))?;
-        self.request_mode.validate()?;
+        if self.amount == 0 {
+            return Err(invalid("offline_cash.request.amount"));
+        }
         self.hardware_credential.validate_shape()?;
         if self.hardware_credential.network_id != self.network_id
             || self.issued_at_ms < self.hardware_credential.issued_at_ms
@@ -6218,55 +6074,17 @@ mod tests {
     }
 
     #[test]
-    fn all_request_modes_are_canonical_positive_policies() {
-        let interval = OfflineCashAmountPolicyV1 {
-            minimum_amount: 1,
-            maximum_amount: 100,
-        };
-        for mode in [
-            OfflineCashPaymentRequestModeV1::SingleExact(OfflineCashSingleExactRequestV1 {
-                amount: 10,
-            }),
-            OfflineCashPaymentRequestModeV1::PartialUntilTotal(
-                OfflineCashPartialUntilTotalRequestV1 { total_amount: 100 },
-            ),
-            OfflineCashPaymentRequestModeV1::BoundedMultiPayment(
-                OfflineCashBoundedMultiPaymentRequestV1 {
-                    max_payments: 3,
-                    per_payment: interval,
-                },
-            ),
-            OfflineCashPaymentRequestModeV1::OpenReceive(OfflineCashOpenReceiveRequestV1 {
-                per_payment: interval,
-            }),
-        ] {
-            mode.validate().expect("valid mode");
-            assert_ne!(mode.canonical_digest().expect("mode digest"), [0; 32]);
-        }
-        assert!(
-            OfflineCashPaymentRequestModeV1::SingleExact(OfflineCashSingleExactRequestV1 {
-                amount: 10
-            })
-            .accepts_exact_amount(10)
-        );
-        assert!(
-            !OfflineCashPaymentRequestModeV1::SingleExact(OfflineCashSingleExactRequestV1 {
-                amount: 10
-            })
-            .accepts_exact_amount(9)
-        );
-        assert!(
-            OfflineCashPaymentRequestModeV1::PartialUntilTotal(
-                OfflineCashPartialUntilTotalRequestV1 { total_amount: 100 }
-            )
-            .accepts_exact_amount(100)
-        );
-        assert!(
-            !OfflineCashPaymentRequestModeV1::PartialUntilTotal(
-                OfflineCashPartialUntilTotalRequestV1 { total_amount: 100 }
-            )
-            .accepts_exact_amount(101)
-        );
+    fn request_amount_is_positive_and_exactly_bound() {
+        let request = request();
+        assert_eq!(request.amount, 12_345);
+
+        let mut zero = request.clone();
+        zero.amount = 0;
+        assert!(zero.validate_shape().is_err());
+
+        let mut wrong_intent = acceptance_intent(&request);
+        wrong_intent.exact_amount -= 1;
+        assert!(wrong_intent.validate_shape_against(&request).is_err());
     }
 
     #[test]
@@ -6402,9 +6220,7 @@ mod tests {
             asset_incarnation,
             scale: 4,
             recipient: account(0xA5),
-            request_mode: OfflineCashPaymentRequestModeV1::SingleExact(
-                OfflineCashSingleExactRequestV1 { amount: 12_345 },
-            ),
+            amount: 12_345,
             hardware_credential: hardware_credential(),
             request_id: [5; 32],
             issued_at_ms: 1_000,
@@ -6472,7 +6288,6 @@ mod tests {
             asset: request.asset.clone(),
             asset_incarnation: request.asset_incarnation,
             scale: request.scale,
-            request_mode: request.request_mode,
             intent_digest,
             exact_amount: intent.exact_amount,
             reserved_inbox_bytes: OFFLINE_CASH_ACCEPTANCE_TICKET_MIN_RESERVED_INBOX_BYTES_V1,
@@ -7386,20 +7201,14 @@ mod tests {
     }
 
     #[test]
-    fn request_credential_and_mode_are_signed_and_payment_has_no_state_links() {
+    fn request_credential_and_amount_are_signed_and_payment_has_no_state_links() {
         let mut lane_request = request();
         lane_request.hardware_credential.lane_commitment = [0x55; 32];
         assert!(lane_request.validate_shape().is_err());
 
-        let mut policy_request = request();
-        policy_request.request_mode =
-            OfflineCashPaymentRequestModeV1::OpenReceive(OfflineCashOpenReceiveRequestV1 {
-                per_payment: OfflineCashAmountPolicyV1 {
-                    minimum_amount: 1,
-                    maximum_amount: 20_000,
-                },
-            });
-        assert!(policy_request.validate_shape().is_err());
+        let mut amount_request = request();
+        amount_request.amount += 1;
+        assert!(amount_request.validate_shape().is_err());
 
         let json = norito::json::to_string(&payment(&request())).expect("payment JSON");
         for private_name in [
@@ -8186,7 +7995,7 @@ mod tests {
         })
     }
 
-    fn canonical_fixture_v2() -> norito::json::Value {
+    fn canonical_fixture_v1() -> norito::json::Value {
         const TYPED_ENVELOPE_KAT_HEX: &str = concat!(
             "4e525430000073550b5069c0fdb105ebe7e810b71b3f001f01000000000000c7",
             "59e8c2f2209cf402020100208520f0098930a754748b7ddcb43ef75a0dbf3a0d",
@@ -8380,7 +8189,7 @@ mod tests {
             );
 
         norito::json!({
-            "fixture_version": 2,
+            "fixture_version": 1,
             "protocol": "OfflineCashV1",
             "text_prefix": OFFLINE_CASH_TEXT_PREFIX_V1,
             "canonical_source": "Rust iroha_data_model OfflineCashV1 Norito derivation plus the native encrypted-credit KAT; every SDK consumes identical bytes",
@@ -8440,8 +8249,8 @@ mod tests {
     }
 
     #[test]
-    fn canonical_fixture_v2_is_generated_by_and_decodes_with_the_native_model() {
-        let expected = canonical_fixture_v2();
+    fn canonical_fixture_v1_is_generated_by_and_decodes_with_the_native_model() {
+        let expected = canonical_fixture_v1();
         let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/offline/offline_cash_v1.json");
         if std::env::var_os("UPDATE_OFFLINE_CASH_V1_FIXTURE").is_some() {

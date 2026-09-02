@@ -52,7 +52,6 @@ public static class OfflineCashV1
     private const string AggregateSchema = Model + "OfflineCashAggregateStateCommitmentV1";
     private const string HardwareProfileSchema = Model + "OfflineCashHardwareProfileV1";
     private const string HardwareCredentialSchema = Model + "OfflineCashHardwareCredentialV1";
-    private const string RequestModeSchema = Model + "OfflineCashPaymentRequestModeV1";
     private const string RequestSchema = Model + "OfflineCashPaymentRequestV1";
     private const string IntentSchema = Model + "OfflineCashAcceptanceIntentV1";
     private const string IntentAuthorizationSchema = Model + "OfflineCashAcceptanceIntentAuthorizationV1";
@@ -151,15 +150,6 @@ public static class OfflineCashV1
     public static OfflineCashHardwareCredentialV1 DecodeHardwareCredential(ReadOnlySpan<byte> archive) =>
         DecodeExact(archive, 768, HardwareCredentialSchema,
             bytes => DecodeHardwareCredentialPayload(bytes), EncodeHardwareCredential);
-
-    public static byte[] EncodePaymentRequestMode(OfflineCashPaymentRequestModeV1 value)
-    {
-        ValidateRequestMode(value);
-        return Frame(RequestModeSchema, EncodeRequestModePayload(value), 16);
-    }
-
-    public static OfflineCashPaymentRequestModeV1 DecodePaymentRequestMode(ReadOnlySpan<byte> archive) =>
-        DecodeExact(archive, 256, RequestModeSchema, DecodeRequestModePayload, EncodePaymentRequestMode);
 
     public static byte[] EncodePaymentRequest(OfflineCashPaymentRequestV1 value)
     {
@@ -669,35 +659,9 @@ public static class OfflineCashV1
             _ = Fixed(field);
     }
 
-    private static void ValidateRequestMode(OfflineCashPaymentRequestModeV1 value)
-    {
-        ArgumentNullException.ThrowIfNull(value);
-        switch (value)
-        {
-            case OfflineCashSingleExactRequestV1 single when single.Amount > 0:
-            case OfflineCashPartialUntilTotalRequestV1 partialRequest when partialRequest.TotalAmount > 0:
-                return;
-            case OfflineCashBoundedMultiPaymentRequestV1 bounded when bounded.MaxPayments > 0:
-                ValidateAmountPolicy(bounded.PerPayment);
-                return;
-            case OfflineCashOpenReceiveRequestV1 open:
-                ValidateAmountPolicy(open.PerPayment);
-                return;
-            default:
-                throw new ArgumentException("Offline Cash V1 request mode is invalid.", nameof(value));
-        }
-    }
-
-    private static void ValidateAmountPolicy(OfflineCashAmountPolicyV1 value)
-    {
-        if (value.MinimumAmount == 0 || value.MaximumAmount < value.MinimumAmount)
-            throw new ArgumentException("Offline Cash V1 amount policy is invalid.");
-    }
-
     private static void ValidateRequest(OfflineCashPaymentRequestV1 value)
     {
-        ValidateHeader(value.Version, value.NetworkId, value.Scale);
-        ValidateRequestMode(value.RequestMode);
+        ValidateHeader(value.Version, value.NetworkId, value.Scale, value.Amount);
         ValidateHardwareCredential(value.HardwareCredential);
         _ = Fixed(value.ReleaseId);
         _ = Fixed(value.LiabilityPoolId);
@@ -722,8 +686,8 @@ public static class OfflineCashV1
         _ = Fixed(value.IntentId);
         _ = Fixed(value.SenderOneTimeCommitment);
         RequireEqual(value.RequestDigest.Span, PaymentRequestDigestUnchecked(request), "intent request digest");
-        if (!request.RequestMode.Accepts(value.ExactAmount))
-            throw new ArgumentException("Offline Cash V1 intent amount is outside the request policy.");
+        if (value.ExactAmount != request.Amount)
+            throw new ArgumentException("Offline Cash V1 intent amount differs from the request amount.");
     }
 
     private static void ValidateIntentAuthorization(
@@ -803,13 +767,12 @@ public static class OfflineCashV1
     {
         ValidateIntent(intent, request);
         ValidateHeader(value.Version, value.NetworkId, value.Scale, value.ExactAmount);
-        ValidateRequestMode(value.RequestMode);
         foreach (var field in new[] { value.RequestId, value.RequestDigest, value.AcceptanceTicketId,
                      value.IntentDigest, value.HardwareProfileId })
             _ = Fixed(field);
         if (value.NetworkId != request.NetworkId || !value.Asset.Equals(request.Asset)
             || !value.AssetIncarnation.Equals(request.AssetIncarnation) || value.Scale != request.Scale
-            || !ModesEqual(value.RequestMode, request.RequestMode) || value.ExactAmount != intent.ExactAmount
+            || value.ExactAmount != request.Amount || value.ExactAmount != intent.ExactAmount
             || value.ReservedInboxBytes < AcceptanceTicketMinimumReservedInboxBytes
             || value.PolicyEpoch != request.HardwareCredential.PolicyEpoch
             || value.IssuedAtMilliseconds < request.IssuedAtMilliseconds
@@ -1234,22 +1197,10 @@ public static class OfflineCashV1
         Fixed(value.DeviceKeyReference), U64(value.IssuedAtMilliseconds), U64(value.ExpiresAtMilliseconds),
         value.GovernanceSignature.RawBytes());
 
-    private static byte[] EncodeRequestModePayload(OfflineCashPaymentRequestModeV1 value) => value switch
-    {
-        OfflineCashSingleExactRequestV1 single => EnumPayload(0, Fields(U128(single.Amount))),
-        OfflineCashPartialUntilTotalRequestV1 partial => EnumPayload(1, Fields(U128(partial.TotalAmount))),
-        OfflineCashBoundedMultiPaymentRequestV1 bounded => EnumPayload(2,
-            Fields(U32(bounded.MaxPayments), U128(bounded.PerPayment.MinimumAmount), U128(bounded.PerPayment.MaximumAmount))),
-        OfflineCashOpenReceiveRequestV1 open => EnumPayload(3,
-            Fields(U128(open.PerPayment.MinimumAmount), U128(open.PerPayment.MaximumAmount))),
-        _ => throw new ArgumentException("Unknown Offline Cash V1 request mode.", nameof(value)),
-    };
-
     private static byte[] EncodeRequestPayload(OfflineCashPaymentRequestV1 value) => Fields(
         U16(value.Version), Fixed(value.ReleaseId), value.NetworkId.ToBytes(), value.Asset.CanonicalPayload(),
         EncodeAssetIncarnationPayload(value.AssetIncarnation), U32(value.Scale), Fixed(value.LiabilityPoolId),
-        value.Recipient.CanonicalPayload(),
-        EncodeRequestModePayload(value.RequestMode), EncodeHardwareCredentialPayload(value.HardwareCredential),
+        value.Recipient.CanonicalPayload(), U128(value.Amount), EncodeHardwareCredentialPayload(value.HardwareCredential),
         Fixed(value.RequestId), U64(value.IssuedAtMilliseconds), U64(value.ExpiresAtMilliseconds), value.Signature.RawBytes());
 
     private static byte[] EncodeIntentPayload(OfflineCashAcceptanceIntentV1 value) => Fields(
@@ -1281,7 +1232,7 @@ public static class OfflineCashV1
         U16(value.Version), value.NetworkId.ToBytes(), Fixed(value.RequestId), Fixed(value.RequestDigest),
         Fixed(value.AcceptanceTicketId), value.Asset.CanonicalPayload(),
         EncodeAssetIncarnationPayload(value.AssetIncarnation), U32(value.Scale),
-        EncodeRequestModePayload(value.RequestMode), Fixed(value.IntentDigest), U128(value.ExactAmount),
+        Fixed(value.IntentDigest), U128(value.ExactAmount),
         U32(value.ReservedInboxBytes), value.RecipientOneTimeKey.Bytes(), Fixed(value.HardwareProfileId),
         U64(value.PolicyEpoch), U64(value.IssuedAtMilliseconds), U64(value.ExpiresAtMilliseconds), value.Signature.RawBytes());
 
@@ -1453,30 +1404,6 @@ public static class OfflineCashV1
         return value;
     }
 
-    private static OfflineCashPaymentRequestModeV1 DecodeRequestModePayload(byte[] payload) =>
-        DecodeRequestModePayload((ReadOnlySpan<byte>)payload);
-
-    private static OfflineCashPaymentRequestModeV1 DecodeRequestModePayload(ReadOnlySpan<byte> payload)
-    {
-        var reader = Reader(payload, "request mode");
-        var tag = reader.ReadUInt32LittleEndian("tag");
-        var nested = Reader(reader.ReadField("policy"), "request mode policy");
-        OfflineCashPaymentRequestModeV1 value = tag switch
-        {
-            0 => new OfflineCashSingleExactRequestV1(ReadU128(ref nested, "amount")),
-            1 => new OfflineCashPartialUntilTotalRequestV1(ReadU128(ref nested, "totalAmount")),
-            2 => new OfflineCashBoundedMultiPaymentRequestV1(
-                ReadU32(ref nested, "maxPayments"),
-                new OfflineCashAmountPolicyV1(ReadU128(ref nested, "minimumAmount"), ReadU128(ref nested, "maximumAmount"))),
-            3 => new OfflineCashOpenReceiveRequestV1(
-                new OfflineCashAmountPolicyV1(ReadU128(ref nested, "minimumAmount"), ReadU128(ref nested, "maximumAmount"))),
-            _ => throw new ArgumentException("Offline Cash V1 request mode tag is invalid."),
-        };
-        nested.RequireEnd();
-        reader.RequireEnd();
-        return value;
-    }
-
     private static OfflineCashPaymentRequestV1 DecodeRequestPayload(byte[] payload)
     {
         var reader = Reader(payload, "payment request");
@@ -1484,7 +1411,7 @@ public static class OfflineCashV1
             ReadU16(ref reader, "version"), ReadFixed32(ref reader, "releaseId"), ReadNetwork(ref reader, "networkId"),
             ReadAsset(ref reader, "asset"), ReadIncarnation(ref reader, "assetIncarnation"), ReadU32(ref reader, "scale"),
             ReadFixed32(ref reader, "liabilityPoolId"), ReadAccount(ref reader, "recipient"),
-            DecodeRequestModePayload(reader.ReadField("requestMode")),
+            ReadU128(ref reader, "amount"),
             DecodeHardwareCredentialPayload(reader.ReadField("hardwareCredential")),
             ReadFixed32(ref reader, "requestId"), ReadU64(ref reader, "issuedAt"), ReadU64(ref reader, "expiresAt"),
             ReadSignature(ref reader, "signature"));
@@ -1561,7 +1488,7 @@ public static class OfflineCashV1
             ReadU16(ref reader, "version"), ReadNetwork(ref reader, "networkId"), ReadFixed32(ref reader, "requestId"),
             ReadFixed32(ref reader, "requestDigest"), ReadFixed32(ref reader, "acceptanceTicketId"),
             ReadAsset(ref reader, "asset"), ReadIncarnation(ref reader, "assetIncarnation"), ReadU32(ref reader, "scale"),
-            DecodeRequestModePayload(reader.ReadField("requestMode")), ReadFixed32(ref reader, "intentDigest"),
+            ReadFixed32(ref reader, "intentDigest"),
             ReadU128(ref reader, "exactAmount"), ReadU32(ref reader, "reservedInboxBytes"),
             new OfflineCashX25519PublicKeyV1(ReadRaw32(ref reader, "recipientOneTimeKey")),
             ReadFixed32(ref reader, "hardwareProfileId"), ReadU64(ref reader, "policyEpoch"),
@@ -2171,8 +2098,6 @@ public static class OfflineCashV1
             MintStatementDigestDomain,
             Frame(MintCreditStatementSchema, EncodeMintStatementPayload(value), 16));
 
-    private static bool ModesEqual(OfflineCashPaymentRequestModeV1 left, OfflineCashPaymentRequestModeV1 right) =>
-        EncodeRequestModePayload(left).AsSpan().SequenceEqual(EncodeRequestModePayload(right));
     private static bool IsZero32(ReadOnlyMemory<byte> value) =>
         value.Length == 32 && value.Span.IndexOfAnyExcept((byte)0) < 0;
     private static bool IsNonzero32(ReadOnlyMemory<byte> value) =>

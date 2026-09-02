@@ -4,7 +4,6 @@
 package org.hyperledger.iroha.sdk.offline
 
 import java.math.BigInteger
-import kotlin.math.min
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -22,7 +21,7 @@ class OfflineCashWalletV1Test {
                 OfflineCashV1TestSupport.qualification.releaseId(),
                 capabilities,
             )
-            val provider = BatchProvider(0, partial)
+            val provider = FoldProvider(0, partial)
             assertFailsWith<IllegalArgumentException>("accepted provider missing $missing") {
                 OfflineCashWalletV1.open(provider)
             }
@@ -31,40 +30,41 @@ class OfflineCashWalletV1Test {
     }
 
     @Test
-    fun `stable snapshot drain folds more than sixteen credits in fixed batches`() {
-        val provider = BatchProvider(33)
+    fun `stable snapshot drain folds every pending credit`() {
+        val provider = FoldProvider(33)
         val wallet = OfflineCashWalletV1.open(provider)
 
         assertEquals(BigInteger.valueOf(33), wallet.drainPendingCredits())
-        assertEquals(listOf(16, 16, 1, 0), provider.foldResults)
-        assertTrue(provider.maximumArguments.all { it == 16 })
+        assertEquals(33, provider.foldResults.count { it })
+        assertEquals(false, provider.foldResults.last())
         assertEquals(1, provider.watermarkCalls)
-        assertEquals(BigInteger.valueOf(3), wallet.journalRevision())
-        assertEquals(BigInteger.valueOf(3), wallet.aggregateState().sequence)
+        assertEquals(BigInteger.valueOf(33), wallet.journalRevision())
+        assertEquals(BigInteger.valueOf(33), wallet.aggregateState().sequence)
     }
 
     @Test
     fun `rotation synchronously drains the complete stable snapshot without relocking`() {
-        val provider = BatchProvider(17)
+        val provider = FoldProvider(17)
         val wallet = OfflineCashWalletV1.open(provider)
 
         val rotated = wallet.rotateHardwareEpoch()
 
-        assertEquals(listOf(16, 1, 0), provider.foldResults)
+        assertEquals(17, provider.foldResults.count { it })
+        assertEquals(false, provider.foldResults.last())
         assertEquals(0, provider.remainingCredits)
         assertTrue(provider.rotationObservedDrainedInbox)
-        assertEquals(BigInteger.valueOf(3), rotated.sequence)
-        assertEquals(BigInteger.valueOf(3), wallet.journalRevision())
+        assertEquals(BigInteger.valueOf(18), rotated.sequence)
+        assertEquals(BigInteger.valueOf(18), wallet.journalRevision())
     }
 
     @Test
     fun `drain rejects a non progressing native fold result`() {
-        val provider = BatchProvider(1, preserveStateCommitment = true)
+        val provider = FoldProvider(1, preserveStateCommitment = true)
         val wallet = OfflineCashWalletV1.open(provider)
         assertFailsWith<IllegalArgumentException> { wallet.drainPendingCredits() }
     }
 
-    private class BatchProvider(
+    private class FoldProvider(
         pending: Int,
         private var activeQualification: OfflineCashHardwareQualificationV1 = OfflineCashV1TestSupport.qualification,
         private val preserveStateCommitment: Boolean = false,
@@ -73,8 +73,7 @@ class OfflineCashWalletV1Test {
         var recoveryCalls = 0
         var watermarkCalls = 0
         var rotationObservedDrainedInbox = false
-        val foldResults = mutableListOf<Int>()
-        val maximumArguments = mutableListOf<Int>()
+        val foldResults = mutableListOf<Boolean>()
         private var revision = BigInteger.ZERO
         private var sequence = 0L
         private var stateTag = 0x51
@@ -95,7 +94,7 @@ class OfflineCashWalletV1Test {
 
         override fun createPaymentRequest(
             recipientAccount: ByteArray,
-            requestMode: ByteArray,
+            amount: BigInteger,
             validityWindowMillis: Long,
         ): ByteArray = unsupported()
 
@@ -126,20 +125,16 @@ class OfflineCashWalletV1Test {
 
         override fun journalRevision(): BigInteger = revision
 
-        override fun foldPendingCreditBatch(
-            inboxSequenceInclusive: BigInteger,
-            maximumCredits: Int,
-        ): OfflineCashHardwareFoldBatchV1 {
+        override fun foldPendingCredit(inboxSequenceInclusive: BigInteger): ByteArray? {
             assertTrue(inboxSequenceInclusive.signum() >= 0)
-            maximumArguments += maximumCredits
-            val folded = min(remainingCredits, maximumCredits)
+            val folded = remainingCredits > 0
             foldResults += folded
-            if (folded == 0) return OfflineCashHardwareFoldBatchV1(0, null)
-            remainingCredits -= folded
+            if (!folded) return null
+            remainingCredits -= 1
             revision += BigInteger.ONE
             sequence += 1
             if (!preserveStateCommitment) stateTag += 1
-            return OfflineCashHardwareFoldBatchV1(folded, stateBytes())
+            return stateBytes()
         }
 
         override fun commitPayment(

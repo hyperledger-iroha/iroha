@@ -35,9 +35,52 @@ public final class OfflineCashDeviceLifecycleBridgeV1Tests {
 
   @Test
   public void javaInventoryExactlyMirrorsTheKotlinContract() {
-    assertEquals(16, OfflineCashDeviceLifecycleBridgeV1.Operation.values().length);
+    assertEquals(24, OfflineCashDeviceLifecycleBridgeV1.Operation.values().length);
     assertEquals(16, OfflineCashDeviceLifecycleBridgeV1.Capability.values().length);
-    assertEquals(10, OfflineCashDeviceLifecycleBridgeV1.Status.values().length);
+    assertEquals(11, OfflineCashDeviceLifecycleBridgeV1.Status.values().length);
+    assertArrayEquals(
+        new String[] {
+          "READ_ACTIVE_HARDWARE_CREDENTIAL",
+          "PREPARE_ACCEPTANCE_INTENT_AUTHORIZATION",
+          "RECOVER_ACCEPTANCE_INTENT_AUTHORIZATION",
+          "VERIFY_AUTHORIZATION_RESERVE_INBOX_AND_ISSUE_ACCEPTANCE_TICKET",
+          "RECOVER_ACCEPTANCE_TICKET",
+          "STAGE_INBOUND_PAYMENT",
+          "RECOVER_STAGED_INBOUND_PAYMENT",
+          "RECOVER_INBOUND_INBOX_PAGE",
+          "PREPARE_EXACT_NEXT_TRANSITION",
+          "RECOVER_PREPARED_TRANSITION",
+          "ABANDON_UNCOMMITTED_PREPARED_TRANSITION",
+          "COMMIT_VERIFIED_CANDIDATE",
+          "RECOVER_TERMINAL_COMMIT_CERTIFICATE",
+          "INSTALL_FINAL_COMMIT_WRAPPER",
+          "RECOVER_INSTALLED_ENVELOPE_OR_STATE_PROOF",
+          "SIGN_RECEIVE_ACKNOWLEDGEMENT",
+          "RELEASE_OUTBOX_ENTRY",
+          "READ_TRUSTED_TIME_OR_LEASE",
+          "PREPARE_MINT_AUTHORIZATION",
+          "RECOVER_MINT_AUTHORIZATION",
+          "VERIFY_AUTHORIZATION_AND_STAGE_MINT_CREDIT",
+          "FOLD_RECEIVE",
+          "READ_PENDING_CREDIT_WATERMARK",
+          "ROTATE_HARDWARE_EPOCH",
+        },
+        names(OfflineCashDeviceLifecycleBridgeV1.Operation.values()));
+    assertArrayEquals(
+        new String[] {
+          "SUCCESS",
+          "UNAVAILABLE",
+          "STALE_OR_CONCURRENT",
+          "BINDING_MISMATCH",
+          "TRUSTED_TIME_REJECTED",
+          "REJECTED",
+          "MISSING",
+          "CONFLICT",
+          "CORRUPT",
+          "MALFORMED_REQUEST",
+          "RECOVERY_REQUIRED",
+        },
+        names(OfflineCashDeviceLifecycleBridgeV1.Status.values()));
     assertEquals(
         Arrays.toString(
             org.hyperledger.iroha.sdk.offline.OfflineCashDeviceLifecycleBridgeV1.Operation
@@ -48,14 +91,28 @@ public final class OfflineCashDeviceLifecycleBridgeV1Tests {
             org.hyperledger.iroha.sdk.offline.OfflineCashDeviceLifecycleBridgeV1.Capability
                 .values()),
         Arrays.toString(OfflineCashDeviceLifecycleBridgeV1.Capability.values()));
+    assertEquals(
+        Arrays.toString(
+            org.hyperledger.iroha.sdk.offline.OfflineCashDeviceLifecycleBridgeV1.Status.values()),
+        Arrays.toString(OfflineCashDeviceLifecycleBridgeV1.Status.values()));
     for (int index = 0; index < OfflineCashDeviceLifecycleBridgeV1.Capability.values().length;
         index++) {
+      assertEquals(
+          1 << index, OfflineCashDeviceLifecycleBridgeV1.Capability.values()[index].mask());
       assertEquals(
           org.hyperledger.iroha.sdk.offline.OfflineCashDeviceLifecycleBridgeV1.Capability.values()[
                   index]
               .getMask(),
           OfflineCashDeviceLifecycleBridgeV1.Capability.values()[index].mask());
     }
+  }
+
+  private static String[] names(final Enum<?>[] values) {
+    final String[] names = new String[values.length];
+    for (int index = 0; index < values.length; index++) {
+      names[index] = values[index].name();
+    }
+    return names;
   }
 
   private static byte[] fixed(final int value, final int count) {

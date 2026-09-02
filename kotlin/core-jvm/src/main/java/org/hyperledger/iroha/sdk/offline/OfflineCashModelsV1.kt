@@ -7,6 +7,11 @@ import java.math.BigInteger
 import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEncoder
 
+/*
+ * JVM carrier convention: Int and Long preserve the raw bit patterns of Rust u32 and u64 fields.
+ * A negative signed carrier therefore remains a valid upper-half unsigned value.
+ */
+
 /** Exact typed `AssetDefinitionId` payload used by Offline Cash V1. */
 class OfflineCashAssetDefinitionIdV1 private constructor(payload: ByteArray) {
     private val value = payload.copyOf()
@@ -278,9 +283,9 @@ class OfflineCashHardwareProfileV1(
     private val qualificationReportDigestValue = fixed32(qualificationReportDigest, "qualificationReportDigest")
 
     init {
-        require(version == 1 && protocolVersion == 1 && policyEpoch > 0)
+        require(version == 1 && protocolVersion == 1 && policyEpoch != 0L)
         require(capabilityMask == 0xffff) { "the complete Offline Cash V1 hardware capability mask is required" }
-        require(validFromMs >= 0 && expiresAtMs > validFromMs)
+        require(java.lang.Long.compareUnsigned(validFromMs, expiresAtMs) < 0)
     }
 
     fun hardwareProfileId(): ByteArray = hardwareProfileIdValue.copyOf()
@@ -321,8 +326,8 @@ class OfflineCashHardwareCredentialV1(
 
     init {
         require(version == 1 && networkId.bytes().any { it != 0.toByte() })
-        require(policyEpoch > 0 && hardwareEpochGeneration >= 0)
-        require(issuedAtMs >= 0 && expiresAtMs > issuedAtMs)
+        require(policyEpoch != 0L)
+        require(java.lang.Long.compareUnsigned(issuedAtMs, expiresAtMs) < 0)
     }
 
     fun credentialId(): ByteArray = credentialIdValue.copyOf()
@@ -332,58 +337,6 @@ class OfflineCashHardwareCredentialV1(
     fun laneCommitment(): ByteArray = laneCommitmentValue.copyOf()
     fun hardwareEpochId(): ByteArray = hardwareEpochIdValue.copyOf()
     fun deviceKeyReference(): ByteArray = deviceKeyReferenceValue.copyOf()
-}
-
-/** Inclusive positive amount interval used by reusable requests. */
-class OfflineCashAmountPolicyV1(
-    @JvmField val minimumAmount: BigInteger,
-    @JvmField val maximumAmount: BigInteger,
-) {
-    init {
-        requireUnsigned128(minimumAmount, "minimumAmount")
-        requireUnsigned128(maximumAmount, "maximumAmount")
-        require(minimumAmount.signum() > 0 && minimumAmount <= maximumAmount)
-    }
-
-    fun contains(amount: BigInteger): Boolean = amount >= minimumAmount && amount <= maximumAmount
-}
-
-/** Closed reusable receiver-request policy. */
-sealed class OfflineCashPaymentRequestModeV1 {
-    /** Exactly one payment of [amount]. */
-    class SingleExact(@JvmField val amount: BigInteger) : OfflineCashPaymentRequestModeV1() {
-        init {
-            requirePositiveU128(amount, "amount")
-        }
-    }
-
-    /** Independently ticketed partial payments up to [totalAmount]. */
-    class PartialUntilTotal(@JvmField val totalAmount: BigInteger) : OfflineCashPaymentRequestModeV1() {
-        init {
-            requirePositiveU128(totalAmount, "totalAmount")
-        }
-    }
-
-    /** At most [maxPayments] payments, each admitted by [perPayment]. */
-    class BoundedMultiPayment(
-        @JvmField val maxPayments: Int,
-        @JvmField val perPayment: OfflineCashAmountPolicyV1,
-    ) : OfflineCashPaymentRequestModeV1() {
-        init {
-            require(maxPayments > 0)
-        }
-    }
-
-    /** Unbounded cumulative count of independently ticketed payments. */
-    class OpenReceive(@JvmField val perPayment: OfflineCashAmountPolicyV1) : OfflineCashPaymentRequestModeV1()
-
-    /** Return whether one exact ticket amount satisfies the stateless policy. */
-    fun acceptsExactAmount(amount: BigInteger): Boolean = when (this) {
-        is SingleExact -> amount == this.amount
-        is PartialUntilTotal -> amount.signum() > 0 && amount <= totalAmount
-        is BoundedMultiPayment -> perPayment.contains(amount)
-        is OpenReceive -> perPayment.contains(amount)
-    }
 }
 
 /** Sender-selected one-use intent presented before receiver capacity is reserved. */
@@ -432,7 +385,7 @@ class OfflineCashAcceptanceIntentAuthorizationStatementV1(
     fun artifactManifestDigest(): ByteArray = artifactManifestDigestValue.copyOf()
 }
 
-/** Proof-bearing sender capability required before request budget or inbox capacity is consumed. */
+/** Proof-bearing sender capability required before an intent decision or inbox capacity is reserved. */
 class OfflineCashAcceptanceIntentAuthorizationV1(
     @JvmField val version: Int,
     @JvmField val statement: OfflineCashAcceptanceIntentAuthorizationStatementV1,
@@ -532,7 +485,6 @@ class OfflineCashAcceptanceTicketV1(
     @JvmField val asset: OfflineCashAssetDefinitionIdV1,
     @JvmField val assetIncarnation: OfflineCashAssetIncarnationV1,
     @JvmField val scale: Int,
-    @JvmField val requestMode: OfflineCashPaymentRequestModeV1,
     intentDigest: ByteArray,
     @JvmField val exactAmount: BigInteger,
     @JvmField val reservedInboxBytes: Int,
@@ -551,9 +503,13 @@ class OfflineCashAcceptanceTicketV1(
 
     init {
         requireHeader(version, networkId, scale, exactAmount)
-        require(reservedInboxBytes >= OfflineCashWireV1.ACCEPTANCE_TICKET_MIN_RESERVED_INBOX_BYTES)
-        require(policyEpoch > 0 && issuedAtMs >= 0 && expiresAtMs > issuedAtMs)
-        require(requestMode.acceptsExactAmount(exactAmount))
+        require(
+            Integer.compareUnsigned(
+                reservedInboxBytes,
+                OfflineCashWireV1.ACCEPTANCE_TICKET_MIN_RESERVED_INBOX_BYTES,
+            ) >= 0,
+        )
+        require(policyEpoch != 0L && java.lang.Long.compareUnsigned(issuedAtMs, expiresAtMs) < 0)
     }
 
     fun requestId(): ByteArray = requestIdValue.copyOf()
@@ -665,7 +621,7 @@ enum class OfflineCashOperationKindV1 {
     BOOTSTRAP,
     MINT_FOLD,
     SEND_SPLIT,
-    RECEIVE_FOLD_BATCH,
+    RECEIVE_FOLD,
     REDEEM_SPLIT,
     SUITE_UPGRADE,
     ROTATE,
@@ -703,7 +659,7 @@ class OfflineCashLifecycleBindingV1(
 
     init {
         requireHeader(version, networkId, scale, null)
-        require(protocolVersion == 1 && policyEpoch > 0)
+        require(protocolVersion == 1 && policyEpoch != 0L)
         val requestFieldsPresent = listOf(requestIdValue, acceptanceTicketIdValue)
             .all { bytes -> bytes.any { it != 0.toByte() } }
         val requestFieldsAbsent = listOf(requestIdValue, acceptanceTicketIdValue)
@@ -758,7 +714,7 @@ class OfflineCashOutboxReservationV1(
     private val reservationIdValue = fixed32(reservationId, "reservationId")
 
     init {
-        require(reservedOutboxBytes > 0 && issuedAtMs >= 0 && expiresAtMs > issuedAtMs)
+        require(reservedOutboxBytes != 0 && java.lang.Long.compareUnsigned(issuedAtMs, expiresAtMs) < 0)
     }
 
     fun reservationId(): ByteArray = reservationIdValue.copyOf()
@@ -788,7 +744,7 @@ class OfflineCashHardwareTerminalBodyV1(
     private val privateRecoveryCommitmentValue = fixed32(privateRecoveryCommitment, "privateRecoveryCommitment")
 
     init {
-        require(version == 1 && policyEpoch > 0)
+        require(version == 1 && policyEpoch != 0L)
     }
 
     fun candidateEnvelopeDigest(): ByteArray = candidateEnvelopeDigestValue.copyOf()
@@ -823,7 +779,7 @@ class OfflineCashCommitCertificateV1(
     private val hardwareTerminalCommitmentValue = fixed32(hardwareTerminalCommitment, "hardwareTerminalCommitment")
 
     init {
-        require(version == 1 && policyEpoch > 0)
+        require(version == 1 && policyEpoch != 0L)
     }
 
     fun certificateId(): ByteArray = certificateIdValue.copyOf()
@@ -883,7 +839,7 @@ class OfflineCashCommitWrapperProofV1(
     fun epHistory(): ByteArray = epHistoryValue.copyOf()
 }
 
-/** Receiver-created reusable request; every payment still requires a separate ticket. */
+/** Receiver-created exact-amount request; every payment still requires a separate ticket. */
 class OfflineCashPaymentRequestV1(
     @JvmField val version: Int,
     releaseId: ByteArray,
@@ -893,7 +849,7 @@ class OfflineCashPaymentRequestV1(
     @JvmField val scale: Int,
     liabilityPoolId: ByteArray,
     @JvmField val recipient: OfflineCashAccountIdV1,
-    @JvmField val requestMode: OfflineCashPaymentRequestModeV1,
+    @JvmField val amount: BigInteger,
     @JvmField val hardwareCredential: OfflineCashHardwareCredentialV1,
     requestId: ByteArray,
     @JvmField val issuedAtMs: Long,
@@ -905,10 +861,15 @@ class OfflineCashPaymentRequestV1(
     private val requestIdValue = fixed32(requestId, "requestId")
 
     init {
-        requireHeader(version, networkId, scale, null)
+        requireHeader(version, networkId, scale, amount)
         require(hardwareCredential.version == version && hardwareCredential.networkId == networkId)
-        require(issuedAtMs >= 0 && expiresAtMs > issuedAtMs)
-        require(expiresAtMs - issuedAtMs <= OfflineCashWireV1.REQUEST_MAX_TTL_MS)
+        require(java.lang.Long.compareUnsigned(issuedAtMs, expiresAtMs) < 0)
+        require(
+            java.lang.Long.compareUnsigned(
+                expiresAtMs - issuedAtMs,
+                OfflineCashWireV1.REQUEST_MAX_TTL_MS,
+            ) <= 0,
+        )
     }
 
     fun releaseId(): ByteArray = releaseIdValue.copyOf()
@@ -1041,7 +1002,7 @@ class OfflineCashMintAuthorizationContextV1(
 
     init {
         requireHeader(version, networkId, scale, amount)
-        require(policyEpoch > 0)
+        require(policyEpoch != 0L)
     }
 
     fun operationId(): ByteArray = operationIdValue.copyOf()
@@ -1112,7 +1073,7 @@ class OfflineCashMintCreditStatementV1(
         require(version == 1 && lifecycle.version == version)
         require(lifecycle.operationKind == OfflineCashOperationKindV1.MINT_FOLD)
         requirePositiveU128(amount, "amount")
-        require(mintedAtMs > 0)
+        require(mintedAtMs != 0L)
     }
 
     fun recipientCredentialCommitment(): ByteArray = recipientCredentialCommitmentValue.copyOf()

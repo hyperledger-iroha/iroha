@@ -16,7 +16,6 @@ import org.hyperledger.iroha.sdk.offline.OfflineCashHardwareRecoveryV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashHardwareStageDispositionV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashMintAuthorizationV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashMintCreditV1;
-import org.hyperledger.iroha.sdk.offline.OfflineCashPaymentRequestModeV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashPaymentRequestV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashPaymentV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashRedemptionVoucherV1;
@@ -56,19 +55,17 @@ public final class OfflineCashWalletV1 {
 
   public OfflineCashPaymentRequestV1 createPaymentRequest(
       final OfflineCashAccountIdV1 recipient,
-      final OfflineCashPaymentRequestModeV1 requestMode,
+      final BigInteger amount,
       final long validityWindowMillis) {
     return delegate.createPaymentRequest(
         Objects.requireNonNull(recipient, "recipient"),
-        Objects.requireNonNull(requestMode, "requestMode"),
+        Objects.requireNonNull(amount, "amount"),
         validityWindowMillis);
   }
 
   public OfflineCashAcceptanceIntentAuthorizationV1 authorizeAcceptanceIntent(
-      final OfflineCashPaymentRequestV1 request, final BigInteger exactAmount) {
-    return delegate.authorizeAcceptanceIntent(
-        Objects.requireNonNull(request, "request"),
-        Objects.requireNonNull(exactAmount, "exactAmount"));
+      final OfflineCashPaymentRequestV1 request) {
+    return delegate.authorizeAcceptanceIntent(Objects.requireNonNull(request, "request"));
   }
 
   public OfflineCashAcceptanceTicketV1 issueAcceptanceTicket(
@@ -104,8 +101,8 @@ public final class OfflineCashWalletV1 {
         Objects.requireNonNull(mintCredit, "mintCredit"));
   }
 
-  public int foldPendingCreditBatch() {
-    return delegate.foldPendingCreditBatch();
+  public boolean foldPendingCredit() {
+    return delegate.foldPendingCredit();
   }
 
   public BigInteger drainPendingCredits() {

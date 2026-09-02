@@ -31,7 +31,6 @@ CONSTANTS
   MaxSequence,
   InboxCapacity,
   OutboxCapacity,
-  EmptyCredit,
   ModelDevice1,
   ModelCredit1,
   ModelCredit2,
@@ -45,15 +44,10 @@ CONSTANTS
   ModelTicket2,
   ModelTicket3,
   ModelTicket4,
-  SingleExactRequest,
-  PartialRequest,
-  BoundedRequest,
-  OpenRequest,
+  ModelRequest1,
   ModelProfile1,
   ModelProfile2
 
-RequestModes ==
-  {"SingleExact", "PartialUntilTotal", "BoundedMultiPayment", "OpenReceive"}
 IntentStates ==
   {"Absent", "Offered", "Authorized", "Ticketed", "ClosedNoCommit"}
 TicketStates ==
@@ -74,42 +68,14 @@ ProfileStates == {"Active", "Suspended"}
 (***************************************************************************
 Concrete model functions are defined in the module because TLC configuration
 files accept scalar model values but do not evaluate general TLA+ function
-expressions. The distinguished IDs select one example of every request mode;
-they remain exploration data rather than wire-format or protocol constants.
+expressions. All four distinguished intent/ticket pairs target the same exact
+request so TLC explores multiple independent valid payments against it.
 ***************************************************************************)
 InitialOnline == [d \in Devices |-> InitialOnlinePerDevice]
 RequestOwner == [q \in RequestIds |-> ModelDevice1]
-RequestMode ==
-  [q \in RequestIds |->
-    CASE q = SingleExactRequest -> "SingleExact"
-      [] q = PartialRequest -> "PartialUntilTotal"
-      [] q = BoundedRequest -> "BoundedMultiPayment"
-      [] OTHER -> "OpenReceive"]
-RequestLimit ==
-  [q \in RequestIds |->
-    CASE q = SingleExactRequest -> 2
-      [] q = PartialRequest -> 4
-      [] q = BoundedRequest -> 2
-      [] OTHER -> 0]
-RequestMinimumAmount ==
-  [q \in RequestIds |-> IF q = OpenRequest THEN 2 ELSE 1]
-RequestMaximumAmount ==
-  [q \in RequestIds |->
-    CASE q = SingleExactRequest -> 2
-      [] q = PartialRequest -> 4
-      [] q = BoundedRequest -> 1
-      [] OTHER -> 3]
-IntentRequest ==
-  [i \in IntentIds |->
-    CASE i = ModelIntent1 -> SingleExactRequest
-      [] i = ModelIntent2 -> PartialRequest
-      [] i = ModelIntent3 -> BoundedRequest
-      [] OTHER -> OpenRequest]
-IntentAmount ==
-  [i \in IntentIds |->
-    CASE i \in {ModelIntent1, ModelIntent2} -> 2
-      [] i = ModelIntent3 -> 1
-      [] OTHER -> 2]
+RequestAmount == [q \in RequestIds |-> 2]
+IntentRequest == [i \in IntentIds |-> ModelRequest1]
+IntentAmount == [i \in IntentIds |-> RequestAmount[IntentRequest[i]]]
 TicketIntent ==
   [t \in TicketIds |->
     CASE t = ModelTicket1 -> ModelIntent1
@@ -135,7 +101,7 @@ PaymentTicket ==
   [c \in CreditIds |->
     CASE c = ModelCredit1 -> ModelTicket1
       [] c = ModelCredit2 -> ModelTicket2
-      [] c = ModelCredit3 -> ModelTicket4
+      [] c = ModelCredit3 -> ModelTicket3
       [] OTHER -> ModelTicket4]
 PaymentOutboxBytes == [c \in CreditIds |-> 1]
 PaymentSuite == [c \in CreditIds |-> InitialActiveSuite]
@@ -261,72 +227,12 @@ SumCreditSet(S) ==
     ELSE LET c == CHOOSE x \in S : TRUE
          IN payment[c].amount + SumCreditSet(S \ {c})
 
-BatchLimit ==
-  IF Cardinality(CreditIds) < 16 THEN Cardinality(CreditIds) ELSE 16
-ActiveBatchSequences ==
-  UNION {[1..n -> CreditIds] : n \in 1..BatchLimit}
-DistinctActiveSequence(active) ==
-  \A i \in DOMAIN active, j \in DOMAIN active :
-    active[i] = active[j] => i = j
-DistinctActiveBatchSequences ==
-  {active \in ActiveBatchSequences : DistinctActiveSequence(active)}
-PaddedBatch(active) ==
-  [active_count |-> Len(active),
-   slots |->
-     [i \in 1..16 |->
-       IF i <= Len(active) THEN active[i] ELSE EmptyCredit]]
-ReceiveFoldBatches ==
-  {PaddedBatch(active) : active \in DistinctActiveBatchSequences}
-
-RECURSIVE SumBatchPrefix(_, _)
-SumBatchPrefix(batch, n) ==
-  IF n = 0
-    THEN 0
-    ELSE SumBatchPrefix(batch, n - 1) + payment[batch[n]].amount
-
-RECURSIVE ReplayRootAfter(_, _, _)
-ReplayRootAfter(root, batch, n) ==
-  IF n = 0
-    THEN root
-    ELSE ReplayRootAfter(root, batch, n - 1) \cup {batch[n]}
-
-RECURSIVE OrderedReplayValid(_, _, _)
-OrderedReplayValid(root, batch, n) ==
-  IF n = 0
-    THEN TRUE
-    ELSE /\ OrderedReplayValid(root, batch, n - 1)
-         /\ batch[n] \notin ReplayRootAfter(root, batch, n - 1)
-
-BatchCreditSet(batch) ==
-  ReplayRootAfter({}, batch.slots, batch.active_count)
-DistinctBatch(batch) ==
-  \A i \in 1..batch.active_count, j \in 1..batch.active_count :
-    batch.slots[i] = batch.slots[j] => i = j
-OccupiedPrefix(batch) ==
-  /\ batch.active_count \in 1..BatchLimit
-  /\ \A i \in 1..batch.active_count : batch.slots[i] \in CreditIds
-CanonicalEmptyPadding(batch) ==
-  \A i \in (batch.active_count + 1)..16 : batch.slots[i] = EmptyCredit
-BatchShapeOK(batch) ==
-  /\ DOMAIN batch = {"active_count", "slots"}
-  /\ DOMAIN batch.slots = 1..16
-  /\ OccupiedPrefix(batch)
-  /\ DistinctBatch(batch)
-  /\ CanonicalEmptyPadding(batch)
-
 RECURSIVE SumVoucherSet(_)
 SumVoucherSet(S) ==
   IF S = {}
     THEN 0
     ELSE LET v == CHOOSE x \in S : TRUE
          IN redemption[v].amount + SumVoucherSet(S \ {v})
-
-RECURSIVE SumTicketAmounts(_)
-SumTicketAmounts(S) ==
-  IF S = {}
-    THEN 0
-    ELSE LET t == CHOOSE x \in S : TRUE
-         IN ticket[t].exactAmount + SumTicketAmounts(S \ {t})
 
 RECURSIVE SumTicketBytes(_)
 SumTicketBytes(S) ==
@@ -649,38 +555,6 @@ RedemptionLifecycleBinding(v) ==
    predecessorStateHead |-> redemption[v].predecessor,
    successorStateHead |-> PrivateRedemptionSuccessor(v)]
 
-IssuedTicketsEver(q) ==
-  {t \in TicketIds :
-     TicketRequest[t] = q /\ ticket[t].state # "Absent"}
-
-RequestLedgerTickets(q) ==
-  {t \in TicketIds :
-     TicketRequest[t] = q
-       /\ ticket[t].state \in
-            {"Reserved", "Locked", "Consumed", "RecoveryPending"}}
-
-RequestAmountAllowed(q, amount) ==
-  /\ amount \in 1..MaxAmount
-  /\ CASE RequestMode[q] = "SingleExact" ->
-            amount = RequestLimit[q]
-       [] RequestMode[q] = "PartialUntilTotal" ->
-            amount <= RequestLimit[q]
-       [] RequestMode[q] \in {"BoundedMultiPayment", "OpenReceive"} ->
-            amount \in RequestMinimumAmount[q]..RequestMaximumAmount[q]
-       [] OTHER -> FALSE
-
-RequestAdmitsTicket(q, t) ==
-  CASE RequestMode[q] = "SingleExact" ->
-         /\ RequestLedgerTickets(q) = {}
-         /\ ticket[t].exactAmount = RequestLimit[q]
-    [] RequestMode[q] = "PartialUntilTotal" ->
-         SumTicketAmounts(RequestLedgerTickets(q)) + ticket[t].exactAmount
-           <= RequestLimit[q]
-    [] RequestMode[q] = "BoundedMultiPayment" ->
-         Cardinality(RequestLedgerTickets(q)) < RequestLimit[q]
-    [] RequestMode[q] = "OpenReceive" -> TRUE
-    [] OTHER -> FALSE
-
 ReservedTicketsFor(d) ==
   {t \in TicketIds :
      ticket[t].state \in {"Reserved", "Locked", "RecoveryPending"}
@@ -693,9 +567,9 @@ InboxUse(d) ==
     + SumCreditInboxBytes(StagedCreditsFor(d))
 
 PaymentAmountAllowed(t, amount) ==
-  /\ amount > 0
+  /\ amount \in 1..MaxAmount
   /\ amount = ticket[t].exactAmount
-  /\ RequestAmountAllowed(TicketRequest[t], amount)
+  /\ amount = RequestAmount[TicketRequest[t]]
 
 NoPaymentStartedForTicket(t) ==
   \A c \in CreditIds :
@@ -713,16 +587,10 @@ StagedCreditValueFits(c) ==
   /\ balance[PaymentRecipient(c)] + payment[c].amount <= MaxAmount
 
 StagedCreditCanEnterFold(c) ==
-  LET batch == PaddedBatch(<<c>>)
-      d == PaymentRecipient(c)
+  LET d == PaymentRecipient(c)
   IN /\ StagedCreditValueFits(c)
-     /\ batch \in ReceiveFoldBatches
-     /\ BatchShapeOK(batch)
-     /\ BatchCreditSet(batch) \subseteq StagedCreditsFor(d)
-     /\ OrderedReplayValid(
-          paymentEvidence.consumed, batch.slots, batch.active_count)
-     /\ balance[d] + SumBatchPrefix(batch.slots, batch.active_count)
-          <= MaxAmount
+     /\ c \in StagedCreditsFor(d)
+     /\ c \notin paymentEvidence.consumed
 
 LivePaymentOutboxes(d) ==
   {c \in CreditIds :
@@ -796,7 +664,6 @@ Init ==
   /\ MaxSequence \in Nat \ {0}
   /\ InboxCapacity \in Nat \ {0}
   /\ OutboxCapacity \in Nat \ {0}
-  /\ EmptyCredit \notin CreditIds
   /\ InitialOnlinePerDevice \in 0..MaxAmount
   /\ ModelDevice1 \in Devices
   /\ {ModelCredit1, ModelCredit2, ModelCredit3, ModelCredit4}
@@ -808,21 +675,13 @@ Init ==
   /\ {ModelTicket1, ModelTicket2, ModelTicket3, ModelTicket4}
        \subseteq TicketIds
   /\ Cardinality({ModelTicket1, ModelTicket2, ModelTicket3, ModelTicket4}) = 4
-  /\ {SingleExactRequest, PartialRequest, BoundedRequest, OpenRequest}
-       \subseteq RequestIds
-  /\ Cardinality(
-       {SingleExactRequest, PartialRequest, BoundedRequest, OpenRequest}) = 4
+  /\ ModelRequest1 \in RequestIds
   /\ {ModelProfile1, ModelProfile2} \subseteq ProfileIds
   /\ ModelProfile1 # ModelProfile2
   /\ InitialOnline \in [Devices -> 0..MaxAmount]
   /\ InitialOnlineTotal <= MaxAmount
   /\ RequestOwner \in [RequestIds -> Devices]
-  /\ RequestMode \in [RequestIds -> RequestModes]
-  /\ RequestLimit \in [RequestIds -> Nat]
-  /\ RequestMinimumAmount \in [RequestIds -> 1..MaxAmount]
-  /\ RequestMaximumAmount \in [RequestIds -> 1..MaxAmount]
-  /\ \A q \in RequestIds :
-       RequestMinimumAmount[q] <= RequestMaximumAmount[q]
+  /\ RequestAmount \in [RequestIds -> 1..MaxAmount]
   /\ IntentRequest \in [IntentIds -> RequestIds]
   /\ IntentAmount \in [IntentIds -> 1..MaxAmount]
   /\ IntentAuthorizationProfile \in [IntentIds -> ProfileIds]
@@ -949,7 +808,7 @@ TopUp(d, amount) ==
 (***************************************************************************
 The sender first creates one unique acceptance intent with an exact positive
 amount and an opaque randomized commitment to its private sender/predecessor
-opening. This does not yet reserve receiver bytes or mutate the request ledger.
+opening. This does not yet reserve receiver bytes.
 The private opening fields below are specification ghosts and never enter the
 public intent or ticket records.
 ***************************************************************************)
@@ -962,7 +821,7 @@ CreateAcceptanceIntent(sender, t) ==
      /\ ticket[t].state = "Absent"
      /\ ticket[t].intentState = "Absent"
      /\ IntentRequest[i] = q
-     /\ RequestAmountAllowed(q, IntentAmount[i])
+     /\ IntentAmount[i] = RequestAmount[q]
      /\ Predecessor(sender) \notin spentPredecessors
      /\ Predecessor(sender) \notin LockedPredecessors
      /\ ticket' =
@@ -1006,10 +865,10 @@ AuthorizeAcceptanceIntent(t) ==
                      evidenceVars>>
 
 (***************************************************************************
-Issuance atomically consumes the unique intent, updates the private request
-amount/count ledger, and reserves receiver bytes. Ticket IDs are one-use.
-OpenReceive removes request-level cumulative limits but still requires one
-distinct intent and exact-amount capacity-backed ticket for every payment.
+Issuance atomically consumes the unique intent and reserves receiver bytes.
+Every distinct valid intent for the same request may receive an exact-amount
+ticket; there is no invoice-level amount or count ledger. Ticket IDs remain
+one-use, and hardware/durable capacity must be reserved for every payment.
 ***************************************************************************)
 IssueAcceptanceTicket(t) ==
   LET q == TicketRequest[t]
@@ -1026,8 +885,7 @@ IssueAcceptanceTicket(t) ==
      /\ ticket[t].senderCommitment =
           RandomSenderCommitment(
             ticket[t].intentId, ticket[t].intentSender)
-     /\ RequestAmountAllowed(q, ticket[t].exactAmount)
-     /\ RequestAdmitsTicket(q, t)
+     /\ ticket[t].exactAmount = RequestAmount[q]
      /\ TicketIssuedAt[t] < TicketExpiresAt[t]
      /\ HardwareQualified[p]
      /\ NoSoftwareFallback[p]
@@ -1217,8 +1075,8 @@ ResumeCommittedPayment(c) ==
   /\ UNCHANGED <<ledgerVars, ticket, redemption, lifecycleVars, evidenceVars>>
 
 (***************************************************************************
-Expiry is only observed evidence. It changes no ticket, intent, request-ledger,
-or capacity state and therefore cannot reclaim anything by itself.
+Expiry is only observed evidence. It changes no ticket, intent, or capacity
+state and therefore cannot reclaim anything by itself.
 ***************************************************************************)
 ObserveTicketExpiry(t) ==
   /\ t \in TicketIds
@@ -1232,10 +1090,9 @@ ObserveTicketExpiry(t) ==
 (***************************************************************************
 These actions abstract an authenticated proof that the bound sender intent did
 not reach terminal hardware commit. Opening recovery preserves the ticket's
-receiver bytes and request-ledger charge in RecoveryPending. Only the distinct
-closure action may release physical capacity and remove an unresolved ticket
-from the current amount/count ledger. Intent and ticket identities remain
-closed forever, and a consumed ticket can never enter this corridor.
+receiver bytes in RecoveryPending. Only the distinct closure action may release
+physical capacity. Intent and ticket identities remain closed forever, and a
+consumed ticket can never enter this corridor.
 ***************************************************************************)
 BeginPaymentNoCommitRecovery(c) ==
   LET t == PaymentTicket[c]
@@ -1338,39 +1195,28 @@ RejectConflictingPayment(c, claimedDigest) ==
   /\ UNCHANGED <<ledgerVars, ticket, payment, redemption, lifecycleVars,
                   redemptionEvidence>>
 
-(***************************************************************************
-This is the padded fixed-shape ReceiveFoldBatch abstraction. Each transition
-uses an explicit active_count plus exactly 16 ordered slots. The occupied
-prefix contains 1--16 distinct credits and every remaining slot contains the
-single canonical EmptyCredit value. OrderedReplayValid checks every occupied
-slot against the replay root produced by all preceding slots, and
-ReplayRootAfter applies each occupied-slot update in that same order.
-***************************************************************************)
-FoldReceiveBatch(d, batch) ==
+(* One fixed-shape receive transition consumes exactly one staged credit. *)
+FoldReceive(d, credit) ==
   /\ d \in Devices
-  /\ batch \in ReceiveFoldBatches
-  /\ BatchShapeOK(batch)
-  /\ BatchCreditSet(batch) \subseteq StagedCreditsFor(d)
-  /\ OrderedReplayValid(
-       paymentEvidence.consumed, batch.slots, batch.active_count)
+  /\ credit \in StagedCreditsFor(d)
+  /\ credit \notin paymentEvidence.consumed
+  /\ balance[d] + payment[credit].amount <= MaxAmount
   /\ sequence[d] < MaxSequence
   /\ Predecessor(d) \notin spentPredecessors
   /\ Predecessor(d) \notin LockedPredecessors
   /\ balance' =
        [balance EXCEPT
-         ![d] = @ + SumBatchPrefix(batch.slots, batch.active_count)]
+         ![d] = @ + payment[credit].amount]
   /\ sequence' = [sequence EXCEPT ![d] = @ + 1]
   /\ spentPredecessors' = spentPredecessors \cup {Predecessor(d)}
   /\ payment' =
        [c \in CreditIds |->
-         IF c \in BatchCreditSet(batch)
+         IF c = credit
            THEN [payment[c] EXCEPT !.creditState = "Consumed"]
            ELSE payment[c]]
   /\ paymentEvidence' =
        [paymentEvidence EXCEPT
-         !.consumed =
-           ReplayRootAfter(
-             paymentEvidence.consumed, batch.slots, batch.active_count)]
+         !.consumed = @ \cup {credit}]
   /\ UNCHANGED <<epoch, online, reserve, totalTopups, totalRedemptions,
                   ticket, redemption, lifecycleVars, redemptionEvidence>>
 
@@ -1641,8 +1487,7 @@ Next ==
   \/ \E c \in CreditIds : ObserveAcknowledgement(c)
   \/ \E c \in CreditIds, claimedDigest \in DigestValues :
        RejectConflictingPayment(c, claimedDigest)
-  \/ \E d \in Devices, batch \in ReceiveFoldBatches :
-       FoldReceiveBatch(d, batch)
+  \/ \E d \in Devices, c \in CreditIds : FoldReceive(d, c)
   \/ \E d \in Devices, v \in VoucherIds, amount \in 1..MaxAmount :
        PrepareRedemption(d, v, amount)
   \/ \E v \in VoucherIds : ProveAndPersistRedemptionCandidate(v)
@@ -1727,8 +1572,8 @@ AcceptanceIntentTicketBinding ==
             /\ ticket[t].intentRequest = TicketRequest[t]
             /\ ticket[t].intentDigest = ticket[t].intentId
             /\ ticket[t].exactAmount = IntentAmount[ticket[t].intentId]
-            /\ RequestAmountAllowed(
-                 ticket[t].intentRequest, ticket[t].exactAmount)
+            /\ ticket[t].exactAmount =
+                 RequestAmount[ticket[t].intentRequest]
             /\ ticket[t].senderCommitment =
                  RandomSenderCommitment(
                    ticket[t].intentId, ticket[t].intentSender)
@@ -1779,27 +1624,11 @@ TerminalCertificateConstructionIsSelfFree ==
        /\ certificate.terminalCertificateId = certificateId
        /\ certificateId.terminalCertificateId = bodyDigest
 
-AggregateRequestModeCeilingsHold ==
-  \A q \in RequestIds :
-    LET ledger == RequestLedgerTickets(q)
-    IN CASE RequestMode[q] = "SingleExact" ->
-              /\ Cardinality(ledger) <= 1
-              /\ \A t \in ledger :
-                   ticket[t].exactAmount = RequestLimit[q]
-         [] RequestMode[q] = "PartialUntilTotal" ->
-              SumTicketAmounts(ledger) <= RequestLimit[q]
-         [] RequestMode[q] = "BoundedMultiPayment" ->
-              Cardinality(ledger) <= RequestLimit[q]
-         [] RequestMode[q] = "OpenReceive" ->
-              \A t \in ledger :
-                RequestAmountAllowed(q, ticket[t].exactAmount)
-         [] OTHER -> FALSE
-
 ExpiryAloneNeverReclaims ==
   \A t \in paymentEvidence.expiredTickets :
     \/ /\ t \notin paymentEvidence.noCommitClosures
-       /\ t \in RequestLedgerTickets(TicketRequest[t])
-       /\ ticket[t].state # "Released"
+       /\ ticket[t].state \in
+            {"Reserved", "Locked", "Consumed", "RecoveryPending"}
     \/ /\ t \in paymentEvidence.noCommitClosures
        /\ ticket[t].state = "Released"
 
@@ -1810,14 +1639,12 @@ AuthenticatedNoCommitRecoveryIntegrity ==
        (paymentEvidence.noCommitRecovery \ paymentEvidence.noCommitClosures) :
        /\ ticket[t].state = "RecoveryPending"
        /\ ticket[t].intentState = "Ticketed"
-       /\ t \in RequestLedgerTickets(TicketRequest[t])
        /\ t \in ReservedTicketsFor(RequestOwner[TicketRequest[t]])
        /\ ticket[t].intentPredecessor \notin spentPredecessors
        /\ \A c \in paymentEvidence.committed : PaymentTicket[c] # t
   /\ \A t \in paymentEvidence.noCommitClosures :
        /\ ticket[t].state = "Released"
        /\ ticket[t].intentState = "ClosedNoCommit"
-       /\ t \notin RequestLedgerTickets(TicketRequest[t])
        /\ \A c \in paymentEvidence.committed : PaymentTicket[c] # t
   /\ \A t \in TicketIds :
        ticket[t].state = "Released" <=>
@@ -1840,20 +1667,20 @@ PaymentsMatchExactTicketAmount ==
          /\ payment[c].predecessor = ticket[t].intentPredecessor
 
 TicketAmountsAreExactPositive ==
+  /\ RequestAmount \in [RequestIds -> 1..MaxAmount]
+  /\ \A i \in IntentIds :
+       IntentAmount[i] = RequestAmount[IntentRequest[i]]
   /\ \A t \in TicketIds :
        ticket[t].intentState # "Absent" =>
          /\ ticket[t].exactAmount > 0
          /\ ticket[t].exactAmount =
+              RequestAmount[TicketRequest[t]]
+         /\ ticket[t].exactAmount =
               PublicAcceptanceIntent(t).exactAmount
          /\ ticket[t].exactAmount =
               PublicAcceptanceTicket(t).exactAmount
-  /\ RequestMinimumAmount[OpenRequest] = 2
-  /\ RequestMaximumAmount[OpenRequest] = 3
-  /\ ticket[ModelTicket4].intentState # "Absent" =>
-       ticket[ModelTicket4].exactAmount \in 2..3
-
-ReceiveFoldBatchShapeIsCanonical ==
-  \A batch \in ReceiveFoldBatches : BatchShapeOK(batch)
+  /\ \A t \in {ModelTicket1, ModelTicket2, ModelTicket3, ModelTicket4} :
+       TicketRequest[t] = ModelRequest1
 
 ConservationMakesStagedCreditsFoldable ==
   \A c \in CreditIds :

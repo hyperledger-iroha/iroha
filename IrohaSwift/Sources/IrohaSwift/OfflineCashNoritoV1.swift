@@ -466,10 +466,10 @@ public enum OfflineCashNoritoV1 {
     let intent = authorization.statement.intent
     guard authorization.statement.releaseID == request.releaseID,
       authorization.statement.suiteID == request.hardwareCredential.suiteID,
-      request.requestMode.accepts(intent.exactAmount), ticket.networkID == request.networkID,
+      request.amount == intent.exactAmount, ticket.networkID == request.networkID,
       ticket.requestID == request.requestID, ticket.asset == request.asset,
       ticket.assetIncarnation == request.assetIncarnation, ticket.scale == request.scale,
-      ticket.requestMode == request.requestMode, ticket.exactAmount == intent.exactAmount,
+      ticket.exactAmount == intent.exactAmount,
       ticket.hardwareProfileID == request.hardwareCredential.hardwareProfileID,
       ticket.policyEpoch == request.hardwareCredential.policyEpoch
     else { throw offlineCashInvalid("preTicketExchange.publicBinding") }
@@ -519,7 +519,7 @@ public enum OfflineCashNoritoV1 {
   ) throws {
     let requestDigest = try paymentRequestDigestShape(requestValue)
     guard value.requestDigest == requestDigest,
-      requestValue.requestMode.accepts(value.exactAmount)
+      requestValue.amount == value.exactAmount
     else { throw offlineCashInvalid("acceptanceIntent.publicBinding") }
   }
 
@@ -561,7 +561,6 @@ public enum OfflineCashNoritoV1 {
       value.asset == requestValue.asset,
       value.assetIncarnation == requestValue.assetIncarnation,
       value.scale == requestValue.scale,
-      value.requestMode == requestValue.requestMode,
       value.intentDigest == intentDigest,
       value.exactAmount == intent.exactAmount,
       value.hardwareProfileID == requestValue.hardwareCredential.hardwareProfileID,
@@ -773,10 +772,10 @@ public enum OfflineCashNoritoV1 {
     guard intent.requestDigest == statement.requestDigest,
       statement.requestDigest == requestDigest,
       statement.acceptanceTicketDigest == ticketDigest,
-      intent.exactAmount == statement.amount, requestValue.requestMode.accepts(statement.amount),
+      intent.exactAmount == statement.amount, requestValue.amount == statement.amount,
       ticket.requestID == requestValue.requestID, ticket.requestDigest == statement.requestDigest,
       ticket.asset == requestValue.asset, ticket.assetIncarnation == requestValue.assetIncarnation,
-      ticket.scale == requestValue.scale, ticket.requestMode == requestValue.requestMode,
+      ticket.scale == requestValue.scale,
       ticket.exactAmount == statement.amount,
       ticket.recipientOneTimeKey == statement.recipientOneTimeKey,
       lifecycle.networkID == requestValue.networkID, lifecycle.releaseID == requestValue.releaseID,
@@ -882,29 +881,6 @@ public enum OfflineCashNoritoV1 {
     ])
   }
 
-  private static func amountPolicy(_ v: OfflineCashAmountPolicyV1) -> Data {
-    fields([v.minimumAmount.littleEndianBytes, v.maximumAmount.littleEndianBytes])
-  }
-
-  private static func requestMode(_ v: OfflineCashPaymentRequestModeV1) -> Data {
-    var writer = OCWriter()
-    switch v {
-    case .singleExact(let amount):
-      writer.raw(u32(0))
-      writer.field(fields([amount.littleEndianBytes]))
-    case .partialUntilTotal(let totalAmount):
-      writer.raw(u32(1))
-      writer.field(fields([totalAmount.littleEndianBytes]))
-    case .boundedMultiPayment(let maxPayments, let perPayment):
-      writer.raw(u32(2))
-      writer.field(fields([u32(maxPayments), amountPolicy(perPayment)]))
-    case .openReceive(let perPayment):
-      writer.raw(u32(3))
-      writer.field(fields([amountPolicy(perPayment)]))
-    }
-    return writer.data
-  }
-
   private static func acceptanceIntent(_ v: OfflineCashAcceptanceIntentV1) -> Data {
     fields([
       u16(v.version), v.requestDigest, v.intentID, v.exactAmount.littleEndianBytes,
@@ -949,8 +925,7 @@ public enum OfflineCashNoritoV1 {
     fields([
       u16(v.version), v.networkID, v.requestID, v.requestDigest,
       v.acceptanceTicketID, v.asset.canonicalPayload, assetIncarnation(v.assetIncarnation),
-      u32(v.scale),
-      requestMode(v.requestMode), v.intentDigest, v.exactAmount.littleEndianBytes,
+      u32(v.scale), v.intentDigest, v.exactAmount.littleEndianBytes,
       u32(v.reservedInboxBytes), v.recipientOneTimeKey.rawBytes, v.hardwareProfileID,
       u64(v.policyEpoch), u64(v.issuedAtMS), u64(v.expiresAtMS), v.signature.rawBytes,
     ])
@@ -1022,7 +997,7 @@ public enum OfflineCashNoritoV1 {
     fields([
       u16(v.version), v.releaseID, v.networkID, v.asset.canonicalPayload,
       assetIncarnation(v.assetIncarnation), u32(v.scale), v.liabilityPoolID,
-      v.recipient.canonicalPayload, requestMode(v.requestMode),
+      v.recipient.canonicalPayload, v.amount.littleEndianBytes,
       hardwareCredential(v.hardwareCredential), v.requestID, u64(v.issuedAtMS),
       u64(v.expiresAtMS), v.signature.rawBytes,
     ])
@@ -1166,42 +1141,6 @@ public enum OfflineCashNoritoV1 {
     return value
   }
 
-  private static func decodeAmountPolicy(_ payload: Data) throws -> OfflineCashAmountPolicyV1 {
-    var r = OCReader(payload)
-    let value = try OfflineCashAmountPolicyV1(
-      minimumAmount: r.u128Field(), maximumAmount: r.u128Field())
-    try r.finish()
-    return value
-  }
-
-  private static func decodeRequestMode(_ payload: Data) throws
-    -> OfflineCashPaymentRequestModeV1
-  {
-    var r = OCReader(payload)
-    let variant = try r.rawU32()
-    let body = try r.field()
-    try r.finish()
-    var bodyReader = OCReader(body)
-    let value: OfflineCashPaymentRequestModeV1
-    switch variant {
-    case 0:
-      value = .singleExact(amount: try bodyReader.u128Field())
-    case 1:
-      value = .partialUntilTotal(totalAmount: try bodyReader.u128Field())
-    case 2:
-      let maxPayments = try bodyReader.u32Field()
-      let policy = try decodeAmountPolicy(bodyReader.field())
-      guard maxPayments > 0 else { throw offlineCashInvalid("requestMode.maxPayments") }
-      value = .boundedMultiPayment(maxPayments: maxPayments, perPayment: policy)
-    case 3:
-      value = .openReceive(perPayment: try decodeAmountPolicy(bodyReader.field()))
-    default:
-      throw offlineCashInvalid("requestMode.variant")
-    }
-    try bodyReader.finish()
-    return value
-  }
-
   private static func decodeAcceptanceIntent(_ payload: Data) throws
     -> OfflineCashAcceptanceIntentV1
   {
@@ -1274,8 +1213,7 @@ public enum OfflineCashNoritoV1 {
       requestDigest: r.digestField(), acceptanceTicketID: r.digestField(),
       asset: OfflineCashAssetDefinitionIDV1(canonicalPayload: r.field()),
       assetIncarnation: decodeAssetIncarnation(r.field()),
-      scale: r.u32Field(), requestMode: decodeRequestMode(r.field()),
-      intentDigest: r.digestField(), exactAmount: r.u128Field(),
+      scale: r.u32Field(), intentDigest: r.digestField(), exactAmount: r.u128Field(),
       reservedInboxBytes: r.u32Field(),
       recipientOneTimeKey: OfflineCashX25519PublicKeyV1(rawBytes: r.exactField(32)),
       hardwareProfileID: r.digestField(), policyEpoch: r.u64Field(),
@@ -1407,7 +1345,7 @@ public enum OfflineCashNoritoV1 {
       assetIncarnation: decodeAssetIncarnation(r.field()),
       scale: r.u32Field(), liabilityPoolID: r.digestField(),
       recipient: OfflineCashAccountIDV1(canonicalPayload: r.field()),
-      requestMode: decodeRequestMode(r.field()),
+      amount: r.u128Field(),
       hardwareCredential: decodeHardwareCredential(r.field()), requestID: r.digestField(),
       issuedAtMS: r.u64Field(), expiresAtMS: r.u64Field(),
       signature: OfflineCashDeviceSignatureV1(rawBytes: r.exactField(64)))

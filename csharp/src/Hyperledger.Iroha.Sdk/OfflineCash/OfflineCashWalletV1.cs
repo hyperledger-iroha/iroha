@@ -143,22 +143,6 @@ public sealed class OfflineCashHardwareMintStageV1
     public byte[] CreditId() => creditId.ToArray();
 }
 
-public sealed class OfflineCashHardwareFoldBatchV1
-{
-    private readonly byte[]? aggregateState;
-
-    public OfflineCashHardwareFoldBatchV1(int foldedCredits, byte[]? aggregateState)
-    {
-        if (foldedCredits is < 0 or > 16 || (foldedCredits == 0) != (aggregateState is null))
-            throw new ArgumentException("A fixed Offline Cash V1 fold batch must contain zero through sixteen credits.");
-        FoldedCredits = foldedCredits;
-        this.aggregateState = aggregateState?.ToArray();
-    }
-
-    public int FoldedCredits { get; }
-    public byte[]? AggregateState() => aggregateState?.ToArray();
-}
-
 public sealed class OfflineCashHardwareTerminalResultV1
 {
     private readonly byte[] canonicalEnvelope;
@@ -206,14 +190,14 @@ public interface IOfflineCashNativeHardwareProviderV1
     OfflineCashHardwareQualificationV1 Qualification();
     OfflineCashHardwareRecoveryV1 Recover();
     byte[] BootstrapState();
-    byte[] CreatePaymentRequest(byte[] recipientAccount, byte[] requestMode, ulong validityWindowMilliseconds);
+    byte[] CreatePaymentRequest(byte[] recipientAccount, UInt128 amount, ulong validityWindowMilliseconds);
     byte[] CreateAcceptanceIntentAuthorization(byte[] canonicalRequest, UInt128 exactAmount);
     byte[] IssueAcceptanceTicket(byte[] canonicalRequest, byte[] canonicalAuthorization);
     OfflineCashHardwarePaymentStageV1 StagePayment(byte[] canonicalRequest, byte[] canonicalPayment);
     OfflineCashHardwareMintStageV1 StageMintCredit(byte[] canonicalAuthorization, byte[] canonicalMintCredit);
     UInt128 PendingCreditWatermark();
     UInt128 JournalRevision();
-    OfflineCashHardwareFoldBatchV1 FoldPendingCreditBatch(UInt128 inboxSequenceInclusive, int maximumCredits);
+    byte[]? FoldPendingCredit(UInt128 inboxSequenceInclusive);
     OfflineCashHardwareTerminalResultV1 CommitPayment(
         byte[] canonicalRequest,
         byte[] canonicalAuthorization,
@@ -300,36 +284,35 @@ public sealed class OfflineCashWalletV1
 
     public OfflineCashPaymentRequestV1 CreatePaymentRequest(
         OfflineCashAccountIdV1 recipient,
-        OfflineCashPaymentRequestModeV1 requestMode,
+        UInt128 amount,
         ulong validityWindowMilliseconds)
     {
         ArgumentNullException.ThrowIfNull(recipient);
+        if (amount == 0)
+            throw new ArgumentOutOfRangeException(nameof(amount));
         if (validityWindowMilliseconds is 0 or > OfflineCashV1.RequestMaximumTtlMilliseconds)
             throw new ArgumentOutOfRangeException(nameof(validityWindowMilliseconds));
         lock (transitionLock)
         {
-            var canonicalMode = OfflineCashV1.EncodePaymentRequestMode(requestMode);
             var request = OfflineCashV1.DecodePaymentRequest(provider.CreatePaymentRequest(
-                recipient.CanonicalPayload(), canonicalMode, validityWindowMilliseconds));
+                recipient.CanonicalPayload(), amount, validityWindowMilliseconds));
             if (!request.Recipient.Equals(recipient)
+                || request.Amount != amount
                 || request.ExpiresAtMilliseconds - request.IssuedAtMilliseconds != validityWindowMilliseconds)
-                throw new InvalidOperationException("Native request output does not match its requested policy.");
+                throw new InvalidOperationException("Native request output does not match the requested amount or lifetime.");
             RequireStateRequestBinding(aggregateState, request);
             return request;
         }
     }
 
     public OfflineCashAcceptanceIntentAuthorizationV1 AuthorizeAcceptanceIntent(
-        OfflineCashPaymentRequestV1 request,
-        UInt128 exactAmount)
+        OfflineCashPaymentRequestV1 request)
     {
-        if (!request.RequestMode.Accepts(exactAmount))
-            throw new ArgumentOutOfRangeException(nameof(exactAmount));
         lock (transitionLock)
         {
             var canonicalRequest = OfflineCashV1.EncodePaymentRequest(request);
             return OfflineCashV1.DecodeAcceptanceIntentAuthorization(
-                provider.CreateAcceptanceIntentAuthorization(canonicalRequest, exactAmount), request);
+                provider.CreateAcceptanceIntentAuthorization(canonicalRequest, request.Amount), request);
         }
     }
 
@@ -410,12 +393,12 @@ public sealed class OfflineCashWalletV1
         }
     }
 
-    public int FoldPendingCreditBatch()
+    public bool FoldPendingCredit()
     {
-        lock (transitionLock) return FoldBatchAtWatermarkLocked(provider.PendingCreditWatermark());
+        lock (transitionLock) return FoldAtWatermarkLocked(provider.PendingCreditWatermark());
     }
 
-    /// <summary>Drain one stable snapshot using repeated fixed batches; no cumulative cap is imposed.</summary>
+    /// <summary>Drain one stable snapshot using repeated single-credit folds; no count cap is imposed.</summary>
     public UInt128 DrainPendingCredits()
     {
         lock (transitionLock) return DrainPendingCreditsLocked();
@@ -488,32 +471,28 @@ public sealed class OfflineCashWalletV1
         UInt128 total = 0;
         while (true)
         {
-            var folded = FoldBatchAtWatermarkLocked(watermark);
-            if (folded == 0) return total;
-            total = checked(total + (uint)folded);
+            if (!FoldAtWatermarkLocked(watermark)) return total;
+            total = checked(total + 1);
         }
     }
 
-    private int FoldBatchAtWatermarkLocked(UInt128 watermark)
+    private bool FoldAtWatermarkLocked(UInt128 watermark)
     {
         var before = journalRevision;
         var beforeCommitment = aggregateState.StateCommitment.ToArray();
-        var folded = provider.FoldPendingCreditBatch(watermark, 16);
-        var successor = folded.AggregateState();
-        if (folded.FoldedCredits > 0)
+        var successor = provider.FoldPendingCredit(watermark);
+        if (successor is not null)
         {
-            if (successor is null)
-                throw new InvalidOperationException("A non-empty native fold did not return its successor.");
             InstallAuthoritativeState(successor);
             if (aggregateState.StateCommitment.Span.SequenceEqual(beforeCommitment))
-                throw new InvalidOperationException("A fixed-shape fold made no aggregate-state progress.");
+                throw new InvalidOperationException("A receive fold made no aggregate-state progress.");
         }
         var after = provider.JournalRevision();
-        var expected = folded.FoldedCredits == 0 ? before : checked(before + 1);
+        var expected = successor is null ? before : checked(before + 1);
         if (after != expected)
-            throw new InvalidOperationException("A fixed-shape fold did not consume exactly one journal revision.");
+            throw new InvalidOperationException("A receive fold did not consume exactly one journal revision.");
         journalRevision = after;
-        return folded.FoldedCredits;
+        return successor is not null;
     }
 
     private void InstallAuthoritativeState(byte[] bytes)

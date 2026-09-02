@@ -39,7 +39,7 @@ public enum OfflineCashDeviceLifecycleOperationV1: UInt8, CaseIterable, Sendable
   case prepareMintAuthorization = 19
   case recoverMintAuthorization = 20
   case verifyAuthorizationAndStageMintCredit = 21
-  case foldReceiveBatch = 22
+  case foldReceive = 22
   case readPendingCreditWatermark = 23
   case rotateHardwareEpoch = 24
 }
@@ -65,7 +65,7 @@ public enum OfflineCashDeviceLifecycleCapabilityV1: UInt32, CaseIterable, Sendab
 }
 
 /// Stable native result status. Only `success` may carry authoritative bytes.
-public enum OfflineCashDeviceLifecycleStatusV1: UInt8, Sendable {
+public enum OfflineCashDeviceLifecycleStatusV1: UInt8, CaseIterable, Sendable {
   case success = 0
   case unavailable = 1
   case staleOrConcurrent = 2
@@ -76,6 +76,7 @@ public enum OfflineCashDeviceLifecycleStatusV1: UInt8, Sendable {
   case conflict = 7
   case corrupt = 8
   case malformedRequest = 9
+  case recoveryRequired = 10
 }
 
 /// Accepted identity of the complete rollback-resistant secure backend.

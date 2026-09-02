@@ -171,7 +171,7 @@ class OfflineCashDeviceSignatureV1 {
 const T = Object.freeze({
   U16: "u16", U32: "u32", U64: "u64", U128: "u128", FIXED32: "fixed32", RAW32: "raw32",
   FIXED24: "fixed24", NETWORK: "network", ASSET: "asset", INCARNATION: "incarnation", ACCOUNT: "account",
-  PUBLIC_KEY: "publicKey", SIGNATURE: "signature", VECTOR: "vector", REQUEST_MODE: "requestMode",
+  PUBLIC_KEY: "publicKey", SIGNATURE: "signature", VECTOR: "vector",
   OPERATION_KIND: "operationKind", COMMIT_EVIDENCE: "commitEvidence", CREDIT_PURPOSE: "creditPurpose",
   OPTIONAL_MINT_AUTHORIZATION: "optionalMintAuthorization",
 });
@@ -201,59 +201,6 @@ function defineModel(name, fields, validate) {
   }
   DEFINITIONS[name] = { Model, fields };
   return Model;
-}
-
-const OfflineCashAmountPolicyV1 = defineModel(
-  "OfflineCashAmountPolicyV1",
-  [["minimumAmount", T.U128], ["maximumAmount", T.U128]],
-  (v) => { if (v.minimumAmount === 0n || v.minimumAmount > v.maximumAmount) throw new RangeError("Offline Cash V1 amount policy is empty or inverted"); },
-);
-const OfflineCashSingleExactRequestV1 = defineModel(
-  "OfflineCashSingleExactRequestV1", [["amount", T.U128]],
-  (v) => { if (v.amount === 0n) throw new RangeError("SingleExact amount must be positive"); },
-);
-const OfflineCashPartialUntilTotalRequestV1 = defineModel(
-  "OfflineCashPartialUntilTotalRequestV1", [["totalAmount", T.U128]],
-  (v) => { if (v.totalAmount === 0n) throw new RangeError("PartialUntilTotal total must be positive"); },
-);
-const OfflineCashBoundedMultiPaymentRequestV1 = defineModel(
-  "OfflineCashBoundedMultiPaymentRequestV1", [["maxPayments", T.U32], ["perPayment", "OfflineCashAmountPolicyV1"]],
-  (v) => { if (v.maxPayments === 0) throw new RangeError("BoundedMultiPayment count must be positive"); },
-);
-const OfflineCashOpenReceiveRequestV1 = defineModel(
-  "OfflineCashOpenReceiveRequestV1", [["perPayment", "OfflineCashAmountPolicyV1"]],
-);
-
-const REQUEST_MODES = Object.freeze({
-  singleExact: [0, OfflineCashSingleExactRequestV1],
-  partialUntilTotal: [1, OfflineCashPartialUntilTotalRequestV1],
-  boundedMultiPayment: [2, OfflineCashBoundedMultiPaymentRequestV1],
-  openReceive: [3, OfflineCashOpenReceiveRequestV1],
-});
-
-class OfflineCashPaymentRequestModeV1 {
-  constructor(input) {
-    exactRecord(input, "OfflineCashPaymentRequestModeV1", ["mode", "policy"]);
-    if (typeof input.mode !== "string" || !Object.hasOwn(REQUEST_MODES, input.mode)) throw new TypeError("unknown Offline Cash V1 request mode");
-    const Model = REQUEST_MODES[input.mode][1];
-    if (!(input.policy instanceof Model)) throw new TypeError(`Offline Cash V1 ${input.mode} policy must be ${Model.name}`);
-    this.mode = input.mode;
-    this.policy = input.policy;
-    Object.freeze(this);
-  }
-
-  static singleExact(amount) { return new this({ mode: "singleExact", policy: new OfflineCashSingleExactRequestV1({ amount }) }); }
-  static partialUntilTotal(totalAmount) { return new this({ mode: "partialUntilTotal", policy: new OfflineCashPartialUntilTotalRequestV1({ totalAmount }) }); }
-  static boundedMultiPayment(maxPayments, perPayment) { return new this({ mode: "boundedMultiPayment", policy: new OfflineCashBoundedMultiPaymentRequestV1({ maxPayments, perPayment }) }); }
-  static openReceive(perPayment) { return new this({ mode: "openReceive", policy: new OfflineCashOpenReceiveRequestV1({ perPayment }) }); }
-
-  acceptsExactAmount(amount) {
-    const candidate = unsigned(amount, MAX_U128, "exact amount");
-    if (candidate === 0n) return false;
-    if (this.mode === "singleExact") return candidate === this.policy.amount;
-    if (this.mode === "partialUntilTotal") return candidate <= this.policy.totalAmount;
-    return candidate >= this.policy.perPayment.minimumAmount && candidate <= this.policy.perPayment.maximumAmount;
-  }
 }
 
 const OfflineCashHardwareCredentialV1 = defineModel(
@@ -314,7 +261,7 @@ const OfflineCashAcceptanceTicketV1 = defineModel(
   "OfflineCashAcceptanceTicketV1",
   [["version", T.U16], ["networkId", T.NETWORK], ["requestId", T.FIXED32], ["requestDigest", T.FIXED32],
     ["acceptanceTicketId", T.FIXED32], ["asset", T.ASSET], ["assetIncarnation", T.INCARNATION], ["scale", T.U32],
-    ["requestMode", T.REQUEST_MODE], ["intentDigest", T.FIXED32], ["exactAmount", T.U128], ["reservedInboxBytes", T.U32],
+    ["intentDigest", T.FIXED32], ["exactAmount", T.U128], ["reservedInboxBytes", T.U32],
     ["recipientOneTimeKey", T.FIXED32], ["hardwareProfileId", T.FIXED32], ["policyEpoch", T.U64], ["issuedAtMs", T.U64],
     ["expiresAtMs", T.U64], ["signature", T.SIGNATURE]],
   (v) => {
@@ -346,7 +293,7 @@ const OfflineCashEncryptedCreditEnvelopeV1 = defineModel(
   },
 );
 
-const OPERATION_KINDS = Object.freeze(["bootstrap", "mintFold", "sendSplit", "receiveFoldBatch", "redeemSplit", "suiteUpgrade", "rotate"]);
+const OPERATION_KINDS = Object.freeze(["bootstrap", "mintFold", "sendSplit", "receiveFold", "redeemSplit", "suiteUpgrade", "rotate"]);
 const CREDIT_PURPOSES = Object.freeze(["mint", "peer"]);
 const OfflineCashTrustedCommitTimeV1 = defineModel("OfflineCashTrustedCommitTimeV1", [["timeEvidenceCommitment", T.FIXED32]]);
 const OfflineCashMonotonicCommitLeaseV1 = defineModel("OfflineCashMonotonicCommitLeaseV1", [["leaseEvidenceCommitment", T.FIXED32]]);
@@ -421,11 +368,11 @@ const OfflineCashCommitWrapperProofV1 = defineModel(
 const OfflineCashPaymentRequestV1 = defineModel(
   "OfflineCashPaymentRequestV1",
   [["version", T.U16], ["releaseId", T.FIXED32], ["networkId", T.NETWORK], ["asset", T.ASSET], ["assetIncarnation", T.INCARNATION],
-    ["scale", T.U32], ["liabilityPoolId", T.FIXED32], ["recipient", T.ACCOUNT], ["requestMode", T.REQUEST_MODE],
+    ["scale", T.U32], ["liabilityPoolId", T.FIXED32], ["recipient", T.ACCOUNT], ["amount", T.U128],
     ["hardwareCredential", "OfflineCashHardwareCredentialV1"], ["requestId", T.FIXED32], ["issuedAtMs", T.U64], ["expiresAtMs", T.U64],
     ["signature", T.SIGNATURE]],
   (v) => {
-    header(v);
+    header(v, true);
     if (v.expiresAtMs <= v.issuedAtMs || v.expiresAtMs - v.issuedAtMs > 300000n) throw new RangeError("Offline Cash V1 request validity window is invalid");
     if (!equalBytes(networkIdBytes(v.networkId), networkIdBytes(v.hardwareCredential.networkId)) || v.issuedAtMs < v.hardwareCredential.issuedAtMs || v.expiresAtMs > v.hardwareCredential.expiresAtMs) throw new TypeError("Offline Cash V1 request credential binding is invalid");
   },
@@ -596,7 +543,7 @@ function validateAcceptanceIntent(intent, request) {
   const i = rawValues(instance(intent, OfflineCashAcceptanceIntentV1, "acceptance intent"));
   const bound = instance(request, OfflineCashPaymentRequestV1, "payment request");
   requireEqual(i.requestDigest, paymentRequestDigest(bound), "acceptance intent request digest");
-  if (!bound.requestMode.acceptsExactAmount(i.exactAmount)) throw new TypeError("acceptance intent amount is outside the request mode");
+  if (bound.amount !== i.exactAmount) throw new TypeError("acceptance intent amount does not equal the request amount");
 }
 
 function validateAcceptanceAuthorization(authorization, request) {
@@ -696,14 +643,13 @@ function validateAcceptanceTicket(ticket, request, intent) {
       || !equalBytes(encodeType(T.ASSET, t.asset), encodeType(T.ASSET, boundRequest.asset))
       || !equalBytes(encodeType(T.INCARNATION, t.assetIncarnation), encodeType(T.INCARNATION, boundRequest.assetIncarnation))
       || t.scale !== boundRequest.scale
-      || !equalBytes(encodeRequestMode(t.requestMode), encodeRequestMode(boundRequest.requestMode))
       || t.exactAmount !== boundIntent.exactAmount
       || !equalBytes(t.hardwareProfileId, boundRequest.hardwareCredential.hardwareProfileId)
       || t.policyEpoch !== boundRequest.hardwareCredential.policyEpoch
       || t.issuedAtMs < boundRequest.issuedAtMs
       || t.expiresAtMs > boundRequest.expiresAtMs
       || t.issuedAtMs >= t.expiresAtMs
-      || !t.requestMode.acceptsExactAmount(t.exactAmount)) {
+      || t.exactAmount !== boundRequest.amount) {
     throw new TypeError("Offline Cash V1 ticket request binding is invalid");
   }
 }
@@ -1190,7 +1136,7 @@ function paymentRequestSigningBytes(value) {
   const payload = join(
     field(vector(DOMAIN.requestSigning)), field(u16(request.version)), field(fixedArray(request.releaseId)), field(networkIdBytes(request.networkId)),
     field(request.asset.canonicalPayload()), field(encodeType(T.INCARNATION, request.assetIncarnation)), field(u32(request.scale)),
-    field(fixedArray(request.liabilityPoolId)), field(request.recipient.canonicalPayload()), field(encodeRequestMode(request.requestMode)),
+    field(fixedArray(request.liabilityPoolId)), field(request.recipient.canonicalPayload()), field(u128(request.amount)),
     field(fixedArray(request.hardwareCredential.credentialId)), field(fixedArray(request.requestId)), field(u64(request.issuedAtMs)), field(u64(request.expiresAtMs)),
   );
   return frame("iroha.offline-cash.v1.payment-request-signing-preimage", payload, 16);
@@ -1257,7 +1203,6 @@ function encodeType(type, value) {
     case T.PUBLIC_KEY: return value.sec1Bytes();
     case T.SIGNATURE: return value.rawBytes();
     case T.VECTOR: return vector(value);
-    case T.REQUEST_MODE: return encodeRequestMode(value);
     case T.OPERATION_KIND: return encodeUnitEnum(value, OPERATION_KINDS, "operation kind");
     case T.CREDIT_PURPOSE: return encodeUnitEnum(value, CREDIT_PURPOSES, "credit purpose");
     case T.COMMIT_EVIDENCE: return encodeCommitEvidence(value);
@@ -1282,29 +1227,12 @@ function decodeType(type, payload, context) {
     case T.PUBLIC_KEY: return new OfflineCashDevicePublicKeyV1(payload);
     case T.SIGNATURE: return new OfflineCashDeviceSignatureV1(payload);
     case T.VECTOR: return readVector(payload, context);
-    case T.REQUEST_MODE: return decodeRequestMode(payload, context);
     case T.OPERATION_KIND: return decodeUnitEnum(payload, OPERATION_KINDS, context);
     case T.CREDIT_PURPOSE: return decodeUnitEnum(payload, CREDIT_PURPOSES, context);
     case T.COMMIT_EVIDENCE: return decodeCommitEvidence(payload, context);
     case T.OPTIONAL_MINT_AUTHORIZATION: return decodeOptionalMintAuthorization(payload, context);
     default: return decodeModel(DEFINITIONS[type].Model, payload);
   }
-}
-
-function encodeRequestMode(value) {
-  const mode = instance(value, OfflineCashPaymentRequestModeV1, "request mode");
-  return join(u32(REQUEST_MODES[mode.mode][0]), field(encodeModel(mode.policy)));
-}
-
-function decodeRequestMode(payload, context) {
-  if (payload.length < 5) throw new TypeError(`${context} is truncated`);
-  const tag = Number(readUnsigned(payload.subarray(0, 4), 4, `${context}.tag`));
-  const entry = Object.entries(REQUEST_MODES).find(([, [candidate]]) => candidate === tag);
-  if (!entry) throw new TypeError(`${context} has an unknown tag`);
-  const reader = new Reader(payload.subarray(4), context);
-  const policy = decodeModel(entry[1][1], reader.readField("policy"));
-  reader.eof();
-  return new OfflineCashPaymentRequestModeV1({ mode: entry[0], policy });
 }
 
 function encodeCommitEvidence(value) {
@@ -1439,7 +1367,6 @@ function normalizeType(type, value, context) {
     case T.PUBLIC_KEY: return value instanceof OfflineCashDevicePublicKeyV1 ? value : new OfflineCashDevicePublicKeyV1(value);
     case T.SIGNATURE: return value instanceof OfflineCashDeviceSignatureV1 ? value : new OfflineCashDeviceSignatureV1(value);
     case T.VECTOR: return bytes(value, context);
-    case T.REQUEST_MODE: return instance(value, OfflineCashPaymentRequestModeV1, context);
     case T.OPERATION_KIND: if (typeof value !== "string" || !OPERATION_KINDS.includes(value)) throw new TypeError(`${context} is invalid`); return value;
     case T.CREDIT_PURPOSE: if (typeof value !== "string" || !CREDIT_PURPOSES.includes(value)) throw new TypeError(`${context} is invalid`); return value;
     case T.COMMIT_EVIDENCE: return instance(value, OfflineCashCommitEvidenceV1, context);
@@ -1507,12 +1434,6 @@ export const OfflineCashV1 = Object.freeze({
   AccountId: OfflineCashAccountIdV1,
   DevicePublicKey: OfflineCashDevicePublicKeyV1,
   DeviceSignature: OfflineCashDeviceSignatureV1,
-  AmountPolicy: OfflineCashAmountPolicyV1,
-  SingleExactRequest: OfflineCashSingleExactRequestV1,
-  PartialUntilTotalRequest: OfflineCashPartialUntilTotalRequestV1,
-  BoundedMultiPaymentRequest: OfflineCashBoundedMultiPaymentRequestV1,
-  OpenReceiveRequest: OfflineCashOpenReceiveRequestV1,
-  PaymentRequestMode: OfflineCashPaymentRequestModeV1,
   HardwareCredential: OfflineCashHardwareCredentialV1,
   PastaStateCommitment: OfflineCashPastaStateCommitmentV1,
   PairedProof: OfflineCashPairedProofV1,

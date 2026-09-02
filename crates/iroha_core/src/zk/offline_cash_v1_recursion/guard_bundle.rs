@@ -51,7 +51,8 @@ use snark_verifier::{pcs::ipa::IpaSuccinctVerifyingKey, verifier::plonk::PlonkPr
 use super::deferred_parent::{
     DeferredAccumulator, accumulator_limb_count, bind_accumulator_limbs,
     constrain_reciprocal_tagged_audit_v1, deferred_field_chips_v1, deferred_loader_v1,
-    finalize_tagged_deferred_audit_v1, verify_fold, verify_ordinary_proof_v1,
+    finalize_tagged_deferred_audit_v1, ordinary_ipa_proof_profile_v1, verify_fold,
+    verify_ordinary_proof_v1,
 };
 
 /// Fixed provider-profile registry depth.
@@ -137,8 +138,6 @@ fn normalized_guard_statement_payload_v1(
     bytes.extend_from_slice(&statement.terminal_commit_binding_digest);
     bytes.extend_from_slice(&statement.sender_one_time_authorization_digest);
     bytes.extend_from_slice(&statement.suite_upgrade_authorization_digest);
-    bytes.push(statement.receive_active_count);
-    bytes.extend_from_slice(&statement.receive_batch_binding_digest);
     bytes.extend_from_slice(&statement.transition_intent_digest);
     bytes.extend_from_slice(&statement.transition_effect_digest);
     bytes.extend_from_slice(&statement.recovery_record_digest);
@@ -152,7 +151,7 @@ const fn operation_tag(operation: super::OfflineCashOperationV1) -> u8 {
         super::OfflineCashOperationV1::Bootstrap => 0,
         super::OfflineCashOperationV1::MintFold => 1,
         super::OfflineCashOperationV1::SendSplit => 2,
-        super::OfflineCashOperationV1::ReceiveFoldBatch => 3,
+        super::OfflineCashOperationV1::ReceiveFold => 3,
         super::OfflineCashOperationV1::RedeemSplit => 4,
         super::OfflineCashOperationV1::SuiteUpgrade => 5,
         super::OfflineCashOperationV1::Rotate => 6,
@@ -870,8 +869,6 @@ pub(super) struct OfflineCashAssignedGuardBundleV1<F: OfflineCashPoseidonFieldV1
     pub(super) terminal_commit_binding_digest: [AssignedValue<F>; 2],
     pub(super) sender_one_time_authorization_digest: [AssignedValue<F>; 2],
     pub(super) suite_upgrade_authorization_digest: [AssignedValue<F>; 2],
-    pub(super) receive_active_count: AssignedValue<F>,
-    pub(super) receive_batch_binding_digest: [AssignedValue<F>; 2],
     pub(super) transition_intent: [AssignedValue<F>; 2],
     pub(super) transition_effect: [AssignedValue<F>; 2],
     pub(super) recovery_record: [AssignedValue<F>; 2],
@@ -1048,9 +1045,6 @@ where
         assign_digest(ctx, &range, statement.sender_one_time_authorization_digest);
     let suite_upgrade_authorization =
         assign_digest(ctx, &range, statement.suite_upgrade_authorization_digest);
-    let receive_active_count =
-        assign_uint_le(ctx, &range, u128::from(statement.receive_active_count), 8);
-    let receive_batch_binding = assign_digest(ctx, &range, statement.receive_batch_binding_digest);
     let intent = assign_digest(ctx, &range, statement.transition_intent_digest);
     let effect = assign_digest(ctx, &range, statement.transition_effect_digest);
     let recovery = assign_digest(ctx, &range, statement.recovery_record_digest);
@@ -1157,14 +1151,6 @@ where
     assert_if_digest_nonzero(ctx, &range, suite_upgrade, &suite_upgrade_authorization);
     let not_suite_upgrade = gate.not(ctx, suite_upgrade);
     assert_if_digest_zero(ctx, &range, not_suite_upgrade, &suite_upgrade_authorization);
-    let receive = selectors[3];
-    let not_receive = gate.not(ctx, receive);
-    assert_if_nonzero(ctx, &range, receive, receive_active_count.value);
-    assert_if_zero(ctx, &range, not_receive, receive_active_count.value);
-    let count_below_seventeen = range.is_less_than_safe(ctx, receive_active_count.value, 17);
-    gate.assert_is_const(ctx, &count_below_seventeen, &F::ONE);
-    assert_if_digest_nonzero(ctx, &range, receive, &receive_batch_binding);
-    assert_if_digest_zero(ctx, &range, not_receive, &receive_batch_binding);
     let state_changes = gate.add(ctx, exact_next, rotate);
     assert_if_digest_different(
         ctx,
@@ -1443,8 +1429,6 @@ where
             terminal_commit.to_vec(),
             sender_authorization.to_vec(),
             suite_upgrade_authorization.to_vec(),
-            receive_active_count.bytes,
-            receive_batch_binding.to_vec(),
             intent.to_vec(),
             effect.to_vec(),
             recovery.to_vec(),
@@ -1502,8 +1486,6 @@ where
             ctx,
             &suite_upgrade_authorization,
         ),
-        receive_active_count: receive_active_count.value,
-        receive_batch_binding_digest: digest_limbs_assigned(ctx, &receive_batch_binding),
         transition_intent: digest_limbs_assigned(ctx, &intent),
         transition_effect: digest_limbs_assigned(ctx, &effect),
         recovery_record: digest_limbs_assigned(ctx, &recovery),
@@ -1881,10 +1863,15 @@ where
     C::Base: BigPrimeField,
     C::ScalarExt: OfflineCashPoseidonFieldV1,
 {
-    if credential_protocol.num_instance != [2]
-        || credential_proofs.iter().any(|proof| {
-            proof.is_empty() || proof.len() > super::OFFLINE_CASH_PARITY_PROOF_MAX_BYTES_V1
-        })
+    if credential_protocol.num_instance != [2] {
+        return Err("Offline Cash credential proof has wrong fixed shape".to_owned());
+    }
+    let credential_proof_len = ordinary_ipa_proof_profile_v1(credential_protocol)
+        .map_err(|error| format!("Offline Cash credential proof profile is invalid: {error}"))?
+        .byte_len;
+    if credential_proofs
+        .iter()
+        .any(|proof| proof.len() != credential_proof_len)
     {
         return Err("Offline Cash credential proof has wrong fixed shape".to_owned());
     }
@@ -2486,8 +2473,6 @@ mod tests {
                 terminal_commit_binding_digest: [0; 32],
                 sender_one_time_authorization_digest: [0; 32],
                 suite_upgrade_authorization_digest: [0; 32],
-                receive_active_count: 0,
-                receive_batch_binding_digest: [0; 32],
                 transition_intent_digest: [16; 32],
                 transition_effect_digest: [17; 32],
                 recovery_record_digest: [18; 32],

@@ -18,6 +18,10 @@ const CREDENTIAL_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x37; 32];
 const CREDENTIAL_EP_PROTOCOL_DIGEST: [u8; 32] = [0x38; 32];
 const GUARD_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x39; 32];
 const GUARD_EP_PROTOCOL_DIGEST: [u8; 32] = [0x3A; 32];
+const CREDENTIAL_EQ_PROOF_BYTES: u32 = 8_000;
+const CREDENTIAL_EP_PROOF_BYTES: u32 = 8_032;
+const GUARD_EQ_PROOF_BYTES: u32 = 12_000;
+const GUARD_EP_PROOF_BYTES: u32 = 12_032;
 
 fn helper_protocols() -> Vec<OfflineCashHelperProtocolV1> {
     vec![
@@ -25,21 +29,29 @@ fn helper_protocols() -> Vec<OfflineCashHelperProtocolV1> {
             helper: OfflineCashQualifiedHelperCircuitV1::MintAuthorization,
             eq_protocol_digest: MINT_AUTHORIZATION_EQ_PROTOCOL_DIGEST,
             ep_protocol_digest: MINT_AUTHORIZATION_EP_PROTOCOL_DIGEST,
+            eq_proof_bytes: 0,
+            ep_proof_bytes: 0,
         },
         OfflineCashHelperProtocolV1 {
             helper: OfflineCashQualifiedHelperCircuitV1::MintCredit,
             eq_protocol_digest: MINT_EQ_PROTOCOL_DIGEST,
             ep_protocol_digest: MINT_EP_PROTOCOL_DIGEST,
+            eq_proof_bytes: 0,
+            ep_proof_bytes: 0,
         },
         OfflineCashHelperProtocolV1 {
             helper: OfflineCashQualifiedHelperCircuitV1::PlatformCredential,
             eq_protocol_digest: CREDENTIAL_EQ_PROTOCOL_DIGEST,
             ep_protocol_digest: CREDENTIAL_EP_PROTOCOL_DIGEST,
+            eq_proof_bytes: CREDENTIAL_EQ_PROOF_BYTES,
+            ep_proof_bytes: CREDENTIAL_EP_PROOF_BYTES,
         },
         OfflineCashHelperProtocolV1 {
             helper: OfflineCashQualifiedHelperCircuitV1::GuardBundle,
             eq_protocol_digest: GUARD_EQ_PROTOCOL_DIGEST,
             ep_protocol_digest: GUARD_EP_PROTOCOL_DIGEST,
+            eq_proof_bytes: GUARD_EQ_PROOF_BYTES,
+            ep_proof_bytes: GUARD_EP_PROOF_BYTES,
         },
     ]
 }
@@ -182,7 +194,20 @@ fn profile_qualification(
                 ep_verifying_key: artifact(artifacts, ep_role),
                 eq_circuit_rows: 32_000,
                 ep_circuit_rows: 32_000,
-                complete_proof_bytes: 4_000,
+                eq_proof_bytes: protocol.eq_proof_bytes,
+                ep_proof_bytes: protocol.ep_proof_bytes,
+                complete_proof_bytes: if matches!(
+                    protocol.helper,
+                    OfflineCashQualifiedHelperCircuitV1::PlatformCredential
+                        | OfflineCashQualifiedHelperCircuitV1::GuardBundle
+                ) {
+                    protocol
+                        .eq_proof_bytes
+                        .checked_add(protocol.ep_proof_bytes)
+                        .expect("bounded internal helper proof lengths")
+                } else {
+                    4_000
+                },
                 prove_p95_ms: 8_000,
                 verify_p95_ms: 800,
                 process_rss_bytes: 110 * 1024 * 1024,
@@ -191,13 +216,6 @@ fn profile_qualification(
                     report_seed.wrapping_add(9 + u8::try_from(index).expect("small helper index")),
                 ),
             }
-        })
-        .collect();
-    let receive_fold_occupancies = (1_u8..=OFFLINE_CASH_RECEIVE_FOLD_BATCH_WIDTH_V1)
-        .map(|occupancy| OfflineCashReceiveFoldOccupancyV1 {
-            occupancy,
-            complete_proof_bytes: 6_000,
-            report: evidence(report_seed.wrapping_add(0x10).wrapping_add(occupancy)),
         })
         .collect();
     let recursive_depths = [8_u32, 64, 1_024, 2_048]
@@ -239,7 +257,6 @@ fn profile_qualification(
         profile,
         relations,
         helper_circuits,
-        receive_fold_occupancies,
         recursive_depths,
         aggregate_balance: OfflineCashAggregateBalanceQualificationV1 {
             independent_payments: OFFLINE_CASH_MIN_QUALIFIED_AGGREGATED_CREDITS_V1,
@@ -860,18 +877,45 @@ fn helper_circuits_are_complete_measured_and_artifact_bound() {
         GUARD_EQ_PROTOCOL_DIGEST;
     assert!(wrong_protocol.validate().is_err());
 
-    let mut exact = base.clone();
-    let helper = &mut exact.profile_qualifications[0].helper_circuits[2];
-    helper.eq_circuit_rows = 1_u32 << OFFLINE_CASH_HALO2_K_V1;
-    helper.complete_proof_bytes =
+    let mut exact_wire_limit = base.clone();
+    let wire_helper = &mut exact_wire_limit.profile_qualifications[0].helper_circuits[0];
+    wire_helper.eq_circuit_rows = 1_u32 << OFFLINE_CASH_HALO2_K_V1;
+    wire_helper.complete_proof_bytes =
         u32::try_from(OFFLINE_CASH_PAIRED_PROOF_MAX_BYTES_V1).expect("proof cap fits u32");
-    helper.prove_p95_ms = OFFLINE_CASH_PROVE_P95_MAX_MS_V1;
-    helper.verify_p95_ms = OFFLINE_CASH_VERIFY_P95_MAX_MS_V1;
-    helper.process_rss_bytes = OFFLINE_CASH_PROCESS_RSS_MAX_BYTES_V1;
-    reseal_profile_qualification(&mut exact, 0);
-    exact.validate().expect("exact helper limits pass");
-    exact.profile_qualifications[0].helper_circuits[2].complete_proof_bytes += 1;
-    assert!(exact.validate().is_err());
+    wire_helper.prove_p95_ms = OFFLINE_CASH_PROVE_P95_MAX_MS_V1;
+    wire_helper.verify_p95_ms = OFFLINE_CASH_VERIFY_P95_MAX_MS_V1;
+    wire_helper.process_rss_bytes = OFFLINE_CASH_PROCESS_RSS_MAX_BYTES_V1;
+    reseal_profile_qualification(&mut exact_wire_limit, 0);
+    exact_wire_limit
+        .validate()
+        .expect("exact wire-helper limits pass");
+    exact_wire_limit.profile_qualifications[0].helper_circuits[0].complete_proof_bytes += 1;
+    reseal_profile_qualification(&mut exact_wire_limit, 0);
+    assert!(exact_wire_limit.validate().is_err());
+
+    let credential = &base.profile_qualifications[0].helper_circuits[2];
+    assert_eq!(credential.eq_proof_bytes, CREDENTIAL_EQ_PROOF_BYTES);
+    assert_eq!(credential.ep_proof_bytes, CREDENTIAL_EP_PROOF_BYTES);
+    assert_eq!(
+        credential.complete_proof_bytes,
+        CREDENTIAL_EQ_PROOF_BYTES + CREDENTIAL_EP_PROOF_BYTES
+    );
+    assert!(
+        usize::try_from(credential.complete_proof_bytes).expect("u32 fits usize")
+            > OFFLINE_CASH_PAIRED_PROOF_MAX_BYTES_V1
+    );
+
+    let mut substituted_internal_length = base.clone();
+    substituted_internal_length.profile_qualifications[0].helper_circuits[2].eq_proof_bytes += 32;
+    substituted_internal_length.profile_qualifications[0].helper_circuits[2]
+        .complete_proof_bytes += 32;
+    reseal_profile_qualification(&mut substituted_internal_length, 0);
+    assert!(substituted_internal_length.validate().is_err());
+
+    let mut wrong_internal_sum = base.clone();
+    wrong_internal_sum.profile_qualifications[0].helper_circuits[3].complete_proof_bytes -= 32;
+    reseal_profile_qualification(&mut wrong_internal_sum, 0);
+    assert!(wrong_internal_sum.validate().is_err());
 
     let mut substituted = base.clone();
     substituted.profile_qualifications[0].helper_circuits[0]
@@ -887,21 +931,108 @@ fn helper_circuits_are_complete_measured_and_artifact_bound() {
 }
 
 #[test]
-fn batch_occupancies_and_recursive_depths_are_exact() {
+fn internal_helper_protocol_lengths_are_exact_authenticated_profiles() {
+    let protocols = helper_protocols();
+    offline_cash_release_profile_digest_v1(
+        evidence(5),
+        STATE_EQ_PROTOCOL_DIGEST,
+        STATE_EP_PROTOCOL_DIGEST,
+        WRAPPER_EQ_PROTOCOL_DIGEST,
+        WRAPPER_EP_PROTOCOL_DIGEST,
+        &protocols,
+    )
+    .expect("well-formed internal proof profiles");
+
+    let mut wire_claims_exact_length = protocols.clone();
+    wire_claims_exact_length[0].eq_proof_bytes = 32;
+    assert!(
+        offline_cash_release_profile_digest_v1(
+            evidence(5),
+            STATE_EQ_PROTOCOL_DIGEST,
+            STATE_EP_PROTOCOL_DIGEST,
+            WRAPPER_EQ_PROTOCOL_DIGEST,
+            WRAPPER_EP_PROTOCOL_DIGEST,
+            &wire_claims_exact_length,
+        )
+        .is_err()
+    );
+
+    let mut non_word_aligned = protocols.clone();
+    non_word_aligned[2].eq_proof_bytes += 1;
+    assert!(
+        offline_cash_release_profile_digest_v1(
+            evidence(5),
+            STATE_EQ_PROTOCOL_DIGEST,
+            STATE_EP_PROTOCOL_DIGEST,
+            WRAPPER_EQ_PROTOCOL_DIGEST,
+            WRAPPER_EP_PROTOCOL_DIGEST,
+            &non_word_aligned,
+        )
+        .is_err()
+    );
+
+    let mut zero_internal_length = protocols.clone();
+    zero_internal_length[3].ep_proof_bytes = 0;
+    assert!(
+        offline_cash_release_profile_digest_v1(
+            evidence(5),
+            STATE_EQ_PROTOCOL_DIGEST,
+            STATE_EP_PROTOCOL_DIGEST,
+            WRAPPER_EQ_PROTOCOL_DIGEST,
+            WRAPPER_EP_PROTOCOL_DIGEST,
+            &zero_internal_length,
+        )
+        .is_err()
+    );
+
+    let mut exact_resource_limit = protocols.clone();
+    exact_resource_limit[2].eq_proof_bytes =
+        OFFLINE_CASH_INTERNAL_HELPER_PROOF_EVIDENCE_MAX_BYTES_V1;
+    offline_cash_release_profile_digest_v1(
+        evidence(5),
+        STATE_EQ_PROTOCOL_DIGEST,
+        STATE_EP_PROTOCOL_DIGEST,
+        WRAPPER_EQ_PROTOCOL_DIGEST,
+        WRAPPER_EP_PROTOCOL_DIGEST,
+        &exact_resource_limit,
+    )
+    .expect("exact internal proof evidence resource limit");
+
+    let mut over_resource_limit = protocols.clone();
+    over_resource_limit[2].eq_proof_bytes =
+        OFFLINE_CASH_INTERNAL_HELPER_PROOF_EVIDENCE_MAX_BYTES_V1 + 32;
+    assert!(
+        offline_cash_release_profile_digest_v1(
+            evidence(5),
+            STATE_EQ_PROTOCOL_DIGEST,
+            STATE_EP_PROTOCOL_DIGEST,
+            WRAPPER_EQ_PROTOCOL_DIGEST,
+            WRAPPER_EP_PROTOCOL_DIGEST,
+            &over_resource_limit,
+        )
+        .is_err()
+    );
+
+    let mut overflowing_pair = protocols;
+    overflowing_pair[2].eq_proof_bytes = u32::MAX - 31;
+    overflowing_pair[2].ep_proof_bytes = 32;
+    assert!(
+        offline_cash_release_profile_digest_v1(
+            evidence(5),
+            STATE_EQ_PROTOCOL_DIGEST,
+            STATE_EP_PROTOCOL_DIGEST,
+            WRAPPER_EQ_PROTOCOL_DIGEST,
+            WRAPPER_EP_PROTOCOL_DIGEST,
+            &overflowing_pair,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn recursive_depths_are_exact() {
     let artifacts = artifacts();
     let base = receipt(&artifacts);
-
-    let mut missing_occupancy = base.clone();
-    missing_occupancy.profile_qualifications[0]
-        .receive_fold_occupancies
-        .remove(7);
-    assert!(missing_occupancy.validate().is_err());
-
-    let mut unordered_occupancy = base.clone();
-    unordered_occupancy.profile_qualifications[0]
-        .receive_fold_occupancies
-        .swap(7, 8);
-    assert!(unordered_occupancy.validate().is_err());
 
     let mut shallow = base.clone();
     shallow.profile_qualifications[0].recursive_depths[3].depth = 1_024;
@@ -986,7 +1117,10 @@ fn quantitative_and_wire_gates_are_typed_per_profile() {
 fn acceptance_cases_and_reproducible_builds_are_closed() {
     let artifacts = artifacts();
     let base = receipt(&artifacts);
-    assert!(OfflineCashAcceptanceCaseV1::ALL.contains(&OfflineCashAcceptanceCaseV1::SingleExact));
+    assert!(
+        OfflineCashAcceptanceCaseV1::ALL
+            .contains(&OfflineCashAcceptanceCaseV1::DistinctPaymentsSameRequest)
+    );
     assert!(
         OfflineCashAcceptanceCaseV1::ALL
             .contains(&OfflineCashAcceptanceCaseV1::CrashAfterCommitWrapperGeneratedBeforeInstall)
@@ -1294,9 +1428,9 @@ fn release_evidence_python_projection_digest_goldens_match_rust_norito() {
         )
         .expect("VK-set digest"),
         [
-            0xA5, 0x0F, 0x9E, 0xF0, 0x0D, 0x78, 0xF4, 0x88, 0x9B, 0xC4, 0xDA, 0x2E, 0x61, 0x1E,
-            0x25, 0xE9, 0xB1, 0x9E, 0x97, 0x27, 0x96, 0x82, 0xBD, 0x65, 0x91, 0x67, 0x05, 0x61,
-            0xBA, 0x9D, 0xC4, 0xB1,
+            0xC2, 0x97, 0x66, 0xB6, 0x9D, 0xF7, 0x18, 0x95, 0xF3, 0x3D, 0xB1, 0xFF, 0xF2, 0x85,
+            0x45, 0x6F, 0x87, 0x13, 0x2C, 0xE4, 0x37, 0x1E, 0xCC, 0xE4, 0x23, 0x24, 0x14, 0x6D,
+            0x16, 0xDA, 0xD3, 0xB0,
         ]
     );
     assert_eq!(
@@ -1310,9 +1444,9 @@ fn release_evidence_python_projection_digest_goldens_match_rust_norito() {
         )
         .expect("release profile digest"),
         [
-            0xD4, 0xC6, 0x03, 0x71, 0x47, 0x28, 0xFF, 0x42, 0x08, 0xE1, 0xDE, 0x2C, 0x74, 0x19,
-            0xF6, 0x9D, 0x58, 0x93, 0xF5, 0x59, 0x3F, 0xCF, 0x29, 0x97, 0x0F, 0x68, 0x21, 0xB6,
-            0xC9, 0xEF, 0x0F, 0xC1,
+            0xC9, 0xFC, 0x4A, 0x07, 0x98, 0xC1, 0x56, 0x6E, 0x97, 0x4B, 0xD5, 0xD9, 0xA7, 0x46,
+            0x65, 0x56, 0x11, 0x65, 0x10, 0xC9, 0x8F, 0x97, 0xC1, 0xC9, 0xB6, 0xA7, 0x8F, 0xEE,
+            0xC5, 0x6A, 0xA2, 0xFD,
         ]
     );
 }

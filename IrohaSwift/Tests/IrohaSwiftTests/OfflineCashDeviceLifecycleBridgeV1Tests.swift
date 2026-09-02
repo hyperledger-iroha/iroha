@@ -41,8 +41,70 @@ final class OfflineCashDeviceLifecycleBridgeV1Tests: XCTestCase {
       (1...24).map(UInt8.init)
     )
     XCTAssertEqual(
+      OfflineCashDeviceLifecycleOperationV1.allCases.map { String(describing: $0) },
+      [
+        "readActiveHardwareCredential",
+        "prepareAcceptanceIntentAuthorization",
+        "recoverAcceptanceIntentAuthorization",
+        "verifyAuthorizationReserveInboxAndIssueAcceptanceTicket",
+        "recoverAcceptanceTicket",
+        "stageInboundPayment",
+        "recoverStagedInboundPayment",
+        "recoverInboundInboxPage",
+        "prepareExactNextTransition",
+        "recoverPreparedTransition",
+        "abandonUncommittedPreparedTransition",
+        "commitVerifiedCandidate",
+        "recoverTerminalCommitCertificate",
+        "installFinalCommitWrapper",
+        "recoverInstalledEnvelopeOrStateProof",
+        "signReceiveAcknowledgement",
+        "releaseOutboxEntry",
+        "readTrustedTimeOrLease",
+        "prepareMintAuthorization",
+        "recoverMintAuthorization",
+        "verifyAuthorizationAndStageMintCredit",
+        "foldReceive",
+        "readPendingCreditWatermark",
+        "rotateHardwareEpoch",
+      ]
+    )
+    XCTAssertEqual(
       OfflineCashDeviceLifecycleCapabilityV1.allCases.map(\.rawValue),
       (0..<16).map { UInt32(1) << UInt32($0) }
+    )
+    XCTAssertEqual(
+      OfflineCashDeviceLifecycleCapabilityV1.allCases.map { String(describing: $0) },
+      [
+        "exactNextPredecessorConsumption",
+        "oneUseSuccessorAuthorization",
+        "rollbackResistantCounterAndJournal",
+        "sealedTransitionRecovery",
+        "oneUseAcceptanceTickets",
+        "durableInboxReservation",
+        "authenticatedInboundStaging",
+        "authoritativeReplayRootRecovery",
+        "senderOutboxReservation",
+        "authenticatedDurableRetryOutbox",
+        "atomicVerifiedCandidateCommit",
+        "recoverableTerminalCommitCertificate",
+        "trustedTimeOrLease",
+        "offlineHardwareEpochRotation",
+        "rollbackSafeCounterRollover",
+        "noSoftwareFallback",
+      ]
+    )
+    XCTAssertEqual(
+      OfflineCashDeviceLifecycleStatusV1.allCases.map(\.rawValue),
+      (0...10).map(UInt8.init)
+    )
+    XCTAssertEqual(
+      OfflineCashDeviceLifecycleStatusV1.allCases.map { String(describing: $0) },
+      [
+        "success", "unavailable", "staleOrConcurrent", "bindingMismatch",
+        "trustedTimeRejected", "rejected", "missing", "conflict", "corrupt",
+        "malformedRequest", "recoveryRequired",
+      ]
     )
 
     for operation in OfflineCashDeviceLifecycleOperationV1.allCases {
@@ -91,6 +153,59 @@ final class OfflineCashDeviceLifecycleBridgeV1Tests: XCTestCase {
         )
       )
     }
+
+    for unknownOperation: UInt8 in [0, 25] {
+      var response = OfflineCashDeviceLifecycleBridgeV1.Codec
+        .encodeResponseForTests(
+          operation: .stageInboundPayment,
+          status: .success,
+          requestID: fixed(0x11, count: 32),
+          payload: Data([4]),
+          authenticator: fixed(0x44, count: 64)
+        )
+      response[10] = unknownOperation
+      XCTAssertThrowsError(
+        try OfflineCashDeviceLifecycleBridgeV1.Codec.decodeResponse(
+          response,
+          expectedOperation: .stageInboundPayment,
+          expectedRequestID: fixed(0x11, count: 32)
+        )
+      )
+    }
+
+    var unknownStatus = OfflineCashDeviceLifecycleBridgeV1.Codec
+      .encodeResponseForTests(
+        operation: .stageInboundPayment,
+        status: .success,
+        requestID: fixed(0x11, count: 32),
+        payload: Data([4]),
+        authenticator: fixed(0x44, count: 64)
+      )
+    unknownStatus[11] = 11
+    XCTAssertThrowsError(
+      try OfflineCashDeviceLifecycleBridgeV1.Codec.decodeResponse(
+        unknownStatus,
+        expectedOperation: .stageInboundPayment,
+        expectedRequestID: fixed(0x11, count: 32)
+      )
+    )
+
+    let recoveryRequired = OfflineCashDeviceLifecycleBridgeV1.Codec
+      .encodeResponseForTests(
+        operation: .recoverTerminalCommitCertificate,
+        status: .recoveryRequired,
+        requestID: fixed(0x11, count: 32),
+        payload: Data(),
+        authenticator: Data()
+      )
+    XCTAssertEqual(
+      try OfflineCashDeviceLifecycleBridgeV1.Codec.decodeResponse(
+        recoveryRequired,
+        expectedOperation: .recoverTerminalCommitCertificate,
+        expectedRequestID: fixed(0x11, count: 32)
+      ).status,
+      .recoveryRequired
+    )
   }
 
   func testPartialCapabilityAndUnauthenticatedSuccessFailClosed() throws {
@@ -103,6 +218,12 @@ final class OfflineCashDeviceLifecycleBridgeV1Tests: XCTestCase {
         "accepted missing feature bit \(featureBit)"
       )
     }
+
+    let unknownFeature = FakeEndpoint()
+    unknownFeature.capabilityFrame[14] = 1
+    XCTAssertThrowsError(
+      try OfflineCashDeviceLifecycleBridgeV1.withEndpointForTests(unknownFeature)
+    )
 
     let endpoint = FakeEndpoint()
     endpoint.authenticator = Data(repeating: 0, count: 64)

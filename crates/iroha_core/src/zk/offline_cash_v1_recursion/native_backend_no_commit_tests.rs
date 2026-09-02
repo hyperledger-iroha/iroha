@@ -20,8 +20,7 @@ use iroha_data_model::{
         OfflineCashHardwareCredentialV1, OfflineCashHardwarePlatformClassV1,
         OfflineCashHardwareProfileV1, OfflineCashLifecycleBindingV1,
         OfflineCashNoCommitClosureStatementV1, OfflineCashOperationKindV1,
-        OfflineCashOutboxReservationV1, OfflineCashPaymentRequestModeV1,
-        OfflineCashPaymentRequestV1, OfflineCashSingleExactRequestV1,
+        OfflineCashOutboxReservationV1, OfflineCashPaymentRequestV1,
         OfflineCashTrustedCommitTimeV1, offline_cash_device_key_reference_v1,
         offline_cash_suite_commitment_v1,
     },
@@ -226,7 +225,6 @@ fn candidate_instances<F: OfflineCashPoseidonFieldV1>(
     let mut instances = vec![F::ZERO; state_relation::PUBLIC_INSTANCE_COUNT];
     instances[state_relation::public_instance::OPERATION] = F::from(2);
     instances[state_relation::public_instance::AMOUNT] = from_u128(guard.amount);
-    instances[state_relation::public_instance::RECEIVE_BATCH_WIDTH] = F::from(16);
     instances[state_relation::public_instance::PROTOCOL_VERSION] =
         F::from(u64::from(guard.protocol_version));
     instances[state_relation::public_instance::POLICY_EPOCH] = F::from(guard.policy_epoch);
@@ -413,9 +411,7 @@ fn request(predecessor: &OfflineCashStateV1) -> OfflineCashPaymentRequestV1 {
                 .public_key()
                 .clone(),
         ),
-        request_mode: OfflineCashPaymentRequestModeV1::SingleExact(
-            OfflineCashSingleExactRequestV1 { amount: AMOUNT },
-        ),
+        amount: AMOUNT,
         hardware_credential: credential,
         request_id: tagged(0x85),
         issued_at_ms: 10,
@@ -448,7 +444,6 @@ fn acceptance_ticket(
         asset: request.asset.clone(),
         asset_incarnation: request.asset_incarnation,
         scale: request.scale,
-        request_mode: request.request_mode,
         intent_digest: intent
             .canonical_digest_against(request)
             .expect("intent digest"),
@@ -533,8 +528,6 @@ fn guard_relation(
             terminal_commit_binding_digest: [0; 32],
             sender_one_time_authorization_digest: sender_authorization,
             suite_upgrade_authorization_digest: [0; 32],
-            receive_active_count: 0,
-            receive_batch_binding_digest: [0; 32],
             transition_intent_digest: transition_intent,
             transition_effect_digest: transition_effect,
             recovery_record_digest: recovery_record,

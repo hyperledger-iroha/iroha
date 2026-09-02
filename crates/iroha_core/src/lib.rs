@@ -112,10 +112,10 @@ pub mod native_amx;
 pub(crate) mod native_amx_fault_injection;
 /// Nexus helpers (UAID portfolio aggregation, etc.).
 pub mod nexus;
-/// Oracle host helpers (admission/aggregation plumbing).
-pub mod oracle;
 /// Qualified-provider encryption for Offline Cash V1 credit openings.
 pub mod offline_cash_v1_crypto;
+/// Oracle host helpers (admission/aggregation plumbing).
+pub mod oracle;
 /// Panic hook suppression helpers shared across crates.
 pub mod panic_hook;
 /// Peer discovery and gossip.
@@ -1320,8 +1320,6 @@ pub mod prelude {
 #[cfg(test)]
 extern crate self as iroha_core;
 #[cfg(test)]
-mod offline_cash_v1_test_fixtures;
-#[cfg(test)]
 #[path = "../tests/admission_batching.rs"]
 mod admission_batching_tests;
 #[cfg(test)]
@@ -1342,6 +1340,8 @@ mod isi_gas_fees_tests;
 #[cfg(test)]
 #[path = "../tests/ivm_corehost_axt.rs"]
 mod ivm_corehost_axt_tests;
+#[cfg(test)]
+mod offline_cash_v1_test_fixtures;
 #[cfg(test)]
 #[path = "../tests/overlay_chunking.rs"]
 mod overlay_chunking_tests;

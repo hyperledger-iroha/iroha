@@ -215,39 +215,6 @@ public sealed record OfflineCashHardwareCredentialV1(
     ReadOnlyMemory<byte> DeviceKeyReference, ulong IssuedAtMilliseconds,
     ulong ExpiresAtMilliseconds, OfflineCashDeviceSignatureV1 GovernanceSignature);
 
-public sealed record OfflineCashAmountPolicyV1(UInt128 MinimumAmount, UInt128 MaximumAmount)
-{
-    public bool Accepts(UInt128 amount) => amount >= MinimumAmount && amount <= MaximumAmount;
-}
-
-/// <summary>Closed request policy. OpenReceive deliberately has no cumulative bound.</summary>
-public abstract record OfflineCashPaymentRequestModeV1
-{
-    public abstract bool Accepts(UInt128 amount);
-}
-
-public sealed record OfflineCashSingleExactRequestV1(UInt128 Amount) : OfflineCashPaymentRequestModeV1
-{
-    public override bool Accepts(UInt128 amount) => amount == Amount;
-}
-
-public sealed record OfflineCashPartialUntilTotalRequestV1(UInt128 TotalAmount) : OfflineCashPaymentRequestModeV1
-{
-    public override bool Accepts(UInt128 amount) => amount > 0 && amount <= TotalAmount;
-}
-
-public sealed record OfflineCashBoundedMultiPaymentRequestV1(
-    uint MaxPayments, OfflineCashAmountPolicyV1 PerPayment) : OfflineCashPaymentRequestModeV1
-{
-    public override bool Accepts(UInt128 amount) => PerPayment.Accepts(amount);
-}
-
-public sealed record OfflineCashOpenReceiveRequestV1(
-    OfflineCashAmountPolicyV1 PerPayment) : OfflineCashPaymentRequestModeV1
-{
-    public override bool Accepts(UInt128 amount) => PerPayment.Accepts(amount);
-}
-
 public sealed record OfflineCashAcceptanceIntentV1(
     ushort Version, ReadOnlyMemory<byte> RequestDigest, ReadOnlyMemory<byte> IntentId,
     UInt128 ExactAmount, ReadOnlyMemory<byte> SenderOneTimeCommitment);
@@ -283,8 +250,8 @@ public sealed record OfflineCashAcceptanceTicketV1(
     ushort Version, NetworkId NetworkId, ReadOnlyMemory<byte> RequestId,
     ReadOnlyMemory<byte> RequestDigest, ReadOnlyMemory<byte> AcceptanceTicketId,
     OfflineCashAssetDefinitionIdV1 Asset, OfflineCashAssetIncarnationV1 AssetIncarnation,
-    uint Scale, OfflineCashPaymentRequestModeV1 RequestMode, ReadOnlyMemory<byte> IntentDigest,
-    UInt128 ExactAmount, uint ReservedInboxBytes, OfflineCashX25519PublicKeyV1 RecipientOneTimeKey,
+    uint Scale, ReadOnlyMemory<byte> IntentDigest, UInt128 ExactAmount,
+    uint ReservedInboxBytes, OfflineCashX25519PublicKeyV1 RecipientOneTimeKey,
     ReadOnlyMemory<byte> HardwareProfileId, ulong PolicyEpoch, ulong IssuedAtMilliseconds,
     ulong ExpiresAtMilliseconds, OfflineCashDeviceSignatureV1 Signature);
 
@@ -318,7 +285,7 @@ public enum OfflineCashOperationKindV1 : uint
     Bootstrap = 0,
     MintFold = 1,
     SendSplit = 2,
-    ReceiveFoldBatch = 3,
+    ReceiveFold = 3,
     RedeemSplit = 4,
     SuiteUpgrade = 5,
     Rotate = 6,
@@ -371,7 +338,7 @@ public sealed record OfflineCashPaymentRequestV1(
     ushort Version, ReadOnlyMemory<byte> ReleaseId, NetworkId NetworkId,
     OfflineCashAssetDefinitionIdV1 Asset, OfflineCashAssetIncarnationV1 AssetIncarnation,
     uint Scale, ReadOnlyMemory<byte> LiabilityPoolId, OfflineCashAccountIdV1 Recipient,
-    OfflineCashPaymentRequestModeV1 RequestMode, OfflineCashHardwareCredentialV1 HardwareCredential,
+    UInt128 Amount, OfflineCashHardwareCredentialV1 HardwareCredential,
     ReadOnlyMemory<byte> RequestId, ulong IssuedAtMilliseconds, ulong ExpiresAtMilliseconds,
     OfflineCashDeviceSignatureV1 Signature);
 

@@ -97,7 +97,7 @@ verifies that same authorization plus reserve finality and the lifecycle
 The bundle has a fixed operation tag:
 
 ```text
-Bootstrap | MintFold | SendSplit | ReceiveFoldBatch |
+Bootstrap | MintFold | SendSplit | ReceiveFold |
 RedeemSplit | Rotate | SuiteUpgrade
 ```
 
@@ -158,11 +158,10 @@ wire values, checked `u128` arithmetic, processing time, and physical capacity
 remain real bounds, but they may stop only a new ticket or prepare operation;
 they do not invalidate an already committed credit.
 
-`ReceiveFoldBatch` contains exactly sixteen slots and `active_count` in
-`1..=16`. Each active slot verifies a distinct final credit, its one-use ticket
-and commit wrapper, proves nonmembership against the root resulting from the
-previous slot, and adds its private amount. Padding slots are all-zero and have
-no effect. The final root and checked sum are installed by one successor.
+`ReceiveFold` verifies exactly one final credit, its one-use ticket and commit
+wrapper, proves nonmembership against the current replay root, and adds its
+private amount. Arbitrary backlogs are consumed by repeated exact-next
+successors, without a protocol count or fan-in maximum.
 
 Peer and mint credits use the one encrypted-credit contract defined in
 [`offline_cash_v1.md`](offline_cash_v1.md): canonical
@@ -254,27 +253,25 @@ successor.
 
 Ticket issuance accepts one
 `OfflineCashAcceptanceIntentAuthorizationV1`. Before hardware persists the
-compact intent or mutates its request ledger, Core verifies both proof parities
+compact intent or mutates its replay ledger, Core verifies both proof parities
 through the exact authenticated release and proves hidden enabled-profile
 membership, qualified sender hardware, sufficient balance, and a one-use
 predecessor authorization for the exact request and amount. A compact
 `OfflineCashAcceptanceIntentV1` or shape-valid proof bytes alone have no
 authority. Hardware then atomically records the exact intent-digest decision
-and reserves its declared inbox bytes while applying the request's private
-ledger. `SingleExact` consumes its one exact slot;
-`PartialUntilTotal` checked-adds the exact ticket amount to its cumulative
-issued amount; `BoundedMultiPayment` increments its issued count and checks its
-amount interval; and `OpenReceive` checks the interval without imposing a
-cumulative count or amount bound. Every ticket fixes one exact amount. The same
-intent cannot issue twice, and expiry never subtracts an issued amount or
-count. Resolved `OpenReceive` decision entries may compact into an
-authenticated exact-decision accumulator with externally paged nodes; duplicate
-and conflict queries remain exact and the accumulator cannot become a
-historical admission bound. Governed relocation preserves the ledger decision and an equivalent
-delivery slot rather than reclaiming either budget. Only an authenticated
+and reserves its declared inbox bytes. Every ticket fixes the request's one
+positive exact amount. Every distinct valid intent against the same request is
+independently acceptable and receives its own one-use ticket; exact intent
+replay or conflicting reuse fails. Expiry never releases a ticket. Resolved
+decision entries may compact into an authenticated exact-decision accumulator
+with externally paged nodes; duplicate and conflict queries remain exact and
+the accumulator cannot become a historical admission bound. Governed relocation
+preserves the ledger decision and an equivalent delivery slot rather than
+reclaiming the slot. Only an authenticated
 no-commit closure may remove an unresolved ticket and release its capacity,
 after proving that its exact authorized predecessor and sender intent never
-reached terminal hardware commit. Consumed tickets remain counted.
+reached terminal hardware commit. Consumed ticket decisions remain authenticated
+for replay detection.
 
 Staging the exact valid payment consumes that reservation and produces one
 durable receipt. Delivery after ticket expiry, profile rotation, or ordinary

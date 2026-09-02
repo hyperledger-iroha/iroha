@@ -20,9 +20,8 @@ use iroha_data_model::offline::{
     OfflineCashCommitCertificateV1, OfflineCashCommitEvidenceV1, OfflineCashCommitWrapperProofV1,
     OfflineCashLifecycleBindingV1, OfflineCashNoCommitClosureStatementV1,
     OfflineCashOperationKindV1, OfflineCashOutboxReservationV1, OfflineCashPairedProofV1,
-    OfflineCashPaymentRequestModeV1, OfflineCashPaymentRequestV1, OfflineCashPaymentV1,
-    OfflineCashRedemptionStatementV1, OfflineCashRedemptionVoucherV1,
-    OfflineCashTransferStatementV1,
+    OfflineCashPaymentRequestV1, OfflineCashPaymentV1, OfflineCashRedemptionStatementV1,
+    OfflineCashRedemptionVoucherV1, OfflineCashTransferStatementV1,
 };
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
@@ -42,12 +41,12 @@ const CIPHERTEXT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:offline-cash:v1:ciphertext";
 const PREPARATION_ID_DOMAIN_V1: &[u8] = b"iroha:offline-cash:v1:outgoing-preparation";
 const CANDIDATE_ENVELOPE_DOMAIN_V1: &[u8] = b"iroha:offline-cash:v1:precommit-candidate";
 const OUTGOING_ENVELOPE_DIGEST_DOMAIN_V1: &[u8] = b"iroha:offline-cash:v1:terminal-envelope";
-const OPEN_RECEIVE_TERMINAL_ACCUMULATOR_DOMAIN_V1: &[u8] =
-    b"iroha:offline-cash:v1:open-receive-terminal-accumulator";
-const OPEN_RECEIVE_TICKET_RETRY_HORIZON_V1: usize = 64;
+const TERMINAL_DECISION_ACCUMULATOR_DOMAIN_V1: &[u8] =
+    b"iroha:offline-cash:v1:terminal-decision-accumulator";
+const TERMINAL_TICKET_RETRY_HORIZON_V1: usize = 64;
 // A pending snapshot contains two logical views of the payment and receiver stage certificate
 // (the pending fold record and the byte-identical ACK replay record). Keep the complete
-// 65,536-byte GuardBundle, both bounded request/payment copies, two acknowledgement encodings,
+// 65,536-byte GuardBundle, both size-bounded request/payment encodings, two acknowledgement encodings,
 // and generous fixed-structure/framing headroom inside the allocation made before ticket issue.
 // Exact materialized collection bytes are checked by the state-machine projection below; this is
 // only the pre-commit worst-case reservation, never a history/count admission bound.
@@ -333,7 +332,7 @@ pub trait OfflineCashAcceptanceIntentAuthorizationVerifierV1 {
 /// The fields are deliberately private and this type is neither cloneable nor decodable. The only
 /// production constructor authenticates the complete release/profile and invokes the native
 /// paired-proof verifier. This prevents raw envelopes or host booleans from consuming permanent
-/// request-mode or inbox capacity.
+/// intent-decision state or inbox capacity.
 #[derive(Debug, PartialEq, Eq)]
 pub struct VerifiedOfflineCashAcceptanceIntentAuthorizationV1 {
     request: OfflineCashPaymentRequestV1,
@@ -457,15 +456,6 @@ struct ClosedAcceptanceTicketNoCommitTombstoneV1 {
     closure_digest: DigestV1,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Decode, Encode)]
-struct RequestCapacityUsageV1 {
-    request_digest: DigestV1,
-    reserved_exact_amount: u128,
-    consumed_amount: u128,
-    outstanding_ticket_count: u128,
-    consumed_payment_count: u128,
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct AcceptanceTicketCapacityMetersV1 {
     committed_inbox_bytes: u64,
@@ -474,7 +464,7 @@ struct AcceptanceTicketCapacityMetersV1 {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
-struct OpenReceiveTerminalAccumulatorStepV1 {
+struct TerminalDecisionAccumulatorStepV1 {
     previous_accumulator: DigestV1,
     previous_terminal_count: u128,
     acceptance_ticket_id: DigestV1,
@@ -505,10 +495,9 @@ pub struct OfflineCashAcceptanceTicketBookV1 {
     closed_no_commit_tombstones: BTreeMap<DigestV1, ClosedAcceptanceTicketNoCommitTombstoneV1>,
     no_commit_recovery_ticket_ids: BTreeMap<DigestV1, DigestV1>,
     no_commit_cancellation_ticket_ids: BTreeMap<DigestV1, DigestV1>,
-    request_usage: BTreeMap<DigestV1, RequestCapacityUsageV1>,
-    open_receive_terminal_accumulator: DigestV1,
-    open_receive_terminal_count: u128,
-    open_receive_retry_order: Vec<DigestV1>,
+    terminal_decision_accumulator: DigestV1,
+    compacted_terminal_count: u128,
+    terminal_retry_order: Vec<DigestV1>,
 }
 
 fn canonical_map_entry_metadata_bytes_v1<K, V>(
@@ -591,15 +580,10 @@ fn retained_payment_metadata_bytes_v1(
     terminal.slot_released = true;
     terminal.no_commit_recovery = None;
     let mut bytes = canonical_map_entry_metadata_bytes_v1(ticket_id, terminal)?;
-    if matches!(
-        entry.request.request_mode,
-        OfflineCashPaymentRequestModeV1::OpenReceive(_)
-    ) {
-        checked_capacity_add_v1(
-            &mut bytes,
-            canonical_retry_order_metadata_bytes_v1(&[[u8::MAX; 32]])?,
-        )?;
-    }
+    checked_capacity_add_v1(
+        &mut bytes,
+        canonical_retry_order_metadata_bytes_v1(&[[u8::MAX; 32]])?,
+    )?;
     Ok(bytes)
 }
 
@@ -766,10 +750,9 @@ impl OfflineCashAcceptanceTicketBookV1 {
             closed_no_commit_tombstones: BTreeMap::new(),
             no_commit_recovery_ticket_ids: BTreeMap::new(),
             no_commit_cancellation_ticket_ids: BTreeMap::new(),
-            request_usage: BTreeMap::new(),
-            open_receive_terminal_accumulator: [0; 32],
-            open_receive_terminal_count: 0,
-            open_receive_retry_order: Vec::new(),
+            terminal_decision_accumulator: [0; 32],
+            compacted_terminal_count: 0,
+            terminal_retry_order: Vec::new(),
         }
     }
 
@@ -811,24 +794,6 @@ impl OfflineCashAcceptanceTicketBookV1 {
             || self.closed_no_commit_tombstones.contains_key(&ticket_id)
         {
             return Err(OfflineCashStateErrorV1::StateInvariant);
-        }
-
-        if !matches!(
-            request.request_mode,
-            OfflineCashPaymentRequestModeV1::OpenReceive(_)
-        ) {
-            if self.request_usage.contains_key(&request.request_id) {
-                return Err(OfflineCashStateErrorV1::StateInvariant);
-            }
-            let usage = RequestCapacityUsageV1 {
-                request_digest,
-                reserved_exact_amount: 0,
-                consumed_amount: payment.statement.amount,
-                outstanding_ticket_count: 0,
-                consumed_payment_count: 1,
-            };
-            validate_request_consumption(request.request_mode, usage)?;
-            self.request_usage.insert(request.request_id, usage);
         }
 
         self.intent_ticket_decisions.insert(
@@ -951,41 +916,58 @@ impl OfflineCashAcceptanceTicketBookV1 {
         Ok(())
     }
 
-    /// Shift the exact live snapshot contribution before atomically releasing folded tickets.
+    /// Build the exact ticket-book successor for one atomic receiver-snapshot reconciliation.
     ///
-    /// The retained terminal contribution is installed only after every ticket in the batch has
-    /// released its pre-reserved headroom, preventing a transient double charge while keeping the
-    /// externally visible book unchanged until the caller swaps the completed clone.
-    pub(super) fn prepare_receiver_snapshot_fold(
-        &mut self,
+    /// Ticket releases are applied to one private clone before exact capacity meters are recomputed
+    /// once for the complete release set. No intermediate clone is externally visible, so charging the
+    /// final retained snapshot contribution and releasing all of its pre-reserved terminal
+    /// headroom in one reconciliation preserves the same fail-closed capacity invariant without
+    /// repeatedly encoding the complete durable ticket history for every active slot.
+    pub(super) fn receiver_snapshot_folded_successor(
+        &self,
         live_snapshot_bytes: u64,
-    ) -> Result<(), OfflineCashStateErrorV1> {
-        let retained_snapshot_bytes = self.receiver_snapshot_retained_bytes;
+        retained_snapshot_bytes: u64,
+        folded_tickets: &[(DigestV1, DigestV1)],
+    ) -> Result<Self, OfflineCashStateErrorV1> {
         let maximum_committed_bytes = self.committed_inbox_bytes;
-        self.reconcile_receiver_snapshot_usage(
-            live_snapshot_bytes,
-            retained_snapshot_bytes,
-            maximum_committed_bytes,
-        )
+        let mut next = self.clone();
+        next.receiver_snapshot_live_bytes = live_snapshot_bytes;
+        next.receiver_snapshot_retained_bytes = retained_snapshot_bytes;
+        for &(ticket_id, payment_digest) in folded_tickets {
+            next.release_folded_unmetered(ticket_id, payment_digest)?;
+        }
+        if live_snapshot_bytes > next.receiver_snapshot_live_capacity_bytes()? {
+            return Err(OfflineCashStateErrorV1::StateInvariant);
+        }
+        let meters = acceptance_ticket_capacity_meters_v1(&next)?;
+        if meters.committed_inbox_bytes > maximum_committed_bytes
+            || meters.committed_inbox_bytes > next.total_inbox_bytes
+        {
+            return Err(OfflineCashStateErrorV1::StateInvariant);
+        }
+        next.committed_inbox_bytes = meters.committed_inbox_bytes;
+        next.retained_metadata_bytes = meters.retained_metadata_bytes;
+        next.reserved_terminal_metadata_bytes = meters.reserved_terminal_metadata_bytes;
+        Ok(next)
     }
 
-    /// Return the authenticated rolling commitment to OpenReceive decisions beyond retry horizon.
+    /// Return the authenticated rolling commitment to terminal decisions beyond retry horizon.
     #[must_use]
-    pub const fn open_receive_terminal_accumulator(&self) -> DigestV1 {
-        self.open_receive_terminal_accumulator
+    pub const fn terminal_decision_accumulator(&self) -> DigestV1 {
+        self.terminal_decision_accumulator
     }
 
-    /// Return the cumulative number of OpenReceive decisions compacted into the accumulator.
+    /// Return the cumulative number of terminal decisions compacted into the accumulator.
     #[must_use]
-    pub const fn open_receive_compacted_terminal_count(&self) -> u128 {
-        self.open_receive_terminal_count
+    pub const fn compacted_terminal_count(&self) -> u128 {
+        self.compacted_terminal_count
     }
 
     /// Durably enter the capacity-preserving first phase of sender no-commit recovery.
     ///
     /// Only an opaque capability returned after release-pinned paired-proof verification can open
-    /// this phase. The ticket bytes, equivalent delivery slot, and bounded request amount/count
-    /// charge remain reserved until [`Self::close_authenticated_no_commit_recovery`] succeeds.
+    /// this phase. The ticket bytes and equivalent physical delivery slot remain reserved until
+    /// [`Self::close_authenticated_no_commit_recovery`] succeeds.
     pub fn begin_authenticated_no_commit_recovery(
         &mut self,
         verified: &VerifiedOfflineCashNoCommitClosureV1,
@@ -1082,9 +1064,9 @@ impl OfflineCashAcceptanceTicketBookV1 {
 
     /// Close one previously opened authenticated no-commit recovery exactly once.
     ///
-    /// Successful closure alone releases the physical slot and removes the unresolved amount and
-    /// count from bounded request modes. Compact statement/proof identities remain in a permanent
-    /// conflict-closed tombstone, while the exact intent-to-ticket decision remains replayable;
+    /// Successful closure alone releases the physical slot. Compact statement/proof identities
+    /// remain in a permanent conflict-closed tombstone, while the exact intent-to-ticket decision
+    /// remains replayable;
     /// neither expiry nor relocation calls this transition.
     pub fn close_authenticated_no_commit_recovery(
         &mut self,
@@ -1143,36 +1125,6 @@ impl OfflineCashAcceptanceTicketBookV1 {
             return Err(OfflineCashStateErrorV1::InvalidAcceptanceTicket);
         }
 
-        let request_id = entry.request.request_id;
-        let request_mode = entry.request.request_mode;
-        let is_open_receive = matches!(
-            request_mode,
-            OfflineCashPaymentRequestModeV1::OpenReceive(_)
-        );
-        let next_request_usage = if is_open_receive {
-            None
-        } else {
-            let usage = self
-                .request_usage
-                .get(&request_id)
-                .copied()
-                .ok_or(OfflineCashStateErrorV1::StateInvariant)?;
-            let next = RequestCapacityUsageV1 {
-                request_digest: usage.request_digest,
-                reserved_exact_amount: usage
-                    .reserved_exact_amount
-                    .checked_sub(entry.ticket.exact_amount)
-                    .ok_or(OfflineCashStateErrorV1::StateInvariant)?,
-                consumed_amount: usage.consumed_amount,
-                outstanding_ticket_count: usage
-                    .outstanding_ticket_count
-                    .checked_sub(1)
-                    .ok_or(OfflineCashStateErrorV1::StateInvariant)?,
-                consumed_payment_count: usage.consumed_payment_count,
-            };
-            Some(next)
-        };
-
         let tombstone = ClosedAcceptanceTicketNoCommitTombstoneV1 {
             acceptance_ticket_id: ticket_id,
             recovery_id: statement.recovery_id,
@@ -1180,15 +1132,8 @@ impl OfflineCashAcceptanceTicketBookV1 {
             statement_digest,
             closure_digest,
         };
-        let removes_request_usage = next_request_usage.is_some_and(|next| {
-            next.reserved_exact_amount == 0
-                && next.consumed_amount == 0
-                && next.outstanding_ticket_count == 0
-                && next.consumed_payment_count == 0
-        });
-
         if self.closed_no_commit_tombstones.contains_key(&ticket_id)
-            || self.open_receive_retry_order.contains(&ticket_id)
+            || self.terminal_retry_order.contains(&ticket_id)
         {
             return Err(OfflineCashStateErrorV1::StateInvariant);
         }
@@ -1199,13 +1144,6 @@ impl OfflineCashAcceptanceTicketBookV1 {
         next_book
             .closed_no_commit_tombstones
             .insert(ticket_id, tombstone);
-        if let Some(next) = next_request_usage {
-            if removes_request_usage {
-                next_book.request_usage.remove(&request_id);
-            } else {
-                next_book.request_usage.insert(request_id, next);
-            }
-        }
         let capacity_meters = acceptance_ticket_capacity_meters_v1(&next_book)?;
         if capacity_meters.committed_inbox_bytes > self.committed_inbox_bytes {
             return Err(OfflineCashStateErrorV1::StateInvariant);
@@ -1221,9 +1159,9 @@ impl OfflineCashAcceptanceTicketBookV1 {
     /// Reserve one signed, capacity-backed ticket.
     ///
     /// A byte-identical recovery replay is idempotent. The intent-to-ticket decision and both
-    /// identities remain permanent even after OpenReceive compaction or authenticated no-commit
-    /// closure; any differing reuse fails closed. Request-local invoice/count rules are checked
-    /// against both outstanding reservations and consumed payments.
+    /// identities remain permanent even after terminal compaction or authenticated no-commit
+    /// closure; any differing reuse fails closed. Distinct tickets for the same request are
+    /// admitted independently, subject only to exact-amount binding and physical inbox capacity.
     pub fn reserve(
         &mut self,
         verified_authorization: VerifiedOfflineCashAcceptanceIntentAuthorizationV1,
@@ -1283,35 +1221,6 @@ impl OfflineCashAcceptanceTicketBookV1 {
             return Err(OfflineCashStateErrorV1::InvalidAcceptanceTicket);
         }
 
-        let is_open_receive = matches!(
-            request.request_mode,
-            OfflineCashPaymentRequestModeV1::OpenReceive(_)
-        );
-        let usage = if is_open_receive {
-            RequestCapacityUsageV1::default()
-        } else {
-            self.request_usage
-                .get(&request.request_id)
-                .copied()
-                .unwrap_or_default()
-        };
-        if usage.request_digest != [0; 32] && usage.request_digest != request_digest {
-            return Err(OfflineCashStateErrorV1::InvalidPaymentRequest);
-        }
-        validate_request_reservation(request.request_mode, usage, &ticket)?;
-        let next_usage = RequestCapacityUsageV1 {
-            request_digest,
-            reserved_exact_amount: usage
-                .reserved_exact_amount
-                .checked_add(ticket.exact_amount)
-                .ok_or(OfflineCashStateErrorV1::ArithmeticOverflow)?,
-            outstanding_ticket_count: usage
-                .outstanding_ticket_count
-                .checked_add(1)
-                .ok_or(OfflineCashStateErrorV1::ArithmeticOverflow)?,
-            ..usage
-        };
-
         let decision_record = DurableAcceptanceIntentTicketDecisionRecordV1 {
             request: request.clone(),
             request_digest,
@@ -1333,9 +1242,6 @@ impl OfflineCashAcceptanceTicketBookV1 {
             no_commit_recovery: None,
         };
         let mut next = self.clone();
-        if !is_open_receive {
-            next.request_usage.insert(request.request_id, next_usage);
-        }
         let decision = DurableAcceptanceTicketDecisionV1 {
             ticket: ticket.clone(),
             ticket_digest,
@@ -1361,7 +1267,7 @@ impl OfflineCashAcceptanceTicketBookV1 {
     /// Consume one reservation for a durably staged payment.
     ///
     /// The reserved bytes remain committed while the payment occupies the durable inbox. Folding
-    /// may later release the physical slot with [`Self::release_folded`].
+    /// later converts the slot through [`Self::receiver_snapshot_folded_successor`].
     pub fn consume(
         &mut self,
         request: &OfflineCashPaymentRequestV1,
@@ -1394,39 +1300,7 @@ impl OfflineCashAcceptanceTicketBookV1 {
         }
 
         let amount = payment.statement.amount;
-        let ticket_exact_amount = entry.ticket.exact_amount;
         let mut next = self.clone();
-        if !matches!(
-            request.request_mode,
-            OfflineCashPaymentRequestModeV1::OpenReceive(_)
-        ) {
-            let usage = self
-                .request_usage
-                .get(&request.request_id)
-                .copied()
-                .ok_or(OfflineCashStateErrorV1::InvalidAcceptanceTicket)?;
-            let next_usage = RequestCapacityUsageV1 {
-                request_digest: usage.request_digest,
-                reserved_exact_amount: usage
-                    .reserved_exact_amount
-                    .checked_sub(ticket_exact_amount)
-                    .ok_or(OfflineCashStateErrorV1::StateInvariant)?,
-                consumed_amount: usage
-                    .consumed_amount
-                    .checked_add(amount)
-                    .ok_or(OfflineCashStateErrorV1::ArithmeticOverflow)?,
-                outstanding_ticket_count: usage
-                    .outstanding_ticket_count
-                    .checked_sub(1)
-                    .ok_or(OfflineCashStateErrorV1::StateInvariant)?,
-                consumed_payment_count: usage
-                    .consumed_payment_count
-                    .checked_add(1)
-                    .ok_or(OfflineCashStateErrorV1::ArithmeticOverflow)?,
-            };
-            validate_request_consumption(request.request_mode, next_usage)?;
-            next.request_usage.insert(request.request_id, next_usage);
-        }
         let entry = next
             .tickets
             .get_mut(&ticket_id)
@@ -1446,7 +1320,26 @@ impl OfflineCashAcceptanceTicketBookV1 {
 
     /// Release physical inbox bytes after the bound credit has entered the authenticated replay
     /// tree and the byte-identical acknowledgement has been durably retained.
+    #[cfg(test)]
     pub(crate) fn release_folded(
+        &mut self,
+        acceptance_ticket_id: DigestV1,
+        expected_payment_digest: DigestV1,
+    ) -> Result<(), OfflineCashStateErrorV1> {
+        let mut next = self.clone();
+        next.release_folded_unmetered(acceptance_ticket_id, expected_payment_digest)?;
+        let capacity_meters = acceptance_ticket_capacity_meters_v1(&next)?;
+        if capacity_meters.committed_inbox_bytes > self.committed_inbox_bytes {
+            return Err(OfflineCashStateErrorV1::StateInvariant);
+        }
+        next.committed_inbox_bytes = capacity_meters.committed_inbox_bytes;
+        next.retained_metadata_bytes = capacity_meters.retained_metadata_bytes;
+        next.reserved_terminal_metadata_bytes = capacity_meters.reserved_terminal_metadata_bytes;
+        *self = next;
+        Ok(())
+    }
+
+    fn release_folded_unmetered(
         &mut self,
         acceptance_ticket_id: DigestV1,
         expected_payment_digest: DigestV1,
@@ -1461,21 +1354,14 @@ impl OfflineCashAcceptanceTicketBookV1 {
         if entry.slot_released {
             return Ok(());
         }
-        let is_open_receive = matches!(
-            entry.request.request_mode,
-            OfflineCashPaymentRequestModeV1::OpenReceive(_)
-        );
-        let mut next = self.clone();
-        next.tickets
+        self.tickets
             .get_mut(&acceptance_ticket_id)
             .ok_or(OfflineCashStateErrorV1::StateInvariant)?
             .slot_released = true;
-        if is_open_receive {
-            next.open_receive_retry_order.push(acceptance_ticket_id);
-        }
-        if next.open_receive_retry_order.len() > OPEN_RECEIVE_TICKET_RETRY_HORIZON_V1 {
-            let compacted_ticket_id = next.open_receive_retry_order.remove(0);
-            let compacted = next
+        self.terminal_retry_order.push(acceptance_ticket_id);
+        if self.terminal_retry_order.len() > TERMINAL_TICKET_RETRY_HORIZON_V1 {
+            let compacted_ticket_id = self.terminal_retry_order.remove(0);
+            let compacted = self
                 .tickets
                 .remove(&compacted_ticket_id)
                 .ok_or(OfflineCashStateErrorV1::StateInvariant)?;
@@ -1485,11 +1371,11 @@ impl OfflineCashAcceptanceTicketBookV1 {
             if !compacted.slot_released {
                 return Err(OfflineCashStateErrorV1::StateInvariant);
             }
-            next.open_receive_terminal_accumulator = canonical_sha256_digest(
-                OPEN_RECEIVE_TERMINAL_ACCUMULATOR_DOMAIN_V1,
-                &OpenReceiveTerminalAccumulatorStepV1 {
-                    previous_accumulator: next.open_receive_terminal_accumulator,
-                    previous_terminal_count: next.open_receive_terminal_count,
+            self.terminal_decision_accumulator = canonical_sha256_digest(
+                TERMINAL_DECISION_ACCUMULATOR_DOMAIN_V1,
+                &TerminalDecisionAccumulatorStepV1 {
+                    previous_accumulator: self.terminal_decision_accumulator,
+                    previous_terminal_count: self.compacted_terminal_count,
                     acceptance_ticket_id: compacted_ticket_id,
                     ticket_digest: compacted.ticket_digest,
                     intent_authorization_digest: compacted.intent_authorization_digest,
@@ -1497,19 +1383,11 @@ impl OfflineCashAcceptanceTicketBookV1 {
                     exact_amount: compacted.ticket.exact_amount,
                 },
             )?;
-            next.open_receive_terminal_count = next
-                .open_receive_terminal_count
+            self.compacted_terminal_count = self
+                .compacted_terminal_count
                 .checked_add(1)
                 .ok_or(OfflineCashStateErrorV1::ArithmeticOverflow)?;
         }
-        let capacity_meters = acceptance_ticket_capacity_meters_v1(&next)?;
-        if capacity_meters.committed_inbox_bytes > self.committed_inbox_bytes {
-            return Err(OfflineCashStateErrorV1::StateInvariant);
-        }
-        next.committed_inbox_bytes = capacity_meters.committed_inbox_bytes;
-        next.retained_metadata_bytes = capacity_meters.retained_metadata_bytes;
-        next.reserved_terminal_metadata_bytes = capacity_meters.reserved_terminal_metadata_bytes;
-        *self = next;
         Ok(())
     }
 
@@ -1518,7 +1396,6 @@ impl OfflineCashAcceptanceTicketBookV1 {
         live_snapshot_bytes: u64,
         retained_snapshot_bytes: u64,
     ) -> Result<(), OfflineCashStateErrorV1> {
-        let mut request_usage = BTreeMap::<DigestV1, RequestCapacityUsageV1>::new();
         let mut expected_ticket_intent_ids = BTreeMap::<DigestV1, DigestV1>::new();
         for (intent_id, decision) in &self.intent_ticket_decisions {
             let request_digest = decision
@@ -1560,10 +1437,6 @@ impl OfflineCashAcceptanceTicketBookV1 {
                 .ticket
                 .canonical_digest_against(&entry.request, &entry.intent)
                 .map_err(|_| OfflineCashStateErrorV1::SnapshotIntegrity)?;
-            let request_digest = entry
-                .request
-                .canonical_digest()
-                .map_err(|_| OfflineCashStateErrorV1::SnapshotIntegrity)?;
             let decision = self
                 .intent_ticket_decisions
                 .get(&entry.intent.intent_id)
@@ -1602,41 +1475,11 @@ impl OfflineCashAcceptanceTicketBookV1 {
             {
                 return Err(OfflineCashStateErrorV1::SnapshotIntegrity);
             }
-            if matches!(
-                entry.request.request_mode,
-                OfflineCashPaymentRequestModeV1::OpenReceive(_)
-            ) {
-                continue;
-            }
-            let usage = request_usage.entry(entry.request.request_id).or_default();
-            if usage.request_digest != [0; 32] && usage.request_digest != request_digest {
+            if entry
+                .consumed_amount
+                .is_some_and(|amount| entry.ticket.exact_amount != amount)
+            {
                 return Err(OfflineCashStateErrorV1::SnapshotIntegrity);
-            }
-            usage.request_digest = request_digest;
-            match entry.consumed_amount {
-                Some(amount) => {
-                    if entry.ticket.exact_amount != amount {
-                        return Err(OfflineCashStateErrorV1::SnapshotIntegrity);
-                    }
-                    usage.consumed_amount = usage
-                        .consumed_amount
-                        .checked_add(amount)
-                        .ok_or(OfflineCashStateErrorV1::SnapshotIntegrity)?;
-                    usage.consumed_payment_count = usage
-                        .consumed_payment_count
-                        .checked_add(1)
-                        .ok_or(OfflineCashStateErrorV1::SnapshotIntegrity)?;
-                }
-                None => {
-                    usage.reserved_exact_amount = usage
-                        .reserved_exact_amount
-                        .checked_add(entry.ticket.exact_amount)
-                        .ok_or(OfflineCashStateErrorV1::SnapshotIntegrity)?;
-                    usage.outstanding_ticket_count = usage
-                        .outstanding_ticket_count
-                        .checked_add(1)
-                        .ok_or(OfflineCashStateErrorV1::SnapshotIntegrity)?;
-                }
             }
         }
         for (ticket_id, tombstone) in &self.closed_no_commit_tombstones {
@@ -1646,7 +1489,7 @@ impl OfflineCashAcceptanceTicketBookV1 {
                 || tombstone.statement_digest == [0; 32]
                 || tombstone.closure_digest == [0; 32]
                 || self.tickets.contains_key(ticket_id)
-                || self.open_receive_retry_order.contains(ticket_id)
+                || self.terminal_retry_order.contains(ticket_id)
                 || !self.ticket_intent_ids.contains_key(ticket_id)
                 || expected_recovery_ticket_ids
                     .insert(tombstone.recovery_id, *ticket_id)
@@ -1668,39 +1511,23 @@ impl OfflineCashAcceptanceTicketBookV1 {
             || self.receiver_snapshot_live_bytes != live_snapshot_bytes
             || self.receiver_snapshot_retained_bytes != retained_snapshot_bytes
             || live_snapshot_bytes > self.receiver_snapshot_live_capacity_bytes()?
-            || request_usage != self.request_usage
             || expected_recovery_ticket_ids != self.no_commit_recovery_ticket_ids
             || expected_cancellation_ticket_ids != self.no_commit_cancellation_ticket_ids
-            || self.open_receive_retry_order.len() > OPEN_RECEIVE_TICKET_RETRY_HORIZON_V1
-            || self.open_receive_terminal_count == 0
-                && self.open_receive_terminal_accumulator != [0; 32]
-            || self.open_receive_terminal_count != 0
-                && self.open_receive_terminal_accumulator == [0; 32]
+            || self.terminal_retry_order.len() > TERMINAL_TICKET_RETRY_HORIZON_V1
+            || self.compacted_terminal_count == 0 && self.terminal_decision_accumulator != [0; 32]
+            || self.compacted_terminal_count != 0 && self.terminal_decision_accumulator == [0; 32]
         {
             return Err(OfflineCashStateErrorV1::SnapshotIntegrity);
         }
         let mut retry_ids = BTreeMap::new();
-        for ticket_id in &self.open_receive_retry_order {
+        for ticket_id in &self.terminal_retry_order {
             let entry = self
                 .tickets
                 .get(ticket_id)
                 .ok_or(OfflineCashStateErrorV1::SnapshotIntegrity)?;
-            if !matches!(
-                entry.request.request_mode,
-                OfflineCashPaymentRequestModeV1::OpenReceive(_)
-            ) || !entry.slot_released
-                || retry_ids.insert(*ticket_id, ()).is_some()
-            {
+            if !entry.slot_released || retry_ids.insert(*ticket_id, ()).is_some() {
                 return Err(OfflineCashStateErrorV1::SnapshotIntegrity);
             }
-        }
-        for (request_id, usage) in &request_usage {
-            let request = self
-                .tickets
-                .values()
-                .find(|entry| entry.request.request_id == *request_id)
-                .ok_or(OfflineCashStateErrorV1::SnapshotIntegrity)?;
-            validate_recovered_request_usage(request.request.request_mode, *usage)?;
         }
         Ok(())
     }
@@ -1784,110 +1611,6 @@ fn validate_no_commit_statement_against_ticket(
         return Err(OfflineCashStateErrorV1::InvalidRecoveryMaterial);
     }
     Ok(())
-}
-
-fn validate_recovered_request_usage(
-    mode: OfflineCashPaymentRequestModeV1,
-    usage: RequestCapacityUsageV1,
-) -> Result<(), OfflineCashStateErrorV1> {
-    let ticket_count = usage
-        .outstanding_ticket_count
-        .checked_add(usage.consumed_payment_count)
-        .ok_or(OfflineCashStateErrorV1::SnapshotIntegrity)?;
-    let committed_amount = usage
-        .reserved_exact_amount
-        .checked_add(usage.consumed_amount)
-        .ok_or(OfflineCashStateErrorV1::SnapshotIntegrity)?;
-    let valid = match mode {
-        OfflineCashPaymentRequestModeV1::SingleExact(exact) => {
-            ticket_count <= 1
-                && (usage.consumed_payment_count == 0 || usage.consumed_amount == exact.amount)
-                && (usage.outstanding_ticket_count == 0
-                    || usage.reserved_exact_amount == exact.amount)
-        }
-        OfflineCashPaymentRequestModeV1::PartialUntilTotal(partial) => {
-            committed_amount <= partial.total_amount
-        }
-        OfflineCashPaymentRequestModeV1::BoundedMultiPayment(bounded) => {
-            ticket_count <= u128::from(bounded.max_payments)
-        }
-        OfflineCashPaymentRequestModeV1::OpenReceive(_) => true,
-    };
-    if valid {
-        Ok(())
-    } else {
-        Err(OfflineCashStateErrorV1::SnapshotIntegrity)
-    }
-}
-
-fn validate_request_reservation(
-    mode: OfflineCashPaymentRequestModeV1,
-    usage: RequestCapacityUsageV1,
-    ticket: &OfflineCashAcceptanceTicketV1,
-) -> Result<(), OfflineCashStateErrorV1> {
-    let outstanding_and_consumed = usage
-        .consumed_amount
-        .checked_add(usage.reserved_exact_amount)
-        .and_then(|value| value.checked_add(ticket.exact_amount))
-        .ok_or(OfflineCashStateErrorV1::ArithmeticOverflow)?;
-    match mode {
-        OfflineCashPaymentRequestModeV1::SingleExact(exact)
-            if usage.outstanding_ticket_count == 0
-                && usage.consumed_payment_count == 0
-                && ticket.exact_amount == exact.amount =>
-        {
-            Ok(())
-        }
-        OfflineCashPaymentRequestModeV1::PartialUntilTotal(partial)
-            if outstanding_and_consumed <= partial.total_amount =>
-        {
-            Ok(())
-        }
-        OfflineCashPaymentRequestModeV1::BoundedMultiPayment(bounded)
-            if usage
-                .outstanding_ticket_count
-                .checked_add(usage.consumed_payment_count)
-                .and_then(|value| value.checked_add(1))
-                .is_some_and(|value| value <= u128::from(bounded.max_payments)) =>
-        {
-            Ok(())
-        }
-        OfflineCashPaymentRequestModeV1::OpenReceive(_) => Ok(()),
-        _ => Err(OfflineCashStateErrorV1::InvalidAcceptanceTicket),
-    }
-}
-
-fn validate_request_consumption(
-    mode: OfflineCashPaymentRequestModeV1,
-    usage: RequestCapacityUsageV1,
-) -> Result<(), OfflineCashStateErrorV1> {
-    let committed_amount = usage
-        .reserved_exact_amount
-        .checked_add(usage.consumed_amount)
-        .ok_or(OfflineCashStateErrorV1::ArithmeticOverflow)?;
-    let ticket_count = usage
-        .outstanding_ticket_count
-        .checked_add(usage.consumed_payment_count)
-        .ok_or(OfflineCashStateErrorV1::ArithmeticOverflow)?;
-    match mode {
-        OfflineCashPaymentRequestModeV1::SingleExact(exact)
-            if ticket_count == 1 && committed_amount == exact.amount =>
-        {
-            Ok(())
-        }
-        OfflineCashPaymentRequestModeV1::PartialUntilTotal(partial)
-            if committed_amount <= partial.total_amount =>
-        {
-            Ok(())
-        }
-        OfflineCashPaymentRequestModeV1::BoundedMultiPayment(bounded)
-            if ticket_count <= u128::from(bounded.max_payments) =>
-        {
-            Ok(())
-        }
-        OfflineCashPaymentRequestModeV1::OpenReceive(_) => Ok(()),
-        _ => Err(OfflineCashStateErrorV1::InvalidAcceptanceTicket),
-    }
 }
 
 /// Result of reserving sender durable-outbox capacity.
@@ -2244,14 +1967,17 @@ pub struct PreparedRedemptionMaterialV1 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+struct PreparedSendPublicProjectionV1 {
+    request: OfflineCashPaymentRequestV1,
+    acceptance_intent: OfflineCashAcceptanceIntentV1,
+    acceptance_ticket: OfflineCashAcceptanceTicketV1,
+    statement: OfflineCashTransferStatementV1,
+    encrypted_credit: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 enum PreparedPublicProjectionV1 {
-    Send {
-        request: OfflineCashPaymentRequestV1,
-        acceptance_intent: OfflineCashAcceptanceIntentV1,
-        acceptance_ticket: OfflineCashAcceptanceTicketV1,
-        statement: OfflineCashTransferStatementV1,
-        encrypted_credit: Vec<u8>,
-    },
+    Send(Box<PreparedSendPublicProjectionV1>),
     Redemption {
         statement: OfflineCashRedemptionStatementV1,
     },
@@ -2260,14 +1986,15 @@ enum PreparedPublicProjectionV1 {
 impl PreparedPublicProjectionV1 {
     fn lifecycle(&self) -> &OfflineCashLifecycleBindingV1 {
         match self {
-            Self::Send { statement, .. } => &statement.lifecycle,
+            Self::Send(projection) => &projection.statement.lifecycle,
             Self::Redemption { statement } => &statement.lifecycle,
         }
     }
 
     fn semantic_digest(&self) -> Result<DigestV1, OfflineCashStateErrorV1> {
         match self {
-            Self::Send { statement, .. } => statement
+            Self::Send(projection) => projection
+                .statement
                 .canonical_digest()
                 .map_err(|_| OfflineCashStateErrorV1::InvalidPeerCredit),
             Self::Redemption { statement } => statement
@@ -2278,7 +2005,7 @@ impl PreparedPublicProjectionV1 {
 
     const fn transition_nullifier(&self) -> DigestV1 {
         match self {
-            Self::Send { statement, .. } => statement.transition_nullifier,
+            Self::Send(projection) => projection.statement.transition_nullifier,
             Self::Redemption { statement } => statement.terminal_nullifier,
         }
     }
@@ -2652,8 +2379,6 @@ impl PreparedOutgoingCandidateV1 {
             mint_finality_proof_binding_digest: statement.mint_finality_proof_binding_digest,
             peer_credit_id: statement.peer_credit_id,
             peer_recipient_lane_id: statement.peer_recipient_lane_id,
-            receive_active_count: statement.receive_active_count,
-            receive_batch_binding_digest: statement.receive_batch_binding_digest,
             lifecycle_binding_digest: statement.lifecycle_binding_digest,
             precommit_binding_digest: statement.precommit_binding_digest,
             suite_upgrade_authorization_digest: statement.suite_upgrade_authorization_digest,
@@ -3713,6 +3438,9 @@ fn validate_prepared_transition_statement(
         .lifecycle()
         .canonical_digest()
         .map_err(|_| OfflineCashStateErrorV1::InvalidCandidateStage)?;
+    let projection_semantic_digest = projection
+        .semantic_digest()
+        .map_err(|_| OfflineCashStateErrorV1::InvalidCandidateStage)?;
     let common_invalid = statement.version != super::OFFLINE_CASH_STATE_VERSION_V1
         || statement.protocol_version != predecessor.protocol_version
         || statement.predecessor_suite_id != predecessor.suite_id
@@ -3741,12 +3469,11 @@ fn validate_prepared_transition_statement(
                 .checked_add(1)
                 .ok_or(OfflineCashStateErrorV1::JournalRevisionOverflow)?
         || statement.effect_digest == [0; 32]
+        || statement.effect_digest != projection_semantic_digest
         || statement.lifecycle_binding_digest != lifecycle_digest
         || statement.precommit_binding_digest == [0; 32]
         || statement.mint_finality_semantic_digest != [0; 32]
         || statement.mint_finality_proof_binding_digest != [0; 32]
-        || statement.receive_active_count != 0
-        || statement.receive_batch_binding_digest != [0; 32]
         || statement.suite_upgrade_authorization_digest != [0; 32]
         || transport_semantic_digest == [0; 32]
         || normalized_guard_statement_digest == [0; 32]
@@ -3882,16 +3609,25 @@ mod tests {
             OFFLINE_CASH_ACCEPTANCE_TICKET_MIN_RESERVED_INBOX_BYTES_V1,
             OFFLINE_CASH_HARDWARE_REQUIRED_CAPABILITIES_V1,
             OFFLINE_CASH_PAYMENT_OUTBOX_MIN_BYTES_V1, OFFLINE_CASH_REDEMPTION_OUTBOX_MIN_BYTES_V1,
-            OfflineCashAmountPolicyV1, OfflineCashBoundedMultiPaymentRequestV1,
+            OFFLINE_CASH_XCHACHA20POLY1305_NONCE_BYTES_V1,
+            OFFLINE_CASH_XCHACHA20POLY1305_TAG_BYTES_V1, OfflineCashAcknowledgementV1,
             OfflineCashDevicePublicKeyV1, OfflineCashDeviceSignatureV1,
-            OfflineCashHardwareCredentialV1, OfflineCashNoCommitClosureV1,
-            OfflineCashOpenReceiveRequestV1, OfflineCashPartialUntilTotalRequestV1,
-            OfflineCashSingleExactRequestV1, offline_cash_device_key_reference_v1,
+            OfflineCashEncryptedCreditEnvelopeV1, OfflineCashHardwareCredentialV1,
+            OfflineCashInboxReceiptV1, OfflineCashNoCommitClosureV1,
+            OfflineCashPastaStateCommitmentV1, OfflineCashTrustedCommitTimeV1,
+            offline_cash_ciphertext_digest_v1, offline_cash_credit_opening_canonical_len_v1,
+            offline_cash_device_key_reference_v1, offline_cash_inbox_receipt_commitment_v1,
             offline_cash_liability_pool_id_v1,
         },
     };
     use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
 
+    use super::super::{
+        AcceptedPaymentReceiptV1, CREDIT_ENVELOPE_DOMAIN, ConsumedCreditRecordV1, CreditIdV1,
+        CreditStageCertificateV1, CreditStageStatementV1, DevicePolicyBindingV1,
+        DurableAcknowledgementV1, ExactConsumedCreditIndex, HardwareEpochV1, OfflineCashLaneIdV1,
+        StagedCreditV1, receiver_snapshot_capacity_usage_v1,
+    };
     use super::*;
     use crate::zk::offline_cash_v1_recursion::{
         OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1, OfflineCashNoCommitClosureDecisionV1,
@@ -3917,6 +3653,28 @@ mod tests {
             _closure: &OfflineCashNoCommitClosureV1,
         ) -> Result<OfflineCashNoCommitClosureDecisionV1, String> {
             Err("rejected test closure".to_owned())
+        }
+    }
+
+    struct AcceptingOutgoingVerifier;
+
+    impl OfflineCashCandidateProofVerifierV1 for AcceptingOutgoingVerifier {
+        fn verify_candidate_proof(
+            &self,
+            _candidate: &PreparedOutgoingCandidateV1,
+            _proof: &OfflineCashPairedProofV1,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    impl OfflineCashCommitWrapperVerifierV1 for AcceptingOutgoingVerifier {
+        fn verify_commit_wrapper(
+            &self,
+            _public_inputs: &OfflineCashCommitWrapperPublicInputsV1,
+            _proof: &OfflineCashCommitWrapperProofV1,
+        ) -> Result<(), String> {
+            Ok(())
         }
     }
 
@@ -3981,19 +3739,15 @@ mod tests {
         );
 
         let receiver_tag = u8::MAX - 2;
-        let open = request(
-            OfflineCashPaymentRequestModeV1::OpenReceive(OfflineCashOpenReceiveRequestV1 {
-                per_payment: OfflineCashAmountPolicyV1 {
-                    minimum_amount: 1,
-                    maximum_amount: 100,
-                },
-            }),
+        let payment_request = request(100, receiver_tag);
+        let acceptance_intent = intent(&payment_request, receiver_tag, 100);
+        let acceptance_ticket = ticket(&payment_request, &acceptance_intent, receiver_tag);
+        let projected_receiver_bytes = exact_capacity_for_ticket(
+            &payment_request,
+            acceptance_intent,
+            &acceptance_ticket,
             receiver_tag,
         );
-        let acceptance_intent = intent(&open, receiver_tag, 100);
-        let acceptance_ticket = ticket(&open, &acceptance_intent, receiver_tag);
-        let projected_receiver_bytes =
-            exact_capacity_for_ticket(&open, acceptance_intent, &acceptance_ticket, receiver_tag);
         assert!(
             projected_receiver_bytes <= OfflineCashDurableCapacityV1::MINIMUM_INBOX_BYTES,
             "projected receiver bytes {projected_receiver_bytes} exceed the durable floor"
@@ -4003,7 +3757,7 @@ mod tests {
         );
         receiver
             .reserve(
-                verified_authorization(&open, acceptance_intent, receiver_tag),
+                verified_authorization(&payment_request, acceptance_intent, receiver_tag),
                 acceptance_ticket,
             )
             .expect("complete receiver floor must admit one ticket");
@@ -4080,7 +3834,7 @@ mod tests {
             .expect("signature")
     }
 
-    fn request(mode: OfflineCashPaymentRequestModeV1, tag: u8) -> OfflineCashPaymentRequestV1 {
+    fn request(amount: u128, tag: u8) -> OfflineCashPaymentRequestV1 {
         let key = signing_key();
         let device_public_key = public_key(&key);
         let mut credential = OfflineCashHardwareCredentialV1 {
@@ -4119,7 +3873,7 @@ mod tests {
             )
             .expect("pool"),
             recipient: account(),
-            request_mode: mode,
+            amount,
             hardware_credential: credential,
             request_id: [tag; 32],
             issued_at_ms: 100,
@@ -4165,7 +3919,6 @@ mod tests {
             asset: request.asset.clone(),
             asset_incarnation: request.asset_incarnation,
             scale: request.scale,
-            request_mode: request.request_mode,
             intent_digest: intent
                 .canonical_digest_against(request)
                 .expect("intent digest"),
@@ -4188,6 +3941,416 @@ mod tests {
             .validate_shape_against(request, intent)
             .expect("valid ticket");
         ticket
+    }
+
+    fn payment_for_consumption(
+        request: &OfflineCashPaymentRequestV1,
+        acceptance_intent: &OfflineCashAcceptanceIntentV1,
+        acceptance_ticket: &OfflineCashAcceptanceTicketV1,
+        tag: u8,
+    ) -> OfflineCashPaymentV1 {
+        let mut ephemeral_x25519_public_key = [0; 32];
+        ephemeral_x25519_public_key[0] = 9;
+        let encrypted_credit = OfflineCashEncryptedCreditEnvelopeV1 {
+            version: OFFLINE_CASH_WIRE_VERSION_V1,
+            ephemeral_x25519_public_key,
+            nonce: [tag.wrapping_add(0x20); OFFLINE_CASH_XCHACHA20POLY1305_NONCE_BYTES_V1],
+            ciphertext_and_tag: vec![
+                tag.wrapping_add(0x21);
+                offline_cash_credit_opening_canonical_len_v1()
+                    .expect("credit opening length")
+                    + OFFLINE_CASH_XCHACHA20POLY1305_TAG_BYTES_V1
+            ],
+        }
+        .canonical_bytes_against_recipient_key(acceptance_ticket.recipient_one_time_key)
+        .expect("canonical encrypted credit");
+        let commit_evidence =
+            OfflineCashCommitEvidenceV1::TrustedTime(OfflineCashTrustedCommitTimeV1 {
+                time_evidence_commitment: [tag.wrapping_add(0x22); 32],
+            });
+        let request_digest = request.canonical_digest().expect("request digest");
+        let acceptance_ticket_digest = acceptance_ticket
+            .canonical_digest_against(request, acceptance_intent)
+            .expect("ticket digest");
+        let statement = OfflineCashTransferStatementV1 {
+            version: OFFLINE_CASH_WIRE_VERSION_V1,
+            lifecycle: OfflineCashLifecycleBindingV1 {
+                version: OFFLINE_CASH_WIRE_VERSION_V1,
+                network_id: request.network_id,
+                protocol_version: super::super::OFFLINE_CASH_STATE_VERSION_V1,
+                suite_id: request.hardware_credential.suite_id,
+                vk_digest: [tag.wrapping_add(0x23); 32],
+                release_id: request.release_id,
+                asset: request.asset.clone(),
+                asset_incarnation: request.asset_incarnation,
+                scale: request.scale,
+                liability_pool_id: request.liability_pool_id,
+                hardware_profile_id: request.hardware_credential.hardware_profile_id,
+                policy_epoch: request.hardware_credential.policy_epoch,
+                operation_kind: OfflineCashOperationKindV1::SendSplit,
+                request_id: request.request_id,
+                acceptance_ticket_id: acceptance_ticket.acceptance_ticket_id,
+                credit_id: [0; 32],
+                ciphertext_digest: offline_cash_ciphertext_digest_v1(&encrypted_credit),
+            },
+            amount: acceptance_ticket.exact_amount,
+            transition_nullifier: [tag.wrapping_add(0x24); 32],
+            request_digest,
+            acceptance_ticket_digest,
+            recipient_one_time_key: acceptance_ticket.recipient_one_time_key,
+            ciphertext_commitment: [tag.wrapping_add(0x25); 32],
+            commit_evidence,
+        }
+        .seal_credit_id()
+        .expect("credit id");
+        let semantic_digest = statement.canonical_digest().expect("statement digest");
+        let candidate_envelope_digest = [tag.wrapping_add(0x26); 32];
+        let commit_certificate = OfflineCashCommitCertificateV1 {
+            version: OFFLINE_CASH_WIRE_VERSION_V1,
+            certificate_id: [0; 32],
+            candidate_envelope_digest,
+            lifecycle_binding_digest: statement
+                .lifecycle
+                .canonical_digest()
+                .expect("lifecycle digest"),
+            transition_nullifier: statement.transition_nullifier,
+            outbox_reservation_commitment: [tag.wrapping_add(0x27); 32],
+            commit_evidence,
+            hardware_profile_id: statement.lifecycle.hardware_profile_id,
+            policy_epoch: statement.lifecycle.policy_epoch,
+            hardware_terminal_commitment: [tag.wrapping_add(0x28); 32],
+        }
+        .seal_certificate_id()
+        .expect("commit certificate");
+        let commit_certificate_digest = canonical_commit_certificate_digest_v1(&commit_certificate)
+            .expect("commit certificate digest");
+        let payment = OfflineCashPaymentV1 {
+            version: OFFLINE_CASH_WIRE_VERSION_V1,
+            statement,
+            acceptance_intent: *acceptance_intent,
+            acceptance_ticket: acceptance_ticket.clone(),
+            commit_certificate,
+            proof: OfflineCashCommitWrapperProofV1 {
+                version: OFFLINE_CASH_WIRE_VERSION_V1,
+                eq_protocol_digest: [tag.wrapping_add(0x29); 32],
+                ep_protocol_digest: [tag.wrapping_add(0x2A); 32],
+                semantic_digest,
+                candidate_envelope_digest,
+                commit_certificate_digest,
+                eq_deferred_audit: [tag.wrapping_add(0x2B); 32],
+                ep_deferred_audit: [tag.wrapping_add(0x2C); 32],
+                eq_proof: vec![tag.wrapping_add(0x2D)],
+                ep_proof: vec![tag.wrapping_add(0x2E)],
+                eq_history: vec![tag.wrapping_add(0x2F); OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1],
+                ep_history: vec![tag.wrapping_add(0x30); OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1],
+            },
+            encrypted_credit,
+            artifact_manifest_digest: [tag.wrapping_add(0x31); 32],
+        };
+        payment
+            .validate_shape_against(request)
+            .expect("valid payment");
+        payment
+    }
+
+    fn staged_and_terminal_receiver_snapshot_bytes(
+        request: &OfflineCashPaymentRequestV1,
+        payment: &OfflineCashPaymentV1,
+    ) -> (u64, u64) {
+        let credit_id = CreditIdV1(payment.statement.lifecycle.credit_id);
+        let envelope_digest = canonical_sha256_digest(CREDIT_ENVELOPE_DOMAIN, payment)
+            .expect("canonical payment envelope digest");
+        let stage_certificate = CreditStageCertificateV1 {
+            statement: CreditStageStatementV1 {
+                version: super::super::OFFLINE_CASH_STATE_VERSION_V1,
+                recipient_lane: OfflineCashLaneIdV1 {
+                    network_id: request.network_id,
+                    device_lane_id: request.hardware_credential.lane_commitment,
+                    asset: request.asset.clone(),
+                    scale: request.scale,
+                },
+                receiver_state_commitment: [0xD1; 32],
+                receiver_hardware_epoch: HardwareEpochV1 {
+                    generation: u128::from(request.hardware_credential.hardware_epoch_generation),
+                    epoch_id: request.hardware_credential.hardware_epoch_id,
+                },
+                receiver_device_policy_binding: DevicePolicyBindingV1 {
+                    device_key_reference: request.hardware_credential.device_key_reference,
+                    hardware_policy_id: request.hardware_credential.firmware_policy_digest,
+                },
+                receiver_state_nonce_commitment: [0xD2; 32],
+                credit_id,
+                envelope_digest,
+                staged_at_ms: 300,
+                journal_revision_before: 0,
+                journal_revision_after: 1,
+            },
+            guard_bundle: vec![0xD3],
+        };
+        let request_digest = request.canonical_digest().expect("request digest");
+        let payment_digest = payment
+            .canonical_digest_against(request)
+            .expect("payment digest");
+        let inbox_receipt = OfflineCashInboxReceiptV1 {
+            version: OFFLINE_CASH_WIRE_VERSION_V1,
+            credit_id: credit_id.0,
+            receipt_commitment: offline_cash_inbox_receipt_commitment_v1(
+                request.hardware_credential.lane_commitment,
+                request.hardware_credential.hardware_epoch_id,
+                1,
+                credit_id.0,
+                payment_digest,
+            )
+            .expect("inbox receipt commitment"),
+        };
+        let mut acknowledgement = OfflineCashAcknowledgementV1 {
+            version: OFFLINE_CASH_WIRE_VERSION_V1,
+            request_digest,
+            payment_digest,
+            inbox_receipt,
+            signature: sign(&signing_key(), b"placeholder acknowledgement"),
+        };
+        acknowledgement.signature = sign(
+            &signing_key(),
+            &acknowledgement
+                .canonical_signing_bytes()
+                .expect("acknowledgement signing bytes"),
+        );
+        let durable_acknowledgement =
+            DurableAcknowledgementV1::from_acknowledgement(acknowledgement, request, payment)
+                .expect("durable acknowledgement");
+        let staged = StagedCreditV1 {
+            request: request.clone(),
+            payment: payment.clone(),
+            envelope_digest,
+            stage_certificate: stage_certificate.clone(),
+        };
+        let receipt = AcceptedPaymentReceiptV1 {
+            credit_id,
+            envelope_digest,
+            request: request.clone(),
+            payment: payment.clone(),
+            stage_certificate,
+            durable_acknowledgement,
+        };
+        let pending = BTreeMap::from([(credit_id, staged)]);
+        let receipts = BTreeMap::from([(credit_id, receipt)]);
+        let staged_usage = receiver_snapshot_capacity_usage_v1(
+            &pending,
+            &receipts,
+            &ExactConsumedCreditIndex::empty(),
+        )
+        .expect("staged receiver snapshot usage");
+        assert_eq!(staged_usage.retained_bytes, 0);
+        assert!(staged_usage.live_bytes > 0);
+
+        let consumed = ExactConsumedCreditIndex::from_records(&[ConsumedCreditRecordV1 {
+            credit_id,
+            envelope_digest,
+        }])
+        .expect("terminal consumed-credit index");
+        let terminal_usage =
+            receiver_snapshot_capacity_usage_v1(&BTreeMap::new(), &receipts, &consumed)
+                .expect("terminal receiver snapshot usage");
+        assert_eq!(terminal_usage.live_bytes, 0);
+        assert!(terminal_usage.retained_bytes > 0);
+        (staged_usage.live_bytes, terminal_usage.retained_bytes)
+    }
+
+    fn outgoing_state(balance: u128, logical_sequence: u128, nonce_tag: u8) -> OfflineCashStateV1 {
+        let network = network();
+        let asset = asset();
+        let asset_incarnation = asset_incarnation(0x39);
+        let lane = super::super::OfflineCashLaneIdV1 {
+            network_id: network,
+            device_lane_id: [0xA1; 32],
+            asset: asset.clone(),
+            scale: 2,
+        };
+        OfflineCashStateV1::build(
+            super::super::OfflineCashStateContextV1 {
+                protocol_version: super::super::OFFLINE_CASH_STATE_VERSION_V1,
+                suite_id: [0xA2; 32],
+                vk_digest: [0xA3; 32],
+                release_id: [0xA4; 32],
+                asset_incarnation,
+                hardware_profile_id: [0xA5; 32],
+                policy_epoch: 1,
+            },
+            offline_cash_liability_pool_id_v1(&network, &asset, asset_incarnation)
+                .expect("liability pool"),
+            lane,
+            balance,
+            logical_sequence,
+            super::super::HardwareEpochV1 {
+                generation: 1,
+                epoch_id: [0xA6; 32],
+            },
+            super::super::DevicePolicyBindingV1 {
+                device_key_reference: [0xA7; 32],
+                hardware_policy_id: [0xA8; 32],
+            },
+            [nonce_tag; 32],
+            OfflineCashPastaStateCommitmentV1::ZERO,
+        )
+        .expect("aggregate state")
+    }
+
+    fn prepared_redemption_for_capacity(reservation_id: DigestV1) -> PreparedOutgoingCandidateV1 {
+        let predecessor = outgoing_state(10, 0, 0xA9);
+        let successor = outgoing_state(7, 1, 0xAA);
+        let amount = 3;
+        let terminal_nullifier = [0xAB; 32];
+        let redemption_commitment = [0xAC; 32];
+        let commit_evidence =
+            OfflineCashCommitEvidenceV1::TrustedTime(OfflineCashTrustedCommitTimeV1 {
+                time_evidence_commitment: [0xAD; 32],
+            });
+        let outbox_reservation = OfflineCashOutboxReservationV1 {
+            reservation_id,
+            operation_kind: OfflineCashOperationKindV1::RedeemSplit,
+            reserved_outbox_bytes: OFFLINE_CASH_REDEMPTION_OUTBOX_MIN_BYTES_V1,
+            issued_at_ms: 100,
+            expires_at_ms: 1_000,
+        };
+        let lifecycle = OfflineCashLifecycleBindingV1 {
+            version: OFFLINE_CASH_WIRE_VERSION_V1,
+            network_id: predecessor.lane.network_id,
+            protocol_version: predecessor.protocol_version,
+            suite_id: predecessor.suite_id,
+            vk_digest: predecessor.vk_digest,
+            release_id: predecessor.release_id,
+            asset: predecessor.lane.asset.clone(),
+            asset_incarnation: predecessor.asset_incarnation,
+            scale: predecessor.lane.scale,
+            liability_pool_id: predecessor.liability_pool_id,
+            hardware_profile_id: predecessor.hardware_profile_id,
+            policy_epoch: predecessor.policy_epoch,
+            operation_kind: OfflineCashOperationKindV1::RedeemSplit,
+            request_id: [0; 32],
+            acceptance_ticket_id: [0; 32],
+            credit_id: [0; 32],
+            ciphertext_digest: [0; 32],
+        };
+        let beneficiary = account();
+        let redemption_statement = OfflineCashRedemptionStatementV1 {
+            version: OFFLINE_CASH_WIRE_VERSION_V1,
+            lifecycle: lifecycle.clone(),
+            amount,
+            beneficiary: beneficiary.clone(),
+            terminal_nullifier,
+            redemption_commitment,
+            redemption_id: [1; 32],
+            commit_evidence,
+        }
+        .seal_redemption_id()
+        .expect("redemption id");
+        let effect_digest = redemption_statement
+            .canonical_digest()
+            .expect("redemption statement digest");
+        let proof_statement = TransitionProofStatementV1 {
+            version: super::super::OFFLINE_CASH_STATE_VERSION_V1,
+            protocol_version: predecessor.protocol_version,
+            predecessor_suite_id: predecessor.suite_id,
+            predecessor_vk_digest: predecessor.vk_digest,
+            successor_suite_id: successor.suite_id,
+            successor_vk_digest: successor.vk_digest,
+            kind: super::super::OfflineCashTransitionKindV1::RedeemSplit,
+            amount,
+            mint_finality_semantic_digest: [0; 32],
+            mint_finality_proof_binding_digest: [0; 32],
+            peer_credit_id: [0; 32],
+            peer_recipient_lane_id: [0; 32],
+            lifecycle_binding_digest: lifecycle.canonical_digest().expect("lifecycle digest"),
+            precommit_binding_digest: outbox_reservation
+                .canonical_commitment()
+                .expect("reservation commitment"),
+            suite_upgrade_authorization_digest: [0; 32],
+            release_id: predecessor.release_id,
+            asset_incarnation: predecessor.asset_incarnation,
+            liability_pool_id: predecessor.liability_pool_id,
+            hardware_profile_id: predecessor.hardware_profile_id,
+            policy_epoch: predecessor.policy_epoch,
+            lane: predecessor.lane.clone(),
+            predecessor_commitment: predecessor.state_commitment,
+            successor_commitment: successor.state_commitment,
+            predecessor_sequence: predecessor.logical_sequence,
+            successor_sequence: successor.logical_sequence,
+            predecessor_epoch: predecessor.hardware_epoch,
+            successor_epoch: successor.hardware_epoch,
+            predecessor_device_policy_binding: predecessor.device_policy_binding,
+            successor_device_policy_binding: successor.device_policy_binding,
+            predecessor_state_nonce_commitment: predecessor.state_nonce_commitment,
+            successor_state_nonce_commitment: successor.state_nonce_commitment,
+            journal_revision_before: 0,
+            journal_revision_after: 1,
+            effect_digest,
+        };
+        let state_transition_digest = proof_statement.digest().expect("transition digest");
+        PreparedOutgoingCandidateV1::redemption(
+            predecessor,
+            successor,
+            state_transition_digest,
+            PreparedRedemptionMaterialV1 {
+                proof_statement,
+                transport_semantic_digest: [0xAE; 32],
+                amount,
+                beneficiary,
+                terminal_nullifier,
+                redemption_commitment,
+                commit_evidence,
+                outbox_reservation,
+                sealed_transition_inputs: vec![0xAF],
+                sealed_recovery_seeds: vec![0xB0],
+                normalized_guard_statement_digest: [0xB1; 32],
+            },
+        )
+        .expect("prepared redemption")
+    }
+
+    fn outgoing_candidate_proof(
+        prepared: &PreparedOutgoingCandidateV1,
+    ) -> OfflineCashPairedProofV1 {
+        OfflineCashPairedProofV1 {
+            version: OFFLINE_CASH_WIRE_VERSION_V1,
+            eq_protocol_digest: [0xB2; 32],
+            ep_protocol_digest: [0xB3; 32],
+            semantic_digest: prepared.transport_semantic_digest,
+            guard_eq_credential_audit: [0xB4; 32],
+            guard_ep_credential_audit: [0xB5; 32],
+            eq_deferred_audit: [0xB6; 32],
+            ep_deferred_audit: [0xB7; 32],
+            eq_proof: vec![0xB8],
+            ep_proof: vec![0xB9],
+            eq_history: vec![0xBA; OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1],
+            ep_history: vec![0xBB; OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1],
+        }
+    }
+
+    fn outgoing_commit_certificate(
+        candidate: &PersistedOutgoingCandidateV1,
+    ) -> OfflineCashCommitCertificateV1 {
+        let prepared = &candidate.prepared;
+        OfflineCashCommitCertificateV1 {
+            version: OFFLINE_CASH_WIRE_VERSION_V1,
+            certificate_id: [0; 32],
+            candidate_envelope_digest: candidate.candidate_envelope_digest,
+            lifecycle_binding_digest: prepared
+                .lifecycle()
+                .canonical_digest()
+                .expect("lifecycle digest"),
+            transition_nullifier: prepared.transition_nullifier(),
+            outbox_reservation_commitment: prepared
+                .outbox_reservation
+                .canonical_commitment()
+                .expect("reservation commitment"),
+            commit_evidence: projection_commit_evidence(&prepared.projection),
+            hardware_profile_id: prepared.lifecycle().hardware_profile_id,
+            policy_epoch: prepared.lifecycle().policy_epoch,
+            hardware_terminal_commitment: [0xBC; 32],
+        }
+        .seal_certificate_id()
+        .expect("commit certificate")
     }
 
     fn exact_capacity_for_ticket(
@@ -4357,25 +4520,17 @@ mod tests {
 
     #[test]
     fn durable_metadata_is_pre_reserved_and_restore_meters_are_exact() {
-        let open = request(
-            OfflineCashPaymentRequestModeV1::OpenReceive(OfflineCashOpenReceiveRequestV1 {
-                per_payment: OfflineCashAmountPolicyV1 {
-                    minimum_amount: 1,
-                    maximum_amount: 100,
-                },
-            }),
-            21,
-        );
-        let acceptance_intent = intent(&open, 21, 9);
-        let acceptance_ticket = ticket(&open, &acceptance_intent, 21);
+        let payment_request = request(9, 21);
+        let acceptance_intent = intent(&payment_request, 21, 9);
+        let acceptance_ticket = ticket(&payment_request, &acceptance_intent, 21);
         let exact_capacity =
-            exact_capacity_for_ticket(&open, acceptance_intent, &acceptance_ticket, 21);
+            exact_capacity_for_ticket(&payment_request, acceptance_intent, &acceptance_ticket, 21);
         assert!(exact_capacity >= RECEIVER_SNAPSHOT_ENTRY_MAX_BYTES_V1);
 
         let mut short = OfflineCashAcceptanceTicketBookV1::new(exact_capacity - 1);
         assert_eq!(
             short.reserve(
-                verified_authorization(&open, acceptance_intent, 21),
+                verified_authorization(&payment_request, acceptance_intent, 21),
                 acceptance_ticket.clone(),
             ),
             Err(OfflineCashStateErrorV1::ReceiverCapacityExhausted)
@@ -4387,7 +4542,7 @@ mod tests {
         let mut payment_book = OfflineCashAcceptanceTicketBookV1::new(exact_capacity);
         payment_book
             .reserve(
-                verified_authorization(&open, acceptance_intent, 21),
+                verified_authorization(&payment_request, acceptance_intent, 21),
                 acceptance_ticket.clone(),
             )
             .expect("exact-capacity reservation");
@@ -4451,12 +4606,17 @@ mod tests {
         let mut closure_book = OfflineCashAcceptanceTicketBookV1::new(exact_capacity);
         closure_book
             .reserve(
-                verified_authorization(&open, acceptance_intent, 21),
+                verified_authorization(&payment_request, acceptance_intent, 21),
                 acceptance_ticket.clone(),
             )
             .expect("exact-capacity closure reservation");
-        let closure =
-            no_commit_closure(&open, &acceptance_intent, &acceptance_ticket, [21; 32], 21);
+        let closure = no_commit_closure(
+            &payment_request,
+            &acceptance_intent,
+            &acceptance_ticket,
+            [21; 32],
+            21,
+        );
         let verified = VerifiedOfflineCashNoCommitClosureV1::verify(
             closure,
             &AcceptingNoCommitClosureVerifier,
@@ -4481,13 +4641,281 @@ mod tests {
     }
 
     #[test]
-    fn authenticated_no_commit_recovery_is_two_step_idempotent_and_conflict_closed() {
-        let single = request(
-            OfflineCashPaymentRequestModeV1::SingleExact(OfflineCashSingleExactRequestV1 {
-                amount: 7,
-            }),
-            1,
+    fn consumed_receiver_ticket_can_release_with_no_residual_capacity() {
+        let payment_request = request(9, 0x31);
+        let acceptance_intent = intent(&payment_request, 0x31, 9);
+        let acceptance_ticket = ticket(&payment_request, &acceptance_intent, 0x31);
+        let exact_capacity = exact_capacity_for_ticket(
+            &payment_request,
+            acceptance_intent,
+            &acceptance_ticket,
+            0x31,
         );
+        let mut book = OfflineCashAcceptanceTicketBookV1::new(exact_capacity);
+        book.reserve(
+            verified_authorization(&payment_request, acceptance_intent, 0x31),
+            acceptance_ticket.clone(),
+        )
+        .expect("reserve the complete receiver workflow");
+        assert_eq!(book.available_inbox_bytes(), 0);
+
+        let payment = payment_for_consumption(
+            &payment_request,
+            &acceptance_intent,
+            &acceptance_ticket,
+            0x31,
+        );
+        let payment_digest = payment
+            .canonical_digest_against(&payment_request)
+            .expect("payment digest");
+        assert_eq!(
+            book.consume(&payment_request, &payment),
+            Ok(AcceptanceTicketUseOutcomeV1::Consumed)
+        );
+        assert_eq!(
+            book.available_inbox_bytes(),
+            0,
+            "consumption must keep the complete terminal workflow pre-reserved"
+        );
+        let (staged_snapshot_bytes, terminal_snapshot_bytes) =
+            staged_and_terminal_receiver_snapshot_bytes(&payment_request, &payment);
+        let maximum_committed_bytes = book.committed_inbox_bytes();
+        book.reconcile_receiver_snapshot_usage(staged_snapshot_bytes, 0, maximum_committed_bytes)
+            .expect("materialize the exact staged payment and ACK-replay projection");
+        assert_eq!(book.available_inbox_bytes(), 0);
+
+        let blocked_intent = intent(&payment_request, 0x32, 9);
+        let blocked_ticket = ticket(&payment_request, &blocked_intent, 0x32);
+        let book_before_blocked_reservation =
+            norito::encode_canonical(&book).expect("encode pre-failure ticket book");
+        assert_eq!(
+            book.reserve(
+                verified_authorization(&payment_request, blocked_intent, 0x32),
+                blocked_ticket,
+            ),
+            Err(OfflineCashStateErrorV1::ReceiverCapacityExhausted),
+            "no unrelated admission may consume the already-reserved terminal headroom"
+        );
+        assert_eq!(book.available_inbox_bytes(), 0);
+        assert_eq!(
+            norito::encode_canonical(&book).expect("encode post-failure ticket book"),
+            book_before_blocked_reservation,
+            "failed capacity admission must not mutate receiver bytes"
+        );
+
+        let committed_before_release = book.committed_inbox_bytes();
+        book = book
+            .receiver_snapshot_folded_successor(
+                0,
+                terminal_snapshot_bytes,
+                &[(acceptance_ticket.acceptance_ticket_id, payment_digest)],
+            )
+            .expect("fold the staged payment into its exact terminal receiver projection");
+        assert!(book.committed_inbox_bytes() < committed_before_release);
+        assert_eq!(book.reserved_terminal_metadata_bytes(), 0);
+        assert!(book.available_inbox_bytes() > 0);
+        book.validate_recovered()
+            .expect("released receiver snapshot");
+
+        let released = book.clone();
+        book = book
+            .receiver_snapshot_folded_successor(
+                0,
+                terminal_snapshot_bytes,
+                &[(acceptance_ticket.acceptance_ticket_id, payment_digest)],
+            )
+            .expect("byte-identical fold completion retry");
+        assert_eq!(book, released);
+    }
+
+    #[test]
+    fn receiver_snapshot_reconciliation_matches_sequential_exact_metering() {
+        let mut book = OfflineCashAcceptanceTicketBookV1::new(u64::MAX);
+        let mut folded_tickets = Vec::new();
+        for tag in 1_u8..=16 {
+            let request = request(u128::from(tag), tag);
+            let intent = intent(&request, tag, u128::from(tag));
+            let ticket = ticket(&request, &intent, tag);
+            book.reserve(
+                verified_authorization(&request, intent, tag),
+                ticket.clone(),
+            )
+            .expect("capacity-backed ticket");
+            let payment_digest = [tag.wrapping_add(0x80); 32];
+            let entry = book
+                .tickets
+                .get_mut(&ticket.acceptance_ticket_id)
+                .expect("reserved ticket");
+            entry.consumed_payment_digest = Some(payment_digest);
+            entry.consumed_amount = Some(ticket.exact_amount);
+            folded_tickets.push((ticket.acceptance_ticket_id, payment_digest));
+        }
+
+        let maximum_committed_bytes = book.committed_inbox_bytes();
+        let mut sequential = book.clone();
+        sequential
+            .reconcile_receiver_snapshot_usage(0, 0, maximum_committed_bytes)
+            .expect("materialized payments fit pre-reserved capacity");
+        for &(ticket_id, payment_digest) in &folded_tickets {
+            sequential
+                .release_folded(ticket_id, payment_digest)
+                .expect("sequential release");
+        }
+        sequential
+            .reconcile_receiver_snapshot_usage(0, 0, maximum_committed_bytes)
+            .expect("sequential final snapshot usage");
+
+        let reconciled = book
+            .receiver_snapshot_folded_successor(0, 0, &folded_tickets)
+            .expect("atomic release reconciliation");
+        assert_eq!(reconciled, sequential);
+        reconciled
+            .validate_recovered()
+            .expect("reconciled meters remain exact");
+
+        let mut invalid_tickets = folded_tickets.clone();
+        invalid_tickets[8].1 = [0xFF; 32];
+        assert_eq!(
+            book.receiver_snapshot_folded_successor(0, 0, &invalid_tickets),
+            Err(OfflineCashStateErrorV1::InvalidAcceptanceTicket)
+        );
+    }
+
+    #[test]
+    fn receiver_snapshot_reconciliation_matches_sequential_near_capacity() {
+        let mut book = OfflineCashAcceptanceTicketBookV1::new(u64::MAX);
+        let mut folded_tickets = Vec::new();
+        for tag in 1_u8..=8 {
+            let request = request(u128::from(tag), tag);
+            let intent = intent(&request, tag, u128::from(tag));
+            let ticket = ticket(&request, &intent, tag);
+            book.reserve(
+                verified_authorization(&request, intent, tag),
+                ticket.clone(),
+            )
+            .expect("capacity-backed ticket");
+            let payment_digest = [tag.wrapping_add(0x80); 32];
+            let entry = book
+                .tickets
+                .get_mut(&ticket.acceptance_ticket_id)
+                .expect("reserved ticket");
+            entry.consumed_payment_digest = Some(payment_digest);
+            entry.consumed_amount = Some(ticket.exact_amount);
+            if tag <= 4 {
+                folded_tickets.push((ticket.acceptance_ticket_id, payment_digest));
+            }
+        }
+
+        let precommitted_ceiling = book.committed_inbox_bytes();
+        book.total_inbox_bytes = precommitted_ceiling;
+        assert_eq!(book.available_inbox_bytes(), 0);
+
+        let mut final_shape = book.clone();
+        for &(ticket_id, payment_digest) in &folded_tickets {
+            final_shape
+                .release_folded_unmetered(ticket_id, payment_digest)
+                .expect("probe final ticket shape");
+        }
+        let live_snapshot_bytes = final_shape
+            .receiver_snapshot_live_capacity_bytes()
+            .expect("remaining live projection capacity");
+        assert!(live_snapshot_bytes > 0);
+
+        let mut sequential = book.clone();
+        sequential
+            .reconcile_receiver_snapshot_usage(live_snapshot_bytes, 0, precommitted_ceiling)
+            .expect("install nonzero live projection");
+        for &(ticket_id, payment_digest) in &folded_tickets {
+            sequential
+                .release_folded(ticket_id, payment_digest)
+                .expect("sequential release");
+        }
+        let retained_room = precommitted_ceiling
+            .checked_sub(sequential.committed_inbox_bytes())
+            .expect("released capacity");
+        assert!(retained_room > 1);
+        let retained_snapshot_bytes = retained_room - 1;
+        sequential
+            .reconcile_receiver_snapshot_usage(
+                live_snapshot_bytes,
+                retained_snapshot_bytes,
+                precommitted_ceiling,
+            )
+            .expect("install near-ceiling retained projection");
+
+        let reconciled = book
+            .receiver_snapshot_folded_successor(
+                live_snapshot_bytes,
+                retained_snapshot_bytes,
+                &folded_tickets,
+            )
+            .expect("atomic release reconciliation");
+
+        assert_eq!(reconciled, sequential);
+        assert_eq!(reconciled.available_inbox_bytes(), 1);
+        assert!(reconciled.retained_metadata_bytes() > retained_snapshot_bytes);
+        assert!(reconciled.reserved_terminal_metadata_bytes() > 0);
+        reconciled
+            .validate_recovered_with_snapshot_usage(live_snapshot_bytes, retained_snapshot_bytes)
+            .expect("exact nonzero snapshot meters");
+    }
+
+    #[test]
+    fn receiver_snapshot_reconciliation_preserves_terminal_compaction_order() {
+        let payment_request = request(1, 0x51);
+        let mut book = OfflineCashAcceptanceTicketBookV1::new(u64::MAX);
+        let mut folded_tickets = Vec::new();
+        for tag in 1_u8..=80 {
+            let intent = intent(&payment_request, tag, 1);
+            let ticket = ticket(&payment_request, &intent, tag);
+            book.reserve(
+                verified_authorization(&payment_request, intent, tag),
+                ticket.clone(),
+            )
+            .expect("distinct reusable-request ticket");
+            let payment_digest = [tag.wrapping_add(0x80); 32];
+            let entry = book
+                .tickets
+                .get_mut(&ticket.acceptance_ticket_id)
+                .expect("reserved ticket");
+            entry.consumed_payment_digest = Some(payment_digest);
+            entry.consumed_amount = Some(ticket.exact_amount);
+            folded_tickets.push((ticket.acceptance_ticket_id, payment_digest));
+        }
+
+        let mut at_retry_horizon = book;
+        for &(ticket_id, payment_digest) in &folded_tickets[..64] {
+            at_retry_horizon
+                .release_folded_unmetered(ticket_id, payment_digest)
+                .expect("seed retry horizon");
+        }
+        let meters =
+            acceptance_ticket_capacity_meters_v1(&at_retry_horizon).expect("retry-horizon meters");
+        at_retry_horizon.committed_inbox_bytes = meters.committed_inbox_bytes;
+        at_retry_horizon.retained_metadata_bytes = meters.retained_metadata_bytes;
+        at_retry_horizon.reserved_terminal_metadata_bytes = meters.reserved_terminal_metadata_bytes;
+        assert_eq!(at_retry_horizon.terminal_retry_order.len(), 64);
+
+        let mut sequential = at_retry_horizon.clone();
+        for &(ticket_id, payment_digest) in &folded_tickets[64..] {
+            sequential
+                .release_folded(ticket_id, payment_digest)
+                .expect("sequential compaction");
+        }
+        let reconciled = at_retry_horizon
+            .receiver_snapshot_folded_successor(0, 0, &folded_tickets[64..])
+            .expect("atomic compaction reconciliation");
+        assert_eq!(reconciled, sequential);
+        assert_eq!(reconciled.compacted_terminal_count(), 16);
+        assert_eq!(reconciled.terminal_retry_order.len(), 64);
+        reconciled
+            .validate_recovered()
+            .expect("compacted reconciled meters remain exact");
+    }
+
+    #[test]
+    fn authenticated_no_commit_recovery_is_two_step_idempotent_and_conflict_closed() {
+        let single = request(7, 1);
         let first_intent = intent(&single, 1, 7);
         let first_ticket = ticket(&single, &first_intent, 1);
         let first_capacity = exact_capacity_for_ticket(&single, first_intent, &first_ticket, 1);
@@ -4518,13 +4946,6 @@ mod tests {
         );
         assert_eq!(book.available_inbox_bytes(), 0);
         assert_eq!(book.committed_inbox_bytes(), first_capacity);
-        assert_eq!(
-            book.request_usage
-                .get(&single.request_id)
-                .expect("pending request charge")
-                .outstanding_ticket_count,
-            1
-        );
         book.validate_recovered().expect("pending snapshot");
         assert_eq!(
             book.begin_authenticated_no_commit_recovery(&verified),
@@ -4553,7 +4974,6 @@ mod tests {
         assert_eq!(book.committed_inbox_bytes(), book.retained_metadata_bytes());
         assert_eq!(book.reserved_terminal_metadata_bytes(), 0);
         assert!(book.available_inbox_bytes() > 0);
-        assert!(!book.request_usage.contains_key(&single.request_id));
         book.validate_recovered().expect("closed snapshot");
 
         let encoded = norito::encode_canonical(&book).expect("encode ticket book");
@@ -4672,25 +5092,23 @@ mod tests {
 
     #[test]
     fn no_commit_recovery_rejects_consumed_or_tampered_ticket_state_without_reclaim() {
-        let open = request(
-            OfflineCashPaymentRequestModeV1::OpenReceive(OfflineCashOpenReceiveRequestV1 {
-                per_payment: OfflineCashAmountPolicyV1 {
-                    minimum_amount: 1,
-                    maximum_amount: 100,
-                },
-            }),
+        let payment_request = request(9, 7);
+        let acceptance_intent = intent(&payment_request, 7, 9);
+        let acceptance_ticket = ticket(&payment_request, &acceptance_intent, 7);
+        let closure = no_commit_closure(
+            &payment_request,
+            &acceptance_intent,
+            &acceptance_ticket,
+            [7; 32],
             7,
         );
-        let acceptance_intent = intent(&open, 7, 9);
-        let acceptance_ticket = ticket(&open, &acceptance_intent, 7);
-        let closure = no_commit_closure(&open, &acceptance_intent, &acceptance_ticket, [7; 32], 7);
         let ticket_capacity =
-            exact_capacity_for_ticket(&open, acceptance_intent, &acceptance_ticket, 7);
+            exact_capacity_for_ticket(&payment_request, acceptance_intent, &acceptance_ticket, 7);
 
         let mut never_begun = OfflineCashAcceptanceTicketBookV1::new(ticket_capacity);
         never_begun
             .reserve(
-                verified_authorization(&open, acceptance_intent, 7),
+                verified_authorization(&payment_request, acceptance_intent, 7),
                 acceptance_ticket.clone(),
             )
             .expect("ticket reservation");
@@ -4725,7 +5143,7 @@ mod tests {
         let mut pending = OfflineCashAcceptanceTicketBookV1::new(ticket_capacity);
         pending
             .reserve(
-                verified_authorization(&open, acceptance_intent, 7),
+                verified_authorization(&payment_request, acceptance_intent, 7),
                 acceptance_ticket.clone(),
             )
             .expect("ticket reservation");
@@ -4751,13 +5169,8 @@ mod tests {
     }
 
     #[test]
-    fn request_modes_enforce_only_their_explicit_invoice_or_count_bounds() {
-        let single = request(
-            OfflineCashPaymentRequestModeV1::SingleExact(OfflineCashSingleExactRequestV1 {
-                amount: 7,
-            }),
-            1,
-        );
+    fn one_exact_request_accepts_distinct_payments_and_rejects_wrong_amounts() {
+        let single = request(7, 1);
         let mut book = OfflineCashAcceptanceTicketBookV1::new(u64::MAX);
         let first_intent = intent(&single, 1, 7);
         let first = ticket(&single, &first_intent, 1);
@@ -4781,89 +5194,34 @@ mod tests {
                 if decision.ticket == first && decision.ticket_digest == first_digest
         ));
         let second_intent = intent(&single, 2, 7);
-        assert_eq!(
-            book.reserve(
-                verified_authorization(&single, second_intent, 2),
-                ticket(&single, &second_intent, 2),
-            ),
-            Err(OfflineCashStateErrorV1::InvalidAcceptanceTicket)
-        );
+        book.reserve(
+            verified_authorization(&single, second_intent, 2),
+            ticket(&single, &second_intent, 2),
+        )
+        .expect("distinct exact payment against same request");
 
-        let partial = request(
-            OfflineCashPaymentRequestModeV1::PartialUntilTotal(
-                OfflineCashPartialUntilTotalRequestV1 { total_amount: 10 },
-            ),
-            2,
-        );
-        let mut book = OfflineCashAcceptanceTicketBookV1::new(u64::MAX);
-        for (tag, exact_amount) in [(3, 4), (4, 6)] {
-            let intent = intent(&partial, tag, exact_amount);
-            book.reserve(
-                verified_authorization(&partial, intent, tag),
-                ticket(&partial, &intent, tag),
-            )
-            .expect("within invoice total");
-        }
-        let overflow_intent = intent(&partial, 5, 1);
+        let wrong_amount = intent(&single, 3, 6);
         assert_eq!(
-            book.reserve(
-                verified_authorization(&partial, overflow_intent, 5),
-                ticket(&partial, &overflow_intent, 5),
-            ),
-            Err(OfflineCashStateErrorV1::InvalidAcceptanceTicket)
-        );
-
-        let bounded = request(
-            OfflineCashPaymentRequestModeV1::BoundedMultiPayment(
-                OfflineCashBoundedMultiPaymentRequestV1 {
-                    max_payments: 2,
-                    per_payment: OfflineCashAmountPolicyV1 {
-                        minimum_amount: 1,
-                        maximum_amount: 5,
-                    },
-                },
-            ),
-            3,
-        );
-        let mut book = OfflineCashAcceptanceTicketBookV1::new(u64::MAX);
-        for tag in [6, 7] {
-            let intent = intent(&bounded, tag, 5);
-            book.reserve(
-                verified_authorization(&bounded, intent, tag),
-                ticket(&bounded, &intent, tag),
+            wrong_amount.validate_shape_against(&single),
+            Err(
+                iroha_data_model::offline::OfflineCashValidationErrorV1::InvalidField {
+                    field: "offline_cash.acceptance_intent.binding"
+                }
             )
-            .expect("within payment-count bound");
-        }
-        let overflow_intent = intent(&bounded, 8, 5);
-        assert_eq!(
-            book.reserve(
-                verified_authorization(&bounded, overflow_intent, 8),
-                ticket(&bounded, &overflow_intent, 8),
-            ),
-            Err(OfflineCashStateErrorV1::InvalidAcceptanceTicket)
         );
     }
 
     #[test]
-    fn open_receive_has_no_request_local_ticket_count_limit() {
-        let open = request(
-            OfflineCashPaymentRequestModeV1::OpenReceive(OfflineCashOpenReceiveRequestV1 {
-                per_payment: OfflineCashAmountPolicyV1 {
-                    minimum_amount: 1,
-                    maximum_amount: 100,
-                },
-            }),
-            9,
-        );
+    fn request_has_no_protocol_ticket_count_limit() {
+        let payment_request = request(7, 9);
         let mut book = OfflineCashAcceptanceTicketBookV1::new(u64::MAX);
         for tag in 1_u8..=130 {
-            let exact_amount = u128::from((tag - 1) % 100 + 1);
-            let acceptance_intent = intent(&open, tag, exact_amount);
+            let acceptance_intent = intent(&payment_request, tag, 7);
             book.reserve(
-                verified_authorization(&open, acceptance_intent, tag),
-                ticket(&open, &acceptance_intent, tag),
+                verified_authorization(&payment_request, acceptance_intent, tag),
+                ticket(&payment_request, &acceptance_intent, tag),
             )
-            .expect("open receive ticket");
+            .expect("distinct reusable-request ticket");
             if matches!(tag, 127..=130) {
                 book.validate_recovered()
                     .expect("collection-length threshold snapshot");
@@ -4871,31 +5229,23 @@ mod tests {
         }
         assert_eq!(book.intent_ticket_decisions.len(), 130);
         book.validate_recovered()
-            .expect("unbounded request snapshot");
+            .expect("reusable-request snapshot");
     }
 
     #[test]
-    fn open_receive_compaction_preserves_exact_intent_ticket_decisions() {
-        let open = request(
-            OfflineCashPaymentRequestModeV1::OpenReceive(OfflineCashOpenReceiveRequestV1 {
-                per_payment: OfflineCashAmountPolicyV1 {
-                    minimum_amount: 1,
-                    maximum_amount: 100,
-                },
-            }),
-            10,
-        );
+    fn terminal_compaction_preserves_exact_intent_ticket_decisions() {
+        let payment_request = request(7, 10);
         let mut book = OfflineCashAcceptanceTicketBookV1::new(u64::MAX);
-        let first_intent = intent(&open, 1, 1);
-        let first_ticket = ticket(&open, &first_intent, 1);
+        let first_intent = intent(&payment_request, 1, 7);
+        let first_ticket = ticket(&payment_request, &first_intent, 1);
         for tag in 1_u8..=65 {
-            let acceptance_intent = intent(&open, tag, u128::from(tag));
-            let acceptance_ticket = ticket(&open, &acceptance_intent, tag);
+            let acceptance_intent = intent(&payment_request, tag, 7);
+            let acceptance_ticket = ticket(&payment_request, &acceptance_intent, tag);
             book.reserve(
-                verified_authorization(&open, acceptance_intent, tag),
+                verified_authorization(&payment_request, acceptance_intent, tag),
                 acceptance_ticket.clone(),
             )
-            .expect("open receive decision");
+            .expect("distinct reusable-request decision");
             let payment_digest = [tag.wrapping_add(0x80); 32];
             let entry = book
                 .tickets
@@ -4906,7 +5256,7 @@ mod tests {
             book.release_folded(acceptance_ticket.acceptance_ticket_id, payment_digest)
                 .expect("release folded slot");
         }
-        assert_eq!(book.open_receive_compacted_terminal_count(), 1);
+        assert_eq!(book.compacted_terminal_count(), 1);
         assert!(
             !book
                 .tickets
@@ -4917,7 +5267,7 @@ mod tests {
         book.validate_recovered().expect("compacted decision state");
         assert!(matches!(
             book.reserve(
-                verified_authorization(&open, first_intent, 1),
+                verified_authorization(&payment_request, first_intent, 1),
                 first_ticket.clone(),
             ),
             Ok(AcceptanceTicketReservationOutcomeV1::AlreadyReserved(decision))
@@ -4925,15 +5275,15 @@ mod tests {
         ));
         assert_eq!(
             book.reserve(
-                verified_authorization(&open, first_intent, 2),
+                verified_authorization(&payment_request, first_intent, 2),
                 first_ticket.clone(),
             ),
             Err(OfflineCashStateErrorV1::InvalidAcceptanceTicket)
         );
         assert_eq!(
             book.reserve(
-                verified_authorization(&open, first_intent, 1),
-                ticket(&open, &first_intent, 66),
+                verified_authorization(&payment_request, first_intent, 1),
+                ticket(&payment_request, &first_intent, 66),
             ),
             Err(OfflineCashStateErrorV1::InvalidAcceptanceTicket)
         );
@@ -5013,6 +5363,146 @@ mod tests {
         );
         assert_eq!(exact.committed_outbox_bytes(), required);
         assert_eq!(exact.available_outbox_bytes(), 0);
+    }
+
+    #[test]
+    fn prepared_outgoing_operation_finishes_with_no_residual_capacity() {
+        let prepared = prepared_redemption_for_capacity([0xC1; 32]);
+        let reservation = prepared.outbox_reservation;
+
+        let mut sizing_journal = OfflineCashOutgoingCandidateJournalV1::default();
+        sizing_journal
+            .prepare(prepared.clone())
+            .expect("size prepared journal");
+        let mut sizing_outbox = OfflineCashSenderOutboxCapacityV1::new(u64::MAX);
+        sizing_outbox
+            .reserve(reservation, &sizing_journal)
+            .expect("size precommitted workflow");
+        let exact_capacity = sizing_outbox.committed_outbox_bytes();
+
+        let mut journal = OfflineCashOutgoingCandidateJournalV1::default();
+        journal.prepare(prepared.clone()).expect("prepare journal");
+        let mut outbox = OfflineCashSenderOutboxCapacityV1::new(exact_capacity);
+        assert_eq!(
+            outbox.reserve(reservation, &journal),
+            Ok(SenderOutboxReservationOutcomeV1::Reserved)
+        );
+        assert_eq!(outbox.available_outbox_bytes(), 0);
+        let precommitted_outbox_bytes = outbox.committed_outbox_bytes();
+
+        let unrelated = OfflineCashOutboxReservationV1 {
+            reservation_id: [0xC2; 32],
+            ..reservation
+        };
+        let outbox_before_blocked_reservation =
+            norito::encode_canonical(&outbox).expect("encode pre-failure outbox");
+        let journal_before_blocked_reservation =
+            norito::encode_canonical(&journal).expect("encode pre-failure journal");
+        assert_eq!(
+            outbox.reserve(unrelated, &journal),
+            Err(OfflineCashStateErrorV1::SenderOutboxCapacityExhausted),
+            "new work cannot consume the live operation's terminal headroom"
+        );
+        assert_eq!(outbox.available_outbox_bytes(), 0);
+        assert_eq!(
+            norito::encode_canonical(&outbox).expect("encode post-failure outbox"),
+            outbox_before_blocked_reservation,
+            "failed capacity admission must not mutate sender bytes"
+        );
+        assert_eq!(
+            norito::encode_canonical(&journal).expect("encode post-failure journal"),
+            journal_before_blocked_reservation,
+            "failed capacity admission must not mutate prepared journal bytes"
+        );
+
+        let candidate = PersistedOutgoingCandidateV1::verify_and_persist(
+            prepared,
+            outgoing_candidate_proof(match journal.stage() {
+                OfflineCashOutgoingJournalStageV1::Prepared(prepared) => prepared,
+                _ => panic!("prepared stage"),
+            }),
+            &AcceptingOutgoingVerifier,
+        )
+        .expect("persist already-reserved candidate");
+        journal
+            .persist_candidate(candidate.clone())
+            .expect("advance candidate journal");
+        outbox
+            .validate_capacity_meters(&journal, false)
+            .expect("candidate stays inside precommitted bytes");
+
+        let committed = CommittedOutgoingCandidateV1::from_hardware_commit(
+            candidate,
+            outgoing_commit_certificate(match journal.stage() {
+                OfflineCashOutgoingJournalStageV1::Candidate(candidate) => candidate,
+                _ => panic!("candidate stage"),
+            }),
+        )
+        .expect("bind terminal hardware certificate");
+        journal
+            .commit(committed.clone())
+            .expect("advance committed journal");
+        outbox
+            .validate_capacity_meters(&journal, false)
+            .expect("committed stage stays inside precommitted bytes");
+
+        let public_inputs = committed
+            .public_wrapper_inputs()
+            .expect("wrapper public inputs");
+        let finalized = DurableOutgoingEnvelopeV1::finalize(
+            committed,
+            OfflineCashCommitWrapperProofV1 {
+                version: OFFLINE_CASH_WIRE_VERSION_V1,
+                eq_protocol_digest: [0xC3; 32],
+                ep_protocol_digest: [0xC4; 32],
+                semantic_digest: public_inputs.semantic_digest,
+                candidate_envelope_digest: public_inputs.candidate_envelope_digest,
+                commit_certificate_digest: public_inputs.commit_certificate_digest,
+                eq_deferred_audit: [0xC5; 32],
+                ep_deferred_audit: [0xC6; 32],
+                eq_proof: vec![0xC7],
+                ep_proof: vec![0xC8],
+                eq_history: vec![0xC9; OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1],
+                ep_history: vec![0xCA; OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1],
+            },
+            [0xCB; 32],
+            vec![0xCC],
+            &AcceptingOutgoingVerifier,
+        )
+        .expect("finalize from pre-reserved terminal headroom");
+        journal
+            .install_finalized(finalized.clone(), &mut outbox)
+            .expect("install durable retry envelope");
+        assert!(outbox.committed_outbox_bytes() <= precommitted_outbox_bytes);
+        let retry_bytes = finalized.retry_bytes().to_vec();
+        assert_eq!(
+            journal.expose(reservation.reservation_id),
+            Ok(retry_bytes.as_slice())
+        );
+        assert_eq!(
+            journal.expose(reservation.reservation_id),
+            Ok(retry_bytes.as_slice()),
+            "retry must remain byte-identical without a new capacity admission"
+        );
+        journal
+            .install_finalized(finalized.clone(), &mut outbox)
+            .expect("idempotent finalized-install retry");
+
+        journal
+            .release_finalized(
+                reservation.reservation_id,
+                finalized.envelope_digest,
+                &mut outbox,
+            )
+            .expect("release completed retry envelope");
+        assert!(outbox.committed_outbox_bytes() < precommitted_outbox_bytes);
+        journal
+            .release_finalized(
+                reservation.reservation_id,
+                finalized.envelope_digest,
+                &mut outbox,
+            )
+            .expect("idempotent terminal release retry");
     }
 
     #[test]

@@ -56,16 +56,11 @@ public struct OfflineCashStagedPaymentV1: Equatable, Sendable {
   }
 }
 
-/// Result of folding one fixed-shape batch. `creditCount` is always in `1...16`.
-public struct OfflineCashReceiveFoldBatchResultV1: Equatable, Sendable {
-  public let creditCount: UInt8
+/// Result of folding one staged credit into the aggregate balance.
+public struct OfflineCashReceiveFoldResultV1: Equatable, Sendable {
   public let aggregateState: OfflineCashAggregateStateCommitmentV1
 
-  public init(creditCount: UInt8, aggregateState: OfflineCashAggregateStateCommitmentV1) throws {
-    guard (1...16).contains(creditCount) else {
-      throw OfflineCashWalletErrorV1.invalidHardwareResult("fold batch must contain 1...16 credits")
-    }
-    self.creditCount = creditCount
+  public init(aggregateState: OfflineCashAggregateStateCommitmentV1) {
     self.aggregateState = aggregateState
   }
 }
@@ -82,7 +77,7 @@ public protocol OfflineCashHardwareProviderV1: AnyObject {
 
   func createPaymentRequest(
     recipient: OfflineCashAccountIDV1,
-    mode: OfflineCashPaymentRequestModeV1,
+    amount: OfflineCashUInt128V1,
     validityWindowMS: UInt64
   ) throws -> Data
 
@@ -131,10 +126,9 @@ public protocol OfflineCashHardwareProviderV1: AnyObject {
 
   func pendingCreditWatermark() throws -> OfflineCashUInt128V1
 
-  func foldNextReceiveBatch(
-    upToInclusive watermark: OfflineCashUInt128V1,
-    maximumCreditCount: UInt8
-  ) throws -> (creditCount: UInt8, aggregateState: Data?)
+  func foldNextReceive(
+    upToInclusive watermark: OfflineCashUInt128V1
+  ) throws -> Data?
 
   func prepareProveCommitRedemption(
     amount: OfflineCashUInt128V1,
@@ -190,20 +184,22 @@ public final class OfflineCashWalletV1: @unchecked Sendable {
     lock.withLock { aggregateStateValue }
   }
 
-  /// Ask qualified receiver hardware to create and sign a reusable request.
+  /// Ask qualified receiver hardware to create and sign an exact-amount request.
   public func createPaymentRequest(
     recipient: OfflineCashAccountIDV1,
-    mode: OfflineCashPaymentRequestModeV1,
+    amount: OfflineCashUInt128V1,
     validityWindowMS: UInt64
   ) throws -> OfflineCashPaymentRequestV1 {
-    guard validityWindowMS > 0, validityWindowMS <= OfflineCashWireV1.requestMaximumTTLMS else {
-      throw OfflineCashWalletErrorV1.invalidHardwareResult("invalid request validity window")
+    guard !amount.isZero,
+      validityWindowMS > 0, validityWindowMS <= OfflineCashWireV1.requestMaximumTTLMS
+    else {
+      throw OfflineCashWalletErrorV1.invalidHardwareResult("invalid request amount or validity window")
     }
     return try lock.withLock {
       let value = try OfflineCashNoritoV1.decodePaymentRequestShapeExact(
         provider.createPaymentRequest(
-          recipient: recipient, mode: mode, validityWindowMS: validityWindowMS))
-      guard value.recipient == recipient, value.requestMode == mode,
+          recipient: recipient, amount: amount, validityWindowMS: validityWindowMS))
+      guard value.recipient == recipient, value.amount == amount,
         value.networkID == aggregateStateValue.networkID,
         value.asset == aggregateStateValue.asset,
         value.assetIncarnation == aggregateStateValue.assetIncarnation,
@@ -216,17 +212,13 @@ public final class OfflineCashWalletV1: @unchecked Sendable {
 
   /// Prepare a proof-bearing one-use sender authorization before receiver capacity is consumed.
   public func prepareAcceptanceIntentAuthorization(
-    request: OfflineCashPaymentRequestV1,
-    exactAmount: OfflineCashUInt128V1
+    request: OfflineCashPaymentRequestV1
   ) throws -> OfflineCashAcceptanceIntentAuthorizationV1 {
-    guard request.requestMode.accepts(exactAmount) else {
-      throw OfflineCashWalletErrorV1.invalidHardwareResult("amount is outside request mode")
-    }
     let canonicalRequest = try OfflineCashNoritoV1.encodePaymentRequestShape(request)
     let authorization = try OfflineCashNoritoV1.decodeAcceptanceIntentAuthorizationShapeExact(
       provider.prepareAcceptanceIntentAuthorization(
-        canonicalRequest: canonicalRequest, exactAmount: exactAmount))
-    guard authorization.statement.intent.exactAmount == exactAmount,
+        canonicalRequest: canonicalRequest, exactAmount: request.amount))
+    guard authorization.statement.intent.exactAmount == request.amount,
       authorization.statement.releaseID == request.releaseID,
       authorization.statement.suiteID == qualification().credential.suiteID
     else { throw OfflineCashWalletErrorV1.invalidHardwareResult("authorization binding") }
@@ -379,43 +371,25 @@ public final class OfflineCashWalletV1: @unchecked Sendable {
       canonicalMintCredit: OfflineCashNoritoV1.encodeMintCreditShape(credit))
   }
 
-  /// Fold the next padded fixed-shape batch of one through sixteen staged credits.
-  public func foldNextReceiveBatch(maximumCreditCount: UInt8 = 16) throws
-    -> OfflineCashReceiveFoldBatchResultV1?
+  /// Fold the next staged credit into the aggregate balance.
+  public func foldNextReceive() throws -> OfflineCashReceiveFoldResultV1?
   {
-    guard (1...16).contains(maximumCreditCount) else {
-      throw OfflineCashWalletErrorV1.invalidHardwareResult("maximum fold batch")
-    }
     return try lock.withLock {
       let watermark = try provider.pendingCreditWatermark()
-      return try foldNextReceiveBatchLocked(
-        upToInclusive: watermark, maximumCreditCount: maximumCreditCount)
+      return try foldNextReceiveLocked(upToInclusive: watermark)
     }
   }
 
-  /// Drain all staged credits in fixed-shape batches before a send or redemption.
+  /// Drain all staged credits one fixed-shape transition at a time before a send or redemption.
   public func drainStagedCredits() throws -> OfflineCashUInt128V1 {
     try lock.withLock { try drainStagedCreditsLocked() }
   }
 
-  private func foldNextReceiveBatchLocked(
-    upToInclusive watermark: OfflineCashUInt128V1,
-    maximumCreditCount: UInt8
-  )
-    throws -> OfflineCashReceiveFoldBatchResultV1?
+  private func foldNextReceiveLocked(
+    upToInclusive watermark: OfflineCashUInt128V1
+  ) throws -> OfflineCashReceiveFoldResultV1?
   {
-    let (count, aggregateStateBytes) = try provider.foldNextReceiveBatch(
-      upToInclusive: watermark, maximumCreditCount: maximumCreditCount)
-    if count == 0 {
-      guard aggregateStateBytes == nil else {
-        throw OfflineCashWalletErrorV1.invalidHardwareResult(
-          "zero-credit fold returned an aggregate state")
-      }
-      return nil
-    }
-    guard count <= maximumCreditCount, let bytes = aggregateStateBytes else {
-      throw OfflineCashWalletErrorV1.invalidHardwareResult("invalid fold progress")
-    }
+    guard let bytes = try provider.foldNextReceive(upToInclusive: watermark) else { return nil }
     let state = try OfflineCashNoritoV1.decodeAggregateStateShapeExact(bytes)
     guard sameBalanceIdentity(aggregateStateValue, state),
       state.hardwareEpochID == aggregateStateValue.hardwareEpochID,
@@ -427,8 +401,7 @@ public final class OfflineCashWalletV1: @unchecked Sendable {
       throw OfflineCashWalletErrorV1.invalidHardwareResult(
         "fold did not install the exact next aggregate state")
     }
-    let result = try OfflineCashReceiveFoldBatchResultV1(
-      creditCount: count, aggregateState: state)
+    let result = OfflineCashReceiveFoldResultV1(aggregateState: state)
     aggregateStateValue = state
     return result
   }
@@ -436,10 +409,8 @@ public final class OfflineCashWalletV1: @unchecked Sendable {
   private func drainStagedCreditsLocked() throws -> OfflineCashUInt128V1 {
     let watermark = try provider.pendingCreditWatermark()
     var count = OfflineCashUInt128V1.zero
-    while let batch = try foldNextReceiveBatchLocked(
-      upToInclusive: watermark, maximumCreditCount: 16)
-    {
-      count = try count.adding(batch.creditCount)
+    while try foldNextReceiveLocked(upToInclusive: watermark) != nil {
+      count = try count.adding(1)
     }
     return count
   }

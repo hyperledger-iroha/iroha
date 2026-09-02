@@ -302,12 +302,7 @@ impl AggregateState {
         self.balance = self.balance.checked_add(amount).expect("u128 balance");
         self.sequence = self.sequence.checked_add(1).expect("u128 sequence");
         self.replay_root = pasta_pair(next_root);
-        operation_witness(
-            before,
-            *self,
-            OfflineCashOperationV1::ReceiveFoldBatch,
-            amount,
-        )
+        operation_witness(before, *self, OfflineCashOperationV1::ReceiveFold, amount)
     }
 
     fn spend(
@@ -354,7 +349,7 @@ fn operation_tag(operation: OfflineCashOperationV1) -> u64 {
         OfflineCashOperationV1::Bootstrap => 0,
         OfflineCashOperationV1::MintFold => 1,
         OfflineCashOperationV1::SendSplit => 2,
-        OfflineCashOperationV1::ReceiveFoldBatch => 3,
+        OfflineCashOperationV1::ReceiveFold => 3,
         OfflineCashOperationV1::RedeemSplit => 4,
         OfflineCashOperationV1::SuiteUpgrade => 5,
         OfflineCashOperationV1::Rotate => 6,

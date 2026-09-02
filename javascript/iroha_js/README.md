@@ -186,10 +186,10 @@ ticket, unlinkable payment, and acknowledgement exchange, plus mint
 authorization/credit binding and typed encrypted-credit opening, AAD, and
 envelope codecs. Governed sender recovery uses the fully cross-bound,
 16,384-byte `NoCommitClosure` canonical wire; its proof remains native-verified.
-Requests support `SingleExact`, `PartialUntilTotal`,
-`BoundedMultiPayment`, and `OpenReceive`; `OpenReceive` has no cumulative
-payment-count ceiling. Strict canonical Norito and unpadded `oc1:` decoders
-enforce the raw/text message and composed-exchange caps before allocation.
+Each request binds one positive exact amount. Every distinct valid payment
+against the same request remains protocol-acceptable; invoice deduplication is
+application policy. Strict canonical Norito and unpadded `oc1:` decoders enforce
+the raw/text message and composed-exchange caps before allocation.
 
 The namespace is codec and orchestration support only. Monetary proving,
 signing, encryption, decryption, and hardware state changes must come from the

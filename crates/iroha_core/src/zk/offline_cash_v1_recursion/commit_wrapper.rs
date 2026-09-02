@@ -1455,7 +1455,7 @@ const fn operation_tag_v1(operation: OfflineCashOperationV1) -> u64 {
         OfflineCashOperationV1::Bootstrap => 0,
         OfflineCashOperationV1::MintFold => 1,
         OfflineCashOperationV1::SendSplit => 2,
-        OfflineCashOperationV1::ReceiveFoldBatch => 3,
+        OfflineCashOperationV1::ReceiveFold => 3,
         OfflineCashOperationV1::RedeemSplit => 4,
         OfflineCashOperationV1::SuiteUpgrade => 5,
         OfflineCashOperationV1::Rotate => 6,
@@ -1467,7 +1467,7 @@ const fn operation_from_wire_v1(operation: OfflineCashOperationKindV1) -> Offlin
         OfflineCashOperationKindV1::Bootstrap => OfflineCashOperationV1::Bootstrap,
         OfflineCashOperationKindV1::MintFold => OfflineCashOperationV1::MintFold,
         OfflineCashOperationKindV1::SendSplit => OfflineCashOperationV1::SendSplit,
-        OfflineCashOperationKindV1::ReceiveFoldBatch => OfflineCashOperationV1::ReceiveFoldBatch,
+        OfflineCashOperationKindV1::ReceiveFold => OfflineCashOperationV1::ReceiveFold,
         OfflineCashOperationKindV1::RedeemSplit => OfflineCashOperationV1::RedeemSplit,
         OfflineCashOperationKindV1::SuiteUpgrade => OfflineCashOperationV1::SuiteUpgrade,
         OfflineCashOperationKindV1::Rotate => OfflineCashOperationV1::Rotate,
@@ -4761,10 +4761,6 @@ where
         (state_relation::public_instance::OPERATION, guard.operation),
         (state_relation::public_instance::AMOUNT, guard.amount),
         (
-            state_relation::public_instance::RECEIVE_ACTIVE_COUNT,
-            guard.receive_active_count,
-        ),
-        (
             state_relation::public_instance::PROTOCOL_VERSION,
             guard.protocol_version,
         ),
@@ -4835,10 +4831,6 @@ where
         (
             state_relation::public_instance::SUITE_UPGRADE_AUTHORIZATION_LO,
             guard.suite_upgrade_authorization_digest,
-        ),
-        (
-            state_relation::public_instance::RECEIVE_BATCH_BINDING_LO,
-            guard.receive_batch_binding_digest,
         ),
         (
             state_relation::public_instance::ASSET_INCARNATION_LO,

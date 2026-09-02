@@ -7,6 +7,7 @@
 
 use std::{
     cell::Cell,
+    collections::{BTreeMap, BTreeSet},
     io::{self, Read},
     rc::Rc,
 };
@@ -24,7 +25,7 @@ use halo2_proofs::halo2curves::CurveAffine;
 use sha2::{Digest as _, Sha256};
 use snark_verifier::{
     Error,
-    loader::{halo2::Halo2Loader, native::NativeLoader},
+    loader::{Loader, halo2::Halo2Loader, native::NativeLoader},
     pcs::{
         AccumulationScheme,
         ipa::{Bgh19, IpaAccumulator, IpaAs, IpaSuccinctVerifyingKey},
@@ -74,6 +75,158 @@ const OFFLINE_CASH_PROTOCOL_IDENTITY_DOMAIN_V1: &[u8] =
 const OFFLINE_CASH_PROTOCOL_STRUCTURE_VERSION_V1: u32 = 1;
 const OFFLINE_CASH_PROTOCOL_IDENTITY_VERSION_V1: u32 = 1;
 const SNARK_VERIFIER_PROTOCOL_REVISION_V1: &str = "bbfcc721d714bea0d44a27c8fc6c4736e73ca853";
+
+/// Exact transcript inventory of one ordinary Pasta/IPA proof.
+///
+/// Halo2's Poseidon transcript writes one 32-byte encoding per commitment,
+/// evaluation, BGH19 opening item, and IPA item.  Keeping this derivation next
+/// to the parser prevents internal helper proofs from inheriting a wire-slot
+/// limit while still rejecting truncation, padding, and trailing bytes before
+/// any verifier work begins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct OfflineCashOrdinaryProofProfileV1 {
+    /// Witness commitments across all challenge phases.
+    pub(super) witness_commitments: usize,
+    /// Quotient-polynomial commitments.
+    pub(super) quotient_commitments: usize,
+    /// Scalar evaluations read from the transcript.
+    pub(super) evaluations: usize,
+    /// BGH19 evaluations, one per distinct polynomial rotation set.
+    pub(super) bgh19_rotation_sets: usize,
+    /// Fixed BGH19 and IPA transcript items for the authenticated `k`.
+    pub(super) opening_items: usize,
+    /// Exact canonical proof length.
+    pub(super) byte_len: usize,
+}
+
+/// Derive the exact canonical byte length accepted by the ordinary proof parser.
+pub(super) fn ordinary_ipa_proof_profile_v1<C, L>(
+    protocol: &PlonkProtocol<C, L>,
+) -> Result<OfflineCashOrdinaryProofProfileV1, String>
+where
+    C: CurveAffine,
+    L: Loader<C>,
+{
+    validate_ordinary_ipa_protocol_shape_v1(
+        protocol.domain.k,
+        protocol.num_witness.len(),
+        protocol.num_challenge.len(),
+        protocol.quotient.chunk_degree,
+        protocol.queries.len(),
+    )?;
+    let witness_commitments = protocol
+        .num_witness
+        .iter()
+        .try_fold(0_usize, |total, count| total.checked_add(*count))
+        .ok_or_else(|| "Offline Cash witness-commitment count overflowed".to_owned())?;
+    let quotient_commitments = protocol.quotient.num_chunk();
+    let evaluations = protocol.evaluations.len();
+    let mut rotations_by_polynomial = BTreeMap::<usize, BTreeSet<i32>>::new();
+    for query in &protocol.queries {
+        rotations_by_polynomial
+            .entry(query.poly)
+            .or_default()
+            .insert(query.rotation.0);
+    }
+    let bgh19_rotation_sets = rotations_by_polynomial
+        .into_values()
+        .map(|rotations| rotations.into_iter().collect::<Vec<_>>())
+        .collect::<BTreeSet<_>>()
+        .len();
+    ordinary_ipa_proof_profile_from_counts_v1(
+        witness_commitments,
+        quotient_commitments,
+        evaluations,
+        bgh19_rotation_sets,
+    )
+}
+
+fn validate_ordinary_ipa_protocol_shape_v1(
+    domain_k: usize,
+    witness_phases: usize,
+    challenge_phases: usize,
+    quotient_chunk_degree: usize,
+    query_count: usize,
+) -> Result<(), String> {
+    if domain_k != OFFLINE_CASH_RECURSION_IPA_K_V1 as usize {
+        return Err(format!(
+            "Offline Cash ordinary proof protocol uses k={}, expected k={OFFLINE_CASH_RECURSION_IPA_K_V1}",
+            domain_k
+        ));
+    }
+    if witness_phases != challenge_phases {
+        return Err(
+            "Offline Cash ordinary proof protocol has mismatched witness/challenge phases"
+                .to_owned(),
+        );
+    }
+    if quotient_chunk_degree == 0 {
+        return Err(
+            "Offline Cash ordinary proof protocol has zero quotient chunk degree".to_owned(),
+        );
+    }
+    if query_count == 0 {
+        return Err("Offline Cash ordinary proof protocol has no PCS queries".to_owned());
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OfflineCashIpaProofKindV1 {
+    Ordinary,
+    Fold,
+}
+
+fn validate_zk_ipa_succinct_key_v1<C>(
+    succinct_vk: &IpaSuccinctVerifyingKey<C>,
+    proof_kind: OfflineCashIpaProofKindV1,
+) -> Result<(), Error>
+where
+    C: CurveAffine,
+{
+    if !succinct_vk.zk() {
+        let label = match proof_kind {
+            OfflineCashIpaProofKindV1::Ordinary => "ordinary proof",
+            OfflineCashIpaProofKindV1::Fold => "fold proof",
+        };
+        return Err(transcript_error(format!(
+            "Offline Cash {label} requires a zero-knowledge IPA key"
+        )));
+    }
+    Ok(())
+}
+
+fn ordinary_ipa_proof_profile_from_counts_v1(
+    witness_commitments: usize,
+    quotient_commitments: usize,
+    evaluations: usize,
+    bgh19_rotation_sets: usize,
+) -> Result<OfflineCashOrdinaryProofProfileV1, String> {
+    // BGH19 contributes F, one scalar per rotation set, and S. IPA then
+    // contributes two points per round, c, blind, and the final basis point.
+    let opening_items = usize::try_from(OFFLINE_CASH_RECURSION_IPA_K_V1)
+        .ok()
+        .and_then(|rounds| rounds.checked_mul(2))
+        .and_then(|items| items.checked_add(5))
+        .ok_or_else(|| "Offline Cash IPA opening-item count overflowed".to_owned())?;
+    let transcript_items = witness_commitments
+        .checked_add(quotient_commitments)
+        .and_then(|items| items.checked_add(evaluations))
+        .and_then(|items| items.checked_add(bgh19_rotation_sets))
+        .and_then(|items| items.checked_add(opening_items))
+        .ok_or_else(|| "Offline Cash proof transcript-item count overflowed".to_owned())?;
+    let byte_len = transcript_items
+        .checked_mul(32)
+        .ok_or_else(|| "Offline Cash proof byte length overflowed".to_owned())?;
+    Ok(OfflineCashOrdinaryProofProfileV1 {
+        witness_commitments,
+        quotient_commitments,
+        evaluations,
+        bgh19_rotation_sets,
+        opening_items,
+        byte_len,
+    })
+}
 
 /// One witness-loaded parent protocol whose self-referential commitments and transcript state
 /// have been bound to the shared field-native protocol identity.
@@ -1180,10 +1333,22 @@ where
     C::Base: BigPrimeField,
     C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
 {
-    if proof_bytes.is_empty() || proof_bytes.len() > super::OFFLINE_CASH_PARITY_PROOF_MAX_BYTES_V1 {
+    validate_zk_ipa_succinct_key_v1(succinct_vk, OfflineCashIpaProofKindV1::Ordinary)?;
+    if succinct_vk.domain.k != protocol.domain.k
+        || succinct_vk.domain.k != OFFLINE_CASH_RECURSION_IPA_K_V1 as usize
+    {
         return Err(transcript_error(
-            "Offline Cash parent proof violates the fixed proof slot",
+            "Offline Cash parent protocol requires the fixed zero-knowledge IPA key and domain",
         ));
+    }
+    let expected_len = ordinary_ipa_proof_profile_v1(protocol)
+        .map_err(transcript_error)?
+        .byte_len;
+    if proof_bytes.len() != expected_len {
+        return Err(transcript_error(format!(
+            "Offline Cash parent proof has length {}, expected exactly {expected_len}",
+            proof_bytes.len()
+        )));
     }
     let (reader, position) = ExactReader::new(proof_bytes);
     let mut transcript =
@@ -1275,6 +1440,12 @@ where
     C::Base: BigPrimeField,
     C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
 {
+    validate_zk_ipa_succinct_key_v1(succinct_vk, OfflineCashIpaProofKindV1::Fold)?;
+    if succinct_vk.domain.k != OFFLINE_CASH_RECURSION_IPA_K_V1 as usize {
+        return Err(transcript_error(
+            "Offline Cash fold proof requires the fixed zero-knowledge IPA key and domain",
+        ));
+    }
     if inputs.len() != 2 || proof_bytes.len() != OFFLINE_CASH_IPA_FOLD_PROOF_BYTES_V1 {
         return Err(transcript_error(
             "Offline Cash BGH19 fold has the wrong input or byte count",
@@ -1402,6 +1573,57 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ordinary_ipa_profile_matches_measured_credential_transcript() {
+        let profile = ordinary_ipa_proof_profile_from_counts_v1(129, 8, 449, 6)
+            .expect("bounded credential proof profile");
+        assert_eq!(profile.opening_items, 37);
+        assert_eq!(profile.byte_len, 20_128);
+        assert!(profile.byte_len > super::super::OFFLINE_CASH_PARITY_PROOF_MAX_BYTES_V1);
+    }
+
+    #[test]
+    fn ordinary_ipa_profile_rejects_count_overflow() {
+        assert!(ordinary_ipa_proof_profile_from_counts_v1(usize::MAX, 1, 0, 0).is_err());
+    }
+
+    #[test]
+    fn ordinary_ipa_protocol_shape_rejects_panic_prone_inputs() {
+        let k = OFFLINE_CASH_RECURSION_IPA_K_V1 as usize;
+        assert!(validate_ordinary_ipa_protocol_shape_v1(k, 1, 1, 1, 1).is_ok());
+        assert!(validate_ordinary_ipa_protocol_shape_v1(k, 1, 1, 1, 0).is_err());
+        assert!(validate_ordinary_ipa_protocol_shape_v1(k, 1, 0, 1, 1).is_err());
+        assert!(validate_ordinary_ipa_protocol_shape_v1(k, 1, 1, 0, 1).is_err());
+        assert!(validate_ordinary_ipa_protocol_shape_v1(k + 1, 1, 1, 1, 1).is_err());
+    }
+
+    #[test]
+    fn ordinary_and_fold_admission_reject_non_zk_ipa_key() {
+        use halo2_proofs::halo2curves::{
+            group::prime::PrimeCurveAffine as _,
+            pasta::{EqAffine, Fp},
+        };
+        use snark_verifier::util::arithmetic::{Domain, root_of_unity};
+
+        let non_zk = IpaSuccinctVerifyingKey::new(
+            Domain::new(
+                OFFLINE_CASH_RECURSION_IPA_K_V1 as usize,
+                root_of_unity::<Fp>(OFFLINE_CASH_RECURSION_IPA_K_V1 as usize),
+            ),
+            EqAffine::identity(),
+            EqAffine::identity(),
+            None,
+        );
+        for kind in [
+            OfflineCashIpaProofKindV1::Ordinary,
+            OfflineCashIpaProofKindV1::Fold,
+        ] {
+            let error = validate_zk_ipa_succinct_key_v1(&non_zk, kind)
+                .expect_err("non-ZK keys must fail before proof parsing");
+            assert!(format!("{error:?}").contains("requires a zero-knowledge IPA key"));
+        }
+    }
 
     #[test]
     fn exact_reader_tracks_trailing_bytes() {

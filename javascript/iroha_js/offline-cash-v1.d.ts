@@ -4,8 +4,7 @@ import type { NetworkId } from "./dist/networkId.js";
 declare namespace OfflineCashV1 {
   type Bytes = ArrayBuffer | ArrayBufferView;
   type Unsigned = number | bigint;
-  type RequestModeName = "singleExact" | "partialUntilTotal" | "boundedMultiPayment" | "openReceive";
-  type OperationKind = "bootstrap" | "mintFold" | "sendSplit" | "receiveFoldBatch" | "redeemSplit" | "suiteUpgrade" | "rotate";
+  type OperationKind = "bootstrap" | "mintFold" | "sendSplit" | "receiveFold" | "redeemSplit" | "suiteUpgrade" | "rotate";
   type CreditPurpose = "mint" | "peer";
   type PayloadKind =
     | "paymentRequest"
@@ -74,45 +73,6 @@ declare namespace OfflineCashV1 {
     rawBytes(): Uint8Array;
   }
 
-  class AmountPolicy {
-    constructor(value: { minimumAmount: Unsigned; maximumAmount: Unsigned });
-    readonly minimumAmount: bigint;
-    readonly maximumAmount: bigint;
-  }
-
-  class SingleExactRequest {
-    constructor(value: { amount: Unsigned });
-    readonly amount: bigint;
-  }
-
-  class PartialUntilTotalRequest {
-    constructor(value: { totalAmount: Unsigned });
-    readonly totalAmount: bigint;
-  }
-
-  class BoundedMultiPaymentRequest {
-    constructor(value: { maxPayments: number; perPayment: AmountPolicy });
-    readonly maxPayments: number;
-    readonly perPayment: AmountPolicy;
-  }
-
-  class OpenReceiveRequest {
-    constructor(value: { perPayment: AmountPolicy });
-    readonly perPayment: AmountPolicy;
-  }
-
-  type RequestPolicy = SingleExactRequest | PartialUntilTotalRequest | BoundedMultiPaymentRequest | OpenReceiveRequest;
-  class PaymentRequestMode {
-    constructor(value: { mode: RequestModeName; policy: RequestPolicy });
-    readonly mode: RequestModeName;
-    readonly policy: RequestPolicy;
-    static singleExact(amount: Unsigned): PaymentRequestMode;
-    static partialUntilTotal(totalAmount: Unsigned): PaymentRequestMode;
-    static boundedMultiPayment(maxPayments: number, perPayment: AmountPolicy): PaymentRequestMode;
-    static openReceive(perPayment: AmountPolicy): PaymentRequestMode;
-    acceptsExactAmount(amount: Unsigned): boolean;
-  }
-
   class HardwareCredential {
     constructor(value: {
       version: 1; credentialId: Bytes; networkId: NetworkId; hardwareProfileId: Bytes;
@@ -153,12 +113,12 @@ declare namespace OfflineCashV1 {
     constructor(value: {
       version: 1; releaseId: Bytes; networkId: NetworkId; asset: AssetDefinitionId;
       assetIncarnation: AssetIncarnation; scale: number; liabilityPoolId: Bytes; recipient: AccountId;
-      requestMode: PaymentRequestMode; hardwareCredential: HardwareCredential; requestId: Bytes;
+      amount: Unsigned; hardwareCredential: HardwareCredential; requestId: Bytes;
       issuedAtMs: Unsigned; expiresAtMs: Unsigned; signature: DeviceSignature;
     });
     readonly version: 1; readonly releaseId: Uint8Array; readonly networkId: NetworkId;
     readonly asset: AssetDefinitionId; readonly assetIncarnation: AssetIncarnation; readonly scale: number;
-    readonly liabilityPoolId: Uint8Array; readonly recipient: AccountId; readonly requestMode: PaymentRequestMode;
+    readonly liabilityPoolId: Uint8Array; readonly recipient: AccountId; readonly amount: bigint;
     readonly hardwareCredential: HardwareCredential; readonly requestId: Uint8Array;
     readonly issuedAtMs: bigint; readonly expiresAtMs: bigint; readonly signature: DeviceSignature;
   }
@@ -203,7 +163,7 @@ declare namespace OfflineCashV1 {
   class AcceptanceTicket {
     constructor(value: {
       version: 1; networkId: NetworkId; requestId: Bytes; requestDigest: Bytes; acceptanceTicketId: Bytes;
-      asset: AssetDefinitionId; assetIncarnation: AssetIncarnation; scale: number; requestMode: PaymentRequestMode;
+      asset: AssetDefinitionId; assetIncarnation: AssetIncarnation; scale: number;
       intentDigest: Bytes; exactAmount: Unsigned; reservedInboxBytes: number; recipientOneTimeKey: Bytes;
       hardwareProfileId: Bytes; policyEpoch: Unsigned; issuedAtMs: Unsigned; expiresAtMs: Unsigned;
       signature: DeviceSignature;
@@ -211,7 +171,7 @@ declare namespace OfflineCashV1 {
     readonly version: 1; readonly networkId: NetworkId; readonly requestId: Uint8Array;
     readonly requestDigest: Uint8Array; readonly acceptanceTicketId: Uint8Array;
     readonly asset: AssetDefinitionId; readonly assetIncarnation: AssetIncarnation; readonly scale: number;
-    readonly requestMode: PaymentRequestMode; readonly intentDigest: Uint8Array; readonly exactAmount: bigint;
+    readonly intentDigest: Uint8Array; readonly exactAmount: bigint;
     readonly reservedInboxBytes: number; readonly recipientOneTimeKey: Uint8Array;
     readonly hardwareProfileId: Uint8Array; readonly policyEpoch: bigint; readonly issuedAtMs: bigint;
     readonly expiresAtMs: bigint; readonly signature: DeviceSignature;

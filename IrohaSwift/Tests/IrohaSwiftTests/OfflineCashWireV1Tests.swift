@@ -224,14 +224,14 @@ final class OfflineCashWireV1Tests: XCTestCase {
           acceptanceTicket: closure.acceptanceTicket, proof: closure.proof)))
   }
 
-  func testGeneratedFixtureV2RoundTripsEveryCanonicalPayloadExactly() throws {
+  func testGeneratedFixtureV1RoundTripsEveryCanonicalPayloadExactly() throws {
     let fixtureURL = URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
       .deletingLastPathComponent()
       .appendingPathComponent("fixtures/offline/offline_cash_v1.json")
     let root = try XCTUnwrap(
       JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? [String: Any])
-    XCTAssertEqual(root["fixture_version"] as? Int, 2)
+    XCTAssertEqual(root["fixture_version"] as? Int, 1)
 
     let payloadNames: Set<String> = [
       "payment_request", "acceptance_intent_authorization", "acceptance_ticket", "payment",
@@ -476,13 +476,11 @@ final class OfflineCashWireV1Tests: XCTestCase {
     let incarnation = try OfflineCashAssetIncarnationV1(bytes: digest(0x21))
     let account = try OfflineCashAccountIDV1(
       "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
-    let mode = OfflineCashPaymentRequestModeV1.openReceive(
-      perPayment: try OfflineCashAmountPolicyV1(
-        minimumAmount: OfflineCashUInt128V1(1), maximumAmount: OfflineCashUInt128V1(1_000)))
+    let amount = OfflineCashUInt128V1(42)
     let request = try OfflineCashPaymentRequestV1(
       releaseID: releaseID, networkID: networkID, asset: asset,
       assetIncarnation: incarnation, scale: 4, liabilityPoolID: digest(0x22),
-      recipient: account, requestMode: mode, hardwareCredential: credential,
+      recipient: account, amount: amount, hardwareCredential: credential,
       requestID: digest(0x23), issuedAtMS: 100, expiresAtMS: 200,
       signature: signature)
     let requestDigest = try OfflineCashNoritoV1.paymentRequestDigestShape(request)
@@ -500,7 +498,7 @@ final class OfflineCashWireV1Tests: XCTestCase {
     let ticket = try OfflineCashAcceptanceTicketV1(
       networkID: networkID, requestID: request.requestID, requestDigest: requestDigest,
       acceptanceTicketID: digest(0x28), asset: asset, assetIncarnation: incarnation,
-      scale: 4, requestMode: mode,
+      scale: 4,
       intentDigest: OfflineCashNoritoV1.acceptanceIntentDigestShape(intent, against: request),
       exactAmount: intent.exactAmount, reservedInboxBytes: 8_960,
       recipientOneTimeKey: OfflineCashX25519PublicKeyV1(rawBytes: digest(0x29)),

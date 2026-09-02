@@ -27,15 +27,16 @@ profiles, compatibility discriminators, legacy prefixes, or heuristic decoders.
 
 The signed request identifies the authenticated release, network, exact asset
 incarnation and scale, pooled reserve, recipient, complete compact receiver
-credential, policy epoch, request ID/window, and one closed request mode. It
-never carries a mutable balance head. Any number of requests may coexist.
+credential, policy epoch, request ID/window, and one positive exact amount. It
+never carries a mutable balance head. Any number of requests may coexist, and
+every distinct valid payment against the same request remains acceptable.
 
 The sender authorization carries a compact one-use intent and paired proof. The
 proof hides sender credential, lane, epoch, predecessor, successor, and balance
 while proving qualified enabled-profile hardware, sufficient private balance,
-and an exact one-use predecessor authorization. Receiver capacity and request
-budget cannot change until the authenticated native verifier accepts it. The
-ticket then binds the exact request and intent digests, amount, request mode,
+and an exact one-use predecessor authorization. Receiver intent-decision state
+and physical inbox capacity cannot change until the authenticated native verifier
+accepts it. The ticket then binds the exact request and intent digests, amount,
 asset incarnation, reserved inbox bytes, recipient X25519 key, receiver profile
 and policy epoch, and exclusive sender-commit deadline.
 

@@ -24,9 +24,10 @@ import org.hyperledger.iroha.sdk.core.model.NetworkId;
 import org.hyperledger.iroha.sdk.offline.OfflineCashAcceptanceIntentAuthorizationV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashAcceptanceTicketV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashAcknowledgementV1;
-import org.hyperledger.iroha.sdk.offline.OfflineCashAmountPolicyV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashAssetDefinitionIdV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashAssetIncarnationV1;
+import org.hyperledger.iroha.sdk.offline.OfflineCashCommitCertificateV1;
+import org.hyperledger.iroha.sdk.offline.OfflineCashCommitEvidenceV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashCreditOpeningV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashEncryptedCreditAadV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashEncryptedCreditEnvelopeV1;
@@ -39,7 +40,6 @@ import org.hyperledger.iroha.sdk.offline.OfflineCashOperationKindV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashOutboxReservationV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashPastaStateCommitmentV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashPaymentRequestV1;
-import org.hyperledger.iroha.sdk.offline.OfflineCashPaymentRequestModeV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashPaymentV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashRedemptionVoucherV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashX25519PublicKeyV1;
@@ -135,6 +135,39 @@ public final class OfflineCashWireV1Tests {
   }
 
   @Test
+  public void signedJvmCarriersPreserveTheFullRustUnsignedTranscriptDomain() {
+    final OfflineCashOutboxReservationV1 boundaryReservation =
+        new OfflineCashOutboxReservationV1(
+            fill(32, (byte) 0xd1),
+            OfflineCashOperationKindV1.SEND_SPLIT,
+            -1,
+            Long.MAX_VALUE,
+            Long.MIN_VALUE);
+    assertArrayEquals(
+        hexBytes("fc904c99266ca1728181789f606b6e421b90a04fe99edb1c8bc236f73b063b0e"),
+        OfflineCashNoritoV1.outboxReservationCommitmentShape(boundaryReservation));
+
+    final OfflineCashCommitCertificateV1 boundaryCertificate =
+        new OfflineCashCommitCertificateV1(
+            1,
+            fill(32, (byte) 0xc1),
+            fill(32, (byte) 0xc2),
+            fill(32, (byte) 0xc3),
+            fill(32, (byte) 0xc4),
+            fill(32, (byte) 0xc5),
+            new OfflineCashCommitEvidenceV1.TrustedTime(fill(32, (byte) 0xc6)),
+            fill(32, (byte) 0xc7),
+            Long.MIN_VALUE,
+            fill(32, (byte) 0xc8));
+    assertArrayEquals(
+        hexBytes("b1fe2841e59c24eda16d2509e124bcf786199e9238cb5c168d0559aebe32cdc3"),
+        OfflineCashNoritoV1.expectedCommitCertificateIdShape(boundaryCertificate));
+    assertArrayEquals(
+        hexBytes("d8f7d13446aa7c0704894c4563c93cb468829d9e17aa7e17dcb70eb939ecc275"),
+        OfflineCashNoritoV1.commitCertificateDigestShape(boundaryCertificate));
+  }
+
+  @Test
   public void noCommitClosureFacadeHasNoPublicStateHeadsAndConsumesGeneratedFixtureWhenPresent()
       throws IOException {
     for (final java.lang.reflect.Field field :
@@ -167,9 +200,9 @@ public final class OfflineCashWireV1Tests {
   }
 
   @Test
-  public void nativeGeneratedV2FixtureRoundTripsEveryTransportedValue() throws IOException {
+  public void nativeGeneratedV1FixtureRoundTripsEveryTransportedValue() throws IOException {
     final String fixture = sharedFixtureText();
-    assertTrue(Pattern.compile("\\\"fixture_version\\\"\\s*:\\s*2").matcher(fixture).find());
+    assertTrue(Pattern.compile("\\\"fixture_version\\\"\\s*:\\s*1").matcher(fixture).find());
 
     final byte[] requestRaw = fixtureBytes(fixture, "payment_request");
     final OfflineCashPaymentRequestV1 request =
@@ -243,25 +276,6 @@ public final class OfflineCashWireV1Tests {
     assertEquals(expected.size(), actual.size());
     for (int index = 0; index < expected.size(); index++) {
       assertArrayEquals("fixture value " + index, expected.get(index), actual.get(index));
-    }
-  }
-
-  @Test
-  public void allFourRequestModesUseTheCanonicalKotlinShapeCodec() {
-    final OfflineCashAmountPolicyV1 policy =
-        new OfflineCashAmountPolicyV1(BigInteger.ONE, BigInteger.valueOf(50));
-    final List<OfflineCashPaymentRequestModeV1> modes =
-        Arrays.asList(
-            new OfflineCashPaymentRequestModeV1.SingleExact(BigInteger.TEN),
-            new OfflineCashPaymentRequestModeV1.PartialUntilTotal(BigInteger.valueOf(100)),
-            new OfflineCashPaymentRequestModeV1.BoundedMultiPayment(4, policy),
-            new OfflineCashPaymentRequestModeV1.OpenReceive(policy));
-    for (final OfflineCashPaymentRequestModeV1 mode : modes) {
-      final byte[] encoded = OfflineCashNoritoV1.encodePaymentRequestModeShape(mode);
-      final OfflineCashPaymentRequestModeV1 decoded =
-          OfflineCashNoritoV1.decodePaymentRequestModeShapeExact(encoded);
-      assertEquals(mode.getClass(), decoded.getClass());
-      assertArrayEquals(encoded, OfflineCashNoritoV1.encodePaymentRequestModeShape(decoded));
     }
   }
 

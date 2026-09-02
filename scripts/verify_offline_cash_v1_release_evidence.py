@@ -42,6 +42,7 @@ WIRE_VERSION = 1
 MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 MAX_REPORT_BYTES = 4 * 1024 * 1024
 MAX_EVENT_LOG_BYTES = 64 * 1024 * 1024
+MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
 MAX_SOURCE_ARCHIVE_BYTES = 4 * 1024 * 1024 * 1024
 MAX_TRANSCRIPT_BYTES = 16 * 1024 * 1024
 MAX_OBSERVER_POLICY_BYTES = 1024 * 1024
@@ -63,6 +64,10 @@ MAX_OBSERVATION_RSS_BYTES = 4 * 1024 * 1024 * 1024
 MAX_JSONL_ROWS = 5_000_000
 
 PAIRED_PROOF_MAX_BYTES = 6_528
+# Internal helper proofs are not wire payloads. This artifact-sized resource
+# ceiling limits filesystem work only; their admissible lengths come from the
+# authenticated compiled-protocol profile and are checked exactly below.
+INTERNAL_PROOF_RESOURCE_MAX_BYTES = MAX_ARTIFACT_BYTES
 RAW_SESSION_MAX_BYTES = 9_211
 TEXT_SESSION_MAX_BYTES = 12_288
 PROCESS_RSS_MAX_BYTES = 128 * 1024 * 1024
@@ -108,7 +113,7 @@ RELATIONS = (
     "bootstrap",
     "mint_fold",
     "send_split",
-    "receive_fold_batch",
+    "receive_fold",
     "redeem_split",
     "rotate",
     "suite_upgrade",
@@ -122,6 +127,8 @@ HELPERS = (
     "platform_credential",
     "guard_bundle",
 )
+
+INTERNAL_PROOF_HELPERS = frozenset({"platform_credential", "guard_bundle"})
 
 ACCEPTANCE_CASES = (
     "receiver_capacity_exhaustion",
@@ -186,6 +193,7 @@ FILE_KINDS = frozenset(
         "artifact",
         "cargo_lock",
         "event_log",
+        "internal_proof",
         "proof",
         "raw_session",
         "report",
@@ -230,7 +238,6 @@ REPORT_SCHEMAS = frozenset(
         "iroha.offline_cash_v1.hardware_profile_qualification_report",
         "iroha.offline_cash_v1.relation_qualification_report",
         "iroha.offline_cash_v1.helper_qualification_report",
-        "iroha.offline_cash_v1.receive_fold_occupancy_report",
         "iroha.offline_cash_v1.recursive_depth_report",
         "iroha.offline_cash_v1.aggregate_balance_report",
         "iroha.offline_cash_v1.thermal_report",
@@ -612,6 +619,8 @@ def _helper_protocol_payload(value: Mapping[str, object]) -> bytes:
         _u32(index),
         _hex_bytes(value["eq_protocol_digest"], f"{helper} Eq protocol digest"),
         _hex_bytes(value["ep_protocol_digest"], f"{helper} Ep protocol digest"),
+        _u32(int(value["eq_proof_bytes"])),
+        _u32(int(value["ep_proof_bytes"])),
     )
 
 
@@ -674,20 +683,14 @@ def _helper_qualification_payload(value: Mapping[str, object]) -> bytes:
         _artifact_payload(_object(value["ep_verifying_key"], "helper Ep VK", {"role", "sha256", "byte_len"})),
         _u32(int(value["eq_circuit_rows"])),
         _u32(int(value["ep_circuit_rows"])),
+        _u32(int(value["eq_proof_bytes"])),
+        _u32(int(value["ep_proof_bytes"])),
         _u32(int(value["complete_proof_bytes"])),
         _u32(int(value["prove_p95_ms"])),
         _u32(int(value["verify_p95_ms"])),
         _u64(int(value["process_rss_bytes"])),
         _u64(int(value["operation_energy_millijoules"])),
         _evidence_file_payload(_object(value["report"], "helper report", {"sha256", "byte_len"})),
-    )
-
-
-def _occupancy_payload(value: Mapping[str, object]) -> bytes:
-    return _norito_struct(
-        _u8(int(value["occupancy"])),
-        _u32(int(value["complete_proof_bytes"])),
-        _evidence_file_payload(_object(value["report"], "occupancy report", {"sha256", "byte_len"})),
     )
 
 
@@ -749,7 +752,6 @@ def _profile_qualification_payload(value: Mapping[str, object]) -> bytes:
         _enabled_profile_payload(profile),
         _norito_vec([_relation_qualification_payload(row) for row in _array(value["relations"], "relations")]),
         _norito_vec([_helper_qualification_payload(row) for row in _array(value["helper_circuits"], "helper circuits")]),
-        _norito_vec([_occupancy_payload(row) for row in _array(value["receive_fold_occupancies"], "occupancies")]),
         _norito_vec([_depth_payload(row) for row in _array(value["recursive_depths"], "recursive depths")]),
         _aggregate_payload(_object(value["aggregate_balance"], "aggregate qualification", {
             "independent_payments", "folded_credits", "spend_payments", "report",
@@ -913,9 +915,10 @@ def _ed25519_verify(public_key: bytes, message: bytes, signature: bytes) -> bool
 
 def _max_for_kind(kind: str) -> int:
     return {
-        "artifact": 64 * 1024 * 1024,
+        "artifact": MAX_ARTIFACT_BYTES,
         "cargo_lock": MAX_MANIFEST_BYTES,
         "event_log": MAX_EVENT_LOG_BYTES,
+        "internal_proof": INTERNAL_PROOF_RESOURCE_MAX_BYTES,
         "proof": PAIRED_PROOF_MAX_BYTES,
         "raw_session": RAW_SESSION_MAX_BYTES,
         "report": MAX_REPORT_BYTES,
@@ -1471,7 +1474,6 @@ class EvidenceVerifier:
             "qualification_report",
             "relations",
             "helpers",
-            "receive_fold_occupancies",
             "recursive_depths",
             "aggregate_balance",
             "thermal",
@@ -1750,20 +1752,59 @@ class EvidenceVerifier:
         helper_rows = _array(protocols["helper_protocols"], "helper protocols")
         if len(helper_rows) != len(HELPERS):
             _fail("compiled helper protocols must contain exactly four rows")
-        helper_projection: list[dict[str, str]] = []
+        helper_projection: list[dict[str, object]] = []
         for index, (raw_row, expected_helper) in enumerate(zip(helper_rows, HELPERS)):
             row = _object(
                 raw_row,
                 f"helper protocol {index}",
-                {"helper", "eq_protocol_digest", "ep_protocol_digest"},
+                {
+                    "helper",
+                    "eq_protocol_digest",
+                    "ep_protocol_digest",
+                    "eq_proof_bytes",
+                    "ep_proof_bytes",
+                },
             )
             if row["helper"] != expected_helper:
                 _fail("compiled helper protocols are not in canonical order")
             eq = _digest(row["eq_protocol_digest"], f"{expected_helper} Eq protocol")
             ep = _digest(row["ep_protocol_digest"], f"{expected_helper} Ep protocol")
+            eq_proof_bytes = _integer(
+                row["eq_proof_bytes"],
+                f"{expected_helper} Eq exact proof length",
+                maximum=(1 << 32) - 1,
+            )
+            ep_proof_bytes = _integer(
+                row["ep_proof_bytes"],
+                f"{expected_helper} Ep exact proof length",
+                maximum=(1 << 32) - 1,
+            )
+            if expected_helper in INTERNAL_PROOF_HELPERS:
+                if (
+                    eq_proof_bytes == 0
+                    or ep_proof_bytes == 0
+                    or eq_proof_bytes % 32 != 0
+                    or ep_proof_bytes % 32 != 0
+                    or eq_proof_bytes + ep_proof_bytes > (1 << 32) - 1
+                ):
+                    _fail(
+                        f"{expected_helper} exact internal proof lengths must be "
+                        "nonzero 32-byte multiples with a bounded sum"
+                    )
+            elif eq_proof_bytes != 0 or ep_proof_bytes != 0:
+                _fail(
+                    f"{expected_helper} is a paired-wire helper and must not "
+                    "declare internal exact proof lengths"
+                )
             all_digests.extend((eq, ep))
             helper_projection.append(
-                {"helper": expected_helper, "eq_protocol_digest": eq, "ep_protocol_digest": ep}
+                {
+                    "helper": expected_helper,
+                    "eq_protocol_digest": eq,
+                    "ep_protocol_digest": ep,
+                    "eq_proof_bytes": eq_proof_bytes,
+                    "ep_proof_bytes": ep_proof_bytes,
+                }
             )
         if len(set(all_digests)) != len(all_digests):
             _fail("state, wrapper, and helper protocol digests must all be distinct")
@@ -1927,7 +1968,6 @@ class EvidenceVerifier:
             "qualification_report",
             "relations",
             "helpers",
-            "receive_fold_occupancies",
             "recursive_depths",
             "aggregate_balance",
             "thermal",
@@ -2050,30 +2090,6 @@ class EvidenceVerifier:
                 )
             )
 
-        occupancy_rows = _array(
-            profile["receive_fold_occupancies"], f"profile {profile_id} occupancies"
-        )
-        if len(occupancy_rows) != 16:
-            _fail("receive-fold occupancy matrix must contain exactly 1 through 16")
-        occupancies: list[dict[str, object]] = []
-        for occupancy_index, raw_row in enumerate(occupancy_rows, start=1):
-            row = _object(
-                raw_row,
-                f"receive-fold occupancy {occupancy_index}",
-                {"occupancy", "report"},
-            )
-            if row["occupancy"] != occupancy_index:
-                _fail("receive-fold occupancies must be exactly 1 through 16")
-            report_path = self._path(row["report"], "receive-fold occupancy report")
-            occupancies.append(
-                self._verify_occupancy(
-                    report_path,
-                    profile_id=profile_id,
-                    occupancy=occupancy_index,
-                    protocols=protocols,
-                )
-            )
-
         depth_rows = _array(
             profile["recursive_depths"], f"profile {profile_id} recursive depths"
         )
@@ -2155,7 +2171,6 @@ class EvidenceVerifier:
             "profile": profile_projection,
             "relations": relations,
             "helper_circuits": helpers,
-            "receive_fold_occupancies": occupancies,
             "recursive_depths": depths,
             "aggregate_balance": aggregate,
             "thermal": thermal,
@@ -2240,6 +2255,11 @@ class EvidenceVerifier:
         helper: str,
         protocols: Mapping[str, object],
     ) -> dict[str, object]:
+        proof_fields = (
+            {"eq_proof", "ep_proof"}
+            if helper in INTERNAL_PROOF_HELPERS
+            else {"proof"}
+        )
         report = self._report(
             path,
             "iroha.offline_cash_v1.helper_qualification_report",
@@ -2252,12 +2272,12 @@ class EvidenceVerifier:
                 "ep_verifying_key",
                 "eq_circuit_rows",
                 "ep_circuit_rows",
-                "proof",
                 "prove_p95_ms",
                 "verify_p95_ms",
                 "process_rss_bytes",
                 "operation_energy_millijoules",
-            },
+            }
+            | proof_fields,
         )
         self._profile_and_name(report, profile_id, "helper", helper)
         helper_protocols = {
@@ -2274,12 +2294,45 @@ class EvidenceVerifier:
             ep_role=ep_role,
         )
         eq_rows, ep_rows = self._measurement_rows(report, helper, "helpers")
-        proof = self._sample(report["proof"], "proof", f"helper:{profile_id}:{helper}")
         metrics = self._performance_metrics(report, f"helper {helper}")
+        requirements = {path, self.artifacts[eq_role], self.artifacts[ep_role]}
+        if helper in INTERNAL_PROOF_HELPERS:
+            eq_proof = self._sample(
+                report["eq_proof"],
+                "internal_proof",
+                f"helper:{profile_id}:{helper}:eq",
+            )
+            ep_proof = self._sample(
+                report["ep_proof"],
+                "internal_proof",
+                f"helper:{profile_id}:{helper}:ep",
+            )
+            eq_proof_bytes = self.files[eq_proof].size
+            ep_proof_bytes = self.files[ep_proof].size
+            if (
+                eq_proof_bytes != protocol["eq_proof_bytes"]
+                or ep_proof_bytes != protocol["ep_proof_bytes"]
+            ):
+                _fail(
+                    f"{helper} internal proof evidence does not match its "
+                    "release-pinned per-parity lengths"
+                )
+            complete_proof_bytes = eq_proof_bytes + ep_proof_bytes
+            if complete_proof_bytes > (1 << 32) - 1:
+                _fail(f"{helper} internal proof evidence length sum exceeds u32")
+            requirements.update((eq_proof, ep_proof))
+        else:
+            proof = self._sample(
+                report["proof"], "proof", f"helper:{profile_id}:{helper}"
+            )
+            eq_proof_bytes = 0
+            ep_proof_bytes = 0
+            complete_proof_bytes = self.files[proof].size
+            requirements.add(proof)
         self._bind_report_command(
             path,
             report,
-            {path, proof, self.artifacts[eq_role], self.artifacts[ep_role]},
+            requirements,
         )
         return {
             "helper": helper,
@@ -2289,50 +2342,10 @@ class EvidenceVerifier:
             "ep_verifying_key": self._artifact_binding(ep_role),
             "eq_circuit_rows": eq_rows,
             "ep_circuit_rows": ep_rows,
-            "complete_proof_bytes": self.files[proof].size,
+            "eq_proof_bytes": eq_proof_bytes,
+            "ep_proof_bytes": ep_proof_bytes,
+            "complete_proof_bytes": complete_proof_bytes,
             **metrics,
-            "report": _binding(self.files[path]),
-        }
-
-    def _verify_occupancy(
-        self,
-        path: str,
-        *,
-        profile_id: str,
-        occupancy: int,
-        protocols: Mapping[str, object],
-    ) -> dict[str, object]:
-        report = self._report(
-            path,
-            "iroha.offline_cash_v1.receive_fold_occupancy_report",
-            {
-                "hardware_profile_id",
-                "occupancy",
-                "eq_protocol_digest",
-                "ep_protocol_digest",
-                "eq_verifying_key",
-                "ep_verifying_key",
-                "proof",
-            },
-        )
-        if report["hardware_profile_id"] != profile_id or report["occupancy"] != occupancy:
-            _fail("receive-fold occupancy report binding differs from its matrix row")
-        self._protocol_and_keys(
-            report,
-            eq_protocol=str(protocols["state_eq_protocol_digest"]),
-            ep_protocol=str(protocols["state_ep_protocol_digest"]),
-            eq_role="state_vk_eq",
-            ep_role="state_vk_ep",
-        )
-        proof = self._sample(report["proof"], "proof", f"occupancy:{profile_id}:{occupancy}")
-        self._bind_report_command(
-            path,
-            report,
-            {path, proof, self.artifacts["state_vk_eq"], self.artifacts["state_vk_ep"]},
-        )
-        return {
-            "occupancy": occupancy,
-            "complete_proof_bytes": self.files[proof].size,
             "report": _binding(self.files[path]),
         }
 

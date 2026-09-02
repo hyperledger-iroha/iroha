@@ -36,7 +36,6 @@ object OfflineCashNoritoV1 {
     private const val PROOF_SCHEMA = MODEL + "OfflineCashPairedProofV1"
     private const val HARDWARE_PROFILE_SCHEMA = MODEL + "OfflineCashHardwareProfileV1"
     private const val HARDWARE_CREDENTIAL_SCHEMA = MODEL + "OfflineCashHardwareCredentialV1"
-    private const val REQUEST_MODE_SCHEMA = MODEL + "OfflineCashPaymentRequestModeV1"
     private const val REQUEST_SCHEMA = MODEL + "OfflineCashPaymentRequestV1"
     private const val INTENT_SCHEMA = MODEL + "OfflineCashAcceptanceIntentV1"
     private const val INTENT_AUTH_SCHEMA = MODEL + "OfflineCashAcceptanceIntentAuthorizationV1"
@@ -131,16 +130,6 @@ object OfflineCashNoritoV1 {
     @JvmStatic
     fun decodeHardwareCredentialShapeExact(bytes: ByteArray): OfflineCashHardwareCredentialV1 =
         decodeExact(bytes, 768, HARDWARE_CREDENTIAL_SCHEMA, HARDWARE_CREDENTIAL_ADAPTER, ::encodeHardwareCredentialShape)
-
-    /** Encode one canonical reusable request policy for the native hardware boundary. */
-    @JvmStatic
-    fun encodePaymentRequestModeShape(value: OfflineCashPaymentRequestModeV1): ByteArray =
-        raw(value, REQUEST_MODE_SCHEMA, REQUEST_MODE_ADAPTER)
-
-    /** Decode one exact reusable request policy. */
-    @JvmStatic
-    fun decodePaymentRequestModeShapeExact(bytes: ByteArray): OfflineCashPaymentRequestModeV1 =
-        decodeExact(bytes, 256, REQUEST_MODE_SCHEMA, REQUEST_MODE_ADAPTER, ::encodePaymentRequestModeShape)
 
     /** Encode a signed request after shape and self-consistency checks only. */
     @JvmStatic
@@ -789,7 +778,7 @@ object OfflineCashNoritoV1 {
             OfflineCashOperationKindV1.REDEEM_SPLIT -> OfflineCashWireV1.REDEMPTION_OUTBOX_MIN_BYTES
             else -> throw IllegalArgumentException("operation does not emit a recoverable terminal envelope")
         }
-        require(value.reservedOutboxBytes >= minimum)
+        require(Integer.compareUnsigned(value.reservedOutboxBytes, minimum) >= 0)
         return digestEncoded(
             OUTBOX_RESERVATION_COMMITMENT_DOMAIN,
             outboxReservationCircuitTranscript(value),
@@ -962,8 +951,8 @@ object OfflineCashNoritoV1 {
         require(value.liabilityPoolId().contentEquals(liabilityPoolId(value.networkId, value.asset, value.assetIncarnation)))
         require(value.hardwareCredential.networkId == value.networkId)
         require(value.hardwareCredential.deviceKeyReference().contentEquals(deviceKeyReference(value.hardwareCredential.devicePublicKey)))
-        require(value.issuedAtMs >= value.hardwareCredential.issuedAtMs)
-        require(value.expiresAtMs <= value.hardwareCredential.expiresAtMs)
+        require(java.lang.Long.compareUnsigned(value.issuedAtMs, value.hardwareCredential.issuedAtMs) >= 0)
+        require(java.lang.Long.compareUnsigned(value.expiresAtMs, value.hardwareCredential.expiresAtMs) <= 0)
     }
 
     private fun validateAcceptanceIntentShape(
@@ -972,7 +961,7 @@ object OfflineCashNoritoV1 {
     ) {
         validatePaymentRequestShape(request)
         require(value.requestDigest().contentEquals(paymentRequestDigest(request)))
-        require(request.requestMode.acceptsExactAmount(value.exactAmount))
+        require(request.amount == value.exactAmount)
     }
 
     private fun validateAcceptanceIntentAuthorizationShape(
@@ -1000,12 +989,14 @@ object OfflineCashNoritoV1 {
         require(value.requestDigest().contentEquals(paymentRequestDigest(request)))
         require(value.asset == request.asset && value.assetIncarnation == request.assetIncarnation)
         require(value.scale == request.scale)
-        require(rawMode(value.requestMode).contentEquals(rawMode(request.requestMode)))
         require(value.intentDigest().contentEquals(acceptanceIntentDigest(authorization.statement.intent, request)))
         require(value.exactAmount == authorization.statement.intent.exactAmount)
         require(value.hardwareProfileId().contentEquals(request.hardwareCredential.hardwareProfileId()))
         require(value.policyEpoch == request.hardwareCredential.policyEpoch)
-        require(value.issuedAtMs >= request.issuedAtMs && value.expiresAtMs <= request.expiresAtMs)
+        require(
+            java.lang.Long.compareUnsigned(value.issuedAtMs, request.issuedAtMs) >= 0 &&
+                java.lang.Long.compareUnsigned(value.expiresAtMs, request.expiresAtMs) <= 0,
+        )
     }
 
     private fun validateNoCommitClosureShape(value: OfflineCashNoCommitClosureV1) {
@@ -1158,12 +1149,15 @@ object OfflineCashNoritoV1 {
         require(value.requestId().contentEquals(request.requestId()))
         require(value.requestDigest().contentEquals(paymentRequestDigest(request)))
         require(value.asset == request.asset && value.assetIncarnation == request.assetIncarnation)
-        require(value.scale == request.scale && rawMode(value.requestMode).contentEquals(rawMode(request.requestMode)))
+        require(value.scale == request.scale)
         require(value.intentDigest().contentEquals(acceptanceIntentDigest(intent, request)))
         require(value.exactAmount == intent.exactAmount)
         require(value.hardwareProfileId().contentEquals(request.hardwareCredential.hardwareProfileId()))
         require(value.policyEpoch == request.hardwareCredential.policyEpoch)
-        require(value.issuedAtMs >= request.issuedAtMs && value.expiresAtMs <= request.expiresAtMs)
+        require(
+            java.lang.Long.compareUnsigned(value.issuedAtMs, request.issuedAtMs) >= 0 &&
+                java.lang.Long.compareUnsigned(value.expiresAtMs, request.expiresAtMs) <= 0,
+        )
     }
 
     private fun validateAcknowledgementShape(
@@ -1465,14 +1459,11 @@ object OfflineCashNoritoV1 {
         OfflineCashOperationKindV1.BOOTSTRAP -> 0
         OfflineCashOperationKindV1.MINT_FOLD -> 1
         OfflineCashOperationKindV1.SEND_SPLIT -> 2
-        OfflineCashOperationKindV1.RECEIVE_FOLD_BATCH -> 3
+        OfflineCashOperationKindV1.RECEIVE_FOLD -> 3
         OfflineCashOperationKindV1.REDEEM_SPLIT -> 4
         OfflineCashOperationKindV1.SUITE_UPGRADE -> 5
         OfflineCashOperationKindV1.ROTATE -> 6
     }
-
-    private fun rawMode(value: OfflineCashPaymentRequestModeV1): ByteArray =
-        raw(value, REQUEST_MODE_SCHEMA, REQUEST_MODE_ADAPTER)
 
     private fun rawEvidence(value: OfflineCashCommitEvidenceV1): ByteArray =
         frame(MODEL + "OfflineCashCommitEvidenceV1") { COMMIT_EVIDENCE_ADAPTER.encode(it, value) }
@@ -1582,33 +1573,6 @@ object OfflineCashNoritoV1 {
         },
     )
 
-    private val REQUEST_MODE_ADAPTER = adapter<OfflineCashPaymentRequestModeV1>(
-        encode = { e, v ->
-            when (v) {
-                is OfflineCashPaymentRequestModeV1.SingleExact -> enumPayload(e, 0) { u128Field(it, v.amount) }
-                is OfflineCashPaymentRequestModeV1.PartialUntilTotal -> enumPayload(e, 1) { u128Field(it, v.totalAmount) }
-                is OfflineCashPaymentRequestModeV1.BoundedMultiPayment -> enumPayload(e, 2) {
-                    u32Field(it, v.maxPayments)
-                    amountPolicyFields(it, v.perPayment)
-                }
-                is OfflineCashPaymentRequestModeV1.OpenReceive -> enumPayload(e, 3) {
-                    amountPolicyFields(it, v.perPayment)
-                }
-            }
-        },
-        decode = { d ->
-            when (val tag = readEnumTag(d, 4)) {
-                0 -> readEnumPayload(d) { OfflineCashPaymentRequestModeV1.SingleExact(readU128(it)) }
-                1 -> readEnumPayload(d) { OfflineCashPaymentRequestModeV1.PartialUntilTotal(readU128(it)) }
-                2 -> readEnumPayload(d) {
-                    OfflineCashPaymentRequestModeV1.BoundedMultiPayment(readU32(it), readAmountPolicy(it))
-                }
-                3 -> readEnumPayload(d) { OfflineCashPaymentRequestModeV1.OpenReceive(readAmountPolicy(it)) }
-                else -> throw IllegalArgumentException("unknown Offline Cash request mode tag: $tag")
-            }
-        },
-    )
-
     private val REQUEST_ADAPTER = adapter<OfflineCashPaymentRequestV1>(
         encode = { e, v ->
             u16Field(e, v.version)
@@ -1619,7 +1583,7 @@ object OfflineCashNoritoV1 {
             u32Field(e, v.scale)
             bytes32Field(e, v.liabilityPoolId())
             accountField(e, v.recipient)
-            nestedField(e, REQUEST_MODE_ADAPTER, v.requestMode)
+            u128Field(e, v.amount)
             nestedField(e, HARDWARE_CREDENTIAL_ADAPTER, v.hardwareCredential)
             bytes32Field(e, v.requestId())
             u64Field(e, v.issuedAtMs)
@@ -1629,7 +1593,7 @@ object OfflineCashNoritoV1 {
         decode = { d ->
             OfflineCashPaymentRequestV1(
                 readU16(d), readFixed32(d), readNetwork(d), readAsset(d), readIncarnation(d),
-                readU32(d), readFixed32(d), readAccount(d), readNested(d, REQUEST_MODE_ADAPTER),
+                readU32(d), readFixed32(d), readAccount(d), readU128(d),
                 readNested(d, HARDWARE_CREDENTIAL_ADAPTER), readFixed32(d), readU64(d), readU64(d),
                 readSignature(d),
             )
@@ -1713,7 +1677,6 @@ object OfflineCashNoritoV1 {
             assetField(e, v.asset)
             incarnationField(e, v.assetIncarnation)
             u32Field(e, v.scale)
-            nestedField(e, REQUEST_MODE_ADAPTER, v.requestMode)
             bytes32Field(e, v.intentDigest())
             u128Field(e, v.exactAmount)
             u32Field(e, v.reservedInboxBytes)
@@ -1727,8 +1690,8 @@ object OfflineCashNoritoV1 {
         decode = { d ->
             OfflineCashAcceptanceTicketV1(
                 readU16(d), readNetwork(d), readFixed32(d), readFixed32(d), readFixed32(d),
-                readAsset(d), readIncarnation(d), readU32(d), readNested(d, REQUEST_MODE_ADAPTER),
-                readFixed32(d), readU128(d), readU32(d), OfflineCashX25519PublicKeyV1(readRaw32(d)),
+                readAsset(d), readIncarnation(d), readU32(d), readFixed32(d), readU128(d),
+                readU32(d), OfflineCashX25519PublicKeyV1(readRaw32(d)),
                 readFixed32(d), readU64(d), readU64(d), readU64(d), readSignature(d),
             )
         },
@@ -2126,7 +2089,6 @@ object OfflineCashNoritoV1 {
 
     private fun canonicalAlignment(schema: String): Int = when (schema) {
         AGGREGATE_SCHEMA,
-        REQUEST_MODE_SCHEMA,
         REQUEST_SCHEMA,
         INTENT_SCHEMA,
         MODEL + "OfflineCashAcceptanceIntentAuthorizationStatementV1",
@@ -2245,14 +2207,6 @@ object OfflineCashNoritoV1 {
         return value
     }
 
-    private fun amountPolicyFields(e: NoritoEncoder, value: OfflineCashAmountPolicyV1) {
-        u128Field(e, value.minimumAmount)
-        u128Field(e, value.maximumAmount)
-    }
-
-    private fun readAmountPolicy(d: NoritoDecoder): OfflineCashAmountPolicyV1 =
-        OfflineCashAmountPolicyV1(readU128(d), readU128(d))
-
     private fun fixedArray(encoder: NoritoEncoder, bytes: ByteArray) = encoder.writeBytes(bytes)
 
     private fun readRaw32(decoder: NoritoDecoder): ByteArray = readExactField(decoder, 32)
@@ -2305,14 +2259,14 @@ object OfflineCashNoritoV1 {
     private fun readU32(decoder: NoritoDecoder): Int {
         val child = readField(decoder)
         val value = child.readUInt(32)
-        require(value <= Int.MAX_VALUE && child.remaining() == 0)
+        require(child.remaining() == 0)
         return value.toInt()
     }
 
     private fun readU64(decoder: NoritoDecoder): Long {
         val child = readField(decoder)
         val value = child.readUInt(64)
-        require(value >= 0 && child.remaining() == 0)
+        require(child.remaining() == 0)
         return value
     }
 

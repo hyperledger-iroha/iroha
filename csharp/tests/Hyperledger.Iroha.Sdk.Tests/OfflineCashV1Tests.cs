@@ -14,8 +14,7 @@ public sealed class OfflineCashV1Tests
     public void CircuitBoundDigestsUseExactFixedSemanticTranscripts()
     {
         var context = TestContext.Create();
-        var request = context.Request(new OfflineCashOpenReceiveRequestV1(
-            new OfflineCashAmountPolicyV1(1, 500)));
+        var request = context.Request(25);
         var authorization = context.Authorization(request, 25);
         var intent = authorization.Statement.Intent;
         var ticket = context.Ticket(request, authorization);
@@ -86,7 +85,7 @@ public sealed class OfflineCashV1Tests
     {
         using var fixture = JsonDocument.Parse(
             File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "offline_cash_v1.json")));
-        var fixtureRoot = RequireFixtureVersionTwo(fixture.RootElement);
+        var fixtureRoot = RequireFixtureVersionOne(fixture.RootElement);
         var closure = OfflineCashV1.DecodeNoCommitClosure(
             FixtureBytes(fixtureRoot, "no_commit_closure"));
         var closureStatement = closure.Statement;
@@ -109,11 +108,11 @@ public sealed class OfflineCashV1Tests
     }
 
     [Fact]
-    public void RustFixtureVersionTwoRoundTripsEveryCanonicalOfflineCashPayload()
+    public void RustFixtureVersionOneRoundTripsEveryCanonicalOfflineCashPayload()
     {
         using var fixture = JsonDocument.Parse(
             File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "offline_cash_v1.json")));
-        var root = RequireFixtureVersionTwo(fixture.RootElement);
+        var root = RequireFixtureVersionOne(fixture.RootElement);
 
         var requestBytes = FixtureBytes(root, "payment_request");
         var request = OfflineCashV1.DecodePaymentRequest(requestBytes);
@@ -188,7 +187,7 @@ public sealed class OfflineCashV1Tests
     {
         using var fixture = JsonDocument.Parse(
             File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "offline_cash_v1.json")));
-        var root = RequireFixtureVersionTwo(fixture.RootElement);
+        var root = RequireFixtureVersionOne(fixture.RootElement);
         var request = OfflineCashV1.DecodePaymentRequest(FixtureBytes(root, "payment_request"));
         var payment = OfflineCashV1.DecodePayment(FixtureBytes(root, "payment"), request);
 
@@ -223,8 +222,7 @@ public sealed class OfflineCashV1Tests
     {
         const string requestSchema =
             "iroha_data_model::offline::offline_cash_v1::OfflineCashPaymentRequestV1";
-        var canonical = OfflineCashV1.EncodePaymentRequest(TestContext.Create().Request(
-            new OfflineCashSingleExactRequestV1(25)));
+        var canonical = OfflineCashV1.EncodePaymentRequest(TestContext.Create().Request(25));
         var (payload, flags) = NoritoCodec.Decode(requestSchema, canonical);
         var reader = new CanonicalNoritoReader(payload, "fixture request", nameof(canonical));
         var writer = new CanonicalNoritoWriter();
@@ -252,37 +250,13 @@ public sealed class OfflineCashV1Tests
     }
 
     [Fact]
-    public void AllFourRequestModesRemainDistinctAndRoundTripCanonically()
+    public void PositiveExactRequestAmountRoundTripsCanonically()
     {
-        OfflineCashPaymentRequestModeV1[] modes =
-        [
-            new OfflineCashSingleExactRequestV1(10),
-            new OfflineCashPartialUntilTotalRequestV1(100),
-            new OfflineCashBoundedMultiPaymentRequestV1(3, new OfflineCashAmountPolicyV1(5, 20)),
-            new OfflineCashOpenReceiveRequestV1(new OfflineCashAmountPolicyV1(7, 30)),
-        ];
-
-        var encoded = modes.Select(OfflineCashV1.EncodePaymentRequestMode).ToArray();
-        Assert.Equal(4, encoded.Select(Convert.ToHexString).Distinct(StringComparer.Ordinal).Count());
-        Assert.IsType<OfflineCashSingleExactRequestV1>(OfflineCashV1.DecodePaymentRequestMode(encoded[0]));
-        Assert.IsType<OfflineCashPartialUntilTotalRequestV1>(OfflineCashV1.DecodePaymentRequestMode(encoded[1]));
-        Assert.IsType<OfflineCashBoundedMultiPaymentRequestV1>(OfflineCashV1.DecodePaymentRequestMode(encoded[2]));
-        Assert.IsType<OfflineCashOpenReceiveRequestV1>(OfflineCashV1.DecodePaymentRequestMode(encoded[3]));
-
-        Assert.True(modes[0].Accepts(10));
-        Assert.False(modes[0].Accepts(9));
-        Assert.True(modes[1].Accepts(75));
-        Assert.False(modes[1].Accepts(101));
-        Assert.True(modes[2].Accepts(20));
-        Assert.False(modes[2].Accepts(21));
-        Assert.True(modes[3].Accepts(30));
-        Assert.False(modes[3].Accepts(31));
-
+        var request = TestContext.Create().Request(10);
+        var encoded = OfflineCashV1.EncodePaymentRequest(request);
+        Assert.Equal((UInt128)10, OfflineCashV1.DecodePaymentRequest(encoded).Amount);
         Assert.Throws<ArgumentException>(() =>
-            OfflineCashV1.EncodePaymentRequestMode(new OfflineCashSingleExactRequestV1(0)));
-        Assert.Throws<ArgumentException>(() =>
-            OfflineCashV1.EncodePaymentRequestMode(
-                new OfflineCashBoundedMultiPaymentRequestV1(0, new OfflineCashAmountPolicyV1(1, 2))));
+            OfflineCashV1.EncodePaymentRequest(request with { Amount = 0 }));
     }
 
     [Fact]
@@ -306,21 +280,12 @@ public sealed class OfflineCashV1Tests
     public void CurrentRequestShapeFitsBothHardCaps()
     {
         var context = TestContext.Create();
-        foreach (var mode in new OfflineCashPaymentRequestModeV1[]
-                 {
-                     new OfflineCashSingleExactRequestV1(10),
-                     new OfflineCashPartialUntilTotalRequestV1(100),
-                     new OfflineCashBoundedMultiPaymentRequestV1(3, new OfflineCashAmountPolicyV1(5, 20)),
-                     new OfflineCashOpenReceiveRequestV1(new OfflineCashAmountPolicyV1(7, 30)),
-                 })
-        {
-            var request = context.Request(mode);
-            var raw = OfflineCashV1.EncodePaymentRequest(request);
-            var text = OfflineCashV1.EncodeText(OfflineCashV1.PayloadKind.PaymentRequest, raw);
-            Assert.InRange(raw.Length, 1, 1_024);
-            Assert.InRange(text.Length, 5, 1_370);
-            Assert.Equal(raw, OfflineCashV1.EncodePaymentRequest(OfflineCashV1.DecodePaymentRequest(raw)));
-        }
+        var request = context.Request(100);
+        var raw = OfflineCashV1.EncodePaymentRequest(request);
+        var text = OfflineCashV1.EncodeText(OfflineCashV1.PayloadKind.PaymentRequest, raw);
+        Assert.InRange(raw.Length, 1, 1_024);
+        Assert.InRange(text.Length, 5, 1_370);
+        Assert.Equal(raw, OfflineCashV1.EncodePaymentRequest(OfflineCashV1.DecodePaymentRequest(raw)));
     }
 
     [Fact]
@@ -376,7 +341,7 @@ public sealed class OfflineCashV1Tests
     {
         using var fixture = JsonDocument.Parse(
             File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "offline_cash_v1.json")));
-        var root = RequireFixtureVersionTwo(fixture.RootElement);
+        var root = RequireFixtureVersionOne(fixture.RootElement);
         var closure = OfflineCashV1.DecodeNoCommitClosure(FixtureBytes(root, "no_commit_closure"));
         var substitutions = new[]
         {
@@ -437,8 +402,7 @@ public sealed class OfflineCashV1Tests
             Enum.GetValues<IrohaPeerPayloadKindV1>().Select(value => (byte)value).ToArray());
 
         var context = TestContext.Create();
-        var request = context.Request(new OfflineCashOpenReceiveRequestV1(
-            new OfflineCashAmountPolicyV1(1, 500)));
+        var request = context.Request(25);
         var authorization = context.Authorization(request, 25);
         var ticket = context.Ticket(request, authorization);
         var payment = context.Payment(request, ticket, authorization.Statement.Intent);
@@ -520,16 +484,16 @@ public sealed class OfflineCashV1Tests
     }
 
     [Fact]
-    public void WalletDrainsOneStableWatermarkInRepeatedSixteenCreditBatches()
+    public void WalletDrainsOneStableWatermarkInRepeatedSingleCreditFolds()
     {
         var context = TestContext.Create();
-        var provider = new FoldOnlyNativeProvider(context, [16, 16, 1, 0], 73);
+        var provider = new FoldOnlyNativeProvider(
+            context, Enumerable.Repeat(true, 33).Append(false), 73);
         var wallet = OfflineCashWalletV1.Open(provider);
 
         Assert.Equal((UInt128)33, wallet.DrainPendingCredits());
-        Assert.Equal(new UInt128[] { 73, 73, 73, 73 }, provider.FoldWatermarks);
-        Assert.All(provider.FoldMaximums, value => Assert.Equal(16, value));
-        Assert.Equal((UInt128)3, wallet.JournalRevision);
+        Assert.Equal(Enumerable.Repeat((UInt128)73, 34), provider.FoldWatermarks);
+        Assert.Equal((UInt128)33, wallet.JournalRevision);
     }
 
     private static byte[] FixtureBytes(JsonElement root, string name)
@@ -568,12 +532,12 @@ public sealed class OfflineCashV1Tests
         return result;
     }
 
-    private static JsonElement RequireFixtureVersionTwo(JsonElement root)
+    private static JsonElement RequireFixtureVersionOne(JsonElement root)
     {
         if (!root.TryGetProperty("fixture_version", out var version)
             || version.ValueKind != JsonValueKind.Number
-            || version.GetInt32() != 2)
-            throw new InvalidDataException("Offline Cash parity requires fixture_version 2.");
+            || version.GetInt32() != 1)
+            throw new InvalidDataException("Offline Cash parity requires fixture_version 1.");
         return root;
     }
 
@@ -706,9 +670,9 @@ public sealed class OfflineCashV1Tests
                 OfflineCashV1.LiabilityPoolId(networkId, asset, incarnation), releaseId);
         }
 
-        internal OfflineCashPaymentRequestV1 Request(OfflineCashPaymentRequestModeV1 mode) => new(
+        internal OfflineCashPaymentRequestV1 Request(UInt128 amount = 25) => new(
             1, ReleaseId, NetworkId, Asset, Incarnation, 4, LiabilityPoolId, Account,
-            mode, Credential, Repeat(0x61), 1_000, 2_000, Signature);
+            amount, Credential, Repeat(0x61), 1_000, 2_000, Signature);
 
         internal OfflineCashAcceptanceIntentAuthorizationV1 Authorization(
             OfflineCashPaymentRequestV1 request,
@@ -731,7 +695,7 @@ public sealed class OfflineCashV1Tests
             var intent = authorization.Statement.Intent;
             return new OfflineCashAcceptanceTicketV1(
                 1, request.NetworkId, request.RequestId, OfflineCashV1.PaymentRequestDigest(request),
-                Repeat(0xb5), request.Asset, request.AssetIncarnation, request.Scale, request.RequestMode,
+                Repeat(0xb5), request.Asset, request.AssetIncarnation, request.Scale,
                 OfflineCashV1.AcceptanceIntentDigest(intent, request), intent.ExactAmount,
                 OfflineCashV1.AcceptanceTicketMinimumReservedInboxBytes,
                 new OfflineCashX25519PublicKeyV1(Repeat(0xb6)),
@@ -855,20 +819,19 @@ public sealed class OfflineCashV1Tests
     private sealed class FoldOnlyNativeProvider : IOfflineCashNativeHardwareProviderV1
     {
         private readonly TestContext context;
-        private readonly Queue<int> batches;
+        private readonly Queue<bool> folds;
         private readonly UInt128 watermark;
         private UInt128 revision;
         private UInt128 sequence = 1;
 
-        internal FoldOnlyNativeProvider(TestContext context, IEnumerable<int> batches, UInt128 watermark)
+        internal FoldOnlyNativeProvider(TestContext context, IEnumerable<bool> folds, UInt128 watermark)
         {
             this.context = context;
-            this.batches = new Queue<int>(batches);
+            this.folds = new Queue<bool>(folds);
             this.watermark = watermark;
         }
 
         internal List<UInt128> FoldWatermarks { get; } = [];
-        internal List<int> FoldMaximums { get; } = [];
 
         public OfflineCashHardwareQualificationV1 Qualification() =>
             context.Qualification(Enum.GetValues<OfflineCashHardwareCapabilityV1>());
@@ -880,21 +843,16 @@ public sealed class OfflineCashV1Tests
         public UInt128 PendingCreditWatermark() => watermark;
         public UInt128 JournalRevision() => revision;
 
-        public OfflineCashHardwareFoldBatchV1 FoldPendingCreditBatch(
-            UInt128 inboxSequenceInclusive,
-            int maximumCredits)
+        public byte[]? FoldPendingCredit(UInt128 inboxSequenceInclusive)
         {
             FoldWatermarks.Add(inboxSequenceInclusive);
-            FoldMaximums.Add(maximumCredits);
-            var folded = batches.Dequeue();
-            if (folded == 0) return new OfflineCashHardwareFoldBatchV1(0, null);
+            if (!folds.Dequeue()) return null;
             revision++;
             sequence++;
-            return new OfflineCashHardwareFoldBatchV1(
-                folded, OfflineCashV1.EncodeAggregateState(context.Aggregate(sequence)));
+            return OfflineCashV1.EncodeAggregateState(context.Aggregate(sequence));
         }
 
-        public byte[] CreatePaymentRequest(byte[] recipientAccount, byte[] requestMode, ulong validityWindowMilliseconds) =>
+        public byte[] CreatePaymentRequest(byte[] recipientAccount, UInt128 amount, ulong validityWindowMilliseconds) =>
             throw new NotSupportedException();
         public byte[] CreateAcceptanceIntentAuthorization(byte[] canonicalRequest, UInt128 exactAmount) =>
             throw new NotSupportedException();

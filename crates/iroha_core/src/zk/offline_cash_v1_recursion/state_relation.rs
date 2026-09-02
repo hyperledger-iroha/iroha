@@ -1,10 +1,9 @@
 //! Native Pasta aggregate-state relation for Offline Cash V1.
 //!
 //! The relation has one fixed shape for all seven operations. It commits every private state
-//! field with the parity-native Poseidon construction, proves exact `u128` balance/count/sequence
-//! arithmetic, and always evaluates sixteen full 256-level consumed-credit paths. `MintFold`
-//! selects the first path, while `ReceiveFoldBatch` selects an active prefix of one through
-//! sixteen paths. All other operations carry the replay root. A 256-bit credit ID therefore has
+//! field with the parity-native Poseidon construction, proves exact `u128` balance/sequence
+//! arithmetic, and always evaluates one full 256-level consumed-credit path. `MintFold` and
+//! `ReceiveFold` select that path. All other operations carry the replay root. A 256-bit credit ID therefore has
 //! no history/count admission cap and retains a 128-bit collision-security target under the
 //! width-3 Poseidon permutation.
 
@@ -40,10 +39,7 @@ use crate::zk::{
     },
 };
 
-/// Fixed number of credit slots in one padded receive fold.
-pub const OFFLINE_CASH_RECEIVE_FOLD_BATCH_WIDTH_V1: usize = 16;
-
-pub(super) const PUBLIC_INSTANCE_COUNT: usize = 81;
+pub(super) const PUBLIC_INSTANCE_COUNT: usize = 77;
 const MINIMUM_UNUSABLE_ROWS: usize = 9;
 
 /// Public-instance positions shared by both state-proof parities.
@@ -88,137 +84,125 @@ pub mod public_instance {
     pub const PEER_RECIPIENT_LANE_LO: usize = 18;
     /// High 128 bits of the peer recipient lane; zero outside peer send/receive.
     pub const PEER_RECIPIENT_LANE_HI: usize = 19;
-    /// Active receive-slot count; zero outside `ReceiveFoldBatch`.
-    pub const RECEIVE_ACTIVE_COUNT: usize = 20;
-    /// Fixed receive-batch width, always sixteen.
-    pub const RECEIVE_BATCH_WIDTH: usize = 21;
     /// Low 128 bits of the common predecessor Eq component.
-    pub const PREDECESSOR_EQ_COMPONENT_LO: usize = 22;
+    pub const PREDECESSOR_EQ_COMPONENT_LO: usize = 20;
     /// High 128 bits of the common predecessor Eq component.
-    pub const PREDECESSOR_EQ_COMPONENT_HI: usize = 23;
+    pub const PREDECESSOR_EQ_COMPONENT_HI: usize = 21;
     /// Low 128 bits of the common predecessor Ep component.
-    pub const PREDECESSOR_EP_COMPONENT_LO: usize = 24;
+    pub const PREDECESSOR_EP_COMPONENT_LO: usize = 22;
     /// High 128 bits of the common predecessor Ep component.
-    pub const PREDECESSOR_EP_COMPONENT_HI: usize = 25;
+    pub const PREDECESSOR_EP_COMPONENT_HI: usize = 23;
     /// Low 128 bits of the common successor Eq component.
-    pub const SUCCESSOR_EQ_COMPONENT_LO: usize = 26;
+    pub const SUCCESSOR_EQ_COMPONENT_LO: usize = 24;
     /// High 128 bits of the common successor Eq component.
-    pub const SUCCESSOR_EQ_COMPONENT_HI: usize = 27;
+    pub const SUCCESSOR_EQ_COMPONENT_HI: usize = 25;
     /// Low 128 bits of the common successor Ep component.
-    pub const SUCCESSOR_EP_COMPONENT_LO: usize = 28;
+    pub const SUCCESSOR_EP_COMPONENT_LO: usize = 26;
     /// High 128 bits of the common successor Ep component.
-    pub const SUCCESSOR_EP_COMPONENT_HI: usize = 29;
+    pub const SUCCESSOR_EP_COMPONENT_HI: usize = 27;
     /// Parity-native predecessor state component, zero only for bootstrap.
-    pub const PREDECESSOR_STATE: usize = 30;
+    pub const PREDECESSOR_STATE: usize = 28;
     /// Parity-native successor state component.
-    pub const SUCCESSOR_STATE: usize = 31;
+    pub const SUCCESSOR_STATE: usize = 29;
     /// Low 128 bits of the canonical Fp Eq compiled-protocol identity.
-    pub const EQ_PROTOCOL_LO: usize = 32;
+    pub const EQ_PROTOCOL_LO: usize = 30;
     /// High 128 bits of the canonical Fp Eq compiled-protocol identity.
-    pub const EQ_PROTOCOL_HI: usize = 33;
+    pub const EQ_PROTOCOL_HI: usize = 31;
     /// Low 128 bits of the canonical Fq Ep compiled-protocol identity.
-    pub const EP_PROTOCOL_LO: usize = 34;
+    pub const EP_PROTOCOL_LO: usize = 32;
     /// High 128 bits of the canonical Fq Ep compiled-protocol identity.
-    pub const EP_PROTOCOL_HI: usize = 35;
+    pub const EP_PROTOCOL_HI: usize = 33;
     /// Low 128 bits of the canonical Fp Eq GuardBundle compiled-protocol identity.
-    pub const GUARD_EQ_PROTOCOL_LO: usize = 36;
+    pub const GUARD_EQ_PROTOCOL_LO: usize = 34;
     /// High 128 bits of the canonical Fp Eq GuardBundle compiled-protocol identity.
-    pub const GUARD_EQ_PROTOCOL_HI: usize = 37;
+    pub const GUARD_EQ_PROTOCOL_HI: usize = 35;
     /// Low 128 bits of the canonical Fq Ep GuardBundle compiled-protocol identity.
-    pub const GUARD_EP_PROTOCOL_LO: usize = 38;
+    pub const GUARD_EP_PROTOCOL_LO: usize = 36;
     /// High 128 bits of the canonical Fq Ep GuardBundle compiled-protocol identity.
-    pub const GUARD_EP_PROTOCOL_HI: usize = 39;
+    pub const GUARD_EP_PROTOCOL_HI: usize = 37;
     /// Low 128 bits of the canonical Fp Eq finalized-mint compiled-protocol identity.
-    pub const MINT_EQ_PROTOCOL_LO: usize = 40;
+    pub const MINT_EQ_PROTOCOL_LO: usize = 38;
     /// High 128 bits of the canonical Fp Eq finalized-mint compiled-protocol identity.
-    pub const MINT_EQ_PROTOCOL_HI: usize = 41;
+    pub const MINT_EQ_PROTOCOL_HI: usize = 39;
     /// Low 128 bits of the canonical Fq Ep finalized-mint compiled-protocol identity.
-    pub const MINT_EP_PROTOCOL_LO: usize = 42;
+    pub const MINT_EP_PROTOCOL_LO: usize = 40;
     /// High 128 bits of the canonical Fq Ep finalized-mint compiled-protocol identity.
-    pub const MINT_EP_PROTOCOL_HI: usize = 43;
+    pub const MINT_EP_PROTOCOL_HI: usize = 41;
     /// Low 128 bits of the Eq credential audit recursively accepted by GuardBundle.
-    pub const GUARD_EQ_CREDENTIAL_AUDIT_LO: usize = 44;
+    pub const GUARD_EQ_CREDENTIAL_AUDIT_LO: usize = 42;
     /// High 128 bits of the Eq credential audit recursively accepted by GuardBundle.
-    pub const GUARD_EQ_CREDENTIAL_AUDIT_HI: usize = 45;
+    pub const GUARD_EQ_CREDENTIAL_AUDIT_HI: usize = 43;
     /// Low 128 bits of the Ep credential audit recursively accepted by GuardBundle.
-    pub const GUARD_EP_CREDENTIAL_AUDIT_LO: usize = 46;
+    pub const GUARD_EP_CREDENTIAL_AUDIT_LO: usize = 44;
     /// High 128 bits of the Ep credential audit recursively accepted by GuardBundle.
-    pub const GUARD_EP_CREDENTIAL_AUDIT_HI: usize = 47;
+    pub const GUARD_EP_CREDENTIAL_AUDIT_HI: usize = 45;
     /// Low 128 bits of the Eq scalar-verifier deferred-equation audit.
-    pub const EQ_DEFERRED_AUDIT_LO: usize = 48;
+    pub const EQ_DEFERRED_AUDIT_LO: usize = 46;
     /// High 128 bits of the Eq scalar-verifier deferred-equation audit.
-    pub const EQ_DEFERRED_AUDIT_HI: usize = 49;
+    pub const EQ_DEFERRED_AUDIT_HI: usize = 47;
     /// Low 128 bits of the Ep scalar-verifier deferred-equation audit.
-    pub const EP_DEFERRED_AUDIT_LO: usize = 50;
+    pub const EP_DEFERRED_AUDIT_LO: usize = 48;
     /// High 128 bits of the Ep scalar-verifier deferred-equation audit.
-    pub const EP_DEFERRED_AUDIT_HI: usize = 51;
+    pub const EP_DEFERRED_AUDIT_HI: usize = 49;
     /// Low 128 bits of the exact paired mint-helper proof binding.
-    pub const MINT_PROOF_BINDING_LO: usize = 52;
+    pub const MINT_PROOF_BINDING_LO: usize = 50;
     /// High 128 bits of the exact paired mint-helper proof binding.
-    pub const MINT_PROOF_BINDING_HI: usize = 53;
+    pub const MINT_PROOF_BINDING_HI: usize = 51;
     /// Low 128 bits of the released lifecycle binding.
-    pub const LIFECYCLE_LO: usize = 54;
+    pub const LIFECYCLE_LO: usize = 52;
     /// High 128 bits of the released lifecycle binding.
-    pub const LIFECYCLE_HI: usize = 55;
+    pub const LIFECYCLE_HI: usize = 53;
     /// Low 128 bits of the precommit request/ticket/reservation binding.
-    pub const PRECOMMIT_LO: usize = 56;
+    pub const PRECOMMIT_LO: usize = 54;
     /// High 128 bits of the precommit request/ticket/reservation binding.
-    pub const PRECOMMIT_HI: usize = 57;
+    pub const PRECOMMIT_HI: usize = 55;
     /// Low 128 bits of the consumed suite identity.
-    pub const PREDECESSOR_SUITE_LO: usize = 58;
+    pub const PREDECESSOR_SUITE_LO: usize = 56;
     /// High 128 bits of the consumed suite identity.
-    pub const PREDECESSOR_SUITE_HI: usize = 59;
+    pub const PREDECESSOR_SUITE_HI: usize = 57;
     /// Low 128 bits of the consumed verifier-key digest.
-    pub const PREDECESSOR_VK_LO: usize = 60;
+    pub const PREDECESSOR_VK_LO: usize = 58;
     /// High 128 bits of the consumed verifier-key digest.
-    pub const PREDECESSOR_VK_HI: usize = 61;
+    pub const PREDECESSOR_VK_HI: usize = 59;
     /// Low 128 bits of the produced suite identity.
-    pub const SUCCESSOR_SUITE_LO: usize = 62;
+    pub const SUCCESSOR_SUITE_LO: usize = 60;
     /// High 128 bits of the produced suite identity.
-    pub const SUCCESSOR_SUITE_HI: usize = 63;
+    pub const SUCCESSOR_SUITE_HI: usize = 61;
     /// Low 128 bits of the produced verifier-key digest.
-    pub const SUCCESSOR_VK_LO: usize = 64;
+    pub const SUCCESSOR_VK_LO: usize = 62;
     /// High 128 bits of the produced verifier-key digest.
-    pub const SUCCESSOR_VK_HI: usize = 65;
+    pub const SUCCESSOR_VK_HI: usize = 63;
     /// Low 128 bits of the authenticated suite-upgrade bridge.
-    pub const SUITE_UPGRADE_AUTHORIZATION_LO: usize = 66;
+    pub const SUITE_UPGRADE_AUTHORIZATION_LO: usize = 64;
     /// High 128 bits of the authenticated suite-upgrade bridge.
-    pub const SUITE_UPGRADE_AUTHORIZATION_HI: usize = 67;
-    /// Low 128 bits of the exact padded receive-batch binding.
-    pub const RECEIVE_BATCH_BINDING_LO: usize = 68;
-    /// High 128 bits of the exact padded receive-batch binding.
-    pub const RECEIVE_BATCH_BINDING_HI: usize = 69;
+    pub const SUITE_UPGRADE_AUTHORIZATION_HI: usize = 65;
     /// Exact protocol version carried by the aggregate state.
-    pub const PROTOCOL_VERSION: usize = 70;
+    pub const PROTOCOL_VERSION: usize = 66;
     /// Low 128 bits of the exact typed asset incarnation carried by the aggregate state.
-    pub const ASSET_INCARNATION_LO: usize = 71;
+    pub const ASSET_INCARNATION_LO: usize = 67;
     /// High 128 bits of the exact typed asset incarnation carried by the aggregate state.
-    pub const ASSET_INCARNATION_HI: usize = 72;
+    pub const ASSET_INCARNATION_HI: usize = 68;
     /// Low 128 bits of the qualified hardware profile.
-    pub const HARDWARE_PROFILE_LO: usize = 73;
+    pub const HARDWARE_PROFILE_LO: usize = 69;
     /// High 128 bits of the qualified hardware profile.
-    pub const HARDWARE_PROFILE_HI: usize = 74;
+    pub const HARDWARE_PROFILE_HI: usize = 70;
     /// Governed hardware policy epoch.
-    pub const POLICY_EPOCH: usize = 75;
+    pub const POLICY_EPOCH: usize = 71;
     /// Low 128 bits of the exact network identity.
-    pub const NETWORK_LO: usize = 76;
+    pub const NETWORK_LO: usize = 72;
     /// High 128 bits of the exact network identity.
-    pub const NETWORK_HI: usize = 77;
+    pub const NETWORK_HI: usize = 73;
     /// Low 128 bits of the canonical typed asset digest.
-    pub const ASSET_LO: usize = 78;
+    pub const ASSET_LO: usize = 74;
     /// High 128 bits of the canonical typed asset digest.
-    pub const ASSET_HI: usize = 79;
+    pub const ASSET_HI: usize = 75;
     /// Authoritative asset scale.
-    pub const ASSET_SCALE: usize = 80;
+    pub const ASSET_SCALE: usize = 76;
 }
 
-/// One private slot in the fixed-width receive-fold relation.
-///
-/// Inactive padding is represented by `None`, which the circuit expands to canonical zero
-/// values and a fixed all-zero sibling path. Active slots form a strict prefix, so a caller
-/// cannot hide a later credit behind inactive padding.
+/// One private credit in the single-credit receive-fold relation.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct OfflineCashReceiveFoldSlotV1 {
+pub struct OfflineCashReceiveFoldCreditV1 {
     /// Positive credit amount in atomic units.
     pub amount: u128,
     /// Exact receiver-bound credit identity.
@@ -252,14 +236,10 @@ pub struct OfflineCashStateRelationPublicInputsV1 {
     pub mint_finality_semantic_digest: DigestV1,
     /// Paired mint-helper proof binding, nonzero only for `MintFold`.
     pub mint_finality_proof_binding_digest: DigestV1,
-    /// Receiver-bound credit identity, nonzero only for `SendSplit`.
+    /// Receiver-bound credit identity, nonzero for `SendSplit` and `ReceiveFold`.
     pub peer_credit_id: DigestV1,
-    /// Receiver lane, nonzero only for `SendSplit`.
+    /// Receiver lane, nonzero for `SendSplit` and `ReceiveFold`.
     pub peer_recipient_lane_id: DigestV1,
-    /// Active receive prefix length.
-    pub receive_active_count: u8,
-    /// Binding of the fixed-width receive batch.
-    pub receive_batch_binding_digest: DigestV1,
     /// Released lifecycle digest.
     pub lifecycle_binding_digest: DigestV1,
     /// Send/redemption precommit binding.
@@ -302,7 +282,7 @@ pub struct OfflineCashStateRelationWitnessV1 {
     /// Produced state.
     pub successor: OfflineCashStateV1,
     /// Positive monetary amount, or zero for bootstrap/suite-upgrade/rotation.
-    /// For `ReceiveFoldBatch` this is the checked sum of all active slot amounts.
+    /// For `ReceiveFold` this is the received credit amount.
     pub amount: u128,
     /// Durable journal revision consumed by this transition.
     pub journal_revision_before: u128,
@@ -314,17 +294,12 @@ pub struct OfflineCashStateRelationWitnessV1 {
     pub mint_finality_semantic_digest: DigestV1,
     /// Exact binding of both mint-helper parities, nonzero only for `MintFold`.
     pub mint_finality_proof_binding_digest: DigestV1,
-    /// Receiver-bound peer credit identity, nonzero only for `SendSplit`.
+    /// Receiver-bound peer credit identity, nonzero for `SendSplit` and `ReceiveFold`.
     pub peer_credit_id: DigestV1,
-    /// Receiver lane authorized by the peer credit, nonzero only for `SendSplit`.
+    /// Receiver lane authorized by the peer credit, nonzero for `SendSplit` and `ReceiveFold`.
     pub peer_recipient_lane_id: DigestV1,
-    /// Number of active slots in `receive_slots`; zero outside `ReceiveFoldBatch`.
-    pub receive_active_count: u8,
-    /// Fixed-width active-prefix receive batch. Inactive entries are canonical `None` padding.
-    pub receive_slots:
-        [Option<OfflineCashReceiveFoldSlotV1>; OFFLINE_CASH_RECEIVE_FOLD_BATCH_WIDTH_V1],
-    /// Binding of the exact active prefix, padding, and paired incoming proofs.
-    pub receive_batch_binding_digest: DigestV1,
+    /// Exact peer credit consumed by `ReceiveFold`; absent for every other operation.
+    pub receive_credit: Option<OfflineCashReceiveFoldCreditV1>,
     /// Exact released lifecycle digest copied into the precommit candidate.
     pub lifecycle_binding_digest: DigestV1,
     /// Hiding binding of the request, one-use ticket, and outbox reservation.
@@ -443,60 +418,36 @@ impl OfflineCashStateRelationWitnessV1 {
                 return Err("MintFold replay roots do not match aggregate states".to_owned());
             }
         }
-        let is_receive = self.operation == OfflineCashOperationV1::ReceiveFoldBatch;
+        let is_receive = self.operation == OfflineCashOperationV1::ReceiveFold;
         if is_receive {
-            if self.receive_active_count == 0
-                || usize::from(self.receive_active_count) > OFFLINE_CASH_RECEIVE_FOLD_BATCH_WIDTH_V1
-                || self.receive_batch_binding_digest == [0; 32]
-            {
-                return Err("ReceiveFoldBatch requires one through sixteen active slots".to_owned());
-            }
             let predecessor = self
                 .predecessor
                 .as_ref()
-                .ok_or_else(|| "ReceiveFoldBatch predecessor is absent".to_owned())?;
-            let mut expected_root = predecessor.consumed_credit_root;
-            let mut checked_amount = 0_u128;
-            let mut active_ids = Vec::with_capacity(usize::from(self.receive_active_count));
-            for (index, slot) in self.receive_slots.iter().enumerate() {
-                let active = index < usize::from(self.receive_active_count);
-                if active != slot.is_some() {
-                    return Err("ReceiveFoldBatch slots must form an active prefix".to_owned());
-                }
-                let Some(slot) = slot else { continue };
-                slot.replay_insert
-                    .validate_shape()
-                    .map_err(|error| error.to_string())?;
-                if slot.amount == 0
-                    || slot.credit_id == [0; 32]
-                    || slot.recipient_lane_id == [0; 32]
-                    || slot.incoming_proof_binding_digest == [0; 32]
-                    || slot.credit_id != slot.replay_insert.credit_id
-                    || slot.recipient_lane_id != self.successor.lane.device_lane_id
-                    || slot.replay_insert.predecessor_root != expected_root
-                {
-                    return Err("invalid ReceiveFoldBatch active slot".to_owned());
-                }
-                if active_ids.contains(&slot.credit_id) {
-                    return Err("ReceiveFoldBatch contains a duplicate active credit ID".to_owned());
-                }
-                active_ids.push(slot.credit_id);
-                checked_amount = checked_amount
-                    .checked_add(slot.amount)
-                    .ok_or_else(|| "ReceiveFoldBatch amount overflow".to_owned())?;
-                expected_root = slot.replay_insert.successor_root;
-            }
-            if checked_amount != self.amount || expected_root != self.successor.consumed_credit_root
+                .ok_or_else(|| "ReceiveFold predecessor is absent".to_owned())?;
+            let credit = self
+                .receive_credit
+                .as_ref()
+                .ok_or_else(|| "ReceiveFold credit is absent".to_owned())?;
+            credit
+                .replay_insert
+                .validate_shape()
+                .map_err(|error| error.to_string())?;
+            if credit.amount == 0
+                || credit.amount != self.amount
+                || credit.credit_id == [0; 32]
+                || credit.recipient_lane_id == [0; 32]
+                || credit.incoming_proof_binding_digest == [0; 32]
+                || credit.credit_id != self.peer_credit_id
+                || credit.recipient_lane_id != self.peer_recipient_lane_id
+                || credit.credit_id != credit.replay_insert.credit_id
+                || credit.recipient_lane_id != self.successor.lane.device_lane_id
+                || credit.replay_insert.predecessor_root != predecessor.consumed_credit_root
+                || credit.replay_insert.successor_root != self.successor.consumed_credit_root
             {
-                return Err("ReceiveFoldBatch sum or final replay root mismatch".to_owned());
+                return Err("invalid ReceiveFold credit or replay transition".to_owned());
             }
-        } else if self.receive_active_count != 0
-            || self.receive_slots.iter().any(Option::is_some)
-            || self.receive_batch_binding_digest != [0; 32]
-        {
-            return Err(
-                "receive batch fields must be canonical zero outside ReceiveFoldBatch".to_owned(),
-            );
+        } else if self.receive_credit.is_some() {
+            return Err("receive credit must be absent outside ReceiveFold".to_owned());
         }
         if matches!(
             self.operation,
@@ -535,11 +486,17 @@ impl OfflineCashStateRelationWitnessV1 {
         {
             return Err("mint proof binding must be nonzero exactly for MintFold".to_owned());
         }
-        let is_send = self.operation == OfflineCashOperationV1::SendSplit;
-        if is_send != (self.peer_credit_id != [0; 32])
-            || is_send != (self.peer_recipient_lane_id != [0; 32])
+        let is_peer = matches!(
+            self.operation,
+            OfflineCashOperationV1::SendSplit | OfflineCashOperationV1::ReceiveFold
+        );
+        if is_peer != (self.peer_credit_id != [0; 32])
+            || is_peer != (self.peer_recipient_lane_id != [0; 32])
         {
-            return Err("peer credit bindings must be nonzero exactly for SendSplit".to_owned());
+            return Err(
+                "peer credit bindings must be nonzero exactly for SendSplit and ReceiveFold"
+                    .to_owned(),
+            );
         }
         let uses_outbox = matches!(
             self.operation,
@@ -584,7 +541,7 @@ impl OfflineCashStateRelationWitnessV1 {
             OfflineCashOperationV1::Bootstrap => 0,
             OfflineCashOperationV1::MintFold => 1,
             OfflineCashOperationV1::SendSplit => 2,
-            OfflineCashOperationV1::ReceiveFoldBatch => 3,
+            OfflineCashOperationV1::ReceiveFold => 3,
             OfflineCashOperationV1::RedeemSplit => 4,
             OfflineCashOperationV1::SuiteUpgrade => 5,
             OfflineCashOperationV1::Rotate => 6,
@@ -650,7 +607,6 @@ impl OfflineCashStateRelationWitnessV1 {
         let successor_suite = digest_limbs::<F>(self.successor.suite_id);
         let successor_vk = digest_limbs::<F>(self.successor.vk_digest);
         let suite_upgrade = digest_limbs::<F>(self.suite_upgrade_authorization_digest);
-        let receive_batch = digest_limbs::<F>(self.receive_batch_binding_digest);
         let asset_incarnation = digest_limbs::<F>(*self.successor.asset_incarnation.as_bytes());
         Ok(vec![
             F::from(self.operation_tag()),
@@ -673,8 +629,6 @@ impl OfflineCashStateRelationWitnessV1 {
             peer_credit[1],
             peer_recipient_lane[0],
             peer_recipient_lane[1],
-            F::from(u64::from(self.receive_active_count)),
-            F::from(OFFLINE_CASH_RECEIVE_FOLD_BATCH_WIDTH_V1 as u64),
             predecessor_eq[0],
             predecessor_eq[1],
             predecessor_ep[0],
@@ -721,8 +675,6 @@ impl OfflineCashStateRelationWitnessV1 {
             successor_vk[1],
             suite_upgrade[0],
             suite_upgrade[1],
-            receive_batch[0],
-            receive_batch[1],
             F::from(u64::from(self.successor.protocol_version)),
             asset_incarnation[0],
             asset_incarnation[1],
@@ -749,9 +701,9 @@ impl OfflineCashStateRelationWitnessV1 {
 }
 
 impl OfflineCashStateRelationPublicInputsV1 {
-    /// Return one parity's verifier-reconstructed 81-cell state column.
+    /// Return one parity's verifier-reconstructed 77-cell state column.
     ///
-    /// Private receive slots and replay paths are intentionally absent: they are constrained by
+    /// The private receive credit and replay path are intentionally absent: they are constrained by
     /// the proof but do not belong to its public instance ABI.
     pub fn public_instances<F: OfflineCashPoseidonFieldV1>(&self) -> Result<Vec<F>, String> {
         OfflineCashStateRelationWitnessV1 {
@@ -766,9 +718,7 @@ impl OfflineCashStateRelationPublicInputsV1 {
             mint_finality_proof_binding_digest: self.mint_finality_proof_binding_digest,
             peer_credit_id: self.peer_credit_id,
             peer_recipient_lane_id: self.peer_recipient_lane_id,
-            receive_active_count: self.receive_active_count,
-            receive_slots: core::array::from_fn(|_| None),
-            receive_batch_binding_digest: self.receive_batch_binding_digest,
+            receive_credit: None,
             lifecycle_binding_digest: self.lifecycle_binding_digest,
             precommit_binding_digest: self.precommit_binding_digest,
             suite_upgrade_authorization_digest: self.suite_upgrade_authorization_digest,
@@ -875,10 +825,9 @@ pub(super) struct AssignedState<F: OfflineCashPoseidonFieldV1> {
     pub(super) lane_id: [AssignedValue<F>; 2],
 }
 
-/// Assigned cells for one fixed-width receive slot.
+/// Assigned cells for the single receive credit.
 #[derive(Clone, Copy)]
-pub(super) struct OfflineCashAssignedReceiveFoldSlotV1<F: OfflineCashPoseidonFieldV1> {
-    pub(super) active: AssignedValue<F>,
+pub(super) struct OfflineCashAssignedReceiveFoldCreditV1<F: OfflineCashPoseidonFieldV1> {
     pub(super) amount: AssignedValue<F>,
     pub(super) credit_id: [AssignedValue<F>; 2],
     pub(super) recipient_lane_id: [AssignedValue<F>; 2],
@@ -903,10 +852,7 @@ pub(super) struct OfflineCashAssignedStateRelationV1<F: OfflineCashPoseidonField
     pub(super) mint_finality_proof_binding_digest: [AssignedValue<F>; 2],
     pub(super) peer_credit_id: [AssignedValue<F>; 2],
     pub(super) peer_recipient_lane_id: [AssignedValue<F>; 2],
-    pub(super) receive_active_count: AssignedValue<F>,
-    pub(super) receive_slots:
-        [OfflineCashAssignedReceiveFoldSlotV1<F>; OFFLINE_CASH_RECEIVE_FOLD_BATCH_WIDTH_V1],
-    pub(super) receive_batch_binding_digest: [AssignedValue<F>; 2],
+    pub(super) receive_credit: OfflineCashAssignedReceiveFoldCreditV1<F>,
     pub(super) lifecycle_binding_digest: [AssignedValue<F>; 2],
     pub(super) precommit_binding_digest: [AssignedValue<F>; 2],
     pub(super) suite_upgrade_authorization_digest: [AssignedValue<F>; 2],
@@ -1189,7 +1135,7 @@ where
     for limb in mint_finality_proof_binding_digest {
         assert_if_equal(ctx, &range, not_mint, limb, Constant(F::ZERO));
     }
-    let peer = send;
+    let peer = gate.add(ctx, send, receive);
     let not_peer = gate.not(ctx, peer);
     for digest in [peer_credit_id, peer_recipient_lane_id] {
         assert_if_digest_different(ctx, &range, peer, digest, [zero; 2]);
@@ -1322,8 +1268,8 @@ where
         predecessor.key_reference,
     );
 
-    // Mint evaluates one fixed replay path. ReceiveFoldBatch evaluates all sixteen paths and
-    // selects a strict active prefix. Thus circuit shape is independent of batch size and history.
+    // MintFold and ReceiveFold each evaluate one fixed replay path. Every other operation keeps
+    // the replay root unchanged, so circuit shape is independent of history length.
     let replay_zero = zero;
     let mint_replay = witness.and_then(|value| value.replay_insert.as_ref());
     let (credit_limbs, envelope_limbs, mint_empty_path, mint_present_path) =
@@ -1333,112 +1279,81 @@ where
     assert_if_equal(ctx, &range, mint, predecessor.replay_root, mint_empty_path);
     assert_if_equal(ctx, &range, mint, successor.replay_root, mint_present_path);
 
-    let receive_active_count = ctx.load_witness(F::from(u64::from(
-        witness.map_or(0, |value| value.receive_active_count),
-    )));
-    range.range_check(ctx, receive_active_count, 5);
-    let active_count_is_zero = gate.is_zero(ctx, receive_active_count);
-    let active_count_nonzero = gate.not(ctx, active_count_is_zero);
-    assert_if_equal(ctx, &range, receive, active_count_nonzero, Constant(F::ONE));
+    let receive_credit = witness.and_then(|value| value.receive_credit.as_ref());
+    let receive_amount = assign_u128(ctx, &range, receive_credit.map_or(0, |value| value.amount));
+    let receive_credit_id = assign_digest(
+        ctx,
+        &range,
+        receive_credit.map_or([0; 32], |value| value.credit_id),
+    );
+    let receive_recipient_lane_id = assign_digest(
+        ctx,
+        &range,
+        receive_credit.map_or([0; 32], |value| value.recipient_lane_id),
+    );
+    let receive_incoming_proof_binding_digest = assign_digest(
+        ctx,
+        &range,
+        receive_credit.map_or([0; 32], |value| value.incoming_proof_binding_digest),
+    );
+    let (receive_replay_credit, receive_envelope_digest, receive_empty_path, receive_present_path) =
+        assign_replay_path_v1(
+            ctx,
+            &range,
+            &poseidon,
+            receive_credit.map(|value| &value.replay_insert),
+        );
+    assert_if_nonzero(ctx, &range, receive, receive_amount);
+    assert_if_equal(ctx, &range, receive, receive_amount, amount);
+    for digest in [
+        receive_credit_id,
+        receive_recipient_lane_id,
+        receive_incoming_proof_binding_digest,
+        receive_envelope_digest,
+    ] {
+        assert_if_digest_different(ctx, &range, receive, digest, [replay_zero; 2]);
+        for limb in digest {
+            assert_if_equal(ctx, &range, not_receive, limb, Constant(F::ZERO));
+        }
+    }
+    assert_if_equal(ctx, &range, not_receive, receive_amount, Constant(F::ZERO));
+    for ((credit, peer), replay) in receive_credit_id
+        .into_iter()
+        .zip(peer_credit_id)
+        .zip(receive_replay_credit)
+    {
+        assert_if_equal(ctx, &range, receive, credit, peer);
+        assert_if_equal(ctx, &range, receive, credit, replay);
+    }
+    for ((recipient, peer), lane) in receive_recipient_lane_id
+        .into_iter()
+        .zip(peer_recipient_lane_id)
+        .zip(successor.lane_id)
+    {
+        assert_if_equal(ctx, &range, receive, recipient, peer);
+        assert_if_equal(ctx, &range, receive, recipient, lane);
+    }
     assert_if_equal(
         ctx,
         &range,
-        not_receive,
-        receive_active_count,
-        Constant(F::ZERO),
-    );
-    let active_count_in_range = range.is_less_than(
-        ctx,
-        receive_active_count,
-        Constant(F::from(
-            (OFFLINE_CASH_RECEIVE_FOLD_BATCH_WIDTH_V1 + 1) as u64,
-        )),
-        5,
+        receive,
+        predecessor.replay_root,
+        receive_empty_path,
     );
     assert_if_equal(
         ctx,
         &range,
         receive,
-        active_count_in_range,
-        Constant(F::ONE),
+        successor.replay_root,
+        receive_present_path,
     );
-
-    let mut running_root = predecessor.replay_root;
-    let mut running_amount = ctx.load_zero();
-    let mut assigned_receive_slots = Vec::with_capacity(OFFLINE_CASH_RECEIVE_FOLD_BATCH_WIDTH_V1);
-    for index in 0..OFFLINE_CASH_RECEIVE_FOLD_BATCH_WIDTH_V1 {
-        let slot = witness
-            .and_then(|value| value.receive_slots.get(index))
-            .and_then(Option::as_ref);
-        let index_cell = ctx.load_constant(F::from(index as u64));
-        let active = range.is_less_than(ctx, index_cell, receive_active_count, 5);
-        let inactive = gate.not(ctx, active);
-        let slot_amount = assign_u128(ctx, &range, slot.map_or(0, |value| value.amount));
-        let slot_credit = assign_digest(ctx, &range, slot.map_or([0; 32], |value| value.credit_id));
-        let slot_recipient = assign_digest(
-            ctx,
-            &range,
-            slot.map_or([0; 32], |value| value.recipient_lane_id),
-        );
-        let slot_incoming = assign_digest(
-            ctx,
-            &range,
-            slot.map_or([0; 32], |value| value.incoming_proof_binding_digest),
-        );
-        let replay = slot.map(|value| &value.replay_insert);
-        let (replay_credit, slot_envelope, empty_path, present_path) =
-            assign_replay_path_v1(ctx, &range, &poseidon, replay);
-
-        assert_if_nonzero(ctx, &range, active, slot_amount);
-        for digest in [slot_credit, slot_recipient, slot_incoming, slot_envelope] {
-            assert_if_digest_different(ctx, &range, active, digest, [replay_zero; 2]);
-            for limb in digest {
-                assert_if_equal(ctx, &range, inactive, limb, Constant(F::ZERO));
-            }
-        }
-        assert_if_equal(ctx, &range, inactive, slot_amount, Constant(F::ZERO));
-        for (claimed, replay) in slot_credit.into_iter().zip(replay_credit) {
-            assert_if_equal(ctx, &range, active, claimed, replay);
-        }
-        for (recipient, lane) in slot_recipient.into_iter().zip(successor.lane_id) {
-            assert_if_equal(ctx, &range, active, recipient, lane);
-        }
-        assert_if_equal(ctx, &range, active, running_root, empty_path);
-        running_root = gate.select(ctx, present_path, running_root, active);
-        running_amount = gate.add(ctx, running_amount, slot_amount);
-        // Range-checking every partial sum prevents a field-valid `u128` overflow.
-        range.range_check(ctx, running_amount, 128);
-        assigned_receive_slots.push(OfflineCashAssignedReceiveFoldSlotV1 {
-            active,
-            amount: slot_amount,
-            credit_id: slot_credit,
-            recipient_lane_id: slot_recipient,
-            incoming_proof_binding_digest: slot_incoming,
-            envelope_digest: slot_envelope,
-        });
-    }
-    for left in 0..OFFLINE_CASH_RECEIVE_FOLD_BATCH_WIDTH_V1 {
-        for right in left + 1..OFFLINE_CASH_RECEIVE_FOLD_BATCH_WIDTH_V1 {
-            let both_active = gate.and(
-                ctx,
-                assigned_receive_slots[left].active,
-                assigned_receive_slots[right].active,
-            );
-            assert_if_digest_different(
-                ctx,
-                &range,
-                both_active,
-                assigned_receive_slots[left].credit_id,
-                assigned_receive_slots[right].credit_id,
-            );
-        }
-    }
-    let receive_slots: [OfflineCashAssignedReceiveFoldSlotV1<F>;
-        OFFLINE_CASH_RECEIVE_FOLD_BATCH_WIDTH_V1] = assigned_receive_slots
-        .try_into()
-        .map_err(|_| "Offline Cash receive slot assignment width changed".to_owned())?;
-    assert_if_equal(ctx, &range, receive, running_amount, amount);
-    assert_if_equal(ctx, &range, receive, running_root, successor.replay_root);
+    let receive_credit = OfflineCashAssignedReceiveFoldCreditV1 {
+        amount: receive_amount,
+        credit_id: receive_credit_id,
+        recipient_lane_id: receive_recipient_lane_id,
+        incoming_proof_binding_digest: receive_incoming_proof_binding_digest,
+        envelope_digest: receive_envelope_digest,
+    };
     assert_if_equal(
         ctx,
         &range,
@@ -1521,11 +1436,6 @@ where
         ctx,
         &range,
         witness.map_or([0; 32], |value| value.suite_upgrade_authorization_digest),
-    );
-    let receive_batch_binding_digest = assign_digest(
-        ctx,
-        &range,
-        witness.map_or([0; 32], |value| value.receive_batch_binding_digest),
     );
     assert_if_digest_different(ctx, &range, active_successor, transport, [replay_zero; 2]);
     assert_if_digest_different(ctx, &range, active_successor, guard, [replay_zero; 2]);
@@ -1627,7 +1537,6 @@ where
     for (selector, digest) in [
         (outbound, precommit_binding_digest),
         (suite_upgrade, suite_upgrade_authorization_digest),
-        (receive, receive_batch_binding_digest),
     ] {
         assert_if_digest_different(ctx, &range, selector, digest, [replay_zero; 2]);
         let inactive = gate.not(ctx, selector);
@@ -1662,8 +1571,6 @@ where
         peer_credit_id[1],
         peer_recipient_lane_id[0],
         peer_recipient_lane_id[1],
-        receive_active_count,
-        ctx.load_constant(F::from(OFFLINE_CASH_RECEIVE_FOLD_BATCH_WIDTH_V1 as u64)),
         predecessor_eq_components[0],
         predecessor_eq_components[1],
         predecessor_ep_components[0],
@@ -1710,8 +1617,6 @@ where
         successor.vk_digest[1],
         suite_upgrade_authorization_digest[0],
         suite_upgrade_authorization_digest[1],
-        receive_batch_binding_digest[0],
-        receive_batch_binding_digest[1],
         successor.protocol_version,
         successor.asset_incarnation[0],
         successor.asset_incarnation[1],
@@ -1744,9 +1649,7 @@ where
             mint_finality_proof_binding_digest,
             peer_credit_id,
             peer_recipient_lane_id,
-            receive_active_count,
-            receive_slots,
-            receive_batch_binding_digest,
+            receive_credit,
             lifecycle_binding_digest,
             precommit_binding_digest,
             suite_upgrade_authorization_digest,
@@ -2132,19 +2035,18 @@ mod tests {
 
     #[test]
     fn public_instance_abi_is_identical_across_parities() {
-        assert_eq!(PUBLIC_INSTANCE_COUNT, 81);
+        assert_eq!(PUBLIC_INSTANCE_COUNT, 77);
         assert_eq!(public_instance::OPERATION, 0);
         assert_eq!(public_instance::AMOUNT, 1);
-        assert_eq!(public_instance::SUCCESSOR_STATE, 31);
-        assert_eq!(public_instance::GUARD_EQ_PROTOCOL_LO, 36);
-        assert_eq!(public_instance::MINT_EQ_PROTOCOL_LO, 40);
-        assert_eq!(public_instance::GUARD_EQ_CREDENTIAL_AUDIT_LO, 44);
-        assert_eq!(public_instance::EP_DEFERRED_AUDIT_HI, 51);
-        assert_eq!(public_instance::LIFECYCLE_LO, 54);
-        assert_eq!(public_instance::RECEIVE_BATCH_BINDING_HI, 69);
-        assert_eq!(public_instance::ASSET_INCARNATION_LO, 71);
-        assert_eq!(public_instance::ASSET_INCARNATION_HI, 72);
-        assert_eq!(public_instance::ASSET_SCALE, 80);
+        assert_eq!(public_instance::SUCCESSOR_STATE, 29);
+        assert_eq!(public_instance::GUARD_EQ_PROTOCOL_LO, 34);
+        assert_eq!(public_instance::MINT_EQ_PROTOCOL_LO, 38);
+        assert_eq!(public_instance::GUARD_EQ_CREDENTIAL_AUDIT_LO, 42);
+        assert_eq!(public_instance::EP_DEFERRED_AUDIT_HI, 49);
+        assert_eq!(public_instance::LIFECYCLE_LO, 52);
+        assert_eq!(public_instance::ASSET_INCARNATION_LO, 67);
+        assert_eq!(public_instance::ASSET_INCARNATION_HI, 68);
+        assert_eq!(public_instance::ASSET_SCALE, 76);
         // Both fields use the same semantic ordering and injective u128 digest limbs.
         assert_eq!(
             digest_limbs::<Fp>([7; 32]).len(),

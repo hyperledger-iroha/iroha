@@ -291,7 +291,6 @@ _ACCOUNT = _Kind("account")
 _PUBLIC_KEY = _Kind("public_key")
 _SIGNATURE = _Kind("signature")
 _VECTOR = _Kind("vector")
-_REQUEST_MODE = _Kind("request_mode")
 _OPERATION_KIND = _Kind("operation_kind")
 _COMMIT_EVIDENCE = _Kind("commit_evidence")
 _CREDIT_PURPOSE = _Kind("credit_purpose")
@@ -410,105 +409,6 @@ def _validate_paired_proof(values: Mapping[str, object]) -> None:
     _validate_proof_vectors(values)
 
 
-OfflineCashAmountPolicyV1 = _define_model(
-    "OfflineCashAmountPolicyV1",
-    (("minimum_amount", _U128), ("maximum_amount", _U128)),
-    lambda value: _fail("Offline Cash V1 amount policy is empty or inverted")
-    if value["minimum_amount"] == 0 or value["minimum_amount"] > value["maximum_amount"]
-    else None,
-)
-OfflineCashSingleExactRequestV1 = _define_model(
-    "OfflineCashSingleExactRequestV1",
-    (("amount", _U128),),
-    lambda value: _fail("SingleExact amount must be positive") if value["amount"] == 0 else None,
-)
-OfflineCashPartialUntilTotalRequestV1 = _define_model(
-    "OfflineCashPartialUntilTotalRequestV1",
-    (("total_amount", _U128),),
-    lambda value: _fail("PartialUntilTotal total must be positive")
-    if value["total_amount"] == 0
-    else None,
-)
-OfflineCashBoundedMultiPaymentRequestV1 = _define_model(
-    "OfflineCashBoundedMultiPaymentRequestV1",
-    (("max_payments", _U32), ("per_payment", OfflineCashAmountPolicyV1)),
-    lambda value: _fail("BoundedMultiPayment count must be positive")
-    if value["max_payments"] == 0
-    else None,
-)
-OfflineCashOpenReceiveRequestV1 = _define_model(
-    "OfflineCashOpenReceiveRequestV1", (("per_payment", OfflineCashAmountPolicyV1),)
-)
-
-_REQUEST_MODES: Final = {
-    "single_exact": (0, OfflineCashSingleExactRequestV1),
-    "partial_until_total": (1, OfflineCashPartialUntilTotalRequestV1),
-    "bounded_multi_payment": (2, OfflineCashBoundedMultiPaymentRequestV1),
-    "open_receive": (3, OfflineCashOpenReceiveRequestV1),
-}
-
-
-class OfflineCashPaymentRequestModeV1:
-    """Closed request-mode union; OpenReceive has no payment-count field."""
-
-    __slots__ = ("mode", "policy")
-
-    def __init__(self, mode: str, policy: _Model) -> None:
-        if mode not in _REQUEST_MODES or not isinstance(policy, _REQUEST_MODES[mode][1]):
-            raise TypeError("unknown or mismatched Offline Cash V1 request mode")
-        object.__setattr__(self, "mode", mode)
-        object.__setattr__(self, "policy", policy)
-
-    def __setattr__(self, _name: str, _value: object) -> None:
-        raise AttributeError("Offline Cash V1 values are immutable")
-
-    def __eq__(self, other: object) -> bool:
-        return (
-            isinstance(other, OfflineCashPaymentRequestModeV1)
-            and self.mode == other.mode
-            and self.policy == other.policy
-        )
-
-    def __hash__(self) -> int:
-        return hash((self.mode, self.policy))
-
-    @classmethod
-    def single_exact(cls, amount: int) -> OfflineCashPaymentRequestModeV1:
-        return cls("single_exact", OfflineCashSingleExactRequestV1(amount=amount))
-
-    @classmethod
-    def partial_until_total(cls, total_amount: int) -> OfflineCashPaymentRequestModeV1:
-        return cls(
-            "partial_until_total",
-            OfflineCashPartialUntilTotalRequestV1(total_amount=total_amount),
-        )
-
-    @classmethod
-    def bounded_multi_payment(
-        cls, max_payments: int, per_payment: _Model
-    ) -> OfflineCashPaymentRequestModeV1:
-        return cls(
-            "bounded_multi_payment",
-            OfflineCashBoundedMultiPaymentRequestV1(
-                max_payments=max_payments, per_payment=per_payment
-            ),
-        )
-
-    @classmethod
-    def open_receive(cls, per_payment: _Model) -> OfflineCashPaymentRequestModeV1:
-        return cls("open_receive", OfflineCashOpenReceiveRequestV1(per_payment=per_payment))
-
-    def accepts_exact_amount(self, amount: int) -> bool:
-        candidate = _unsigned(amount, _MAX_U128, "exact amount")
-        if candidate == 0:
-            return False
-        if self.mode == "single_exact":
-            return candidate == self.policy.amount
-        if self.mode == "partial_until_total":
-            return candidate <= self.policy.total_amount
-        return self.policy.per_payment.minimum_amount <= candidate <= self.policy.per_payment.maximum_amount
-
-
 OfflineCashHardwareCredentialV1 = _define_model(
     "OfflineCashHardwareCredentialV1",
     (
@@ -594,7 +494,7 @@ OfflineCashAcceptanceTicketV1 = _define_model(
         ("version", _U16), ("network_id", _NETWORK), ("request_id", _FIXED32),
         ("request_digest", _FIXED32), ("acceptance_ticket_id", _FIXED32),
         ("asset", _ASSET), ("asset_incarnation", _INCARNATION), ("scale", _U32),
-        ("request_mode", _REQUEST_MODE), ("intent_digest", _FIXED32),
+        ("intent_digest", _FIXED32),
         ("exact_amount", _U128), ("reserved_inbox_bytes", _U32),
         ("recipient_one_time_key", _FIXED32), ("hardware_profile_id", _FIXED32),
         ("policy_epoch", _U64), ("issued_at_ms", _U64), ("expires_at_ms", _U64),
@@ -632,7 +532,7 @@ OfflineCashEncryptedCreditEnvelopeV1 = _define_model(
 )
 
 _OPERATION_KINDS: Final = (
-    "bootstrap", "mint_fold", "send_split", "receive_fold_batch", "redeem_split",
+    "bootstrap", "mint_fold", "send_split", "receive_fold", "redeem_split",
     "suite_upgrade", "rotate",
 )
 _CREDIT_PURPOSES: Final = ("mint", "peer")
@@ -752,7 +652,7 @@ OfflineCashPaymentRequestV1 = _define_model(
         ("version", _U16), ("release_id", _FIXED32), ("network_id", _NETWORK),
         ("asset", _ASSET), ("asset_incarnation", _INCARNATION), ("scale", _U32),
         ("liability_pool_id", _FIXED32), ("recipient", _ACCOUNT),
-        ("request_mode", _REQUEST_MODE), ("hardware_credential", OfflineCashHardwareCredentialV1),
+        ("amount", _U128), ("hardware_credential", OfflineCashHardwareCredentialV1),
         ("request_id", _FIXED32), ("issued_at_ms", _U64), ("expires_at_ms", _U64),
         ("signature", _SIGNATURE),
     ),
@@ -976,7 +876,7 @@ def _validate_lifecycle_values(values: Mapping[str, object]) -> None:
 
 
 def _validate_request_values(values: Mapping[str, object]) -> None:
-    _header(values)
+    _header(values, positive_amount=True)
     if (
         values["expires_at_ms"] <= values["issued_at_ms"]
         or values["expires_at_ms"] - values["issued_at_ms"] > 300_000
@@ -1069,10 +969,6 @@ def _normalize_type(kind: object, value: object, context: str) -> object:
         return value if isinstance(value, OfflineCashDeviceSignatureV1) else OfflineCashDeviceSignatureV1(value)
     if kind is _VECTOR:
         return _bytes(value, context)
-    if kind is _REQUEST_MODE:
-        if not isinstance(value, OfflineCashPaymentRequestModeV1):
-            raise TypeError(f"{context} must be OfflineCashPaymentRequestModeV1")
-        return value
     if kind is _OPERATION_KIND:
         if value not in _OPERATION_KINDS:
             raise TypeError(f"{context} is not an Offline Cash V1 operation kind")
@@ -1146,8 +1042,6 @@ def _encode_type(kind: object, value: object) -> bytes:
         return value.raw_bytes
     if kind is _VECTOR:
         return _vector(value)
-    if kind is _REQUEST_MODE:
-        return _encode_request_mode(value)
     if kind is _OPERATION_KIND:
         return _OPERATION_KINDS.index(value).to_bytes(4, "little")
     if kind is _COMMIT_EVIDENCE:
@@ -1205,8 +1099,6 @@ def _decode_type(kind: object, payload: bytes, context: str) -> object:
         if len(payload) < 8 or int.from_bytes(payload[:8], "little") != len(payload) - 8:
             _fail(f"{context} vector length is invalid")
         return payload[8:]
-    if kind is _REQUEST_MODE:
-        return _decode_request_mode(payload, context)
     if kind is _OPERATION_KIND:
         tag = _decode_unsigned(payload, 4, context)
         if tag >= len(_OPERATION_KINDS):
@@ -1239,26 +1131,6 @@ def _decode_model(model: type[Any], payload: bytes) -> Any:
     }
     reader.eof()
     return model(**values)
-
-
-def _encode_request_mode(value: OfflineCashPaymentRequestModeV1) -> bytes:
-    tag, model = _REQUEST_MODES[value.mode]
-    if not isinstance(value.policy, model):
-        raise TypeError("request-mode payload type does not match its tag")
-    return tag.to_bytes(4, "little") + _field(_encode_model(value.policy))
-
-
-def _decode_request_mode(payload: bytes, context: str) -> OfflineCashPaymentRequestModeV1:
-    if len(payload) < 5:
-        _fail(f"{context} is truncated")
-    tag = int.from_bytes(payload[:4], "little")
-    entry = next((item for item in _REQUEST_MODES.items() if item[1][0] == tag), None)
-    if entry is None:
-        _fail(f"{context} has an unknown mode tag")
-    reader = _Reader(payload[4:], context)
-    policy = _decode_model(entry[1][1], reader.field("policy"))
-    reader.eof()
-    return OfflineCashPaymentRequestModeV1(entry[0], policy)
 
 
 def _encode_commit_evidence(value: OfflineCashCommitEvidenceV1) -> bytes:
@@ -1475,7 +1347,7 @@ def payment_request_signing_bytes(value: OfflineCashPaymentRequestV1) -> bytes:
             _field(value.release_id), _field(_network_bytes(value.network_id)),
             _field(value.asset.canonical_payload), _field(_encode_type(_INCARNATION, value.asset_incarnation)),
             _field(value.scale.to_bytes(4, "little")), _field(value.liability_pool_id),
-            _field(value.recipient.canonical_payload), _field(_encode_request_mode(value.request_mode)),
+            _field(value.recipient.canonical_payload), _field(value.amount.to_bytes(16, "little")),
             _field(value.hardware_credential.credential_id), _field(value.request_id),
             _field(value.issued_at_ms.to_bytes(8, "little")),
             _field(value.expires_at_ms.to_bytes(8, "little")),
@@ -1624,8 +1496,8 @@ def _validate_acceptance_intent(
     intent: OfflineCashAcceptanceIntentV1, request: OfflineCashPaymentRequestV1
 ) -> None:
     _same_bytes(intent.request_digest, payment_request_digest(request), "acceptance intent request digest")
-    if not request.request_mode.accepts_exact_amount(intent.exact_amount):
-        _fail("acceptance intent amount is outside the request mode")
+    if request.amount != intent.exact_amount:
+        _fail("acceptance intent amount does not equal the request amount")
 
 
 def _validate_acceptance_authorization(
@@ -1664,14 +1536,13 @@ def _validate_acceptance_ticket(
         or _encode_type(_INCARNATION, ticket.asset_incarnation)
         != _encode_type(_INCARNATION, request.asset_incarnation)
         or ticket.scale != request.scale
-        or _encode_request_mode(ticket.request_mode) != _encode_request_mode(request.request_mode)
         or ticket.exact_amount != intent.exact_amount
         or ticket.hardware_profile_id != request.hardware_credential.hardware_profile_id
         or ticket.policy_epoch != request.hardware_credential.policy_epoch
         or ticket.issued_at_ms < request.issued_at_ms
         or ticket.expires_at_ms > request.expires_at_ms
         or ticket.issued_at_ms >= ticket.expires_at_ms
-        or not ticket.request_mode.accepts_exact_amount(ticket.exact_amount)
+        or ticket.exact_amount != request.amount
     ):
         _fail("Offline Cash V1 ticket request binding is invalid")
 
@@ -2488,12 +2359,6 @@ class OfflineCashV1:
     AccountId = OfflineCashAccountIdV1
     DevicePublicKey = OfflineCashDevicePublicKeyV1
     DeviceSignature = OfflineCashDeviceSignatureV1
-    AmountPolicy = OfflineCashAmountPolicyV1
-    SingleExactRequest = OfflineCashSingleExactRequestV1
-    PartialUntilTotalRequest = OfflineCashPartialUntilTotalRequestV1
-    BoundedMultiPaymentRequest = OfflineCashBoundedMultiPaymentRequestV1
-    OpenReceiveRequest = OfflineCashOpenReceiveRequestV1
-    PaymentRequestMode = OfflineCashPaymentRequestModeV1
     HardwareCredential = OfflineCashHardwareCredentialV1
     PastaStateCommitment = OfflineCashPastaStateCommitmentV1
     PairedProof = OfflineCashPairedProofV1

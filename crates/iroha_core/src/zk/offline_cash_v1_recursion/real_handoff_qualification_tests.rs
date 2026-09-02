@@ -4,10 +4,7 @@
 //! GuardBundle, credential, fold, and native terminal-verification code. No `MockProver`, native
 //! transition model, or fabricated state proof is accepted by this module.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    io::Cursor,
-};
+use std::io::Cursor;
 
 use ff::PrimeField;
 use halo2_base::gates::circuit::BaseCircuitParams;
@@ -36,11 +33,10 @@ use iroha_data_model::{
     nexus::AxtAssetIncarnationV1,
     offline::{
         OFFLINE_CASH_HALO2_K_V1, OFFLINE_CASH_HARDWARE_REQUIRED_CAPABILITIES_V1,
-        OFFLINE_CASH_PAIRED_PROOF_MAX_BYTES_V1, OFFLINE_CASH_PARITY_PROOF_MAX_BYTES_V1,
-        OFFLINE_CASH_WIRE_VERSION_V1, OfflineCashDevicePublicKeyV1, OfflineCashPairedProofV1,
-        OfflineCashPastaStateCommitmentV1, offline_cash_asset_identity_digest_v1,
-        offline_cash_device_key_reference_v1, offline_cash_liability_pool_id_v1,
-        offline_cash_pasta_state_commitment_v1,
+        OFFLINE_CASH_PAIRED_PROOF_MAX_BYTES_V1, OFFLINE_CASH_WIRE_VERSION_V1,
+        OfflineCashDevicePublicKeyV1, OfflineCashPairedProofV1, OfflineCashPastaStateCommitmentV1,
+        offline_cash_asset_identity_digest_v1, offline_cash_device_key_reference_v1,
+        offline_cash_liability_pool_id_v1, offline_cash_pasta_state_commitment_v1,
     },
 };
 use p256::ecdsa::SigningKey;
@@ -77,7 +73,7 @@ use super::{
     },
     deferred_parent::{
         accumulator_limb_count, native_parent_protocol_digest_v1,
-        offline_cash_protocol_structure_digest_v1,
+        offline_cash_protocol_structure_digest_v1, ordinary_ipa_proof_profile_v1,
     },
     fold_offline_cash_ep_accumulators_v1, fold_offline_cash_eq_accumulators_v1,
     generation::generate_offline_cash_recursive_state_artifacts_v1,
@@ -416,7 +412,15 @@ pub(super) fn create_eq_proof<C: Circuit<Fp>>(
     .expect("real Eq Halo2 proof");
     let proof = transcript.finalize();
     assert!(!proof.is_empty());
-    assert!(proof.len() <= OFFLINE_CASH_PARITY_PROOF_MAX_BYTES_V1);
+    let protocol = compile(
+        params,
+        proving_key.get_vk(),
+        snark_verifier::system::halo2::Config::ipa().with_num_instance(vec![instances.len()]),
+    );
+    let expected = ordinary_ipa_proof_profile_v1(&protocol)
+        .expect("valid Eq proof profile")
+        .byte_len;
+    assert_eq!(proof.len(), expected, "non-canonical real Eq proof length");
     proof
 }
 
@@ -448,40 +452,34 @@ pub(super) fn create_ep_proof<C: Circuit<Fq>>(
     .expect("real Ep Halo2 proof");
     let proof = transcript.finalize();
     assert!(!proof.is_empty());
-    assert!(proof.len() <= OFFLINE_CASH_PARITY_PROOF_MAX_BYTES_V1);
+    let protocol = compile(
+        params,
+        proving_key.get_vk(),
+        snark_verifier::system::halo2::Config::ipa().with_num_instance(vec![instances.len()]),
+    );
+    let expected = ordinary_ipa_proof_profile_v1(&protocol)
+        .expect("valid Ep proof profile")
+        .byte_len;
+    assert_eq!(proof.len(), expected, "non-canonical real Ep proof length");
     proof
 }
 
-fn bgh19_query_set_count<C: CurveAffine>(protocol: &PlonkProtocol<C>) -> usize {
-    let mut rotations_by_polynomial = BTreeMap::<usize, BTreeSet<i32>>::new();
-    for query in &protocol.queries {
-        rotations_by_polynomial
-            .entry(query.poly)
-            .or_default()
-            .insert(query.rotation.0);
-    }
-    rotations_by_polynomial
-        .into_values()
-        .map(|rotations| rotations.into_iter().collect::<Vec<_>>())
-        .collect::<BTreeSet<_>>()
-        .len()
-}
-
 fn dummy_ordinary_proof<C: CurveAffine>(protocol: &PlonkProtocol<C>, point: C) -> Vec<u8> {
+    let profile = ordinary_ipa_proof_profile_v1(protocol).expect("valid dummy proof profile");
     let point = point.to_bytes();
     let scalar = [0_u8; 32];
-    let mut proof = Vec::new();
-    for _ in 0..protocol.num_witness.iter().sum::<usize>() {
+    let mut proof = Vec::with_capacity(profile.byte_len);
+    for _ in 0..profile.witness_commitments {
         proof.extend_from_slice(point.as_ref());
     }
-    for _ in 0..protocol.quotient.num_chunk() {
+    for _ in 0..profile.quotient_commitments {
         proof.extend_from_slice(point.as_ref());
     }
-    for _ in 0..protocol.evaluations.len() {
+    for _ in 0..profile.evaluations {
         proof.extend_from_slice(&scalar);
     }
     proof.extend_from_slice(point.as_ref());
-    for _ in 0..bgh19_query_set_count(protocol) {
+    for _ in 0..profile.bgh19_rotation_sets {
         proof.extend_from_slice(&scalar);
     }
     proof.extend_from_slice(point.as_ref());
@@ -491,8 +489,7 @@ fn dummy_ordinary_proof<C: CurveAffine>(protocol: &PlonkProtocol<C>, point: C) -
     proof.extend_from_slice(&scalar);
     proof.extend_from_slice(&scalar);
     proof.extend_from_slice(point.as_ref());
-    assert!(!proof.is_empty());
-    assert!(proof.len() <= OFFLINE_CASH_PARITY_PROOF_MAX_BYTES_V1);
+    assert_eq!(proof.len(), profile.byte_len);
     proof
 }
 
@@ -681,8 +678,6 @@ fn bootstrap_guard_relation(
         terminal_commit_binding_digest: [0; 32],
         sender_one_time_authorization_digest: [0; 32],
         suite_upgrade_authorization_digest: [0; 32],
-        receive_active_count: 0,
-        receive_batch_binding_digest: [0; 32],
         transition_intent_digest: digest(b"bootstrap-intent", 0),
         transition_effect_digest: digest(b"bootstrap-effect", 0),
         recovery_record_digest: digest(b"bootstrap-recovery", 0),
@@ -753,8 +748,6 @@ fn rotation_guard_relation(
             terminal_commit_binding_digest: [0; 32],
             sender_one_time_authorization_digest: [0; 32],
             suite_upgrade_authorization_digest: [0; 32],
-            receive_active_count: 0,
-            receive_batch_binding_digest: [0; 32],
             transition_intent_digest: digest(b"rotation-intent", depth),
             transition_effect_digest: digest(b"rotation-effect", depth),
             recovery_record_digest: digest(b"rotation-recovery", depth),
@@ -1120,9 +1113,7 @@ fn bootstrap_state_relation(
         mint_finality_proof_binding_digest: [0; 32],
         peer_credit_id: [0; 32],
         peer_recipient_lane_id: [0; 32],
-        receive_active_count: 0,
-        receive_slots: core::array::from_fn(|_| None),
-        receive_batch_binding_digest: [0; 32],
+        receive_credit: None,
         lifecycle_binding_digest: guard.relation.statement.lifecycle_binding_digest,
         precommit_binding_digest: [0; 32],
         suite_upgrade_authorization_digest: [0; 32],
@@ -1165,9 +1156,7 @@ fn rotation_state_relation(
         mint_finality_proof_binding_digest: [0; 32],
         peer_credit_id: [0; 32],
         peer_recipient_lane_id: [0; 32],
-        receive_active_count: 0,
-        receive_slots: core::array::from_fn(|_| None),
-        receive_batch_binding_digest: [0; 32],
+        receive_credit: None,
         lifecycle_binding_digest: guard.relation.statement.lifecycle_binding_digest,
         precommit_binding_digest: [0; 32],
         suite_upgrade_authorization_digest: [0; 32],
@@ -1282,8 +1271,8 @@ fn state_generation_witness<'a>(
         ep_parent_fold_proof: ep_parent_fold,
         eq_incoming_protocol: &incoming.eq_protocol,
         ep_incoming_protocol: &incoming.ep_protocol,
-        eq_incoming_slots: [eq_incoming_slot; 16],
-        ep_incoming_slots: [ep_incoming_slot; 16],
+        eq_incoming: eq_incoming_slot,
+        ep_incoming: ep_incoming_slot,
         eq_successor_history,
         ep_successor_history,
         eq_guard_protocol: &guard_keys.eq_protocol,
@@ -1910,12 +1899,16 @@ fn run_real_recursive_handoffs(handoff_count: u64, checkpoints: &[u64]) {
 }
 
 #[test]
-fn real_paired_pasta_recursive_handoff_smoke() {
-    run_real_recursive_handoffs(2, &[1, 2]);
+#[should_panic(expected = "TransportProofProfileTooLarge")]
+fn current_wide_recursive_state_carrier_is_rejected_by_transport_release_gate() {
+    // The recursive relation remains sound, but its current transcript is wider than the
+    // immutable transport slot. Keep release fail-closed until the compact transport decider
+    // replaces this carrier; once that lands, this test must become a successful handoff.
+    run_real_recursive_handoffs(1, &[]);
 }
 
 #[test]
-#[ignore = "release qualification generates and verifies 1,024 serial k=16 paired-Pasta handoffs"]
+#[ignore = "blocked until the compact transport decider fits the immutable wire slot; then generates and verifies 1,024 serial k=16 paired-Pasta handoffs"]
 fn real_paired_pasta_recursive_handoffs_reach_1024_without_history_caps() {
     run_real_recursive_handoffs(1_024, &[8, 64, 1_024]);
 }

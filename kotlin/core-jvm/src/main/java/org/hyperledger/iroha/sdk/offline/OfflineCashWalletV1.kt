@@ -113,22 +113,6 @@ class OfflineCashHardwareMintStageV1(
     fun creditId(): ByteArray = creditIdValue.copyOf()
 }
 
-/** Native-core result for a fixed-shape batch fold of one through sixteen credits. */
-class OfflineCashHardwareFoldBatchV1(
-    @JvmField val foldedCredits: Int,
-    aggregateState: ByteArray?,
-) {
-    private val aggregateStateValue = aggregateState?.copyOf()
-
-    init {
-        require(foldedCredits in 0..16)
-        require((foldedCredits == 0) == (aggregateStateValue == null))
-    }
-
-    /** Canonical successor state when at least one credit was folded. */
-    fun aggregateState(): ByteArray? = aggregateStateValue?.copyOf()
-}
-
 /** Native terminal envelope plus the authoritative private successor's public commitment. */
 class OfflineCashHardwareTerminalResultV1(
     canonicalEnvelope: ByteArray,
@@ -160,7 +144,7 @@ class OfflineCashStagedPaymentV1(
  * Mandatory shared-native-core and non-forking secure-device boundary.
  *
  * Implementations authenticate releases, profiles, credentials, signatures, recursive proofs,
- * X25519 possession, HKDF/AEAD openings, exact request-ledger decisions, inbox reservations, and
+ * X25519 possession, HKDF/AEAD openings, exact amount binding, inbox reservations, and
  * recoverable prepare/prove/commit state. No method may fall back to process memory, application
  * files, ordinary AndroidKeyStore signing, or JVM cryptography for monetary authority.
  */
@@ -174,10 +158,10 @@ interface OfflineCashHardwareProviderV1 {
     /** Establish the hardware-bound zero state, idempotently. */
     fun bootstrapState(): ByteArray
 
-    /** Create and sign one reusable request policy using hardware trusted time. */
+    /** Create and sign one exact-amount request using hardware trusted time. */
     fun createPaymentRequest(
         recipientAccount: ByteArray,
-        requestMode: ByteArray,
+        amount: BigInteger,
         validityWindowMillis: Long,
     ): ByteArray
 
@@ -211,8 +195,8 @@ interface OfflineCashHardwareProviderV1 {
     /** Return the rollback-resistant journal revision. */
     fun journalRevision(): BigInteger
 
-    /** Fold a padded fixed-shape batch of at most sixteen credits from one stable snapshot. */
-    fun foldPendingCreditBatch(inboxSequenceInclusive: BigInteger, maximumCredits: Int): OfflineCashHardwareFoldBatchV1
+    /** Fold one staged credit from a stable inbox snapshot, or return null when drained. */
+    fun foldPendingCredit(inboxSequenceInclusive: BigInteger): ByteArray?
 
     /** Prepare, prove, commit, and install one payment; return byte-identical terminal output. */
     fun commitPayment(
@@ -284,18 +268,19 @@ class OfflineCashWalletV1 private constructor(
         )
     }
 
-    /** Create one reusable request; each actual payment still requires a one-use ticket. */
+    /** Create one exact-amount request; each actual payment still requires a one-use ticket. */
     fun createPaymentRequest(
         recipient: OfflineCashAccountIdV1,
-        requestMode: OfflineCashPaymentRequestModeV1,
+        amount: BigInteger,
         validityWindowMillis: Long,
     ): OfflineCashPaymentRequestV1 = transitionLock.withLock {
+        requirePositiveU128(amount, "amount")
         require(validityWindowMillis in 1..OfflineCashWireV1.REQUEST_MAX_TTL_MS)
-        val canonicalMode = OfflineCashNoritoV1.encodePaymentRequestModeShape(requestMode)
         val request = OfflineCashNoritoV1.decodePaymentRequestShapeExact(
-            provider.createPaymentRequest(recipient.canonicalPayload(), canonicalMode, validityWindowMillis),
+            provider.createPaymentRequest(recipient.canonicalPayload(), amount, validityWindowMillis),
         )
         require(request.recipient == recipient)
+        require(request.amount == amount)
         require(request.expiresAtMs - request.issuedAtMs == validityWindowMillis)
         requireStateRequestBinding(currentAggregateState, request)
         request
@@ -304,12 +289,10 @@ class OfflineCashWalletV1 private constructor(
     /** Ask sender hardware for the proof that must precede any receiver-side persistence. */
     fun authorizeAcceptanceIntent(
         request: OfflineCashPaymentRequestV1,
-        exactAmount: BigInteger,
     ): OfflineCashAcceptanceIntentAuthorizationV1 = transitionLock.withLock {
-        require(request.requestMode.acceptsExactAmount(exactAmount))
         val canonicalRequest = OfflineCashNoritoV1.encodePaymentRequestShape(request)
         OfflineCashNoritoV1.decodeAcceptanceIntentAuthorizationShapeExact(
-            provider.createAcceptanceIntentAuthorization(canonicalRequest, exactAmount),
+            provider.createAcceptanceIntentAuthorization(canonicalRequest, request.amount),
             request,
         )
     }
@@ -391,10 +374,10 @@ class OfflineCashWalletV1 private constructor(
         staged.disposition
     }
 
-    /** Fold one fixed-shape batch of up to sixteen credits from the current snapshot. */
-    fun foldPendingCreditBatch(): Int = transitionLock.withLock { foldSnapshotLocked() }
+    /** Fold one staged credit from the current snapshot. */
+    fun foldPendingCredit(): Boolean = transitionLock.withLock { foldSnapshotLocked() }
 
-    /** Drain one stable inbox snapshot through repeated fixed one-to-sixteen-credit batches. */
+    /** Drain one stable inbox snapshot through repeated one-credit transitions. */
     fun drainPendingCredits(): BigInteger = transitionLock.withLock { drainPendingCreditsLocked() }
 
     /** Recover a byte-identical exposed payment for transport retry. */
@@ -451,9 +434,9 @@ class OfflineCashWalletV1 private constructor(
         currentAggregateState
     }
 
-    private fun foldSnapshotLocked(): Int {
+    private fun foldSnapshotLocked(): Boolean {
         val watermark = provider.pendingCreditWatermark()
-        return foldBatchAtWatermarkLocked(watermark)
+        return foldAtWatermarkLocked(watermark)
     }
 
     private fun drainPendingCreditsLocked(): BigInteger {
@@ -461,32 +444,29 @@ class OfflineCashWalletV1 private constructor(
         require(watermark.signum() >= 0)
         var total = BigInteger.ZERO
         while (true) {
-            val folded = foldBatchAtWatermarkLocked(watermark)
-            if (folded == 0) return total
-            total = total + BigInteger.valueOf(folded.toLong())
+            if (!foldAtWatermarkLocked(watermark)) return total
+            total += BigInteger.ONE
         }
     }
 
-    private fun foldBatchAtWatermarkLocked(watermark: BigInteger): Int {
+    private fun foldAtWatermarkLocked(watermark: BigInteger): Boolean {
         require(watermark.signum() >= 0)
         val before = currentJournalRevision
         val beforeCommitment = currentAggregateState.stateCommitment()
-        val folded = provider.foldPendingCreditBatch(watermark, 16)
-        val successorBytes = folded.aggregateState()
-        if (folded.foldedCredits > 0) {
-            require(successorBytes != null) { "a non-empty fold batch did not return its successor" }
+        val successorBytes = provider.foldPendingCredit(watermark)
+        if (successorBytes != null) {
             installAuthoritativeState(successorBytes)
             require(!currentAggregateState.stateCommitment().contentEquals(beforeCommitment)) {
-                "fixed-shape fold batch made no aggregate-state progress"
+                "receive fold made no aggregate-state progress"
             }
         }
         val after = provider.journalRevision()
-        val expectedRevision = if (folded.foldedCredits == 0) before else before + BigInteger.ONE
+        val expectedRevision = if (successorBytes == null) before else before + BigInteger.ONE
         require(after == expectedRevision) {
-            "fixed-shape fold batch did not consume exactly one journal revision"
+            "receive fold did not consume exactly one journal revision"
         }
         currentJournalRevision = after
-        return folded.foldedCredits
+        return successorBytes != null
     }
 
     private fun installAuthoritativeState(bytes: ByteArray) {

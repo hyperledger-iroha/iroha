@@ -32,7 +32,6 @@ import org.hyperledger.iroha.sdk.offline.OfflineCashNoCommitClosureV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashOutboxReservationV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashPairedProofV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashPastaStateCommitmentV1;
-import org.hyperledger.iroha.sdk.offline.OfflineCashPaymentRequestModeV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashPaymentRequestV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashPaymentV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashPeerCreditContextV1;
@@ -83,18 +82,6 @@ public final class OfflineCashNoritoV1 {
       final byte[] bytes) {
     return org.hyperledger.iroha.sdk.offline.OfflineCashNoritoV1
         .decodeHardwareCredentialShapeExact(copy(bytes));
-  }
-
-  public static byte[] encodePaymentRequestModeShape(
-      final OfflineCashPaymentRequestModeV1 value) {
-    return org.hyperledger.iroha.sdk.offline.OfflineCashNoritoV1.encodePaymentRequestModeShape(
-        Objects.requireNonNull(value, "value"));
-  }
-
-  public static OfflineCashPaymentRequestModeV1 decodePaymentRequestModeShapeExact(
-      final byte[] bytes) {
-    return org.hyperledger.iroha.sdk.offline.OfflineCashNoritoV1
-        .decodePaymentRequestModeShapeExact(copy(bytes));
   }
 
   public static byte[] encodePaymentRequestShape(final OfflineCashPaymentRequestV1 value) {

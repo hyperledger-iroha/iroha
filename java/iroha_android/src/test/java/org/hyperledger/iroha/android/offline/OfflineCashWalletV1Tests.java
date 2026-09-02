@@ -22,7 +22,6 @@ import org.hyperledger.iroha.sdk.offline.OfflineCashDevicePublicKeyV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashDeviceSignatureV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashHardwareCapabilityV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashHardwareCredentialV1;
-import org.hyperledger.iroha.sdk.offline.OfflineCashHardwareFoldBatchV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashHardwareMintStageV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashHardwarePaymentStageV1;
 import org.hyperledger.iroha.sdk.offline.OfflineCashHardwarePlatformClassV1;
@@ -43,7 +42,7 @@ public final class OfflineCashWalletV1Tests {
   }
 
   @Test
-  public void facadeExposesFixedBatchDrainSendRedeemRecoveryAndRotation() throws Exception {
+  public void facadeExposesReceiveFoldDrainSendRedeemRecoveryAndRotation() throws Exception {
     final Set<String> methods =
         Arrays.stream(OfflineCashWalletV1.class.getDeclaredMethods())
             .map(Method::getName)
@@ -61,7 +60,7 @@ public final class OfflineCashWalletV1Tests {
                 "issueAcceptanceTicket",
                 "stagePayment",
                 "stageMintCredit",
-                "foldPendingCreditBatch",
+                "foldPendingCredit",
                 "drainPendingCredits",
                 "send",
                 "recoverPayment",
@@ -76,28 +75,28 @@ public final class OfflineCashWalletV1Tests {
 
   @Test
   public void javaFacadeDrainsMoreThanSixteenCreditsFromOneStableSnapshot() {
-    final BatchProvider provider = new BatchProvider(33);
+    final FoldProvider provider = new FoldProvider(33);
     final OfflineCashWalletV1 wallet = OfflineCashWalletV1.open(provider);
 
     assertEquals(BigInteger.valueOf(33), wallet.drainPendingCredits());
-    assertEquals(Arrays.asList(16, 16, 1, 0), provider.foldResults);
-    assertEquals(Arrays.asList(16, 16, 16, 16), provider.maximumArguments);
+    assertEquals(34, provider.foldResults.size());
+    assertTrue(provider.foldResults.subList(0, 33).stream().allMatch(Boolean::booleanValue));
+    assertEquals(Boolean.FALSE, provider.foldResults.get(33));
     assertEquals(1, provider.watermarkCalls);
     assertEquals(0, provider.remainingCredits);
-    assertEquals(BigInteger.valueOf(3), wallet.journalRevision());
-    assertEquals(BigInteger.valueOf(3), wallet.aggregateState().sequence);
+    assertEquals(BigInteger.valueOf(33), wallet.journalRevision());
+    assertEquals(BigInteger.valueOf(33), wallet.aggregateState().sequence);
   }
 
-  private static final class BatchProvider implements OfflineCashHardwareProviderV1 {
+  private static final class FoldProvider implements OfflineCashHardwareProviderV1 {
     private int remainingCredits;
     private int watermarkCalls;
-    private final List<Integer> foldResults = new ArrayList<>();
-    private final List<Integer> maximumArguments = new ArrayList<>();
+    private final List<Boolean> foldResults = new ArrayList<>();
     private BigInteger revision = BigInteger.ZERO;
     private long sequence;
     private int stateTag = 0x51;
 
-    private BatchProvider(final int pending) {
+    private FoldProvider(final int pending) {
       this.remainingCredits = pending;
     }
 
@@ -120,7 +119,7 @@ public final class OfflineCashWalletV1Tests {
     @Override
     public byte[] createPaymentRequest(
         final byte[] recipientAccount,
-        final byte[] requestMode,
+        final BigInteger amount,
         final long validityWindowMillis) {
       throw unused();
     }
@@ -161,20 +160,18 @@ public final class OfflineCashWalletV1Tests {
     }
 
     @Override
-    public OfflineCashHardwareFoldBatchV1 foldPendingCreditBatch(
-        final BigInteger inboxSequenceInclusive, final int maximumCredits) {
+    public byte[] foldPendingCredit(final BigInteger inboxSequenceInclusive) {
       assertTrue(inboxSequenceInclusive.signum() >= 0);
-      maximumArguments.add(maximumCredits);
-      final int folded = Math.min(remainingCredits, maximumCredits);
+      final boolean folded = remainingCredits > 0;
       foldResults.add(folded);
-      if (folded == 0) {
-        return new OfflineCashHardwareFoldBatchV1(0, null);
+      if (!folded) {
+        return null;
       }
-      remainingCredits -= folded;
+      remainingCredits -= 1;
       revision = revision.add(BigInteger.ONE);
       sequence += 1;
       stateTag += 1;
-      return new OfflineCashHardwareFoldBatchV1(folded, stateBytes());
+      return stateBytes();
     }
 
     @Override

@@ -982,20 +982,41 @@ profile and never permits software fallback.
   note inventories, public state heads, or hop/input/origin/receipt/fan-in/
   proof-depth/history admission caps.
 - Candidate-qualify the implemented hidden `u128` aggregate balance and fixed
-  paired-Pasta `Bootstrap`, `MintFold`, `SendSplit`, `ReceiveFoldBatch`,
+  paired-Pasta `Bootstrap`, `MintFold`, `SendSplit`, `ReceiveFold`,
   `RedeemSplit`, `Rotate`, terminal-wrapper, and no-commit-closure relations.
-  Prove that the 1--16 receive batch is only a fixed transition width and that
-  repeated folds preserve constant public/proof shape and unrestricted later
-  spending. Resolve every remaining native circuit failure without weakening
-  lifecycle, Guard, release/VK, replay, or private-state bindings.
+  Implement the missing Core `SuiteUpgrade` preview/apply orchestration and a
+  positive authenticated bridge lifecycle regression before treating all
+  seven aggregate-state relations as end-to-end complete. Define a
+  threshold-authenticated target-release bridge that binds the exact old/new
+  release, manifest, suite, verifying-key, protocol, profile, and policy
+  mapping; preserve every monetary, lane, device-key, replay-root, and hardware
+  epoch invariant across it. Retain authenticated old-suite verifiers across
+  snapshot/restore so delayed committed credits remain acceptable after an
+  ordinary upgrade.
+  Prove that each singular `ReceiveFold` has constant public/proof shape and
+  that arbitrarily many repeated folds preserve unrestricted later spending.
+  Finish the focused single-credit metering, near-capacity, replay, and
+  late-authorization atomicity gates, then qualify the real circuit. Resolve
+  every remaining native circuit failure without weakening lifecycle, Guard,
+  release/VK, replay, or private-state bindings.
 - Complete one immutable-candidate crash matrix for the recoverable
   prepare/prove/hardware-commit/persist/expose protocol. Inject failure at every
   journal, candidate, hardware commit, proof, successor, inbox, retained
   receipt, outbox, transport, and acknowledgement boundary; demonstrate
   byte-identical recovery, one successor, no balance burn, and no cancellation
-  of exposed credits.
-- Qualify exact durable-capacity accounting for all four request modes:
-  `SingleExact`, `PartialUntilTotal`, `BoundedMultiPayment`, and `OpenReceive`.
+  of exposed credits. The two focused mock recovery selectors pass 1/1, but
+  they do not replace this immutable-candidate matrix.
+- Qualify exact durable-capacity accounting for the reusable, exact-amount
+  `PaymentRequestV1`. Distinct valid intents against the same request must each
+  receive an independent one-use ticket without a request-local count or amount
+  ledger; invoice deduplication remains outside the monetary protocol. Core now
+  enforces conservative complete-operation floors of 298,640 inbox
+  bytes and 90,274 implementation-local outbox bytes. Preserve those floors and
+  preserve the passing focused floor, precommit, and zero-headroom baselines
+  while obtaining immutable-candidate exhaustion evidence and completing
+  bounded sender-metadata compaction under long histories without introducing
+  a history-count limit. Preserve the exact prepared-projection `effect_digest`
+  binding, including commit evidence, throughout candidate qualification.
   Cover maximum-size Guard bundles, collection-prefix thresholds, shuffled
   concurrent tickets, delayed post-expiry delivery, duplicate delivery,
   conflicting credit-ID reuse, folding, restart, and rotation. Exhaustion may
@@ -1007,6 +1028,11 @@ profile and never permits software fallback.
   journal/counter/inbox/outbox, trusted time or monotonic lease, atomic recovery,
   epoch rotation, and counter rollover. Stock signing-only services remain
   online-only, and no software fallback may enter the monetary path.
+  Preserve the source-aligned ABI baseline (`0x0000ffff`, operations `1..=24`,
+  statuses `0..=10`, fail-closed unknown values) while implementing exact
+  operation bodies and authenticators in the OEM/secure-element provider.
+  Stock C/JNI must remain unavailable until that provider and physical
+  crash/capacity/rollback qualification exist.
 - Candidate-qualify exactly one pooled reserve per `(network, asset
   incarnation)` with finalized mint authorization, idempotent top-up and
   redemption, unique terminal nullifiers, full and partial redemption,
@@ -1014,14 +1040,20 @@ profile and never permits software fallback.
   restored-state solvency. Normal suite rotation must retain offline
   verification or use an authenticated recursive upgrade; emergency suspension
   must retain legitimate online redemption and recovery.
-- Finish byte-identical canonical fixture-version-2 parity through Rust, Swift,
-  Kotlin, mirrored Java, JavaScript, Python, C#, JNI, animated QR, and NFC from
-  one audited native core. Rebuild the Swift XCFramework, run the full SDK
-  matrix, preserve exact positive and adversarial fixtures, and allow static QR
-  only for messages proven to fit its small-message policy.
+- Preserve canonical fixture version 2 regenerated from Rust's corrected
+  fixed-width semantic transcripts at SHA-256
+  `e3cb07f567c75abb965ef460cd093228580b01a841a0cc65c535ef63bd894b7d`.
+  Focused Swift, Kotlin, mirrored Java, JavaScript, Python, and C# fixture
+  parity is green; finish the same byte-identical boundary through JNI,
+  animated QR, and NFC from one audited native core. Rebuild the Swift
+  XCFramework, run the full SDK matrix, preserve exact positive and adversarial
+  fixtures, and allow static QR only for messages proven to fit its
+  small-message policy.
 - Treat measured evidence from that immutable candidate as the release gate.
   Record exact proof/raw/text bytes, circuit rows, verifying-key sizes,
   prove/verify/handoff latency, peak RSS, energy, and sustained thermal folding.
+  The integrated 1,000-credit mock-verifier lifecycle baseline passes 1/1; it
+  remains software coverage and does not satisfy the immutable-candidate gate.
   Pass 1,000 independently funded credits folded and spent as one payment, at
   least 1,024 real recursive handoffs, real proofs at depths 8, 64, 1,024 and
   beyond, the full adversarial matrix, a four-validator settlement corridor,
@@ -1033,7 +1065,16 @@ profile and never permits software fallback.
   proofs, approximately 9,211/12,288 bytes for raw/text handoff, 16,384 bytes
   for the raw five-message qualification exchange, and 18,171 bytes for the
   composed absolute cap. If a candidate misses a target, revise the sole V1
-  design rather than adding an alternate protocol or history limit.
+  design rather than adding an alternate protocol or history limit. The first
+  measured Eq platform-credential proof is an internal 20,128-byte proof with
+  exact transcript inventory `129 + 8 + 449 + 6 + 37 = 629` 32-byte items;
+  internal parsing must use its authenticated protocol-derived exact length,
+  not the 2,495-byte wire slot. Keep compile-time transport preflight for every
+  externally serialized proof role and replace the SHA/dense-MSM public carrier
+  with a narrow authenticated decider whose non-tail inventory satisfies
+  `W + T + E + Q <= 40` at `k=16` (2,495-byte parity slot), without raising the
+  authoritative 6,528-byte complete-proof limit. Re-run the real handoff gate
+  only after every transported role passes that structural preflight.
 
 ## MKHE and Figure 9 evidence-gated completion
 

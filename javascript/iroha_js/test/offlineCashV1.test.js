@@ -11,7 +11,7 @@ import { OfflineCashV1 } from "../src/offlineCashV1.js";
 const fixture = JSON.parse(
   readFileSync(new URL("../../../fixtures/offline/offline_cash_v1.json", import.meta.url), "utf8"),
 );
-const v2FixtureKeys = [
+const canonicalFixtureKeys = [
   "payment_request",
   "acceptance_intent_authorization",
   "acceptance_ticket",
@@ -28,9 +28,7 @@ const v2FixtureKeys = [
   "terminal_trio",
   "complete_five_message",
 ];
-const isV2Fixture = fixture.fixture_version === 2;
-const hasCanonicalV2Fixture = isV2Fixture
-  && v2FixtureKeys.every((key) => Object.hasOwn(fixture, key));
+const hasCanonicalFixture = canonicalFixtureKeys.every((key) => Object.hasOwn(fixture, key));
 const fixtureTransportKinds = Object.freeze({
   payment_request: "paymentRequest",
   acceptance_intent_authorization: "acceptanceIntentAuthorization",
@@ -168,7 +166,7 @@ function baseContext() {
   return { networkId, asset, assetIncarnation, recipient, signature, hardwareCredential };
 }
 
-function requestForMode(requestMode) {
+function requestForAmount(amount = 5n) {
   const context = baseContext();
   return new OfflineCashV1.PaymentRequest({
     version: 1,
@@ -183,7 +181,7 @@ function requestForMode(requestMode) {
       context.assetIncarnation,
     ),
     recipient: context.recipient,
-    requestMode,
+    amount,
     hardwareCredential: context.hardwareCredential,
     requestId: bytes(9),
     issuedAtMs: 100n,
@@ -209,7 +207,7 @@ function proof(semanticDigest, proofLength = 8) {
   });
 }
 
-function preTicketExchange(request, exactAmount = 5n, ticketSeed = 24) {
+function preTicketExchange(request, exactAmount = request.amount, ticketSeed = 24) {
   const intent = new OfflineCashV1.AcceptanceIntent({
     version: 1,
     requestDigest: OfflineCashV1.paymentRequestDigest(request),
@@ -239,7 +237,6 @@ function preTicketExchange(request, exactAmount = 5n, ticketSeed = 24) {
     asset: request.asset,
     assetIncarnation: request.assetIncarnation,
     scale: request.scale,
-    requestMode: request.requestMode,
     intentDigest: OfflineCashV1.acceptanceIntentDigest(intent),
     exactAmount,
     reservedInboxBytes: 8960,
@@ -300,33 +297,20 @@ test("strict oc1 transport enforces the current request caps", () => {
   }
 });
 
-test("all four request modes canonically round-trip and OpenReceive has no count ceiling", () => {
-  const interval = new OfflineCashV1.AmountPolicy({ minimumAmount: 1n, maximumAmount: 9n });
-  const modes = [
-    OfflineCashV1.PaymentRequestMode.singleExact(5n),
-    OfflineCashV1.PaymentRequestMode.partialUntilTotal(10n),
-    OfflineCashV1.PaymentRequestMode.boundedMultiPayment(3, interval),
-    OfflineCashV1.PaymentRequestMode.openReceive(interval),
-  ];
-  for (const mode of modes) {
-    const request = requestForMode(mode);
-    const raw = OfflineCashV1.encodePaymentRequest(request);
-    assert.ok(raw.length <= 1024);
-    const decoded = OfflineCashV1.decodePaymentRequest(raw);
-    assert.equal(decoded.requestMode.mode, mode.mode);
-    assert.deepEqual(OfflineCashV1.encodePaymentRequest(decoded), raw);
-  }
-  assert.equal(Object.hasOwn(modes[3].policy, "maxPayments"), false);
-  assert.throws(() => new OfflineCashV1.OpenReceiveRequest({ perPayment: interval, maxPayments: 1 }));
+test("positive exact request amount canonically round-trips", () => {
+  const request = requestForAmount(5n);
+  const raw = OfflineCashV1.encodePaymentRequest(request);
+  assert.ok(raw.length <= 1024);
+  const decoded = OfflineCashV1.decodePaymentRequest(raw);
+  assert.equal(decoded.amount, 5n);
+  assert.deepEqual(OfflineCashV1.encodePaymentRequest(decoded), raw);
+  assert.throws(() => requestForAmount(0n));
   assert.throws(() => OfflineCashV1.decodePaymentRequest(bytes(1, 1025)));
-  const canonical = OfflineCashV1.encodePaymentRequest(requestForMode(modes[0]));
-  assert.throws(() => OfflineCashV1.decodePaymentRequest(Uint8Array.from([...canonical, 0])));
+  assert.throws(() => OfflineCashV1.decodePaymentRequest(Uint8Array.from([...raw, 0])));
 });
 
 test("proof-bearing authorization and exact one-use ticket form the pre-ticket exchange", () => {
-  const request = requestForMode(OfflineCashV1.PaymentRequestMode.openReceive(
-    new OfflineCashV1.AmountPolicy({ minimumAmount: 1n, maximumAmount: 9n }),
-  ));
+  const request = requestForAmount(5n);
   const { intent, authorization, ticket } = preTicketExchange(request);
   const authorizationRaw = OfflineCashV1.encodeAcceptanceIntentAuthorization(authorization, request);
   const ticketRaw = OfflineCashV1.encodeAcceptanceTicket(ticket, request, intent);
@@ -350,7 +334,7 @@ test("proof-bearing authorization and exact one-use ticket form the pre-ticket e
 });
 
 test("no-commit recovery closure is canonical, fully cross-bound, and exactly bounded", () => {
-  const request = requestForMode(OfflineCashV1.PaymentRequestMode.singleExact(5n));
+  const request = requestForAmount(5n);
   const { authorization, ticket } = preTicketExchange(request);
   const closure = noCommitClosure(request, authorization, ticket);
   const raw = OfflineCashV1.encodeNoCommitClosure(closure);
@@ -406,7 +390,7 @@ test("no-commit recovery closure is canonical, fully cross-bound, and exactly bo
 });
 
 test("circuit-bound semantic hashes use exact fixed transcripts, not Norito archives", () => {
-  const request = requestForMode(OfflineCashV1.PaymentRequestMode.singleExact(5n));
+  const request = requestForAmount(5n);
   const { intent, authorization, ticket } = preTicketExchange(request);
   const closure = noCommitClosure(request, authorization, ticket);
   const intentTranscript = intentSemanticTranscript(intent);
@@ -529,20 +513,9 @@ test("retired public state-link shapes and software money-crypto fallbacks are a
   assert.equal(OfflineCashV1.maximumSessionTextBytes, 12288);
 });
 
-test("the predecessor-era shared fixture is explicitly rejected until native v2 regeneration", {
-  skip: isV2Fixture,
-}, () => {
-  assert.notEqual(fixture.fixture_version, 2);
-  assert.ok(v2FixtureKeys.some((key) => !Object.hasOwn(fixture, key)));
-  assert.throws(() => OfflineCashV1.decodePaymentRequest(
-    Uint8Array.from(Buffer.from(fixture.payment_request.norito_hex, "hex")),
-  ));
-});
-
-test("native-generated canonical v2 fixture round-trips every required transported value", {
-  skip: !isV2Fixture,
-}, () => {
-  assert.equal(hasCanonicalV2Fixture, true, "fixture_version 2 must contain the complete canonical key set");
+test("native-generated canonical V1 fixture round-trips every required transported value", () => {
+  assert.equal(fixture.fixture_version, 1);
+  assert.equal(hasCanonicalFixture, true, "fixture_version 1 must contain the complete canonical key set");
   const raw = (name) => Uint8Array.from(Buffer.from(fixture[name].norito_hex, "hex"));
   for (const [name, kind] of Object.entries(fixtureTransportKinds)) {
     assert.deepEqual(Object.keys(fixture[name]).sort(), ["norito_hex", "oc1", "raw_bytes"]);

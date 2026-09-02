@@ -22,11 +22,11 @@ use halo2_proofs::{
 };
 use iroha_data_model::offline::{
     OFFLINE_CASH_ASSET_SCALE_MAX_V1, OFFLINE_CASH_HALO2_K_V1,
-    OFFLINE_CASH_HARDWARE_REQUIRED_CAPABILITIES_V1, OFFLINE_CASH_PARITY_PROOF_MAX_BYTES_V1,
-    OfflineCashCreditOpeningV1, OfflineCashEncryptedCreditEnvelopeV1,
-    OfflineCashHardwareCredentialV1, OfflineCashHardwareProfileV1,
-    OfflineCashMintAuthorizationStatementV1, offline_cash_asset_identity_digest_v1,
-    offline_cash_ciphertext_digest_v1, offline_cash_mint_credit_opening_commitment_v1,
+    OFFLINE_CASH_HARDWARE_REQUIRED_CAPABILITIES_V1, OfflineCashCreditOpeningV1,
+    OfflineCashEncryptedCreditEnvelopeV1, OfflineCashHardwareCredentialV1,
+    OfflineCashHardwareProfileV1, OfflineCashMintAuthorizationStatementV1,
+    offline_cash_asset_identity_digest_v1, offline_cash_ciphertext_digest_v1,
+    offline_cash_mint_credit_opening_commitment_v1,
     offline_cash_recipient_credential_commitment_v1,
 };
 use sha2::{Digest as _, Sha256};
@@ -41,7 +41,7 @@ use super::{
     deferred_parent::{
         DeferredAccumulator, accumulator_limb_count, bind_accumulator_limbs,
         constrain_reciprocal_tagged_audit_v1, deferred_field_chips_v1, deferred_loader_v1,
-        finalize_tagged_deferred_audit_v1, verify_ordinary_proof_v1,
+        finalize_tagged_deferred_audit_v1, ordinary_ipa_proof_profile_v1, verify_ordinary_proof_v1,
     },
     guard_bundle::{
         AssignedCredentialV1, OfflineCashPlatformCredentialStatementV1, assert_digest_nonzero,
@@ -484,10 +484,15 @@ where
     C::Base: BigPrimeField,
     C::ScalarExt: OfflineCashPoseidonFieldV1,
 {
-    if credential_protocol.num_instance != [2]
-        || credential_proof.is_empty()
-        || credential_proof.len() > OFFLINE_CASH_PARITY_PROOF_MAX_BYTES_V1
-    {
+    if credential_protocol.num_instance != [2] {
+        return Err("mint-authorization credential proof has wrong fixed shape".to_owned());
+    }
+    let credential_proof_len = ordinary_ipa_proof_profile_v1(credential_protocol)
+        .map_err(|error| {
+            format!("mint-authorization credential proof profile is invalid: {error}")
+        })?
+        .byte_len;
+    if credential_proof.len() != credential_proof_len {
         return Err("mint-authorization credential proof has wrong fixed shape".to_owned());
     }
     let mut builder = BaseCircuitBuilder::new(false)

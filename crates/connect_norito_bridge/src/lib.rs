@@ -288,6 +288,201 @@ const ERR_VALIDATION_FEE_POLICY_PROOF: c_int = -504;
 const ERR_PARLIAMENT_TIMED_OVN: c_int = -505;
 const ERR_VALIDATION_FEE_HIJIRI_QUOTE: c_int = -506;
 const ERR_PRIVATE_SETTLEMENT_RESPONSE: c_int = -507;
+
+/// Exact capability mask required by the Offline Cash V1 secure-device frame.
+///
+/// The frame stores this value in a `u32`, while the governed hardware profile
+/// and its circuit-visible credential use the same complete lower sixteen bits.
+pub const CONNECT_NORITO_OFFLINE_CASH_DEVICE_REQUIRED_CAPABILITIES_V1: u32 =
+    iroha_data_model::offline::OFFLINE_CASH_HARDWARE_REQUIRED_CAPABILITIES_V1 as u32;
+
+/// Closed operation-code inventory in the Offline Cash V1 secure-device command frame.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OfflineCashDeviceLifecycleOperationV1 {
+    /// Read the active compact hardware credential and profile reference.
+    ReadActiveHardwareCredential = 1,
+    /// Prepare a proof-bearing acceptance-intent authorization.
+    PrepareAcceptanceIntentAuthorization = 2,
+    /// Recover a byte-identical prepared acceptance-intent authorization.
+    RecoverAcceptanceIntentAuthorization = 3,
+    /// Verify authorization, reserve inbox bytes, and issue an acceptance ticket.
+    VerifyAuthorizationReserveInboxAndIssueAcceptanceTicket = 4,
+    /// Recover an existing acceptance ticket and its reservation.
+    RecoverAcceptanceTicket = 5,
+    /// Stage one authenticated inbound payment against its reservation.
+    StageInboundPayment = 6,
+    /// Recover a byte-identical staged inbound payment and receipt.
+    RecoverStagedInboundPayment = 7,
+    /// Recover one bounded page of durable inbox entries.
+    RecoverInboundInboxPage = 8,
+    /// Reserve terminal bytes and prepare one exact-next transition.
+    PrepareExactNextTransition = 9,
+    /// Recover one sealed prepared transition.
+    RecoverPreparedTransition = 10,
+    /// Abandon a prepared transition proven not to have committed.
+    AbandonUncommittedPreparedTransition = 11,
+    /// Atomically commit one Core-verified candidate digest.
+    CommitVerifiedCandidate = 12,
+    /// Recover the terminal commit certificate and candidate binding.
+    RecoverTerminalCommitCertificate = 13,
+    /// Install the verified final commit-wrapper artifact.
+    InstallFinalCommitWrapper = 14,
+    /// Recover the installed envelope or state proof byte-identically.
+    RecoverInstalledEnvelopeOrStateProof = 15,
+    /// Sign an acknowledgement for a committed inbox receipt.
+    SignReceiveAcknowledgement = 16,
+    /// Release an outbox entry after authenticated terminal delivery.
+    ReleaseOutboxEntry = 17,
+    /// Read trusted time or obtain or inspect the active monotonic lease.
+    ReadTrustedTimeOrLease = 18,
+    /// Prepare a proof-bearing mint authorization before reserve debit.
+    PrepareMintAuthorization = 19,
+    /// Recover a byte-identical prepared mint authorization.
+    RecoverMintAuthorization = 20,
+    /// Verify mint authorization and stage the matching finalized mint credit.
+    VerifyAuthorizationAndStageMintCredit = 21,
+    /// Fold one staged credit into the aggregate balance.
+    FoldReceive = 22,
+    /// Read the stable pending-credit high-water mark.
+    ReadPendingCreditWatermark = 23,
+    /// Rotate aggregate state into the next qualified hardware epoch.
+    RotateHardwareEpoch = 24,
+}
+
+impl OfflineCashDeviceLifecycleOperationV1 {
+    /// All V1 operations in canonical wire-code order.
+    pub const ALL: [Self; 24] = [
+        Self::ReadActiveHardwareCredential,
+        Self::PrepareAcceptanceIntentAuthorization,
+        Self::RecoverAcceptanceIntentAuthorization,
+        Self::VerifyAuthorizationReserveInboxAndIssueAcceptanceTicket,
+        Self::RecoverAcceptanceTicket,
+        Self::StageInboundPayment,
+        Self::RecoverStagedInboundPayment,
+        Self::RecoverInboundInboxPage,
+        Self::PrepareExactNextTransition,
+        Self::RecoverPreparedTransition,
+        Self::AbandonUncommittedPreparedTransition,
+        Self::CommitVerifiedCandidate,
+        Self::RecoverTerminalCommitCertificate,
+        Self::InstallFinalCommitWrapper,
+        Self::RecoverInstalledEnvelopeOrStateProof,
+        Self::SignReceiveAcknowledgement,
+        Self::ReleaseOutboxEntry,
+        Self::ReadTrustedTimeOrLease,
+        Self::PrepareMintAuthorization,
+        Self::RecoverMintAuthorization,
+        Self::VerifyAuthorizationAndStageMintCredit,
+        Self::FoldReceive,
+        Self::ReadPendingCreditWatermark,
+        Self::RotateHardwareEpoch,
+    ];
+
+    /// Decode one closed V1 command-frame operation code.
+    pub const fn from_code(code: u8) -> Option<Self> {
+        match code {
+            1 => Some(Self::ReadActiveHardwareCredential),
+            2 => Some(Self::PrepareAcceptanceIntentAuthorization),
+            3 => Some(Self::RecoverAcceptanceIntentAuthorization),
+            4 => Some(Self::VerifyAuthorizationReserveInboxAndIssueAcceptanceTicket),
+            5 => Some(Self::RecoverAcceptanceTicket),
+            6 => Some(Self::StageInboundPayment),
+            7 => Some(Self::RecoverStagedInboundPayment),
+            8 => Some(Self::RecoverInboundInboxPage),
+            9 => Some(Self::PrepareExactNextTransition),
+            10 => Some(Self::RecoverPreparedTransition),
+            11 => Some(Self::AbandonUncommittedPreparedTransition),
+            12 => Some(Self::CommitVerifiedCandidate),
+            13 => Some(Self::RecoverTerminalCommitCertificate),
+            14 => Some(Self::InstallFinalCommitWrapper),
+            15 => Some(Self::RecoverInstalledEnvelopeOrStateProof),
+            16 => Some(Self::SignReceiveAcknowledgement),
+            17 => Some(Self::ReleaseOutboxEntry),
+            18 => Some(Self::ReadTrustedTimeOrLease),
+            19 => Some(Self::PrepareMintAuthorization),
+            20 => Some(Self::RecoverMintAuthorization),
+            21 => Some(Self::VerifyAuthorizationAndStageMintCredit),
+            22 => Some(Self::FoldReceive),
+            23 => Some(Self::ReadPendingCreditWatermark),
+            24 => Some(Self::RotateHardwareEpoch),
+            _ => None,
+        }
+    }
+
+    /// Return the exact `u8` command-frame code.
+    pub const fn code(self) -> u8 {
+        self as u8
+    }
+}
+
+/// Closed status-code inventory in the Offline Cash V1 secure-device response frame.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OfflineCashDeviceLifecycleStatusV1 {
+    /// The authenticated operation completed successfully.
+    Success = 0,
+    /// The service or pre-reservation capacity is unavailable.
+    Unavailable = 1,
+    /// Retry after a stale or concurrent operation.
+    StaleOrConcurrent = 2,
+    /// An exact request, candidate, or lifecycle binding mismatched.
+    BindingMismatch = 3,
+    /// Trusted time or the monotonic lease rejected the operation.
+    TrustedTimeRejected = 4,
+    /// Governed policy rejected the operation.
+    Rejected = 5,
+    /// The requested durable record is missing.
+    Missing = 6,
+    /// The request conflicts with an existing durable record.
+    Conflict = 7,
+    /// Authenticated durable state is corrupt.
+    Corrupt = 8,
+    /// The command frame or canonical operation body is malformed.
+    MalformedRequest = 9,
+    /// Terminal value remains authoritative and governed recovery is required.
+    RecoveryRequired = 10,
+}
+
+impl OfflineCashDeviceLifecycleStatusV1 {
+    /// All V1 statuses in canonical wire-code order.
+    pub const ALL: [Self; 11] = [
+        Self::Success,
+        Self::Unavailable,
+        Self::StaleOrConcurrent,
+        Self::BindingMismatch,
+        Self::TrustedTimeRejected,
+        Self::Rejected,
+        Self::Missing,
+        Self::Conflict,
+        Self::Corrupt,
+        Self::MalformedRequest,
+        Self::RecoveryRequired,
+    ];
+
+    /// Decode one closed V1 response-frame status code.
+    pub const fn from_code(code: u8) -> Option<Self> {
+        match code {
+            0 => Some(Self::Success),
+            1 => Some(Self::Unavailable),
+            2 => Some(Self::StaleOrConcurrent),
+            3 => Some(Self::BindingMismatch),
+            4 => Some(Self::TrustedTimeRejected),
+            5 => Some(Self::Rejected),
+            6 => Some(Self::Missing),
+            7 => Some(Self::Conflict),
+            8 => Some(Self::Corrupt),
+            9 => Some(Self::MalformedRequest),
+            10 => Some(Self::RecoveryRequired),
+            _ => None,
+        }
+    }
+
+    /// Return the exact `u8` response-frame code.
+    pub const fn code(self) -> u8 {
+        self as u8
+    }
+}
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 enum BridgeError {
@@ -422,9 +617,7 @@ fn validate_offline_cash_v1_aggregate_input_lengths(
 ) -> BridgeResult<()> {
     let total = lengths.iter().try_fold(0_usize, |total, length| {
         let length = usize::try_from(*length).map_err(|_| BridgeError::OfflineCashV1)?;
-        total
-            .checked_add(length)
-            .ok_or(BridgeError::OfflineCashV1)
+        total.checked_add(length).ok_or(BridgeError::OfflineCashV1)
     })?;
     if total > maximum {
         return Err(BridgeError::OfflineCashV1);
@@ -11395,6 +11588,162 @@ mod tests {
     use iroha_data_model::isi::rwa::RwaInstructionBox;
     use std::{ffi::CString, mem::MaybeUninit};
 
+    #[test]
+    fn offline_cash_device_bridge_v1_numeric_inventory_is_closed_and_header_exact() {
+        assert_eq!(
+            CONNECT_NORITO_OFFLINE_CASH_DEVICE_REQUIRED_CAPABILITIES_V1,
+            0x0000_ffff,
+        );
+        assert_eq!(
+            OfflineCashDeviceLifecycleOperationV1::ALL.map(|operation| operation.code()),
+            [
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+                24,
+            ],
+        );
+        for operation in OfflineCashDeviceLifecycleOperationV1::ALL {
+            assert_eq!(
+                OfflineCashDeviceLifecycleOperationV1::from_code(operation.code()),
+                Some(operation),
+            );
+        }
+        for unknown in [0, 25, u8::MAX] {
+            assert_eq!(
+                OfflineCashDeviceLifecycleOperationV1::from_code(unknown),
+                None,
+            );
+        }
+
+        assert_eq!(
+            OfflineCashDeviceLifecycleStatusV1::ALL.map(|status| status.code()),
+            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        );
+        for status in OfflineCashDeviceLifecycleStatusV1::ALL {
+            assert_eq!(
+                OfflineCashDeviceLifecycleStatusV1::from_code(status.code()),
+                Some(status),
+            );
+        }
+        for unknown in [11, u8::MAX] {
+            assert_eq!(OfflineCashDeviceLifecycleStatusV1::from_code(unknown), None,);
+        }
+
+        let compact_header: String = include_str!("../include/connect_norito_bridge.h")
+            .split_whitespace()
+            .collect();
+        assert!(compact_header.contains(
+            "CONNECT_NORITO_OFFLINE_CASH_DEVICE_REQUIRED_CAPABILITIES_V1UINT32_C(0x0000FFFF)"
+        ));
+        let capability_names = [
+            "EXACT_NEXT_PREDECESSOR_CONSUMPTION",
+            "ONE_USE_SUCCESSOR_AUTHORIZATION",
+            "ROLLBACK_RESISTANT_COUNTER_AND_JOURNAL",
+            "SEALED_TRANSITION_RECOVERY",
+            "ONE_USE_ACCEPTANCE_TICKETS",
+            "DURABLE_INBOX_RESERVATION",
+            "AUTHENTICATED_INBOUND_STAGING",
+            "AUTHORITATIVE_REPLAY_ROOT_RECOVERY",
+            "SENDER_OUTBOX_RESERVATION",
+            "AUTHENTICATED_DURABLE_RETRY_OUTBOX",
+            "ATOMIC_VERIFIED_CANDIDATE_COMMIT",
+            "RECOVERABLE_TERMINAL_COMMIT_CERTIFICATE",
+            "TRUSTED_TIME_OR_LEASE",
+            "OFFLINE_HARDWARE_EPOCH_ROTATION",
+            "ROLLBACK_SAFE_COUNTER_ROLLOVER",
+            "NO_SOFTWARE_FALLBACK",
+        ];
+        for (bit, name) in capability_names.iter().enumerate() {
+            assert!(compact_header.contains(&format!(
+                "CONNECT_NORITO_OFFLINE_CASH_DEVICE_CAPABILITY_{name}_V1=1u<<{bit}"
+            )));
+        }
+        let operation_names = [
+            "READ_ACTIVE_HARDWARE_CREDENTIAL",
+            "PREPARE_ACCEPTANCE_INTENT_AUTHORIZATION",
+            "RECOVER_ACCEPTANCE_INTENT_AUTHORIZATION",
+            "VERIFY_AUTHORIZATION_RESERVE_INBOX_AND_ISSUE_ACCEPTANCE_TICKET",
+            "RECOVER_ACCEPTANCE_TICKET",
+            "STAGE_INBOUND_PAYMENT",
+            "RECOVER_STAGED_INBOUND_PAYMENT",
+            "RECOVER_INBOUND_INBOX_PAGE",
+            "PREPARE_EXACT_NEXT_TRANSITION",
+            "RECOVER_PREPARED_TRANSITION",
+            "ABANDON_UNCOMMITTED_PREPARED_TRANSITION",
+            "COMMIT_VERIFIED_CANDIDATE",
+            "RECOVER_TERMINAL_COMMIT_CERTIFICATE",
+            "INSTALL_FINAL_COMMIT_WRAPPER",
+            "RECOVER_INSTALLED_ENVELOPE_OR_STATE_PROOF",
+            "SIGN_RECEIVE_ACKNOWLEDGEMENT",
+            "RELEASE_OUTBOX_ENTRY",
+            "READ_TRUSTED_TIME_OR_LEASE",
+            "PREPARE_MINT_AUTHORIZATION",
+            "RECOVER_MINT_AUTHORIZATION",
+            "VERIFY_AUTHORIZATION_AND_STAGE_MINT_CREDIT",
+            "FOLD_RECEIVE",
+            "READ_PENDING_CREDIT_WATERMARK",
+            "ROTATE_HARDWARE_EPOCH",
+        ];
+        for (index, name) in operation_names.iter().enumerate() {
+            let code = index + 1;
+            assert!(compact_header.contains(&format!(
+                "CONNECT_NORITO_OFFLINE_CASH_DEVICE_OPERATION_{name}_V1={code}"
+            )));
+        }
+        let status_names = [
+            "SUCCESS",
+            "UNAVAILABLE",
+            "STALE_OR_CONCURRENT",
+            "BINDING_MISMATCH",
+            "TRUSTED_TIME_REJECTED",
+            "REJECTED",
+            "MISSING",
+            "CONFLICT",
+            "CORRUPT",
+            "MALFORMED_REQUEST",
+            "RECOVERY_REQUIRED",
+        ];
+        for (code, name) in status_names.iter().enumerate() {
+            assert!(compact_header.contains(&format!(
+                "CONNECT_NORITO_OFFLINE_CASH_DEVICE_STATUS_{name}_V1={code}"
+            )));
+        }
+    }
+
+    #[test]
+    fn stock_offline_cash_device_bridge_v1_remains_unavailable_for_every_operation() {
+        let mut capabilities = [0xa5_u8; 96];
+        assert_eq!(
+            unsafe {
+                connect_norito_offline_cash_device_capabilities_v1(
+                    capabilities.as_mut_ptr(),
+                    capabilities.len(),
+                )
+            },
+            ERR_OFFLINE_CASH_DEVICE_UNAVAILABLE_V1,
+        );
+        assert_eq!(capabilities, [0_u8; 96]);
+
+        let mut command = [0_u8; 80];
+        let mut output = [0xa5_u8; 116];
+        for operation in OfflineCashDeviceLifecycleOperationV1::ALL {
+            command[10] = operation.code();
+            let mut output_len = usize::MAX;
+            assert_eq!(
+                unsafe {
+                    connect_norito_offline_cash_device_execute_v1(
+                        command.as_ptr(),
+                        command.len(),
+                        output.as_mut_ptr(),
+                        output.len(),
+                        &mut output_len,
+                    )
+                },
+                ERR_OFFLINE_CASH_DEVICE_UNAVAILABLE_V1,
+            );
+            assert_eq!(output_len, 0);
+        }
+    }
+
     fn offline_cash_v1_fixture_v2() -> JsonValue {
         let fixture: JsonValue = norito::json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -11431,9 +11780,7 @@ mod tests {
     }
 
     fn resign_offline_cash_v1_fixture_ticket(ticket: &mut OfflineCashAcceptanceTicketV1) {
-        use p256::ecdsa::{
-            Signature as P256Signature, SigningKey, signature::Signer as _,
-        };
+        use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _};
 
         let signing_key =
             SigningKey::from_bytes((&[7_u8; 32]).into()).expect("fixture P-256 signing key");
@@ -11443,11 +11790,10 @@ mod tests {
                 .expect("fixture ticket signing bytes"),
         );
         let signature = signature.normalize_s().unwrap_or(signature);
-        ticket.signature =
-            iroha_data_model::offline::OfflineCashDeviceSignatureV1::from_raw_bytes(
-                signature.to_bytes().as_ref(),
-            )
-            .expect("canonical fixture ticket signature");
+        ticket.signature = iroha_data_model::offline::OfflineCashDeviceSignatureV1::from_raw_bytes(
+            signature.to_bytes().as_ref(),
+        )
+        .expect("canonical fixture ticket signature");
     }
 
     #[test]
@@ -11559,9 +11905,7 @@ mod tests {
     fn offline_cash_v1_bridge_rejects_untrusted_recovery_buffers_and_aggregate_overruns() {
         let byte = 0_u8;
         assert_eq!(
-            unsafe {
-                connect_norito_offline_cash_v1_no_commit_closure_validate(ptr::null(), 1)
-            },
+            unsafe { connect_norito_offline_cash_v1_no_commit_closure_validate(ptr::null(), 1) },
             ERR_NULL_PTR,
         );
         assert_eq!(
@@ -11774,14 +12118,11 @@ mod tests {
             ERR_OFFLINE_CASH_V1,
         );
 
-        let mint_authorization_bytes =
-            offline_cash_v1_fixture_raw(&fixture, "mint_authorization");
+        let mint_authorization_bytes = offline_cash_v1_fixture_raw(&fixture, "mint_authorization");
         let mint_credit_bytes = offline_cash_v1_fixture_raw(&fixture, "mint_credit");
         let mut substituted_mint_authorization =
-            OfflineCashMintAuthorizationV1::decode_canonical_shape_exact(
-                &mint_authorization_bytes,
-            )
-            .expect("fixture mint authorization");
+            OfflineCashMintAuthorizationV1::decode_canonical_shape_exact(&mint_authorization_bytes)
+                .expect("fixture mint authorization");
         substituted_mint_authorization.proof.eq_proof[0] ^= 1;
         substituted_mint_authorization
             .validate_shape()

@@ -6,11 +6,7 @@
 //! delayed-history fold, mint-finality helper, normalized hardware GuardBundle, and reciprocal
 //! Pasta equation audit are one inseparable proving authority.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    io::Cursor,
-    sync::Arc,
-};
+use std::{io::Cursor, sync::Arc};
 
 #[cfg(feature = "zk-halo2-ipa")]
 use ff::Field as _;
@@ -87,7 +83,10 @@ use super::{
         OfflineCashRecursiveStateWitnessV1, OfflineCashSuiteUpgradeBridgeWitnessV1,
         build_offline_cash_recursive_state_pair_v1,
     },
-    deferred_parent::native_parent_protocol_digest_v1,
+    deferred_parent::{
+        OfflineCashOrdinaryProofProfileV1, native_parent_protocol_digest_v1,
+        ordinary_ipa_proof_profile_v1,
+    },
     fold_offline_cash_ep_accumulators_v1, fold_offline_cash_eq_accumulators_v1,
     initial_offline_cash_ep_accumulator_v1, initial_offline_cash_eq_accumulator_v1,
     mint_authority::{
@@ -199,7 +198,7 @@ impl<'a> OfflineCashRecursiveIncomingEqGenerationWitnessV1<'a> {
     }
 }
 
-/// One fixed Ep/Fq incoming sender slot for a sixteen-slot `ReceiveFoldBatch` relation.
+/// The fixed Ep/Fq incoming sender proof for a `ReceiveFold` relation.
 #[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone, Copy)]
 pub struct OfflineCashRecursiveIncomingEpGenerationWitnessV1<'a> {
@@ -276,9 +275,8 @@ impl OfflineCashSuiteUpgradeGenerationWitnessV1 {
 
 /// Complete private input needed to build both production recursive state circuits.
 ///
-/// The sixteen incoming slots are always present. `receive_active_count` in the state witness
-/// selects an active prefix; every remaining position carries the release-pinned valid padding
-/// proof and history, so proof shape never depends on receipt count.
+/// One incoming proof slot is always present. Outside `ReceiveFold` it carries the release-pinned
+/// valid padding proof and history, so proof shape never depends on aggregate history.
 #[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone)]
 pub struct OfflineCashRecursiveStateGenerationWitnessV1<'a> {
@@ -312,10 +310,10 @@ pub struct OfflineCashRecursiveStateGenerationWitnessV1<'a> {
     pub eq_incoming_protocol: &'a PlonkProtocol<EqAffine>,
     /// Ep terminal CommitWrapper protocol compiled from the authenticated release key.
     pub ep_incoming_protocol: &'a PlonkProtocol<EpAffine>,
-    /// Fixed sixteen Eq terminal CommitWrapper proof/history slots.
-    pub eq_incoming_slots: [OfflineCashRecursiveIncomingEqGenerationWitnessV1<'a>; 16],
-    /// Fixed sixteen Ep terminal CommitWrapper proof/history slots.
-    pub ep_incoming_slots: [OfflineCashRecursiveIncomingEpGenerationWitnessV1<'a>; 16],
+    /// Eq terminal CommitWrapper proof/history consumed by `ReceiveFold`.
+    pub eq_incoming: OfflineCashRecursiveIncomingEqGenerationWitnessV1<'a>,
+    /// Ep terminal CommitWrapper proof/history consumed by `ReceiveFold`.
+    pub ep_incoming: OfflineCashRecursiveIncomingEpGenerationWitnessV1<'a>,
     /// Eq delayed-history accumulator carried by the successor.
     pub eq_successor_history: &'a OfflineCashEqAccumulatorV1,
     /// Ep delayed-history accumulator carried by the successor.
@@ -370,8 +368,8 @@ pub struct OfflineCashRecursiveStateGenerationWitnessV1<'a> {
 impl<'a> OfflineCashRecursiveStateGenerationWitnessV1<'a> {
     fn into_recursive<'b>(
         self,
-        eq_incoming_slots: &'b [CompositeIncomingEqWitnessV1<'b>; 16],
-        ep_incoming_slots: &'b [CompositeIncomingEpWitnessV1<'b>; 16],
+        eq_incoming: CompositeIncomingEqWitnessV1<'b>,
+        ep_incoming: CompositeIncomingEpWitnessV1<'b>,
     ) -> OfflineCashRecursiveStateWitnessV1<'b>
     where
         'a: 'b,
@@ -392,8 +390,8 @@ impl<'a> OfflineCashRecursiveStateGenerationWitnessV1<'a> {
             ep_parent_fold_proof: self.ep_parent_fold_proof,
             eq_incoming_protocol: self.eq_incoming_protocol,
             ep_incoming_protocol: self.ep_incoming_protocol,
-            eq_incoming_slots,
-            ep_incoming_slots,
+            eq_incoming,
+            ep_incoming,
             eq_successor_history: self.eq_successor_history,
             ep_successor_history: self.ep_successor_history,
             eq_guard_protocol: self.eq_guard_protocol,
@@ -1587,6 +1585,28 @@ pub enum OfflineCashArtifactGenerationErrorV1 {
         /// Generated length.
         actual: u64,
     },
+    /// A compiled externally transported proof cannot fit its immutable wire slot.
+    #[error(
+        "Offline Cash V1 {parity:?} {kind} profile requires {actual} proof bytes (W={witness_commitments}, T={quotient_commitments}, E={evaluations}, Q={bgh19_rotation_sets}); wire maximum is {maximum}"
+    )]
+    TransportProofProfileTooLarge {
+        /// Pasta parity being compiled.
+        parity: OfflineCashPastaParityV1,
+        /// Externally transported circuit family.
+        kind: &'static str,
+        /// Witness commitments across all phases.
+        witness_commitments: u64,
+        /// Quotient commitments.
+        quotient_commitments: u64,
+        /// Transcript evaluations.
+        evaluations: u64,
+        /// Distinct BGH19 query rotation sets.
+        bgh19_rotation_sets: u64,
+        /// Exact proof bytes implied by the compiled protocol.
+        actual: u64,
+        /// Immutable per-parity wire maximum.
+        maximum: u64,
+    },
     /// A processed key was malformed or had trailing bytes.
     #[error("failed to decode Offline Cash V1 {parity:?} {kind}: {reason}")]
     KeyDecode {
@@ -1678,6 +1698,16 @@ pub fn generate_offline_cash_mint_authority_artifacts_v1(
         snark_verifier::system::halo2::Config::ipa()
             .with_num_instance(vec![OFFLINE_CASH_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1]),
     );
+    validate_transport_protocol_profile(
+        OfflineCashPastaParityV1::Eq,
+        "mint-authority carrier",
+        &eq_protocol,
+    )?;
+    validate_transport_protocol_profile(
+        OfflineCashPastaParityV1::Ep,
+        "mint-authority carrier",
+        &ep_protocol,
+    )?;
     let eq_protocol_digest =
         native_parent_protocol_digest_v1(&eq_protocol, OfflineCashPastaParityV1::Eq)
             .map_err(OfflineCashArtifactGenerationErrorV1::CircuitBuild)?;
@@ -1733,6 +1763,17 @@ where
         &proving_key,
         vk_bytes.as_ref(),
     )?;
+    let protocol = compile(
+        &parameters,
+        &verifying_key,
+        snark_verifier::system::halo2::Config::ipa()
+            .with_num_instance(vec![OFFLINE_CASH_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1]),
+    );
+    validate_transport_protocol_profile(
+        OfflineCashPastaParityV1::Eq,
+        "mint-authority carrier",
+        &protocol,
+    )?;
     Ok(OfflineCashLoadedEqMintAuthorityArtifactsV1 {
         parameters,
         proving_key,
@@ -1765,6 +1806,17 @@ where
         OfflineCashPastaParityV1::Ep,
         &proving_key,
         vk_bytes.as_ref(),
+    )?;
+    let protocol = compile(
+        &parameters,
+        &verifying_key,
+        snark_verifier::system::halo2::Config::ipa()
+            .with_num_instance(vec![OFFLINE_CASH_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1]),
+    );
+    validate_transport_protocol_profile(
+        OfflineCashPastaParityV1::Ep,
+        "mint-authority carrier",
+        &protocol,
     )?;
     Ok(OfflineCashLoadedEpMintAuthorityArtifactsV1 {
         parameters,
@@ -2120,21 +2172,23 @@ where
             "dummy parent point encoding is not canonical Pasta width".to_owned(),
         ));
     }
+    let profile = ordinary_ipa_proof_profile_v1(protocol)
+        .map_err(OfflineCashArtifactGenerationErrorV1::CircuitBuild)?;
     let scalar = [0_u8; 32];
-    let mut proof = Vec::new();
-    for _ in 0..protocol.num_witness.iter().sum::<usize>() {
+    let mut proof = Vec::with_capacity(profile.byte_len);
+    for _ in 0..profile.witness_commitments {
         proof.extend_from_slice(point);
     }
-    for _ in 0..protocol.quotient.num_chunk() {
+    for _ in 0..profile.quotient_commitments {
         proof.extend_from_slice(point);
     }
-    for _ in 0..protocol.evaluations.len() {
+    for _ in 0..profile.evaluations {
         proof.extend_from_slice(&scalar);
     }
     // BGH19 multi-opening proof: F, one evaluation per distinct rotation set, S, sixteen
     // left/right IPA points, c, blind, and the final basis point.
     proof.extend_from_slice(point);
-    for _ in 0..bgh19_query_set_count(protocol) {
+    for _ in 0..profile.bgh19_rotation_sets {
         proof.extend_from_slice(&scalar);
     }
     proof.extend_from_slice(point);
@@ -2144,27 +2198,14 @@ where
     proof.extend_from_slice(&scalar);
     proof.extend_from_slice(&scalar);
     proof.extend_from_slice(point);
-    validate_recursive_proof_length(parity, &proof)?;
-    Ok(proof)
-}
-
-#[cfg(feature = "zk-halo2-ipa")]
-fn bgh19_query_set_count<C>(protocol: &PlonkProtocol<C>) -> usize
-where
-    C: snark_verifier::util::arithmetic::CurveAffine,
-{
-    let mut rotations_by_polynomial = BTreeMap::<usize, BTreeSet<i32>>::new();
-    for query in &protocol.queries {
-        rotations_by_polynomial
-            .entry(query.poly)
-            .or_default()
-            .insert(query.rotation.0);
+    if proof.len() != profile.byte_len {
+        return Err(OfflineCashArtifactGenerationErrorV1::InvalidLength {
+            parity,
+            kind: "exact dummy parent proof",
+            actual: u64::try_from(proof.len()).unwrap_or(u64::MAX),
+        });
     }
-    rotations_by_polynomial
-        .into_values()
-        .map(|rotations| rotations.into_iter().collect::<Vec<_>>())
-        .collect::<BTreeSet<_>>()
-        .len()
+    Ok(proof)
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
@@ -2381,16 +2422,12 @@ fn build_recursive_generation_pair_v1(
     ),
     String,
 > {
-    let eq_incoming_slots = witness
-        .eq_incoming_slots
-        .map(OfflineCashRecursiveIncomingEqGenerationWitnessV1::into_composite);
-    let ep_incoming_slots = witness
-        .ep_incoming_slots
-        .map(OfflineCashRecursiveIncomingEpGenerationWitnessV1::into_composite);
+    let eq_incoming = witness.eq_incoming.into_composite();
+    let ep_incoming = witness.ep_incoming.into_composite();
     build_offline_cash_recursive_state_pair_v1(
         eq_parameters,
         ep_parameters,
-        witness.into_recursive(&eq_incoming_slots, &ep_incoming_slots),
+        witness.into_recursive(eq_incoming, ep_incoming),
     )
 }
 
@@ -2450,6 +2487,16 @@ pub fn generate_offline_cash_recursive_state_artifacts_v1(
         snark_verifier::system::halo2::Config::ipa()
             .with_num_instance(vec![recursive_public_instance_count()]),
     );
+    validate_transport_protocol_profile(
+        OfflineCashPastaParityV1::Eq,
+        "recursive aggregate state",
+        &eq_protocol,
+    )?;
+    validate_transport_protocol_profile(
+        OfflineCashPastaParityV1::Ep,
+        "recursive aggregate state",
+        &ep_protocol,
+    )?;
     let eq_protocol_digest =
         native_parent_protocol_digest_v1(&eq_protocol, OfflineCashPastaParityV1::Eq)
             .map_err(OfflineCashArtifactGenerationErrorV1::CircuitBuild)?;
@@ -2497,6 +2544,17 @@ where
         &proving_key,
         verifying_bytes.as_ref(),
     )?;
+    let protocol = compile(
+        &parameters,
+        &verifying_key,
+        snark_verifier::system::halo2::Config::ipa()
+            .with_num_instance(vec![recursive_public_instance_count()]),
+    );
+    validate_transport_protocol_profile(
+        OfflineCashPastaParityV1::Eq,
+        "recursive aggregate state",
+        &protocol,
+    )?;
     Ok(OfflineCashLoadedEqRecursiveStateArtifactsV1 {
         parameters,
         proving_key,
@@ -2529,6 +2587,17 @@ where
         OfflineCashPastaParityV1::Ep,
         &proving_key,
         verifying_bytes.as_ref(),
+    )?;
+    let protocol = compile(
+        &parameters,
+        &verifying_key,
+        snark_verifier::system::halo2::Config::ipa()
+            .with_num_instance(vec![recursive_public_instance_count()]),
+    );
+    validate_transport_protocol_profile(
+        OfflineCashPastaParityV1::Ep,
+        "recursive aggregate state",
+        &protocol,
     )?;
     Ok(OfflineCashLoadedEpRecursiveStateArtifactsV1 {
         parameters,
@@ -2771,6 +2840,16 @@ pub fn generate_offline_cash_commit_wrapper_artifacts_v1(
         snark_verifier::system::halo2::Config::ipa()
             .with_num_instance(vec![COMMIT_WRAPPER_PUBLIC_INSTANCE_COUNT_V1]),
     );
+    validate_transport_protocol_profile(
+        OfflineCashPastaParityV1::Eq,
+        "terminal commit wrapper",
+        &eq_protocol,
+    )?;
+    validate_transport_protocol_profile(
+        OfflineCashPastaParityV1::Ep,
+        "terminal commit wrapper",
+        &ep_protocol,
+    )?;
     let eq_protocol_digest =
         native_parent_protocol_digest_v1(&eq_protocol, OfflineCashPastaParityV1::Eq)
             .map_err(OfflineCashArtifactGenerationErrorV1::CircuitBuild)?;
@@ -2869,6 +2948,11 @@ where
         snark_verifier::system::halo2::Config::ipa()
             .with_num_instance(vec![COMMIT_WRAPPER_PUBLIC_INSTANCE_COUNT_V1]),
     );
+    validate_transport_protocol_profile(
+        OfflineCashPastaParityV1::Eq,
+        "terminal commit wrapper",
+        &protocol,
+    )?;
     let protocol_digest = native_parent_protocol_digest_v1(&protocol, OfflineCashPastaParityV1::Eq)
         .map_err(OfflineCashArtifactGenerationErrorV1::CircuitBuild)?;
     if protocol_digest != recursion_release.commit_wrapper_eq_protocol_digest {
@@ -2930,6 +3014,11 @@ where
         snark_verifier::system::halo2::Config::ipa()
             .with_num_instance(vec![COMMIT_WRAPPER_PUBLIC_INSTANCE_COUNT_V1]),
     );
+    validate_transport_protocol_profile(
+        OfflineCashPastaParityV1::Ep,
+        "terminal commit wrapper",
+        &protocol,
+    )?;
     let protocol_digest = native_parent_protocol_digest_v1(&protocol, OfflineCashPastaParityV1::Ep)
         .map_err(OfflineCashArtifactGenerationErrorV1::CircuitBuild)?;
     if protocol_digest != recursion_release.commit_wrapper_ep_protocol_digest {
@@ -3313,6 +3402,16 @@ pub fn generate_offline_cash_mint_authorization_artifacts_v1(
         snark_verifier::system::halo2::Config::ipa()
             .with_num_instance(vec![MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1]),
     );
+    validate_transport_protocol_profile(
+        OfflineCashPastaParityV1::Eq,
+        "mint authorization",
+        &eq_protocol,
+    )?;
+    validate_transport_protocol_profile(
+        OfflineCashPastaParityV1::Ep,
+        "mint authorization",
+        &ep_protocol,
+    )?;
     let eq_protocol_digest =
         native_parent_protocol_digest_v1(&eq_protocol, OfflineCashPastaParityV1::Eq)
             .map_err(OfflineCashArtifactGenerationErrorV1::CircuitBuild)?;
@@ -3418,6 +3517,11 @@ where
         snark_verifier::system::halo2::Config::ipa()
             .with_num_instance(vec![MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1]),
     );
+    validate_transport_protocol_profile(
+        OfflineCashPastaParityV1::Eq,
+        "mint authorization",
+        &protocol,
+    )?;
     let protocol_digest = native_parent_protocol_digest_v1(&protocol, OfflineCashPastaParityV1::Eq)
         .map_err(OfflineCashArtifactGenerationErrorV1::CircuitBuild)?;
     if protocol_digest != helper.eq_protocol_digest {
@@ -3481,6 +3585,11 @@ where
         snark_verifier::system::halo2::Config::ipa()
             .with_num_instance(vec![MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1]),
     );
+    validate_transport_protocol_profile(
+        OfflineCashPastaParityV1::Ep,
+        "mint authorization",
+        &protocol,
+    )?;
     let protocol_digest = native_parent_protocol_digest_v1(&protocol, OfflineCashPastaParityV1::Ep)
         .map_err(OfflineCashArtifactGenerationErrorV1::CircuitBuild)?;
     if protocol_digest != helper.ep_protocol_digest {
@@ -4646,6 +4755,45 @@ fn validate_commit_wrapper_proof_length(
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
+fn validate_transport_protocol_profile<C>(
+    parity: OfflineCashPastaParityV1,
+    kind: &'static str,
+    protocol: &PlonkProtocol<C>,
+) -> Result<(), OfflineCashArtifactGenerationErrorV1>
+where
+    C: snark_verifier::util::arithmetic::CurveAffine,
+{
+    let profile = ordinary_ipa_proof_profile_v1(protocol)
+        .map_err(OfflineCashArtifactGenerationErrorV1::CircuitBuild)?;
+    validate_transport_proof_profile(parity, kind, profile)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn validate_transport_proof_profile(
+    parity: OfflineCashPastaParityV1,
+    kind: &'static str,
+    profile: OfflineCashOrdinaryProofProfileV1,
+) -> Result<(), OfflineCashArtifactGenerationErrorV1> {
+    if profile.byte_len > OFFLINE_CASH_PARITY_PROOF_MAX_BYTES_V1 {
+        return Err(
+            OfflineCashArtifactGenerationErrorV1::TransportProofProfileTooLarge {
+                parity,
+                kind,
+                witness_commitments: u64::try_from(profile.witness_commitments).unwrap_or(u64::MAX),
+                quotient_commitments: u64::try_from(profile.quotient_commitments)
+                    .unwrap_or(u64::MAX),
+                evaluations: u64::try_from(profile.evaluations).unwrap_or(u64::MAX),
+                bgh19_rotation_sets: u64::try_from(profile.bgh19_rotation_sets).unwrap_or(u64::MAX),
+                actual: u64::try_from(profile.byte_len).unwrap_or(u64::MAX),
+                maximum: u64::try_from(OFFLINE_CASH_PARITY_PROOF_MAX_BYTES_V1)
+                    .expect("fixed proof bound fits u64"),
+            },
+        );
+    }
+    Ok(())
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
 const fn recursive_public_instance_count() -> usize {
     PUBLIC_INSTANCE_COUNT + super::OFFLINE_CASH_HISTORY_ACCUMULATOR_BYTES_V1 / 16
 }
@@ -4929,6 +5077,48 @@ mod tests {
 
     #[cfg(feature = "zk-halo2-ipa")]
     #[test]
+    fn transport_profile_preflight_rejects_wide_internal_shape() {
+        let wide = OfflineCashOrdinaryProofProfileV1 {
+            witness_commitments: 129,
+            quotient_commitments: 8,
+            evaluations: 449,
+            bgh19_rotation_sets: 6,
+            opening_items: 37,
+            byte_len: 20_128,
+        };
+        assert!(matches!(
+            validate_transport_proof_profile(
+                OfflineCashPastaParityV1::Eq,
+                "platform credential",
+                wide,
+            ),
+            Err(
+                OfflineCashArtifactGenerationErrorV1::TransportProofProfileTooLarge {
+                    actual: 20_128,
+                    maximum: 2_495,
+                    ..
+                }
+            )
+        ));
+
+        let compact = OfflineCashOrdinaryProofProfileV1 {
+            witness_commitments: 30,
+            quotient_commitments: 3,
+            evaluations: 5,
+            bgh19_rotation_sets: 2,
+            opening_items: 37,
+            byte_len: 2_464,
+        };
+        validate_transport_proof_profile(
+            OfflineCashPastaParityV1::Ep,
+            "compact transport decider",
+            compact,
+        )
+        .expect("77 transcript items fit the immutable parity slot");
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    #[test]
     fn recursive_profile_comparison_covers_every_layout_field() {
         let profile = BaseCircuitParams {
             k: OFFLINE_CASH_HALO2_K_V1 as usize,
@@ -4948,14 +5138,8 @@ mod tests {
     #[test]
     fn commit_wrapper_shape_roles_and_transport_bounds_are_fixed() {
         assert_eq!(COMMIT_WRAPPER_PUBLIC_INSTANCE_COUNT_V1, 81);
-        assert_eq!(
-            core::mem::size_of::<[OfflineCashRecursiveIncomingEqGenerationWitnessV1<'_>; 16]>(),
-            16 * core::mem::size_of::<OfflineCashRecursiveIncomingEqGenerationWitnessV1<'_>>()
-        );
-        assert_eq!(
-            core::mem::size_of::<[OfflineCashRecursiveIncomingEpGenerationWitnessV1<'_>; 16]>(),
-            16 * core::mem::size_of::<OfflineCashRecursiveIncomingEpGenerationWitnessV1<'_>>()
-        );
+        assert!(core::mem::size_of::<OfflineCashRecursiveIncomingEqGenerationWitnessV1<'_>>() > 0);
+        assert!(core::mem::size_of::<OfflineCashRecursiveIncomingEpGenerationWitnessV1<'_>>() > 0);
 
         let profile = BaseCircuitParams {
             k: OFFLINE_CASH_HALO2_K_V1 as usize,

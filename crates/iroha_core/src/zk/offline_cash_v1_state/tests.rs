@@ -28,11 +28,11 @@ use iroha_data_model::{
         OfflineCashDeviceSignatureV1, OfflineCashEncryptedCreditEnvelopeV1,
         OfflineCashHardwareCredentialV1, OfflineCashInboxReceiptV1, OfflineCashLifecycleBindingV1,
         OfflineCashOperationKindV1, OfflineCashOutboxReservationV1, OfflineCashPairedProofV1,
-        OfflineCashPaymentRequestModeV1, OfflineCashPaymentRequestV1, OfflineCashPaymentV1,
-        OfflineCashSingleExactRequestV1, OfflineCashTransferStatementV1,
-        OfflineCashTrustedCommitTimeV1, offline_cash_ciphertext_digest_v1,
-        offline_cash_credit_opening_canonical_len_v1, offline_cash_device_key_reference_v1,
-        offline_cash_inbox_receipt_commitment_v1, offline_cash_liability_pool_id_v1,
+        OfflineCashPaymentRequestV1, OfflineCashPaymentV1, OfflineCashRedemptionStatementV1,
+        OfflineCashTransferStatementV1, OfflineCashTrustedCommitTimeV1,
+        offline_cash_ciphertext_digest_v1, offline_cash_credit_opening_canonical_len_v1,
+        offline_cash_device_key_reference_v1, offline_cash_inbox_receipt_commitment_v1,
+        offline_cash_liability_pool_id_v1,
     },
 };
 use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _};
@@ -298,6 +298,43 @@ impl OfflineCashGuardBundleVerifierV1 for AcceptingGuardVerifier {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct RejectingTransitionGuardVerifier;
+
+impl OfflineCashGuardBundleVerifierV1 for RejectingTransitionGuardVerifier {
+    fn verify_bootstrap(
+        &self,
+        _statement: &BootstrapStatementV1,
+        _guard_bundle: &[u8],
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn verify_transition(
+        &self,
+        _statement: &HardwareTransitionStatementV1,
+        _guard_bundle: &[u8],
+    ) -> Result<(), String> {
+        Err("rejected test transition".to_owned())
+    }
+
+    fn verify_credit_stage(
+        &self,
+        _statement: &CreditStageStatementV1,
+        _guard_bundle: &[u8],
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn verify_durability_anchor(
+        &self,
+        _statement: &DurabilityAnchorStatementV1,
+        _guard_bundle: &[u8],
+    ) -> Result<(), String> {
+        Ok(())
+    }
+}
+
 type TestMachine = OfflineCashStateMachineV1<AcceptingRecursiveVerifier, AcceptingGuardVerifier>;
 
 fn machine(balance: u128) -> TestMachine {
@@ -335,6 +372,26 @@ fn machine(balance: u128) -> TestMachine {
         proof_release: OfflineCashStateProofReleaseV1::from_test_artifacts(artifacts()),
         recursive_verifier: AcceptingRecursiveVerifier,
         guard_verifier: AcceptingGuardVerifier,
+    }
+}
+
+fn rejecting_transition_machine(
+    balance: u128,
+) -> OfflineCashStateMachineV1<AcceptingRecursiveVerifier, RejectingTransitionGuardVerifier> {
+    let machine = machine(balance);
+    OfflineCashStateMachineV1 {
+        state: machine.state,
+        journal_revision: machine.journal_revision,
+        pending_credits: machine.pending_credits,
+        accepted_recipient_bindings: machine.accepted_recipient_bindings,
+        accepted_payment_receipts: machine.accepted_payment_receipts,
+        consumed_credits: machine.consumed_credits,
+        acceptance_ticket_book: machine.acceptance_ticket_book,
+        sender_outbox_capacity: machine.sender_outbox_capacity,
+        outgoing_candidate_journal: machine.outgoing_candidate_journal,
+        proof_release: machine.proof_release,
+        recursive_verifier: machine.recursive_verifier,
+        guard_verifier: RejectingTransitionGuardVerifier,
     }
 }
 
@@ -381,6 +438,15 @@ fn payment_stub(
     state: &OfflineCashStateV1,
     index: u64,
 ) -> (OfflineCashPaymentRequestV1, OfflineCashPaymentV1) {
+    payment_stub_with_amount(state, index, 1)
+}
+
+fn payment_stub_with_amount(
+    state: &OfflineCashStateV1,
+    index: u64,
+    amount: u128,
+) -> (OfflineCashPaymentRequestV1, OfflineCashPaymentV1) {
+    assert!(amount > 0, "payment stub amount must be positive");
     let key = signing_key(7);
     let public_key = device_public_key(&key);
     let signature = sign(&key, b"offline-cash-v1-state-test");
@@ -410,8 +476,6 @@ fn payment_stub(
     }
     .seal_credential_id()
     .expect("credential id");
-    let request_mode =
-        OfflineCashPaymentRequestModeV1::SingleExact(OfflineCashSingleExactRequestV1 { amount: 1 });
     let mut request = OfflineCashPaymentRequestV1 {
         version: OFFLINE_CASH_WIRE_VERSION_V1,
         release_id: state.release_id,
@@ -421,7 +485,7 @@ fn payment_stub(
         scale: state.lane.scale,
         liability_pool_id: state.liability_pool_id,
         recipient: account(0xA5),
-        request_mode,
+        amount,
         hardware_credential,
         request_id,
         issued_at_ms: 1,
@@ -439,7 +503,7 @@ fn payment_stub(
         version: OFFLINE_CASH_WIRE_VERSION_V1,
         request_digest,
         intent_id: indexed_digest(0x74, index),
-        exact_amount: 1,
+        exact_amount: amount,
         sender_one_time_commitment: indexed_digest(0x77, index),
     };
     let intent_digest = intent
@@ -454,9 +518,8 @@ fn payment_stub(
         asset: state.lane.asset.clone(),
         asset_incarnation: state.asset_incarnation,
         scale: state.lane.scale,
-        request_mode,
         intent_digest,
-        exact_amount: 1,
+        exact_amount: amount,
         reserved_inbox_bytes: OFFLINE_CASH_ACCEPTANCE_TICKET_MIN_RESERVED_INBOX_BYTES_V1,
         recipient_one_time_key,
         hardware_profile_id: state.hardware_profile_id,
@@ -500,7 +563,7 @@ fn payment_stub(
             credit_id: [0; 32],
             ciphertext_digest: offline_cash_ciphertext_digest_v1(&encrypted_credit),
         },
-        amount: 1,
+        amount,
         transition_nullifier: indexed_digest(0x7B, index),
         request_digest,
         acceptance_ticket_digest: ticket_digest,
@@ -736,6 +799,119 @@ fn transition_authorization(preview: &TransitionPreviewV1) -> TransitionAuthoriz
     }
 }
 
+fn prepared_send(
+    machine: &TestMachine,
+    request: OfflineCashPaymentRequestV1,
+    payment: &OfflineCashPaymentV1,
+    reservation_id: DigestV1,
+) -> (PreparedOutgoingCandidateV1, TransitionPreviewV1) {
+    prepared_send_with_commit_evidence(
+        machine,
+        request,
+        payment,
+        reservation_id,
+        payment.statement.commit_evidence,
+    )
+    .expect("prepared send")
+}
+
+fn prepared_send_with_commit_evidence(
+    machine: &TestMachine,
+    request: OfflineCashPaymentRequestV1,
+    payment: &OfflineCashPaymentV1,
+    reservation_id: DigestV1,
+    commit_evidence: OfflineCashCommitEvidenceV1,
+) -> Result<(PreparedOutgoingCandidateV1, TransitionPreviewV1), OfflineCashStateErrorV1> {
+    let statement = &payment.statement;
+    let amount = statement.amount;
+    let outbox_reservation = OfflineCashOutboxReservationV1 {
+        reservation_id,
+        operation_kind: OfflineCashOperationKindV1::SendSplit,
+        reserved_outbox_bytes: iroha_data_model::offline::OFFLINE_CASH_PAYMENT_OUTBOX_MIN_BYTES_V1,
+        issued_at_ms: 100,
+        expires_at_ms: 10_000,
+    };
+    let successor = machine
+        .next_state(
+            machine
+                .state
+                .balance
+                .checked_sub(amount)
+                .expect("sufficient send balance"),
+            machine.state.hardware_epoch,
+            machine.state.device_policy_binding,
+            digest(0xDA),
+            machine.state.consumed_credit_root,
+        )
+        .expect("send successor");
+    let lifecycle_binding_digest = statement
+        .lifecycle
+        .canonical_digest()
+        .expect("send lifecycle digest");
+    let effect_digest = statement.canonical_digest().expect("send effect digest");
+    let successor_commitment = successor.state_commitment;
+    let preview = machine
+        .transition_preview(
+            OfflineCashTransitionKindV1::SendSplit,
+            successor,
+            effect_digest,
+            [0; 32],
+            [0; 32],
+            statement.lifecycle.credit_id,
+            request.hardware_credential.lane_commitment,
+            TransitionAuxiliaryBindingsV1 {
+                lifecycle_binding_digest,
+                precommit_binding_digest: outbox_reservation
+                    .canonical_commitment()
+                    .expect("send reservation commitment"),
+                ..TransitionAuxiliaryBindingsV1::default()
+            },
+            9_000,
+            |normalized_guard_statement_digest| {
+                local_transition_transport_digest(
+                    OfflineCashTransitionKindV1::SendSplit,
+                    machine.state.release_id,
+                    machine.state.liability_pool_id,
+                    effect_digest,
+                    machine.state.state_commitment,
+                    successor_commitment,
+                    normalized_guard_statement_digest,
+                )
+            },
+        )
+        .expect("send preview");
+    let normalized_guard_statement_digest = preview
+        .normalized_guard_statement
+        .canonical_digest()
+        .expect("send guard statement digest");
+    let state_transition_digest = preview
+        .proof_statement
+        .digest()
+        .expect("send transition digest");
+    let material = PreparedSendMaterialV1 {
+        proof_statement: preview.proof_statement.clone(),
+        transport_semantic_digest: preview.transport_semantic_digest,
+        request,
+        acceptance_intent: payment.acceptance_intent,
+        acceptance_ticket: payment.acceptance_ticket.clone(),
+        transition_nullifier: statement.transition_nullifier,
+        ciphertext_commitment: statement.ciphertext_commitment,
+        encrypted_credit: payment.encrypted_credit.clone(),
+        commit_evidence,
+        outbox_reservation,
+        sealed_transition_inputs: vec![0xDB],
+        sealed_recovery_seeds: vec![0xDC],
+        normalized_guard_statement_digest,
+    };
+    let prepared = PreparedOutgoingCandidateV1::send(
+        machine.state.clone(),
+        preview.successor.clone(),
+        state_transition_digest,
+        material,
+    )?;
+    Ok((prepared, preview))
+}
+
 fn prepared_redemption(
     machine: &TestMachine,
     reservation_id: DigestV1,
@@ -784,11 +960,21 @@ fn prepared_redemption(
         ciphertext_digest: [0; 32],
     };
     let lifecycle_binding_digest = lifecycle.canonical_digest().expect("lifecycle digest");
-    let effect_digest = canonical_sha256_digest(
-        b"iroha:offline-cash:v1:test-redemption-effect",
-        &(amount, terminal_nullifier, redemption_commitment),
-    )
-    .expect("effect digest");
+    let beneficiary = account(0xD5);
+    let effect_digest = OfflineCashRedemptionStatementV1 {
+        version: OFFLINE_CASH_WIRE_VERSION_V1,
+        lifecycle: lifecycle.clone(),
+        amount,
+        beneficiary: beneficiary.clone(),
+        terminal_nullifier,
+        redemption_commitment,
+        redemption_id: [1; 32],
+        commit_evidence,
+    }
+    .seal_redemption_id()
+    .expect("redemption id")
+    .canonical_digest()
+    .expect("redemption effect digest");
     let successor_commitment = successor.state_commitment;
     let preview = machine
         .transition_preview(
@@ -829,7 +1015,7 @@ fn prepared_redemption(
         proof_statement: preview.proof_statement.clone(),
         transport_semantic_digest: preview.transport_semantic_digest,
         amount,
-        beneficiary: account(0xD5),
+        beneficiary,
         terminal_nullifier,
         redemption_commitment,
         commit_evidence,
@@ -848,7 +1034,10 @@ fn prepared_redemption(
     (prepared, preview)
 }
 
-fn commit_certificate(candidate: &PersistedOutgoingCandidateV1) -> OfflineCashCommitCertificateV1 {
+fn commit_certificate(
+    candidate: &PersistedOutgoingCandidateV1,
+    commit_evidence: OfflineCashCommitEvidenceV1,
+) -> OfflineCashCommitCertificateV1 {
     let prepared = &candidate.prepared;
     OfflineCashCommitCertificateV1 {
         version: OFFLINE_CASH_WIRE_VERSION_V1,
@@ -863,15 +1052,52 @@ fn commit_certificate(candidate: &PersistedOutgoingCandidateV1) -> OfflineCashCo
             .outbox_reservation
             .canonical_commitment()
             .expect("reservation commitment"),
-        commit_evidence: OfflineCashCommitEvidenceV1::TrustedTime(OfflineCashTrustedCommitTimeV1 {
-            time_evidence_commitment: digest(0xD3),
-        }),
+        commit_evidence,
         hardware_profile_id: prepared.lifecycle().hardware_profile_id,
         policy_epoch: prepared.lifecycle().policy_epoch,
         hardware_terminal_commitment: digest(0xD8),
     }
     .seal_certificate_id()
     .expect("terminal certificate")
+}
+
+fn commit_wrapper_proof(
+    committed: &CommittedOutgoingCandidateV1,
+) -> OfflineCashCommitWrapperProofV1 {
+    let public_inputs = committed
+        .public_wrapper_inputs()
+        .expect("terminal public inputs");
+    OfflineCashCommitWrapperProofV1 {
+        version: OFFLINE_CASH_WIRE_VERSION_V1,
+        eq_protocol_digest: artifacts().commit_wrapper_eq_protocol_digest,
+        ep_protocol_digest: artifacts().commit_wrapper_ep_protocol_digest,
+        semantic_digest: public_inputs.semantic_digest,
+        candidate_envelope_digest: public_inputs.candidate_envelope_digest,
+        commit_certificate_digest: public_inputs.commit_certificate_digest,
+        eq_deferred_audit: crate::zk::offline_cash_v1_poseidon::encode(Fp::from(0x71_u64)),
+        ep_deferred_audit: crate::zk::offline_cash_v1_poseidon::encode(Fq::from(0x72_u64)),
+        eq_proof: vec![0xE8],
+        ep_proof: vec![0xE9],
+        eq_history: eq_history_bytes(),
+        ep_history: ep_history_bytes(),
+    }
+}
+
+fn rebind_anchor_to_snapshot(
+    anchor: &mut DurabilityAnchorV1,
+    snapshot: &OfflineCashStateSnapshotV1,
+) {
+    anchor.statement = DurabilityAnchorStatementV1 {
+        version: snapshot.version,
+        lane: snapshot.state.lane.clone(),
+        state_commitment: snapshot.state.state_commitment,
+        hardware_epoch: snapshot.state.hardware_epoch,
+        device_policy_binding: snapshot.state.device_policy_binding,
+        state_nonce_commitment: snapshot.state.state_nonce_commitment,
+        logical_sequence: snapshot.state.logical_sequence,
+        journal_revision: snapshot.journal_revision,
+        snapshot_commitment: snapshot.snapshot_commitment,
+    };
 }
 
 fn reseal_snapshot(snapshot: &mut OfflineCashStateSnapshotV1) {
@@ -920,7 +1146,84 @@ fn aggregate_state_commitment_binds_typed_incarnation_and_hardware_profile() {
 }
 
 #[test]
-fn one_thousand_independent_credits_fold_without_a_history_cap() {
+fn receive_fold_late_authorization_failure_is_fully_atomic() {
+    let mut machine = rejecting_transition_machine(0);
+    for index in 0..3_u64 {
+        let (request, payment) = payment_stub(machine.state(), index);
+        let credit_id = CreditIdV1(payment.statement.lifecycle.credit_id);
+        machine
+            .acceptance_ticket_book
+            .preseed_consumed_payment_for_test(
+                request.clone(),
+                &payment,
+                indexed_digest(0x92, index),
+            )
+            .expect("capacity-backed consumed ticket");
+        let (staged, receipt) =
+            recoverable_stage_stub(machine.state(), request, payment, u128::from(index));
+        assert!(machine.pending_credits.insert(credit_id, staged).is_none());
+        assert!(
+            machine
+                .accepted_payment_receipts
+                .insert(credit_id, receipt)
+                .is_none()
+        );
+    }
+    machine
+        .acceptance_ticket_book
+        .finish_consumed_payment_preseed_for_test()
+        .expect("exact ticket meters");
+    machine.journal_revision = 3;
+    let snapshot_usage = receiver_snapshot_capacity_usage_v1(
+        &machine.pending_credits,
+        &machine.accepted_payment_receipts,
+        &machine.consumed_credits,
+    )
+    .expect("staged snapshot usage");
+    let maximum_committed_bytes = machine.acceptance_ticket_book.committed_inbox_bytes();
+    machine
+        .acceptance_ticket_book
+        .reconcile_receiver_snapshot_usage(
+            snapshot_usage.live_bytes,
+            snapshot_usage.retained_bytes,
+            maximum_committed_bytes,
+        )
+        .expect("materialize staged snapshot bytes");
+
+    let credit_id = *machine
+        .pending_credits
+        .keys()
+        .next()
+        .expect("staged credit");
+    let preview = machine
+        .preview_receive_fold(credit_id, digest(0x9A), 20_000)
+        .expect("receive preview");
+    let authorization = transition_authorization(&preview.transition);
+    let state_before = machine.state.clone();
+    let revision_before = machine.journal_revision;
+    let pending_before = machine.pending_credits.clone();
+    let replay_before = machine.consumed_credits.records();
+    let replay_root_before = machine.consumed_credits.root();
+    let ticket_book_before = machine.acceptance_ticket_book.clone();
+    let receipts_before = machine.accepted_payment_receipts.clone();
+
+    assert_eq!(
+        machine.receive_fold_prepared(preview, authorization),
+        Err(OfflineCashStateErrorV1::GuardRejected(
+            "rejected test transition".to_owned()
+        ))
+    );
+    assert_eq!(machine.state, state_before);
+    assert_eq!(machine.journal_revision, revision_before);
+    assert_eq!(machine.pending_credits, pending_before);
+    assert_eq!(machine.consumed_credits.records(), replay_before);
+    assert_eq!(machine.consumed_credits.root(), replay_root_before);
+    assert_eq!(machine.acceptance_ticket_book, ticket_book_before);
+    assert_eq!(machine.accepted_payment_receipts, receipts_before);
+}
+
+#[test]
+fn mocked_state_machine_folds_one_thousand_credits_and_builds_one_spend() {
     let mut machine = machine(0);
     machine.acceptance_ticket_book = OfflineCashAcceptanceTicketBookV1::new(512 * 1024 * 1024);
     let mut expected_replay_records = BTreeMap::new();
@@ -966,34 +1269,32 @@ fn one_thousand_independent_credits_fold_without_a_history_cap() {
         1_000
     );
 
-    let mut batch_index = 0_u64;
+    let mut fold_index = 0_u64;
     while !machine.pending_credits.is_empty() {
-        let credit_ids = machine
+        let credit_id = *machine
             .pending_credits
             .keys()
-            .copied()
-            .take(16)
-            .collect::<Vec<_>>();
+            .next()
+            .expect("staged credit");
         let preview = machine
-            .preview_receive_fold_batch(
-                &credit_ids,
-                indexed_digest(0x91, batch_index),
-                20_000 + batch_index,
+            .preview_receive_fold(
+                credit_id,
+                indexed_digest(0x91, fold_index),
+                20_000 + fold_index,
             )
-            .expect("fixed-width batch preview");
-        assert_eq!(usize::from(preview.active_count), credit_ids.len());
+            .expect("single-credit receive preview");
         let authorization = transition_authorization(&preview.transition);
         machine
-            .receive_fold_batch_prepared(preview, authorization)
-            .expect("authorized batch fold");
-        batch_index += 1;
+            .receive_fold_prepared(preview, authorization)
+            .expect("authorized receive fold");
+        fold_index += 1;
     }
 
-    assert_eq!(batch_index, 63);
+    assert_eq!(fold_index, 1_000);
     assert_eq!(machine.pending_credit_count(), 0);
     assert_eq!(machine.state().balance, 1_000);
-    assert_eq!(machine.state().logical_sequence, 63);
-    assert_eq!(machine.journal_revision(), 1_063);
+    assert_eq!(machine.state().logical_sequence, 1_000);
+    assert_eq!(machine.journal_revision(), 2_000);
     assert_eq!(machine.consumed_credits.len(), 1_000);
     assert_eq!(machine.accepted_payment_receipts.len(), 1_000);
     for (credit_id, envelope_digest) in &expected_replay_records {
@@ -1011,7 +1312,7 @@ fn one_thousand_independent_credits_fold_without_a_history_cap() {
     }
 
     let snapshot = machine.snapshot().expect("recoverable folded snapshot");
-    assert_eq!(snapshot.journal_revision, 1_063);
+    assert_eq!(snapshot.journal_revision, 2_000);
     assert_eq!(snapshot.consumed_credits.len(), 1_000);
     assert_eq!(snapshot.accepted_payment_receipts.len(), 1_000);
     for record in &snapshot.consumed_credits {
@@ -1023,7 +1324,7 @@ fn one_thousand_independent_credits_fold_without_a_history_cap() {
     let anchor = machine
         .seal_durability_anchor(vec![0xA1])
         .expect("hardware-sealed recovery anchor");
-    let restored = TestMachine::restore(
+    let mut restored = TestMachine::restore(
         snapshot,
         &anchor,
         OfflineCashStateProofReleaseV1::from_test_artifacts(artifacts()),
@@ -1031,7 +1332,7 @@ fn one_thousand_independent_credits_fold_without_a_history_cap() {
         AcceptingGuardVerifier,
     )
     .expect("recover complete aggregate state");
-    assert_eq!(restored.journal_revision(), 1_063);
+    assert_eq!(restored.journal_revision(), 2_000);
     assert_eq!(restored.consumed_credits.len(), 1_000);
     for (credit_id, envelope_digest) in expected_replay_records {
         assert_eq!(
@@ -1039,6 +1340,133 @@ fn one_thousand_independent_credits_fold_without_a_history_cap() {
             Some(envelope_digest)
         );
     }
+
+    const AGGREGATE_AMOUNT: u128 = 1_000;
+    let reservation_id = indexed_digest(0xE3, 1_000);
+    let (request, payment_template) =
+        payment_stub_with_amount(restored.state(), 1_000, AGGREGATE_AMOUNT);
+    let commit_evidence = payment_template.statement.commit_evidence;
+    let (prepared, preview) = prepared_send(
+        &restored,
+        request.clone(),
+        &payment_template,
+        reservation_id,
+    );
+    let (_, capability) = restored
+        .prepare_outgoing_candidate(prepared)
+        .expect("prepare aggregate send");
+    let candidate = restored
+        .persist_outgoing_candidate(&capability, transition_authorization(&preview).proof)
+        .expect("persist aggregate send proof");
+    let committed = restored
+        .commit_outgoing_candidate(capability, commit_certificate(&candidate, commit_evidence))
+        .expect("commit aggregate send");
+    assert_eq!(restored.state(), &preview.successor);
+    assert_eq!(restored.state().balance, 0);
+    assert_eq!(restored.state().logical_sequence, 1_001);
+    assert_eq!(restored.journal_revision(), 2_001);
+
+    let public_inputs = committed
+        .public_wrapper_inputs()
+        .expect("aggregate send public inputs");
+    let finalized = restored
+        .finalize_outgoing_candidate(
+            OfflineCashCommitWrapperProofV1 {
+                version: OFFLINE_CASH_WIRE_VERSION_V1,
+                eq_protocol_digest: artifacts().commit_wrapper_eq_protocol_digest,
+                ep_protocol_digest: artifacts().commit_wrapper_ep_protocol_digest,
+                semantic_digest: public_inputs.semantic_digest,
+                candidate_envelope_digest: public_inputs.candidate_envelope_digest,
+                commit_certificate_digest: public_inputs.commit_certificate_digest,
+                eq_deferred_audit: crate::zk::offline_cash_v1_poseidon::encode(Fp::from(0x71_u64)),
+                ep_deferred_audit: crate::zk::offline_cash_v1_poseidon::encode(Fq::from(0x72_u64)),
+                eq_proof: vec![0xE8],
+                ep_proof: vec![0xE9],
+                eq_history: eq_history_bytes(),
+                ep_history: ep_history_bytes(),
+            },
+            vec![0xEA],
+        )
+        .expect("finalize aggregate payment");
+    let payment = match &finalized.envelope {
+        OfflineCashOutgoingEnvelopeV1::Payment(payment) => payment,
+        OfflineCashOutgoingEnvelopeV1::Redemption(_) => {
+            panic!("aggregate send must expose one payment")
+        }
+    };
+    payment
+        .validate_shape_against(&request)
+        .expect("valid aggregate payment");
+    assert_eq!(payment.statement.amount, AGGREGATE_AMOUNT);
+    assert_eq!(payment.acceptance_intent.exact_amount, AGGREGATE_AMOUNT);
+    assert_eq!(payment.acceptance_ticket.exact_amount, AGGREGATE_AMOUNT);
+    assert_eq!(
+        payment.statement.lifecycle.operation_kind,
+        OfflineCashOperationKindV1::SendSplit
+    );
+    assert_eq!(
+        restored
+            .outgoing_candidate_journal()
+            .finalized_outbox_count(),
+        1
+    );
+    assert_eq!(restored.state().balance, 0);
+    assert_eq!(
+        restored
+            .expose_outgoing_candidate(reservation_id)
+            .expect("expose aggregate payment"),
+        finalized.retry_bytes()
+    );
+    let payment_bytes = norito::encode_canonical(payment).expect("canonical aggregate payment");
+    assert_eq!(finalized.retry_bytes(), payment_bytes.as_slice());
+    assert!(
+        finalized.retry_bytes().len()
+            <= iroha_data_model::offline::OFFLINE_CASH_PAYMENT_MAX_BYTES_V1
+    );
+}
+
+#[test]
+fn prepared_send_rejects_commit_evidence_substitution_after_effect_binding() {
+    let machine = machine(10);
+    let (request, payment) = payment_stub_with_amount(machine.state(), 10_001, 3);
+    let reservation_id = indexed_digest(0xE3, 10_001);
+    prepared_send(&machine, request.clone(), &payment, reservation_id);
+
+    let substituted_commit_evidence =
+        OfflineCashCommitEvidenceV1::TrustedTime(OfflineCashTrustedCommitTimeV1 {
+            time_evidence_commitment: digest(0xEE),
+        });
+    assert_ne!(
+        substituted_commit_evidence,
+        payment.statement.commit_evidence
+    );
+    let mut substituted_statement = payment.statement.clone();
+    substituted_statement.commit_evidence = substituted_commit_evidence;
+    let substituted_statement = substituted_statement
+        .seal_credit_id()
+        .expect("substituted statement credit id");
+    assert_eq!(substituted_statement.amount, payment.statement.amount);
+    assert_eq!(substituted_statement.lifecycle, payment.statement.lifecycle);
+    assert_ne!(
+        substituted_statement
+            .canonical_digest()
+            .expect("substituted statement digest"),
+        payment
+            .statement
+            .canonical_digest()
+            .expect("original statement digest")
+    );
+
+    assert_eq!(
+        prepared_send_with_commit_evidence(
+            &machine,
+            request,
+            &payment,
+            reservation_id,
+            substituted_commit_evidence,
+        ),
+        Err(OfflineCashStateErrorV1::InvalidCandidateStage)
+    );
 }
 
 #[test]
@@ -1124,7 +1552,7 @@ fn receiver_snapshot_meter_covers_max_guard_and_collection_framing() {
 }
 
 #[test]
-fn fixed_batch_width_is_operation_shape_not_backlog_admission() {
+fn receive_backlog_has_no_count_based_admission_limit() {
     let mut machine = machine(5);
     for index in 0..17_u64 {
         let (request, payment) = payment_stub(machine.state(), index);
@@ -1133,14 +1561,15 @@ fn fixed_batch_width_is_operation_shape_not_backlog_admission() {
         let staged = stage_stub(machine.state(), request, payment, envelope_digest);
         machine.pending_credits.insert(credit_id, staged);
     }
-    let all = machine.pending_credits.keys().copied().collect::<Vec<_>>();
-    assert_eq!(
-        machine.preview_receive_fold_batch(&all, digest(0xA1), 30_000),
-        Err(OfflineCashStateErrorV1::InvalidPeerCredit)
-    );
-    machine
-        .preview_receive_fold_batch(&all[..16], digest(0xA2), 30_000)
-        .expect("one fixed-shape operation accepts sixteen from a larger backlog");
+    for (index, credit_id) in machine.pending_credits.keys().copied().enumerate() {
+        machine
+            .preview_receive_fold(
+                credit_id,
+                indexed_digest(0xA1, index as u64),
+                30_000 + index as u64,
+            )
+            .expect("every staged credit remains independently foldable");
+    }
     assert_eq!(machine.pending_credit_count(), 17);
 }
 
@@ -1242,6 +1671,322 @@ fn prepare_atomically_reserves_capacity_and_snapshot_rejects_torn_outbox() {
 }
 
 #[test]
+fn mock_candidate_recovery_commits_one_successor_and_preserves_retry_bytes() {
+    let mut origin = machine(10);
+    let reservation_id = digest(0xEA);
+    let commit_evidence =
+        OfflineCashCommitEvidenceV1::TrustedTime(OfflineCashTrustedCommitTimeV1 {
+            time_evidence_commitment: digest(0xD3),
+        });
+    let (prepared, preview) = prepared_redemption(
+        &origin,
+        reservation_id,
+        iroha_data_model::offline::OFFLINE_CASH_REDEMPTION_OUTBOX_MIN_BYTES_V1,
+    );
+    let predecessor = origin.state().clone();
+    let predecessor_revision = origin.journal_revision();
+    let (_, initial_capability) = origin
+        .prepare_outgoing_candidate(prepared.clone())
+        .expect("prepare before candidate persistence");
+    let prepared_snapshot = origin.snapshot().expect("prepared recovery snapshot");
+    let prepared_anchor = origin
+        .seal_durability_anchor(vec![0xA1])
+        .expect("prepared recovery anchor");
+    origin = TestMachine::restore(
+        prepared_snapshot,
+        &prepared_anchor,
+        origin.proof_release,
+        AcceptingRecursiveVerifier,
+        AcceptingGuardVerifier,
+    )
+    .expect("recover prepared operation before proving");
+    let recovered_prepared_capability = origin
+        .recover_outgoing_commit_capability()
+        .expect("reissue prepared commit authority");
+    assert_eq!(initial_capability, recovered_prepared_capability);
+    let candidate = origin
+        .persist_outgoing_candidate(
+            &recovered_prepared_capability,
+            transition_authorization(&preview).proof,
+        )
+        .expect("persist candidate before simulated crash");
+    assert_eq!(origin.state(), &predecessor);
+    assert_eq!(origin.journal_revision(), predecessor_revision);
+    assert!(matches!(
+        origin.outgoing_candidate_journal.stage(),
+        OfflineCashOutgoingJournalStageV1::Candidate(existing) if existing == &candidate
+    ));
+
+    let candidate_snapshot = origin.snapshot().expect("candidate snapshot");
+    let candidate_anchor = origin
+        .seal_durability_anchor(vec![0xA1])
+        .expect("candidate anchor");
+    let mut recovered = TestMachine::restore(
+        candidate_snapshot.clone(),
+        &candidate_anchor,
+        origin.proof_release,
+        AcceptingRecursiveVerifier,
+        AcceptingGuardVerifier,
+    )
+    .expect("first candidate recovery");
+    let recovered_again = TestMachine::restore(
+        candidate_snapshot.clone(),
+        &candidate_anchor,
+        origin.proof_release,
+        AcceptingRecursiveVerifier,
+        AcceptingGuardVerifier,
+    )
+    .expect("repeated candidate recovery");
+    assert_eq!(
+        recovered.snapshot().expect("first recovered snapshot"),
+        candidate_snapshot
+    );
+    assert_eq!(
+        recovered_again
+            .snapshot()
+            .expect("second recovered snapshot"),
+        candidate_snapshot
+    );
+
+    let recovered_capability = recovered
+        .recover_outgoing_commit_capability()
+        .expect("recover candidate commit authority");
+    let replay_capability = recovered
+        .recover_outgoing_commit_capability()
+        .expect("idempotently recover candidate commit authority");
+    assert_eq!(recovered_capability, replay_capability);
+    let certificate = commit_certificate(&candidate, commit_evidence);
+    let committed = recovered
+        .commit_outgoing_candidate(recovered_capability, certificate.clone())
+        .expect("commit the recovered candidate once");
+    assert_eq!(recovered.state(), &preview.successor);
+    assert_eq!(
+        recovered.journal_revision(),
+        preview.proof_statement.journal_revision_after
+    );
+    assert_eq!(
+        recovered.state().logical_sequence,
+        predecessor.logical_sequence + 1
+    );
+    let after_commit = recovered.snapshot().expect("committed snapshot");
+    assert_eq!(
+        recovered.commit_outgoing_candidate(replay_capability, certificate),
+        Err(OfflineCashStateErrorV1::InvalidCandidateStage)
+    );
+    assert_eq!(
+        recovered
+            .snapshot()
+            .expect("snapshot after rejected replay"),
+        after_commit,
+        "recovered commit authority cannot install the successor twice"
+    );
+
+    let committed_anchor = recovered
+        .seal_durability_anchor(vec![0xA1])
+        .expect("committed anchor");
+    let mut finalize_after_recovery = TestMachine::restore(
+        after_commit.clone(),
+        &committed_anchor,
+        origin.proof_release,
+        AcceptingRecursiveVerifier,
+        AcceptingGuardVerifier,
+    )
+    .expect("recover committed candidate for wrapper generation");
+    let mut finalize_after_repeated_recovery = TestMachine::restore(
+        after_commit,
+        &committed_anchor,
+        origin.proof_release,
+        AcceptingRecursiveVerifier,
+        AcceptingGuardVerifier,
+    )
+    .expect("repeat committed-candidate recovery");
+    let wrapper_proof = commit_wrapper_proof(&committed);
+    let retry_metadata = vec![0xEB; 32];
+    let finalized = finalize_after_recovery
+        .finalize_outgoing_candidate(wrapper_proof.clone(), retry_metadata.clone())
+        .expect("finalize recovered candidate");
+    let repeated_finalized = finalize_after_repeated_recovery
+        .finalize_outgoing_candidate(wrapper_proof, retry_metadata)
+        .expect("repeat deterministic finalization after recovery");
+    assert_eq!(finalized, repeated_finalized);
+    assert_eq!(finalized.retry_bytes(), repeated_finalized.retry_bytes());
+    assert_eq!(
+        finalize_after_recovery
+            .outgoing_candidate_journal
+            .finalized_outbox_count(),
+        1
+    );
+    assert_eq!(
+        finalize_after_recovery
+            .expose_outgoing_candidate(reservation_id)
+            .expect("first exposure"),
+        finalized.retry_bytes()
+    );
+    assert_eq!(
+        finalize_after_recovery
+            .expose_outgoing_candidate(reservation_id)
+            .expect("idempotent exposure"),
+        finalized.retry_bytes()
+    );
+
+    let finalized_snapshot = finalize_after_recovery
+        .snapshot()
+        .expect("finalized snapshot");
+    let finalized_anchor = finalize_after_recovery
+        .seal_durability_anchor(vec![0xA1])
+        .expect("finalized anchor");
+    let mut final_recovery = TestMachine::restore(
+        finalized_snapshot.clone(),
+        &finalized_anchor,
+        origin.proof_release,
+        AcceptingRecursiveVerifier,
+        AcceptingGuardVerifier,
+    )
+    .expect("recover finalized envelope");
+    assert_eq!(
+        final_recovery
+            .expose_outgoing_candidate(reservation_id)
+            .expect("exposure after final recovery"),
+        finalized.retry_bytes()
+    );
+    assert_eq!(final_recovery.state(), &preview.successor);
+    assert_eq!(final_recovery.journal_revision(), predecessor_revision + 1);
+    assert_eq!(
+        final_recovery.prepare_outgoing_candidate(prepared),
+        Err(OfflineCashStateErrorV1::InvalidCandidateStage)
+    );
+    assert_eq!(
+        final_recovery
+            .snapshot()
+            .expect("single-successor snapshot"),
+        finalized_snapshot
+    );
+}
+
+#[test]
+fn mock_candidate_restore_rejects_torn_and_corrupt_boundaries() {
+    let mut machine = machine(10);
+    let (prepared, preview) = prepared_redemption(
+        &machine,
+        digest(0xEC),
+        iroha_data_model::offline::OFFLINE_CASH_REDEMPTION_OUTBOX_MIN_BYTES_V1,
+    );
+    let (_, capability) = machine
+        .prepare_outgoing_candidate(prepared)
+        .expect("prepare candidate boundary");
+    let candidate = machine
+        .persist_outgoing_candidate(&capability, transition_authorization(&preview).proof)
+        .expect("persist candidate boundary");
+    let snapshot = machine.snapshot().expect("candidate snapshot");
+    let anchor = machine
+        .seal_durability_anchor(vec![0xA1])
+        .expect("candidate anchor");
+    TestMachine::restore(
+        snapshot.clone(),
+        &anchor,
+        machine.proof_release,
+        AcceptingRecursiveVerifier,
+        AcceptingGuardVerifier,
+    )
+    .expect("uncorrupted candidate restores");
+
+    let mut torn_successor = snapshot.clone();
+    torn_successor.state = preview.successor.clone();
+    torn_successor.journal_revision = preview.proof_statement.journal_revision_after;
+    reseal_snapshot(&mut torn_successor);
+    let mut torn_successor_anchor = anchor.clone();
+    rebind_anchor_to_snapshot(&mut torn_successor_anchor, &torn_successor);
+    assert!(matches!(
+        TestMachine::restore(
+            torn_successor,
+            &torn_successor_anchor,
+            machine.proof_release,
+            AcceptingRecursiveVerifier,
+            AcceptingGuardVerifier,
+        ),
+        Err(OfflineCashStateErrorV1::SnapshotIntegrity)
+    ));
+
+    let committed_record = CommittedOutgoingCandidateV1::from_hardware_commit(
+        candidate.clone(),
+        commit_certificate(
+            &candidate,
+            OfflineCashCommitEvidenceV1::TrustedTime(OfflineCashTrustedCommitTimeV1 {
+                time_evidence_commitment: digest(0xD3),
+            }),
+        ),
+    )
+    .expect("construct committed terminal record");
+    let mut committed_journal = OfflineCashOutgoingCandidateJournalV1::default();
+    committed_journal
+        .prepare(candidate.prepared.clone())
+        .expect("install prepared record before torn commit");
+    committed_journal
+        .persist_candidate(candidate.clone())
+        .expect("install candidate record before torn commit");
+    committed_journal
+        .commit(committed_record)
+        .expect("install committed record without advancing aggregate head");
+    let mut torn_commit = snapshot.clone();
+    torn_commit.outgoing_candidate_journal = committed_journal;
+    reseal_snapshot(&mut torn_commit);
+    let mut torn_commit_anchor = anchor.clone();
+    rebind_anchor_to_snapshot(&mut torn_commit_anchor, &torn_commit);
+    assert!(matches!(
+        TestMachine::restore(
+            torn_commit,
+            &torn_commit_anchor,
+            machine.proof_release,
+            AcceptingRecursiveVerifier,
+            AcceptingGuardVerifier,
+        ),
+        Err(OfflineCashStateErrorV1::SnapshotIntegrity)
+    ));
+
+    let mut corrupt_candidate = candidate.clone();
+    corrupt_candidate.candidate_proof.eq_proof[0] ^= 0x01;
+    let mut corrupt_journal = OfflineCashOutgoingCandidateJournalV1::default();
+    corrupt_journal
+        .prepare(corrupt_candidate.prepared.clone())
+        .expect("install forged prepare record");
+    corrupt_journal
+        .persist_candidate(corrupt_candidate)
+        .expect("install forged candidate record");
+    let mut corrupt_proof = snapshot.clone();
+    corrupt_proof.outgoing_candidate_journal = corrupt_journal;
+    reseal_snapshot(&mut corrupt_proof);
+    let mut corrupt_proof_anchor = anchor.clone();
+    rebind_anchor_to_snapshot(&mut corrupt_proof_anchor, &corrupt_proof);
+    assert!(matches!(
+        TestMachine::restore(
+            corrupt_proof,
+            &corrupt_proof_anchor,
+            machine.proof_release,
+            AcceptingRecursiveVerifier,
+            AcceptingGuardVerifier,
+        ),
+        Err(OfflineCashStateErrorV1::SnapshotIntegrity)
+    ));
+
+    let mut missing_reservation = snapshot;
+    missing_reservation.sender_outbox_capacity =
+        OfflineCashSenderOutboxCapacityV1::new(machine.sender_outbox_capacity.total_outbox_bytes());
+    reseal_snapshot(&mut missing_reservation);
+    let mut missing_reservation_anchor = anchor;
+    rebind_anchor_to_snapshot(&mut missing_reservation_anchor, &missing_reservation);
+    assert!(matches!(
+        TestMachine::restore(
+            missing_reservation,
+            &missing_reservation_anchor,
+            machine.proof_release,
+            AcceptingRecursiveVerifier,
+            AcceptingGuardVerifier,
+        ),
+        Err(OfflineCashStateErrorV1::SnapshotIntegrity)
+    ));
+}
+
+#[test]
 fn hardware_commit_atomically_installs_successor_and_final_retry_state() {
     let mut machine = machine(10);
     let reservation_bytes = iroha_data_model::offline::OFFLINE_CASH_REDEMPTION_OUTBOX_MIN_BYTES_V1;
@@ -1256,7 +2001,12 @@ fn hardware_commit_atomically_installs_successor_and_final_retry_state() {
     let candidate = machine
         .persist_outgoing_candidate(&capability, candidate_proof)
         .expect("persist candidate");
-    let certificate = commit_certificate(&candidate);
+    let certificate = commit_certificate(
+        &candidate,
+        OfflineCashCommitEvidenceV1::TrustedTime(OfflineCashTrustedCommitTimeV1 {
+            time_evidence_commitment: digest(0xD3),
+        }),
+    );
     let committed = machine
         .commit_outgoing_candidate(capability, certificate)
         .expect("atomic hardware commit");

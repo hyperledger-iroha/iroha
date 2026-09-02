@@ -9,8 +9,7 @@ final class OfflineCashWalletV1Tests: XCTestCase {
     let provider = FakeProvider(fixture: fixture)
     let wallet = try OfflineCashWalletV1.open(provider: provider)
 
-    let authorization = try wallet.prepareAcceptanceIntentAuthorization(
-      request: fixture.request, exactAmount: fixture.amount)
+    let authorization = try wallet.prepareAcceptanceIntentAuthorization(request: fixture.request)
     XCTAssertFalse(provider.didReserveInbox)
 
     let ticket = try wallet.issueAcceptanceTicket(
@@ -21,56 +20,44 @@ final class OfflineCashWalletV1Tests: XCTestCase {
     XCTAssertEqual(ticket.recipientOneTimeKey, fixture.ticket.recipientOneTimeKey)
   }
 
-  func testOpenReceiveDoesNotImposeACumulativePaymentLimit() throws {
-    let policy = try OfflineCashAmountPolicyV1(
-      minimumAmount: OfflineCashUInt128V1(1), maximumAmount: OfflineCashUInt128V1(10_000))
-    let mode = OfflineCashPaymentRequestModeV1.openReceive(perPayment: policy)
-    XCTAssertTrue(mode.accepts(OfflineCashUInt128V1(1)))
-    XCTAssertTrue(mode.accepts(OfflineCashUInt128V1(10_000)))
-    XCTAssertFalse(mode.accepts(OfflineCashUInt128V1(10_001)))
-  }
-
-  func testReceiveFoldBatchIsExactlyOneThroughSixteen() throws {
+  func testReceiveFoldConsumesExactlyOneCredit() throws {
     let fixture = try Fixture()
     let provider = FakeProvider(fixture: fixture)
-    provider.pendingCreditWatermarkValue = OfflineCashUInt128V1(16)
-    provider.foldResults = [(16, try fixture.foldedStateBytes(sequence: 1, commitmentByte: 54))]
+    provider.pendingCreditWatermarkValue = OfflineCashUInt128V1(1)
+    provider.foldResults = [try fixture.foldedStateBytes(sequence: 1, commitmentByte: 54)]
     let wallet = try OfflineCashWalletV1.open(provider: provider)
-    let result = try XCTUnwrap(wallet.foldNextReceiveBatch())
-    XCTAssertEqual(result.creditCount, 16)
-    XCTAssertThrowsError(try wallet.foldNextReceiveBatch(maximumCreditCount: 17))
+    let result = try XCTUnwrap(wallet.foldNextReceive())
+    XCTAssertEqual(result.aggregateState.sequence, OfflineCashUInt128V1(1))
   }
 
-  func testCommitPaymentSynchronouslyDrainsMoreThanOneBatchBeforeCommit() throws {
+  func testCommitPaymentSynchronouslyDrainsEveryPendingCreditBeforeCommit() throws {
     let fixture = try Fixture()
     let provider = FakeProvider(fixture: fixture)
     provider.pendingCreditWatermarkValue = OfflineCashUInt128V1(39)
-    provider.foldResults = [
-      (16, try fixture.foldedStateBytes(sequence: 1, commitmentByte: 55)),
-      (16, try fixture.foldedStateBytes(sequence: 2, commitmentByte: 56)),
-      (7, try fixture.foldedStateBytes(sequence: 3, commitmentByte: 57)),
-    ]
+    provider.foldResults = try (1...39).map {
+      try fixture.foldedStateBytes(sequence: UInt64($0), commitmentByte: UInt8(54 + $0))
+    }
     let wallet = try OfflineCashWalletV1.open(provider: provider)
 
     XCTAssertThrowsError(
       try wallet.commitPayment(
         request: fixture.request, authorization: fixture.authorization, ticket: fixture.ticket))
-    XCTAssertEqual(provider.foldedCreditCounts, [16, 16, 7])
-    XCTAssertEqual(provider.events, ["fold:16", "fold:16", "fold:7", "fold:none", "commit"])
+    XCTAssertEqual(provider.foldCount, 39)
+    XCTAssertEqual(provider.events.last, "commit")
     XCTAssertEqual(
       provider.observedWatermarks,
-      Array(repeating: OfflineCashUInt128V1(39), count: 4))
+      Array(repeating: OfflineCashUInt128V1(39), count: 40))
   }
 
-  func testZeroCreditFoldWithASuccessorFailsInsteadOfSpinning() throws {
+  func testNonSuccessorFoldStateFailsInsteadOfSpinning() throws {
     let fixture = try Fixture()
     let provider = FakeProvider(fixture: fixture)
     provider.pendingCreditWatermarkValue = OfflineCashUInt128V1(1)
-    provider.foldResults = [(0, fixture.stateBytes)]
+    provider.foldResults = [fixture.stateBytes]
     let wallet = try OfflineCashWalletV1.open(provider: provider)
 
     XCTAssertThrowsError(try wallet.drainStagedCredits())
-    XCTAssertEqual(provider.events, ["fold:0"])
+    XCTAssertEqual(provider.events, ["fold"])
   }
 
   func testStageMintCreditUsesTheAuthorizationSealedCreditID() throws {
@@ -94,10 +81,9 @@ final class OfflineCashWalletV1Tests: XCTestCase {
     let fixture = try Fixture()
     let provider = FakeProvider(fixture: fixture)
     provider.pendingCreditWatermarkValue = OfflineCashUInt128V1(17)
-    provider.foldResults = [
-      (16, try fixture.foldedStateBytes(sequence: 1, commitmentByte: 58)),
-      (1, try fixture.foldedStateBytes(sequence: 2, commitmentByte: 59)),
-    ]
+    provider.foldResults = try (1...17).map {
+      try fixture.foldedStateBytes(sequence: UInt64($0), commitmentByte: UInt8(57 + $0))
+    }
     let rotation = try fixture.rotation(generation: 2)
     provider.rotationQualification = rotation.qualification
     provider.rotationStateBytes = rotation.stateBytes
@@ -105,8 +91,8 @@ final class OfflineCashWalletV1Tests: XCTestCase {
 
     let result = try wallet.rotateHardwareEpoch()
 
-    XCTAssertEqual(provider.foldedCreditCounts, [16, 1])
-    XCTAssertEqual(provider.events, ["fold:16", "fold:1", "fold:none", "rotate"])
+    XCTAssertEqual(provider.foldCount, 17)
+    XCTAssertEqual(provider.events.last, "rotate")
     XCTAssertTrue(result.sequence.isZero)
     XCTAssertEqual(result.hardwareEpochID, rotation.qualification.credential.hardwareEpochID)
     XCTAssertEqual(
@@ -133,8 +119,8 @@ private final class FakeProvider: OfflineCashHardwareProviderV1 {
   var didReserveInbox = false
   var didStageMintCredit = false
   var pendingCreditWatermarkValue = OfflineCashUInt128V1.zero
-  var foldResults: [(UInt8, Data?)] = []
-  var foldedCreditCounts: [UInt8] = []
+  var foldResults: [Data] = []
+  var foldCount = 0
   var observedWatermarks: [OfflineCashUInt128V1] = []
   var events: [String] = []
   var rotationQualification: OfflineCashHardwareQualificationV1?
@@ -149,7 +135,7 @@ private final class FakeProvider: OfflineCashHardwareProviderV1 {
   func recoverAggregateState() throws -> Data { fixture.stateBytes }
 
   func createPaymentRequest(
-    recipient: OfflineCashAccountIDV1, mode: OfflineCashPaymentRequestModeV1,
+    recipient: OfflineCashAccountIDV1, amount: OfflineCashUInt128V1,
     validityWindowMS: UInt64
   ) throws -> Data {
     try OfflineCashNoritoV1.encodePaymentRequestShape(fixture.request)
@@ -218,18 +204,17 @@ private final class FakeProvider: OfflineCashHardwareProviderV1 {
     pendingCreditWatermarkValue
   }
 
-  func foldNextReceiveBatch(
-    upToInclusive watermark: OfflineCashUInt128V1,
-    maximumCreditCount: UInt8
-  ) throws -> (creditCount: UInt8, aggregateState: Data?) {
+  func foldNextReceive(
+    upToInclusive watermark: OfflineCashUInt128V1
+  ) throws -> Data? {
     observedWatermarks.append(watermark)
     guard !foldResults.isEmpty else {
       events.append("fold:none")
-      return (0, nil)
+      return nil
     }
     let result = foldResults.removeFirst()
-    if result.0 > 0 { foldedCreditCounts.append(result.0) }
-    events.append("fold:\(result.0)")
+    foldCount += 1
+    events.append("fold")
     return result
   }
 
@@ -302,14 +287,11 @@ private struct Fixture {
 
     let recipient = try OfflineCashAccountIDV1(
       "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
-    let mode = OfflineCashPaymentRequestModeV1.openReceive(
-      perPayment: try OfflineCashAmountPolicyV1(
-        minimumAmount: OfflineCashUInt128V1(1), maximumAmount: OfflineCashUInt128V1(1_000)))
     let requestDigest = Fixture.digest(20)
     request = try OfflineCashPaymentRequestV1(
       releaseID: releaseID, networkID: networkID, asset: asset,
       assetIncarnation: incarnation, scale: 4, liabilityPoolID: state.liabilityPoolID,
-      recipient: recipient, requestMode: mode, hardwareCredential: credential,
+      recipient: recipient, amount: amount, hardwareCredential: credential,
       requestID: Fixture.digest(21), issuedAtMS: 100, expiresAtMS: 200,
       signature: signature)
     let intent = try OfflineCashAcceptanceIntentV1(
@@ -329,7 +311,7 @@ private struct Fixture {
     ticket = try OfflineCashAcceptanceTicketV1(
       networkID: networkID, requestID: request.requestID, requestDigest: requestDigest,
       acceptanceTicketID: Fixture.digest(33), asset: asset, assetIncarnation: incarnation,
-      scale: 4, requestMode: mode, intentDigest: Fixture.digest(34), exactAmount: amount,
+      scale: 4, intentDigest: Fixture.digest(34), exactAmount: amount,
       reservedInboxBytes: 8_960,
       recipientOneTimeKey: OfflineCashX25519PublicKeyV1(rawBytes: Fixture.digest(35)),
       hardwareProfileID: profileID, policyEpoch: 1, issuedAtMS: 110,

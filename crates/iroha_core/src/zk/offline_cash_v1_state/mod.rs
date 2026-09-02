@@ -10,7 +10,7 @@ mod batch;
 mod candidate_lifecycle;
 mod sparse_merkle;
 
-pub use batch::{CreditFoldBatchPreviewV1, CreditFoldBatchSlotPreviewV1};
+pub use batch::{ReceiveFoldCreditPreviewV1, ReceiveFoldPreviewV1};
 pub use candidate_lifecycle::{
     AcceptanceTicketNoCommitClosureOutcomeV1, AcceptanceTicketNoCommitRecoveryOutcomeV1,
     AcceptanceTicketReservationOutcomeV1, AcceptanceTicketUseOutcomeV1,
@@ -471,8 +471,8 @@ pub enum OfflineCashTransitionKindV1 {
     MintFold,
     /// Split one receiver-bound peer credit from the aggregate.
     SendSplit,
-    /// Fold one through sixteen durably staged peer credits into the aggregate.
-    ReceiveFoldBatch,
+    /// Fold one durably staged peer credit into the aggregate.
+    ReceiveFold,
     /// Split one chain-facing redemption voucher from the aggregate.
     RedeemSplit,
     /// Recursively bridge the unchanged aggregate into a newly governed verifier suite.
@@ -514,10 +514,6 @@ pub struct TransitionProofStatementV1 {
     pub precommit_binding_digest: DigestV1,
     /// Authenticated verifier-bridge authorization, nonzero only for `SuiteUpgrade`.
     pub suite_upgrade_authorization_digest: DigestV1,
-    /// Number of active slots in the fixed sixteen-slot receive relation.
-    pub receive_active_count: u8,
-    /// Binding of every active/padded receive slot and replay update.
-    pub receive_batch_binding_digest: DigestV1,
     /// Authenticated proof release carried by the aggregate state.
     pub release_id: DigestV1,
     /// Exact asset incarnation carried by the aggregate state.
@@ -714,8 +710,6 @@ pub(crate) struct TransitionAuxiliaryBindingsV1 {
     pub(crate) lifecycle_binding_digest: DigestV1,
     pub(crate) precommit_binding_digest: DigestV1,
     pub(crate) suite_upgrade_authorization_digest: DigestV1,
-    pub(crate) receive_active_count: u8,
-    pub(crate) receive_batch_binding_digest: DigestV1,
 }
 
 /// Exact private nonmembership-and-insert witness for one consumed credit.
@@ -1698,7 +1692,7 @@ where
     /// Select the deterministic prefix of staged credits needed to cover `amount`.
     ///
     /// Wallet orchestration calls this before a send or redemption, then drains the returned
-    /// credits through as many fixed-width [`Self::receive_fold_batch`] transitions as needed.
+    /// credits through repeated [`Self::receive_fold`] transitions.
     /// The selection is ordered by credit ID and has no protocol count ceiling: a larger backlog
     /// changes only local work and latency. An empty result means the current aggregate balance
     /// already covers the amount.
@@ -2002,45 +1996,6 @@ where
             journal_revision,
             acknowledgement: durable_acknowledgement,
         })
-    }
-
-    /// Preview folding one staged credit into the aggregate balance.
-    pub fn preview_receive_fold(
-        &self,
-        credit_id: CreditIdV1,
-        successor_state_nonce_commitment: DigestV1,
-        trusted_commit_time_ms: u64,
-    ) -> Result<CreditFoldPreviewV1, OfflineCashStateErrorV1> {
-        let batch = self.preview_receive_fold_batch(
-            &[credit_id],
-            successor_state_nonce_commitment,
-            trusted_commit_time_ms,
-        )?;
-        let replay_insert_witness = batch.slots[0]
-            .as_ref()
-            .expect("one-credit batch has one active slot")
-            .replay_insert_witness
-            .clone();
-        Ok(CreditFoldPreviewV1 {
-            transition: batch.transition,
-            replay_insert_witness,
-        })
-    }
-
-    /// Verify and atomically fold one staged credit into the current aggregate.
-    pub fn receive_fold(
-        &mut self,
-        credit_id: CreditIdV1,
-        successor_state_nonce_commitment: DigestV1,
-        trusted_commit_time_ms: u64,
-        authorization: TransitionAuthorizationV1,
-    ) -> Result<OfflineCashStateV1, OfflineCashStateErrorV1> {
-        self.receive_fold_batch(
-            &[credit_id],
-            successor_state_nonce_commitment,
-            trusted_commit_time_ms,
-            authorization,
-        )
     }
 
     /// Preview exact-next hardware epoch rotation without changing balance or replay state.
@@ -2579,19 +2534,11 @@ where
         {
             return Err(OfflineCashStateErrorV1::InvalidMintCredit);
         }
-        let is_send = kind == OfflineCashTransitionKindV1::SendSplit;
-        if is_send != (peer_credit_id != [0; 32]) || is_send != (peer_recipient_lane_id != [0; 32])
-        {
-            return Err(OfflineCashStateErrorV1::InvalidPeerCredit);
-        }
-        let is_receive = kind == OfflineCashTransitionKindV1::ReceiveFoldBatch;
-        if is_receive
-            != (auxiliary.receive_active_count > 0
-                && auxiliary.receive_active_count <= 16
-                && auxiliary.receive_batch_binding_digest != [0; 32])
-            || (!is_receive
-                && (auxiliary.receive_active_count != 0
-                    || auxiliary.receive_batch_binding_digest != [0; 32]))
+        let is_peer = matches!(
+            kind,
+            OfflineCashTransitionKindV1::SendSplit | OfflineCashTransitionKindV1::ReceiveFold
+        );
+        if is_peer != (peer_credit_id != [0; 32]) || is_peer != (peer_recipient_lane_id != [0; 32])
         {
             return Err(OfflineCashStateErrorV1::InvalidPeerCredit);
         }
@@ -2645,7 +2592,7 @@ where
             kind,
             amount: match kind {
                 OfflineCashTransitionKindV1::MintFold
-                | OfflineCashTransitionKindV1::ReceiveFoldBatch => successor
+                | OfflineCashTransitionKindV1::ReceiveFold => successor
                     .balance
                     .checked_sub(self.state.balance)
                     .ok_or(OfflineCashStateErrorV1::StateInvariant)?,
@@ -2666,8 +2613,6 @@ where
             lifecycle_binding_digest,
             precommit_binding_digest: auxiliary.precommit_binding_digest,
             suite_upgrade_authorization_digest: auxiliary.suite_upgrade_authorization_digest,
-            receive_active_count: auxiliary.receive_active_count,
-            receive_batch_binding_digest: auxiliary.receive_batch_binding_digest,
             release_id: self.state.release_id,
             asset_incarnation: self.state.asset_incarnation,
             liability_pool_id: self.state.liability_pool_id,
@@ -2940,8 +2885,6 @@ fn bootstrap_guard_context(
         precommit_binding_digest: [0; 32],
         sender_one_time_authorization_digest: [0; 32],
         suite_upgrade_authorization_digest: [0; 32],
-        receive_active_count: 0,
-        receive_batch_binding_digest: [0; 32],
         transition_intent_digest,
         transition_effect_digest,
         recovery_record_digest,
@@ -2987,7 +2930,7 @@ fn transition_guard_context(
     };
     let empty = artifacts.canonical_empty_effect_digest;
     let (durable_inbox_effect_digest, durable_outbox_effect_digest) = match statement.kind {
-        OfflineCashTransitionKindV1::MintFold | OfflineCashTransitionKindV1::ReceiveFoldBatch => (
+        OfflineCashTransitionKindV1::MintFold | OfflineCashTransitionKindV1::ReceiveFold => (
             canonical_sha256_digest(DURABLE_INBOX_EFFECT_DOMAIN, &durable_effect)?,
             empty,
         ),
@@ -3006,8 +2949,6 @@ fn transition_guard_context(
         precommit_binding_digest: statement.precommit_binding_digest,
         sender_one_time_authorization_digest: [0; 32],
         suite_upgrade_authorization_digest: statement.suite_upgrade_authorization_digest,
-        receive_active_count: statement.receive_active_count,
-        receive_batch_binding_digest: statement.receive_batch_binding_digest,
         transition_intent_digest,
         transition_effect_digest: statement.effect_digest,
         recovery_record_digest,
@@ -3050,8 +2991,6 @@ fn bootstrap_state_public_inputs(
         mint_finality_proof_binding_digest: [0; 32],
         peer_credit_id: [0; 32],
         peer_recipient_lane_id: [0; 32],
-        receive_active_count: 0,
-        receive_batch_binding_digest: [0; 32],
         lifecycle_binding_digest: guard.lifecycle_binding_digest,
         precommit_binding_digest: [0; 32],
         suite_upgrade_authorization_digest: [0; 32],
@@ -3111,8 +3050,6 @@ fn transition_state_public_inputs(
         mint_finality_proof_binding_digest: statement.mint_finality_proof_binding_digest,
         peer_credit_id: statement.peer_credit_id,
         peer_recipient_lane_id: statement.peer_recipient_lane_id,
-        receive_active_count: statement.receive_active_count,
-        receive_batch_binding_digest: statement.receive_batch_binding_digest,
         lifecycle_binding_digest: statement.lifecycle_binding_digest,
         precommit_binding_digest: statement.precommit_binding_digest,
         suite_upgrade_authorization_digest: statement.suite_upgrade_authorization_digest,

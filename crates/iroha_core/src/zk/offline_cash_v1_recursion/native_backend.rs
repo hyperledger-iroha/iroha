@@ -1677,8 +1677,8 @@ mod tests {
             OfflineCashAcceptanceTicketV1, OfflineCashDevicePublicKeyV1,
             OfflineCashDeviceSignatureV1, OfflineCashHardwareCredentialV1,
             OfflineCashNoCommitClosureStatementV1, OfflineCashNoCommitClosureV1,
-            OfflineCashPairedProofV1, OfflineCashSingleExactRequestV1,
-            offline_cash_device_key_reference_v1, offline_cash_liability_pool_id_v1,
+            OfflineCashPairedProofV1, offline_cash_device_key_reference_v1,
+            offline_cash_liability_pool_id_v1,
         },
     };
     use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
@@ -1758,9 +1758,7 @@ mod tests {
                     .public_key()
                     .clone(),
             ),
-            request_mode: iroha_data_model::offline::OfflineCashPaymentRequestModeV1::SingleExact(
-                OfflineCashSingleExactRequestV1 { amount: 7 },
-            ),
+            amount: 7,
             hardware_credential: credential,
             request_id: [0x45; 32],
             issued_at_ms: 100,
@@ -1828,7 +1826,6 @@ mod tests {
             asset: request.asset.clone(),
             asset_incarnation: request.asset_incarnation,
             scale: request.scale,
-            request_mode: request.request_mode,
             intent_digest: intent
                 .canonical_digest_against(&request)
                 .expect("intent digest"),

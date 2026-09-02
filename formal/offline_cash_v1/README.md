@@ -41,31 +41,26 @@ ancestry, origins, receipts, fan-in, transition history, or proof depth.
   The recursive mint-helper binding carries the same authorization digest and
   exact credit commitment. Derived credit IDs and ciphertext fields are absent
   from the authorization preimage, preserving an acyclic pre-ID construction.
-- **Atomic private request ledger and capacity.** Ticket issuance atomically
-  adds one capacity-backed ticket to the receiver's private request ledger.
-  The ledger contains every unresolved or consumed ticket. `SingleExact`
-  permits one ticket equal to the request total; `PartialUntilTotal` checks the
-  sum against the total; `BoundedMultiPayment` checks the count; `OpenReceive`
-  has no protocol cumulative amount or count ceiling. Send and redemption
+- **Exact reusable requests and atomic capacity.** Every request commits one
+  exact positive amount. Each distinct valid sender intent against that request
+  may receive its own one-use, capacity-backed ticket for exactly that amount;
+  there is no invoice-level amount, payment-count, or request-use ledger.
+  Ticket issuance reserves receiver bytes atomically. Send and redemption
   preparation also reserve sender outbox bytes. Staging atomically exchanges
   ticket bytes for staged-inbox bytes. Folding or acknowledgement frees the
-  corresponding physical slot without erasing the consumed ledger decision.
+  corresponding physical slot without weakening one-use ticket evidence.
 - **No expiry reclaim.** Observing ticket expiry changes only evidence. It
-  cannot release capacity or decrement request amount/count state. A separate
+  cannot release capacity. A separate
   authenticated no-commit recovery first enters `RecoveryPending`, preserving
   both reservations, and may close only while the bound predecessor remains
   unconsumed and no terminal payment commit exists. Only that closure releases
-  physical capacity and removes an unresolved ticket from the current
-  amount/count ledger; the intent/ticket identity remains permanently closed.
-  Relocation alone has no reclaim transition. Consumed tickets always count.
-- **Fixed-shape receive folding.** Every `FoldReceiveBatch` input is a record
-  containing `active_count` plus an explicit tuple of exactly 16 slots. The
-  nonempty occupied prefix contains distinct staged credits; every remaining
-  slot is the one canonical `EmptyCredit` value. Each occupied slot checks
-  replay nonmembership against the root produced by all prior slots, then
-  applies its own root update. The amount and final consumed set are folds of
-  that same prefix. The real implementation may store sparse-tree nodes
-  externally while hardware retains the root.
+  physical capacity; the intent/ticket identity remains permanently closed.
+  Relocation alone has no reclaim transition.
+- **Fixed-shape receive folding.** Every `FoldReceive` consumes exactly one
+  staged credit, proves replay nonmembership against the current root, and
+  installs one exact successor. Wallets drain arbitrary backlogs by repeating
+  this constant-shape transition. The real implementation may store
+  sparse-tree nodes externally while hardware retains the root.
 - **Lifecycle behavior.** Verifier rotation moves the previous active suite to
   `Retained`; it is never silently discarded. Hardware profile suspension
   stops new admission and uncommitted hardware commits, but does not gate
@@ -111,12 +106,13 @@ The TLC configuration is configured to check:
   absence of derived IDs/ciphertext from the authorization preimage;
 - self-free terminal body-to-digest-to-certificate-ID construction;
 - deadline checks only at sender hardware commit;
-- all four private aggregate request-ledger ceilings and one-use tickets;
-- expiry observation never reclaiming ledger or capacity state, plus
+- exact reusable request amounts, distinct one-use intent/ticket pairs, and no
+  invoice-level payment-count admission ceiling;
+- expiry observation never reclaiming capacity state, plus
   authenticated no-commit recovery preserving both until distinct closure;
 - receiver inbox and combined sender outbox byte-reservation bounds;
 - conservation-derived value-foldability of every staged exact-amount credit;
-- canonical 16-slot occupied-prefix/empty-padding batch shape;
+- singular receive-fold shape with no count-based admission limit;
 - rejection state for a different envelope digest presented with the same
   credit and acceptance-ticket IDs;
 - uniqueness of exact-next predecessors across committed operations;
@@ -143,16 +139,13 @@ ordered singleton fold without an amount overflow.
 Every finite constant in `OfflineCashV1.cfg`—devices, intent/ticket/credit IDs,
 amounts, byte
 capacities, counters, and epochs—exists only to make TLC exploration finite.
-The four configured credits mean the sample run explores active fold counts up
-to four; every explored batch still contains exactly 16 slots. The action fixes
-the production active range at 1–16. This configuration has one intent/ticket
-fixture per request mode. It checks each mode's transition formula but does not
-exhaustively exercise multi-ticket accumulation within `PartialUntilTotal`,
-`BoundedMultiPayment`, or `OpenReceive`; that requires an alternate
-configuration with more intent/ticket IDs. Larger alternate configurations may
-also explore more occupied slots. None of these constants is a production
-limit or an authorization rule, and they must never be copied into protocol
-admission logic.
+The four configured intent/ticket/credit pairs all target the same exact
+request, so the sample run explores independent valid payments against one
+request and repeated singular folds. More pairs can be supplied through an
+alternate configuration to explore a larger concurrent or sequential set.
+Their finite count, the configured capacities, and every other TLC constant
+exist only to bound state exploration; none is a protocol limit or an
+authorization rule, and none may be copied into admission logic.
 
 The growing evidence sets are specification ghosts for checking prior
 transitions, not protocol history fields. The production design requires
@@ -171,10 +164,10 @@ treats the sampled sender commitment and cryptographic evidence as abstract
 opaque values. Real circuits and qualified-hardware acceptance evidence remain
 separate release gates.
 
-SANY successfully parsed and semantically checked this model. An exhaustive
-TLC exploration has not completed: one bounded run was stopped after more than
-90 million generated states. That partial exploration is neither an invariant
-result nor release evidence.
+Run SANY and TLC against the exact model revision before treating it as release
+evidence. A prior bounded exploration was stopped after more than 90 million
+generated states; that partial run is neither an invariant result nor release
+evidence for this revision.
 
 Run from this directory with a local TLA+ installation:
 

@@ -34,12 +34,82 @@ class OfflineCashDeviceLifecycleBridgeV1Test {
             endpoint.capabilityFrame.copyOfRange(12, 16),
         )
         assertEquals(
-            (1..16).toList(),
+            (1..24).toList(),
             OfflineCashDeviceLifecycleBridgeV1.Operation.values().map { it.code },
+        )
+        assertEquals(
+            listOf(
+                "READ_ACTIVE_HARDWARE_CREDENTIAL",
+                "PREPARE_ACCEPTANCE_INTENT_AUTHORIZATION",
+                "RECOVER_ACCEPTANCE_INTENT_AUTHORIZATION",
+                "VERIFY_AUTHORIZATION_RESERVE_INBOX_AND_ISSUE_ACCEPTANCE_TICKET",
+                "RECOVER_ACCEPTANCE_TICKET",
+                "STAGE_INBOUND_PAYMENT",
+                "RECOVER_STAGED_INBOUND_PAYMENT",
+                "RECOVER_INBOUND_INBOX_PAGE",
+                "PREPARE_EXACT_NEXT_TRANSITION",
+                "RECOVER_PREPARED_TRANSITION",
+                "ABANDON_UNCOMMITTED_PREPARED_TRANSITION",
+                "COMMIT_VERIFIED_CANDIDATE",
+                "RECOVER_TERMINAL_COMMIT_CERTIFICATE",
+                "INSTALL_FINAL_COMMIT_WRAPPER",
+                "RECOVER_INSTALLED_ENVELOPE_OR_STATE_PROOF",
+                "SIGN_RECEIVE_ACKNOWLEDGEMENT",
+                "RELEASE_OUTBOX_ENTRY",
+                "READ_TRUSTED_TIME_OR_LEASE",
+                "PREPARE_MINT_AUTHORIZATION",
+                "RECOVER_MINT_AUTHORIZATION",
+                "VERIFY_AUTHORIZATION_AND_STAGE_MINT_CREDIT",
+                "FOLD_RECEIVE",
+                "READ_PENDING_CREDIT_WATERMARK",
+                "ROTATE_HARDWARE_EPOCH",
+            ),
+            OfflineCashDeviceLifecycleBridgeV1.Operation.values().map { it.name },
         )
         assertEquals(
             (0 until 16).map { 1 shl it },
             OfflineCashDeviceLifecycleBridgeV1.Capability.values().map { it.mask },
+        )
+        assertEquals(
+            listOf(
+                "EXACT_NEXT_PREDECESSOR_CONSUMPTION",
+                "ONE_USE_SUCCESSOR_AUTHORIZATION",
+                "ROLLBACK_RESISTANT_COUNTER_AND_JOURNAL",
+                "SEALED_TRANSITION_RECOVERY",
+                "ONE_USE_ACCEPTANCE_TICKETS",
+                "DURABLE_INBOX_RESERVATION",
+                "AUTHENTICATED_INBOUND_STAGING",
+                "AUTHORITATIVE_REPLAY_ROOT_RECOVERY",
+                "SENDER_OUTBOX_RESERVATION",
+                "AUTHENTICATED_DURABLE_RETRY_OUTBOX",
+                "ATOMIC_VERIFIED_CANDIDATE_COMMIT",
+                "RECOVERABLE_TERMINAL_COMMIT_CERTIFICATE",
+                "TRUSTED_TIME_OR_LEASE",
+                "OFFLINE_HARDWARE_EPOCH_ROTATION",
+                "ROLLBACK_SAFE_COUNTER_ROLLOVER",
+                "NO_SOFTWARE_FALLBACK",
+            ),
+            OfflineCashDeviceLifecycleBridgeV1.Capability.values().map { it.name },
+        )
+        assertEquals(
+            (0..10).toList(),
+            OfflineCashDeviceLifecycleBridgeV1.Status.values().map { it.code },
+        )
+        assertEquals(
+            listOf(
+                "SUCCESS",
+                "UNAVAILABLE",
+                "STALE_OR_CONCURRENT",
+                "BINDING_MISMATCH",
+                "TRUSTED_TIME_REJECTED",
+                "REJECTED",
+                "MISSING",
+                "CONFLICT",
+                "CORRUPT",
+                "MALFORMED_REQUEST",
+                "RECOVERY_REQUIRED",
+            ),
+            OfflineCashDeviceLifecycleBridgeV1.Status.values().map { it.name },
         )
 
         for (operation in OfflineCashDeviceLifecycleBridgeV1.Operation.values()) {
@@ -61,7 +131,7 @@ class OfflineCashDeviceLifecycleBridgeV1Test {
             byteArrayOf(1, 2, 3),
         )
         assertEquals(
-            "494f43464a434d3101000400" +
+            "494f43464a434d3101000600" +
                 "11".repeat(32) +
                 "03000000" +
                 "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81" +
@@ -86,6 +156,56 @@ class OfflineCashDeviceLifecycleBridgeV1Test {
                 )
             }
         }
+
+        for (unknownOperation in listOf(0, 25)) {
+            val response = OfflineCashDeviceLifecycleBridgeV1.Codec.encodeResponseForTests(
+                OfflineCashDeviceLifecycleBridgeV1.Operation.STAGE_INBOUND_PAYMENT,
+                OfflineCashDeviceLifecycleBridgeV1.Status.SUCCESS,
+                fixed(0x11, 32),
+                byteArrayOf(4),
+                fixed(0x44, 64),
+            )
+            response[10] = unknownOperation.toByte()
+            assertFailsWith<IllegalArgumentException> {
+                OfflineCashDeviceLifecycleBridgeV1.Codec.decodeResponse(
+                    response,
+                    OfflineCashDeviceLifecycleBridgeV1.Operation.STAGE_INBOUND_PAYMENT,
+                    fixed(0x11, 32),
+                )
+            }
+        }
+
+        val unknownStatus = OfflineCashDeviceLifecycleBridgeV1.Codec.encodeResponseForTests(
+            OfflineCashDeviceLifecycleBridgeV1.Operation.STAGE_INBOUND_PAYMENT,
+            OfflineCashDeviceLifecycleBridgeV1.Status.SUCCESS,
+            fixed(0x11, 32),
+            byteArrayOf(4),
+            fixed(0x44, 64),
+        )
+        unknownStatus[11] = 11
+        assertFailsWith<IllegalArgumentException> {
+            OfflineCashDeviceLifecycleBridgeV1.Codec.decodeResponse(
+                unknownStatus,
+                OfflineCashDeviceLifecycleBridgeV1.Operation.STAGE_INBOUND_PAYMENT,
+                fixed(0x11, 32),
+            )
+        }
+
+        val recoveryRequired = OfflineCashDeviceLifecycleBridgeV1.Codec.encodeResponseForTests(
+            OfflineCashDeviceLifecycleBridgeV1.Operation.RECOVER_TERMINAL_COMMIT_CERTIFICATE,
+            OfflineCashDeviceLifecycleBridgeV1.Status.RECOVERY_REQUIRED,
+            fixed(0x11, 32),
+            byteArrayOf(),
+            byteArrayOf(),
+        )
+        assertEquals(
+            OfflineCashDeviceLifecycleBridgeV1.Status.RECOVERY_REQUIRED,
+            OfflineCashDeviceLifecycleBridgeV1.Codec.decodeResponse(
+                recoveryRequired,
+                OfflineCashDeviceLifecycleBridgeV1.Operation.RECOVER_TERMINAL_COMMIT_CERTIFICATE,
+                fixed(0x11, 32),
+            ).status,
+        )
     }
 
     @Test
@@ -100,6 +220,14 @@ class OfflineCashDeviceLifecycleBridgeV1Test {
             assertFailsWith<IllegalArgumentException>("accepted missing feature bit $featureBit") {
                 OfflineCashDeviceLifecycleBridgeV1.withEndpointForTests(partial)
             }
+        }
+
+        val unknownFeature = FakeEndpoint()
+        val capabilities = unknownFeature.capabilities()
+        capabilities[14] = 1
+        unknownFeature.capabilityFrame = capabilities
+        assertFailsWith<IllegalArgumentException> {
+            OfflineCashDeviceLifecycleBridgeV1.withEndpointForTests(unknownFeature)
         }
 
         val endpoint = FakeEndpoint()

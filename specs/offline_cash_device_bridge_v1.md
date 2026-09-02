@@ -34,26 +34,31 @@ The capability frame is exactly 96 bytes.
 | 8 | 2 | version `1` |
 | 10 | 1 | platform: Android `1`, iOS `2` |
 | 11 | 1 | zero flags |
-| 12 | 4 | exact required-feature mask `0x000003ff` |
+| 12 | 4 | exact required-feature mask `0x0000ffff` |
 | 16 | 4 | maximum command payload `65,536` |
 | 20 | 4 | maximum response payload `65,536` |
 | 24 | 32 | active non-zero `hardware_profile_id` |
 | 56 | 32 | active non-zero `OfflineCashHardwareCredentialV1` digest |
 | 88 | 8 | zero trailer |
 
-The ten required bits, in order, are:
+The sixteen required bits, in order, are:
 
 1. exact-next predecessor consumption;
 2. one-use successor authorization;
-3. rollback-resistant monetary counters;
-4. rollback-resistant journal with sealed inputs and recovery seeds;
-5. durable ticket-reserved inbox, exact deduplication, paging, and replay-root
-   recovery;
-6. pre-reserved authenticated durable retry outbox;
-7. atomic candidate-bound commit and terminal-certificate recovery;
-8. trusted time or secure monotonic authorization lease;
-9. offline hardware-epoch rotation and rollback-safe counter rollover; and
-10. no software fallback.
+3. rollback-resistant counter and journal;
+4. sealed transition inputs and deterministic recovery seeds;
+5. one-use acceptance-ticket issuance;
+6. durable inbox byte reservation;
+7. authenticated inbound staging, exact deduplication, and paging;
+8. authoritative replay-root and external sparse-tree recovery;
+9. sender outbox byte reservation before predecessor lock;
+10. authenticated durable retry outbox;
+11. atomic commit bound to a Core-verified candidate digest;
+12. recoverable terminal commit certificate;
+13. trusted time or a secure monotonic authorization lease;
+14. offline hardware-epoch rotation;
+15. rollback-safe counter rollover; and
+16. no software fallback.
 
 Missing or unknown bits fail closed. The IDs identify the enrolled result but
 are not self-authenticating. Online enrollment verifies raw platform evidence,
@@ -65,10 +70,10 @@ required for enrollment, ticket issuance, and new offline commits; a status
 change cannot block verification, staging, acknowledgement, or governed online
 recovery/redemption of a terminally committed credit.
 
-This ten-bit bridge mask groups related transport capabilities. It is not the
-profile's circuit-visible capability mask: enrollment expands and verifies the
-complete sixteen-bit `OfflineCashHardwareProfileV1` mask before issuing a
-credential. Neither representation permits a missing or unknown capability.
+The bridge mask is the `u32` framing of the profile's exact circuit-visible
+lower-sixteen-bit capability mask. Enrollment and every bridge discovery must
+therefore require `0x0000ffff`; a missing lower bit or any non-zero upper bit
+fails closed.
 
 ## Command frame
 
@@ -90,55 +95,64 @@ The operation codes are closed:
 | Code | Operation |
 | ---: | --- |
 | 1 | read the active compact hardware credential and profile reference |
-| 2 | reserve exact inbox bytes and issue one `OfflineCashAcceptanceTicketV1` |
-| 3 | recover an existing ticket and its reservation by exact ticket ID |
-| 4 | consume a ticket reservation and stage one authenticated final payment |
-| 5 | recover the byte-identical staged payment and durable inbox receipt |
-| 6 | recover a bounded page of durable inbox credit IDs and digests |
-| 7 | reserve all terminal bytes and prepare one exact-next state transition |
-| 8 | recover the sealed prepared transition by exact operation ID |
-| 9 | abandon a prepared transition that has no terminal commit |
-| 10 | atomically commit one verified precommit-candidate envelope digest |
-| 11 | recover the terminal hardware commit certificate and candidate binding |
-| 12 | install the verified final commit-wrapper artifact in its reservation |
-| 13 | recover/expose the byte-identical installed outgoing envelope |
-| 14 | sign an acknowledgement for an already committed inbox receipt |
-| 15 | release an outbox entry after matching ACK or finalized online submission |
-| 16 | read trusted time or obtain/inspect the active monotonic lease |
+| 2 | prepare one proof-bearing `OfflineCashAcceptanceIntentAuthorizationV1` |
+| 3 | recover that byte-identical prepared acceptance authorization |
+| 4 | verify the authorization, reserve exact inbox bytes, and issue one `OfflineCashAcceptanceTicketV1` |
+| 5 | recover an existing ticket and its reservation by exact ticket ID |
+| 6 | consume a ticket reservation and stage one authenticated final payment |
+| 7 | recover the byte-identical staged payment and durable inbox receipt |
+| 8 | recover a bounded page of durable inbox credit IDs and digests |
+| 9 | reserve all terminal bytes and prepare one exact-next state transition |
+| 10 | recover the sealed prepared transition by exact operation ID |
+| 11 | abandon a prepared transition that has no terminal commit |
+| 12 | atomically commit one verified precommit-candidate envelope digest |
+| 13 | recover the terminal hardware commit certificate and candidate binding |
+| 14 | install the verified final commit-wrapper artifact in its reservation |
+| 15 | recover/expose the byte-identical installed outgoing envelope or state proof |
+| 16 | sign an acknowledgement for an already committed inbox receipt |
+| 17 | release an outbox entry after matching ACK or finalized online submission |
+| 18 | read trusted time or obtain/inspect the active monotonic lease |
+| 19 | prepare one proof-bearing `OfflineCashMintAuthorizationV1` before reserve debit |
+| 20 | recover that byte-identical prepared mint authorization |
+| 21 | verify the authorization and stage its matching finalized mint credit |
+| 22 | fold one staged credit into the aggregate balance |
+| 23 | read the stable pending-credit high-water mark |
+| 24 | rotate aggregate state into the next qualified hardware epoch |
 
-Operation 2 accepts the exact signed `PaymentRequestV1` and a proof-bearing
-`OfflineCashAcceptanceIntentAuthorizationV1` created before ticket issuance.
+Operations 2 and 3 prepare and recover the proof-bearing
+`OfflineCashAcceptanceIntentAuthorizationV1` for one exact signed
+`PaymentRequestV1` and amount before ticket issuance. Operation 4 accepts the
+exact request and that authorization.
 Its statement contains the compact intent plus exact release, suite,
 verifying-key, and artifact-manifest bindings. Before invoking the reservation
-operation, the audited native Core resolves that authenticated release and
+operation 4, the audited native Core resolves that authenticated release and
 cryptographically verifies both proof parities for hidden enabled-profile
 membership, qualified sender hardware, sufficient private balance, and a
 one-use predecessor authorization bound to the exact request and amount. The
-service must not persist the compact intent, consume request budget, or reserve
-capacity when that proof is missing or invalid; a canonical
+service must not persist the compact intent or reserve physical inbox capacity
+when that proof is missing or invalid; a canonical
 `OfflineCashAcceptanceIntentV1` alone has no authority.
 
 After verification, one atomic service operation records the exact intent
-digest and decision, applies the request's private mode ledger, allocates
+digest and decision in the replay ledger, allocates
 `reserved_inbox_bytes`, creates the recipient X25519 one-time key, and returns
-an exact-amount ticket signed over the intent digest. `SingleExact` consumes its sole slot;
-`PartialUntilTotal` checked-adds issued amount; `BoundedMultiPayment`
-increments issued count; and `OpenReceive` has no cumulative count or amount
-limit. Every mode prevents duplicate or conflicting intent issuance. Resolved
-`OpenReceive` decisions may move into an authenticated compact accumulator, but
-exact duplicate/conflict answers survive compaction and no historical count
-limit is introduced. Neither request budget
-nor inbox capacity is reclaimed on expiry; governed relocation preserves the
-ledger decision and an equivalent durable delivery slot. A separate
+an exact-amount ticket signed over the intent digest. Every distinct valid
+intent against the same request is independently acceptable and receives its
+own one-use ticket; only exact intent replay or conflicting reuse fails. Resolved
+decisions may move into an authenticated compact accumulator, but exact
+duplicate/conflict answers survive compaction and history never becomes an
+admission condition. Inbox capacity is not reclaimed on expiry; governed
+relocation preserves the ledger decision and an equivalent durable delivery
+slot. A separate
 authenticated no-commit closure may release an unresolved ticket only after it
 proves that the exact authorized predecessor and sender intent never reached
 terminal hardware commit;
-consumed tickets remain counted. Operation 4 uses that
+consumed ticket decisions remain authenticated for replay detection. Operation 6 uses that
 allocation, accepts a valid final wrapper regardless of later traffic or
 delivery time, and is idempotent only for the same canonical bytes.
 
-Operation 7 accepts a closed transition tag (`Bootstrap`, `MintFold`,
-`SendSplit`, `ReceiveFoldBatch`, `RedeemSplit`, `Rotate`, or `SuiteUpgrade`). A
+Operation 9 accepts a closed transition tag (`Bootstrap`, `MintFold`,
+`SendSplit`, `ReceiveFold`, `RedeemSplit`, `Rotate`, or `SuiteUpgrade`). A
 batch payload names 1--16 already-staged credit IDs; it never embeds sixteen
 payment envelopes. For an outgoing transition, the reserved byte count covers
 the sealed record, precommit candidate, terminal certificate, final wrapper,
@@ -157,6 +171,17 @@ The finalized mint helper recursively verifies the same authorization digest.
 Stable credential, lane, epoch, and device-key identities must not escape
 through the bridge's public result.
 
+Operations 19 and 20 give that pre-debit mint authorization the same sealed,
+byte-identical recovery property as the acceptance authorization. Operation 21
+verifies it before staging the matching finalized mint credit. Operations 22
+and 23 expose the fixed 1--16 folding and stable-snapshot watermark required by
+the aggregate receiver; neither introduces a cumulative inbox or receipt
+limit. Operations 22 and 24 must preserve the exact-next preparation,
+candidate-bound commit, and recovery invariants established for operations
+9--15; neither is an alternate commit path. Operation 24 performs only a
+qualified exact-next hardware-epoch and counter rollover and must preserve the
+aggregate balance and replay root.
+
 Every peer or mint encrypted credit is the canonical
 `OfflineCashEncryptedCreditEnvelopeV1` defined in
 [`offline_cash_v1.md`](offline_cash_v1.md). The recipient key is X25519; the
@@ -167,7 +192,7 @@ nonces are fresh per envelope. Operation-specific proof relations constrain the
 pre-ID commitments and exact public projection; the `k = 16` circuit does not
 reimplement the KEM or AEAD.
 
-Operation 10 is permitted only after Core has durably persisted the exact
+Operation 12 is permitted only after Core has durably persisted the exact
 candidate and cryptographically verified both parities under an immutable
 `OfflineCashAuthenticatedReleaseV1`. Core can construct this command only from
 its internal authenticated-candidate typestate; that capability is not
@@ -175,14 +200,14 @@ serialized into the frame and cannot be replaced by caller-supplied proof or
 release metadata or a successful `validate_shape*` result. Repeating it with
 the same operation and
 `candidate_envelope_digest` recovers the same
-`OfflineCashCommitCertificateV1`; another digest conflicts. Operation 9 is
-forbidden once operation 10 has any terminal outcome. Operations 11--13 must
+`OfflineCashCommitCertificateV1`; another digest conflicts. Operation 11 is
+forbidden once operation 12 has any terminal outcome. Operations 13--15 must
 succeed from the reserved record after terminal commit and reproduce the same
 `OfflineCashCommitWrapperProofV1` and final bytes. They cannot report capacity
 exhaustion, select another successor, or change proof randomness. Only
-operation 13 makes an outgoing envelope transport-visible.
+operation 15 makes an outgoing envelope transport-visible.
 
-At operation 10 the service first seals a self-free
+At operation 12 the service first seals a self-free
 `OfflineCashHardwareTerminalBodyV1` containing the candidate and lifecycle
 digests, transition nullifier, reservation commitment, opaque commit evidence,
 profile/policy, and private successor/journal/recovery commitments. It contains
@@ -191,10 +216,10 @@ that body and derives the certificate ID, fixing the order terminal body →
 terminal commitment → certificate ID → wrapper → envelope without a hash
 cycle.
 
-Operation 14 signs an opaque `OfflineCashInboxReceiptV1` only after the exact
+Operation 16 signs an opaque `OfflineCashInboxReceiptV1` only after the exact
 payment is durable. Its public fields are the credit ID and receipt commitment;
 the receiver lane, hardware epoch, exact-next inbox sequence, persistence time,
-payment, and raw receipt are private authenticated inputs. Operation 16 may
+payment, and raw receipt are private authenticated inputs. Operation 18 may
 return only the opaque public `time_evidence_commitment` or
 `lease_evidence_commitment` used by the terminal proof. The exact checked
 deadline, actual commit time, clock authority, lease identity/window, and
@@ -225,8 +250,8 @@ request; `10` means governed recovery is required while the committed record
 remains authoritative. Success requires a non-empty payload and non-zero
 authenticator; failure carries neither. Status `1` is allowed for new ticket
 issuance and new transition preparation, never for staging against a valid
-ticket or recovering a terminally committed operation. After operation 10
-succeeds, operations 11--13 may return only `0`, retryable `2`, or
+ticket or recovering a terminally committed operation. After operation 12
+succeeds, operations 13--15 may return only `0`, retryable `2`, or
 recovery-required `10`; callers retry the identical command or enter governed
 recovery. Every other status is an implementation breach, not a legal rejection
 of the committed value.
@@ -267,6 +292,13 @@ profile or credential, partial feature mask, or non-zero native status fails
 closed during capability discovery; none triggers a TEE or software downgrade.
 An authenticated operation status such as pre-reservation capacity exhaustion
 fails only that operation and does not change an otherwise valid discovery.
+
+The generic `connect_norito_bridge` entry points publish this closed numeric
+inventory but intentionally provide no secure-device implementation: both
+stock C and JNI execution paths remain unavailable. Exact per-operation
+canonical command/result bodies and authenticators must be implemented and
+qualified by the OEM/secure-element provider; the stock bridge must not
+simulate them in software.
 
 The stock-platform build intentionally exposes no qualifying service. Closing
 this gate requires an audited OEM/secure-element implementation and physical
