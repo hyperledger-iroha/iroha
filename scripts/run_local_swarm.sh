@@ -6,6 +6,7 @@ set -euo pipefail
 BASE="${BASE:-/tmp/iroha-bare}"
 GENESIS_PUBLIC_KEY_FILE="${GENESIS_PUBLIC_KEY_FILE:-}"
 GENESIS_PRIVATE_KEY_FILE="${GENESIS_PRIVATE_KEY_FILE:-}"
+KAGEMUSHA_MINT_FINALITY_PARAMETERS_FILE="${KAGEMUSHA_MINT_FINALITY_PARAMETERS_FILE:-}"
 
 PKS=(
   "ea01308A230D5DA9DE92163DDE5F662CD859985ADC53040D9BFE1FA4A091CA7E1D8E88914535FC790CACC077DCC2F2D06FE106"
@@ -309,7 +310,13 @@ GEN_PUB="$(cat "$GENESIS_PUBLIC_KEY_FILE")"
 }
 
 echo "[1/6] Generate genesis"
-$KAGAMI genesis generate --ivm-dir . --genesis-public-key "$GEN_PUB" default > "$BASE/genesis.json"
+if [[ -z "$KAGEMUSHA_MINT_FINALITY_PARAMETERS_FILE" || ! -s "$KAGEMUSHA_MINT_FINALITY_PARAMETERS_FILE" ]]; then
+  echo "Set KAGEMUSHA_MINT_FINALITY_PARAMETERS_FILE to explicit public authority for this validator topology." >&2
+  exit 1
+fi
+$KAGAMI genesis generate --ivm-dir . --genesis-public-key "$GEN_PUB" \
+  --kagemusha-mint-finality-parameters "$KAGEMUSHA_MINT_FINALITY_PARAMETERS_FILE" \
+  default > "$BASE/genesis.json"
 
 echo "[2/6] Inject topology"
 inject_topology

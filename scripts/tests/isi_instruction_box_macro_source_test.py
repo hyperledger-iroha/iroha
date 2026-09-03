@@ -14,7 +14,7 @@ DIRECT_CALL = re.compile(r"impl_direct_instruction_box!\(([^)]+)\);")
 
 
 class InstructionBoxMacroSourceTest(unittest.TestCase):
-    """Keep direct conversions unique and require the sole Kagemusha V1 ISIs."""
+    """Keep direct conversions unique and require the sole KAGEMUSHA V1 ISIs."""
 
     def test_typed_direct_conversions_are_unique(self) -> None:
         source = SOURCE.read_text(encoding="utf-8")

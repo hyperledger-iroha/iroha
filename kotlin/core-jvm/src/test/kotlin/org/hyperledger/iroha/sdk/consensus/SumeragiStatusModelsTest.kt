@@ -41,7 +41,7 @@ class SumeragiStatusModelsTest {
     }
 
     @Test
-    fun `execution commitment accepts one thousand Kagemusha top-ups and rejects legacy names`() {
+    fun `execution commitment accepts one thousand KAGEMUSHA top-ups and rejects legacy names`() {
         val kagemushaTopUpRoot = hash(0x38)
         val canonicalPayload = statusJson().replace(
             "\"kagemusha_top_up_count\": 0,",

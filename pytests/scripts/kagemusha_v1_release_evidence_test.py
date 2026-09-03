@@ -1,4 +1,4 @@
-"""Focused tests for the strict Kagemusha V1 release-evidence verifier."""
+"""Test release-evidence projection; synthetic fixtures are not proof qualification."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -92,8 +93,8 @@ class EvidenceFixture:
     commands: list[dict[str, Any]]
     proof_paths: list[str]
     internal_proof_paths: dict[str, tuple[str, str]]
-    raw_paths: list[str]
-    text_paths: list[str]
+    raw_complete_exchange_paths: list[str]
+    text_complete_exchange_paths: list[str]
 
     def path(self, relative: str) -> Path:
         return self.root / relative
@@ -265,8 +266,8 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
         commands=[],
         proof_paths=[],
         internal_proof_paths={},
-        raw_paths=[],
-        text_paths=[],
+        raw_complete_exchange_paths=[],
+        text_complete_exchange_paths=[],
     )
 
     fixture.write("source/candidate.tar", b"immutable candidate source archive\n", "source_archive")
@@ -368,8 +369,6 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
 
     state_eq = _digest(1)
     state_ep = _digest(2)
-    wrapper_eq = _digest(3)
-    wrapper_ep = _digest(4)
     helper_protocols = []
     for index, helper in enumerate(VERIFIER.HELPERS):
         eq_proof_bytes, ep_proof_bytes = INTERNAL_HELPER_PROOF_LENGTHS.get(
@@ -387,8 +386,10 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
     protocols = {
         "state_eq_protocol_digest": state_eq,
         "state_ep_protocol_digest": state_ep,
-        "commit_wrapper_eq_protocol_digest": wrapper_eq,
-        "commit_wrapper_ep_protocol_digest": wrapper_ep,
+        "terminal_authorization_eq_protocol_digest": _digest(3),
+        "terminal_authorization_ep_protocol_digest": _digest(4),
+        "commit_wrapper_eq_protocol_digest": _digest(13),
+        "commit_wrapper_ep_protocol_digest": _digest(14),
         "helper_protocols": helper_protocols,
     }
     artifact_projection = [
@@ -490,17 +491,29 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
         proof = f"samples/relation-{index:02d}.proof"
         fixture.write(proof, bytes([index]) * (100 + index), "proof")
         fixture.proof_paths.append(proof)
-        wrapper = relation in {"acceptance_intent_authorization", "commit_wrapper"}
-        eq_role = "commit_wrapper_vk_eq" if wrapper else "state_vk_eq"
-        ep_role = "commit_wrapper_vk_ep" if wrapper else "state_vk_ep"
+        if relation == "terminal_authorization":
+            eq_protocol = protocols["terminal_authorization_eq_protocol_digest"]
+            ep_protocol = protocols["terminal_authorization_ep_protocol_digest"]
+            eq_role = "terminal_authorization_vk_eq"
+            ep_role = "terminal_authorization_vk_ep"
+        elif relation == "commit_wrapper":
+            eq_protocol = protocols["commit_wrapper_eq_protocol_digest"]
+            ep_protocol = protocols["commit_wrapper_ep_protocol_digest"]
+            eq_role = "commit_wrapper_vk_eq"
+            ep_role = "commit_wrapper_vk_ep"
+        else:
+            eq_protocol = state_eq
+            ep_protocol = state_ep
+            eq_role = "state_vk_eq"
+            ep_role = "state_vk_ep"
         report_path = add_report(
             f"reports/profile/relation-{index:02d}.json",
             "iroha.kagemusha_v1.relation_qualification_report",
             {
                 "hardware_profile_id": profile_id,
                 "relation": relation,
-                "eq_protocol_digest": wrapper_eq if wrapper else state_eq,
-                "ep_protocol_digest": wrapper_ep if wrapper else state_ep,
+                "eq_protocol_digest": eq_protocol,
+                "ep_protocol_digest": ep_protocol,
                 "eq_verifying_key": artifact_paths[eq_role],
                 "ep_verifying_key": artifact_paths[ep_role],
                 "eq_circuit_rows": 20_000,
@@ -564,6 +577,27 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
         )
         helper_rows.append({"helper": helper, "report": report_path})
 
+    occupancy_rows: list[dict[str, Any]] = []
+    for occupancy in range(1, VERIFIER.RECEIVE_FOLD_BATCH_WIDTH + 1):
+        proof = f"samples/occupancy-{occupancy:02d}.proof"
+        fixture.write(proof, bytes([40 + occupancy]) * (140 + occupancy), "proof")
+        fixture.proof_paths.append(proof)
+        report_path = add_report(
+            f"reports/profile/occupancy-{occupancy:02d}.json",
+            "iroha.kagemusha_v1.receive_fold_occupancy_report",
+            {
+                "hardware_profile_id": profile_id,
+                "occupancy": occupancy,
+                "eq_protocol_digest": state_eq,
+                "ep_protocol_digest": state_ep,
+                "eq_verifying_key": artifact_paths["state_vk_eq"],
+                "ep_verifying_key": artifact_paths["state_vk_ep"],
+                "proof": proof,
+            },
+            [proof, artifact_paths["state_vk_eq"], artifact_paths["state_vk_ep"]],
+        )
+        occupancy_rows.append({"occupancy": occupancy, "report": report_path})
+
     depth_rows: list[dict[str, Any]] = []
     for depth in (8, 64, 1024, 1025):
         proof = f"samples/depth-{depth}.proof"
@@ -571,16 +605,24 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
         text = f"samples/depth-{depth}.txt"
         log = f"logs/depth-{depth}.jsonl"
         fixture.write(proof, bytes([70 + depth % 10]) * 200, "proof")
-        fixture.write(raw, bytes([80 + depth % 10]) * 400, "raw_session")
-        fixture.write(text, bytes([90 + depth % 10]) * 500, "text_session")
+        fixture.write(
+            raw,
+            bytes([80 + depth % 10]) * 400,
+            "raw_complete_exchange",
+        )
+        fixture.write(
+            text,
+            bytes([90 + depth % 10]) * 500,
+            "text_complete_exchange",
+        )
         fixture.write(
             log,
             b"".join(_json_line({"index": index, "result": "verified"}) for index in range(1, depth + 1)),
             "event_log",
         )
         fixture.proof_paths.append(proof)
-        fixture.raw_paths.append(raw)
-        fixture.text_paths.append(text)
+        fixture.raw_complete_exchange_paths.append(raw)
+        fixture.text_complete_exchange_paths.append(text)
         report_path = add_report(
             f"reports/profile/depth-{depth}.json",
             "iroha.kagemusha_v1.recursive_depth_report",
@@ -592,8 +634,8 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
                 "eq_verifying_key": artifact_paths["state_vk_eq"],
                 "ep_verifying_key": artifact_paths["state_vk_ep"],
                 "proof": proof,
-                "raw_session": raw,
-                "text_session": text,
+                "raw_complete_exchange": raw,
+                "text_complete_exchange": text,
                 "handoff_log": log,
             },
             [
@@ -678,17 +720,18 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
 
     envelope_raw = "samples/envelope.raw"
     envelope_text = "samples/envelope.txt"
-    fixture.write(envelope_raw, b"R" * 400, "raw_session")
-    fixture.write(envelope_text, b"X" * 500, "text_session")
-    fixture.raw_paths.append(envelope_raw)
-    fixture.text_paths.append(envelope_text)
+    fixture.write(envelope_raw, b"R" * 400, "raw_complete_exchange")
+    fixture.write(envelope_text, b"X" * 500, "text_complete_exchange")
+    fixture.raw_complete_exchange_paths.append(envelope_raw)
+    fixture.text_complete_exchange_paths.append(envelope_text)
     envelope_path = add_report(
         "reports/profile/envelope.json",
         "iroha.kagemusha_v1.envelope_report",
         {
             "hardware_profile_id": profile_id,
-            "raw_session": envelope_raw,
-            "text_session": envelope_text,
+            "messages": list(VERIFIER.PUBLIC_MESSAGES),
+            "raw_complete_exchange": envelope_raw,
+            "text_complete_exchange": envelope_text,
             "handoff_p95_ms": 1_000,
         },
         [envelope_raw, envelope_text],
@@ -747,6 +790,7 @@ def _fixture(tmp_path: Path) -> EvidenceFixture:
                 "qualification_report": qualification_path,
                 "relations": relation_rows,
                 "helpers": helper_rows,
+                "receive_fold_occupancies": occupancy_rows,
                 "recursive_depths": depth_rows,
                 "aggregate_balance": aggregate_path,
                 "thermal": thermal_path,
@@ -797,6 +841,287 @@ def _verify_direct(fixture: EvidenceFixture) -> dict[str, Any]:
     )
 
 
+def test_acceptance_matrix_is_plan_complete_and_matches_rust_order() -> None:
+    cases = VERIFIER.ACCEPTANCE_CASES
+    assert len(cases) == len(set(cases))
+    assert {
+        "missing_sender_authorization",
+        "forged_sender_authorization",
+        "replayed_sender_authorization",
+        "cross_release_sender_authorization",
+        "missing_mint_authorization",
+        "forged_mint_authorization",
+        "replayed_mint_authorization",
+        "cross_release_mint_authorization",
+        "crash_during_transport",
+        "crash_during_ack_recovery",
+        "ack_recovery_idempotence",
+        "delayed_delivery_across_ordinary_suite_rotation",
+        "delayed_delivery_across_credential_rotation",
+        "monotonic_lease_expiry",
+        "hardware_epoch_rollover",
+        "hardware_counter_rollover",
+        "positive_exact_request",
+        "recipient_key_binding",
+        "request_amount_mismatch_rejection",
+        "committed_payment_after_request_expiry",
+        "distinct_payments_same_request",
+        "exact_duplicate_durable_ack",
+        "conflicting_credit_id_bytes",
+        "transcript_unlinkability",
+        "x25519_low_order_public_key_rejection",
+        "x25519_zero_dh_rejection",
+        "aead_ciphertext_substitution",
+        "aead_associated_data_substitution",
+        "deterministic_encryption_injected_randomness_kat",
+        "receive_fold_single_credit",
+        "receive_fold_replay_atomicity",
+        "pending_credit_backlog_no_count_rejection",
+    } <= set(cases)
+
+    outbound_crash_order = (
+        "crash_during_prepare",
+        "crash_after_prepare_before_proof",
+        "crash_during_proof",
+        "crash_after_proof_before_candidate_persistence",
+        "crash_during_candidate_persistence",
+        "crash_after_candidate_persistence_before_verification",
+        "crash_during_candidate_verification",
+        "crash_after_candidate_verification_before_hardware_commit",
+        "crash_during_hardware_commit",
+        "crash_after_hardware_commit_before_terminal_authorization",
+        "crash_during_terminal_authorization",
+        "crash_after_terminal_authorization_before_final_envelope_persistence",
+        "crash_during_final_envelope_persistence",
+        "crash_after_final_envelope_persistence_before_exposure",
+        "crash_during_exposure",
+    )
+    start = cases.index(outbound_crash_order[0])
+    assert cases[start : start + len(outbound_crash_order)] == outbound_crash_order
+    assert {
+        "crash_after_transition_intent_stage",
+        "crash_after_hardware_commit_before_proof",
+        "crash_after_proof_before_state_persistence",
+        "crash_after_state_persistence_before_envelope",
+        "crash_after_envelope_before_exposure",
+    }.isdisjoint(cases)
+
+    rust_source = (
+        ROOT
+        / "crates/iroha_data_model/src/kagemusha/kagemusha_release_v1.rs"
+    ).read_text()
+    all_block = rust_source.split("pub const ALL: &[Self] = &[", 1)[1].split(
+        "];", 1
+    )[0]
+    rust_order = re.findall(r"Self::([A-Za-z0-9]+),", all_block)
+    python_order_as_rust = [
+        "".join(part[:1].upper() + part[1:] for part in case.split("_"))
+        for case in cases
+    ]
+    assert rust_order == python_order_as_rust
+
+
+@pytest.mark.parametrize(
+    ("rust_type", "inventory"),
+    [
+        ("KagemushaArtifactRoleV1", VERIFIER.ARTIFACT_ROLES),
+        ("KagemushaQualifiedRelationV1", VERIFIER.RELATIONS),
+        ("KagemushaQualifiedHelperCircuitV1", VERIFIER.HELPERS),
+    ],
+)
+def test_release_inventory_order_matches_current_rust_model(
+    rust_type: str, inventory: tuple[str, ...]
+) -> None:
+    source = (
+        ROOT / "crates/iroha_data_model/src/kagemusha/kagemusha_release_v1.rs"
+    ).read_text()
+    ordered = re.search(
+        rf"impl {rust_type} \{{.*?pub const ALL: \[Self; \d+\] = \[(.*?)\];",
+        source,
+        re.DOTALL,
+    )
+    assert ordered is not None, f"missing canonical Rust inventory for {rust_type}"
+    rust_names = re.findall(r"Self::([A-Za-z0-9]+),", ordered.group(1))
+    python_names = [
+        "".join(part[:1].upper() + part[1:] for part in name.split("_"))
+        for name in inventory
+    ]
+    assert python_names == rust_names
+
+
+def test_release_artifact_ordinals_match_current_rust_model() -> None:
+    source = (
+        ROOT / "crates/iroha_data_model/src/kagemusha/kagemusha_release_v1.rs"
+    ).read_text()
+    enum = source.split("pub enum KagemushaArtifactRoleV1 {", 1)[1].split("}", 1)[0]
+    declarations = re.findall(
+        r"^    ([A-Za-z0-9]+)(?: = (\d+))?,$", enum, re.MULTILINE
+    )
+    rust_roles = []
+    next_ordinal = 0
+    for name, explicit_ordinal in declarations:
+        ordinal = int(explicit_ordinal) if explicit_ordinal else next_ordinal
+        rust_roles.append((name, str(ordinal)))
+        next_ordinal = ordinal + 1
+    expected = [
+        (
+            "".join(part[:1].upper() + part[1:] for part in role.split("_")),
+            str(ordinal),
+        )
+        for ordinal, role in enumerate(VERIFIER.ARTIFACT_ROLES)
+    ]
+    assert rust_roles == expected
+    assert len(rust_roles) == 42
+
+
+def test_native_inner_mint_profiles_are_required_and_authenticated() -> None:
+    """Pin native requirements without claiming to verify a native profile here."""
+
+    native = (
+        ROOT / "crates/iroha_core/src/zk/kagemusha_v1_recursion/native_backend.rs"
+    ).read_text()
+    config = (ROOT / "crates/iroha_core/src/smartcontracts/isi/kagemusha.rs").read_text()
+    native_profile = native.split(
+        "pub struct KagemushaRecursiveVerifierProfileV1 {", 1
+    )[1].split("}", 1)[0]
+    config_profile = config.split(
+        "struct KagemushaRecursiveVerifierProfileFileV1 {", 1
+    )[1].split("}", 1)[0]
+    native_fields = re.findall(r"pub (\w+): BaseCircuitParams,", native_profile)
+    config_fields = re.findall(
+        r"^    (\w+): KagemushaBaseCircuitProfileFileV1,", config_profile, re.MULTILINE
+    )
+    assert native_fields == config_fields
+    inner_fields = (
+        "inner_mint_authorization_eq",
+        "inner_mint_authorization_ep",
+        "inner_mint_eq",
+        "inner_mint_ep",
+    )
+    assert tuple(native_fields[-4:]) == inner_fields
+    digest_impl = native.split("impl KagemushaRecursiveVerifierProfileV1 {", 1)[1].split(
+        "    fn validate(&self)", 1
+    )[0]
+    validation_impl = native.split("    fn validate(&self)", 1)[1].split(
+        "        if self.mint_eq_protocol_digest", 1
+    )[0]
+    for tag, field in enumerate(inner_fields, start=18):
+        assert re.search(rf"\({tag}(?:_u8)?, &self\.{field}\)", digest_impl)
+        assert f"&self.{field}" in validation_impl
+
+
+@pytest.mark.parametrize("missing_role", [None, *VERIFIER.ARTIFACT_ROLES[34:]])
+def test_release_rejects_missing_inner_mint_artifacts(
+    tmp_path: Path, missing_role: str | None
+) -> None:
+    fixture = _fixture(tmp_path)
+    fixture.manifest["artifacts"] = [
+        row
+        for row in fixture.manifest["artifacts"]
+        if (
+            row["role"] != missing_role
+            if missing_role is not None
+            else row["role"] not in VERIFIER.ARTIFACT_ROLES[34:]
+        )
+    ]
+    fixture.write_manifest()
+    result = _run(fixture)
+    assert result.returncode == 1
+    assert "artifact inventory must contain exactly the 42 V1 roles" in result.stderr
+
+
+def test_release_rejects_reordered_inner_mint_artifacts(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    artifacts = fixture.manifest["artifacts"]
+    artifacts[34], artifacts[38] = artifacts[38], artifacts[34]
+    fixture.write_manifest()
+    result = _run(fixture)
+    assert result.returncode == 1
+    assert "artifact inventory is not in the canonical V1 role order" in result.stderr
+
+
+def test_public_message_inventory_matches_current_rust_exchange() -> None:
+    source = (
+        ROOT / "crates/iroha_data_model/src/kagemusha/kagemusha_v1.rs"
+    ).read_text()
+    signature = re.search(
+        r"pub fn validate_kagemusha_complete_exchange_shape_v1\((.*?)\) ->",
+        source,
+        re.DOTALL,
+    )
+    assert signature is not None
+    rust_messages = re.findall(r": &(Kagemusha[A-Za-z0-9]+V1)", signature.group(1))
+    python_messages = [
+        "Kagemusha"
+        + "".join(part[:1].upper() + part[1:] for part in name.split("_"))
+        + "V1"
+        for name in VERIFIER.PUBLIC_MESSAGES
+    ]
+    assert python_messages == rust_messages
+    payment = source.split("pub struct KagemushaPaymentV1 {", 1)[1].split("}", 1)[0]
+    assert "pub proof: KagemushaPaymentProofV1" in payment
+
+
+@pytest.mark.parametrize("suffix", ["pk_eq", "vk_eq", "pk_ep", "vk_ep"])
+def test_release_rejects_retired_pre_ticket_proof_artifact_roles(
+    tmp_path: Path, suffix: str
+) -> None:
+    fixture = _fixture(tmp_path)
+    row = next(
+        row for row in fixture.manifest["artifacts"] if row["role"] == f"commit_wrapper_{suffix}"
+    )
+    row["role"] = "acceptance_intent_" + "authorization_" + suffix
+    fixture.write_manifest()
+    result = _run(fixture)
+    assert result.returncode == 1
+    assert "artifact inventory is not in the canonical V1 role order" in result.stderr
+
+
+@pytest.mark.parametrize("parity", ["eq", "ep"])
+@pytest.mark.parametrize("retain_current", [False, True])
+def test_release_rejects_retired_pre_ticket_proof_protocol_keys(
+    tmp_path: Path, parity: str, retain_current: bool
+) -> None:
+    fixture = _fixture(tmp_path)
+    protocols = fixture.manifest["protocols"]
+    current = f"commit_wrapper_{parity}_protocol_digest"
+    retired = "acceptance_intent_" + f"authorization_{parity}_protocol_digest"
+    protocols[retired] = protocols[current]
+    if not retain_current:
+        del protocols[current]
+    fixture.write_manifest()
+    result = _run(fixture)
+    assert result.returncode == 1
+    assert "compiled protocols fields must be exactly" in result.stderr
+
+
+@pytest.mark.parametrize("location", ["matrix", "report"])
+def test_release_rejects_retired_pre_ticket_proof_relation(
+    tmp_path: Path, location: str
+) -> None:
+    fixture = _fixture(tmp_path)
+    row = next(
+        row
+        for row in fixture.manifest["profiles"][0]["relations"]
+        if row["relation"] == "commit_wrapper"
+    )
+    retired = "acceptance_intent_" + "authorization"
+    if location == "matrix":
+        row["relation"] = retired
+        fixture.write_manifest()
+        expected_error = "profile relation matrix is not in canonical order"
+    else:
+        report = json.loads(fixture.path(row["report"]).read_text())
+        report["relation"] = retired
+        fixture.write(row["report"], VERIFIER.canonical_json_bytes(report), "report")
+        fixture.resign_commands_for_file(row["report"])
+        fixture.refresh_files()
+        expected_error = "typed report relation binding differs from its matrix row"
+    result = _run(fixture)
+    assert result.returncode == 1
+    assert expected_error in result.stderr
+
+
 def test_valid_closure_derives_complete_projection_deterministically(tmp_path: Path) -> None:
     fixture = _fixture(tmp_path)
     first = _run(fixture)
@@ -806,18 +1131,31 @@ def test_valid_closure_derives_complete_projection_deterministically(tmp_path: P
     assert first.stdout == second.stdout
     projection = json.loads(first.stdout)
     profile = projection["receipt_projection"]["profile_qualifications"][0]
+    assert [row["relation"] for row in profile["relations"]] == list(
+        VERIFIER.RELATIONS
+    )
     assert len(profile["relations"]) == 8
-    assert [row["relation"] for row in profile["relations"]][-2:] == [
-        "acceptance_intent_authorization",
-        "commit_wrapper",
-    ]
-    acceptance_authorization = profile["relations"][-2]
-    assert acceptance_authorization["eq_verifying_key"]["role"] == "commit_wrapper_vk_eq"
-    assert acceptance_authorization["ep_verifying_key"]["role"] == "commit_wrapper_vk_ep"
+    assert {
+        row["eq_verifying_key"]["role"] for row in profile["relations"]
+    } == {
+        "state_vk_eq",
+        "terminal_authorization_vk_eq",
+        "commit_wrapper_vk_eq",
+    }
+    assert {
+        row["ep_verifying_key"]["role"] for row in profile["relations"]
+    } == {
+        "state_vk_ep",
+        "terminal_authorization_vk_ep",
+        "commit_wrapper_vk_ep",
+    }
     assert len(profile["helper_circuits"]) == 4
     assert [row["helper"] for row in profile["helper_circuits"]] == list(
         VERIFIER.HELPERS
     )
+    assert [
+        row["occupancy"] for row in profile["receive_fold_occupancies"]
+    ] == list(range(1, VERIFIER.RECEIVE_FOLD_BATCH_WIDTH + 1))
     for helper in profile["helper_circuits"][2:]:
         expected_eq, expected_ep = INTERNAL_HELPER_PROOF_LENGTHS[helper["helper"]]
         assert helper["eq_proof_bytes"] == expected_eq
@@ -829,13 +1167,36 @@ def test_valid_closure_derives_complete_projection_deterministically(tmp_path: P
     assert profile["aggregate_balance"]["independent_payments"] == 1000
     assert profile["aggregate_balance"]["folded_credits"] == 1000
     assert profile["aggregate_balance"]["spend_payments"] == 1
-    assert len(profile["acceptance_cases"]) == 45
-    assert len(projection["artifact_inventory"]) == 26
-    assert [row["role"] for row in projection["artifact_inventory"]][6:10] == [
+    assert [row["case"] for row in profile["acceptance_cases"]] == list(
+        VERIFIER.ACCEPTANCE_CASES
+    )
+    assert len(profile["acceptance_cases"]) == len(VERIFIER.ACCEPTANCE_CASES)
+    assert len(projection["artifact_inventory"]) == 42
+    assert [row["role"] for row in projection["artifact_inventory"]][2:10] == [
+        "inner_state_pk_eq",
+        "inner_state_vk_eq",
+        "inner_state_pk_ep",
+        "inner_state_vk_ep",
+        "state_pk_eq",
+        "state_vk_eq",
+        "state_pk_ep",
+        "state_vk_ep",
+    ]
+    assert [row["role"] for row in projection["artifact_inventory"]][10:14] == [
         "mint_authorization_pk_eq",
         "mint_authorization_vk_eq",
         "mint_authorization_pk_ep",
         "mint_authorization_vk_ep",
+    ]
+    assert [row["role"] for row in projection["artifact_inventory"]][34:42] == [
+        "inner_mint_authorization_pk_eq",
+        "inner_mint_authorization_vk_eq",
+        "inner_mint_authorization_pk_ep",
+        "inner_mint_authorization_vk_ep",
+        "inner_mint_credit_pk_eq",
+        "inner_mint_credit_vk_eq",
+        "inner_mint_credit_pk_ep",
+        "inner_mint_credit_vk_ep",
     ]
     assert len(projection["verifier_commands"]) == len(fixture.commands)
     candidate_context_digest = projection["receipt_projection"]["evidence_closure"][
@@ -849,7 +1210,7 @@ def test_valid_closure_derives_complete_projection_deterministically(tmp_path: P
     assert first.stdout.encode() == VERIFIER.canonical_json_bytes(projection)
 
 
-def test_exact_proof_raw_and_text_limits_are_admitted(tmp_path: Path) -> None:
+def test_exact_proof_and_complete_exchange_limits_are_admitted(tmp_path: Path) -> None:
     fixture = _fixture(tmp_path)
     fixture.write(fixture.proof_paths[0], b"P" * 6_528, "proof")
     fixture.resign_commands_for_file(fixture.proof_paths[0])
@@ -860,11 +1221,11 @@ def test_exact_proof_raw_and_text_limits_are_admitted(tmp_path: Path) -> None:
     wire_helper_proof = wire_helper_report["proof"]
     fixture.write(wire_helper_proof, b"H" * 6_528, "proof")
     fixture.resign_commands_for_file(wire_helper_proof)
-    for relative in fixture.raw_paths:
-        fixture.write(relative, b"R" * 9_211, "raw_session")
+    for relative in fixture.raw_complete_exchange_paths:
+        fixture.write(relative, b"R" * 9_211, "raw_complete_exchange")
         fixture.resign_commands_for_file(relative)
-    for relative in fixture.text_paths:
-        fixture.write(relative, b"T" * 12_288, "text_session")
+    for relative in fixture.text_complete_exchange_paths:
+        fixture.write(relative, b"T" * 12_288, "text_complete_exchange")
         fixture.resign_commands_for_file(relative)
     fixture.refresh_files()
     result = _run(fixture)
@@ -874,16 +1235,106 @@ def test_exact_proof_raw_and_text_limits_are_admitted(tmp_path: Path) -> None:
     assert profile["helper_circuits"][0]["complete_proof_bytes"] == 6_528
     assert profile["helper_circuits"][0]["eq_proof_bytes"] == 0
     assert profile["helper_circuits"][0]["ep_proof_bytes"] == 0
-    assert {row["raw_session_bytes"] for row in profile["recursive_depths"]} == {9_211}
-    assert {row["text_session_bytes"] for row in profile["recursive_depths"]} == {12_288}
+    assert {
+        row["raw_complete_exchange_bytes"] for row in profile["recursive_depths"]
+    } == {9_211}
+    assert {
+        row["text_complete_exchange_bytes"] for row in profile["recursive_depths"]
+    } == {12_288}
+    assert profile["envelope"]["raw_complete_exchange_bytes"] == 9_211
+    assert profile["envelope"]["text_complete_exchange_bytes"] == 12_288
+    retired_measurements = {
+        "raw_" + "ses" + "sion_bytes",
+        "text_" + "ses" + "sion_bytes",
+    }
+    assert retired_measurements.isdisjoint(profile["envelope"])
+    assert all(
+        retired_measurements.isdisjoint(row) for row in profile["recursive_depths"]
+    )
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        [
+            "payment_request",
+            "acceptance_intent_" + "authorization",
+            "payment",
+            "acknowledgement",
+        ],
+        [
+            "payment_request",
+            "acceptance_intent",
+            "payment",
+            "acknowledgement",
+        ],
+        [
+            "payment_request",
+            "acceptance_ticket",
+            "payment",
+            "acknowledgement",
+        ],
+        [
+            "payment_request",
+            "receipt",
+        ],
+    ],
+)
+def test_envelope_requires_exact_three_message_protocol(
+    tmp_path: Path, messages: list[str]
+) -> None:
+    fixture = _fixture(tmp_path)
+    envelope_report = fixture.manifest["profiles"][0]["envelope"]
+    report = json.loads(fixture.path(envelope_report).read_text())
+    report["messages"] = messages
+    fixture.write(envelope_report, VERIFIER.canonical_json_bytes(report), "report")
+    fixture.resign_commands_for_file(envelope_report)
+    fixture.refresh_files()
+    result = _run(fixture)
+    assert result.returncode == 1
+    assert "exactly payment_request, payment, and acknowledgement" in result.stderr
+
+
+@pytest.mark.parametrize("representation", ("raw", "text"))
+def test_envelope_rejects_retired_artifact_keys(
+    tmp_path: Path, representation: str
+) -> None:
+    fixture = _fixture(tmp_path)
+    envelope_report = fixture.manifest["profiles"][0]["envelope"]
+    report = json.loads(fixture.path(envelope_report).read_text())
+    current_key = f"{representation}_complete_exchange"
+    retired_key = f"{representation}_" + "ses" + "sion"
+    report[retired_key] = report.pop(current_key)
+    fixture.write(envelope_report, VERIFIER.canonical_json_bytes(report), "report")
+    fixture.resign_commands_for_file(envelope_report)
+    fixture.refresh_files()
+    result = _run(fixture)
+    assert result.returncode == 1
+    assert "fields must be exactly" in result.stderr
+    assert "raw_complete_exchange" in result.stderr
+    assert "text_complete_exchange" in result.stderr
+
+
+@pytest.mark.parametrize("representation", ("raw", "text"))
+def test_manifest_rejects_retired_complete_exchange_file_kinds(
+    tmp_path: Path, representation: str
+) -> None:
+    fixture = _fixture(tmp_path)
+    paths = getattr(fixture, f"{representation}_complete_exchange_paths")
+    retired_kind = f"{representation}_" + "ses" + "sion"
+    fixture.kinds[paths[0]] = retired_kind
+    fixture.refresh_files()
+    result = _run(fixture)
+    assert result.returncode == 1
+    assert "has unsupported kind" in result.stderr
 
 
 @pytest.mark.parametrize(
     ("kind", "limit", "collection"),
     [
         ("proof", 6_528, "proof_paths"),
-        ("raw_session", 9_211, "raw_paths"),
-        ("text_session", 12_288, "text_paths"),
+        ("raw_complete_exchange", 9_211, "raw_complete_exchange_paths"),
+        ("text_complete_exchange", 12_288, "text_complete_exchange_paths"),
     ],
 )
 def test_exact_size_gates_reject_one_byte_over(
@@ -956,7 +1407,25 @@ def test_closed_matrices_reject_missing_rows(tmp_path: Path, matrix: str) -> Non
     digest = fixture.write_manifest()
     result = _run(fixture, digest)
     assert result.returncode == 1
-    assert "matrix" in result.stderr or "45 acceptance" in result.stderr
+    if matrix == "acceptance_cases":
+        assert (
+            f"exactly {len(VERIFIER.ACCEPTANCE_CASES)} acceptance cases"
+            in result.stderr
+        )
+    else:
+        assert "matrix" in result.stderr
+
+
+def test_acceptance_matrix_rejects_noncanonical_order(tmp_path: Path) -> None:
+    fixture = _fixture(tmp_path)
+    rows = fixture.manifest["profiles"][0]["acceptance_cases"]
+    rows[0], rows[1] = rows[1], rows[0]
+    digest = fixture.write_manifest()
+    result = _run(fixture, digest)
+    assert result.returncode == 1
+    assert (
+        f"canonical {len(VERIFIER.ACCEPTANCE_CASES)}-case order" in result.stderr
+    )
 
 
 def test_manifest_digest_and_file_digest_are_both_pinned(tmp_path: Path) -> None:
@@ -1032,6 +1501,25 @@ def test_one_measurement_sample_cannot_alias_two_matrix_cells(tmp_path: Path) ->
     assert "measurement sample" in result.stderr and "aliased" in result.stderr
 
 
+def test_receive_fold_occupancies_are_exactly_one_through_sixteen(
+    tmp_path: Path,
+) -> None:
+    missing = _fixture(tmp_path / "missing")
+    missing.manifest["profiles"][0]["receive_fold_occupancies"].pop()
+    missing.write_manifest()
+    result = _run(missing)
+    assert result.returncode == 1
+    assert "exactly 1 through 16" in result.stderr
+
+    unordered = _fixture(tmp_path / "unordered")
+    rows = unordered.manifest["profiles"][0]["receive_fold_occupancies"]
+    rows[0], rows[1] = rows[1], rows[0]
+    unordered.write_manifest()
+    result = _run(unordered)
+    assert result.returncode == 1
+    assert "exactly 1 through 16" in result.stderr
+
+
 def test_counts_are_derived_from_typed_logs(tmp_path: Path) -> None:
     fixture = _fixture(tmp_path)
     log = fixture.path("logs/depth-1024.jsonl")
@@ -1068,14 +1556,33 @@ def test_observation_must_be_signed_and_match_its_transcript(tmp_path: Path) -> 
     assert "invalid approval" in failed.stderr
 
 
-def test_wrapper_uses_distinct_protocol_and_verifying_key_roles(tmp_path: Path) -> None:
+def test_direct_relation_rejects_inner_state_verifying_key(tmp_path: Path) -> None:
     fixture = _fixture(tmp_path)
-    wrapper_row = fixture.manifest["profiles"][0]["relations"][-1]
-    report_path = fixture.path(wrapper_row["report"])
+    relation_row = fixture.manifest["profiles"][0]["relations"][-1]
+    report_path = fixture.path(relation_row["report"])
     report = json.loads(report_path.read_text())
-    report["eq_protocol_digest"] = fixture.manifest["protocols"]["state_eq_protocol_digest"]
-    fixture.write(wrapper_row["report"], VERIFIER.canonical_json_bytes(report), "report")
-    fixture.resign_commands_for_file(wrapper_row["report"])
+    old_key = report["eq_verifying_key"]
+    report["eq_verifying_key"] = next(
+        row["path"]
+        for row in fixture.manifest["artifacts"]
+        if row["role"] == "inner_state_vk_eq"
+    )
+    fixture.write(
+        relation_row["report"], VERIFIER.canonical_json_bytes(report), "report"
+    )
+    command = next(
+        row
+        for row in fixture.commands
+        if row["id"] == report["verification_id"]
+    )
+    command["arguments"] = [
+        {"file": report["eq_verifying_key"]}
+        if argument == {"file": old_key}
+        else argument
+        for argument in command["arguments"]
+    ]
+    command["arguments"] = sorted(command["arguments"], key=lambda value: value["file"])
+    fixture.resign_command(command["id"])
     fixture.refresh_files()
     result = _run(fixture)
     assert result.returncode == 1

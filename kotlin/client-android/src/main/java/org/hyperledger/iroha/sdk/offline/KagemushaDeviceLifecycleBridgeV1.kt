@@ -5,11 +5,11 @@ import java.nio.ByteOrder
 import java.security.MessageDigest
 
 /**
- * Fail-closed Android entry point for the Kagemusha V1 secure-device lifecycle.
+ * Fail-closed Android entry point for the KAGEMUSHA V1 secure-device lifecycle.
  *
  * Android KeyMint single-use signing keys do not provide the atomic journal, authenticated
  * multi-credit inbox, trusted clock, exact-next counter, hardware-epoch rotation, or authenticated
- * payment outbox required by Kagemusha V1. This bridge therefore becomes available only when
+ * payment outbox required by KAGEMUSHA V1. This bridge therefore becomes available only when
  * the loaded native bridge exposes the complete hardware capability frame. Missing symbols,
  * partial capabilities, malformed replies, and every native failure leave the wallet online-only.
  * There is no software backend or downgrade path.
@@ -18,7 +18,7 @@ class KagemushaDeviceLifecycleBridgeV1 private constructor(
     private val endpoint: Endpoint?,
     private val acceptedCapabilities: Capabilities?,
 ) {
-    /** Whether this device may execute the complete Kagemusha lifecycle. */
+    /** Whether this device may execute the complete KAGEMUSHA lifecycle. */
     enum class Availability {
         /** No qualifying secure backend is present; ordinary online wallet use remains valid. */
         ONLINE_ONLY,
@@ -41,23 +41,25 @@ class KagemushaDeviceLifecycleBridgeV1 private constructor(
         RECOVER_INBOUND_INBOX_PAGE(4),
         PREPARE_EXACT_NEXT_TRANSITION(5),
         RECOVER_PREPARED_TRANSITION(6),
-        ABANDON_UNCOMMITTED_PREPARED_TRANSITION(7),
-        COMMIT_VERIFIED_CANDIDATE(8),
-        RECOVER_TERMINAL_COMMIT_CERTIFICATE(9),
-        INSTALL_FINAL_COMMIT_WRAPPER(10),
-        RECOVER_INSTALLED_ENVELOPE_OR_STATE_PROOF(11),
-        SIGN_RECEIVE_ACKNOWLEDGEMENT(12),
-        RELEASE_OUTBOX_ENTRY(13),
-        READ_TRUSTED_TIME_OR_LEASE(14),
-        PREPARE_MINT_AUTHORIZATION(15),
-        RECOVER_MINT_AUTHORIZATION(16),
-        VERIFY_AUTHORIZATION_AND_STAGE_MINT_CREDIT(17),
-        FOLD_RECEIVE(18),
-        READ_PENDING_CREDIT_WATERMARK(19),
-        ROTATE_HARDWARE_EPOCH(20),
+        COMMIT_VERIFIED_CANDIDATE_AND_SIGN_TERMINAL(7),
+        RECOVER_TERMINAL_OUTCOME(8),
+        INSTALL_TERMINAL_ENVELOPE(9),
+        RECOVER_INSTALLED_ENVELOPE_OR_STATE_PROOF(10),
+        SIGN_RECEIVE_ACKNOWLEDGEMENT(11),
+        RELEASE_OUTBOX_ENTRY(12),
+        READ_TRUSTED_TIME_OR_LEASE(13),
+        PREPARE_MINT_AUTHORIZATION(14),
+        RECOVER_MINT_AUTHORIZATION(15),
+        VERIFY_AUTHORIZATION_AND_STAGE_MINT_CREDIT(16),
+        FOLD_RECEIVE_CREDIT(17),
+        READ_PENDING_CREDIT_WATERMARK(18),
+        ROTATE_HARDWARE_EPOCH(19),
+        BOOTSTRAP_AGGREGATE_STATE(20),
+        RECOVER_WALLET_SNAPSHOT(21),
+        CREATE_SIGNED_PAYMENT_REQUEST(22),
     }
 
-    /** Exact secure-backend capabilities required by Kagemusha V1. */
+    /** Exact secure-backend capabilities required by KAGEMUSHA V1. */
     enum class Capability(val mask: Int) {
         EXACT_NEXT_PREDECESSOR_CONSUMPTION(1 shl 0),
         ONE_USE_SUCCESSOR_AUTHORIZATION(1 shl 1),
@@ -72,7 +74,7 @@ class KagemushaDeviceLifecycleBridgeV1 private constructor(
         ATOMIC_VERIFIED_CANDIDATE_COMMIT(1 shl 10),
         RECOVERABLE_TERMINAL_COMMIT_CERTIFICATE(1 shl 11),
         TRUSTED_TIME_OR_LEASE(1 shl 12),
-        KAGEMUSHA_HARDWARE_EPOCH_ROTATION(1 shl 13),
+        OFFLINE_HARDWARE_EPOCH_ROTATION(1 shl 13),
         ROLLBACK_SAFE_COUNTER_ROLLOVER(1 shl 14),
         NO_SOFTWARE_FALLBACK(1 shl 15),
     }
@@ -95,19 +97,20 @@ class KagemushaDeviceLifecycleBridgeV1 private constructor(
     /** Accepted, exact secure-backend identity. */
     class Capabilities internal constructor(
         hardwarePolicyId: ByteArray,
-        attestationDigest: ByteArray,
+        qualificationReportDigest: ByteArray,
     ) {
         init {
             requireDigest(hardwarePolicyId, "hardwarePolicyId")
-            requireDigest(attestationDigest, "attestationDigest")
+            requireDigest(qualificationReportDigest, "qualificationReportDigest")
         }
 
         private val policy = hardwarePolicyId.copyOf()
-        private val attestation = attestationDigest.copyOf()
+        private val qualificationReport = qualificationReportDigest.copyOf()
 
         fun hardwarePolicyId(): ByteArray = policy.copyOf()
 
-        fun attestationDigest(): ByteArray = attestation.copyOf()
+        fun qualificationReportDigest(): ByteArray = qualificationReport.copyOf()
+
     }
 
     /** Bounded result returned by the secure backend. */
@@ -142,28 +145,58 @@ class KagemushaDeviceLifecycleBridgeV1 private constructor(
      * Execute one exact canonical Core command.
      *
      * [requestId] is a non-zero 32-byte idempotency binding. [canonicalCommand] is the bounded,
-     * canonical Kagemusha V1 command archive for [operation].
+     * canonical KAGEMUSHA V1 command archive for [operation].
      */
-    fun execute(
+    /**
+     * Execute one command and expose a success only after the native P-256 verifier admits the
+     * complete response transcript. Operation 1 bootstraps its key from the qualification payload;
+     * every later operation requires the 65-byte SEC1 key accepted from that exchange.
+     */
+    fun executeAuthenticated(
         operation: Operation,
         requestId: ByteArray,
         canonicalCommand: ByteArray,
+        acceptedDevicePublicKey: ByteArray?,
     ): Result {
         val nativeEndpoint = endpoint
             ?: throw IllegalStateException(ONLINE_ONLY_MESSAGE)
+        val responseKey = when (operation) {
+            Operation.READ_ACTIVE_HARDWARE_CREDENTIAL -> {
+                require(acceptedDevicePublicKey == null) {
+                    "operation 1 bootstraps its device public key"
+                }
+                null
+            }
+            else -> requireDevicePublicKey(acceptedDevicePublicKey)
+        }
         val request = Codec.encodeCommand(operation, requestId, canonicalCommand)
         val rawResponse = try {
             nativeEndpoint.execute(request)
         } catch (error: RuntimeException) {
-            throw IllegalStateException("Kagemusha V1 secure backend execution failed", error)
+            throw IllegalStateException("KAGEMUSHA V1 secure backend execution failed", error)
         } catch (error: LinkageError) {
-            throw IllegalStateException("Kagemusha V1 secure backend execution failed", error)
+            throw IllegalStateException("KAGEMUSHA V1 secure backend execution failed", error)
         } finally {
             request.fill(0)
         }
         return try {
-            Codec.decodeResponse(rawResponse, operation, requestId)
+            val result = Codec.decodeResponse(rawResponse, operation, requestId)
+            if (result.status == Status.SUCCESS) {
+                val capabilities = checkNotNull(acceptedCapabilities)
+                require(
+                    nativeEndpoint.verifyResponseAuthenticator(
+                        rawResponse,
+                        operation,
+                        requestId,
+                        capabilities.hardwarePolicyId(),
+                        capabilities.qualificationReportDigest(),
+                        responseKey,
+                    ),
+                ) { "KAGEMUSHA response authenticator verification failed" }
+            }
+            result
         } finally {
+            responseKey?.fill(0)
             rawResponse.fill(0)
         }
     }
@@ -172,13 +205,35 @@ class KagemushaDeviceLifecycleBridgeV1 private constructor(
         fun capabilities(): ByteArray
 
         fun execute(command: ByteArray): ByteArray
+
+        fun verifyResponseAuthenticator(
+            response: ByteArray,
+            operation: Operation,
+            requestId: ByteArray,
+            hardwarePolicyId: ByteArray,
+            qualificationReportDigest: ByteArray,
+            acceptedDevicePublicKey: ByteArray?,
+        ): Boolean = try {
+            NativeEndpoint.verifyResponseAuthenticator(
+                response,
+                operation,
+                requestId,
+                hardwarePolicyId,
+                qualificationReportDigest,
+                acceptedDevicePublicKey,
+            )
+        } catch (_: RuntimeException) {
+            false
+        } catch (_: LinkageError) {
+            false
+        }
     }
 
     companion object {
         const val PROTOCOL_VERSION: Int = 1
         const val MAXIMUM_COMMAND_PAYLOAD_BYTES: Int = 64 * 1024
         const val MAXIMUM_RESPONSE_PAYLOAD_BYTES: Int = 64 * 1024
-        const val MAXIMUM_AUTHENTICATOR_BYTES: Int = 8 * 1024
+        const val MAXIMUM_AUTHENTICATOR_BYTES: Int = 64
 
         private const val LIBRARY_NAME = "connect_norito_bridge"
         private const val ANDROID_PLATFORM_CODE = 1
@@ -186,7 +241,7 @@ class KagemushaDeviceLifecycleBridgeV1 private constructor(
             mask or capability.mask
         }
         private const val ONLINE_ONLY_MESSAGE =
-            "Kagemusha V1 requires a rollback-resistant secure journal/outbox backend; this device remains online-only"
+            "KAGEMUSHA V1 requires a rollback-resistant secure journal/outbox backend; this device remains online-only"
 
         /** Discover the optional native secure backend without permitting a software fallback. */
         @JvmStatic
@@ -204,14 +259,19 @@ class KagemushaDeviceLifecycleBridgeV1 private constructor(
             KagemushaDeviceLifecycleBridgeV1(null, null)
 
         internal fun withEndpointForTests(endpoint: Endpoint): KagemushaDeviceLifecycleBridgeV1 {
+            return withSecureElementEndpoint(endpoint)
+        }
+
+        /** Admit an access-controlled platform endpoint only after the exact full capability frame. */
+        internal fun withSecureElementEndpoint(endpoint: Endpoint): KagemushaDeviceLifecycleBridgeV1 {
             val capabilities = Codec.decodeCapabilities(endpoint.capabilities(), ANDROID_PLATFORM_CODE)
             return KagemushaDeviceLifecycleBridgeV1(endpoint, capabilities)
         }
     }
 
     private object NativeEndpoint : Endpoint {
-        // TODO: implement these optional JNI methods only for an audited OEM/StrongBox service
-        // that can attest every required capability; stock AndroidKeyStore is insufficient.
+        // Qualified product builds bind these JNI methods only to an audited OEM/StrongBox
+        // service that attests every required capability; stock AndroidKeyStore is insufficient.
         fun create(): Endpoint? = try {
             System.loadLibrary(LIBRARY_NAME)
             val capabilities = nativeCapabilitiesV1()
@@ -224,23 +284,49 @@ class KagemushaDeviceLifecycleBridgeV1 private constructor(
 
         override fun capabilities(): ByteArray =
             nativeCapabilitiesV1()
-                ?: throw IllegalStateException("native Kagemusha V1 capabilities are unavailable")
+                ?: throw IllegalStateException("native KAGEMUSHA V1 capabilities are unavailable")
 
         override fun execute(command: ByteArray): ByteArray {
             val nativeCommand = command.copyOf()
             return try {
                 nativeExecuteV1(nativeCommand)
-                    ?: throw IllegalStateException("native Kagemusha V1 execution returned no response")
+                    ?: throw IllegalStateException("native KAGEMUSHA V1 execution returned no response")
             } finally {
                 nativeCommand.fill(0)
             }
         }
+
+        override fun verifyResponseAuthenticator(
+            response: ByteArray,
+            operation: Operation,
+            requestId: ByteArray,
+            hardwarePolicyId: ByteArray,
+            qualificationReportDigest: ByteArray,
+            acceptedDevicePublicKey: ByteArray?,
+        ): Boolean = nativeVerifyResponseAuthenticatorV1(
+            response,
+            operation.code,
+            requestId,
+            hardwarePolicyId,
+            qualificationReportDigest,
+            acceptedDevicePublicKey,
+        )
 
         @JvmStatic
         private external fun nativeCapabilitiesV1(): ByteArray?
 
         @JvmStatic
         private external fun nativeExecuteV1(command: ByteArray): ByteArray?
+
+        @JvmStatic
+        private external fun nativeVerifyResponseAuthenticatorV1(
+            response: ByteArray,
+            operation: Int,
+            requestId: ByteArray,
+            hardwarePolicyId: ByteArray,
+            qualificationReportDigest: ByteArray,
+            acceptedDevicePublicKey: ByteArray?,
+        ): Boolean
     }
 
     internal object Codec {
@@ -252,19 +338,19 @@ class KagemushaDeviceLifecycleBridgeV1 private constructor(
         private const val RESPONSE_HEADER_BYTES = 116
 
         fun decodeCapabilities(encoded: ByteArray, expectedPlatform: Int): Capabilities {
-            require(encoded.size == CAPABILITY_BYTES) { "invalid Kagemusha V1 capability size" }
+            require(encoded.size == CAPABILITY_BYTES) { "invalid KAGEMUSHA V1 capability size" }
             val input = reader(encoded)
             requireMagic(input, capabilityMagic, "capabilities")
-            require(readU16(input) == PROTOCOL_VERSION) { "unsupported Kagemusha device bridge version" }
-            require(readU8(input) == expectedPlatform) { "Kagemusha device bridge platform mismatch" }
-            require(readU8(input) == 0) { "non-canonical Kagemusha capability flags" }
-            require(readU32(input) == REQUIRED_FEATURES.toLong()) { "incomplete Kagemusha secure backend" }
-            require(readU32(input) == MAXIMUM_COMMAND_PAYLOAD_BYTES.toLong()) { "Kagemusha command bound mismatch" }
-            require(readU32(input) == MAXIMUM_RESPONSE_PAYLOAD_BYTES.toLong()) { "Kagemusha response bound mismatch" }
+            require(readU16(input) == PROTOCOL_VERSION) { "unsupported KAGEMUSHA device bridge version" }
+            require(readU8(input) == expectedPlatform) { "KAGEMUSHA device bridge platform mismatch" }
+            require(readU8(input) == 0) { "non-canonical KAGEMUSHA capability flags" }
+            require(readU32(input) == REQUIRED_FEATURES.toLong()) { "incomplete KAGEMUSHA secure backend" }
+            require(readU32(input) == MAXIMUM_COMMAND_PAYLOAD_BYTES.toLong()) { "KAGEMUSHA command bound mismatch" }
+            require(readU32(input) == MAXIMUM_RESPONSE_PAYLOAD_BYTES.toLong()) { "KAGEMUSHA response bound mismatch" }
             val policy = ByteArray(32).also(input::get)
             val attestation = ByteArray(32).also(input::get)
-            require(readU64(input) == 0L) { "non-canonical Kagemusha capability trailer" }
-            require(!policy.contentEquals(attestation)) { "Kagemusha policy and attestation bindings must differ" }
+            require(readU64(input) == 0L) { "non-canonical KAGEMUSHA capability trailer" }
+            require(!policy.contentEquals(attestation)) { "KAGEMUSHA policy and attestation bindings must differ" }
             return Capabilities(policy, attestation)
         }
 
@@ -294,9 +380,9 @@ class KagemushaDeviceLifecycleBridgeV1 private constructor(
             expectedOperation: Operation,
             expectedRequestId: ByteArray,
         ): Result {
-            require(encoded.size >= RESPONSE_HEADER_BYTES) { "truncated Kagemusha V1 response" }
+            require(encoded.size >= RESPONSE_HEADER_BYTES) { "truncated KAGEMUSHA V1 response" }
             require(encoded.size <= RESPONSE_HEADER_BYTES + MAXIMUM_RESPONSE_PAYLOAD_BYTES + MAXIMUM_AUTHENTICATOR_BYTES) {
-                "oversized Kagemusha V1 response"
+                "oversized KAGEMUSHA V1 response"
             }
             val input = reader(encoded)
             var payload = ByteArray(0)
@@ -304,33 +390,36 @@ class KagemushaDeviceLifecycleBridgeV1 private constructor(
             var transferred = false
             try {
                 requireMagic(input, responseMagic, "response")
-                require(readU16(input) == PROTOCOL_VERSION) { "unsupported Kagemusha device bridge version" }
+                require(readU16(input) == PROTOCOL_VERSION) { "unsupported KAGEMUSHA device bridge version" }
                 val operationCode = readU8(input)
                 val operation = Operation.values().singleOrNull { it.code == operationCode }
-                    ?: throw IllegalArgumentException("unknown Kagemusha V1 operation")
-                require(operation == expectedOperation) { "Kagemusha response operation mismatch" }
+                    ?: throw IllegalArgumentException("unknown KAGEMUSHA V1 operation")
+                require(operation == expectedOperation) { "KAGEMUSHA response operation mismatch" }
                 val statusCode = readU8(input)
                 val status = Status.values().singleOrNull { it.code == statusCode }
-                    ?: throw IllegalArgumentException("unknown Kagemusha V1 status")
+                    ?: throw IllegalArgumentException("unknown KAGEMUSHA V1 status")
                 val requestId = ByteArray(32).also(input::get)
-                require(MessageDigest.isEqual(requestId, expectedRequestId)) { "Kagemusha response request mismatch" }
+                require(MessageDigest.isEqual(requestId, expectedRequestId)) { "KAGEMUSHA response request mismatch" }
                 val payloadLength = readBoundedLength(input, MAXIMUM_RESPONSE_PAYLOAD_BYTES, "payload")
                 val authenticatorLength = readBoundedLength(input, MAXIMUM_AUTHENTICATOR_BYTES, "authenticator")
                 val payloadDigest = ByteArray(32).also(input::get)
                 val authenticatorDigest = ByteArray(32).also(input::get)
-                require(input.remaining() == payloadLength + authenticatorLength) { "Kagemusha response length mismatch" }
+                require(input.remaining() == payloadLength + authenticatorLength) { "KAGEMUSHA response length mismatch" }
                 payload = ByteArray(payloadLength).also(input::get)
                 authenticator = ByteArray(authenticatorLength).also(input::get)
-                require(MessageDigest.isEqual(payloadDigest, sha256(payload))) { "Kagemusha response payload digest mismatch" }
-                require(MessageDigest.isEqual(authenticatorDigest, sha256(authenticator))) { "Kagemusha response authenticator digest mismatch" }
+                require(MessageDigest.isEqual(payloadDigest, sha256(payload))) { "KAGEMUSHA response payload digest mismatch" }
+                require(MessageDigest.isEqual(authenticatorDigest, sha256(authenticator))) { "KAGEMUSHA response authenticator digest mismatch" }
                 if (status == Status.SUCCESS) {
-                    require(payload.isNotEmpty()) { "successful Kagemusha response has no payload" }
-                    require(authenticator.isNotEmpty() && authenticator.any { it != 0.toByte() }) {
-                        "successful Kagemusha response is unauthenticated"
+                    require(payload.isNotEmpty()) { "successful KAGEMUSHA response has no payload" }
+                    require(
+                        authenticator.size == MAXIMUM_AUTHENTICATOR_BYTES &&
+                            authenticator.any { it != 0.toByte() },
+                    ) {
+                        "successful KAGEMUSHA response requires one exact 64-byte authenticator"
                     }
                 } else {
                     require(payload.isEmpty() && authenticator.isEmpty()) {
-                        "failed Kagemusha response must not expose bytes"
+                        "failed KAGEMUSHA response must not expose bytes"
                     }
                 }
                 val result = Result(operation, status, payload, authenticator)
@@ -395,12 +484,12 @@ class KagemushaDeviceLifecycleBridgeV1 private constructor(
 
         private fun requireMagic(input: ByteBuffer, expected: ByteArray, label: String) {
             val actual = ByteArray(expected.size).also(input::get)
-            require(actual.contentEquals(expected)) { "invalid Kagemusha V1 $label magic" }
+            require(actual.contentEquals(expected)) { "invalid KAGEMUSHA V1 $label magic" }
         }
 
         private fun readBoundedLength(input: ByteBuffer, maximum: Int, label: String): Int {
             val value = readU32(input)
-            require(value <= maximum.toLong()) { "Kagemusha response $label exceeds its bound" }
+            require(value <= maximum.toLong()) { "KAGEMUSHA response $label exceeds its bound" }
             return value.toInt()
         }
 
@@ -429,4 +518,12 @@ private fun requireDigest(value: ByteArray, field: String) {
     require(value.size == 32 && value.any { it != 0.toByte() }) {
         "$field must be exactly 32 non-zero bytes"
     }
+}
+
+private fun requireDevicePublicKey(value: ByteArray?): ByteArray {
+    require(value != null && value.size == 65 && value[0] == 4.toByte() &&
+        value.drop(1).any { it != 0.toByte() }) {
+        "operations 2 through 22 require the accepted 65-byte uncompressed SEC1 device key"
+    }
+    return value.copyOf()
 }

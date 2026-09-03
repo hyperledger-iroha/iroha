@@ -1,4 +1,4 @@
-//! Kagemusha V1 command configuration tests.
+//! KAGEMUSHA V1 command configuration tests.
 
 use super::*;
 use iroha_crypto::ExposedPrivateKey;
@@ -24,12 +24,12 @@ impl TestKeyFile {
                 .create_new(true)
                 .mode(0o600)
                 .open(&path)
-                .expect("create owner-only Kagemusha V1 key file");
+                .expect("create owner-only KAGEMUSHA V1 key file");
             file.write_all(contents.as_bytes())
-                .expect("write Kagemusha V1 key file");
+                .expect("write KAGEMUSHA V1 key file");
         }
         #[cfg(not(unix))]
-        fs::write(&path, contents).expect("write Kagemusha V1 key file");
+        fs::write(&path, contents).expect("write KAGEMUSHA V1 key file");
         Self(path)
     }
     fn missing() -> Self {
@@ -49,9 +49,9 @@ impl Drop for TestKeyFile {
 fn sample() -> ToriiKagemushaV1Commands {
     let key_pair = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
     ToriiKagemushaV1Commands {
-        private_key: Some(key_pair.private_key().clone()),
-        private_key_file: None,
-        minimum_xor_balance: Quantity::from(25_u32),
+        redemption_private_key: Some(key_pair.private_key().clone()),
+        redemption_private_key_file: None,
+        redemption_minimum_xor_balance: Some(Quantity::from(25_u32)),
         max_tx_value: defaults::torii::kagemusha_v1_commands::max_tx_value(),
         operation_registry_max_entries:
             defaults::torii::kagemusha_v1_commands::OPERATION_REGISTRY_MAX_ENTRIES,
@@ -63,22 +63,25 @@ fn parse_valid(config: ToriiKagemushaV1Commands) -> actual::ToriiKagemushaV1Comm
     let mut emitter = Emitter::new();
     let parsed = config
         .parse(&mut emitter)
-        .expect("valid Kagemusha V1 command configuration");
+        .expect("valid KAGEMUSHA V1 command configuration");
     emitter
         .into_result()
-        .expect("valid Kagemusha V1 command configuration must not emit errors");
+        .expect("valid KAGEMUSHA V1 command configuration must not emit errors");
     parsed
 }
-fn assert_rejected(config: ToriiKagemushaV1Commands) {
+fn rejection_report(config: ToriiKagemushaV1Commands) -> String {
     let mut emitter = Emitter::new();
     assert!(config.parse(&mut emitter).is_none());
-    assert!(
-        emitter.into_result().is_err(),
-        "invalid Kagemusha V1 command configuration must emit an error"
-    );
+    let error = emitter
+        .into_result()
+        .expect_err("invalid KAGEMUSHA V1 command configuration must emit an error");
+    format!("{error:?}")
+}
+fn assert_rejected(config: ToriiKagemushaV1Commands) {
+    let _ = rejection_report(config);
 }
 #[test]
-fn parses_minimal_kagemusha_v1_submission_authority() {
+fn parses_kagemusha_v1_redemption_authority() {
     let parsed = parse_valid(sample());
     assert_eq!(
         defaults::torii::kagemusha_v1_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY,
@@ -93,62 +96,103 @@ fn parses_minimal_kagemusha_v1_submission_authority() {
         defaults::torii::kagemusha_v1_commands::OPERATION_REGISTRY_MAX_ENTRIES
     );
     assert_eq!(parsed.operation_registry_max_bytes.get(), 593_920);
-    assert_eq!(parsed.minimum_xor_balance, Quantity::from(25_u32));
+    let issuer = parsed
+        .redemption_issuer
+        .expect("configured redemption issuer");
+    assert_eq!(issuer.minimum_xor_balance, Quantity::from(25_u32));
+    assert!(!parsed.max_tx_value.is_zero());
+}
+
+#[test]
+fn payer_signed_top_up_admission_does_not_require_a_redemption_key() {
+    let mut config = sample();
+    config.redemption_private_key = None;
+    config.redemption_minimum_xor_balance = None;
+    let parsed = parse_valid(config);
+    assert!(parsed.redemption_issuer.is_none());
     assert!(!parsed.max_tx_value.is_zero());
 }
 #[test]
-fn parses_owner_held_kagemusha_v1_submission_key() {
+fn parses_owner_held_kagemusha_v1_redemption_key() {
     let key_pair = KeyPair::from_seed(vec![0x42; 32], Algorithm::Ed25519);
     let key_file = TestKeyFile::create(&format!(
         "{}\n",
         ExposedPrivateKey(key_pair.private_key().clone())
     ));
     let mut config = sample();
-    config.private_key = None;
-    config.private_key_file = Some(WithOrigin::inline(key_file.path().to_path_buf()));
+    config.redemption_private_key = None;
+    config.redemption_private_key_file = Some(WithOrigin::inline(key_file.path().to_path_buf()));
     let parsed = parse_valid(config);
+    let issuer = parsed
+        .redemption_issuer
+        .expect("configured redemption issuer");
     assert_eq!(
-        parsed.authority,
+        issuer.authority,
         AccountId::new(key_pair.public_key().clone())
     );
 }
 #[test]
-fn rejects_duplicate_kagemusha_v1_private_key_sources() {
+fn rejects_duplicate_kagemusha_v1_redemption_private_key_sources() {
     let key_file = TestKeyFile::create("");
     let mut config = sample();
-    config.private_key_file = Some(WithOrigin::inline(key_file.path().to_path_buf()));
-    assert_rejected(config);
+    config.redemption_private_key_file = Some(WithOrigin::inline(key_file.path().to_path_buf()));
+    let report = rejection_report(config);
+    assert!(
+        report.contains("torii.kagemusha_v1_commands.redemption_private_key")
+            && report.contains("torii.kagemusha_v1_commands.redemption_private_key_file"),
+        "unexpected diagnostic: {report}"
+    );
 }
 #[test]
-fn rejects_missing_kagemusha_v1_private_key_source() {
+fn rejects_minimum_balance_without_a_redemption_key() {
     let mut config = sample();
-    config.private_key = None;
-    assert_rejected(config);
+    config.redemption_private_key = None;
+    let report = rejection_report(config);
+    assert!(
+        report.contains("torii.kagemusha_v1_commands.redemption_minimum_xor_balance"),
+        "unexpected diagnostic: {report}"
+    );
+}
+
+#[test]
+fn rejects_redemption_key_without_a_minimum_balance() {
+    let mut config = sample();
+    config.redemption_minimum_xor_balance = None;
+    let report = rejection_report(config);
+    assert!(
+        report.contains("torii.kagemusha_v1_commands.redemption_minimum_xor_balance"),
+        "unexpected diagnostic: {report}"
+    );
 }
 #[test]
-fn rejects_missing_or_malformed_kagemusha_v1_private_key_file() {
+fn rejects_missing_or_malformed_kagemusha_v1_redemption_private_key_file() {
     for key_file in [
         TestKeyFile::missing(),
         TestKeyFile::create("not-a-private-key\n"),
     ] {
         let mut config = sample();
-        config.private_key = None;
-        config.private_key_file = Some(WithOrigin::inline(key_file.path().to_path_buf()));
+        config.redemption_private_key = None;
+        config.redemption_private_key_file =
+            Some(WithOrigin::inline(key_file.path().to_path_buf()));
         assert_rejected(config);
     }
 }
 #[test]
-fn rejects_unsupported_kagemusha_v1_private_key_algorithm() {
+fn rejects_unsupported_kagemusha_v1_redemption_private_key_algorithm() {
     let key_pair = KeyPair::from_seed(vec![0x43; 32], Algorithm::BlsNormal);
     let mut config = sample();
-    config.private_key = Some(key_pair.private_key().clone());
+    config.redemption_private_key = Some(key_pair.private_key().clone());
     assert_rejected(config);
 }
 #[test]
-fn rejects_zero_minimum_xor_balance() {
+fn rejects_zero_redemption_minimum_xor_balance() {
     let mut config = sample();
-    config.minimum_xor_balance = Quantity::zero();
-    assert_rejected(config);
+    config.redemption_minimum_xor_balance = Some(Quantity::zero());
+    let report = rejection_report(config);
+    assert!(
+        report.contains("torii.kagemusha_v1_commands.redemption_minimum_xor_balance"),
+        "unexpected diagnostic: {report}"
+    );
 }
 #[test]
 fn rejects_zero_operation_registry_limits() {

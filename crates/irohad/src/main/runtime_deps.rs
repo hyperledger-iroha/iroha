@@ -450,7 +450,7 @@ impl IrohaRuntimeDeps {
         with_sumeragi_global_beacon_partial_signer(
             signer: Arc<dyn iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1>,
         ) => sumeragi_global_beacon_partial_signer;
-        /// Attach the separately provisioned Pasta authority for Kagemusha
+        /// Attach the separately provisioned Pasta authority for KAGEMUSHA
         /// V1 top-up finality. The seed remains inside this runtime-owned object.
         with_kagemusha_mint_finality_authority(
             authority: Arc<

@@ -1598,6 +1598,120 @@ fn terminal_owner_publishes_completed_and_reopens_exact_producer_carrier() {
             .exactly_covers_recovered_ready_work(&reopened.coordinator)
     );
 }
+
+#[test]
+fn parked_recovered_broadcast_allows_exact_producer_claim() {
+    let fixture = RecoveryFixture::new("parked-broadcast-producer-claim", 0x89);
+    let directory = TempDir::new().expect("temporary parked-Broadcast owner storage");
+    let (mut owner, broadcast_ordinal, paired_ordinal, unrelated_ordinal) =
+        ProductionLifecycleOwnerV1::recovered_broadcast_pair_scheduler_fixture_for_test(
+            fixture.verified.clone(),
+            &fixture.keys[0],
+            directory.path(),
+        );
+    let second_broadcast_ordinal = owner
+        .add_recovered_broadcast_scheduler_fixture_for_test(&fixture.keys[0], 0xD9)
+        .expect("add a second exact unpaired recovered Broadcast");
+    let (request, durable_body, response) = fixture.completed_serve_exchange(
+        owner
+            .body_store
+            .as_mut()
+            .expect("recovered owner retains its exact body store"),
+        7,
+        0xC9,
+        3,
+    );
+
+    assert!(owner.park_recovered_broadcast_for_census_test(broadcast_ordinal));
+    assert!(owner.park_recovered_broadcast_for_census_test(second_broadcast_ordinal));
+    assert!(owner.retire_unrelated_sign_for_finalization_test(paired_ordinal));
+    assert!(owner.retire_unrelated_sign_for_finalization_test(unrelated_ordinal));
+    assert!(
+        owner
+            .registry
+            .registry_mut()
+            .exactly_covers_all_live_work(&fixture.verified, &owner.coordinator),
+        "the terminal paired-Sign lineage must not block fresh Serve admission"
+    );
+
+    let target = super::super::super::LifecycleIngressIoTargetSeal::for_certified_serve_test(
+        fixture.verified.context(),
+        request.request_hash(),
+        1,
+    );
+    let admitted = owner.admit_selected_certified_serve(target, &fixture.keys[0], &request);
+    assert!(matches!(
+        admitted.decision(),
+        Some(super::super::super::AdmissionDecision::Admitted { .. })
+    ));
+    let serve_ordinal = *owner
+        .coordinator
+        .ready_index
+        .iter()
+        .find(|ordinal| {
+            owner.coordinator.records[ordinal].work_class == LifecycleWorkClass::CertifiedServe
+        })
+        .expect("fresh Serve owns the sole Ready service row");
+    let serve_record = &owner.coordinator.records[&serve_ordinal];
+    let TurnPlan::Execute(serve_lease) = owner.coordinator.plan_turn(
+        super::super::super::SchedulerInputs::new(
+            [],
+            [(
+                serve_ordinal,
+                super::super::super::SchedulerReadyInputs::new(serve_record, None, [0; 6]),
+            )],
+        )
+        .expect("one exact Ready Serve scheduler row"),
+    ) else {
+        panic!("fresh Serve must acquire its exact lifecycle lease")
+    };
+    assert_eq!(serve_lease.work_class(), LifecycleWorkClass::CertifiedServe);
+    owner
+        .settle_certified_serve_completed(serve_lease, &request, &durable_body, &response)
+        .expect("publish exact completed Serve beside parked Broadcast");
+
+    let producer_ordinal = serve_ordinal
+        .checked_add(1)
+        .expect("adjacent ProducerTurn ordinal remains representable");
+    let ledger = LifecycleLedgerV1::from_coordinator(&owner.coordinator)
+        .expect("project exact pre-Producer ledger");
+    let attestation = owner
+        .registry
+        .registry_mut()
+        .attest_ready_producer_turn_census(&fixture.verified, &owner.coordinator, &ledger)
+        .expect("attest complete ProducerTurn census")
+        .expect("completed Serve exposes one Ready ProducerTurn");
+    let producer_record = &owner.coordinator.records[&producer_ordinal];
+    let TurnPlan::Execute(producer_lease) = owner.coordinator.plan_turn(
+        super::super::super::SchedulerInputs::new(
+            [],
+            [(
+                producer_ordinal,
+                super::super::super::SchedulerReadyInputs::new(producer_record, None, [0; 6]),
+            )],
+        )
+        .expect("one exact Ready Producer scheduler row"),
+    ) else {
+        panic!("completed Serve must release its adjacent ProducerTurn")
+    };
+    assert_eq!(
+        producer_lease.work_class(),
+        LifecycleWorkClass::ProducerTurn
+    );
+    let claimed = owner
+        .registry
+        .registry_mut()
+        .project_claimed_producer_turn(
+            &fixture.verified,
+            &owner.coordinator,
+            &ledger,
+            producer_lease,
+            attestation,
+        )
+        .expect("parked Broadcast permits the exact active-Producer census");
+    assert_eq!(claimed.lease().ordinal(), producer_ordinal);
+}
+
 #[test]
 fn launched_terminal_owner_settles_exact_worker_body_readback() {
     let fixture = RecoveryFixture::new("terminal-owner-worker-readback", 0x86);
@@ -2005,6 +2119,7 @@ fn terminal_registry_rejects_every_arbitrary_staged_drift_before_callback() {
             .registry
             .registry_mut()
             .prepare_certified_serve_terminal_transition(
+                &fixture.verified,
                 &owner.coordinator,
                 &lease,
                 &request,
@@ -2053,6 +2168,7 @@ fn terminal_registry_rejects_every_arbitrary_staged_drift_before_callback() {
             .registry_mut()
             .publish_certified_serve_terminal_transition(
                 transition,
+                &fixture.verified,
                 &owner.coordinator,
                 &staged,
                 &lease,
@@ -2087,7 +2203,11 @@ fn terminal_registry_rejects_every_arbitrary_staged_drift_before_callback() {
             owner
                 .registry
                 .registry_mut()
-                .preflight_certified_serve_terminal_owner_state(&owner.coordinator, &lease,)
+                .preflight_certified_serve_terminal_owner_state(
+                    &fixture.verified,
+                    &owner.coordinator,
+                    &lease,
+                )
         );
     }
 }

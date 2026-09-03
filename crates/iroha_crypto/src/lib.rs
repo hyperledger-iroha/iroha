@@ -17,14 +17,14 @@ mod hash;
 #[cfg(feature = "pqc")]
 /// Hybrid KEM/DEM helpers used by SoraFS payload envelopes.
 pub mod hybrid;
+/// Qualified-provider cryptography for KAGEMUSHA V1 credit envelopes.
+pub mod kagemusha;
 /// Key exchange protocols.
 pub mod kex;
 mod merkle;
 #[cfg(feature = "pqc")]
 mod mldsa_seed;
 mod multihash;
-/// Qualified-provider cryptography for Kagemusha V1 credit envelopes.
-pub mod kagemusha;
 /// Lane privacy commitment registry (NX-10).
 pub mod privacy;
 mod protocol_key;

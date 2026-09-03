@@ -1,4 +1,4 @@
-/// Canonical files needed to authenticate and load one Kagemusha V1 proof release.
+/// Canonical files needed to authenticate and load one KAGEMUSHA V1 proof release.
 #[derive(Debug, Clone)]
 pub struct KagemushaV1ProofReleaseFiles {
     /// Canonical Norito release manifest.
@@ -15,13 +15,13 @@ pub struct KagemushaV1ProofReleaseFiles {
     pub artifact_directory: PathBuf,
 }
 
-/// Runtime-derived Kagemusha V1 reserve custody accounts and proof authority.
+/// Runtime-derived KAGEMUSHA V1 reserve custody accounts and proof authority.
 #[derive(Debug, Clone)]
 pub struct Kagemusha {
     /// Lazily derived reserve accounts keyed by asset definition.
     ///
     /// This map is runtime state, not operator configuration and not an
-    /// enablement catalog. Every asset can use the Kagemusha instructions.
+    /// enablement catalog. Every asset can use the KAGEMUSHA instructions.
     pub reserve_accounts: BTreeMap<AssetDefinitionId, AccountId>,
     /// Optional threshold-authenticated proof release loaded before replay.
     pub proof_release: Option<KagemushaV1ProofReleaseFiles>,

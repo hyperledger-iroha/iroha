@@ -22,12 +22,16 @@ use iroha_data_model::{
     ChainId, Registrable as _,
     account::{Account, AccountId},
     asset::{AssetDefinitionId, definition::AssetDefinition, id::AssetId},
-    block::consensus_v2::ConsensusMode as WireConsensusMode,
+    block::consensus_v2::{ConsensusMode as WireConsensusMode, SumeragiV2GenesisContextParameters},
     da::commitment::DaProofPolicyBundle,
     domain::{Domain, DomainId},
     hijiri::HijiriParametersV1,
     isi::{
         Grant, InstructionBox, Mint, SetParameter,
+        kagemusha_v1::{
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
+            KagemushaMintFinalityGenesisParametersV1,
+        },
         register::{Register, RegisterPeerWithPop},
     },
     metadata::Metadata,
@@ -167,7 +171,7 @@ pub fn genesis_with_keypair(
     genesis_key_pair: KeyPair,
 ) -> GenesisBlock {
     // Always construct a deterministic, minimal built-in genesis tailored for tests.
-    // This avoids surprises from `defaults/genesis.json` contents and keeps the
+    // This avoids treating `defaults/genesis.template.json` as a runtime manifest and keeps the
     // first transaction shape predictable (e.g., single Upgrade when a sample
     // executor is available).
     init_instruction_registry();
@@ -343,6 +347,41 @@ fn decode_consensus_handshake_metadata(
         .validate()
         .map_err(|error| eyre!("invalid consensus handshake metadata: {error}"))?;
     Ok(metadata)
+}
+
+fn test_kagemusha_mint_finality_genesis_parameters(
+    topology: &UniqueVec<PeerId>,
+) -> KagemushaMintFinalityGenesisParametersV1 {
+    let mut voters = topology.iter().cloned().collect::<Vec<_>>();
+    voters.sort();
+    let validators = voters
+        .into_iter()
+        .enumerate()
+        .map(|(index, validator)| {
+            let seed_byte = 0xA0_u8.wrapping_add(
+                u8::try_from(index).expect("test-network validator index fits in one byte"),
+            );
+            iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                &[seed_byte; 32],
+                0,
+                validator,
+            )
+            .expect("derive independent test-only paired-Pasta validator keys")
+        })
+        .collect();
+    let epoch_roster = KagemushaMintFinalityEpochRosterTemplateV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
+        epoch: 0,
+        validators,
+    };
+    let parameters = KagemushaMintFinalityGenesisParametersV1 {
+        epoch_roster,
+        next_epoch_roster: None,
+    };
+    parameters
+        .validate()
+        .expect("test-network topology must form a canonical mint-finality template");
+    parameters
 }
 fn signed_genesis_consensus_mode(block: &GenesisBlock) -> Result<WireConsensusMode, Report> {
     let mut metadata_entries = Vec::new();
@@ -592,22 +631,41 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         .map(decode_consensus_handshake_metadata)
         .transpose()
         .expect("test-network consensus handshake metadata must be canonical");
-    if let (Some(metadata), Some(mode_override)) =
-        (consensus_handshake_metadata, consensus_mode_override)
-    {
+    if let (Some(metadata), Some(mode_override)) = (
+        consensus_handshake_metadata.as_ref(),
+        consensus_mode_override,
+    ) {
         assert_eq!(
             metadata.mode, mode_override,
             "consensus mode override must agree with signed handshake metadata"
         );
     }
-    let consensus_mode = consensus_handshake_metadata.map_or_else(
+    let consensus_mode = consensus_handshake_metadata.as_ref().map_or_else(
         || consensus_mode_override.unwrap_or(SumeragiConsensusMode::Permissioned),
         |metadata| metadata.mode,
     );
-    if let Some(metadata) = consensus_handshake_metadata {
-        builder = builder
-            .with_block_cadence_ms(metadata.block_cadence_ms)
-            .with_sumeragi_v2_context_parameters(metadata.sumeragi_v2);
+    let (block_cadence_ms, sumeragi_v2, kagemusha_mint_finality) = consensus_handshake_metadata
+        .map_or_else(
+            || {
+                (
+                    None,
+                    SumeragiV2GenesisContextParameters::recommended(),
+                    test_kagemusha_mint_finality_genesis_parameters(&topology),
+                )
+            },
+            |metadata| {
+                (
+                    Some(metadata.block_cadence_ms),
+                    metadata.sumeragi_v2,
+                    metadata.kagemusha_mint_finality,
+                )
+            },
+        );
+    builder = builder
+        .with_sumeragi_v2_context_parameters(sumeragi_v2)
+        .with_kagemusha_mint_finality_genesis_parameters(kagemusha_mint_finality);
+    if let Some(block_cadence_ms) = block_cadence_ms {
+        builder = builder.with_block_cadence_ms(block_cadence_ms);
     }
     if let Some(crypto) = genesis_crypto {
         builder = builder.with_crypto(crypto);
@@ -896,7 +954,10 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         HijiriParametersV1::first_release_genesis().into_custom_parameter(),
     ));
     builder = builder.append_parameter(conf_param);
-    let raw_genesis = builder.build_raw().with_consensus_mode(consensus_mode);
+    let raw_genesis = builder
+        .build_raw()
+        .expect("build canonical test-network genesis manifest")
+        .with_consensus_mode(consensus_mode);
     let block = raw_genesis
         .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
             &genesis_key_pair,

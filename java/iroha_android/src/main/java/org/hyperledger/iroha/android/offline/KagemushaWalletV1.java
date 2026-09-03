@@ -6,6 +6,8 @@ package org.hyperledger.iroha.android.offline;
 import java.math.BigInteger;
 import java.util.Arrays;
 import java.util.Objects;
+import org.hyperledger.iroha.sdk.offline.KagemushaAcceptanceIntentV1;
+import org.hyperledger.iroha.sdk.offline.KagemushaAcceptanceTicketV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaAccountIdV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaAcknowledgementV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaAggregateStateCommitmentV1;
@@ -15,11 +17,13 @@ import org.hyperledger.iroha.sdk.offline.KagemushaHardwareStageDispositionV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaMintAuthorizationV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaMintCreditV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaPaymentRequestV1;
+import org.hyperledger.iroha.sdk.offline.KagemushaPaymentRequestModeV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaPaymentV1;
+import org.hyperledger.iroha.sdk.offline.KagemushaReceiveFoldBatchResultV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaRedemptionVoucherV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaStagedPaymentV1;
 
-/** Java facade over the canonical Kotlin/native-core Kagemusha V1 orchestration. */
+/** Java facade over the canonical Kotlin/native-core KAGEMUSHA V1 orchestration. */
 public final class KagemushaWalletV1 {
   private final org.hyperledger.iroha.sdk.offline.KagemushaWalletV1 delegate;
 
@@ -53,22 +57,75 @@ public final class KagemushaWalletV1 {
 
   public KagemushaPaymentRequestV1 createPaymentRequest(
       final KagemushaAccountIdV1 recipient,
-      final BigInteger amount,
+      final KagemushaPaymentRequestModeV1 requestMode,
       final long validityWindowMillis) {
     return delegate.createPaymentRequest(
         Objects.requireNonNull(recipient, "recipient"),
-        Objects.requireNonNull(amount, "amount"),
+        Objects.requireNonNull(requestMode, "requestMode"),
         validityWindowMillis);
   }
 
-  public KagemushaPaymentV1 send(final KagemushaPaymentRequestV1 request) {
-    return delegate.send(Objects.requireNonNull(request, "request"));
+  public KagemushaAcceptanceIntentV1 prepareAcceptanceIntent(
+      final KagemushaPaymentRequestV1 request, final BigInteger exactAmount) {
+    return delegate.prepareAcceptanceIntent(
+        Objects.requireNonNull(request, "request"),
+        Objects.requireNonNull(exactAmount, "exactAmount"));
+  }
+
+  public KagemushaAcceptanceIntentV1 recoverAcceptanceIntent(
+      final KagemushaPaymentRequestV1 request, final byte[] intentId) {
+    final byte[] copy = Objects.requireNonNull(intentId, "intentId").clone();
+    try {
+      return delegate.recoverAcceptanceIntent(
+          Objects.requireNonNull(request, "request"), copy);
+    } finally {
+      Arrays.fill(copy, (byte) 0);
+    }
+  }
+
+  public KagemushaAcceptanceTicketV1 issueAcceptanceTicket(
+      final KagemushaPaymentRequestV1 request,
+      final KagemushaAcceptanceIntentV1 intent) {
+    return delegate.issueAcceptanceTicket(
+        Objects.requireNonNull(request, "request"),
+        Objects.requireNonNull(intent, "intent"));
+  }
+
+  public KagemushaAcceptanceTicketV1 recoverAcceptanceTicket(
+      final KagemushaPaymentRequestV1 request,
+      final KagemushaAcceptanceIntentV1 intent,
+      final byte[] acceptanceTicketId) {
+    final byte[] copy =
+        Objects.requireNonNull(acceptanceTicketId, "acceptanceTicketId").clone();
+    try {
+      return delegate.recoverAcceptanceTicket(
+          Objects.requireNonNull(request, "request"),
+          Objects.requireNonNull(intent, "intent"),
+          copy);
+    } finally {
+      Arrays.fill(copy, (byte) 0);
+    }
+  }
+
+  public KagemushaPaymentV1 send(
+      final KagemushaPaymentRequestV1 request,
+      final KagemushaAcceptanceIntentV1 intent,
+      final KagemushaAcceptanceTicketV1 ticket) {
+    return delegate.send(
+        Objects.requireNonNull(request, "request"),
+        Objects.requireNonNull(intent, "intent"),
+        Objects.requireNonNull(ticket, "ticket"));
   }
 
   public KagemushaStagedPaymentV1 stagePayment(
-      final KagemushaPaymentRequestV1 request, final KagemushaPaymentV1 payment) {
+      final KagemushaPaymentRequestV1 request,
+      final KagemushaAcceptanceIntentV1 intent,
+      final KagemushaAcceptanceTicketV1 ticket,
+      final KagemushaPaymentV1 payment) {
     return delegate.stagePayment(
         Objects.requireNonNull(request, "request"),
+        Objects.requireNonNull(intent, "intent"),
+        Objects.requireNonNull(ticket, "ticket"),
         Objects.requireNonNull(payment, "payment"));
   }
 
@@ -80,8 +137,8 @@ public final class KagemushaWalletV1 {
         Objects.requireNonNull(mintCredit, "mintCredit"));
   }
 
-  public boolean foldPendingCredit() {
-    return delegate.foldPendingCredit();
+  public KagemushaReceiveFoldBatchResultV1 foldReceiveBatch() {
+    return delegate.foldReceiveBatch();
   }
 
   public BigInteger drainPendingCredits() {
@@ -89,10 +146,17 @@ public final class KagemushaWalletV1 {
   }
 
   public KagemushaPaymentV1 recoverPayment(
-      final KagemushaPaymentRequestV1 request, final byte[] creditId) {
+      final KagemushaPaymentRequestV1 request,
+      final KagemushaAcceptanceIntentV1 intent,
+      final KagemushaAcceptanceTicketV1 ticket,
+      final byte[] creditId) {
     final byte[] copy = Objects.requireNonNull(creditId, "creditId").clone();
     try {
-      return delegate.recoverPayment(Objects.requireNonNull(request, "request"), copy);
+      return delegate.recoverPayment(
+          Objects.requireNonNull(request, "request"),
+          Objects.requireNonNull(intent, "intent"),
+          Objects.requireNonNull(ticket, "ticket"),
+          copy);
     } finally {
       Arrays.fill(copy, (byte) 0);
     }
@@ -100,10 +164,14 @@ public final class KagemushaWalletV1 {
 
   public void recordAcknowledgement(
       final KagemushaPaymentRequestV1 request,
+      final KagemushaAcceptanceIntentV1 intent,
+      final KagemushaAcceptanceTicketV1 ticket,
       final KagemushaPaymentV1 payment,
       final KagemushaAcknowledgementV1 acknowledgement) {
     delegate.recordAcknowledgement(
         Objects.requireNonNull(request, "request"),
+        Objects.requireNonNull(intent, "intent"),
+        Objects.requireNonNull(ticket, "ticket"),
         Objects.requireNonNull(payment, "payment"),
         Objects.requireNonNull(acknowledgement, "acknowledgement"));
   }

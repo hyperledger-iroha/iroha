@@ -106,16 +106,16 @@ pub use iroha_torii_shared::parliament_api::{
 };
 pub use iroha_torii_shared::private_settlement_api::{
     PrivateSettlementAuditApprovalRequestV1, PrivateSettlementAuditApprovalResponseV1,
-    PrivateSettlementAuditorCapsuleResponseV1, PrivateSettlementAvailabilityShareRequestV1,
-    PrivateSettlementAvailabilityShareResponseV1, PrivateSettlementBundleReceiptResponseV1,
-    PrivateSettlementBundleStatusResponseV1, PrivateSettlementBundleSubmitRequestV1,
-    PrivateSettlementBundleSubmitResponseV1, PrivateSettlementCommitVoteRequestV1,
-    PrivateSettlementCommitteeProofResponseV1, PrivateSettlementLegStatusResponseV1,
-    PrivateSettlementLegUploadDispositionV1, PrivateSettlementLegUploadRequestV1,
-    PrivateSettlementLegUploadResponseV1, PrivateSettlementLifecycleDtoV1,
-    PrivateSettlementPhaseCertificateRequestV1, PrivateSettlementPhaseCertificateResponseV1,
-    PrivateSettlementPhaseCertificatesResponseV1, PrivateSettlementPhaseVoteResponseV1,
-    PrivateSettlementPrepareVoteRequestV1,
+    PrivateSettlementAuditorCapsuleRequestV1, PrivateSettlementAuditorCapsuleResponseV1,
+    PrivateSettlementAvailabilityShareRequestV1, PrivateSettlementAvailabilityShareResponseV1,
+    PrivateSettlementBundleReceiptResponseV1, PrivateSettlementBundleStatusResponseV1,
+    PrivateSettlementBundleSubmitRequestV1, PrivateSettlementBundleSubmitResponseV1,
+    PrivateSettlementCommitVoteRequestV1, PrivateSettlementCommitteeProofResponseV1,
+    PrivateSettlementLegStatusResponseV1, PrivateSettlementLegUploadDispositionV1,
+    PrivateSettlementLegUploadRequestV1, PrivateSettlementLegUploadResponseV1,
+    PrivateSettlementLifecycleDtoV1, PrivateSettlementPhaseCertificateRequestV1,
+    PrivateSettlementPhaseCertificateResponseV1, PrivateSettlementPhaseCertificatesResponseV1,
+    PrivateSettlementPhaseVoteResponseV1, PrivateSettlementPrepareVoteRequestV1,
 };
 
 /// Exact public-map count vector returned by the non-shipping APS evidence route.
@@ -147,6 +147,8 @@ pub struct PrivateSettlementTestNetworkStateCountsV1 {
     pub staged_nullifiers: u64,
     /// Staged output-commitment reservations.
     pub staged_output_commitments: u64,
+    /// Globally replicated bundle and opaque resource-index lock rows.
+    pub replicated_staged_locks: u64,
     /// Total staged bundle locks.
     pub staged_locks: u64,
 }
@@ -165,8 +167,10 @@ pub struct PrivateSettlementTestNetworkStateEvidenceResponseV1 {
     pub height: u64,
     /// Combined ledger and staged-lock commitment.
     pub commitment: Hash,
-    /// Commitment to every globally replicated APS ledger map.
+    /// Commitment to every globally replicated APS financial/terminal map.
     pub ledger_commitment: Hash,
+    /// Commitment to the globally replicated all-Prepare lock map.
+    pub replicated_staged_lock_commitment: Hash,
     /// Commitment to every durable staged-lock reservation map.
     pub staged_lock_commitment: Hash,
     /// Exact public-map count vector.
@@ -175,7 +179,7 @@ pub struct PrivateSettlementTestNetworkStateEvidenceResponseV1 {
 pub use iroha_torii_shared::kagemusha_api::{
     KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1, KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V1,
     KagemushaFinalityTrustAnchorV1, KagemushaOperationStatusV1, KagemushaReadinessV1,
-    KagemushaRedemptionRequestV1, KagemushaTopUpRequestV1,
+    KagemushaRedemptionRequestV1, KagemushaTopUpRequestV1, UnverifiedKagemushaOperationStatusV1,
 };
 pub use iroha_torii_shared::sorafs_hedging_billing_api::BillingAcknowledgementProofV1 as SorafsBillingAcknowledgementProof;
 pub use iroha_torii_shared::sumeragi_evidence_api::{
@@ -206,6 +210,9 @@ use iroha_torii_shared::{
     kagemusha_api::{
         KAGEMUSHA_OPERATION_STATUS_ROUTE_PREFIX_V1, KAGEMUSHA_READINESS_MAX_BYTES_V1,
         KagemushaOperationKindV1, KagemushaOperationStateV1,
+        decode_unverified_kagemusha_operation_status_json_v1,
+        decode_unverified_kagemusha_operation_status_v1,
+        validate_kagemusha_top_up_signed_transaction_v1,
     },
     uri as torii_uri,
 };
@@ -9592,7 +9599,7 @@ impl Client {
         };
         if response.body().len() > maximum_bytes {
             return Err(eyre!(
-                "Failed to fetch Kagemusha operation: {representation} response exceeds the {maximum_bytes}-byte limit"
+                "Failed to fetch KAGEMUSHA operation: {representation} response exceeds the {maximum_bytes}-byte limit"
             ));
         }
         Ok(())
@@ -9677,46 +9684,126 @@ impl Client {
     }
     fn validate_kagemusha_submission(
         response: &Response<Vec<u8>>,
-        status: &KagemushaOperationStatusV1,
+        status: &UnverifiedKagemushaOperationStatusV1,
         operation_id: [u8; 32],
         kind: KagemushaOperationKindV1,
     ) -> Result<()> {
-        status
-            .validate()
-            .map_err(|error| eyre!("invalid Kagemusha V1 operation status: {error}"))?;
-        if status.operation_id != operation_id
-            || status.kind != kind
-            || status.state != KagemushaOperationStateV1::Pending
-        {
+        if status.operation_id() != operation_id || status.kind() != kind {
             return Err(eyre!(
-                "accepted Kagemusha V1 response is not the request-bound pending operation"
+                "KAGEMUSHA V1 submission response is not bound to the requested operation"
             ));
         }
         let expected_status_uri = format!(
             "{KAGEMUSHA_OPERATION_STATUS_ROUTE_PREFIX_V1}{}",
             hex::encode(operation_id)
         );
-        let location = response
-            .headers()
-            .get(http::header::LOCATION)
+        let location_values = response.headers().get_all(http::header::LOCATION);
+        let mut locations = location_values.iter();
+        let location = locations
+            .next()
             .and_then(|value| value.to_str().ok())
-            .ok_or_else(|| eyre!("Kagemusha operation response is missing Location"))?;
-        if location != expected_status_uri {
+            .ok_or_else(|| eyre!("KAGEMUSHA operation response is missing Location"))?;
+        if locations.next().is_some() {
             return Err(eyre!(
-                "Kagemusha operation Location does not match the typed status URI"
+                "KAGEMUSHA operation response must include exactly one Location"
             ));
         }
-        let retry_after = response
-            .headers()
-            .get(http::header::RETRY_AFTER)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<u64>().ok())
-            .filter(|seconds| *seconds > 0)
-            .ok_or_else(|| eyre!("Kagemusha operation response has no valid Retry-After"))?;
-        let _ = retry_after;
-        Ok(())
+        if location != expected_status_uri {
+            return Err(eyre!(
+                "KAGEMUSHA operation Location does not match the typed status URI"
+            ));
+        }
+        match (response.status(), status.state()) {
+            (StatusCode::ACCEPTED, KagemushaOperationStateV1::Pending) => {
+                let retry_after_headers = response.headers().get_all(http::header::RETRY_AFTER);
+                let mut retry_after_values = retry_after_headers.iter();
+                retry_after_values
+                    .next()
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .filter(|seconds| *seconds > 0)
+                    .ok_or_else(|| {
+                        eyre!("pending KAGEMUSHA operation response has no valid Retry-After")
+                    })?;
+                if retry_after_values.next().is_some() {
+                    return Err(eyre!(
+                        "pending KAGEMUSHA operation response must include exactly one Retry-After"
+                    ));
+                }
+                Ok(())
+            }
+            (
+                StatusCode::OK,
+                KagemushaOperationStateV1::Applied | KagemushaOperationStateV1::Rejected,
+            ) => {
+                if response.headers().contains_key(http::header::RETRY_AFTER) {
+                    return Err(eyre!(
+                        "terminal KAGEMUSHA operation response must not include Retry-After"
+                    ));
+                }
+                Ok(())
+            }
+            (StatusCode::ACCEPTED, _) => Err(eyre!(
+                "accepted KAGEMUSHA operation response must be pending"
+            )),
+            (StatusCode::OK, _) => Err(eyre!(
+                "successful KAGEMUSHA operation replay response must be terminal"
+            )),
+            _ => Err(
+                ResponseReport::with_msg("Failed to submit KAGEMUSHA operation", response)
+                    .unwrap_or_else(core::convert::identity)
+                    .into(),
+            ),
+        }
     }
-    /// Discover the universally compiled Kagemusha-handoff capability.
+
+    fn parse_unverified_kagemusha_submission_response(
+        response: &Response<Vec<u8>>,
+        preference: WireFormatPreference,
+    ) -> Result<UnverifiedKagemushaOperationStatusV1> {
+        const CONTEXT: &str = "Failed to submit KAGEMUSHA operation";
+        if response.status() != StatusCode::OK && response.status() != StatusCode::ACCEPTED {
+            return Err(ResponseReport::with_msg(CONTEXT, response)
+                .unwrap_or_else(core::convert::identity)
+                .into());
+        }
+        let content_type = Self::response_content_type(response);
+        let media_type = content_type
+            .split(';')
+            .next()
+            .map(str::trim)
+            .unwrap_or_default();
+        let is_json = Self::is_json_content_type(content_type);
+        let is_norito = media_type.eq_ignore_ascii_case(APPLICATION_NORITO);
+        match preference {
+            WireFormatPreference::NoritoOnly if !is_norito => {
+                return Err(eyre!(
+                    "{CONTEXT}: response violates NoritoOnly: expected content-type `{APPLICATION_NORITO}`"
+                ));
+            }
+            WireFormatPreference::JsonOnly if !is_json => {
+                return Err(eyre!(
+                    "{CONTEXT}: response violates JsonOnly: expected content-type `{APPLICATION_JSON}`"
+                ));
+            }
+            WireFormatPreference::NoritoPreferred
+            | WireFormatPreference::JsonPreferred
+            | WireFormatPreference::NoritoOnly
+            | WireFormatPreference::JsonOnly => {}
+        }
+        if is_json {
+            return decode_unverified_kagemusha_operation_status_json_v1(response.body())
+                .map_err(|error| eyre!("{CONTEXT}: failed to decode JSON payload: {error}"));
+        }
+        if is_norito {
+            return decode_unverified_kagemusha_operation_status_v1(response.body())
+                .map_err(|error| eyre!("{CONTEXT}: failed to decode Norito payload: {error}"));
+        }
+        Err(eyre!(
+            "{CONTEXT}: invalid content-type `{content_type}` (expected application/json or application/x-norito)"
+        ))
+    }
+    /// Discover the universally compiled KAGEMUSHA-handoff capability.
     ///
     /// The capability is independent of backend configuration, asset catalogs,
     /// and dataspace routing, so this request never includes an asset selector.
@@ -9735,40 +9822,44 @@ impl Client {
         let status: KagemushaReadinessV1 = Self::parse_negotiated_typed_response(
             &response,
             StatusCode::OK,
-            "Failed to discover Kagemusha readiness",
+            "Failed to discover KAGEMUSHA readiness",
             self.wire_format_preference,
         )?;
         status
             .validate()
-            .map_err(|error| eyre!("invalid Kagemusha V1 readiness response: {error}"))?;
+            .map_err(|error| eyre!("invalid KAGEMUSHA V1 readiness response: {error}"))?;
         Ok(status)
     }
-    /// Submit a signed Kagemusha top-up operation.
+    /// Submit a signed KAGEMUSHA top-up operation.
     ///
     /// The signed operation ID is also sent as the HTTP idempotency key. Identical retries return
     /// the original operation resource; a changed request under that key is rejected by Torii.
+    /// The returned wrapper exposes only identity and lifecycle state until an Applied result is
+    /// authenticated against a caller-pinned finality anchor.
     ///
     /// # Errors
     /// Returns an error when local request binding validation, encoding, transport, response
     /// decoding, or response-to-request binding validation fails.
     pub fn submit_kagemusha_top_up(
         &self,
-        request: &KagemushaTopUpRequestV1,
-    ) -> Result<KagemushaOperationStatusV1> {
-        request
-            .validate()
-            .wrap_err("invalid Kagemusha V1 top-up request")?;
-        self.submit_kagemusha_operation(
+        transaction: &SignedTransaction,
+    ) -> Result<UnverifiedKagemushaOperationStatusV1> {
+        let request =
+            validate_kagemusha_top_up_signed_transaction_v1(&self.network_id, transaction)
+                .wrap_err("invalid payer-signed KAGEMUSHA V1 top-up transaction")?;
+        self.submit_kagemusha_operation_body(
             torii_uri::KAGEMUSHA_TOP_UP,
-            request,
+            transaction.encode_versioned(),
             request.operation_id,
             KagemushaOperationKindV1::TopUp,
         )
     }
-    /// Submit a signed Kagemusha redemption operation.
+    /// Submit a signed KAGEMUSHA redemption operation.
     ///
     /// The signed operation ID is also sent as the HTTP idempotency key. Identical retries return
     /// the original operation resource; a changed request under that key is rejected by Torii.
+    /// The returned wrapper exposes only identity and lifecycle state until an Applied result is
+    /// authenticated against a caller-pinned finality anchor.
     ///
     /// # Errors
     /// Returns an error when local request binding validation, encoding, transport, response
@@ -9776,10 +9867,10 @@ impl Client {
     pub fn submit_kagemusha_redeem(
         &self,
         request: &KagemushaRedemptionRequestV1,
-    ) -> Result<KagemushaOperationStatusV1> {
+    ) -> Result<UnverifiedKagemushaOperationStatusV1> {
         request
-            .validate()
-            .wrap_err("invalid Kagemusha V1 redemption request")?;
+            .validate_shape()
+            .wrap_err("invalid KAGEMUSHA V1 redemption request")?;
         self.submit_kagemusha_operation(
             torii_uri::KAGEMUSHA_REDEEM,
             request,
@@ -9793,31 +9884,44 @@ impl Client {
         request: &T,
         operation_id: [u8; 32],
         kind: KagemushaOperationKindV1,
-    ) -> Result<KagemushaOperationStatusV1>
+    ) -> Result<UnverifiedKagemushaOperationStatusV1>
     where
         T: norito::NoritoSerialize,
     {
-        let body = to_bytes(request).wrap_err("failed to encode Kagemusha request as Norito")?;
+        let body = to_bytes(request).wrap_err("failed to encode KAGEMUSHA request as Norito")?;
+        self.submit_kagemusha_operation_body(path, body, operation_id, kind)
+    }
+    fn submit_kagemusha_operation_body(
+        &self,
+        path: &str,
+        body: Vec<u8>,
+        operation_id: [u8; 32],
+        kind: KagemushaOperationKindV1,
+    ) -> Result<UnverifiedKagemushaOperationStatusV1> {
         let url = join_torii_url(&self.torii_url, path);
+        let max_response_bytes = match self.wire_format_preference {
+            WireFormatPreference::NoritoOnly => KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V1,
+            WireFormatPreference::NoritoPreferred
+            | WireFormatPreference::JsonPreferred
+            | WireFormatPreference::JsonOnly => KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
+        };
         let response = self.send_builder(
             self.default_request(HttpMethod::POST, url)
                 .header("Content-Type", APPLICATION_NORITO)
                 .header("Accept", self.wire_format_preference.accept_header())
                 .header("Idempotency-Key", &hex::encode(operation_id))
-                .max_response_bytes(KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V1)
+                .max_response_bytes(max_response_bytes)
                 .body(body),
         )?;
         Self::ensure_kagemusha_operation_status_response_size(&response)?;
-        let status: KagemushaOperationStatusV1 = Self::parse_negotiated_typed_response(
+        let status = Self::parse_unverified_kagemusha_submission_response(
             &response,
-            StatusCode::ACCEPTED,
-            "Failed to submit Kagemusha operation",
             self.wire_format_preference,
         )?;
         Self::validate_kagemusha_submission(&response, &status, operation_id, kind)?;
         Ok(status)
     }
-    /// Poll one Kagemusha V1 operation.
+    /// Poll one KAGEMUSHA V1 operation.
     ///
     /// # Errors
     /// Applied results require a caller-pinned finality anchor. Pending and
@@ -9828,7 +9932,7 @@ impl Client {
         trust_anchor: Option<&KagemushaFinalityTrustAnchorV1>,
     ) -> Result<KagemushaOperationStatusV1> {
         if operation_id == [0; 32] {
-            return Err(eyre!("Kagemusha V1 operation id must be non-zero"));
+            return Err(eyre!("KAGEMUSHA V1 operation id must be non-zero"));
         }
         let operation_id_text = hex::encode(operation_id);
         let path = torii_uri::KAGEMUSHA_OPERATION.replace("{operation_id}", &operation_id_text);
@@ -9848,25 +9952,25 @@ impl Client {
         let status: KagemushaOperationStatusV1 = Self::parse_negotiated_typed_response(
             &response,
             StatusCode::OK,
-            "Failed to fetch Kagemusha operation",
+            "Failed to fetch KAGEMUSHA operation",
             self.wire_format_preference,
         )?;
         if status.operation_id != operation_id {
             return Err(eyre!(
-                "Kagemusha V1 operation status is bound to a different operation id"
+                "KAGEMUSHA V1 operation status is bound to a different operation id"
             ));
         }
         if status.state == KagemushaOperationStateV1::Applied {
             let trust_anchor = trust_anchor.ok_or_else(|| {
-                eyre!("applied Kagemusha V1 status requires a caller-pinned finality anchor")
+                eyre!("applied KAGEMUSHA V1 status requires a caller-pinned finality anchor")
             })?;
             status
                 .validate_against(trust_anchor)
-                .map_err(|error| eyre!("untrusted Kagemusha V1 applied status: {error}"))?;
+                .map_err(|error| eyre!("untrusted KAGEMUSHA V1 applied status: {error}"))?;
         } else {
             status
                 .validate()
-                .map_err(|error| eyre!("invalid Kagemusha V1 operation status: {error}"))?;
+                .map_err(|error| eyre!("invalid KAGEMUSHA V1 operation status: {error}"))?;
         }
         Ok(status)
     }
@@ -10266,6 +10370,9 @@ fn mk_response(status: StatusCode, body: Vec<u8>, content_type: Option<&str>) ->
 #[cfg(test)]
 mod kagemusha_v1_client_tests {
     use super::*;
+    use iroha_torii_shared::kagemusha_api::{
+        KagemushaOperationRejectionCodeV1, KagemushaOperationRejectionV1,
+    };
 
     fn pending_status(
         operation_id: [u8; 32],
@@ -10281,10 +10388,36 @@ mod kagemusha_v1_client_tests {
         }
     }
 
+    fn rejected_status(
+        operation_id: [u8; 32],
+        kind: KagemushaOperationKindV1,
+    ) -> KagemushaOperationStatusV1 {
+        KagemushaOperationStatusV1 {
+            version: iroha_torii_shared::kagemusha_api::KAGEMUSHA_CHAIN_VERSION_V1,
+            operation_id,
+            kind,
+            state: KagemushaOperationStateV1::Rejected,
+            result: None,
+            rejection: Some(KagemushaOperationRejectionV1 {
+                code: KagemushaOperationRejectionCodeV1::InvalidRequest,
+                detail_digest: [0x31; 32],
+            }),
+        }
+    }
+
+    fn unverified_status(
+        status: &KagemushaOperationStatusV1,
+    ) -> UnverifiedKagemushaOperationStatusV1 {
+        let encoded = norito::encode_canonical(status).expect("encode operation status");
+        decode_unverified_kagemusha_operation_status_v1(&encoded)
+            .expect("decode unverified operation status")
+    }
+
     #[test]
     fn accepted_status_must_match_operation_kind_and_location() {
         let operation_id = [0x41; 32];
         let status = pending_status(operation_id, KagemushaOperationKindV1::TopUp);
+        let status = unverified_status(&status);
         let response = Response::builder()
             .status(StatusCode::ACCEPTED)
             .header(
@@ -10313,19 +10446,204 @@ mod kagemusha_v1_client_tests {
             )
             .is_err()
         );
+
+        let wrong_location = Response::builder()
+            .status(StatusCode::ACCEPTED)
+            .header(http::header::LOCATION, "/v1/kagemusha/operations/invalid")
+            .header(http::header::RETRY_AFTER, "1")
+            .body(Vec::new())
+            .expect("response");
+        assert!(
+            Client::validate_kagemusha_submission(
+                &wrong_location,
+                &status,
+                operation_id,
+                KagemushaOperationKindV1::TopUp,
+            )
+            .is_err()
+        );
+
+        let missing_retry = Response::builder()
+            .status(StatusCode::ACCEPTED)
+            .header(
+                http::header::LOCATION,
+                format!(
+                    "{KAGEMUSHA_OPERATION_STATUS_ROUTE_PREFIX_V1}{}",
+                    hex::encode(operation_id)
+                ),
+            )
+            .body(Vec::new())
+            .expect("response");
+        assert!(
+            Client::validate_kagemusha_submission(
+                &missing_retry,
+                &status,
+                operation_id,
+                KagemushaOperationKindV1::TopUp,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn terminal_replay_status_uses_ok_location_without_retry_after() {
+        let operation_id = [0x42; 32];
+        let status = rejected_status(operation_id, KagemushaOperationKindV1::TopUp);
+        let status = unverified_status(&status);
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header(
+                http::header::LOCATION,
+                format!(
+                    "{KAGEMUSHA_OPERATION_STATUS_ROUTE_PREFIX_V1}{}",
+                    hex::encode(operation_id)
+                ),
+            )
+            .body(Vec::new())
+            .expect("response");
+        Client::validate_kagemusha_submission(
+            &response,
+            &status,
+            operation_id,
+            KagemushaOperationKindV1::TopUp,
+        )
+        .expect("request-bound terminal status");
+
+        let response_with_retry = Response::builder()
+            .status(StatusCode::OK)
+            .header(
+                http::header::LOCATION,
+                format!(
+                    "{KAGEMUSHA_OPERATION_STATUS_ROUTE_PREFIX_V1}{}",
+                    hex::encode(operation_id)
+                ),
+            )
+            .header(http::header::RETRY_AFTER, "1")
+            .body(Vec::new())
+            .expect("response");
+        assert!(
+            Client::validate_kagemusha_submission(
+                &response_with_retry,
+                &status,
+                operation_id,
+                KagemushaOperationKindV1::TopUp,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn submission_http_status_must_match_operation_state() {
+        let operation_id = [0x43; 32];
+        let location = format!(
+            "{KAGEMUSHA_OPERATION_STATUS_ROUTE_PREFIX_V1}{}",
+            hex::encode(operation_id)
+        );
+        let pending = pending_status(operation_id, KagemushaOperationKindV1::TopUp);
+        let pending = unverified_status(&pending);
+        let ok_pending = Response::builder()
+            .status(StatusCode::OK)
+            .header(http::header::LOCATION, location.as_str())
+            .body(Vec::new())
+            .expect("response");
+        assert!(
+            Client::validate_kagemusha_submission(
+                &ok_pending,
+                &pending,
+                operation_id,
+                KagemushaOperationKindV1::TopUp,
+            )
+            .is_err()
+        );
+
+        let rejected = rejected_status(operation_id, KagemushaOperationKindV1::TopUp);
+        let rejected = unverified_status(&rejected);
+        let accepted_rejected = Response::builder()
+            .status(StatusCode::ACCEPTED)
+            .header(http::header::LOCATION, location.as_str())
+            .header(http::header::RETRY_AFTER, "1")
+            .body(Vec::new())
+            .expect("response");
+        assert!(
+            Client::validate_kagemusha_submission(
+                &accepted_rejected,
+                &rejected,
+                operation_id,
+                KagemushaOperationKindV1::TopUp,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn submission_parser_accepts_bounded_norito_and_json_for_ok_or_accepted() {
+        let operation_id = [0x44; 32];
+        let pending = pending_status(operation_id, KagemushaOperationKindV1::TopUp);
+        let pending_response = Response::builder()
+            .status(StatusCode::ACCEPTED)
+            .header(http::header::CONTENT_TYPE, APPLICATION_NORITO)
+            .body(norito::encode_canonical(&pending).expect("encode pending status"))
+            .expect("response");
+        let decoded = Client::parse_unverified_kagemusha_submission_response(
+            &pending_response,
+            WireFormatPreference::NoritoOnly,
+        )
+        .expect("decode accepted Norito status");
+        assert_eq!(decoded.operation_id(), operation_id);
+        assert_eq!(decoded.state(), KagemushaOperationStateV1::Pending);
+
+        let rejected = rejected_status(operation_id, KagemushaOperationKindV1::TopUp);
+        let rejected_response = Response::builder()
+            .status(StatusCode::OK)
+            .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+            .body(norito::json::to_vec(&rejected).expect("encode rejected status"))
+            .expect("response");
+        let decoded = Client::parse_unverified_kagemusha_submission_response(
+            &rejected_response,
+            WireFormatPreference::JsonOnly,
+        )
+        .expect("decode replayed JSON status");
+        assert_eq!(decoded.operation_id(), operation_id);
+        assert_eq!(decoded.state(), KagemushaOperationStateV1::Rejected);
     }
 
     #[test]
     fn readiness_uses_only_the_kagemusha_v1_contract() {
         let readiness = KagemushaReadinessV1 {
-            kagemusha_handoff_capability: iroha_data_model::kagemusha::KAGEMUSHA_HANDOFF_CAPABILITY_V1
-                .to_owned(),
+            kagemusha_handoff_capability:
+                iroha_data_model::kagemusha::KAGEMUSHA_HANDOFF_CAPABILITY_V1.to_owned(),
             wire_version: iroha_data_model::kagemusha::KAGEMUSHA_WIRE_VERSION_V1,
             device_lifecycle_version:
                 iroha_data_model::kagemusha::KAGEMUSHA_DEVICE_LIFECYCLE_VERSION_V1,
             ready: true,
         };
         readiness.validate().expect("exact V1 readiness");
+    }
+
+    #[test]
+    fn top_up_submission_rejects_anything_but_one_payer_signed_native_instruction() {
+        let client = super::evidence_http_tests::client_with_base_url(
+            super::evidence_http_tests::base_url(),
+        );
+        let transaction = TransactionBuilder::new(
+            client.network_id,
+            client.account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "not a KAGEMUSHA top-up".to_owned())])
+        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+        .try_sign(client.key_pair.private_key())
+        .expect("sign wrong-instruction fixture");
+
+        let error = client
+            .submit_kagemusha_top_up(&transaction)
+            .err()
+            .expect("wrong native instruction must fail before transport");
+        assert!(
+            error
+                .to_string()
+                .contains("invalid payer-signed KAGEMUSHA V1 top-up transaction")
+        );
     }
 }
 #[cfg(test)]
@@ -13223,14 +13541,13 @@ mod evidence_http_tests {
             height: context.height,
             view: 3,
         };
-        let execution_commitment =
-            ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-                Hash::new(b"client evidence parent state"),
-                Hash::new(b"client evidence post state"),
-                Hash::new(b"client evidence ordinary writes"),
-                1,
-                Hash::new(b"client evidence block"),
-            );
+        let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"client evidence parent state"),
+            Hash::new(b"client evidence post state"),
+            Hash::new(b"client evidence ordinary writes"),
+            1,
+            Hash::new(b"client evidence block"),
+        );
         let vote = |seed: u8| Vote {
             round,
             proposal_round: round,
@@ -16230,7 +16547,6 @@ impl Client {
             timeout_ms = %self.transaction_status_timeout.as_millis(),
             "starting tx confirmation listener"
         );
-        let deadline = tokio::time::Instant::now() + self.transaction_status_timeout;
         thread::scope(|scope| {
             let client = self;
             scope
@@ -16276,45 +16592,61 @@ impl Client {
                         };
                         let poll_interval =
                             Self::tx_confirmation_poll_interval(client.transaction_status_timeout);
-                        let mut submit_result_receiver = Some(submit_result_receiver);
                         let hash_for_check = hash;
-                        let result = if let Some(ref mut iterator) = event_iterator {
-                            tokio::time::timeout_at(
-                                deadline,
-                                Self::listen_for_tx_confirmation_loop(
-                                    iterator,
-                                    hash,
-                                    max_queued_duration,
-                                    poll_interval,
-                                    submit_result_receiver.take(),
-                                    || {
-                                        client.transaction_confirmation_status_with_rejection_details(
-                                            hash_for_check,
-                                            entrypoint_hash,
-                                        )
-                                    },
-                                ),
-                            )
-                            .await
-                        } else {
-                            let mut empty_stream = stream::empty::<Result<EventBox>>();
-                            tokio::time::timeout_at(
-                                deadline,
-                                listen_for_tx_confirmation_stream_with_status_check(
-                                    &mut empty_stream,
-                                    hash,
-                                    max_queued_duration,
-                                    poll_interval,
-                                    submit_result_receiver.take(),
-                                    || {
-                                        client.transaction_confirmation_status_with_rejection_details(
-                                            hash_for_check,
-                                            entrypoint_hash,
-                                        )
-                                    },
-                                ),
-                            )
-                            .await
+                        let submission = await_transaction_submission_disposition(
+                            hash,
+                            submit_result_receiver,
+                        )
+                        .await;
+                        let result = match submission {
+                            Ok(()) => {
+                                // The status timeout measures confirmation after Torii has either
+                                // acknowledged admission or reported an indeterminate durable
+                                // admission. Listener setup and the separately bounded HTTP POST
+                                // must not consume this deadline or trigger status reads while the
+                                // POST is still pending.
+                                let deadline = tokio::time::Instant::now()
+                                    + client.transaction_status_timeout;
+                                if let Some(ref mut iterator) = event_iterator {
+                                    tokio::time::timeout_at(
+                                        deadline,
+                                        Self::listen_for_tx_confirmation_loop(
+                                            iterator,
+                                            hash,
+                                            max_queued_duration,
+                                            poll_interval,
+                                            None,
+                                            || {
+                                                client.transaction_confirmation_status_with_rejection_details(
+                                                    hash_for_check,
+                                                    entrypoint_hash,
+                                                )
+                                            },
+                                        ),
+                                    )
+                                    .await
+                                } else {
+                                    let mut empty_stream = stream::empty::<Result<EventBox>>();
+                                    tokio::time::timeout_at(
+                                        deadline,
+                                        listen_for_tx_confirmation_stream_with_status_check(
+                                            &mut empty_stream,
+                                            hash,
+                                            max_queued_duration,
+                                            poll_interval,
+                                            None,
+                                            || {
+                                                client.transaction_confirmation_status_with_rejection_details(
+                                                    hash_for_check,
+                                                    entrypoint_hash,
+                                                )
+                                            },
+                                        ),
+                                    )
+                                    .await
+                                }
+                            }
+                            Err(error) => Ok(Err(error)),
                         };
                         if let Some(iterator) = event_iterator {
                             let close_timeout = Self::tx_confirmation_connect_timeout(
@@ -16473,8 +16805,9 @@ impl Client {
             Ok(outcome) => outcome,
             Err(error) if is_final_tx_confirmation_error(&error) => return Err(error),
             Err(error) => {
+                let diagnostic = format!("{context}; last fallback status error: {error:#}");
                 return Err(unresolved_tx_confirmation_report(
-                    error.wrap_err(context),
+                    fallback_err.wrap_err(diagnostic),
                     outcome_unknown,
                 ));
             }
@@ -16888,7 +17221,7 @@ impl Client {
     ) -> DefaultRequestBuilder {
         // Public Torii ingress accepts a versioned SignedTransaction; internal
         // TransactionEntrypoint wrapping happens on the server boundary.
-        DefaultRequestBuilder::new(
+        let mut request = DefaultRequestBuilder::new(
             HttpMethod::POST,
             join_torii_url(&self.torii_url, torii_uri::TRANSACTION),
         )
@@ -16896,7 +17229,11 @@ impl Client {
         .header("Content-Type", APPLICATION_NORITO)
         .header("Accept", self.wire_format_preference.accept_header())
         .body(payload.as_bytes().to_vec())
-        .max_response_bytes(TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES)
+        .max_response_bytes(TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES);
+        if self.torii_request_timeout != Duration::ZERO {
+            request = request.timeout(self.torii_request_timeout);
+        }
+        request
     }
     /// Submits and waits for globally resolved `Applied` finality.
     /// Returns rejection reason if the transaction is rejected.
@@ -23699,6 +24036,31 @@ fn authoritative_tx_confirmation_result(
         | TxConfirmationStatus::Committed => None,
     }
 }
+async fn await_transaction_submission_disposition(
+    hash: HashOf<SignedTransaction>,
+    submit_result_receiver: tokio::sync::oneshot::Receiver<
+        Result<TransactionSubmissionDisposition>,
+    >,
+) -> Result<()> {
+    match submit_result_receiver.await {
+        Ok(Ok(TransactionSubmissionDisposition::Accepted)) => {
+            debug!(%hash, "transaction submission acknowledged; awaiting terminal status");
+            Ok(())
+        }
+        Ok(Ok(TransactionSubmissionDisposition::QueuePlanOutcomeUnknown(context))) => {
+            debug!(
+                %hash,
+                entrypoint_hash = %context.identity.entrypoint_hash,
+                "QueuePlanSynced admission outcome is unknown; reconciling through authoritative status polling"
+            );
+            Ok(())
+        }
+        Ok(Err(error)) => Err(tx_confirmation_final_report(error)),
+        Err(_recv_error) => Err(tx_confirmation_final_report(eyre!(
+            "transaction submitter thread exited before reporting submit result"
+        ))),
+    }
+}
 #[allow(clippy::too_many_lines)]
 async fn listen_for_tx_confirmation_stream_with_status_check<S, F>(
     event_iterator: &mut S,
@@ -23719,6 +24081,9 @@ where
             "transaction confirmation requires authoritative global status polling"
         )));
     }
+    if let Some(submit_result_receiver) = submit_result_receiver {
+        await_transaction_submission_disposition(hash, submit_result_receiver).await?;
+    }
     // Keep track of the block height in which the transaction was approved
     // so we can later detect the corresponding block finalization event.
     let mut block_height = None;
@@ -23728,37 +24093,9 @@ where
     let mut poll = tokio::time::interval_at(first_poll_at, poll_interval);
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut stream_open = true;
-    let mut submit_result_receiver = submit_result_receiver;
     loop {
         tokio::select! {
             biased;
-            submit_outcome = async {
-                submit_result_receiver
-                    .as_mut()
-                    .expect("submit result branch is gated by receiver presence")
-                    .await
-            }, if submit_result_receiver.is_some() => {
-                match submit_outcome {
-                    Ok(Ok(TransactionSubmissionDisposition::Accepted)) => {
-                        debug!(%hash, "transaction submission acknowledged; awaiting terminal status");
-                        submit_result_receiver = None;
-                    }
-                    Ok(Ok(TransactionSubmissionDisposition::QueuePlanOutcomeUnknown(context))) => {
-                        debug!(
-                            %hash,
-                            entrypoint_hash = %context.identity.entrypoint_hash,
-                            "QueuePlanSynced admission outcome is unknown; reconciling through authoritative status polling"
-                        );
-                        submit_result_receiver = None;
-                    }
-                    Ok(Err(err)) => {
-                        return Err(tx_confirmation_final_report(err));
-                    }
-                    Err(_recv_err) => return Err(tx_confirmation_final_report(eyre!(
-                        "transaction submitter thread exited before reporting submit result"
-                    ))),
-                }
-            }
             () = async move {
                 let queued_at =
                     queued_at.expect("queued timeout branch is gated by queued_at presence");
@@ -24280,6 +24617,41 @@ mod tx_hash_tests {
             err.to_string().contains("fallback error"),
             "unexpected error: {err:?}"
         );
+    }
+    #[tokio::test]
+    async fn fallback_status_error_preserves_original_confirmation_error() {
+        let hash: HashOf<SignedTransaction> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([24_u8; Hash::LENGTH]));
+        for original in [
+            "confirmation deadline elapsed",
+            "Transaction status not finalized",
+        ] {
+            let err = super::Client::resolve_global_status_fallback(
+                || Err(eyre!("429 Too Many Requests: proxy_capacity_exceeded")),
+                hash,
+                Duration::ZERO,
+                0,
+                "transaction confirmation timed out; fallback status check failed",
+                eyre!("{original}"),
+                None,
+            )
+            .await
+            .expect_err("an exhausted fallback must preserve the original confirmation error");
+            let report = format!("{err:#}");
+            assert!(
+                report.contains(original),
+                "missing original error: {report}"
+            );
+            assert!(
+                report.contains("fallback status check failed"),
+                "missing fallback context: {report}"
+            );
+            assert!(report.contains("429"), "missing HTTP diagnostic: {report}");
+            assert!(
+                report.contains("proxy_capacity_exceeded"),
+                "missing structured Torii diagnostic: {report}"
+            );
+        }
     }
     #[tokio::test]
     async fn unresolved_outcome_unknown_fallback_preserves_both_identities() {
@@ -24998,10 +25370,10 @@ mod tx_confirmation_stream_tests {
         assert!(status_checks > 0);
     }
     #[tokio::test]
-    async fn peer_local_terminal_event_racing_before_outcome_unknown_waits_for_global_status() {
+    async fn peer_local_terminal_event_does_not_poll_before_outcome_unknown() {
         use std::sync::{
             Arc,
-            atomic::{AtomicBool, AtomicUsize, Ordering},
+            atomic::{AtomicUsize, Ordering},
         };
 
         let hash: HashOf<SignedTransaction> =
@@ -25021,47 +25393,37 @@ mod tx_confirmation_stream_tests {
             .expect("queue peer-local rejection before submission result");
         let mut events = UnboundedReceiverStream::new(event_receiver);
         let (submit_result_sender, submit_result_receiver) = oneshot::channel();
-        let first_global_check = Arc::new(tokio::sync::Notify::new());
-        let globally_applied = Arc::new(AtomicBool::new(false));
         let status_checks = Arc::new(AtomicUsize::new(0));
         let producer = {
-            let first_global_check = Arc::clone(&first_global_check);
-            let globally_applied = Arc::clone(&globally_applied);
+            let status_checks = Arc::clone(&status_checks);
             tokio::spawn(async move {
-                first_global_check.notified().await;
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                assert_eq!(
+                    status_checks.load(Ordering::SeqCst),
+                    0,
+                    "neither a buffered peer-local event nor the poll timer may query global status before the submission disposition"
+                );
                 submit_result_sender
                     .send(Ok(
                         super::TransactionSubmissionDisposition::QueuePlanOutcomeUnknown(
                             identity.into(),
                         ),
                     ))
-                    .expect("publish outcome-unknown after the local rejection");
-                globally_applied.store(true, Ordering::SeqCst);
-                event_sender
-                    .send(Ok(transaction_event(
-                        hash,
-                        None,
-                        TransactionStatus::Expired,
-                    )))
-                    .expect("wake reconciliation with a peer-local expiry");
+                    .expect("publish outcome-unknown after proving status remained gated");
             })
         };
+        let status_checks_for_poll = Arc::clone(&status_checks);
         let result = tokio::time::timeout(
             Duration::from_millis(200),
             listen_for_tx_confirmation_stream_with_status_check(
                 &mut events,
                 hash,
                 Duration::from_secs(1),
-                Duration::from_secs(1),
+                Duration::from_millis(1),
                 Some(submit_result_receiver),
                 || {
-                    status_checks.fetch_add(1, Ordering::SeqCst);
-                    if globally_applied.load(Ordering::SeqCst) {
-                        Ok(Some(super::TxConfirmationStatus::Applied))
-                    } else {
-                        first_global_check.notify_one();
-                        Ok(None)
-                    }
+                    status_checks_for_poll.fetch_add(1, Ordering::SeqCst);
+                    Ok(Some(super::TxConfirmationStatus::Applied))
                 },
             ),
         )
@@ -25071,8 +25433,8 @@ mod tx_confirmation_stream_tests {
         producer.await.expect("event producer");
         assert_eq!(result, hash);
         assert!(
-            status_checks.load(Ordering::SeqCst) >= 2,
-            "both peer-local terminal events must be checked against global state"
+            status_checks.load(Ordering::SeqCst) >= 1,
+            "the buffered peer-local rejection must be reconciled after outcome-unknown is reported"
         );
     }
     #[tokio::test]
@@ -25196,7 +25558,7 @@ mod tx_confirmation_stream_tests {
                 &mut events,
                 hash,
                 Duration::from_secs(1),
-                Duration::from_millis(100),
+                Duration::from_millis(1),
                 Some(submit_result_receiver),
                 || {
                     status_polled_clone.store(true, Ordering::SeqCst);
@@ -32768,6 +33130,106 @@ mod tests {
         });
     }
     #[test]
+    fn submit_transaction_blocking_applies_configured_torii_request_timeout() {
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = {
+            let snapshots = Arc::clone(&snapshots);
+            move |snapshot: RequestSnapshot| {
+                let path = snapshot.url.path().to_owned();
+                snapshots.lock().expect("snapshot lock").push(snapshot);
+                match path.as_str() {
+                    p if p == torii_uri::TRANSACTION => Ok(json_response(
+                        StatusCode::BAD_REQUEST,
+                        r#"{"code":"transaction_rejected","message":"timeout snapshot rejection"}"#,
+                    )),
+                    "/v1/pipeline/transactions/status" => {
+                        Ok(empty_response(StatusCode::NO_CONTENT))
+                    }
+                    other => panic!("unexpected request path: {other}"),
+                }
+            }
+        };
+        let configured_timeout = Duration::from_millis(1_234);
+        with_mock_http(responder, || {
+            let mut client =
+                client_with_base_url(Url::parse("http://127.0.0.1:1/").expect("valid URL"));
+            mark_data_model_compatible(&client);
+            client.torii_request_timeout = configured_timeout;
+            client.transaction_status_timeout = Duration::from_millis(50);
+            let transaction = empty_transaction(&client);
+            let _ = client
+                .submit_transaction_blocking(&transaction)
+                .expect_err("the mock rejection must terminate blocking submission");
+        });
+
+        let snapshots = snapshots.lock().expect("snapshot lock");
+        let submission = snapshots
+            .iter()
+            .find(|snapshot| snapshot.url.path() == torii_uri::TRANSACTION)
+            .expect("blocking submission must issue one transaction POST");
+        assert_eq!(submission.timeout, Some(configured_timeout));
+    }
+    #[test]
+    fn blocking_confirmation_does_not_poll_before_submit_disposition() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        let mut client =
+            client_with_base_url(Url::parse("http://127.0.0.1:1/").expect("valid URL"));
+        mark_data_model_compatible(&client);
+        client.transaction_status_timeout = Duration::from_millis(25);
+        client.torii_request_timeout = Duration::from_secs(1);
+        let transaction = empty_transaction(&client);
+        let hash = transaction.hash();
+        let status = PipelineTransactionStatusResponse::new(
+            hash.to_string(),
+            iroha_torii_shared::PipelineTransactionStatus {
+                kind: "Applied".to_owned(),
+                block_height: Some(1),
+            },
+            "global".to_owned(),
+            "state".to_owned(),
+        );
+        let status_body = norito::json::to_string(&status).expect("encode global status");
+        let post_completed = Arc::new(AtomicBool::new(false));
+        let status_checks = Arc::new(AtomicUsize::new(0));
+        let premature_status_checks = Arc::new(AtomicUsize::new(0));
+        let responder = {
+            let post_completed = Arc::clone(&post_completed);
+            let status_checks = Arc::clone(&status_checks);
+            let premature_status_checks = Arc::clone(&premature_status_checks);
+            move |snapshot: RequestSnapshot| match snapshot.url.path() {
+                path if path == torii_uri::TRANSACTION => {
+                    std::thread::sleep(Duration::from_millis(75));
+                    post_completed.store(true, Ordering::SeqCst);
+                    Ok(empty_response(StatusCode::ACCEPTED))
+                }
+                "/v1/pipeline/transactions/status" => {
+                    status_checks.fetch_add(1, Ordering::SeqCst);
+                    if !post_completed.load(Ordering::SeqCst) {
+                        premature_status_checks.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Ok(json_response(StatusCode::OK, &status_body))
+                }
+                other => panic!("unexpected request path: {other}"),
+            }
+        };
+
+        let resolved = with_mock_http(responder, || {
+            client.submit_transaction_blocking(&transaction)
+        })
+        .expect("state-resolved Applied must finish blocking confirmation");
+        assert_eq!(resolved, hash);
+        assert!(
+            status_checks.load(Ordering::SeqCst) >= 1,
+            "the post-admission timeout fallback must query global status"
+        );
+        assert_eq!(
+            premature_status_checks.load(Ordering::SeqCst),
+            0,
+            "global status must remain gated until the transaction POST reports its disposition"
+        );
+    }
+    #[test]
     fn nonblocking_queue_plan_exact_outcome_unknown_is_structured_and_never_retried() {
         let client = client_with_base_url(base_url());
         mark_data_model_compatible(&client);
@@ -35153,14 +35615,13 @@ mod tests {
                 )),
                 payload_hash: Hash::new(b"client-qc-payload"),
             },
-            execution_commitment:
-                ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-                    Hash::new(b"client-qc-parent-state"),
-                    Hash::new(b"client-qc-post-state"),
-                    Hash::new(b"client-qc-writes"),
-                    1,
-                    Hash::new(b"client-qc-executed-wire"),
-                ),
+            execution_commitment: ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                Hash::new(b"client-qc-parent-state"),
+                Hash::new(b"client-qc-post-state"),
+                Hash::new(b"client-qc-writes"),
+                1,
+                Hash::new(b"client-qc-executed-wire"),
+            ),
         };
         let response = SumeragiV2QcResponse {
             highest_prepare_qc: Some(certificate),

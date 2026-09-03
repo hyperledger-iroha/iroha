@@ -1,8 +1,8 @@
-//! Authenticated artifact and internal-validation contract for Kagemusha V1.
+//! Authenticated artifact and internal-validation contract for KAGEMUSHA V1.
 
 use super::{
-    KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1, KAGEMUSHA_SESSION_MAX_BYTES_V1,
-    KAGEMUSHA_TEXT_SESSION_MAX_BYTES_V1, KAGEMUSHA_WIRE_VERSION_V1,
+    KAGEMUSHA_COMPLETE_EXCHANGE_MAX_BYTES_V1, KAGEMUSHA_COMPLETE_TEXT_EXCHANGE_MAX_BYTES_V1,
+    KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1, KAGEMUSHA_WIRE_VERSION_V1,
 };
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
@@ -23,11 +23,11 @@ pub const KAGEMUSHA_HELPER_PROVING_KEY_MAX_BYTES_V1: u64 = 64 * 1024 * 1024;
 pub const KAGEMUSHA_VERIFYING_KEY_MAX_BYTES_V1: u64 = 64 * 1024;
 /// Maximum raw proof-evidence bytes for one internal helper parity.
 ///
-/// This is a release-evidence resource ceiling, not a Kagemusha payment
+/// This is a release-evidence resource ceiling, not a KAGEMUSHA payment
 /// transport allowance. The authenticated compiled protocol fixes the exact
 /// admissible length below this ceiling.
 pub const KAGEMUSHA_INTERNAL_HELPER_PROOF_EVIDENCE_MAX_BYTES_V1: u32 = 64 * 1024 * 1024;
-/// Maximum complete preinstalled Kagemusha artifact package.
+/// Maximum complete preinstalled KAGEMUSHA artifact package.
 pub const KAGEMUSHA_ARTIFACT_SET_MAX_BYTES_V1: u64 = 512 * 1024 * 1024;
 /// Maximum whole-process resident memory during proving or verification.
 pub const KAGEMUSHA_PROCESS_RSS_MAX_BYTES_V1: u64 = 128 * 1024 * 1024;
@@ -51,7 +51,7 @@ pub const KAGEMUSHA_HANDOFF_P95_MAX_MS_V1: u32 = 30_000;
 pub const KAGEMUSHA_VALIDATOR_COUNT_V1: u8 = 4;
 /// Maximum trusted authorities in one locally configured release policy.
 pub const KAGEMUSHA_RELEASE_AUTHORITY_MAX_SIGNERS_V1: usize = 32;
-/// Maximum canonical bytes accepted for one Kagemusha V1 release manifest.
+/// Maximum canonical bytes accepted for one KAGEMUSHA V1 release manifest.
 ///
 /// The 64-KiB admission budget accommodates the complete authenticated records
 /// for all 64 embedded hardware profiles; it is enforced before decoding.
@@ -103,29 +103,37 @@ pub enum KagemushaArtifactRoleV1 {
     ParamsEq,
     /// Ep/Fq transparent IPA parameters.
     ParamsEp,
-    /// Eq/Fp state proving key.
+    /// Eq/Fp private recursive aggregate-state carrier proving key.
+    InnerStatePkEq,
+    /// Eq/Fp private recursive aggregate-state carrier verifying key.
+    InnerStateVkEq,
+    /// Ep/Fq private recursive aggregate-state carrier proving key.
+    InnerStatePkEp,
+    /// Ep/Fq private recursive aggregate-state carrier verifying key.
+    InnerStateVkEp,
+    /// Eq/Fp compact outer transport-decider proving key.
     StatePkEq,
-    /// Eq/Fp state verifying key.
+    /// Eq/Fp compact outer transport-decider verifying key.
     StateVkEq,
-    /// Ep/Fq state proving key.
+    /// Ep/Fq compact outer transport-decider proving key.
     StatePkEp,
-    /// Ep/Fq state verifying key.
+    /// Ep/Fq compact outer transport-decider verifying key.
     StateVkEp,
-    /// Eq/Fp mint-authorization helper proving key.
+    /// Eq/Fp compact outer mint-authorization proving key.
     MintAuthorizationPkEq,
-    /// Eq/Fp mint-authorization helper verifying key.
+    /// Eq/Fp compact outer mint-authorization verifying key.
     MintAuthorizationVkEq,
-    /// Ep/Fq mint-authorization helper proving key.
+    /// Ep/Fq compact outer mint-authorization proving key.
     MintAuthorizationPkEp,
-    /// Ep/Fq mint-authorization helper verifying key.
+    /// Ep/Fq compact outer mint-authorization verifying key.
     MintAuthorizationVkEp,
-    /// Eq/Fp finalized mint-credit helper proving key.
+    /// Eq/Fp compact outer finalized mint-credit proving key.
     MintCreditPkEq,
-    /// Eq/Fp finalized mint-credit helper verifying key.
+    /// Eq/Fp compact outer finalized mint-credit verifying key.
     MintCreditVkEq,
-    /// Ep/Fq finalized mint-credit helper proving key.
+    /// Ep/Fq compact outer finalized mint-credit proving key.
     MintCreditPkEp,
-    /// Ep/Fq finalized mint-credit helper verifying key.
+    /// Ep/Fq compact outer finalized mint-credit verifying key.
     MintCreditVkEp,
     /// Eq/Fp provider-neutral hardware-credential proving key.
     PlatformCredentialPkEq,
@@ -143,13 +151,49 @@ pub enum KagemushaArtifactRoleV1 {
     GuardBundlePkEp,
     /// Ep/Fq `GuardBundle` verifying key.
     GuardBundleVkEp,
+    /// Eq/Fp release-reserved `TerminalAuthorization` proving-key role.
+    TerminalAuthorizationPkEq,
+    /// Eq/Fp release-reserved `TerminalAuthorization` verifying-key role.
+    TerminalAuthorizationVkEq,
+    /// Ep/Fq release-reserved `TerminalAuthorization` proving-key role.
+    TerminalAuthorizationPkEp,
+    /// Ep/Fq release-reserved `TerminalAuthorization` verifying-key role.
+    TerminalAuthorizationVkEp,
+    /// Eq/Fp post-commit wrapper proving-key role.
+    CommitWrapperPkEq,
+    /// Eq/Fp post-commit wrapper verifying-key role.
+    CommitWrapperVkEq,
+    /// Ep/Fq post-commit wrapper proving-key role.
+    CommitWrapperPkEp,
+    /// Ep/Fq post-commit wrapper verifying-key role.
+    CommitWrapperVkEp,
+    /// Eq/Fp inner recipient hardware mint-authorization proving key.
+    InnerMintAuthorizationPkEq = 34,
+    /// Eq/Fp inner recipient hardware mint-authorization verifying key.
+    InnerMintAuthorizationVkEq = 35,
+    /// Ep/Fq inner recipient hardware mint-authorization proving key.
+    InnerMintAuthorizationPkEp = 36,
+    /// Ep/Fq inner recipient hardware mint-authorization verifying key.
+    InnerMintAuthorizationVkEp = 37,
+    /// Eq/Fp inner finalized mint-credit and consensus-finality proving key.
+    InnerMintCreditPkEq = 38,
+    /// Eq/Fp inner finalized mint-credit and consensus-finality verifying key.
+    InnerMintCreditVkEq = 39,
+    /// Ep/Fq inner finalized mint-credit and consensus-finality proving key.
+    InnerMintCreditPkEp = 40,
+    /// Ep/Fq inner finalized mint-credit and consensus-finality verifying key.
+    InnerMintCreditVkEp = 41,
 }
 
 impl KagemushaArtifactRoleV1 {
     /// Exact canonically ordered release inventory.
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 42] = [
         Self::ParamsEq,
         Self::ParamsEp,
+        Self::InnerStatePkEq,
+        Self::InnerStateVkEq,
+        Self::InnerStatePkEp,
+        Self::InnerStateVkEp,
         Self::StatePkEq,
         Self::StateVkEq,
         Self::StatePkEp,
@@ -170,6 +214,22 @@ impl KagemushaArtifactRoleV1 {
         Self::GuardBundleVkEq,
         Self::GuardBundlePkEp,
         Self::GuardBundleVkEp,
+        Self::TerminalAuthorizationPkEq,
+        Self::TerminalAuthorizationVkEq,
+        Self::TerminalAuthorizationPkEp,
+        Self::TerminalAuthorizationVkEp,
+        Self::CommitWrapperPkEq,
+        Self::CommitWrapperVkEq,
+        Self::CommitWrapperPkEp,
+        Self::CommitWrapperVkEp,
+        Self::InnerMintAuthorizationPkEq,
+        Self::InnerMintAuthorizationVkEq,
+        Self::InnerMintAuthorizationPkEp,
+        Self::InnerMintAuthorizationVkEp,
+        Self::InnerMintCreditPkEq,
+        Self::InnerMintCreditVkEq,
+        Self::InnerMintCreditPkEp,
+        Self::InnerMintCreditVkEp,
     ];
 
     const fn is_params(self) -> bool {
@@ -177,7 +237,10 @@ impl KagemushaArtifactRoleV1 {
     }
 
     const fn is_state_pk(self) -> bool {
-        matches!(self, Self::StatePkEq | Self::StatePkEp)
+        matches!(
+            self,
+            Self::InnerStatePkEq | Self::InnerStatePkEp | Self::StatePkEq | Self::StatePkEp
+        )
     }
 
     const fn is_helper_pk(self) -> bool {
@@ -191,13 +254,23 @@ impl KagemushaArtifactRoleV1 {
                 | Self::PlatformCredentialPkEp
                 | Self::GuardBundlePkEq
                 | Self::GuardBundlePkEp
+                | Self::TerminalAuthorizationPkEq
+                | Self::TerminalAuthorizationPkEp
+                | Self::CommitWrapperPkEq
+                | Self::CommitWrapperPkEp
+                | Self::InnerMintAuthorizationPkEq
+                | Self::InnerMintAuthorizationPkEp
+                | Self::InnerMintCreditPkEq
+                | Self::InnerMintCreditPkEp
         )
     }
 
     const fn is_vk(self) -> bool {
         matches!(
             self,
-            Self::StateVkEq
+            Self::InnerStateVkEq
+                | Self::InnerStateVkEp
+                | Self::StateVkEq
                 | Self::StateVkEp
                 | Self::MintAuthorizationVkEq
                 | Self::MintAuthorizationVkEp
@@ -207,6 +280,14 @@ impl KagemushaArtifactRoleV1 {
                 | Self::PlatformCredentialVkEp
                 | Self::GuardBundleVkEq
                 | Self::GuardBundleVkEp
+                | Self::TerminalAuthorizationVkEq
+                | Self::TerminalAuthorizationVkEp
+                | Self::CommitWrapperVkEq
+                | Self::CommitWrapperVkEp
+                | Self::InnerMintAuthorizationVkEq
+                | Self::InnerMintAuthorizationVkEp
+                | Self::InnerMintCreditVkEq
+                | Self::InnerMintCreditVkEp
         )
     }
 }
@@ -256,7 +337,7 @@ pub struct KagemushaEnabledProfileV1 {
     /// Exact proof suite admitted for credentials under this profile.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub suite_id: [u8; 32],
-    /// Digest of every authenticated verifier artifact and compiled protocol identity.
+    /// Digest of every authenticated verifier artifact plus state and helper protocol identities.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub vk_digest: [u8; 32],
     /// Digest of this profile's exact typed qualification matrix.
@@ -281,16 +362,19 @@ pub enum KagemushaQualifiedRelationV1 {
     MintFold,
     /// Split one payment from the aggregate balance.
     SendSplit,
-    /// Fold one received credit into the aggregate balance.
+    /// Fold exactly one received credit into the aggregate balance.
     ReceiveFold,
     /// Split an online redemption from the aggregate balance.
     RedeemSplit,
-    /// Rotate the hardware credential and, when governed, the verifier suite without changing
-    /// value.
+    /// Rotate the hardware credential without changing value.
     Rotate,
+    /// Bind a prepared transition to the terminal hardware commit certificate.
+    TerminalAuthorization,
+    /// Bind a payment's aggregate candidate, exact ticket and hardware commit after commitment.
+    CommitWrapper,
 }
 
-/// Helper circuit qualified alongside the six aggregate-state relations.
+/// Helper circuit qualified alongside the eight release relations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "helper", content = "value", rename_all = "snake_case")]
@@ -421,20 +505,50 @@ pub struct KagemushaHelperQualificationV1 {
 
 impl KagemushaQualifiedRelationV1 {
     /// Exact ordered relation set required for every enabled profile.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 8] = [
         Self::Bootstrap,
         Self::MintFold,
         Self::SendSplit,
         Self::ReceiveFold,
         Self::RedeemSplit,
         Self::Rotate,
+        Self::TerminalAuthorization,
+        Self::CommitWrapper,
     ];
 
     const fn expected_vk_roles(self) -> (KagemushaArtifactRoleV1, KagemushaArtifactRoleV1) {
-        (
-            KagemushaArtifactRoleV1::StateVkEq,
-            KagemushaArtifactRoleV1::StateVkEp,
-        )
+        match self {
+            Self::TerminalAuthorization => (
+                KagemushaArtifactRoleV1::TerminalAuthorizationVkEq,
+                KagemushaArtifactRoleV1::TerminalAuthorizationVkEp,
+            ),
+            Self::CommitWrapper => (
+                KagemushaArtifactRoleV1::CommitWrapperVkEq,
+                KagemushaArtifactRoleV1::CommitWrapperVkEp,
+            ),
+            Self::Bootstrap
+            | Self::MintFold
+            | Self::SendSplit
+            | Self::ReceiveFold
+            | Self::RedeemSplit
+            | Self::Rotate => (
+                KagemushaArtifactRoleV1::StateVkEq,
+                KagemushaArtifactRoleV1::StateVkEp,
+            ),
+        }
+    }
+
+    const fn distinct_protocol_index(self) -> Option<usize> {
+        match self {
+            Self::TerminalAuthorization => Some(0),
+            Self::CommitWrapper => Some(1),
+            Self::Bootstrap
+            | Self::MintFold
+            | Self::SendSplit
+            | Self::ReceiveFold
+            | Self::RedeemSplit
+            | Self::Rotate => None,
+        }
     }
 }
 
@@ -484,10 +598,10 @@ pub struct KagemushaRecursiveDepthQualificationV1 {
     pub verified_handoffs: u32,
     /// Exact complete paired-proof bytes at this depth.
     pub complete_proof_bytes: u32,
-    /// Exact complete raw session bytes at this depth.
-    pub raw_session_bytes: u32,
-    /// Exact complete text session bytes at this depth.
-    pub text_session_bytes: u32,
+    /// Exact complete five-message exchange bytes at this depth.
+    pub raw_complete_exchange_bytes: u32,
+    /// Exact complete text-encoded five-message exchange bytes at this depth.
+    pub text_complete_exchange_bytes: u32,
     /// Exact depth-run report.
     pub report: KagemushaEvidenceFileV1,
 }
@@ -524,15 +638,15 @@ pub struct KagemushaThermalQualificationV1 {
     pub report: KagemushaEvidenceFileV1,
 }
 
-/// Complete session-size and handoff measurement for one profile.
+/// Complete five-message exchange-size and handoff measurement for one profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaEnvelopeQualificationV1 {
-    /// Largest complete raw handoff session.
-    pub raw_session_bytes: u32,
-    /// Largest complete text handoff session.
-    pub text_session_bytes: u32,
+    /// Largest complete raw five-message exchange.
+    pub raw_complete_exchange_bytes: u32,
+    /// Largest complete text-encoded five-message exchange.
+    pub text_complete_exchange_bytes: u32,
     /// Slowest qualifying p95 complete handoff, in milliseconds.
     pub handoff_p95_ms: u32,
     /// Exact transport measurement report.
@@ -546,7 +660,7 @@ pub struct KagemushaEnvelopeQualificationV1 {
 pub struct KagemushaProfileQualificationV1 {
     /// Exact enabled profile qualified by this record.
     pub profile: KagemushaEnabledProfileV1,
-    /// Exactly the nine required relations in protocol order.
+    /// Exactly the eight required release relations in protocol order.
     pub relations: Vec<KagemushaRelationQualificationV1>,
     /// Exactly the four required helper circuits in protocol order.
     pub helper_circuits: Vec<KagemushaHelperQualificationV1>,
@@ -573,30 +687,110 @@ pub enum KagemushaAcceptanceCaseV1 {
     ReceiverInboxPressure,
     /// Sender outbox capacity is reserved before commitment.
     SenderOutboxCapacityExhaustion,
-    /// Crash after durable transition-intent staging.
-    CrashAfterTransitionIntentStage,
-    /// Crash during the one authoritative hardware commit.
-    CrashDuringHardwareCommit,
-    /// Crash after hardware commit and before proof completion.
-    CrashAfterHardwareCommitBeforeProof,
-    /// Crash during recursive proof generation.
+    /// Crash during predecessor locking and sealed-input preparation is recoverable.
+    CrashDuringPrepare,
+    /// Crash after durable preparation and before proof generation is recoverable.
+    CrashAfterPrepareBeforeProof,
+    /// Crash during recursive transition-proof generation is recoverable.
     CrashDuringProof,
-    /// Crash after proof completion and before successor-state persistence.
-    CrashAfterProofBeforeStatePersistence,
-    /// Crash after successor-state persistence and before envelope persistence.
-    CrashAfterStatePersistenceBeforeEnvelope,
-    /// Crash after canonical-envelope persistence and before exposure.
-    CrashAfterEnvelopeBeforeExposure,
+    /// Crash after proof completion and before candidate persistence is recoverable.
+    CrashAfterProofBeforeCandidatePersistence,
+    /// Crash while durably persisting the candidate envelope is recoverable.
+    CrashDuringCandidatePersistence,
+    /// Crash after candidate persistence and before local verification is recoverable.
+    CrashAfterCandidatePersistenceBeforeVerification,
+    /// Crash while verifying the persisted candidate is recoverable.
+    CrashDuringCandidateVerification,
+    /// Crash after candidate verification and before hardware commit is recoverable.
+    CrashAfterCandidateVerificationBeforeHardwareCommit,
+    /// Crash during the one authoritative atomic hardware commit is recoverable.
+    CrashDuringHardwareCommit,
+    /// Crash after hardware commit and before terminal authorization is recoverable.
+    CrashAfterHardwareCommitBeforeTerminalAuthorization,
+    /// Crash during terminal authorization or recovery is recoverable.
+    CrashDuringTerminalAuthorization,
+    /// Crash after terminal authorization and before final-envelope persistence is recoverable.
+    CrashAfterTerminalAuthorizationBeforeFinalEnvelopePersistence,
+    /// Crash while persisting the final canonical envelope is recoverable.
+    CrashDuringFinalEnvelopePersistence,
+    /// Crash after final-envelope persistence and before exposure is recoverable.
+    CrashAfterFinalEnvelopePersistenceBeforeExposure,
+    /// Crash while exposing the already-persisted final envelope is recoverable.
+    CrashDuringExposure,
+    /// Crash during transport is recoverable by byte-identical redelivery.
+    CrashDuringTransport,
+    /// Crash after transport and before receiver inbox staging is recoverable.
+    CrashAfterTransportBeforeInboxStage,
     /// Crash while irreversibly staging an inbound credit.
     CrashDuringInboxStage,
     /// Crash after inbound staging and before acknowledgement exposure.
     CrashAfterInboxStageBeforeAck,
+    /// Crash while durably persisting the acknowledgement is recoverable.
+    CrashDuringAckPersistence,
+    /// Crash after acknowledgement persistence and before exposure is recoverable.
+    CrashAfterAckPersistenceBeforeExposure,
+    /// Crash while exposing an already-persisted acknowledgement is recoverable.
+    CrashDuringAckExposure,
+    /// Crash during acknowledgement recovery remains idempotent.
+    CrashDuringAckRecovery,
+    /// Acknowledgement recovery reproduces the same durable acknowledgement.
+    AckRecoveryIdempotence,
+    /// A second crash while recovering any terminal transition remains recoverable.
+    CrashDuringRecovery,
     /// Repeated recovery reproduces the same terminal envelope and acknowledgement.
     RecoveryIdempotence,
+    /// Absence of the sender's proof-bearing authorization fails closed.
+    MissingSenderAuthorization,
+    /// A forged sender authorization fails closed.
+    ForgedSenderAuthorization,
+    /// A replayed sender authorization fails closed.
+    ReplayedSenderAuthorization,
+    /// A sender authorization from another authenticated release fails closed.
+    CrossReleaseSenderAuthorization,
+    /// Absence of the proof-bearing mint authorization fails closed.
+    MissingMintAuthorization,
+    /// A forged mint authorization fails closed.
+    ForgedMintAuthorization,
+    /// A replayed mint authorization fails closed.
+    ReplayedMintAuthorization,
+    /// A mint authorization from another authenticated release fails closed.
+    CrossReleaseMintAuthorization,
     /// Shuffled simultaneous receiver requests remain independent.
     ShuffledConcurrentRequests,
     /// A credit committed in-window remains valid after request expiry.
     DelayedDeliveryAfterRequestExpiry,
+    /// A delayed committed credit remains valid across an ordinary suite rotation.
+    DelayedDeliveryAcrossOrdinarySuiteRotation,
+    /// A delayed committed credit remains valid across a hardware-credential rotation.
+    DelayedDeliveryAcrossCredentialRotation,
+    /// `SingleExact` tickets permit exactly one payment of the requested amount.
+    AcceptanceTicketSingleExact,
+    /// `PartialUntilTotal` tickets admit partial payments only up to the signed total.
+    AcceptanceTicketPartialUntilTotal,
+    /// `BoundedMultiPayment` tickets enforce both the signed amount and payment-count bounds.
+    AcceptanceTicketBoundedMultiPayment,
+    /// `OpenReceive` admits arbitrarily many distinct payments with distinct one-use tickets.
+    AcceptanceTicketOpenReceive,
+    /// Reuse of a one-use acceptance ticket fails closed.
+    AcceptanceTicketReplay,
+    /// Any request, mode, amount, key, capacity, policy, or authorization ticket mismatch fails closed.
+    AcceptanceTicketMismatch,
+    /// An acceptance ticket cannot authorize a sender commit after its deadline.
+    AcceptanceTicketExpiryBeforeCommit,
+    /// A payment committed before the ticket deadline remains receivable after ticket expiry.
+    CommittedPaymentAfterAcceptanceTicketExpiry,
+    /// Request, payment, opening, and proof bind the same positive exact amount.
+    ExactAmountBinding,
+    /// Any amount that violates the signed request mode fails closed.
+    RequestModeAmountMismatchRejection,
+    /// Invoice overpayment, including cumulative overpayment, fails closed.
+    InvoiceOverpaymentRejection,
+    /// Distinct valid payments against the same reusable request are all accepted.
+    DistinctPaymentsSameRequest,
+    /// Shuffled concurrent payments against one reusable request remain independently valid.
+    ShuffledConcurrentPaymentsSameRequest,
+    /// Invoice deduplication remains outside protocol admission.
+    InvoiceDeduplicationApplicationPolicy,
     /// Exact duplicate delivery returns the same durable acknowledgement.
     DuplicateTransport,
     /// Reuse of a credit ID with different bytes fails closed.
@@ -609,24 +803,36 @@ pub enum KagemushaAcceptanceCaseV1 {
     Rollback,
     /// Rollback of trusted hardware time fails closed.
     ClockRollback,
+    /// Expiry of a secure monotonic authorization lease fails closed.
+    MonotonicLeaseExpiry,
     /// Hardware counter reuse or skipping fails closed.
     CounterReuseOrSkip,
     /// Forged hardware-epoch rotation fails closed.
     ForgedEpochRotation,
+    /// A valid hardware-epoch rollover preserves spendable value and replay state.
+    HardwareEpochRollover,
+    /// Hardware-counter rollover never strands funds.
+    HardwareCounterRollover,
+    /// Ordinary verifier rotation carries balance and replay state offline.
+    OrdinaryVerifierRotation,
+    /// Emergency profile suspension preserves online redemption and recovery.
+    EmergencySuspensionOnlineRecovery,
     /// Every checked asset-arithmetic overflow fails closed.
     ArithmeticOverflow,
-    /// Request, payment, opening, and proof bind the same positive exact amount.
-    ExactAmountBinding,
-    /// Any exact-amount mismatch fails closed.
-    WrongAmountRejection,
-    /// Distinct valid payments against the same request are all accepted.
-    DistinctPaymentsSameRequest,
-    /// Concurrent distinct payments against the same request remain independently valid.
-    ConcurrentPaymentsSameRequest,
-    /// Invoice deduplication remains outside protocol admission.
-    InvoiceDeduplicationApplicationPolicy,
     /// Proof or public-output substitution fails closed.
     ProofOutputSubstitution,
+    /// Public transcripts do not reveal sender predecessor/successor state links.
+    TranscriptUnlinkability,
+    /// Every low-order X25519 public-key encoding is rejected before agreement.
+    X25519LowOrderPublicKeyRejection,
+    /// An all-zero X25519 shared secret is rejected before key derivation.
+    X25519ZeroDhRejection,
+    /// AEAD ciphertext or authentication-tag substitution fails closed.
+    AeadCiphertextSubstitution,
+    /// AEAD associated-data substitution fails closed.
+    AeadAssociatedDataSubstitution,
+    /// Injected explicit randomness yields deterministic seal/open known-answer vectors.
+    DeterministicEncryptionInjectedRandomnessKat,
     /// Reserve underflow fails atomically.
     ReserveUnderflow,
     /// Duplicate redemption is idempotent and never debits twice.
@@ -641,19 +847,15 @@ pub enum KagemushaAcceptanceCaseV1 {
     PartialRedemption,
     /// A zero-balance successor can later receive and spend.
     ZeroBalanceContinuation,
-    /// Ordinary verifier rotation carries balance and replay state offline.
-    OrdinaryVerifierRotation,
-    /// Hardware-counter rollover never strands funds.
-    HardwareCounterRollover,
-    /// Emergency profile suspension preserves online redemption and recovery.
-    EmergencySuspensionOnlineRecovery,
     /// Animated QR recovers from qualified frame loss.
     AnimatedQrLossRecovery,
     /// Animated QR recovers from qualified frame reordering.
     AnimatedQrReorderingRecovery,
     /// Static QR is admitted only for messages proven to fit.
     StaticQrSizeGuard,
-    /// Four validators pass activation, restart, and replay.
+    /// Four validators pass activation, restart/replay, finalized top-up, peer transfer,
+    /// full/partial redemption, terminal-nullifier deduplication, and reserve/liability
+    /// conservation as one settlement corridor.
     FourPeerActivationRestartReplay,
     /// Qualified devices complete end-to-end operation in airplane mode.
     PhysicalAirplaneMode,
@@ -665,11 +867,12 @@ pub enum KagemushaAcceptanceCaseV1 {
     PhysicalClockRollback,
     /// Backup/restore cannot fork rollback-resistant state.
     PhysicalBackupRestoreRejection,
-    /// Physical memory and latency measurements satisfy the release caps.
+    /// Physical memory, latency, and energy measurements satisfy the release caps.
     PhysicalMemoryAndLatency,
     /// Physical sustained thermal folding satisfies the release caps.
     PhysicalThermalFolding,
-    /// No software implementation may replace the qualified non-forking service.
+    /// One audited native core owns cryptography and admission; no software fallback or SDK
+    /// reimplementation may replace the qualified non-forking service.
     NoSoftwareFallback,
     /// Swift consumes native-core canonical fixtures without independent cryptography.
     NativeFixtureSwift,
@@ -693,36 +896,82 @@ pub enum KagemushaAcceptanceCaseV1 {
 
 impl KagemushaAcceptanceCaseV1 {
     /// Exact canonically ordered acceptance case set.
-    pub const ALL: [Self; 60] = [
+    pub const ALL: &[Self] = &[
         Self::ReceiverInboxPressure,
         Self::SenderOutboxCapacityExhaustion,
-        Self::CrashAfterTransitionIntentStage,
-        Self::CrashDuringHardwareCommit,
-        Self::CrashAfterHardwareCommitBeforeProof,
+        Self::CrashDuringPrepare,
+        Self::CrashAfterPrepareBeforeProof,
         Self::CrashDuringProof,
-        Self::CrashAfterProofBeforeStatePersistence,
-        Self::CrashAfterStatePersistenceBeforeEnvelope,
-        Self::CrashAfterEnvelopeBeforeExposure,
+        Self::CrashAfterProofBeforeCandidatePersistence,
+        Self::CrashDuringCandidatePersistence,
+        Self::CrashAfterCandidatePersistenceBeforeVerification,
+        Self::CrashDuringCandidateVerification,
+        Self::CrashAfterCandidateVerificationBeforeHardwareCommit,
+        Self::CrashDuringHardwareCommit,
+        Self::CrashAfterHardwareCommitBeforeTerminalAuthorization,
+        Self::CrashDuringTerminalAuthorization,
+        Self::CrashAfterTerminalAuthorizationBeforeFinalEnvelopePersistence,
+        Self::CrashDuringFinalEnvelopePersistence,
+        Self::CrashAfterFinalEnvelopePersistenceBeforeExposure,
+        Self::CrashDuringExposure,
+        Self::CrashDuringTransport,
+        Self::CrashAfterTransportBeforeInboxStage,
         Self::CrashDuringInboxStage,
         Self::CrashAfterInboxStageBeforeAck,
+        Self::CrashDuringAckPersistence,
+        Self::CrashAfterAckPersistenceBeforeExposure,
+        Self::CrashDuringAckExposure,
+        Self::CrashDuringAckRecovery,
+        Self::AckRecoveryIdempotence,
+        Self::CrashDuringRecovery,
         Self::RecoveryIdempotence,
+        Self::MissingSenderAuthorization,
+        Self::ForgedSenderAuthorization,
+        Self::ReplayedSenderAuthorization,
+        Self::CrossReleaseSenderAuthorization,
+        Self::MissingMintAuthorization,
+        Self::ForgedMintAuthorization,
+        Self::ReplayedMintAuthorization,
+        Self::CrossReleaseMintAuthorization,
         Self::ShuffledConcurrentRequests,
         Self::DelayedDeliveryAfterRequestExpiry,
+        Self::DelayedDeliveryAcrossOrdinarySuiteRotation,
+        Self::DelayedDeliveryAcrossCredentialRotation,
+        Self::AcceptanceTicketSingleExact,
+        Self::AcceptanceTicketPartialUntilTotal,
+        Self::AcceptanceTicketBoundedMultiPayment,
+        Self::AcceptanceTicketOpenReceive,
+        Self::AcceptanceTicketReplay,
+        Self::AcceptanceTicketMismatch,
+        Self::AcceptanceTicketExpiryBeforeCommit,
+        Self::CommittedPaymentAfterAcceptanceTicketExpiry,
+        Self::ExactAmountBinding,
+        Self::RequestModeAmountMismatchRejection,
+        Self::InvoiceOverpaymentRejection,
+        Self::DistinctPaymentsSameRequest,
+        Self::ShuffledConcurrentPaymentsSameRequest,
+        Self::InvoiceDeduplicationApplicationPolicy,
         Self::DuplicateTransport,
         Self::SameCreditReplay,
         Self::StaleState,
         Self::TwoSuccessorsFromOnePredecessor,
         Self::Rollback,
         Self::ClockRollback,
+        Self::MonotonicLeaseExpiry,
         Self::CounterReuseOrSkip,
         Self::ForgedEpochRotation,
+        Self::HardwareEpochRollover,
+        Self::HardwareCounterRollover,
+        Self::OrdinaryVerifierRotation,
+        Self::EmergencySuspensionOnlineRecovery,
         Self::ArithmeticOverflow,
-        Self::ExactAmountBinding,
-        Self::WrongAmountRejection,
-        Self::DistinctPaymentsSameRequest,
-        Self::ConcurrentPaymentsSameRequest,
-        Self::InvoiceDeduplicationApplicationPolicy,
         Self::ProofOutputSubstitution,
+        Self::TranscriptUnlinkability,
+        Self::X25519LowOrderPublicKeyRejection,
+        Self::X25519ZeroDhRejection,
+        Self::AeadCiphertextSubstitution,
+        Self::AeadAssociatedDataSubstitution,
+        Self::DeterministicEncryptionInjectedRandomnessKat,
         Self::ReserveUnderflow,
         Self::DuplicateRedemption,
         Self::ConcurrentRedemption,
@@ -730,9 +979,6 @@ impl KagemushaAcceptanceCaseV1 {
         Self::FullRedemption,
         Self::PartialRedemption,
         Self::ZeroBalanceContinuation,
-        Self::OrdinaryVerifierRotation,
-        Self::HardwareCounterRollover,
-        Self::EmergencySuspensionOnlineRecovery,
         Self::AnimatedQrLossRecovery,
         Self::AnimatedQrReorderingRecovery,
         Self::StaticQrSizeGuard,
@@ -837,7 +1083,7 @@ pub struct KagemushaInternalValidationReceiptV1 {
     /// SHA-256 of the unchanged root `Cargo.lock`.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub cargo_lock_digest: [u8; 32],
-    /// Exact circuit/profile digest.
+    /// Exact state/helper circuit-profile digest.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub profile_digest: [u8; 32],
     /// Canonical little-endian Fp Poseidon digest of the compiled Eq protocol exercised by qualification.
@@ -890,7 +1136,7 @@ pub struct KagemushaReleaseManifestV1 {
     /// SHA-256 of the unchanged root `Cargo.lock`.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub cargo_lock_digest: [u8; 32],
-    /// Exact circuit/profile digest.
+    /// Exact state/helper circuit-profile digest.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub profile_digest: [u8; 32],
     /// Canonical little-endian Fp Poseidon digest of the compiled Eq protocol.
@@ -915,7 +1161,7 @@ pub struct KagemushaReleaseManifestV1 {
     pub artifacts: Vec<KagemushaArtifactBindingV1>,
 }
 
-/// Locally trusted threshold policy for Kagemusha V1 release authorities.
+/// Locally trusted threshold policy for KAGEMUSHA V1 release authorities.
 ///
 /// This policy is deployment configuration, not evidence supplied by an
 /// untrusted release bundle. Callers must select the trusted policy before
@@ -935,7 +1181,7 @@ pub struct KagemushaReleaseAuthorityPolicyV1 {
     pub authorized_signers: Vec<PublicKey>,
 }
 
-/// Immutable release subject approved by every Kagemusha V1 authority.
+/// Immutable release subject approved by every KAGEMUSHA V1 authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
@@ -959,7 +1205,7 @@ pub struct KagemushaReleaseAttestationSubjectV1 {
     pub artifact_set_digest: [u8; 32],
 }
 
-/// Domain-separated payload signed by one Kagemusha V1 release authority.
+/// Domain-separated payload signed by one KAGEMUSHA V1 release authority.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
@@ -970,7 +1216,7 @@ pub struct KagemushaReleaseApprovalPayloadV1 {
     pub subject: KagemushaReleaseAttestationSubjectV1,
 }
 
-/// One authority signature in an Kagemusha V1 release attestation.
+/// One authority signature in an KAGEMUSHA V1 release attestation.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
@@ -981,7 +1227,7 @@ pub struct KagemushaReleaseApprovalV1 {
     pub signature: SignatureOf<KagemushaReleaseApprovalPayloadV1>,
 }
 
-/// Threshold-signed Kagemusha V1 release attestation.
+/// Threshold-signed KAGEMUSHA V1 release attestation.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
@@ -1106,6 +1352,7 @@ impl std::error::Error for KagemushaReleaseErrorV1 {}
 #[derive(Debug, PartialEq, Eq)]
 pub struct KagemushaAuthenticatedReleaseV1 {
     manifest: KagemushaReleaseManifestV1,
+    distinct_relation_protocols: KagemushaDistinctRelationProtocolsV1,
     manifest_digest: [u8; 32],
     receipt_digest: [u8; 32],
     authority_policy_digest: [u8; 32],
@@ -1225,6 +1472,45 @@ fn protocol_digests_are_unique(
     digests.extend([state_eq, state_ep]);
     for helper in helpers {
         digests.extend([helper.eq_protocol_digest, helper.ep_protocol_digest]);
+    }
+    digests
+        .iter()
+        .enumerate()
+        .all(|(index, digest)| digest_is_nonzero(*digest) && !digests[index + 1..].contains(digest))
+}
+
+type KagemushaDistinctRelationProtocolsV1 = [([u8; 32], [u8; 32]); 2];
+
+fn distinct_relation_protocols(
+    qualification: &KagemushaProfileQualificationV1,
+) -> Option<KagemushaDistinctRelationProtocolsV1> {
+    let mut protocols = [([0; 32], [0; 32]); 2];
+    let mut present = [false; 2];
+    for relation in &qualification.relations {
+        if let Some(index) = relation.relation.distinct_protocol_index() {
+            if present[index] {
+                return None;
+            }
+            protocols[index] = (relation.eq_protocol_digest, relation.ep_protocol_digest);
+            present[index] = true;
+        }
+    }
+    (present == [true; 2]).then_some(protocols)
+}
+
+fn profile_protocol_digests_are_unique(
+    state_eq: [u8; 32],
+    state_ep: [u8; 32],
+    helpers: &[KagemushaHelperProtocolV1],
+    distinct_relations: KagemushaDistinctRelationProtocolsV1,
+) -> bool {
+    let mut digests = Vec::with_capacity(2 + 2 * helpers.len() + 2 * distinct_relations.len());
+    digests.extend([state_eq, state_ep]);
+    for helper in helpers {
+        digests.extend([helper.eq_protocol_digest, helper.ep_protocol_digest]);
+    }
+    for (eq, ep) in distinct_relations {
+        digests.extend([eq, ep]);
     }
     digests
         .iter()
@@ -1485,6 +1771,7 @@ fn validate_profile_qualification(
     state_eq_protocol_digest: [u8; 32],
     state_ep_protocol_digest: [u8; 32],
     helper_protocols: &[KagemushaHelperProtocolV1],
+    distinct_relation_protocols: KagemushaDistinctRelationProtocolsV1,
 ) -> Result<(), KagemushaReleaseErrorV1> {
     let invalid = || KagemushaReleaseErrorV1::InvalidValidationReceipt;
     let maximum_circuit_rows = 1_u32
@@ -1492,13 +1779,19 @@ fn validate_profile_qualification(
         .ok_or_else(invalid)?;
     let proof_max =
         u32::try_from(KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1).expect("proof maximum fits u32");
-    let raw_session_max =
-        u32::try_from(KAGEMUSHA_SESSION_MAX_BYTES_V1).expect("raw-session maximum fits u32");
-    let text_session_max =
-        u32::try_from(KAGEMUSHA_TEXT_SESSION_MAX_BYTES_V1).expect("text-session maximum fits u32");
+    let raw_complete_exchange_max = u32::try_from(KAGEMUSHA_COMPLETE_EXCHANGE_MAX_BYTES_V1)
+        .expect("raw complete-exchange maximum fits u32");
+    let text_complete_exchange_max = u32::try_from(KAGEMUSHA_COMPLETE_TEXT_EXCHANGE_MAX_BYTES_V1)
+        .expect("text complete-exchange maximum fits u32");
     if !validate_enabled_profile(qualification.profile)
         || qualification.relations.len() != KagemushaQualifiedRelationV1::ALL.len()
         || qualification.helper_circuits.len() != KagemushaQualifiedHelperCircuitV1::ALL.len()
+        || !profile_protocol_digests_are_unique(
+            state_eq_protocol_digest,
+            state_ep_protocol_digest,
+            helper_protocols,
+            distinct_relation_protocols,
+        )
         || qualification.profile.qualification_digest
             != qualification
                 .expected_qualification_digest()
@@ -1513,7 +1806,10 @@ fn validate_profile_qualification(
     {
         let (expected_eq_vk, expected_ep_vk) = expected_relation.expected_vk_roles();
         let (expected_eq_protocol, expected_ep_protocol) =
-            (state_eq_protocol_digest, state_ep_protocol_digest);
+            expected_relation.distinct_protocol_index().map_or(
+                (state_eq_protocol_digest, state_ep_protocol_digest),
+                |index| distinct_relation_protocols[index],
+            );
         if relation.relation != expected_relation
             || relation.eq_protocol_digest != expected_eq_protocol
             || relation.ep_protocol_digest != expected_ep_protocol
@@ -1587,22 +1883,22 @@ fn validate_profile_qualification(
     }
     let invariant_depth_sizes = (
         qualification.recursive_depths[0].complete_proof_bytes,
-        qualification.recursive_depths[0].raw_session_bytes,
-        qualification.recursive_depths[0].text_session_bytes,
+        qualification.recursive_depths[0].raw_complete_exchange_bytes,
+        qualification.recursive_depths[0].text_complete_exchange_bytes,
     );
     for depth in &qualification.recursive_depths {
         if depth.depth == 0
             || depth.verified_handoffs != depth.depth
             || depth.complete_proof_bytes == 0
             || depth.complete_proof_bytes > proof_max
-            || depth.raw_session_bytes == 0
-            || depth.raw_session_bytes > raw_session_max
-            || depth.text_session_bytes == 0
-            || depth.text_session_bytes > text_session_max
+            || depth.raw_complete_exchange_bytes == 0
+            || depth.raw_complete_exchange_bytes > raw_complete_exchange_max
+            || depth.text_complete_exchange_bytes == 0
+            || depth.text_complete_exchange_bytes > text_complete_exchange_max
             || (
                 depth.complete_proof_bytes,
-                depth.raw_session_bytes,
-                depth.text_session_bytes,
+                depth.raw_complete_exchange_bytes,
+                depth.text_complete_exchange_bytes,
             ) != invariant_depth_sizes
             || !validate_evidence_file(depth.report)
         {
@@ -1637,12 +1933,12 @@ fn validate_profile_qualification(
         return Err(invalid());
     }
     let envelope = qualification.envelope;
-    if envelope.raw_session_bytes == 0
-        || envelope.raw_session_bytes > raw_session_max
-        || envelope.text_session_bytes == 0
-        || envelope.text_session_bytes > text_session_max
-        || envelope.raw_session_bytes != invariant_depth_sizes.1
-        || envelope.text_session_bytes != invariant_depth_sizes.2
+    if envelope.raw_complete_exchange_bytes == 0
+        || envelope.raw_complete_exchange_bytes > raw_complete_exchange_max
+        || envelope.text_complete_exchange_bytes == 0
+        || envelope.text_complete_exchange_bytes > text_complete_exchange_max
+        || envelope.raw_complete_exchange_bytes != invariant_depth_sizes.1
+        || envelope.text_complete_exchange_bytes != invariant_depth_sizes.2
         || envelope.handoff_p95_ms == 0
         || envelope.handoff_p95_ms > KAGEMUSHA_HANDOFF_P95_MAX_MS_V1
         || !validate_evidence_file(envelope.report)
@@ -1655,7 +1951,7 @@ fn validate_profile_qualification(
     for (evidence, expected_case) in qualification
         .acceptance_cases
         .iter()
-        .zip(KagemushaAcceptanceCaseV1::ALL)
+        .zip(KagemushaAcceptanceCaseV1::ALL.iter().copied())
     {
         let expected_validator_count = if matches!(
             expected_case,
@@ -1709,6 +2005,11 @@ impl KagemushaInternalValidationReceiptV1 {
             .profile_qualifications
             .first()
             .map(|qualification| qualification.profile.vk_digest)
+            .ok_or(KagemushaReleaseErrorV1::InvalidValidationReceipt)?;
+        let expected_distinct_relation_protocols = self
+            .profile_qualifications
+            .first()
+            .and_then(distinct_relation_protocols)
             .ok_or(KagemushaReleaseErrorV1::InvalidValidationReceipt)?;
         let expected_profile_digest = kagemusha_release_profile_digest_v1(
             self.circuit_shape_report,
@@ -1766,6 +2067,7 @@ impl KagemushaInternalValidationReceiptV1 {
                 self.eq_protocol_digest,
                 self.ep_protocol_digest,
                 &self.helper_protocols,
+                expected_distinct_relation_protocols,
             )?;
         }
         for build in &self.reproducible_builds {
@@ -2056,9 +2358,10 @@ impl KagemushaReleaseManifestV1 {
         }
         for qualification in &receipt.profile_qualifications {
             for relation in &qualification.relations {
+                // Redemption-terminal and payment-commit-wrapper protocol identities are distinct relation
+                // fields authenticated by both the profile qualification digest and the
+                // manifest's receipt digest.
                 let (eq_role, ep_role) = relation.relation.expected_vk_roles();
-                let (eq_protocol_digest, ep_protocol_digest) =
-                    (self.eq_protocol_digest, self.ep_protocol_digest);
                 let eq_artifact = self
                     .artifacts
                     .iter()
@@ -2071,8 +2374,9 @@ impl KagemushaReleaseManifestV1 {
                     .ok_or(KagemushaReleaseErrorV1::InvalidArtifactSet)?;
                 if relation.eq_verifying_key != *eq_artifact
                     || relation.ep_verifying_key != *ep_artifact
-                    || relation.eq_protocol_digest != eq_protocol_digest
-                    || relation.ep_protocol_digest != ep_protocol_digest
+                    || (relation.relation.distinct_protocol_index().is_none()
+                        && (relation.eq_protocol_digest != self.eq_protocol_digest
+                            || relation.ep_protocol_digest != self.ep_protocol_digest))
                 {
                     return Err(KagemushaReleaseErrorV1::InvalidManifest);
                 }
@@ -2126,6 +2430,11 @@ impl KagemushaReleaseManifestV1 {
         attestation: &KagemushaReleaseAttestationV1,
     ) -> Result<KagemushaAuthenticatedReleaseV1, KagemushaReleaseErrorV1> {
         let expected_subject = self.release_attestation_subject(receipt, policy)?;
+        let distinct_relation_protocols = receipt
+            .profile_qualifications
+            .first()
+            .and_then(distinct_relation_protocols)
+            .ok_or(KagemushaReleaseErrorV1::InvalidValidationReceipt)?;
         if attestation.version != KAGEMUSHA_WIRE_VERSION_V1
             || attestation.subject != expected_subject
             || attestation.approvals.len() > policy.authorized_signers.len()
@@ -2166,6 +2475,7 @@ impl KagemushaReleaseManifestV1 {
         let attestation_digest = digest_encoded(RELEASE_ATTESTATION_DIGEST_DOMAIN, attestation)?;
         Ok(KagemushaAuthenticatedReleaseV1 {
             manifest: self.clone(),
+            distinct_relation_protocols,
             manifest_digest: expected_subject.manifest_digest,
             receipt_digest: expected_subject.validation_receipt_digest,
             authority_policy_digest: expected_subject.authority_policy_digest,
@@ -2250,6 +2560,25 @@ impl KagemushaAuthenticatedReleaseV1 {
             .map(|index| &self.manifest.helper_protocols[index])
     }
 
+    /// Return the authenticated Eq/Fp and Ep/Fq protocol identities for one qualified relation.
+    ///
+    /// The seven monetary state relations share the manifest's aggregate-state protocols. The
+    /// terminal `TerminalAuthorization` and post-commit `CommitWrapper` relations retain
+    /// their distinct receipt-authenticated identities without adding another wire-manifest field.
+    #[must_use]
+    pub fn qualified_relation_protocol_digests(
+        &self,
+        relation: KagemushaQualifiedRelationV1,
+    ) -> ([u8; 32], [u8; 32]) {
+        relation.distinct_protocol_index().map_or(
+            (
+                self.manifest.eq_protocol_digest,
+                self.manifest.ep_protocol_digest,
+            ),
+            |index| self.distinct_relation_protocols[index],
+        )
+    }
+
     /// Return the digest of the complete authenticated manifest bytes.
     #[must_use]
     pub fn manifest_digest(&self) -> [u8; 32] {
@@ -2294,3 +2623,234 @@ impl KagemushaAuthenticatedReleaseV1 {
 #[cfg(test)]
 #[path = "kagemusha_release_v1_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod inner_mint_artifact_tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+
+    const INNER_ROLES: [KagemushaArtifactRoleV1; 8] = [
+        KagemushaArtifactRoleV1::InnerMintAuthorizationPkEq,
+        KagemushaArtifactRoleV1::InnerMintAuthorizationVkEq,
+        KagemushaArtifactRoleV1::InnerMintAuthorizationPkEp,
+        KagemushaArtifactRoleV1::InnerMintAuthorizationVkEp,
+        KagemushaArtifactRoleV1::InnerMintCreditPkEq,
+        KagemushaArtifactRoleV1::InnerMintCreditVkEq,
+        KagemushaArtifactRoleV1::InnerMintCreditPkEp,
+        KagemushaArtifactRoleV1::InnerMintCreditVkEp,
+    ];
+
+    fn inventory() -> Vec<KagemushaArtifactBindingV1> {
+        KagemushaArtifactRoleV1::ALL
+            .into_iter()
+            .enumerate()
+            .map(|(index, role)| KagemushaArtifactBindingV1 {
+                role,
+                sha256: [u8::try_from(index + 1).expect("bounded role index"); 32],
+                byte_len: if role.is_params() {
+                    KAGEMUSHA_PARAMS_BYTES_V1
+                } else {
+                    32
+                },
+            })
+            .collect()
+    }
+
+    fn helper_protocols() -> Vec<KagemushaHelperProtocolV1> {
+        KagemushaQualifiedHelperCircuitV1::ALL
+            .into_iter()
+            .enumerate()
+            .map(|(index, helper)| {
+                let seed = u8::try_from(100 + index * 2).expect("bounded helper index");
+                KagemushaHelperProtocolV1 {
+                    helper,
+                    eq_protocol_digest: [seed; 32],
+                    ep_protocol_digest: [seed + 1; 32],
+                    eq_proof_bytes: if helper.uses_internal_proof_evidence() {
+                        32
+                    } else {
+                        0
+                    },
+                    ep_proof_bytes: if helper.uses_internal_proof_evidence() {
+                        32
+                    } else {
+                        0
+                    },
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn inner_mint_roles_append_without_renumbering_and_roundtrip_norito() {
+        assert_eq!(&KagemushaArtifactRoleV1::ALL[34..], &INNER_ROLES);
+        for (index, role) in KagemushaArtifactRoleV1::ALL.into_iter().enumerate() {
+            assert_eq!(usize::from(role as u8), index);
+        }
+        let bindings = inventory();
+        let mut unique_encodings = BTreeSet::new();
+        for (offset, role) in INNER_ROLES.into_iter().enumerate() {
+            let encoded = norito::to_bytes(&role).expect("encode inner artifact role");
+            assert_eq!(
+                norito::decode_from_bytes::<KagemushaArtifactRoleV1>(&encoded)
+                    .expect("decode inner artifact role"),
+                role
+            );
+            assert!(unique_encodings.insert(encoded));
+            let binding = bindings[34 + offset];
+            let encoded = norito::to_bytes(&binding).expect("encode inner artifact binding");
+            assert_eq!(
+                norito::decode_from_bytes::<KagemushaArtifactBindingV1>(&encoded)
+                    .expect("decode inner artifact binding"),
+                binding
+            );
+        }
+        assert_eq!(unique_encodings.len(), INNER_ROLES.len());
+        let encoded = norito::to_bytes(&bindings).expect("encode complete role inventory");
+        let decoded = norito::decode_from_bytes::<Vec<KagemushaArtifactBindingV1>>(&encoded)
+            .expect("decode complete role inventory");
+        assert_eq!(decoded, bindings);
+        assert!(validate_artifacts(&decoded).is_ok());
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn inner_mint_roles_roundtrip_json_with_distinct_canonical_names() {
+        let names = [
+            "inner_mint_authorization_pk_eq",
+            "inner_mint_authorization_vk_eq",
+            "inner_mint_authorization_pk_ep",
+            "inner_mint_authorization_vk_ep",
+            "inner_mint_credit_pk_eq",
+            "inner_mint_credit_vk_eq",
+            "inner_mint_credit_pk_ep",
+            "inner_mint_credit_vk_ep",
+        ];
+        let bindings = inventory();
+        for (offset, (role, name)) in INNER_ROLES.into_iter().zip(names).enumerate() {
+            let encoded = norito::json::to_json(&role).expect("encode inner role JSON");
+            assert!(encoded.contains(&format!("\"{name}\"")));
+            assert_eq!(
+                norito::json::from_str::<KagemushaArtifactRoleV1>(&encoded)
+                    .expect("decode inner role JSON"),
+                role
+            );
+            let binding = bindings[34 + offset];
+            let encoded = norito::json::to_json(&binding).expect("encode inner binding JSON");
+            assert_eq!(
+                norito::json::from_str::<KagemushaArtifactBindingV1>(&encoded)
+                    .expect("decode inner binding JSON"),
+                binding
+            );
+        }
+    }
+
+    #[test]
+    fn inner_mint_inventory_rejects_each_missing_duplicate_and_aliased_role() {
+        let base = inventory();
+        assert!(kagemusha_artifact_set_digest_v1(&base).is_ok());
+        for index in 34..KagemushaArtifactRoleV1::ALL.len() {
+            let mut missing = base.clone();
+            missing.remove(index);
+            let mut duplicate = base.clone();
+            duplicate[index].role = base[index - 24].role;
+            let mut aliased_outer = base.clone();
+            aliased_outer[index].sha256 = base[index - 24].sha256;
+            let mut aliased_inner = base.clone();
+            aliased_inner[index].sha256 = base[34 + (index - 34 + 1) % 8].sha256;
+            let mut extra = base.clone();
+            extra.push(base[index]);
+            for invalid in [missing, duplicate, aliased_outer, aliased_inner, extra] {
+                assert_eq!(
+                    kagemusha_artifact_set_digest_v1(&invalid),
+                    Err(KagemushaReleaseErrorV1::InvalidArtifactSet),
+                    "reject malformed inventory for {:?}",
+                    base[index].role
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn inner_mint_roles_keep_helper_key_and_complete_package_bounds() {
+        let base = inventory();
+        for (offset, role) in INNER_ROLES.into_iter().enumerate() {
+            let is_pk = offset % 2 == 0;
+            assert_eq!(role.is_helper_pk(), is_pk);
+            assert_eq!(role.is_vk(), !is_pk);
+            assert!(!role.is_params());
+            assert!(!role.is_state_pk());
+            let limit = if is_pk {
+                KAGEMUSHA_HELPER_PROVING_KEY_MAX_BYTES_V1
+            } else {
+                KAGEMUSHA_VERIFYING_KEY_MAX_BYTES_V1
+            };
+            let mut boundary = base.clone();
+            boundary[34 + offset].byte_len = limit;
+            assert!(validate_artifacts(&boundary).is_ok());
+            for invalid_length in [0, limit + 1] {
+                boundary[34 + offset].byte_len = invalid_length;
+                assert_eq!(
+                    validate_artifacts(&boundary),
+                    Err(KagemushaReleaseErrorV1::InvalidArtifactSet)
+                );
+            }
+            boundary[34 + offset].byte_len = limit;
+            boundary[34 + offset].sha256 = [0; 32];
+            assert_eq!(
+                validate_artifacts(&boundary),
+                Err(KagemushaReleaseErrorV1::InvalidArtifactSet)
+            );
+        }
+        let mut oversized = base;
+        for artifact in &mut oversized {
+            if artifact.role.is_helper_pk() {
+                artifact.byte_len = KAGEMUSHA_HELPER_PROVING_KEY_MAX_BYTES_V1;
+            }
+        }
+        assert!(
+            oversized
+                .iter()
+                .map(|artifact| artifact.byte_len)
+                .sum::<u64>()
+                > KAGEMUSHA_ARTIFACT_SET_MAX_BYTES_V1
+        );
+        assert_eq!(
+            validate_artifacts(&oversized),
+            Err(KagemushaReleaseErrorV1::InvalidArtifactSet)
+        );
+    }
+
+    #[test]
+    fn inner_mint_artifact_and_vk_digests_bind_every_inner_key() {
+        let base = inventory();
+        let protocols = helper_protocols();
+        let artifact_digest = kagemusha_artifact_set_digest_v1(&base).expect("artifact digest");
+        let vk_digest = |artifacts: &[KagemushaArtifactBindingV1]| {
+            kagemusha_vk_set_digest_v1(artifacts, [90; 32], [91; 32], &protocols)
+                .expect("complete verifier inventory digest")
+        };
+        let original_vk_digest = vk_digest(&base);
+        for (offset, role) in INNER_ROLES.into_iter().enumerate() {
+            let index = 34 + offset;
+            for change_digest in [false, true] {
+                let mut changed = base.clone();
+                if change_digest {
+                    changed[index].sha256 = [200; 32];
+                } else {
+                    changed[index].byte_len += 1;
+                }
+                assert_ne!(
+                    kagemusha_artifact_set_digest_v1(&changed).expect("changed artifact digest"),
+                    artifact_digest
+                );
+                assert_eq!(
+                    vk_digest(&changed) != original_vk_digest,
+                    role.is_vk(),
+                    "verifier-set membership for {role:?}"
+                );
+            }
+        }
+    }
+}

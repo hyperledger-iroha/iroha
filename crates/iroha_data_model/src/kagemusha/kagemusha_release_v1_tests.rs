@@ -1,3 +1,7 @@
+//! Release-schema tests for the closed KAGEMUSHA V1 artifact and qualification inventory.
+
+use std::collections::BTreeSet;
+
 use super::*;
 use crate::kagemusha::{
     KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KagemushaDevicePublicKeyV1,
@@ -8,8 +12,8 @@ use p256::ecdsa::SigningKey;
 
 const STATE_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x31; 32];
 const STATE_EP_PROTOCOL_DIGEST: [u8; 32] = [0x32; 32];
-const WRAPPER_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x33; 32];
-const WRAPPER_EP_PROTOCOL_DIGEST: [u8; 32] = [0x34; 32];
+const TERMINAL_AUTHORIZATION_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x33; 32];
+const TERMINAL_AUTHORIZATION_EP_PROTOCOL_DIGEST: [u8; 32] = [0x34; 32];
 const MINT_AUTHORIZATION_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x3B; 32];
 const MINT_AUTHORIZATION_EP_PROTOCOL_DIGEST: [u8; 32] = [0x3C; 32];
 const MINT_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x35; 32];
@@ -18,6 +22,8 @@ const CREDENTIAL_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x37; 32];
 const CREDENTIAL_EP_PROTOCOL_DIGEST: [u8; 32] = [0x38; 32];
 const GUARD_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x39; 32];
 const GUARD_EP_PROTOCOL_DIGEST: [u8; 32] = [0x3A; 32];
+const COMMIT_WRAPPER_EQ_PROTOCOL_DIGEST: [u8; 32] = [0x3D; 32];
+const COMMIT_WRAPPER_EP_PROTOCOL_DIGEST: [u8; 32] = [0x3E; 32];
 const CREDENTIAL_EQ_PROOF_BYTES: u32 = 8_000;
 const CREDENTIAL_EP_PROOF_BYTES: u32 = 8_032;
 const GUARD_EQ_PROOF_BYTES: u32 = 12_000;
@@ -155,12 +161,25 @@ fn profile_qualification(
         .enumerate()
         .map(|(index, relation)| {
             let (eq_role, ep_role) = relation.expected_vk_roles();
-            let (eq_protocol_digest, ep_protocol_digest) =
-                if relation.uses_commit_wrapper_protocol() {
-                    (WRAPPER_EQ_PROTOCOL_DIGEST, WRAPPER_EP_PROTOCOL_DIGEST)
-                } else {
+            let (eq_protocol_digest, ep_protocol_digest) = match relation {
+                KagemushaQualifiedRelationV1::TerminalAuthorization => (
+                    TERMINAL_AUTHORIZATION_EQ_PROTOCOL_DIGEST,
+                    TERMINAL_AUTHORIZATION_EP_PROTOCOL_DIGEST,
+                ),
+                KagemushaQualifiedRelationV1::CommitWrapper => (
+                    COMMIT_WRAPPER_EQ_PROTOCOL_DIGEST,
+                    COMMIT_WRAPPER_EP_PROTOCOL_DIGEST,
+                ),
+                KagemushaQualifiedRelationV1::Bootstrap
+                | KagemushaQualifiedRelationV1::MintFold
+                | KagemushaQualifiedRelationV1::SendSplit
+                | KagemushaQualifiedRelationV1::ReceiveFoldBatch
+                | KagemushaQualifiedRelationV1::RedeemSplit
+                | KagemushaQualifiedRelationV1::SuiteUpgrade
+                | KagemushaQualifiedRelationV1::Rotate => {
                     (STATE_EQ_PROTOCOL_DIGEST, STATE_EP_PROTOCOL_DIGEST)
-                };
+                }
+            };
             KagemushaRelationQualificationV1 {
                 relation,
                 eq_protocol_digest,
@@ -225,10 +244,22 @@ fn profile_qualification(
             depth,
             verified_handoffs: depth,
             complete_proof_bytes: 6_000,
-            raw_session_bytes: 9_000,
-            text_session_bytes: 12_000,
+            raw_complete_exchange_bytes: 9_000,
+            text_complete_exchange_bytes: 12_000,
             report: evidence(
                 report_seed.wrapping_add(0x30 + u8::try_from(index).expect("small depth index")),
+            ),
+        })
+        .collect();
+    let receive_fold_occupancies = (1..=KAGEMUSHA_RECEIVE_FOLD_BATCH_WIDTH_V1)
+        .enumerate()
+        .map(|(index, occupancy)| KagemushaReceiveFoldOccupancyV1 {
+            occupancy,
+            complete_proof_bytes: 6_000,
+            report: evidence(
+                report_seed
+                    .wrapping_add(0x20)
+                    .wrapping_add(u8::try_from(index).expect("sixteen occupancy indexes fit u8")),
             ),
         })
         .collect();
@@ -257,6 +288,7 @@ fn profile_qualification(
         profile,
         relations,
         helper_circuits,
+        receive_fold_occupancies,
         recursive_depths,
         aggregate_balance: KagemushaAggregateBalanceQualificationV1 {
             independent_payments: KAGEMUSHA_MIN_QUALIFIED_AGGREGATED_CREDITS_V1,
@@ -272,8 +304,8 @@ fn profile_qualification(
             report: evidence(report_seed.wrapping_add(0x41)),
         },
         envelope: KagemushaEnvelopeQualificationV1 {
-            raw_session_bytes: 9_000,
-            text_session_bytes: 12_000,
+            raw_complete_exchange_bytes: 9_000,
+            text_complete_exchange_bytes: 12_000,
             handoff_p95_ms: 29_000,
             report: evidence(report_seed.wrapping_add(0x42)),
         },
@@ -290,8 +322,6 @@ fn receipt(artifacts: &[KagemushaArtifactBindingV1]) -> KagemushaInternalValidat
         artifacts,
         STATE_EQ_PROTOCOL_DIGEST,
         STATE_EP_PROTOCOL_DIGEST,
-        WRAPPER_EQ_PROTOCOL_DIGEST,
-        WRAPPER_EP_PROTOCOL_DIGEST,
         &helper_protocols,
     )
     .expect("VK-set digest");
@@ -321,8 +351,6 @@ fn receipt(artifacts: &[KagemushaArtifactBindingV1]) -> KagemushaInternalValidat
         circuit_shape_report,
         STATE_EQ_PROTOCOL_DIGEST,
         STATE_EP_PROTOCOL_DIGEST,
-        WRAPPER_EQ_PROTOCOL_DIGEST,
-        WRAPPER_EP_PROTOCOL_DIGEST,
         &helper_protocols,
     )
     .expect("release profile digest");
@@ -333,8 +361,6 @@ fn receipt(artifacts: &[KagemushaArtifactBindingV1]) -> KagemushaInternalValidat
         profile_digest,
         eq_protocol_digest: STATE_EQ_PROTOCOL_DIGEST,
         ep_protocol_digest: STATE_EP_PROTOCOL_DIGEST,
-        commit_wrapper_eq_protocol_digest: WRAPPER_EQ_PROTOCOL_DIGEST,
-        commit_wrapper_ep_protocol_digest: WRAPPER_EP_PROTOCOL_DIGEST,
         artifact_set_digest,
         hardware_policy_digest,
         evidence_closure: KagemushaEvidenceClosureV1 {
@@ -430,8 +456,6 @@ fn manifest(
         profile_digest: receipt.profile_digest,
         eq_protocol_digest: receipt.eq_protocol_digest,
         ep_protocol_digest: receipt.ep_protocol_digest,
-        commit_wrapper_eq_protocol_digest: receipt.commit_wrapper_eq_protocol_digest,
-        commit_wrapper_ep_protocol_digest: receipt.commit_wrapper_ep_protocol_digest,
         hardware_policy_digest: receipt.hardware_policy_digest,
         validation_receipt_digest: receipt.canonical_digest().expect("receipt digest"),
         halo2_k: KAGEMUSHA_HALO2_K_V1,
@@ -496,8 +520,6 @@ fn authenticates_complete_typed_evidence_release() {
         &artifacts,
         receipt.eq_protocol_digest,
         receipt.ep_protocol_digest,
-        receipt.commit_wrapper_eq_protocol_digest,
-        receipt.commit_wrapper_ep_protocol_digest,
         &receipt.helper_protocols,
     )
     .expect("expected VK set");
@@ -536,14 +558,8 @@ fn authenticates_complete_typed_evidence_release() {
         authenticated.hardware_policy_digest(),
         receipt.hardware_policy_digest
     );
-    assert_eq!(
-        authenticated.commit_wrapper_eq_protocol_digest(),
-        WRAPPER_EQ_PROTOCOL_DIGEST
-    );
-    assert_eq!(
-        authenticated.commit_wrapper_ep_protocol_digest(),
-        WRAPPER_EP_PROTOCOL_DIGEST
-    );
+    assert_eq!(authenticated.eq_protocol_digest(), STATE_EQ_PROTOCOL_DIGEST);
+    assert_eq!(authenticated.ep_protocol_digest(), STATE_EP_PROTOCOL_DIGEST);
     assert_eq!(authenticated.helper_protocols(), receipt.helper_protocols);
     let mint_authorization = authenticated
         .helper_protocol(KagemushaQualifiedHelperCircuitV1::MintAuthorization)
@@ -560,9 +576,9 @@ fn authenticates_complete_typed_evidence_release() {
     );
     assert_eq!(
         authenticated
-            .artifact(KagemushaArtifactRoleV1::CommitWrapperVkEp)
+            .artifact(KagemushaArtifactRoleV1::InnerStateVkEp)
             .role,
-        KagemushaArtifactRoleV1::CommitWrapperVkEp
+        KagemushaArtifactRoleV1::InnerStateVkEp
     );
 }
 
@@ -574,8 +590,6 @@ fn vk_qualification_and_hardware_policy_digests_bind_exact_content() {
         &artifacts,
         base.eq_protocol_digest,
         base.ep_protocol_digest,
-        base.commit_wrapper_eq_protocol_digest,
-        base.commit_wrapper_ep_protocol_digest,
         &base.helper_protocols,
     )
     .expect("VK-set digest");
@@ -604,8 +618,6 @@ fn vk_qualification_and_hardware_policy_digests_bind_exact_content() {
             &changed_vk_artifact,
             base.eq_protocol_digest,
             base.ep_protocol_digest,
-            base.commit_wrapper_eq_protocol_digest,
-            base.commit_wrapper_ep_protocol_digest,
             &base.helper_protocols,
         )
         .expect("changed VK-set digest"),
@@ -707,13 +719,13 @@ fn manifest_profile_set_is_canonical_release_identity() {
         Err(KagemushaReleaseErrorV1::InvalidManifest)
     );
 
-    let mut changed_wrapper_protocol = manifest.clone();
-    changed_wrapper_protocol.commit_wrapper_eq_protocol_digest = [0xED; 32];
-    changed_wrapper_protocol.release_id = [0; 32];
-    changed_wrapper_protocol = changed_wrapper_protocol
+    let mut changed_state_protocol = manifest.clone();
+    changed_state_protocol.eq_protocol_digest = [0xED; 32];
+    changed_state_protocol.release_id = [0; 32];
+    changed_state_protocol = changed_state_protocol
         .seal()
-        .expect("reseal wrapper protocol");
-    assert_ne!(manifest.release_id, changed_wrapper_protocol.release_id);
+        .expect("reseal state protocol");
+    assert_ne!(manifest.release_id, changed_state_protocol.release_id);
 
     let mut unordered = manifest;
     unordered.enabled_profiles.reverse();
@@ -738,32 +750,93 @@ fn relations_are_closed_ordered_and_bind_exact_verifier_artifacts() {
 
     let mut missing = base.clone();
     missing.profile_qualifications[0].relations.pop();
+    reseal_profile_qualification(&mut missing, 0);
     assert!(missing.validate().is_err());
 
     let mut unordered = base.clone();
     unordered.profile_qualifications[0].relations.swap(0, 1);
+    reseal_profile_qualification(&mut unordered, 0);
     assert!(unordered.validate().is_err());
 
-    let mut wrong_wrapper_role = base.clone();
-    let wrapper = wrong_wrapper_role.profile_qualifications[0]
-        .relations
-        .last_mut()
-        .expect("wrapper relation");
-    wrapper.eq_verifying_key = artifact(&artifacts, KagemushaArtifactRoleV1::StateVkEq);
-    assert!(wrong_wrapper_role.validate().is_err());
+    let mut wrong_inner_state_role = base.clone();
+    wrong_inner_state_role.profile_qualifications[0].relations[0].eq_verifying_key =
+        artifact(&artifacts, KagemushaArtifactRoleV1::InnerStateVkEq);
+    reseal_profile_qualification(&mut wrong_inner_state_role, 0);
+    assert!(wrong_inner_state_role.validate().is_err());
 
     let mut wrong_protocol = base.clone();
     wrong_protocol.profile_qualifications[0].relations[0].eq_protocol_digest =
-        WRAPPER_EQ_PROTOCOL_DIGEST;
+        MINT_AUTHORIZATION_EQ_PROTOCOL_DIGEST;
+    reseal_profile_qualification(&mut wrong_protocol, 0);
     assert!(wrong_protocol.validate().is_err());
 
-    let mut wrapper_using_state_protocol = base.clone();
-    wrapper_using_state_protocol.profile_qualifications[0]
+    let mut helper_protocol_on_direct_relation = base.clone();
+    helper_protocol_on_direct_relation.profile_qualifications[0].relations[0].ep_protocol_digest =
+        GUARD_EP_PROTOCOL_DIGEST;
+    reseal_profile_qualification(&mut helper_protocol_on_direct_relation, 0);
+    assert!(helper_protocol_on_direct_relation.validate().is_err());
+
+    let mut terminal_authorization_using_commit_wrapper_key = base.clone();
+    let terminal_authorization = terminal_authorization_using_commit_wrapper_key
+        .profile_qualifications[0]
         .relations
-        .last_mut()
-        .expect("wrapper relation")
-        .ep_protocol_digest = STATE_EP_PROTOCOL_DIGEST;
-    assert!(wrapper_using_state_protocol.validate().is_err());
+        .iter_mut()
+        .find(|relation| relation.relation == KagemushaQualifiedRelationV1::TerminalAuthorization)
+        .expect("terminal-authorization relation");
+    terminal_authorization.eq_verifying_key =
+        artifact(&artifacts, KagemushaArtifactRoleV1::CommitWrapperVkEq);
+    reseal_profile_qualification(&mut terminal_authorization_using_commit_wrapper_key, 0);
+    assert!(
+        terminal_authorization_using_commit_wrapper_key
+            .validate()
+            .is_err()
+    );
+
+    let mut aliased_relation_protocol = base.clone();
+    let terminal_authorization = aliased_relation_protocol.profile_qualifications[0]
+        .relations
+        .iter_mut()
+        .find(|relation| relation.relation == KagemushaQualifiedRelationV1::TerminalAuthorization)
+        .expect("terminal-authorization relation");
+    terminal_authorization.eq_protocol_digest = COMMIT_WRAPPER_EQ_PROTOCOL_DIGEST;
+    reseal_profile_qualification(&mut aliased_relation_protocol, 0);
+    assert!(aliased_relation_protocol.validate().is_err());
+
+    let mut zero_relation_protocol = base.clone();
+    let acceptance = zero_relation_protocol.profile_qualifications[0]
+        .relations
+        .iter_mut()
+        .find(|relation| relation.relation == KagemushaQualifiedRelationV1::CommitWrapper)
+        .expect("post-commit wrapper relation");
+    acceptance.ep_protocol_digest = [0; 32];
+    reseal_profile_qualification(&mut zero_relation_protocol, 0);
+    assert!(zero_relation_protocol.validate().is_err());
+
+    let mut parity_aliased_relation_protocol = base.clone();
+    let acceptance = parity_aliased_relation_protocol.profile_qualifications[0]
+        .relations
+        .iter_mut()
+        .find(|relation| relation.relation == KagemushaQualifiedRelationV1::CommitWrapper)
+        .expect("post-commit wrapper relation");
+    acceptance.ep_protocol_digest = acceptance.eq_protocol_digest;
+    reseal_profile_qualification(&mut parity_aliased_relation_protocol, 0);
+    assert!(parity_aliased_relation_protocol.validate().is_err());
+
+    let mut inconsistent_direct_profile_protocol = base.clone();
+    inconsistent_direct_profile_protocol.profile_qualifications[1].relations[0]
+        .eq_protocol_digest = [0xF1; 32];
+    reseal_profile_qualification(&mut inconsistent_direct_profile_protocol, 1);
+    assert!(inconsistent_direct_profile_protocol.validate().is_err());
+
+    let mut inconsistent_profile_protocol = base.clone();
+    let terminal_authorization = inconsistent_profile_protocol.profile_qualifications[1]
+        .relations
+        .iter_mut()
+        .find(|relation| relation.relation == KagemushaQualifiedRelationV1::TerminalAuthorization)
+        .expect("terminal-authorization relation");
+    terminal_authorization.eq_protocol_digest = [0xF2; 32];
+    reseal_profile_qualification(&mut inconsistent_profile_protocol, 1);
+    assert!(inconsistent_profile_protocol.validate().is_err());
 
     let mut exact_limits = base.clone();
     let relation = &mut exact_limits.profile_qualifications[0].relations[0];
@@ -774,6 +847,7 @@ fn relations_are_closed_ordered_and_bind_exact_verifier_artifacts() {
     reseal_profile_qualification(&mut exact_limits, 0);
     exact_limits.validate().expect("exact relation limits pass");
     exact_limits.profile_qualifications[0].relations[0].complete_proof_bytes += 1;
+    reseal_profile_qualification(&mut exact_limits, 0);
     assert!(exact_limits.validate().is_err());
 
     let mut substituted_vk = base.clone();
@@ -788,29 +862,135 @@ fn relations_are_closed_ordered_and_bind_exact_verifier_artifacts() {
         Err(KagemushaReleaseErrorV1::InvalidManifest)
     );
 
-    let mut aliased_wrapper = artifacts;
-    let state_eq = artifact(&aliased_wrapper, KagemushaArtifactRoleV1::StateVkEq).sha256;
-    let wrapper_eq = aliased_wrapper
+    let mut substituted_terminal_authorization_vk = base.clone();
+    substituted_terminal_authorization_vk.profile_qualifications[0]
+        .relations
         .iter_mut()
-        .find(|binding| binding.role == KagemushaArtifactRoleV1::CommitWrapperVkEq)
-        .expect("wrapper Eq binding");
-    wrapper_eq.sha256 = state_eq;
+        .find(|relation| relation.relation == KagemushaQualifiedRelationV1::TerminalAuthorization)
+        .expect("terminal-authorization relation")
+        .eq_verifying_key
+        .sha256 = [0xEE; 32];
+    reseal_profile_qualification(&mut substituted_terminal_authorization_vk, 0);
+    let substituted_manifest = manifest(artifacts.clone(), &substituted_terminal_authorization_vk);
     assert_eq!(
-        kagemusha_artifact_set_digest_v1(&aliased_wrapper),
+        substituted_manifest.release_attestation_subject(
+            &substituted_terminal_authorization_vk,
+            &authority_policy(&authority_keys(), 1),
+        ),
+        Err(KagemushaReleaseErrorV1::InvalidManifest)
+    );
+
+    let mut aliased_inner_outer = artifacts;
+    let outer_state_eq = artifact(&aliased_inner_outer, KagemushaArtifactRoleV1::StateVkEq).sha256;
+    let inner_state_eq = aliased_inner_outer
+        .iter_mut()
+        .find(|binding| binding.role == KagemushaArtifactRoleV1::InnerStateVkEq)
+        .expect("inner-state Eq binding");
+    inner_state_eq.sha256 = outer_state_eq;
+    assert_eq!(
+        kagemusha_artifact_set_digest_v1(&aliased_inner_outer),
         Err(KagemushaReleaseErrorV1::InvalidArtifactSet)
     );
 }
 
 #[test]
-fn mint_authorization_artifacts_helpers_and_acceptance_relation_are_frozen() {
-    assert_eq!(KagemushaArtifactRoleV1::ALL.len(), 26);
+fn artifact_and_relation_inventories_are_frozen() {
+    assert_eq!(KagemushaArtifactRoleV1::ALL.len(), 42);
+    assert_eq!(
+        KagemushaArtifactRoleV1::ALL
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+            .len(),
+        KagemushaArtifactRoleV1::ALL.len()
+    );
+    assert_eq!(
+        &KagemushaArtifactRoleV1::ALL[2..6],
+        &[
+            KagemushaArtifactRoleV1::InnerStatePkEq,
+            KagemushaArtifactRoleV1::InnerStateVkEq,
+            KagemushaArtifactRoleV1::InnerStatePkEp,
+            KagemushaArtifactRoleV1::InnerStateVkEp,
+        ]
+    );
     assert_eq!(
         &KagemushaArtifactRoleV1::ALL[6..10],
+        &[
+            KagemushaArtifactRoleV1::StatePkEq,
+            KagemushaArtifactRoleV1::StateVkEq,
+            KagemushaArtifactRoleV1::StatePkEp,
+            KagemushaArtifactRoleV1::StateVkEp,
+        ]
+    );
+    assert_eq!(
+        &KagemushaArtifactRoleV1::ALL[10..14],
         &[
             KagemushaArtifactRoleV1::MintAuthorizationPkEq,
             KagemushaArtifactRoleV1::MintAuthorizationVkEq,
             KagemushaArtifactRoleV1::MintAuthorizationPkEp,
             KagemushaArtifactRoleV1::MintAuthorizationVkEp,
+        ]
+    );
+    assert_eq!(
+        &KagemushaArtifactRoleV1::ALL[14..18],
+        &[
+            KagemushaArtifactRoleV1::MintCreditPkEq,
+            KagemushaArtifactRoleV1::MintCreditVkEq,
+            KagemushaArtifactRoleV1::MintCreditPkEp,
+            KagemushaArtifactRoleV1::MintCreditVkEp,
+        ]
+    );
+    assert_eq!(
+        &KagemushaArtifactRoleV1::ALL[18..22],
+        &[
+            KagemushaArtifactRoleV1::PlatformCredentialPkEq,
+            KagemushaArtifactRoleV1::PlatformCredentialVkEq,
+            KagemushaArtifactRoleV1::PlatformCredentialPkEp,
+            KagemushaArtifactRoleV1::PlatformCredentialVkEp,
+        ]
+    );
+    assert_eq!(
+        &KagemushaArtifactRoleV1::ALL[22..26],
+        &[
+            KagemushaArtifactRoleV1::GuardBundlePkEq,
+            KagemushaArtifactRoleV1::GuardBundleVkEq,
+            KagemushaArtifactRoleV1::GuardBundlePkEp,
+            KagemushaArtifactRoleV1::GuardBundleVkEp,
+        ]
+    );
+    assert_eq!(
+        &KagemushaArtifactRoleV1::ALL[26..30],
+        &[
+            KagemushaArtifactRoleV1::TerminalAuthorizationPkEq,
+            KagemushaArtifactRoleV1::TerminalAuthorizationVkEq,
+            KagemushaArtifactRoleV1::TerminalAuthorizationPkEp,
+            KagemushaArtifactRoleV1::TerminalAuthorizationVkEp,
+        ]
+    );
+    assert_eq!(
+        &KagemushaArtifactRoleV1::ALL[30..34],
+        &[
+            KagemushaArtifactRoleV1::CommitWrapperPkEq,
+            KagemushaArtifactRoleV1::CommitWrapperVkEq,
+            KagemushaArtifactRoleV1::CommitWrapperPkEp,
+            KagemushaArtifactRoleV1::CommitWrapperVkEp,
+        ]
+    );
+    assert_eq!(
+        &KagemushaArtifactRoleV1::ALL[34..38],
+        &[
+            KagemushaArtifactRoleV1::InnerMintAuthorizationPkEq,
+            KagemushaArtifactRoleV1::InnerMintAuthorizationVkEq,
+            KagemushaArtifactRoleV1::InnerMintAuthorizationPkEp,
+            KagemushaArtifactRoleV1::InnerMintAuthorizationVkEp,
+        ]
+    );
+    assert_eq!(
+        &KagemushaArtifactRoleV1::ALL[38..42],
+        &[
+            KagemushaArtifactRoleV1::InnerMintCreditPkEq,
+            KagemushaArtifactRoleV1::InnerMintCreditVkEq,
+            KagemushaArtifactRoleV1::InnerMintCreditPkEp,
+            KagemushaArtifactRoleV1::InnerMintCreditVkEp,
         ]
     );
     assert_eq!(
@@ -822,14 +1002,23 @@ fn mint_authorization_artifacts_helpers_and_acceptance_relation_are_frozen() {
             KagemushaQualifiedHelperCircuitV1::GuardBundle,
         ]
     );
-    assert_eq!(KagemushaQualifiedRelationV1::ALL.len(), 8);
     assert_eq!(
-        KagemushaQualifiedRelationV1::AcceptanceIntentAuthorization.expected_vk_roles(),
-        (
-            KagemushaArtifactRoleV1::CommitWrapperVkEq,
-            KagemushaArtifactRoleV1::CommitWrapperVkEp,
-        )
+        KagemushaQualifiedRelationV1::ALL,
+        [
+            KagemushaQualifiedRelationV1::Bootstrap,
+            KagemushaQualifiedRelationV1::MintFold,
+            KagemushaQualifiedRelationV1::SendSplit,
+            KagemushaQualifiedRelationV1::ReceiveFoldBatch,
+            KagemushaQualifiedRelationV1::RedeemSplit,
+            KagemushaQualifiedRelationV1::SuiteUpgrade,
+            KagemushaQualifiedRelationV1::Rotate,
+            KagemushaQualifiedRelationV1::TerminalAuthorization,
+            KagemushaQualifiedRelationV1::CommitWrapper,
+        ]
     );
+    assert!(KagemushaQualifiedHelperCircuitV1::GuardBundle.uses_internal_proof_evidence());
+    assert!(KagemushaQualifiedHelperCircuitV1::PlatformCredential.uses_internal_proof_evidence());
+    assert!(!KagemushaQualifiedHelperCircuitV1::MintAuthorization.uses_internal_proof_evidence());
 
     let artifacts = artifacts();
     let mut missing_mint_authorization = artifacts.clone();
@@ -840,16 +1029,53 @@ fn mint_authorization_artifacts_helpers_and_acceptance_relation_are_frozen() {
         Err(KagemushaReleaseErrorV1::InvalidArtifactSet)
     );
     let base = receipt(&artifacts);
-    let acceptance = base.profile_qualifications[0]
-        .relations
-        .iter()
-        .find(|relation| {
-            relation.relation == KagemushaQualifiedRelationV1::AcceptanceIntentAuthorization
+    assert!(base.profile_qualifications.iter().all(|qualification| {
+        qualification.relations.iter().all(|relation| {
+            let expected = match relation.relation {
+                KagemushaQualifiedRelationV1::TerminalAuthorization => (
+                    TERMINAL_AUTHORIZATION_EQ_PROTOCOL_DIGEST,
+                    TERMINAL_AUTHORIZATION_EP_PROTOCOL_DIGEST,
+                    KagemushaArtifactRoleV1::TerminalAuthorizationVkEq,
+                    KagemushaArtifactRoleV1::TerminalAuthorizationVkEp,
+                ),
+                KagemushaQualifiedRelationV1::CommitWrapper => (
+                    COMMIT_WRAPPER_EQ_PROTOCOL_DIGEST,
+                    COMMIT_WRAPPER_EP_PROTOCOL_DIGEST,
+                    KagemushaArtifactRoleV1::CommitWrapperVkEq,
+                    KagemushaArtifactRoleV1::CommitWrapperVkEp,
+                ),
+                KagemushaQualifiedRelationV1::Bootstrap
+                | KagemushaQualifiedRelationV1::MintFold
+                | KagemushaQualifiedRelationV1::SendSplit
+                | KagemushaQualifiedRelationV1::ReceiveFoldBatch
+                | KagemushaQualifiedRelationV1::RedeemSplit
+                | KagemushaQualifiedRelationV1::SuiteUpgrade
+                | KagemushaQualifiedRelationV1::Rotate => (
+                    STATE_EQ_PROTOCOL_DIGEST,
+                    STATE_EP_PROTOCOL_DIGEST,
+                    KagemushaArtifactRoleV1::StateVkEq,
+                    KagemushaArtifactRoleV1::StateVkEp,
+                ),
+            };
+            (relation.eq_protocol_digest, relation.ep_protocol_digest) == (expected.0, expected.1)
+                && relation.relation.expected_vk_roles() == (expected.2, expected.3)
         })
-        .expect("acceptance-intent authorization qualification");
+    }));
+
+    let mut aliased_relation_keys = artifacts;
+    let terminal_authorization_eq = artifact(
+        &aliased_relation_keys,
+        KagemushaArtifactRoleV1::TerminalAuthorizationVkEq,
+    )
+    .sha256;
+    aliased_relation_keys
+        .iter_mut()
+        .find(|artifact| artifact.role == KagemushaArtifactRoleV1::CommitWrapperVkEq)
+        .expect("post-commit wrapper Eq verifier key")
+        .sha256 = terminal_authorization_eq;
     assert_eq!(
-        (acceptance.eq_protocol_digest, acceptance.ep_protocol_digest),
-        (WRAPPER_EQ_PROTOCOL_DIGEST, WRAPPER_EP_PROTOCOL_DIGEST)
+        kagemusha_artifact_set_digest_v1(&aliased_relation_keys),
+        Err(KagemushaReleaseErrorV1::InvalidArtifactSet)
     );
 }
 
@@ -860,16 +1086,19 @@ fn helper_circuits_are_complete_measured_and_artifact_bound() {
 
     let mut missing = base.clone();
     missing.profile_qualifications[0].helper_circuits.pop();
+    reseal_profile_qualification(&mut missing, 0);
     assert!(missing.validate().is_err());
 
     let mut wrong_role = base.clone();
     wrong_role.profile_qualifications[0].helper_circuits[0].eq_verifying_key =
         artifact(&artifacts, KagemushaArtifactRoleV1::StateVkEq);
+    reseal_profile_qualification(&mut wrong_role, 0);
     assert!(wrong_role.validate().is_err());
 
     let mut wrong_protocol = base.clone();
     wrong_protocol.profile_qualifications[0].helper_circuits[1].eq_protocol_digest =
         GUARD_EQ_PROTOCOL_DIGEST;
+    reseal_profile_qualification(&mut wrong_protocol, 0);
     assert!(wrong_protocol.validate().is_err());
 
     let mut exact_wire_limit = base.clone();
@@ -932,8 +1161,6 @@ fn internal_helper_protocol_lengths_are_exact_authenticated_profiles() {
         evidence(5),
         STATE_EQ_PROTOCOL_DIGEST,
         STATE_EP_PROTOCOL_DIGEST,
-        WRAPPER_EQ_PROTOCOL_DIGEST,
-        WRAPPER_EP_PROTOCOL_DIGEST,
         &protocols,
     )
     .expect("well-formed internal proof profiles");
@@ -945,8 +1172,6 @@ fn internal_helper_protocol_lengths_are_exact_authenticated_profiles() {
             evidence(5),
             STATE_EQ_PROTOCOL_DIGEST,
             STATE_EP_PROTOCOL_DIGEST,
-            WRAPPER_EQ_PROTOCOL_DIGEST,
-            WRAPPER_EP_PROTOCOL_DIGEST,
             &wire_claims_exact_length,
         )
         .is_err()
@@ -959,8 +1184,6 @@ fn internal_helper_protocol_lengths_are_exact_authenticated_profiles() {
             evidence(5),
             STATE_EQ_PROTOCOL_DIGEST,
             STATE_EP_PROTOCOL_DIGEST,
-            WRAPPER_EQ_PROTOCOL_DIGEST,
-            WRAPPER_EP_PROTOCOL_DIGEST,
             &non_word_aligned,
         )
         .is_err()
@@ -973,8 +1196,6 @@ fn internal_helper_protocol_lengths_are_exact_authenticated_profiles() {
             evidence(5),
             STATE_EQ_PROTOCOL_DIGEST,
             STATE_EP_PROTOCOL_DIGEST,
-            WRAPPER_EQ_PROTOCOL_DIGEST,
-            WRAPPER_EP_PROTOCOL_DIGEST,
             &zero_internal_length,
         )
         .is_err()
@@ -986,8 +1207,6 @@ fn internal_helper_protocol_lengths_are_exact_authenticated_profiles() {
         evidence(5),
         STATE_EQ_PROTOCOL_DIGEST,
         STATE_EP_PROTOCOL_DIGEST,
-        WRAPPER_EQ_PROTOCOL_DIGEST,
-        WRAPPER_EP_PROTOCOL_DIGEST,
         &exact_resource_limit,
     )
     .expect("exact internal proof evidence resource limit");
@@ -1000,8 +1219,6 @@ fn internal_helper_protocol_lengths_are_exact_authenticated_profiles() {
             evidence(5),
             STATE_EQ_PROTOCOL_DIGEST,
             STATE_EP_PROTOCOL_DIGEST,
-            WRAPPER_EQ_PROTOCOL_DIGEST,
-            WRAPPER_EP_PROTOCOL_DIGEST,
             &over_resource_limit,
         )
         .is_err()
@@ -1015,12 +1232,44 @@ fn internal_helper_protocol_lengths_are_exact_authenticated_profiles() {
             evidence(5),
             STATE_EQ_PROTOCOL_DIGEST,
             STATE_EP_PROTOCOL_DIGEST,
-            WRAPPER_EQ_PROTOCOL_DIGEST,
-            WRAPPER_EP_PROTOCOL_DIGEST,
             &overflowing_pair,
         )
         .is_err()
     );
+}
+
+#[test]
+fn receive_fold_batch_occupancies_are_exact_and_bounded() {
+    let artifacts = artifacts();
+    let base = receipt(&artifacts);
+    assert_eq!(
+        base.profile_qualifications[0]
+            .receive_fold_occupancies
+            .iter()
+            .map(|entry| entry.occupancy)
+            .collect::<Vec<_>>(),
+        (1..=KAGEMUSHA_RECEIVE_FOLD_BATCH_WIDTH_V1).collect::<Vec<_>>()
+    );
+
+    let mut missing = base.clone();
+    missing.profile_qualifications[0]
+        .receive_fold_occupancies
+        .pop();
+    reseal_profile_qualification(&mut missing, 0);
+    assert!(missing.validate().is_err());
+
+    let mut unordered = base.clone();
+    unordered.profile_qualifications[0]
+        .receive_fold_occupancies
+        .swap(0, 1);
+    reseal_profile_qualification(&mut unordered, 0);
+    assert!(unordered.validate().is_err());
+
+    let mut oversized = base;
+    oversized.profile_qualifications[0].receive_fold_occupancies[15].complete_proof_bytes =
+        u32::try_from(KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1).expect("proof cap fits u32") + 1;
+    reseal_profile_qualification(&mut oversized, 0);
+    assert!(oversized.validate().is_err());
 }
 
 #[test]
@@ -1031,10 +1280,12 @@ fn recursive_depths_are_exact() {
     let mut shallow = base.clone();
     shallow.profile_qualifications[0].recursive_depths[3].depth = 1_024;
     shallow.profile_qualifications[0].recursive_depths[3].verified_handoffs = 1_024;
+    reseal_profile_qualification(&mut shallow, 0);
     assert!(shallow.validate().is_err());
 
     let mut unverifiable = base;
     unverifiable.profile_qualifications[0].recursive_depths[2].verified_handoffs -= 1;
+    reseal_profile_qualification(&mut unverifiable, 0);
     assert!(unverifiable.validate().is_err());
 }
 
@@ -1045,27 +1296,34 @@ fn recursive_depth_wire_sizes_are_bounded_and_invariant() {
 
     let mut variant = base.clone();
     variant.profile_qualifications[0].recursive_depths[3].complete_proof_bytes -= 1;
+    reseal_profile_qualification(&mut variant, 0);
     assert!(variant.validate().is_err());
 
     let mut exact = base.clone();
     for depth in &mut exact.profile_qualifications[0].recursive_depths {
         depth.complete_proof_bytes =
             u32::try_from(KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1).expect("proof cap fits u32");
-        depth.raw_session_bytes =
-            u32::try_from(KAGEMUSHA_SESSION_MAX_BYTES_V1).expect("raw cap fits u32");
-        depth.text_session_bytes =
-            u32::try_from(KAGEMUSHA_TEXT_SESSION_MAX_BYTES_V1).expect("text cap fits u32");
+        depth.raw_complete_exchange_bytes =
+            u32::try_from(KAGEMUSHA_COMPLETE_EXCHANGE_MAX_BYTES_V1).expect("raw cap fits u32");
+        depth.text_complete_exchange_bytes =
+            u32::try_from(KAGEMUSHA_COMPLETE_TEXT_EXCHANGE_MAX_BYTES_V1)
+                .expect("text cap fits u32");
     }
-    exact.profile_qualifications[0].envelope.raw_session_bytes =
-        u32::try_from(KAGEMUSHA_SESSION_MAX_BYTES_V1).expect("raw cap fits u32");
-    exact.profile_qualifications[0].envelope.text_session_bytes =
-        u32::try_from(KAGEMUSHA_TEXT_SESSION_MAX_BYTES_V1).expect("text cap fits u32");
+    exact.profile_qualifications[0]
+        .envelope
+        .raw_complete_exchange_bytes =
+        u32::try_from(KAGEMUSHA_COMPLETE_EXCHANGE_MAX_BYTES_V1).expect("raw cap fits u32");
+    exact.profile_qualifications[0]
+        .envelope
+        .text_complete_exchange_bytes =
+        u32::try_from(KAGEMUSHA_COMPLETE_TEXT_EXCHANGE_MAX_BYTES_V1).expect("text cap fits u32");
     reseal_profile_qualification(&mut exact, 0);
     exact.validate().expect("exact invariant depth limits pass");
 
     for depth in &mut exact.profile_qualifications[0].recursive_depths {
         depth.complete_proof_bytes += 1;
     }
+    reseal_profile_qualification(&mut exact, 0);
     assert!(exact.validate().is_err());
 }
 
@@ -1075,35 +1333,49 @@ fn quantitative_and_wire_gates_are_typed_per_profile() {
     let base = receipt(&artifacts);
 
     let mut exact = base.clone();
-    exact.profile_qualifications[0].envelope.raw_session_bytes =
-        u32::try_from(KAGEMUSHA_SESSION_MAX_BYTES_V1).expect("raw cap fits u32");
-    exact.profile_qualifications[0].envelope.text_session_bytes =
-        u32::try_from(KAGEMUSHA_TEXT_SESSION_MAX_BYTES_V1).expect("text cap fits u32");
-    let raw_session_bytes = exact.profile_qualifications[0].envelope.raw_session_bytes;
-    let text_session_bytes = exact.profile_qualifications[0].envelope.text_session_bytes;
+    exact.profile_qualifications[0]
+        .envelope
+        .raw_complete_exchange_bytes =
+        u32::try_from(KAGEMUSHA_COMPLETE_EXCHANGE_MAX_BYTES_V1).expect("raw cap fits u32");
+    exact.profile_qualifications[0]
+        .envelope
+        .text_complete_exchange_bytes =
+        u32::try_from(KAGEMUSHA_COMPLETE_TEXT_EXCHANGE_MAX_BYTES_V1).expect("text cap fits u32");
+    let raw_complete_exchange_bytes = exact.profile_qualifications[0]
+        .envelope
+        .raw_complete_exchange_bytes;
+    let text_complete_exchange_bytes = exact.profile_qualifications[0]
+        .envelope
+        .text_complete_exchange_bytes;
     for depth in &mut exact.profile_qualifications[0].recursive_depths {
-        depth.raw_session_bytes = raw_session_bytes;
-        depth.text_session_bytes = text_session_bytes;
+        depth.raw_complete_exchange_bytes = raw_complete_exchange_bytes;
+        depth.text_complete_exchange_bytes = text_complete_exchange_bytes;
     }
     reseal_profile_qualification(&mut exact, 0);
     exact.validate().expect("exact envelope limits pass");
-    exact.profile_qualifications[0].envelope.raw_session_bytes += 1;
+    exact.profile_qualifications[0]
+        .envelope
+        .raw_complete_exchange_bytes += 1;
+    reseal_profile_qualification(&mut exact, 0);
     assert!(exact.validate().is_err());
 
     let mut aggregate = base.clone();
     aggregate.profile_qualifications[0]
         .aggregate_balance
         .independent_payments -= 1;
+    reseal_profile_qualification(&mut aggregate, 0);
     assert!(aggregate.validate().is_err());
 
     let mut not_one_spend = base.clone();
     not_one_spend.profile_qualifications[0]
         .aggregate_balance
         .spend_payments = 2;
+    reseal_profile_qualification(&mut not_one_spend, 0);
     assert!(not_one_spend.validate().is_err());
 
     let mut thermal = base;
     thermal.profile_qualifications[0].thermal.folded_credits -= 1;
+    reseal_profile_qualification(&mut thermal, 0);
     assert!(thermal.validate().is_err());
 }
 
@@ -1111,25 +1383,96 @@ fn quantitative_and_wire_gates_are_typed_per_profile() {
 fn acceptance_cases_and_reproducible_builds_are_closed() {
     let artifacts = artifacts();
     let base = receipt(&artifacts);
-    assert!(
-        KagemushaAcceptanceCaseV1::ALL
-            .contains(&KagemushaAcceptanceCaseV1::DistinctPaymentsSameRequest)
+    let cases = KagemushaAcceptanceCaseV1::ALL
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    assert_eq!(cases.len(), KagemushaAcceptanceCaseV1::ALL.len());
+    assert_eq!(
+        &KagemushaAcceptanceCaseV1::ALL[2..17],
+        &[
+            KagemushaAcceptanceCaseV1::CrashDuringPrepare,
+            KagemushaAcceptanceCaseV1::CrashAfterPrepareBeforeProof,
+            KagemushaAcceptanceCaseV1::CrashDuringProof,
+            KagemushaAcceptanceCaseV1::CrashAfterProofBeforeCandidatePersistence,
+            KagemushaAcceptanceCaseV1::CrashDuringCandidatePersistence,
+            KagemushaAcceptanceCaseV1::CrashAfterCandidatePersistenceBeforeVerification,
+            KagemushaAcceptanceCaseV1::CrashDuringCandidateVerification,
+            KagemushaAcceptanceCaseV1::CrashAfterCandidateVerificationBeforeHardwareCommit,
+            KagemushaAcceptanceCaseV1::CrashDuringHardwareCommit,
+            KagemushaAcceptanceCaseV1::CrashAfterHardwareCommitBeforeTerminalAuthorization,
+            KagemushaAcceptanceCaseV1::CrashDuringTerminalAuthorization,
+            KagemushaAcceptanceCaseV1::CrashAfterTerminalAuthorizationBeforeFinalEnvelopePersistence,
+            KagemushaAcceptanceCaseV1::CrashDuringFinalEnvelopePersistence,
+            KagemushaAcceptanceCaseV1::CrashAfterFinalEnvelopePersistenceBeforeExposure,
+            KagemushaAcceptanceCaseV1::CrashDuringExposure,
+        ]
     );
-    assert!(
-        KagemushaAcceptanceCaseV1::ALL
-            .contains(&KagemushaAcceptanceCaseV1::CrashAfterCommitWrapperGeneratedBeforeInstall)
-    );
+    for required in [
+        KagemushaAcceptanceCaseV1::CrashDuringPrepare,
+        KagemushaAcceptanceCaseV1::CrashAfterPrepareBeforeProof,
+        KagemushaAcceptanceCaseV1::CrashDuringProof,
+        KagemushaAcceptanceCaseV1::CrashDuringCandidatePersistence,
+        KagemushaAcceptanceCaseV1::CrashDuringCandidateVerification,
+        KagemushaAcceptanceCaseV1::CrashDuringHardwareCommit,
+        KagemushaAcceptanceCaseV1::CrashDuringTerminalAuthorization,
+        KagemushaAcceptanceCaseV1::CrashDuringFinalEnvelopePersistence,
+        KagemushaAcceptanceCaseV1::CrashDuringExposure,
+        KagemushaAcceptanceCaseV1::CrashDuringTransport,
+        KagemushaAcceptanceCaseV1::CrashDuringInboxStage,
+        KagemushaAcceptanceCaseV1::CrashDuringAckRecovery,
+        KagemushaAcceptanceCaseV1::CrashDuringRecovery,
+        KagemushaAcceptanceCaseV1::MissingSenderAuthorization,
+        KagemushaAcceptanceCaseV1::ForgedSenderAuthorization,
+        KagemushaAcceptanceCaseV1::ReplayedSenderAuthorization,
+        KagemushaAcceptanceCaseV1::CrossReleaseSenderAuthorization,
+        KagemushaAcceptanceCaseV1::MissingMintAuthorization,
+        KagemushaAcceptanceCaseV1::ForgedMintAuthorization,
+        KagemushaAcceptanceCaseV1::ReplayedMintAuthorization,
+        KagemushaAcceptanceCaseV1::CrossReleaseMintAuthorization,
+        KagemushaAcceptanceCaseV1::AcceptanceTicketSingleExact,
+        KagemushaAcceptanceCaseV1::AcceptanceTicketPartialUntilTotal,
+        KagemushaAcceptanceCaseV1::AcceptanceTicketBoundedMultiPayment,
+        KagemushaAcceptanceCaseV1::AcceptanceTicketOpenReceive,
+        KagemushaAcceptanceCaseV1::AcceptanceTicketReplay,
+        KagemushaAcceptanceCaseV1::AcceptanceTicketMismatch,
+        KagemushaAcceptanceCaseV1::DistinctPaymentsSameRequest,
+        KagemushaAcceptanceCaseV1::ShuffledConcurrentPaymentsSameRequest,
+        KagemushaAcceptanceCaseV1::DelayedDeliveryAfterRequestExpiry,
+        KagemushaAcceptanceCaseV1::DelayedDeliveryAcrossOrdinarySuiteRotation,
+        KagemushaAcceptanceCaseV1::DelayedDeliveryAcrossCredentialRotation,
+        KagemushaAcceptanceCaseV1::DuplicateTransport,
+        KagemushaAcceptanceCaseV1::SameCreditReplay,
+        KagemushaAcceptanceCaseV1::TwoSuccessorsFromOnePredecessor,
+        KagemushaAcceptanceCaseV1::MonotonicLeaseExpiry,
+        KagemushaAcceptanceCaseV1::HardwareEpochRollover,
+        KagemushaAcceptanceCaseV1::OrdinaryVerifierRotation,
+        KagemushaAcceptanceCaseV1::HardwareCounterRollover,
+        KagemushaAcceptanceCaseV1::TranscriptUnlinkability,
+        KagemushaAcceptanceCaseV1::X25519LowOrderPublicKeyRejection,
+        KagemushaAcceptanceCaseV1::X25519ZeroDhRejection,
+        KagemushaAcceptanceCaseV1::AeadCiphertextSubstitution,
+        KagemushaAcceptanceCaseV1::AeadAssociatedDataSubstitution,
+        KagemushaAcceptanceCaseV1::DeterministicEncryptionInjectedRandomnessKat,
+        KagemushaAcceptanceCaseV1::ReceiveFoldBatchOccupancyOneThroughSixteen,
+        KagemushaAcceptanceCaseV1::ReceiveFoldBatchPadding,
+        KagemushaAcceptanceCaseV1::ReceiveFoldBatchReplayAtomicity,
+    ] {
+        assert!(cases.contains(&required));
+    }
 
     let mut missing_case = base.clone();
     missing_case.profile_qualifications[0]
         .acceptance_cases
         .pop();
+    reseal_profile_qualification(&mut missing_case, 0);
     assert!(missing_case.validate().is_err());
 
     let mut unordered_case = base.clone();
     unordered_case.profile_qualifications[0]
         .acceptance_cases
         .swap(1, 2);
+    reseal_profile_qualification(&mut unordered_case, 0);
     assert!(unordered_case.validate().is_err());
 
     let mut wrong_validator_count = base.clone();
@@ -1139,6 +1482,7 @@ fn acceptance_cases_and_reproducible_builds_are_closed() {
         .find(|case| case.case == KagemushaAcceptanceCaseV1::FourPeerActivationRestartReplay)
         .expect("four-peer case");
     four_peer.validator_count = 3;
+    reseal_profile_qualification(&mut wrong_validator_count, 0);
     assert!(wrong_validator_count.validate().is_err());
 
     let manifest = manifest(artifacts.clone(), &base);
@@ -1191,6 +1535,7 @@ fn evidence_file_bindings_are_nonempty_and_bounded_provenance() {
     receipt.profile_qualifications[0].relations[0]
         .report
         .byte_len = KAGEMUSHA_RELEASE_EVIDENCE_FILE_MAX_BYTES_V1 + 1;
+    reseal_profile_qualification(&mut receipt, 0);
     assert!(receipt.validate().is_err());
 }
 
@@ -1399,47 +1744,79 @@ fn evidence_closure_and_release_profile_are_receipt_authority_inputs() {
 }
 
 #[test]
-fn release_evidence_python_projection_digest_goldens_match_rust_norito() {
+fn release_digests_bind_inner_outer_helper_and_lifecycle_artifact_provenance() {
     let artifacts = artifacts();
+    let artifact_set_digest =
+        kagemusha_artifact_set_digest_v1(&artifacts).expect("artifact-set digest");
     assert_eq!(
-        kagemusha_artifact_set_digest_v1(&artifacts).expect("artifact-set digest"),
-        [
-            0xC2, 0xE2, 0x30, 0x1C, 0x23, 0x41, 0x17, 0x7A, 0xB4, 0x5E, 0x50, 0xA3, 0x9F, 0x63,
-            0x13, 0xDF, 0x3C, 0xAE, 0x77, 0xB2, 0xB6, 0x55, 0x91, 0x8C, 0x62, 0xC1, 0xAE, 0x53,
-            0x50, 0xC7, 0xF4, 0x6F,
-        ]
+        kagemusha_artifact_set_digest_v1(&artifacts).expect("repeat artifact-set digest"),
+        artifact_set_digest
     );
+
     let helper_protocols = helper_protocols();
+    let vk_set_digest = kagemusha_vk_set_digest_v1(
+        &artifacts,
+        STATE_EQ_PROTOCOL_DIGEST,
+        STATE_EP_PROTOCOL_DIGEST,
+        &helper_protocols,
+    )
+    .expect("VK-set digest");
     assert_eq!(
         kagemusha_vk_set_digest_v1(
             &artifacts,
             STATE_EQ_PROTOCOL_DIGEST,
             STATE_EP_PROTOCOL_DIGEST,
-            WRAPPER_EQ_PROTOCOL_DIGEST,
-            WRAPPER_EP_PROTOCOL_DIGEST,
             &helper_protocols,
         )
-        .expect("VK-set digest"),
-        [
-            0xC2, 0x97, 0x66, 0xB6, 0x9D, 0xF7, 0x18, 0x95, 0xF3, 0x3D, 0xB1, 0xFF, 0xF2, 0x85,
-            0x45, 0x6F, 0x87, 0x13, 0x2C, 0xE4, 0x37, 0x1E, 0xCC, 0xE4, 0x23, 0x24, 0x14, 0x6D,
-            0x16, 0xDA, 0xD3, 0xB0,
-        ]
+        .expect("repeat VK-set digest"),
+        vk_set_digest
     );
-    assert_eq!(
+
+    for role in [
+        KagemushaArtifactRoleV1::InnerStateVkEq,
+        KagemushaArtifactRoleV1::StateVkEq,
+        KagemushaArtifactRoleV1::GuardBundleVkEq,
+        KagemushaArtifactRoleV1::MintAuthorizationVkEq,
+        KagemushaArtifactRoleV1::TerminalAuthorizationVkEq,
+        KagemushaArtifactRoleV1::CommitWrapperVkEq,
+    ] {
+        let mut changed = artifacts.clone();
+        changed
+            .iter_mut()
+            .find(|artifact| artifact.role == role)
+            .expect("verifier artifact")
+            .sha256 = [0xFC; 32];
+        assert_ne!(
+            kagemusha_artifact_set_digest_v1(&changed).expect("changed artifact-set digest"),
+            artifact_set_digest
+        );
+        assert_ne!(
+            kagemusha_vk_set_digest_v1(
+                &changed,
+                STATE_EQ_PROTOCOL_DIGEST,
+                STATE_EP_PROTOCOL_DIGEST,
+                &helper_protocols,
+            )
+            .expect("changed VK-set digest"),
+            vk_set_digest
+        );
+    }
+
+    let profile_digest = kagemusha_release_profile_digest_v1(
+        evidence(5),
+        STATE_EQ_PROTOCOL_DIGEST,
+        STATE_EP_PROTOCOL_DIGEST,
+        &helper_protocols,
+    )
+    .expect("release profile digest");
+    assert_ne!(
         kagemusha_release_profile_digest_v1(
-            evidence(5),
+            evidence(6),
             STATE_EQ_PROTOCOL_DIGEST,
             STATE_EP_PROTOCOL_DIGEST,
-            WRAPPER_EQ_PROTOCOL_DIGEST,
-            WRAPPER_EP_PROTOCOL_DIGEST,
             &helper_protocols,
         )
-        .expect("release profile digest"),
-        [
-            0xC9, 0xFC, 0x4A, 0x07, 0x98, 0xC1, 0x56, 0x6E, 0x97, 0x4B, 0xD5, 0xD9, 0xA7, 0x46,
-            0x65, 0x56, 0x11, 0x65, 0x10, 0xC9, 0x8F, 0x97, 0xC1, 0xC9, 0xB6, 0xA7, 0x8F, 0xEE,
-            0xC5, 0x6A, 0xA2, 0xFD,
-        ]
+        .expect("changed release profile digest"),
+        profile_digest
     );
 }

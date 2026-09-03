@@ -97,7 +97,7 @@ def test_checked_in_generated_profile_inline_secret_fails(tmp_path: pathlib.Path
         guard.validate_repository(tmp_path)
 
 
-def test_taira_kagemusha_inline_secret_fails(tmp_path: pathlib.Path) -> None:
+def test_taira_kagemusha_redemption_inline_secret_fails(tmp_path: pathlib.Path) -> None:
     _write_repository(tmp_path)
     target = tmp_path / guard.DEPLOYMENT_SERVER_TEMPLATES[0]
     target.write_text(
@@ -106,7 +106,7 @@ def test_taira_kagemusha_inline_secret_fails(tmp_path: pathlib.Path) -> None:
 
 [torii.kagemusha_v1_commands]
 enabled = true
-private_key = "runtime-secret"
+redemption_private_key = "runtime-secret"
 ''',
         encoding="utf-8",
     )

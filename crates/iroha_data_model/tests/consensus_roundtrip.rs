@@ -19,7 +19,8 @@ use iroha_data_model::{
         },
     },
     isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
+        KagemushaMintFinalityEpochRosterV1, KagemushaMintFinalityGenesisParametersV1,
         KagemushaMintFinalityValidatorKeysV1,
     },
     nexus::{DataSpaceId, LaneId},
@@ -61,33 +62,17 @@ fn mint_finality_roster(
         validators: roster
             .iter()
             .enumerate()
-            .map(
-                |(index, validator)| KagemushaMintFinalityValidatorKeysV1 {
-                    validator: validator.validator.clone(),
-                    eq_proof_public_key: [u8::try_from(index + 1).expect("small fixture roster");
-                        32],
-                    ep_proof_public_key: [u8::try_from(index + 17).expect("small fixture roster");
-                        32],
-                },
-            )
+            .map(|(index, validator)| KagemushaMintFinalityValidatorKeysV1 {
+                validator: validator.validator.clone(),
+                eq_proof_public_key: [u8::try_from(index + 1).expect("small fixture roster"); 32],
+                ep_proof_public_key: [u8::try_from(index + 17).expect("small fixture roster"); 32],
+            })
             .collect(),
     }
 }
 
 fn recommended_genesis_context() -> SumeragiV2GenesisContextParameters {
-    let network_id = NetworkId::from_genesis_hash(sample_block_hash(0xD0));
-    let mut roster = [0xD1, 0xD2, 0xD3, 0xD4]
-        .into_iter()
-        .map(|seed| ValidatorPower {
-            validator: checked_bls_peer_id_from_seed(seed),
-            power: 1,
-        })
-        .collect::<Vec<_>>();
-    roster.sort();
-    SumeragiV2GenesisContextParameters::recommended(
-        mint_finality_roster(network_id, 0, &roster),
-        None,
-    )
+    SumeragiV2GenesisContextParameters::recommended()
 }
 
 #[test]
@@ -393,14 +378,13 @@ fn rng_sumeragi_v2_qc_response(rng: &mut DeterministicRng) -> SumeragiV2QcRespon
                 block_hash: rng_block_hash(rng),
                 payload_hash: rng_hash(rng),
             },
-            execution_commitment:
-                ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-                    rng_hash(rng),
-                    rng_hash(rng),
-                    rng_hash(rng),
-                    rng.next_u64().max(1),
-                    rng_hash(rng),
-                ),
+            execution_commitment: ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                rng_hash(rng),
+                rng_hash(rng),
+                rng_hash(rng),
+                rng.next_u64().max(1),
+                rng_hash(rng),
+            ),
         }
     }
     SumeragiV2QcResponse {
@@ -438,6 +422,40 @@ fn consensus_genesis_norito_roundtrip() {
     assert_roundtrip(&npos);
     assert_roundtrip(&with_npos);
     assert_roundtrip(&without_npos);
+}
+#[test]
+fn kagemusha_mint_finality_genesis_parameters_norito_roundtrip() {
+    let network_id = NetworkId::from_genesis_hash(sample_block_hash(0xD0));
+    let mut roster = [0xD1, 0xD2, 0xD3, 0xD4]
+        .into_iter()
+        .map(|seed| ValidatorPower {
+            validator: checked_bls_peer_id_from_seed(seed),
+            power: 1,
+        })
+        .collect::<Vec<_>>();
+    roster.sort();
+    let template = |epoch| {
+        let roster = mint_finality_roster(network_id, epoch, &roster);
+        KagemushaMintFinalityEpochRosterTemplateV1 {
+            version: roster.version,
+            epoch: roster.epoch,
+            validators: roster.validators,
+        }
+    };
+    let parameters = KagemushaMintFinalityGenesisParametersV1 {
+        epoch_roster: template(0),
+        next_epoch_roster: Some(template(1)),
+    };
+    parameters.validate().expect("valid genesis authority");
+    assert_roundtrip(&parameters);
+    assert_eq!(
+        parameters
+            .epoch_roster
+            .bind_network_id(network_id)
+            .expect("bind final network identity")
+            .network_id,
+        network_id
+    );
 }
 #[test]
 fn consensus_persistence_norito_roundtrip() {

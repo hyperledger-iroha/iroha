@@ -2,1916 +2,1203 @@
 EXTENDS Naturals, FiniteSets, Sequences
 
 (***************************************************************************
-Finite-state safety model for the sole first-release Kagemusha protocol.
+Finite-state safety model for the sole first-release KAGEMUSHA protocol.
 
-Devices, identifiers, amounts, counters, and byte capacities are TLC
-exploration bounds only. They are not protocol admission limits. In
-particular, the real protocol carries one aggregate recursive balance and
-constant-size public state; it carries no hop, ancestry, origin, fan-in,
-receipt-count, transition-count, or proof-depth field.
+KAGEMUSHA carries one recursively proved aggregate balance per device lane
+and asset.  Nothing in this module gives monetary meaning to hops, notes,
+origins, ancestry, fan-in, receipt count, or proof depth.  The finite sets and
+integer ceilings supplied to TLC are exploration bounds only; they are not
+protocol fields or admission rules.
 
-Cryptographic digests and proofs are abstracted by identifiers. A candidate
-identifier denotes the exact sealed bytes recovered after a crash. Private
-predecessors occur only in the hardware-side state below, never in the
-abstract public payment envelope.
+Cryptographic hashes, commitments, recursive proofs, attestation, finality,
+authenticated storage, and trusted time are symbolic here.  The model checks
+the state-machine obligations that those mechanisms must enforce.
 ***************************************************************************)
 
 CONSTANTS
   Devices,
-  CreditIds,
-  IntentIds,
-  TicketIds,
   RequestIds,
+  CreditIds,
+  MintIds,
   VoucherIds,
-  SuiteIds,
-  ProfileIds,
-  InitialActiveSuite,
+  RotationIds,
   InitialOnlinePerDevice,
   MaxAmount,
-  MaxSequence,
-  InboxCapacity,
-  OutboxCapacity,
+  MaxLogicalSequence,
+  MaxHardwareCounter,
+  MaxEpoch,
+  MaxTime,
+  NoState,
+  NoDigest,
+  NoAck,
+  ConflictingDigest,
   ModelDevice1,
+  ModelDevice2,
+  ModelRequest1,
+  ModelRequest2,
   ModelCredit1,
   ModelCredit2,
   ModelCredit3,
-  ModelCredit4,
-  ModelIntent1,
-  ModelIntent2,
-  ModelIntent3,
-  ModelIntent4,
-  ModelTicket1,
-  ModelTicket2,
-  ModelTicket3,
-  ModelTicket4,
-  ModelRequest1,
-  ModelProfile1,
-  ModelProfile2
+  ModelMint1,
+  ModelMint2,
+  ModelVoucher1,
+  ModelVoucher2,
+  ModelRotation1,
+  ModelRotation2
 
-IntentStates ==
-  {"Absent", "Offered", "Authorized", "Ticketed", "ClosedNoCommit"}
-TicketStates ==
-  {"Absent", "Reserved", "Locked", "Consumed", "RecoveryPending", "Released"}
+PeerMessageOrder == <<"Request", "Payment", "Acknowledgement">>
+MintStates == {"Absent", "Finalized", "Folded"}
 PaymentPhases ==
-  {"Idle", "Prepared", "Candidate", "HardwareCommitted",
-   "WrapperGenerated", "Installed", "Exposed", "Recovery", "Cancelled"}
-RedemptionPhases == PaymentPhases
-RecoverySources ==
-  {"None", "Prepared", "Candidate", "HardwareCommitted",
-   "WrapperGenerated", "Installed", "Exposed"}
-CreditStates == {"Absent", "Committed", "Available", "Staged", "Consumed"}
-VoucherStates == {"Absent", "Pending", "Applied"}
-OutboxStates == {"Absent", "Reserved", "Committed", "Released"}
-SuiteStates == {"Pending", "Active", "Retained"}
-ProfileStates == {"Active", "Suspended"}
+  {"Absent", "HardwareCommitted", "Proofed", "Canonical", "Exposed",
+   "Staged", "Folded"}
+RedemptionPhases ==
+  {"Absent", "HardwareCommitted", "Proofed", "Canonical", "Exposed",
+   "Applied"}
+TransitionKinds ==
+  {"MintFold", "SendSplit", "ReceiveFold", "RedeemSplit", "Rotate"}
 
 (***************************************************************************
-Concrete model functions are defined in the module because TLC configuration
-files accept scalar model values but do not evaluate general TLA+ function
-expressions. All four distinguished intent/ticket pairs target the same exact
-request so TLC explores multiple independent valid payments against it.
+The concrete functions below are sample exploration data.  ModelCredit1 and
+ModelCredit2 are deliberately distinct payments for ModelRequest1.  There is
+no mutable per-request use, amount-total, count, or reservation state.
 ***************************************************************************)
+
+RequestAmount ==
+  [q \in RequestIds |-> IF q = ModelRequest2 THEN 2 ELSE 1]
+RequestRecipient == [q \in RequestIds |-> ModelDevice2]
+RequestIssuedAt ==
+  [q \in RequestIds |-> IF q = ModelRequest2 THEN 20 ELSE 10]
+RequestExpiresAt ==
+  [q \in RequestIds |-> IF q = ModelRequest2 THEN 30 ELSE 20]
+
+CreditRequest ==
+  [c \in CreditIds |->
+    IF c \in {ModelCredit1, ModelCredit2}
+      THEN ModelRequest1
+      ELSE ModelRequest2]
+CreditSender == [c \in CreditIds |-> ModelDevice1]
+CreditRecipient == [c \in CreditIds |-> RequestRecipient[CreditRequest[c]]]
+CreditAmount == [c \in CreditIds |-> RequestAmount[CreditRequest[c]]]
+CreditCommitTime ==
+  [c \in CreditIds |->
+    CASE c = ModelCredit1 -> 11
+      [] c = ModelCredit2 -> 12
+      [] OTHER -> 31]
+
+RotationDevice ==
+  [r \in RotationIds |->
+    IF r = ModelRotation1 THEN ModelDevice1 ELSE ModelDevice2]
+
+SendKey(c) == <<"SendSplit", c>>
+MintKey(m) == <<"MintFold", m>>
+ReceiveKey(c) == <<"ReceiveFold", c>>
+RedeemKey(v) == <<"RedeemSplit", v>>
+RotateKey(r) == <<"Rotate", r>>
+
+OperationKeys ==
+  {SendKey(c) : c \in CreditIds}
+    \cup {MintKey(m) : m \in MintIds}
+    \cup {ReceiveKey(c) : c \in CreditIds}
+    \cup {RedeemKey(v) : v \in VoucherIds}
+    \cup {RotateKey(r) : r \in RotationIds}
+
+MaxValue == Cardinality(Devices) * InitialOnlinePerDevice
 InitialOnline == [d \in Devices |-> InitialOnlinePerDevice]
-RequestOwner == [q \in RequestIds |-> ModelDevice1]
-RequestAmount == [q \in RequestIds |-> 2]
-IntentRequest == [i \in IntentIds |-> ModelRequest1]
-IntentAmount == [i \in IntentIds |-> RequestAmount[IntentRequest[i]]]
-TicketIntent ==
-  [t \in TicketIds |->
-    CASE t = ModelTicket1 -> ModelIntent1
-      [] t = ModelTicket2 -> ModelIntent2
-      [] t = ModelTicket3 -> ModelIntent3
-      [] OTHER -> ModelIntent4]
-TicketRequest ==
-  [t \in TicketIds |-> IntentRequest[TicketIntent[t]]]
-RandomSenderCommitment(i, sender) ==
-  [randomIntentNonce |-> i, committedSender |-> sender]
-SenderCommitmentValues ==
-  {RandomSenderCommitment(i, d) : i \in IntentIds, d \in Devices}
-TicketBytes == [t \in TicketIds |-> 1]
-TicketIssuedAt == [t \in TicketIds |-> 1]
-TicketExpiresAt == [t \in TicketIds |-> 8]
-TicketSuite == [t \in TicketIds |-> InitialActiveSuite]
-TicketProfile ==
-  [t \in TicketIds |->
-    IF t = ModelTicket3 THEN ModelProfile2 ELSE ModelProfile1]
-IntentAuthorizationProfile == [i \in IntentIds |-> ModelProfile1]
-IntentAuthorizationSuite == [i \in IntentIds |-> InitialActiveSuite]
-PaymentTicket ==
-  [c \in CreditIds |->
-    CASE c = ModelCredit1 -> ModelTicket1
-      [] c = ModelCredit2 -> ModelTicket2
-      [] c = ModelCredit3 -> ModelTicket3
-      [] OTHER -> ModelTicket4]
-PaymentOutboxBytes == [c \in CreditIds |-> 1]
-PaymentSuite == [c \in CreditIds |-> InitialActiveSuite]
-PaymentProfile ==
-  [c \in CreditIds |->
-    IF c = ModelCredit2 THEN ModelProfile2 ELSE ModelProfile1]
-SenderCommitTime == [c \in CreditIds |-> 3]
-RedemptionOutboxBytes == [v \in VoucherIds |-> 1]
-RedemptionSuite == [v \in VoucherIds |-> InitialActiveSuite]
-RedemptionProfile == [v \in VoucherIds |-> ModelProfile1]
-HardwareQualified ==
-  [p \in ProfileIds |-> p \in {ModelProfile1, ModelProfile2}]
-NoSoftwareFallback ==
-  [p \in ProfileIds |-> p \in {ModelProfile1, ModelProfile2}]
-DigestValues == {"canonical-digest", "conflicting-digest"}
-CanonicalEnvelopeDigest(c) == "canonical-digest"
+
+DefaultDevice == CHOOSE d \in Devices : TRUE
+DefaultRequest == CHOOSE q \in RequestIds : TRUE
+
+StateHeadType ==
+  [deviceLane : Devices,
+   hardwareEpoch : 0..MaxEpoch,
+   logicalSequence : 0..MaxLogicalSequence,
+   hardwareCounter : 0..MaxHardwareCounter,
+   stateNonce : 0..MaxLogicalSequence]
+
+DeviceStateType ==
+  [bootstrapped : BOOLEAN,
+   balance : 0..MaxValue,
+   hardwareEpoch : 0..MaxEpoch,
+   logicalSequence : 0..MaxLogicalSequence,
+   hardwareCounter : 0..MaxHardwareCounter,
+   stateNonce : 0..MaxLogicalSequence,
+   replayRoot : SUBSET CreditIds]
+
+MintRecordType ==
+  [state : MintStates,
+   recipient : Devices,
+   amount : 0..MaxAmount,
+   authorizationVerified : BOOLEAN,
+   finalityVerified : BOOLEAN]
+
+PaymentRecordType ==
+  [phase : PaymentPhases,
+   request : RequestIds,
+   sender : Devices,
+   recipient : Devices,
+   amount : 0..MaxAmount,
+   commitTime : 0..MaxTime,
+   before : StateHeadType \cup {NoState},
+   after : StateHeadType \cup {NoState},
+   beforeBalance : 0..MaxValue,
+   afterBalance : 0..MaxValue,
+   hardwareCertificate : BOOLEAN,
+   recursiveProof : BOOLEAN,
+   outboxEnvelope : CreditIds \cup {NoDigest},
+   acceptedEnvelope : CreditIds \cup {NoDigest, ConflictingDigest},
+   durableAck : CreditIds \cup {NoAck},
+   outboxRetained : BOOLEAN,
+   crashed : BOOLEAN,
+   recovered : BOOLEAN]
+
+RedemptionRecordType ==
+  [phase : RedemptionPhases,
+   owner : Devices,
+   amount : 0..MaxAmount,
+   before : StateHeadType \cup {NoState},
+   after : StateHeadType \cup {NoState},
+   beforeBalance : 0..MaxValue,
+   afterBalance : 0..MaxValue,
+   hardwareCertificate : BOOLEAN,
+   recursiveProof : BOOLEAN,
+   outboxEnvelope : VoucherIds \cup {NoDigest},
+   outboxRetained : BOOLEAN,
+   crashed : BOOLEAN,
+   recovered : BOOLEAN]
+
+TransitionRecordType ==
+  [kind : TransitionKinds,
+   operation : OperationKeys,
+   device : Devices,
+   before : StateHeadType,
+   after : StateHeadType,
+   beforeBalance : 0..MaxValue,
+   afterBalance : 0..MaxValue,
+   beforeReplayRoot : SUBSET CreditIds,
+   afterReplayRoot : SUBSET CreditIds]
+
 ConflictRecordType ==
-  [creditId : CreditIds, ticketId : TicketIds, digest : DigestValues]
+  [creditId : CreditIds, digest : {ConflictingDigest}]
 
 VARIABLES
-  balance,
-  sequence,
-  epoch,
+  device,
   online,
   reserve,
   totalTopups,
   totalRedemptions,
-  spentPredecessors,
-  ticket,
+  consumedHeads,
+  transitionLog,
+  preparedHead,
+  mint,
   payment,
   redemption,
-  suiteState,
-  profileState,
-  profilePolicyEpoch,
-  paymentEvidence,
-  redemptionEvidence
+  conflictingDeliveries,
+  duplicateAckCredits,
+  senderObservedAcks,
+  trustedTime
 
 ledgerVars ==
-  <<balance, sequence, epoch, online, reserve, totalTopups, totalRedemptions,
-    spentPredecessors>>
-lifecycleVars == <<suiteState, profileState, profilePolicyEpoch>>
-evidenceVars == <<paymentEvidence, redemptionEvidence>>
-vars == <<ledgerVars, ticket, payment, redemption, lifecycleVars, evidenceVars>>
+  <<device, online, reserve, totalTopups, totalRedemptions,
+    consumedHeads, transitionLog, preparedHead>>
+transportVars ==
+  <<payment, conflictingDeliveries, duplicateAckCredits, senderObservedAcks>>
+vars == <<ledgerVars, mint, transportVars, redemption, trustedTime>>
 
-DefaultDevice == CHOOSE d \in Devices : TRUE
-DefaultCredit == CHOOSE c \in CreditIds : TRUE
-DefaultIntent == CHOOSE i \in IntentIds : TRUE
-DefaultRequest == CHOOSE q \in RequestIds : TRUE
-DefaultPredecessor ==
-  [device |-> DefaultDevice, sequence |-> 0, epoch |-> 1]
+StateHead(d) ==
+  [deviceLane |-> d,
+   hardwareEpoch |-> device[d].hardwareEpoch,
+   logicalSequence |-> device[d].logicalSequence,
+   hardwareCounter |-> device[d].hardwareCounter,
+   stateNonce |-> device[d].stateNonce]
 
-PredecessorType ==
-  [device : Devices, sequence : 0..MaxSequence, epoch : 1..MaxSequence]
-TicketRecordType ==
-  [state : TicketStates,
-   intentState : IntentStates,
-   intentId : IntentIds,
-   intentRequest : RequestIds,
-   intentDigest : IntentIds,
-   exactAmount : 0..MaxAmount,
-   senderCommitment : SenderCommitmentValues,
-   intentSender : Devices,
-   intentPredecessor : PredecessorType,
-   authorizationProfile : ProfileIds,
-   authorizationSuite : SuiteIds,
-   authorizationPolicyEpoch : 0..MaxSequence,
-   authorizationReleaseDigest : SuiteIds,
-   authorizationProof : IntentIds,
-   boundCredit : CreditIds,
-   policyEpoch : 0..MaxSequence]
-PaymentRecordType ==
-  [phase : PaymentPhases,
-   recoveryFrom : RecoverySources,
-   sender : Devices,
-   predecessor : PredecessorType,
-   policyEpoch : 0..MaxSequence,
-   creditState : CreditStates,
-   amount : 0..MaxAmount,
-   outboxState : OutboxStates]
-RedemptionRecordType ==
-  [phase : RedemptionPhases,
-   recoveryFrom : RecoverySources,
-   owner : Devices,
-   predecessor : PredecessorType,
-   policyEpoch : 0..MaxSequence,
-   voucherState : VoucherStates,
-   amount : 0..MaxAmount,
-   outboxState : OutboxStates]
-PaymentEvidenceType ==
-  [sealed : SUBSET CreditIds,
-   candidates : SUBSET CreditIds,
-   wrappers : SUBSET CreditIds,
-   canonical : SUBSET CreditIds,
-   exposed : SUBSET CreditIds,
-   committed : SUBSET CreditIds,
-   inbox : SUBSET CreditIds,
-   acknowledgements : SUBSET CreditIds,
-   consumed : SUBSET CreditIds,
-   conflicts : SUBSET ConflictRecordType,
-   expiredTickets : SUBSET TicketIds,
-   noCommitRecovery : SUBSET TicketIds,
-   noCommitClosures : SUBSET TicketIds]
-RedemptionEvidenceType ==
-  [sealed : SUBSET VoucherIds,
-   candidates : SUBSET VoucherIds,
-   wrappers : SUBSET VoucherIds,
-   canonical : SUBSET VoucherIds,
-   exposed : SUBSET VoucherIds,
-   committed : SUBSET VoucherIds,
-   consumedNullifiers : SUBSET VoucherIds]
+NormalSuccessor(h) ==
+  [deviceLane |-> h.deviceLane,
+   hardwareEpoch |-> h.hardwareEpoch,
+   logicalSequence |-> h.logicalSequence + 1,
+   hardwareCounter |-> h.hardwareCounter + 1,
+   stateNonce |-> h.stateNonce + 1]
 
-RECURSIVE SumDeviceSet(_, _)
-SumDeviceSet(f, S) ==
+RotationSuccessor(h) ==
+  [deviceLane |-> h.deviceLane,
+   hardwareEpoch |-> h.hardwareEpoch + 1,
+   logicalSequence |-> h.logicalSequence + 1,
+   hardwareCounter |-> 0,
+   stateNonce |-> h.stateNonce + 1]
+
+Transition(kind, operation, d, before, after,
+           beforeBalance, afterBalance, beforeRoot, afterRoot) ==
+  [kind |-> kind,
+   operation |-> operation,
+   device |-> d,
+   before |-> before,
+   after |-> after,
+   beforeBalance |-> beforeBalance,
+   afterBalance |-> afterBalance,
+   beforeReplayRoot |-> beforeRoot,
+   afterReplayRoot |-> afterRoot]
+
+CanAdvance(d) ==
+  /\ device[d].bootstrapped
+  /\ device[d].logicalSequence < MaxLogicalSequence
+  /\ device[d].hardwareCounter < MaxHardwareCounter
+  /\ StateHead(d) \notin consumedHeads
+
+CanRotate(d) ==
+  /\ device[d].bootstrapped
+  /\ device[d].logicalSequence < MaxLogicalSequence
+  /\ device[d].hardwareEpoch < MaxEpoch
+  /\ StateHead(d) \notin consumedHeads
+
+HardwareQualified(d) == d \in Devices
+NoSoftwareFallback(d) == d \in Devices
+
+PaymentRequestV1(q) ==
+  [protocolVersion |-> 1,
+   network |-> "kagemusha-v1-network",
+   asset |-> <<"kagemusha-asset", 1>>,
+   amount |-> RequestAmount[q],
+   recipientAccount |-> RequestRecipient[q],
+   recipientLane |-> <<"lane", RequestRecipient[q]>>,
+   recipientEncryptionKey |-> <<"kem", q>>,
+   hardwarePolicy |-> "non-forking-no-fallback",
+   requestId |-> q,
+   issuedAt |-> RequestIssuedAt[q],
+   expiresAt |-> RequestExpiresAt[q]]
+
+RequestDigest(q) == <<"request-digest", PaymentRequestV1(q)>>
+
+OpaqueStateCommitment(head, hiddenBalance) ==
+  <<"state-commitment", head, hiddenBalance>>
+
+HardwareTransitionCommitment(c) ==
+  <<"hardware-transition", payment[c].before, payment[c].after,
+    payment[c].request, payment[c].amount>>
+
+GuardBundle(c) ==
+  [exactBefore |-> payment[c].before,
+   exactAfter |-> payment[c].after,
+   requestDigest |-> RequestDigest(payment[c].request),
+   recipientLane |-> PaymentRequestV1(payment[c].request).recipientLane,
+   hardwareEpoch |-> payment[c].before.hardwareEpoch,
+   commitTime |-> payment[c].commitTime,
+   transitionCommitment |-> HardwareTransitionCommitment(c)]
+
+GuardBundleValid(c) ==
+  /\ payment[c].hardwareCertificate
+  /\ payment[c].before # NoState
+  /\ payment[c].after = NormalSuccessor(payment[c].before)
+  /\ payment[c].request = CreditRequest[c]
+  /\ payment[c].recipient = CreditRecipient[c]
+  /\ payment[c].amount = CreditAmount[c]
+  /\ GuardBundle(c).requestDigest = RequestDigest(CreditRequest[c])
+  /\ GuardBundle(c).recipientLane =
+       PaymentRequestV1(CreditRequest[c]).recipientLane
+
+PaymentV1(c) ==
+  [protocolVersion |-> 1,
+   creditId |-> c,
+   requestDigest |-> RequestDigest(payment[c].request),
+   amount |-> payment[c].amount,
+   senderBeforeCommitment |->
+     OpaqueStateCommitment(payment[c].before, payment[c].beforeBalance),
+   senderAfterCommitment |->
+     OpaqueStateCommitment(payment[c].after, payment[c].afterBalance),
+   receiverBinding |->
+     <<payment[c].recipient,
+       PaymentRequestV1(payment[c].request).recipientLane,
+       PaymentRequestV1(payment[c].request).recipientEncryptionKey>>,
+   trustedSenderCommitTime |-> payment[c].commitTime,
+   encryptedCreditOpening |-> <<"encrypted-credit", c>>,
+   hardwareTransitionCommitment |-> HardwareTransitionCommitment(c),
+   recursiveProof |-> <<"paired-pasta-proof", c>>]
+
+AcknowledgementV1(c) ==
+  [protocolVersion |-> 1,
+   requestDigest |-> RequestDigest(payment[c].request),
+   paymentDigest |-> c,
+   creditId |-> c,
+   inboxReceipt |-> <<"rollback-resistant-inbox-receipt", c>>]
+
+RequestValidAt(q, t) ==
+  /\ RequestIssuedAt[q] <= t
+  /\ t < RequestExpiresAt[q]
+
+PaymentStageEligible(c) ==
+  /\ payment[c].phase = "Exposed"
+  /\ payment[c].recursiveProof
+  /\ payment[c].outboxEnvelope = c
+  /\ payment[c].recipient = CreditRecipient[c]
+  /\ payment[c].request = CreditRequest[c]
+  /\ payment[c].amount = CreditAmount[c]
+
+ReceiveCreditSemanticallyValid(c) ==
+  LET d == CreditRecipient[c]
+  IN /\ payment[c].phase = "Staged"
+     /\ payment[c].acceptedEnvelope = c
+     /\ payment[c].durableAck = c
+     /\ c \notin device[d].replayRoot
+
+RECURSIVE SumDeviceBalances(_)
+SumDeviceBalances(S) ==
   IF S = {}
     THEN 0
     ELSE LET d == CHOOSE x \in S : TRUE
-         IN f[d] + SumDeviceSet(f, S \ {d})
+         IN device[d].balance + SumDeviceBalances(S \ {d})
 
-RECURSIVE SumCreditSet(_)
-SumCreditSet(S) ==
+RECURSIVE SumOnline(_)
+SumOnline(S) ==
+  IF S = {}
+    THEN 0
+    ELSE LET d == CHOOSE x \in S : TRUE
+         IN online[d] + SumOnline(S \ {d})
+
+RECURSIVE SumMintValue(_)
+SumMintValue(S) ==
+  IF S = {}
+    THEN 0
+    ELSE LET m == CHOOSE x \in S : TRUE
+         IN mint[m].amount + SumMintValue(S \ {m})
+
+RECURSIVE SumCreditValue(_)
+SumCreditValue(S) ==
   IF S = {}
     THEN 0
     ELSE LET c == CHOOSE x \in S : TRUE
-         IN payment[c].amount + SumCreditSet(S \ {c})
+         IN payment[c].amount + SumCreditValue(S \ {c})
 
-RECURSIVE SumVoucherSet(_)
-SumVoucherSet(S) ==
+RECURSIVE SumVoucherValue(_)
+SumVoucherValue(S) ==
   IF S = {}
     THEN 0
     ELSE LET v == CHOOSE x \in S : TRUE
-         IN redemption[v].amount + SumVoucherSet(S \ {v})
+         IN redemption[v].amount + SumVoucherValue(S \ {v})
 
-RECURSIVE SumTicketBytes(_)
-SumTicketBytes(S) ==
-  IF S = {}
-    THEN 0
-    ELSE LET t == CHOOSE x \in S : TRUE
-         IN TicketBytes[t] + SumTicketBytes(S \ {t})
-
-RECURSIVE SumCreditInboxBytes(_)
-SumCreditInboxBytes(S) ==
-  IF S = {}
-    THEN 0
-    ELSE LET c == CHOOSE x \in S : TRUE
-         IN TicketBytes[PaymentTicket[c]] + SumCreditInboxBytes(S \ {c})
-
-RECURSIVE SumPaymentOutboxBytes(_)
-SumPaymentOutboxBytes(S) ==
-  IF S = {}
-    THEN 0
-    ELSE LET c == CHOOSE x \in S : TRUE
-         IN PaymentOutboxBytes[c] + SumPaymentOutboxBytes(S \ {c})
-
-RECURSIVE SumRedemptionOutboxBytes(_)
-SumRedemptionOutboxBytes(S) ==
-  IF S = {}
-    THEN 0
-    ELSE LET v == CHOOSE x \in S : TRUE
-         IN RedemptionOutboxBytes[v] + SumRedemptionOutboxBytes(S \ {v})
-
-Predecessor(d) ==
-  [device |-> d, sequence |-> sequence[d], epoch |-> epoch[d]]
-
-PaymentRecipient(c) ==
-  RequestOwner[TicketRequest[PaymentTicket[c]]]
-
-PrivatePaymentSuccessor(c) ==
-  [device |-> payment[c].sender,
-   sequence |-> payment[c].predecessor.sequence + 1,
-   epoch |-> payment[c].predecessor.epoch]
-
-(***************************************************************************
-The sender authorization is a proof-bearing, release-pinned envelope produced
-after the intent and before ticket issuance. Its authority is selected from
-the sender authorization profile, never inferred from the receiver's ticket
-profile. The proof and artifact manifest are abstract digests in this model.
-***************************************************************************)
-AcceptanceIntentAuthorizationStatement(t) ==
-  [requestId |-> ticket[t].intentRequest,
-   intentDigest |-> ticket[t].intentDigest,
-   exactAmount |-> ticket[t].exactAmount,
-   senderCommitment |-> ticket[t].senderCommitment,
-   senderProfileId |-> ticket[t].authorizationProfile,
-   suiteId |-> ticket[t].authorizationSuite,
-   policyEpoch |-> ticket[t].authorizationPolicyEpoch,
-   releaseDigest |-> ticket[t].authorizationReleaseDigest]
-
-AcceptanceIntentAuthorizationEnvelope(t) ==
-  [statement |-> AcceptanceIntentAuthorizationStatement(t),
-   pairedProof |->
-     [statementDigest |-> ticket[t].intentDigest,
-      proofDigest |-> ticket[t].authorizationProof],
-   artifactManifest |->
-     [senderProfileId |-> ticket[t].authorizationProfile,
-      suiteId |-> ticket[t].authorizationSuite,
-      policyEpoch |-> ticket[t].authorizationPolicyEpoch,
-      releaseDigest |-> ticket[t].authorizationReleaseDigest]]
-
-AcceptanceIntentAuthorizationBound(t) ==
-  LET i == ticket[t].intentId
-      p == ticket[t].authorizationProfile
-      s == ticket[t].authorizationSuite
-      envelope == AcceptanceIntentAuthorizationEnvelope(t)
-  IN /\ p = IntentAuthorizationProfile[i]
-     /\ s = IntentAuthorizationSuite[i]
-     /\ ticket[t].authorizationPolicyEpoch > 0
-     /\ ticket[t].authorizationReleaseDigest = s
-     /\ ticket[t].authorizationProof = i
-     /\ HardwareQualified[p]
-     /\ NoSoftwareFallback[p]
-     /\ DOMAIN envelope = {"statement", "pairedProof", "artifactManifest"}
-     /\ DOMAIN envelope.statement =
-          {"requestId", "intentDigest", "exactAmount", "senderCommitment",
-           "senderProfileId", "suiteId", "policyEpoch", "releaseDigest"}
-     /\ DOMAIN envelope.pairedProof = {"statementDigest", "proofDigest"}
-     /\ DOMAIN envelope.artifactManifest =
-          {"senderProfileId", "suiteId", "policyEpoch", "releaseDigest"}
-     /\ envelope.pairedProof.statementDigest = ticket[t].intentDigest
-     /\ envelope.pairedProof.proofDigest = ticket[t].authorizationProof
-     /\ envelope.artifactManifest.senderProfileId = p
-     /\ envelope.artifactManifest.suiteId = s
-     /\ envelope.artifactManifest.policyEpoch =
-          ticket[t].authorizationPolicyEpoch
-     /\ envelope.artifactManifest.releaseDigest =
-          ticket[t].authorizationReleaseDigest
-
-AcceptanceIntentAuthorizationValid(t) ==
-  LET p == ticket[t].authorizationProfile
-      s == ticket[t].authorizationSuite
-  IN /\ AcceptanceIntentAuthorizationBound(t)
-     /\ ticket[t].authorizationPolicyEpoch = profilePolicyEpoch[p]
-     /\ profileState[p] = "Active"
-     /\ suiteState[s] = "Active"
-
-(***************************************************************************
-MintAuthorization is checked before TopUp debits online value. Its statement
-binds the exact recipient, typed asset incarnation, amount/context, randomized
-credential commitment, ID-independent credit commitment, and recipient KEM.
-Derived credit IDs and ciphertext are deliberately absent, preserving the
-acyclic pre-ID authorization -> debit/mint construction order.
-***************************************************************************)
-AxtAssetIncarnationV1 ==
-  [assetDefinitionId |-> "kagemusha-asset", incarnationId |-> 1]
-
-ActiveSuite == CHOOSE s \in SuiteIds : suiteState[s] = "Active"
-MintAuthorizationProfile(d) == ModelProfile1
-MintRecipientCredentialCommitment(d) ==
-  [randomCredentialNonce |-> Predecessor(d), recipientDevice |-> d]
-MintCreditCommitment(d, amount) ==
-  [preIdCreditCommitment |->
-    [recipientDevice |-> d,
-     amount |-> amount,
-     aggregatePredecessor |-> Predecessor(d)]]
-MintRecipientKem(d) == [recipientKem |-> d]
-
-MintCreditBinding(d, amount) ==
-  [recipientCredentialCommitment |-> MintRecipientCredentialCommitment(d),
-   creditCommitment |-> MintCreditCommitment(d, amount),
-   recipientKem |-> MintRecipientKem(d)]
-
-MintAuthorizationStatement(d, amount) ==
-  LET p == MintAuthorizationProfile(d)
-      s == ActiveSuite
-  IN [recipientAccount |-> d,
-      assetIncarnation |-> AxtAssetIncarnationV1,
-      amount |-> amount,
-      context |-> "OnlineTopUp",
-      creditBinding |-> MintCreditBinding(d, amount),
-      recipientProfileId |-> p,
-      suiteId |-> s,
-      policyEpoch |-> profilePolicyEpoch[p],
-      releaseDigest |-> s]
-
-MintAuthorizationEnvelope(d, amount) ==
-  LET statement == MintAuthorizationStatement(d, amount)
-  IN [statement |-> statement,
-      pairedProof |-> [statementDigest |-> statement],
-      artifactManifest |->
-        [recipientProfileId |-> statement.recipientProfileId,
-         suiteId |-> statement.suiteId,
-         policyEpoch |-> statement.policyEpoch,
-         releaseDigest |-> statement.releaseDigest]]
-
-MintAuthorizationDigest(d, amount) ==
-  [mintAuthorizationDigest |-> MintAuthorizationEnvelope(d, amount)]
-
-MintRecursiveHelperBinding(d, amount) ==
-  [mintAuthorizationDigest |-> MintAuthorizationDigest(d, amount),
-   creditCommitment |-> MintCreditCommitment(d, amount),
-   aggregatePredecessor |-> Predecessor(d)]
-
-MintAuthorizationShape(d, amount) ==
-  LET statement == MintAuthorizationStatement(d, amount)
-      binding == MintCreditBinding(d, amount)
-      envelope == MintAuthorizationEnvelope(d, amount)
-      helper == MintRecursiveHelperBinding(d, amount)
-      forbidden ==
-        {"creditId", "ciphertext", "ciphertextDigest", "encryptedCredit"}
-  IN /\ DOMAIN statement =
-          {"recipientAccount", "assetIncarnation", "amount", "context",
-           "creditBinding", "recipientProfileId", "suiteId", "policyEpoch",
-           "releaseDigest"}
-     /\ DOMAIN binding =
-          {"recipientCredentialCommitment", "creditCommitment", "recipientKem"}
-     /\ DOMAIN binding.creditCommitment = {"preIdCreditCommitment"}
-     /\ DOMAIN envelope = {"statement", "pairedProof", "artifactManifest"}
-     /\ DOMAIN envelope.artifactManifest =
-          {"recipientProfileId", "suiteId", "policyEpoch", "releaseDigest"}
-     /\ forbidden \cap DOMAIN statement = {}
-     /\ forbidden \cap DOMAIN binding = {}
-     /\ forbidden \cap DOMAIN binding.creditCommitment = {}
-     /\ statement.recipientAccount = d
-     /\ statement.assetIncarnation = AxtAssetIncarnationV1
-     /\ statement.amount = amount
-     /\ statement.creditBinding = MintCreditBinding(d, amount)
-     /\ helper.mintAuthorizationDigest = MintAuthorizationDigest(d, amount)
-     /\ helper.creditCommitment = statement.creditBinding.creditCommitment
-
-MintAuthorizationValid(d, amount) ==
-  LET p == MintAuthorizationProfile(d)
-      s == ActiveSuite
-  IN /\ MintAuthorizationShape(d, amount)
-     /\ HardwareQualified[p]
-     /\ NoSoftwareFallback[p]
-     /\ profileState[p] = "Active"
-     /\ suiteState[s] = "Active"
-
-LifecycleBindingFields ==
-  {"networkId", "protocolVersion", "suiteId", "vkDigest", "assetId",
-   "assetIncarnation", "assetScale", "hardwareProfileId", "policyEpoch",
-   "credentialExpiry", "laneCommitment", "hardwareEpoch", "operationKind",
-   "requestId", "acceptanceIntentAuthorizationDigest", "acceptanceTicketId",
-   "creditId", "ciphertextDigest",
-   "predecessorStateHead", "successorStateHead"}
-
-PaymentLifecycleBinding(c) ==
-  LET t == PaymentTicket[c]
-  IN [networkId |-> "kagemusha-v1-network",
-      protocolVersion |-> 1,
-      suiteId |-> PaymentSuite[c],
-      vkDigest |-> PaymentSuite[c],
-      assetId |-> "kagemusha-asset",
-      assetIncarnation |-> AxtAssetIncarnationV1,
-      assetScale |-> 2,
-      hardwareProfileId |-> PaymentProfile[c],
-      policyEpoch |-> payment[c].policyEpoch,
-      credentialExpiry |-> TicketExpiresAt[t],
-      laneCommitment |-> payment[c].predecessor,
-      hardwareEpoch |-> payment[c].predecessor.epoch,
-      operationKind |-> "PeerPayment",
-      requestId |-> TicketRequest[t],
-      acceptanceIntentAuthorizationDigest |->
-        AcceptanceIntentAuthorizationEnvelope(t),
-      acceptanceTicketId |-> t,
-      creditId |-> c,
-      ciphertextDigest |-> CanonicalEnvelopeDigest(c),
-      predecessorStateHead |-> payment[c].predecessor,
-      successorStateHead |-> PrivatePaymentSuccessor(c)]
-
-PaymentCandidateRecord(c) ==
-  LET t == PaymentTicket[c]
-  IN [candidateDigest |-> c,
-      lifecycleBinding |-> PaymentLifecycleBinding(c),
-      sealedAmount |-> payment[c].amount,
-      privateIntentOpening |->
-        [intentId |-> ticket[t].intentId,
-         sender |-> ticket[t].intentSender,
-         predecessor |-> ticket[t].intentPredecessor]]
-
-(***************************************************************************
-The canonical terminal body is constructed first and deliberately contains no
-certificate ID. Only then is its digest computed, and only that digest derives
-the terminal certificate ID. This functional order models a self-free preimage.
-***************************************************************************)
-TerminalBodyFieldOrder ==
-  <<"candidateDigest", "lifecycleBindingDigest", "commitEvidence">>
-
-PaymentTerminalCertificateBody(c) ==
-  [canonicalFieldOrder |-> TerminalBodyFieldOrder,
-   candidateDigest |-> PaymentCandidateRecord(c).candidateDigest,
-   lifecycleBindingDigest |-> c,
-   commitEvidence |-> c]
-
-PaymentTerminalCertificateBodyDigest(c) ==
-  [terminalBodyDigest |-> PaymentTerminalCertificateBody(c)]
-
-PaymentTerminalCertificateId(c) ==
-  [terminalCertificateId |-> PaymentTerminalCertificateBodyDigest(c)]
-
-PaymentCommitCertificate(c) ==
-  [terminalBody |-> PaymentTerminalCertificateBody(c),
-   terminalBodyDigest |-> PaymentTerminalCertificateBodyDigest(c),
-   terminalCertificateId |-> PaymentTerminalCertificateId(c)]
-
-PublicAcceptanceIntent(t) ==
-  [requestId |-> ticket[t].intentRequest,
-   intentId |-> ticket[t].intentId,
-   exactAmount |-> ticket[t].exactAmount,
-   senderCommitment |-> ticket[t].senderCommitment]
-
-PublicAcceptanceTicket(t) ==
-  [requestId |-> TicketRequest[t],
-   acceptanceTicketId |-> t,
-   intentDigest |-> ticket[t].intentDigest,
-   exactAmount |-> ticket[t].exactAmount]
-
-AllowedPublicPaymentFields ==
-  {"transitionNullifier", "acceptanceIntent", "acceptanceTicket",
-   "recipientOneTimeKey", "amountCiphertextCommitment",
-   "hardwareProfileId", "policyEpoch", "commitEvidence",
-   "proof", "commitCertificate"}
-
-PublicPayment(c) ==
-  LET t == PaymentTicket[c]
-  IN [transitionNullifier |-> c,
-      acceptanceIntent |-> PublicAcceptanceIntent(t),
-      acceptanceTicket |-> PublicAcceptanceTicket(t),
-      recipientOneTimeKey |-> t,
-      amountCiphertextCommitment |-> CanonicalEnvelopeDigest(c),
-      hardwareProfileId |-> PaymentProfile[c],
-      policyEpoch |-> payment[c].policyEpoch,
-      commitEvidence |-> c,
-      proof |-> c,
-      commitCertificate |-> PaymentCommitCertificate(c)]
-
-PaymentEnvelopeRecord(c) ==
-  [candidateDigest |-> PaymentCandidateRecord(c).candidateDigest,
-   lifecycleBindingDigest |-> c,
-   publicPayment |-> PublicPayment(c)]
-
-PrivateRedemptionSuccessor(v) ==
-  [device |-> redemption[v].owner,
-   sequence |-> redemption[v].predecessor.sequence + 1,
-   epoch |-> redemption[v].predecessor.epoch]
-
-RedemptionLifecycleBinding(v) ==
-  [networkId |-> "kagemusha-v1-network",
-   protocolVersion |-> 1,
-   suiteId |-> RedemptionSuite[v],
-   vkDigest |-> RedemptionSuite[v],
-   assetId |-> "kagemusha-asset",
-   assetIncarnation |-> AxtAssetIncarnationV1,
-   assetScale |-> 2,
-   hardwareProfileId |-> RedemptionProfile[v],
-   policyEpoch |-> redemption[v].policyEpoch,
-   laneCommitment |-> redemption[v].predecessor,
-   hardwareEpoch |-> redemption[v].predecessor.epoch,
-   operationKind |-> "Redemption",
-   voucherId |-> v,
-   ciphertextDigest |-> v,
-   predecessorStateHead |-> redemption[v].predecessor,
-   successorStateHead |-> PrivateRedemptionSuccessor(v)]
-
-ReservedTicketsFor(d) ==
-  {t \in TicketIds :
-     ticket[t].state \in {"Reserved", "Locked", "RecoveryPending"}
-       /\ RequestOwner[TicketRequest[t]] = d}
-StagedCreditsFor(d) ==
+PendingMints == {m \in MintIds : mint[m].state = "Finalized"}
+CommittedCredits == {c \in CreditIds : payment[c].phase # "Absent"}
+PendingCredits ==
   {c \in CreditIds :
-     payment[c].creditState = "Staged" /\ PaymentRecipient(c) = d}
-InboxUse(d) ==
-  SumTicketBytes(ReservedTicketsFor(d))
-    + SumCreditInboxBytes(StagedCreditsFor(d))
-
-PaymentAmountAllowed(t, amount) ==
-  /\ amount \in 1..MaxAmount
-  /\ amount = ticket[t].exactAmount
-  /\ amount = RequestAmount[TicketRequest[t]]
-
-NoPaymentStartedForTicket(t) ==
-  \A c \in CreditIds :
-    PaymentTicket[c] = t => payment[c].phase = "Idle"
-
-CancelledBoundPayment(t) ==
-  LET c == ticket[t].boundCredit
-  IN /\ PaymentTicket[c] = t
-     /\ payment[c].phase = "Cancelled"
-     /\ payment[c].creditState = "Absent"
-     /\ c \notin paymentEvidence.committed
-
-StagedCreditValueFits(c) ==
-  /\ payment[c].creditState = "Staged"
-  /\ balance[PaymentRecipient(c)] + payment[c].amount <= MaxAmount
-
-StagedCreditCanEnterFold(c) ==
-  LET d == PaymentRecipient(c)
-  IN /\ StagedCreditValueFits(c)
-     /\ c \in StagedCreditsFor(d)
-     /\ c \notin paymentEvidence.consumed
-
-LivePaymentOutboxes(d) ==
-  {c \in CreditIds :
-     payment[c].sender = d
-       /\ payment[c].outboxState \in {"Reserved", "Committed"}}
-LiveRedemptionOutboxes(d) ==
-  {v \in VoucherIds :
-     redemption[v].owner = d
-       /\ redemption[v].outboxState \in {"Reserved", "Committed"}}
-OutboxUse(d) ==
-  SumPaymentOutboxBytes(LivePaymentOutboxes(d))
-    + SumRedemptionOutboxBytes(LiveRedemptionOutboxes(d))
-
-PaymentHoldsPredecessor(c) ==
-  \/ payment[c].phase \in {"Prepared", "Candidate"}
-  \/ /\ payment[c].phase = "Recovery"
-     /\ payment[c].recoveryFrom \in {"Prepared", "Candidate"}
-RedemptionHoldsPredecessor(v) ==
-  \/ redemption[v].phase \in {"Prepared", "Candidate"}
-  \/ /\ redemption[v].phase = "Recovery"
-     /\ redemption[v].recoveryFrom \in {"Prepared", "Candidate"}
-LockedPredecessors ==
-  {payment[c].predecessor :
-     c \in {x \in CreditIds : PaymentHoldsPredecessor(x)}}
-    \cup
-  {redemption[v].predecessor :
-     v \in {x \in VoucherIds : RedemptionHoldsPredecessor(x)}}
-    \cup
-  {ticket[t].intentPredecessor :
-     t \in {x \in TicketIds : ticket[x].state = "RecoveryPending"}}
-
-LiveCredits ==
-  {c \in CreditIds :
-     payment[c].creditState \in {"Committed", "Available", "Staged"}}
+    payment[c].phase \in
+      {"HardwareCommitted", "Proofed", "Canonical", "Exposed", "Staged"}}
+StagedCredits ==
+  {c \in CreditIds : payment[c].phase \in {"Staged", "Folded"}}
+FoldedCredits == {c \in CreditIds : payment[c].phase = "Folded"}
 PendingVouchers ==
-  {v \in VoucherIds : redemption[v].voucherState = "Pending"}
-OfflineLiability ==
-  SumDeviceSet(balance, Devices)
-    + SumCreditSet(LiveCredits)
-    + SumVoucherSet(PendingVouchers)
-InitialOnlineTotal == SumDeviceSet(InitialOnline, Devices)
+  {v \in VoucherIds :
+    redemption[v].phase \in
+      {"HardwareCommitted", "Proofed", "Canonical", "Exposed"}}
 
-CanStage(c) ==
-  LET t == PaymentTicket[c]
-  IN /\ c \in paymentEvidence.committed
-     /\ c \in paymentEvidence.canonical
-     /\ c \in paymentEvidence.exposed
-     /\ \/ payment[c].phase = "Exposed"
-        \/ /\ payment[c].phase = "Recovery"
-           /\ payment[c].recoveryFrom = "Exposed"
-     /\ payment[c].creditState = "Available"
-     /\ payment[c].outboxState = "Committed"
-     /\ ticket[t].state = "Locked"
-     /\ ticket[t].intentState = "Ticketed"
-     /\ ticket[t].boundCredit = c
-     /\ payment[c].amount = ticket[t].exactAmount
-     /\ payment[c].sender = ticket[t].intentSender
-     /\ payment[c].predecessor = ticket[t].intentPredecessor
+OfflineLiability ==
+  SumDeviceBalances(Devices)
+    + SumMintValue(PendingMints)
+    + SumCreditValue(PendingCredits)
+    + SumVoucherValue(PendingVouchers)
+
+InitialOnlineTotal == Cardinality(Devices) * InitialOnlinePerDevice
 
 Init ==
   /\ Devices # {}
-  /\ CreditIds # {}
-  /\ IntentIds # {}
-  /\ TicketIds # {}
   /\ RequestIds # {}
-  /\ VoucherIds # {}
-  /\ SuiteIds # {}
-  /\ ProfileIds # {}
-  /\ InitialActiveSuite \in SuiteIds
-  /\ MaxAmount \in Nat \ {0}
-  /\ MaxSequence \in Nat \ {0}
-  /\ InboxCapacity \in Nat \ {0}
-  /\ OutboxCapacity \in Nat \ {0}
-  /\ InitialOnlinePerDevice \in 0..MaxAmount
   /\ ModelDevice1 \in Devices
-  /\ {ModelCredit1, ModelCredit2, ModelCredit3, ModelCredit4}
-       \subseteq CreditIds
-  /\ Cardinality({ModelCredit1, ModelCredit2, ModelCredit3, ModelCredit4}) = 4
-  /\ {ModelIntent1, ModelIntent2, ModelIntent3, ModelIntent4}
-       \subseteq IntentIds
-  /\ Cardinality({ModelIntent1, ModelIntent2, ModelIntent3, ModelIntent4}) = 4
-  /\ {ModelTicket1, ModelTicket2, ModelTicket3, ModelTicket4}
-       \subseteq TicketIds
-  /\ Cardinality({ModelTicket1, ModelTicket2, ModelTicket3, ModelTicket4}) = 4
-  /\ ModelRequest1 \in RequestIds
-  /\ {ModelProfile1, ModelProfile2} \subseteq ProfileIds
-  /\ ModelProfile1 # ModelProfile2
-  /\ InitialOnline \in [Devices -> 0..MaxAmount]
-  /\ InitialOnlineTotal <= MaxAmount
-  /\ RequestOwner \in [RequestIds -> Devices]
-  /\ RequestAmount \in [RequestIds -> 1..MaxAmount]
-  /\ IntentRequest \in [IntentIds -> RequestIds]
-  /\ IntentAmount \in [IntentIds -> 1..MaxAmount]
-  /\ IntentAuthorizationProfile \in [IntentIds -> ProfileIds]
-  /\ IntentAuthorizationSuite \in [IntentIds -> SuiteIds]
-  /\ TicketIntent \in [TicketIds -> IntentIds]
-  /\ \A t1 \in TicketIds, t2 \in TicketIds :
-       TicketIntent[t1] = TicketIntent[t2] => t1 = t2
-  /\ TicketRequest \in [TicketIds -> RequestIds]
-  /\ TicketBytes \in [TicketIds -> 1..InboxCapacity]
-  /\ TicketIssuedAt \in [TicketIds -> Nat]
-  /\ TicketExpiresAt \in [TicketIds -> Nat]
-  /\ TicketSuite \in [TicketIds -> SuiteIds]
-  /\ TicketProfile \in [TicketIds -> ProfileIds]
-  /\ PaymentTicket \in [CreditIds -> TicketIds]
-  /\ PaymentOutboxBytes \in [CreditIds -> 1..OutboxCapacity]
-  /\ PaymentSuite \in [CreditIds -> SuiteIds]
-  /\ PaymentProfile \in [CreditIds -> ProfileIds]
-  /\ SenderCommitTime \in [CreditIds -> Nat]
-  /\ RedemptionOutboxBytes \in [VoucherIds -> 1..OutboxCapacity]
-  /\ RedemptionSuite \in [VoucherIds -> SuiteIds]
-  /\ RedemptionProfile \in [VoucherIds -> ProfileIds]
-  /\ HardwareQualified \in [ProfileIds -> BOOLEAN]
-  /\ NoSoftwareFallback \in [ProfileIds -> BOOLEAN]
-  /\ balance = [d \in Devices |-> 0]
-  /\ sequence = [d \in Devices |-> 0]
-  /\ epoch = [d \in Devices |-> 1]
+  /\ ModelDevice2 \in Devices
+  /\ ModelDevice1 # ModelDevice2
+  /\ {ModelRequest1, ModelRequest2} \subseteq RequestIds
+  /\ ModelRequest1 # ModelRequest2
+  /\ {ModelCredit1, ModelCredit2, ModelCredit3} \subseteq CreditIds
+  /\ Cardinality({ModelCredit1, ModelCredit2, ModelCredit3}) = 3
+  /\ {ModelMint1, ModelMint2} \subseteq MintIds
+  /\ ModelMint1 # ModelMint2
+  /\ {ModelVoucher1, ModelVoucher2} \subseteq VoucherIds
+  /\ ModelVoucher1 # ModelVoucher2
+  /\ {ModelRotation1, ModelRotation2} \subseteq RotationIds
+  /\ ModelRotation1 # ModelRotation2
+  /\ NoState \notin StateHeadType
+  /\ NoDigest \notin CreditIds
+  /\ NoDigest \notin VoucherIds
+  /\ NoAck \notin CreditIds
+  /\ ConflictingDigest \notin CreditIds
+  /\ MaxAmount > 0
+  /\ MaxLogicalSequence > 0
+  /\ MaxHardwareCounter > 0
+  /\ MaxEpoch > 0
+  /\ MaxTime >= 31
+  /\ device =
+       [d \in Devices |->
+         [bootstrapped |-> FALSE,
+          balance |-> 0,
+          hardwareEpoch |-> 0,
+          logicalSequence |-> 0,
+          hardwareCounter |-> 0,
+          stateNonce |-> 0,
+          replayRoot |-> {}]]
   /\ online = InitialOnline
   /\ reserve = 0
   /\ totalTopups = 0
   /\ totalRedemptions = 0
-  /\ spentPredecessors = {}
-  /\ ticket =
-       [t \in TicketIds |->
+  /\ consumedHeads = {}
+  /\ transitionLog = {}
+  /\ preparedHead = [op \in OperationKeys |-> NoState]
+  /\ mint =
+       [m \in MintIds |->
          [state |-> "Absent",
-          intentState |-> "Absent",
-          intentId |-> DefaultIntent,
-          intentRequest |-> DefaultRequest,
-          intentDigest |-> DefaultIntent,
-          exactAmount |-> 0,
-          senderCommitment |->
-            RandomSenderCommitment(DefaultIntent, DefaultDevice),
-          intentSender |-> DefaultDevice,
-          intentPredecessor |-> DefaultPredecessor,
-          authorizationProfile |-> ModelProfile1,
-          authorizationSuite |-> InitialActiveSuite,
-          authorizationPolicyEpoch |-> 0,
-          authorizationReleaseDigest |-> InitialActiveSuite,
-          authorizationProof |-> DefaultIntent,
-          boundCredit |-> DefaultCredit,
-          policyEpoch |-> 0]]
+          recipient |-> DefaultDevice,
+          amount |-> 0,
+          authorizationVerified |-> FALSE,
+          finalityVerified |-> FALSE]]
   /\ payment =
        [c \in CreditIds |->
-         [phase |-> "Idle",
-          recoveryFrom |-> "None",
+         [phase |-> "Absent",
+          request |-> DefaultRequest,
           sender |-> DefaultDevice,
-          predecessor |-> DefaultPredecessor,
-          policyEpoch |-> 0,
-          creditState |-> "Absent",
+          recipient |-> DefaultDevice,
           amount |-> 0,
-          outboxState |-> "Absent"]]
+          commitTime |-> 0,
+          before |-> NoState,
+          after |-> NoState,
+          beforeBalance |-> 0,
+          afterBalance |-> 0,
+          hardwareCertificate |-> FALSE,
+          recursiveProof |-> FALSE,
+          outboxEnvelope |-> NoDigest,
+          acceptedEnvelope |-> NoDigest,
+          durableAck |-> NoAck,
+          outboxRetained |-> FALSE,
+          crashed |-> FALSE,
+          recovered |-> FALSE]]
   /\ redemption =
        [v \in VoucherIds |->
-         [phase |-> "Idle",
-          recoveryFrom |-> "None",
+         [phase |-> "Absent",
           owner |-> DefaultDevice,
-          predecessor |-> DefaultPredecessor,
-          policyEpoch |-> 0,
-          voucherState |-> "Absent",
           amount |-> 0,
-          outboxState |-> "Absent"]]
-  /\ suiteState =
-       [s \in SuiteIds |->
-         IF s = InitialActiveSuite THEN "Active" ELSE "Pending"]
-  /\ profileState = [p \in ProfileIds |-> "Active"]
-  /\ profilePolicyEpoch = [p \in ProfileIds |-> 1]
-  /\ paymentEvidence =
-       [sealed |-> {},
-        candidates |-> {},
-        wrappers |-> {},
-        canonical |-> {},
-        exposed |-> {},
-        committed |-> {},
-        inbox |-> {},
-        acknowledgements |-> {},
-        consumed |-> {},
-        conflicts |-> {},
-        expiredTickets |-> {},
-        noCommitRecovery |-> {},
-        noCommitClosures |-> {}]
-  /\ redemptionEvidence =
-       [sealed |-> {},
-        candidates |-> {},
-        wrappers |-> {},
-        canonical |-> {},
-        exposed |-> {},
-        committed |-> {},
-        consumedNullifiers |-> {}]
+          before |-> NoState,
+          after |-> NoState,
+          beforeBalance |-> 0,
+          afterBalance |-> 0,
+          hardwareCertificate |-> FALSE,
+          recursiveProof |-> FALSE,
+          outboxEnvelope |-> NoDigest,
+          outboxRetained |-> FALSE,
+          crashed |-> FALSE,
+          recovered |-> FALSE]]
+  /\ conflictingDeliveries = {}
+  /\ duplicateAckCredits = {}
+  /\ senderObservedAcks = {}
+  /\ trustedTime = 0
 
-(***************************************************************************
-Online top-up enters the one global asset reserve and advances the exact-next
-aggregate state. It is shown atomically because this model concentrates its
-crash boundary exploration on offline sends and redemptions.
-***************************************************************************)
-TopUp(d, amount) ==
+Bootstrap(d) ==
   /\ d \in Devices
+  /\ ~device[d].bootstrapped
+  /\ device[d].balance = 0
+  /\ device' = [device EXCEPT ![d].bootstrapped = TRUE]
+  /\ UNCHANGED <<online, reserve, totalTopups, totalRedemptions,
+                  consumedHeads, transitionLog, preparedHead, mint,
+                  transportVars, redemption, trustedTime>>
+
+AdvanceTrustedTime(t) ==
+  /\ t \in 0..MaxTime
+  /\ trustedTime < t
+  /\ trustedTime' = t
+  /\ UNCHANGED <<ledgerVars, mint, transportVars, redemption>>
+
+TopUp(d, m, amount) ==
+  /\ d \in Devices
+  /\ m \in MintIds
   /\ amount \in 1..MaxAmount
-  /\ MintAuthorizationValid(d, amount)
+  /\ mint[m].state = "Absent"
   /\ online[d] >= amount
-  /\ balance[d] + amount <= MaxAmount
-  /\ reserve + amount <= MaxAmount
-  /\ totalTopups + amount <= MaxAmount
-  /\ sequence[d] < MaxSequence
-  /\ Predecessor(d) \notin spentPredecessors
-  /\ Predecessor(d) \notin LockedPredecessors
-  /\ balance' = [balance EXCEPT ![d] = @ + amount]
-  /\ sequence' = [sequence EXCEPT ![d] = @ + 1]
+  /\ HardwareQualified(d)
+  /\ NoSoftwareFallback(d)
   /\ online' = [online EXCEPT ![d] = @ - amount]
   /\ reserve' = reserve + amount
   /\ totalTopups' = totalTopups + amount
-  /\ spentPredecessors' = spentPredecessors \cup {Predecessor(d)}
-  /\ UNCHANGED <<epoch, totalRedemptions, ticket, payment, redemption,
-                  lifecycleVars, evidenceVars>>
+  /\ mint' =
+       [mint EXCEPT
+         ![m] =
+           [@ EXCEPT
+             !.state = "Finalized",
+             !.recipient = d,
+             !.amount = amount,
+             !.authorizationVerified = TRUE,
+             !.finalityVerified = TRUE]]
+  /\ UNCHANGED <<device, totalRedemptions, consumedHeads, transitionLog,
+                  preparedHead, transportVars, redemption, trustedTime>>
 
-(***************************************************************************
-The sender first creates one unique acceptance intent with an exact positive
-amount and an opaque randomized commitment to its private sender/predecessor
-opening. This does not yet reserve receiver bytes.
-The private opening fields below are specification ghosts and never enter the
-public intent or ticket records.
-***************************************************************************)
-CreateAcceptanceIntent(sender, t) ==
-  LET i == TicketIntent[t]
-      q == TicketRequest[t]
-  IN /\ sender \in Devices
-     /\ t \in TicketIds
-     /\ sender # RequestOwner[q]
-     /\ ticket[t].state = "Absent"
-     /\ ticket[t].intentState = "Absent"
-     /\ IntentRequest[i] = q
-     /\ IntentAmount[i] = RequestAmount[q]
-     /\ Predecessor(sender) \notin spentPredecessors
-     /\ Predecessor(sender) \notin LockedPredecessors
-     /\ ticket' =
-          [ticket EXCEPT
-            ![t].intentState = "Offered",
-            ![t].intentId = i,
-            ![t].intentRequest = q,
-            ![t].intentDigest = i,
-            ![t].exactAmount = IntentAmount[i],
-            ![t].senderCommitment = RandomSenderCommitment(i, sender),
-            ![t].intentSender = sender,
-            ![t].intentPredecessor = Predecessor(sender)]
-     /\ UNCHANGED <<ledgerVars, payment, redemption, lifecycleVars,
-                     evidenceVars>>
+PrepareMintFold(m) ==
+  LET d == mint[m].recipient
+      op == MintKey(m)
+  IN /\ m \in MintIds
+     /\ mint[m].state = "Finalized"
+     /\ preparedHead[op] = NoState
+     /\ device[d].bootstrapped
+     /\ preparedHead' = [preparedHead EXCEPT ![op] = StateHead(d)]
+     /\ UNCHANGED <<device, online, reserve, totalTopups,
+                     totalRedemptions, consumedHeads, transitionLog, mint,
+                     transportVars, redemption, trustedTime>>
 
-(***************************************************************************
-This explicit pre-ticket step verifies the proof-bearing sender authorization
-against its own profile, suite, policy epoch, and release. TicketProfile[t] is
-the receiver authority and is intentionally not used as the sender authority.
-***************************************************************************)
-AuthorizeAcceptanceIntent(t) ==
-  LET i == ticket[t].intentId
-      p == IntentAuthorizationProfile[i]
-      s == IntentAuthorizationSuite[i]
-  IN /\ t \in TicketIds
-     /\ ticket[t].state = "Absent"
-     /\ ticket[t].intentState = "Offered"
-     /\ HardwareQualified[p]
-     /\ NoSoftwareFallback[p]
-     /\ profileState[p] = "Active"
-     /\ suiteState[s] = "Active"
-     /\ ticket' =
-          [ticket EXCEPT
-            ![t].intentState = "Authorized",
-            ![t].authorizationProfile = p,
-            ![t].authorizationSuite = s,
-            ![t].authorizationPolicyEpoch = profilePolicyEpoch[p],
-            ![t].authorizationReleaseDigest = s,
-            ![t].authorizationProof = i]
-     /\ UNCHANGED <<ledgerVars, payment, redemption, lifecycleVars,
-                     evidenceVars>>
+MintFold(m) ==
+  LET d == mint[m].recipient
+      amount == mint[m].amount
+      op == MintKey(m)
+      before == StateHead(d)
+      after == NormalSuccessor(before)
+      transition ==
+        Transition("MintFold", op, d, before, after,
+                   device[d].balance, device[d].balance + amount,
+                   device[d].replayRoot, device[d].replayRoot)
+  IN /\ m \in MintIds
+     /\ mint[m].state = "Finalized"
+     /\ mint[m].authorizationVerified
+     /\ mint[m].finalityVerified
+     /\ preparedHead[op] = before
+     /\ CanAdvance(d)
+     /\ device[d].balance + amount <= MaxValue
+     /\ device' =
+          [device EXCEPT
+            ![d] =
+              [@ EXCEPT
+                !.balance = @ + amount,
+                !.logicalSequence = @ + 1,
+                !.hardwareCounter = @ + 1,
+                !.stateNonce = @ + 1]]
+     /\ consumedHeads' = consumedHeads \cup {before}
+     /\ transitionLog' = transitionLog \cup {transition}
+     /\ mint' = [mint EXCEPT ![m].state = "Folded"]
+     /\ UNCHANGED <<online, reserve, totalTopups, totalRedemptions,
+                     preparedHead, transportVars, redemption, trustedTime>>
 
-(***************************************************************************
-Issuance atomically consumes the unique intent and reserves receiver bytes.
-Every distinct valid intent for the same request may receive an exact-amount
-ticket; there is no invoice-level amount or count ledger. Ticket IDs remain
-one-use, and hardware/durable capacity must be reserved for every payment.
-***************************************************************************)
-IssueAcceptanceTicket(t) ==
-  LET q == TicketRequest[t]
-      d == RequestOwner[q]
-      p == TicketProfile[t]
-      s == TicketSuite[t]
-  IN /\ t \in TicketIds
-     /\ ticket[t].state = "Absent"
-     /\ ticket[t].intentState = "Authorized"
-     /\ AcceptanceIntentAuthorizationValid(t)
-     /\ ticket[t].intentId = TicketIntent[t]
-     /\ ticket[t].intentRequest = q
-     /\ ticket[t].intentDigest = ticket[t].intentId
-     /\ ticket[t].senderCommitment =
-          RandomSenderCommitment(
-            ticket[t].intentId, ticket[t].intentSender)
-     /\ ticket[t].exactAmount = RequestAmount[q]
-     /\ TicketIssuedAt[t] < TicketExpiresAt[t]
-     /\ HardwareQualified[p]
-     /\ NoSoftwareFallback[p]
-     /\ profileState[p] = "Active"
-     /\ suiteState[s] = "Active"
-     /\ InboxUse(d) + TicketBytes[t] <= InboxCapacity
-     /\ ticket' =
-          [ticket EXCEPT
-            ![t].state = "Reserved",
-            ![t].intentState = "Ticketed",
-            ![t].policyEpoch = profilePolicyEpoch[p]]
-     /\ UNCHANGED <<ledgerVars, payment, redemption, lifecycleVars,
-                     evidenceVars>>
-
-(***************************************************************************
-Send: prepare seals the exact predecessor, inputs, and randomness and reserves
-sender outbox bytes. Candidate persistence precedes the atomic hardware
-commit. Wrapper generation, canonical installation, and exposure are separate
-crash boundaries; recovery resumes the same c-bound bytes and cannot create
-another successor.
-***************************************************************************)
-PreparePayment(c) ==
-  LET t == PaymentTicket[c]
-      sender == ticket[t].intentSender
-      amount == ticket[t].exactAmount
-      recipient == PaymentRecipient(c)
-      senderProfile == PaymentProfile[c]
-      receiverProfile == TicketProfile[t]
-      s == PaymentSuite[c]
-  IN /\ sender \in Devices
-     /\ c \in CreditIds
-     /\ sender # recipient
-     /\ payment[c].phase = "Idle"
-     /\ payment[c].creditState = "Absent"
-     /\ ticket[t].state = "Reserved"
-     /\ ticket[t].intentState = "Ticketed"
-     /\ PaymentAmountAllowed(t, amount)
-     /\ PaymentSuite[c] = TicketSuite[t]
-     /\ HardwareQualified[senderProfile]
-     /\ NoSoftwareFallback[senderProfile]
-     /\ HardwareQualified[receiverProfile]
-     /\ NoSoftwareFallback[receiverProfile]
-     /\ profileState[senderProfile] = "Active"
-     /\ profileState[receiverProfile] = "Active"
-     /\ suiteState[s] = "Active"
-     /\ balance[sender] >= amount
-     /\ StagedCreditsFor(sender) = {}
-     /\ sequence[sender] < MaxSequence
-     /\ ticket[t].intentPredecessor = Predecessor(sender)
-     /\ Predecessor(sender) \notin spentPredecessors
-     /\ Predecessor(sender) \notin LockedPredecessors
-     /\ OutboxUse(sender) + PaymentOutboxBytes[c] <= OutboxCapacity
-     /\ ticket' =
-          [ticket EXCEPT
-            ![t].state = "Locked",
-            ![t].boundCredit = c]
-     /\ payment' =
-          [payment EXCEPT
-            ![c].phase = "Prepared",
-            ![c].recoveryFrom = "None",
-            ![c].sender = sender,
-            ![c].predecessor = Predecessor(sender),
-            ![c].policyEpoch = profilePolicyEpoch[senderProfile],
-            ![c].amount = amount,
-            ![c].outboxState = "Reserved"]
-     /\ paymentEvidence' =
-          [paymentEvidence EXCEPT !.sealed = @ \cup {c}]
-     /\ UNCHANGED <<ledgerVars, redemption, lifecycleVars, redemptionEvidence>>
-
-ProveAndPersistPaymentCandidate(c) ==
-  /\ c \in CreditIds
-  /\ payment[c].phase = "Prepared"
-  /\ c \in paymentEvidence.sealed
-  /\ payment' = [payment EXCEPT ![c].phase = "Candidate"]
-  /\ paymentEvidence' =
-       [paymentEvidence EXCEPT !.candidates = @ \cup {c}]
-  /\ UNCHANGED <<ledgerVars, ticket, redemption, lifecycleVars,
-                  redemptionEvidence>>
-
-HardwareCommitPayment(c) ==
-  LET d == payment[c].sender
-      t == PaymentTicket[c]
-      p == PaymentProfile[c]
+PrepareSend(c) ==
+  LET d == CreditSender[c]
+      op == SendKey(c)
   IN /\ c \in CreditIds
-     /\ payment[c].phase = "Candidate"
-     /\ payment[c].creditState = "Absent"
-     /\ payment[c].outboxState = "Reserved"
-     /\ c \in paymentEvidence.sealed
-     /\ c \in paymentEvidence.candidates
-     /\ ticket[t].state = "Locked"
-     /\ ticket[t].intentState = "Ticketed"
-     /\ ticket[t].boundCredit = c
-     /\ HardwareQualified[p]
-     /\ NoSoftwareFallback[p]
-     /\ profileState[p] = "Active"
-     /\ SenderCommitTime[c] >= TicketIssuedAt[t]
-     /\ SenderCommitTime[c] < TicketExpiresAt[t]
-     /\ payment[c].amount = ticket[t].exactAmount
-     /\ payment[c].sender = ticket[t].intentSender
-     /\ payment[c].predecessor = ticket[t].intentPredecessor
-     /\ payment[c].predecessor = Predecessor(d)
-     /\ Predecessor(d) \notin spentPredecessors
-     /\ balance[d] >= payment[c].amount
-     /\ sequence[d] < MaxSequence
-     /\ balance' = [balance EXCEPT ![d] = @ - payment[c].amount]
-     /\ sequence' = [sequence EXCEPT ![d] = @ + 1]
-     /\ spentPredecessors' = spentPredecessors \cup {Predecessor(d)}
+     /\ payment[c].phase = "Absent"
+     /\ preparedHead[op] = NoState
+     /\ device[d].bootstrapped
+     /\ CreditAmount[c] > 0
+     /\ preparedHead' = [preparedHead EXCEPT ![op] = StateHead(d)]
+     /\ UNCHANGED <<device, online, reserve, totalTopups,
+                     totalRedemptions, consumedHeads, transitionLog, mint,
+                     transportVars, redemption, trustedTime>>
+
+SendSplit(c) ==
+  LET d == CreditSender[c]
+      amount == CreditAmount[c]
+      op == SendKey(c)
+      before == StateHead(d)
+      after == NormalSuccessor(before)
+      transition ==
+        Transition("SendSplit", op, d, before, after,
+                   device[d].balance, device[d].balance - amount,
+                   device[d].replayRoot, device[d].replayRoot)
+  IN /\ c \in CreditIds
+     /\ payment[c].phase = "Absent"
+     /\ preparedHead[op] = before
+     /\ CanAdvance(d)
+     /\ amount > 0
+     /\ device[d].balance >= amount
+     /\ trustedTime = CreditCommitTime[c]
+     /\ RequestValidAt(CreditRequest[c], trustedTime)
+     /\ HardwareQualified(d)
+     /\ NoSoftwareFallback(d)
+     /\ device' =
+          [device EXCEPT
+            ![d] =
+              [@ EXCEPT
+                !.balance = @ - amount,
+                !.logicalSequence = @ + 1,
+                !.hardwareCounter = @ + 1,
+                !.stateNonce = @ + 1]]
+     /\ consumedHeads' = consumedHeads \cup {before}
+     /\ transitionLog' = transitionLog \cup {transition}
      /\ payment' =
           [payment EXCEPT
-            ![c].phase = "HardwareCommitted",
-            ![c].creditState = "Committed",
-            ![c].outboxState = "Committed"]
-     /\ paymentEvidence' =
-          [paymentEvidence EXCEPT !.committed = @ \cup {c}]
-     /\ UNCHANGED <<epoch, online, reserve, totalTopups, totalRedemptions,
-                     ticket, redemption, lifecycleVars, redemptionEvidence>>
+            ![c] =
+              [@ EXCEPT
+                !.phase = "HardwareCommitted",
+                !.request = CreditRequest[c],
+                !.sender = d,
+                !.recipient = CreditRecipient[c],
+                !.amount = amount,
+                !.commitTime = trustedTime,
+                !.before = before,
+                !.after = after,
+                !.beforeBalance = device[d].balance,
+                !.afterBalance = device[d].balance - amount,
+                !.hardwareCertificate = TRUE,
+                !.outboxRetained = TRUE]]
+     /\ UNCHANGED <<online, reserve, totalTopups, totalRedemptions,
+                     preparedHead, mint, conflictingDeliveries,
+                     duplicateAckCredits, senderObservedAcks, redemption,
+                     trustedTime>>
 
-GeneratePaymentWrapper(c) ==
+GeneratePaymentProof(c) ==
   /\ c \in CreditIds
   /\ payment[c].phase = "HardwareCommitted"
-  /\ payment[c].creditState = "Committed"
-  /\ c \in paymentEvidence.candidates
-  /\ payment' =
-       [payment EXCEPT ![c].phase = "WrapperGenerated"]
-  /\ paymentEvidence' =
-       [paymentEvidence EXCEPT !.wrappers = @ \cup {c}]
-  /\ UNCHANGED <<ledgerVars, ticket, redemption, lifecycleVars,
-                  redemptionEvidence>>
-
-InstallPaymentEnvelope(c) ==
-  /\ c \in CreditIds
-  /\ payment[c].phase = "WrapperGenerated"
-  /\ payment[c].creditState = "Committed"
-  /\ c \in paymentEvidence.wrappers
-  /\ payment' = [payment EXCEPT ![c].phase = "Installed"]
-  /\ paymentEvidence' =
-       [paymentEvidence EXCEPT !.canonical = @ \cup {c}]
-  /\ UNCHANGED <<ledgerVars, ticket, redemption, lifecycleVars,
-                  redemptionEvidence>>
-
-ExposePaymentEnvelope(c) ==
-  /\ c \in CreditIds
-  /\ payment[c].phase = "Installed"
-  /\ payment[c].creditState = "Committed"
-  /\ c \in paymentEvidence.canonical
+  /\ ~payment[c].crashed
+  /\ GuardBundleValid(c)
   /\ payment' =
        [payment EXCEPT
-         ![c].phase = "Exposed",
-         ![c].creditState = "Available"]
-  /\ paymentEvidence' =
-       [paymentEvidence EXCEPT !.exposed = @ \cup {c}]
-  /\ UNCHANGED <<ledgerVars, ticket, redemption, lifecycleVars,
-                  redemptionEvidence>>
+         ![c] = [@ EXCEPT !.phase = "Proofed", !.recursiveProof = TRUE]]
+  /\ UNCHANGED <<ledgerVars, mint, conflictingDeliveries,
+                  duplicateAckCredits, senderObservedAcks, redemption,
+                  trustedTime>>
+
+PersistPaymentEnvelope(c) ==
+  /\ c \in CreditIds
+  /\ payment[c].phase = "Proofed"
+  /\ payment[c].recursiveProof
+  /\ ~payment[c].crashed
+  /\ payment' =
+       [payment EXCEPT
+         ![c] = [@ EXCEPT !.phase = "Canonical", !.outboxEnvelope = c]]
+  /\ UNCHANGED <<ledgerVars, mint, conflictingDeliveries,
+                  duplicateAckCredits, senderObservedAcks, redemption,
+                  trustedTime>>
+
+ExposePayment(c) ==
+  /\ c \in CreditIds
+  /\ payment[c].phase = "Canonical"
+  /\ payment[c].outboxEnvelope = c
+  /\ ~payment[c].crashed
+  /\ payment' = [payment EXCEPT ![c].phase = "Exposed"]
+  /\ UNCHANGED <<ledgerVars, mint, conflictingDeliveries,
+                  duplicateAckCredits, senderObservedAcks, redemption,
+                  trustedTime>>
 
 CrashPayment(c) ==
   /\ c \in CreditIds
-  /\ payment[c].phase \in
-       {"Prepared", "Candidate", "HardwareCommitted",
-        "WrapperGenerated", "Installed", "Exposed"}
-  /\ payment' =
-       [payment EXCEPT
-         ![c].recoveryFrom = payment[c].phase,
-         ![c].phase = "Recovery"]
-  /\ UNCHANGED <<ledgerVars, ticket, redemption, lifecycleVars, evidenceVars>>
+  /\ payment[c].phase # "Absent"
+  /\ ~payment[c].crashed
+  /\ payment' = [payment EXCEPT ![c].crashed = TRUE]
+  /\ UNCHANGED <<ledgerVars, mint, conflictingDeliveries,
+                  duplicateAckCredits, senderObservedAcks, redemption,
+                  trustedTime>>
 
-ResumePrecommitPayment(c) ==
+RecoverPayment(c) ==
   /\ c \in CreditIds
-  /\ payment[c].phase = "Recovery"
-  /\ payment[c].recoveryFrom \in {"Prepared", "Candidate"}
+  /\ payment[c].crashed
   /\ payment' =
        [payment EXCEPT
-         ![c].phase = payment[c].recoveryFrom,
-         ![c].recoveryFrom = "None"]
-  /\ UNCHANGED <<ledgerVars, ticket, redemption, lifecycleVars, evidenceVars>>
+         ![c] = [@ EXCEPT !.crashed = FALSE, !.recovered = TRUE]]
+  /\ UNCHANGED <<ledgerVars, mint, conflictingDeliveries,
+                  duplicateAckCredits, senderObservedAcks, redemption,
+                  trustedTime>>
 
-ResumeCommittedPayment(c) ==
-  /\ c \in CreditIds
-  /\ payment[c].phase = "Recovery"
-  /\ payment[c].recoveryFrom \in
-       {"HardwareCommitted", "WrapperGenerated", "Installed", "Exposed"}
-  /\ c \in paymentEvidence.candidates
-  /\ c \in paymentEvidence.committed
-  /\ payment' =
-       [payment EXCEPT
-         ![c].phase = payment[c].recoveryFrom,
-         ![c].recoveryFrom = "None"]
-  /\ UNCHANGED <<ledgerVars, ticket, redemption, lifecycleVars, evidenceVars>>
-
-(***************************************************************************
-Expiry is only observed evidence. It changes no ticket, intent, or capacity
-state and therefore cannot reclaim anything by itself.
-***************************************************************************)
-ObserveTicketExpiry(t) ==
-  /\ t \in TicketIds
-  /\ ticket[t].state # "Absent"
-  /\ t \notin paymentEvidence.expiredTickets
-  /\ paymentEvidence' =
-       [paymentEvidence EXCEPT !.expiredTickets = @ \cup {t}]
-  /\ UNCHANGED <<ledgerVars, ticket, payment, redemption, lifecycleVars,
-                  redemptionEvidence>>
-
-(***************************************************************************
-These actions abstract an authenticated proof that the bound sender intent did
-not reach terminal hardware commit. Opening recovery preserves the ticket's
-receiver bytes in RecoveryPending. Only the distinct closure action may release
-physical capacity. Intent and ticket identities remain closed forever, and a
-consumed ticket can never enter this corridor.
-***************************************************************************)
-BeginPaymentNoCommitRecovery(c) ==
-  LET t == PaymentTicket[c]
-  IN /\ c \in CreditIds
-     /\ \/ payment[c].phase \in {"Prepared", "Candidate"}
-        \/ /\ payment[c].phase = "Recovery"
-           /\ payment[c].recoveryFrom \in {"Prepared", "Candidate"}
-     /\ payment[c].creditState = "Absent"
-     /\ payment[c].outboxState = "Reserved"
-     /\ ticket[t].state = "Locked"
-     /\ ticket[t].intentState = "Ticketed"
-     /\ ticket[t].boundCredit = c
-     /\ ticket[t].intentPredecessor \notin spentPredecessors
-     /\ ticket' = [ticket EXCEPT ![t].state = "RecoveryPending"]
-     /\ payment' =
-          [payment EXCEPT
-            ![c].phase = "Cancelled",
-            ![c].recoveryFrom = "None",
-            ![c].outboxState = "Released"]
-     /\ paymentEvidence' =
-          [paymentEvidence EXCEPT !.noCommitRecovery = @ \cup {t}]
-     /\ UNCHANGED <<ledgerVars, redemption, lifecycleVars,
-                     redemptionEvidence>>
-
-BeginUnusedTicketNoCommitRecovery(t) ==
-  /\ t \in TicketIds
-  /\ ticket[t].state = "Reserved"
-  /\ ticket[t].intentState = "Ticketed"
-  /\ NoPaymentStartedForTicket(t)
-  /\ ticket[t].intentPredecessor \notin spentPredecessors
-  /\ ticket[t].intentPredecessor \notin LockedPredecessors
-  /\ ticket' = [ticket EXCEPT ![t].state = "RecoveryPending"]
-  /\ paymentEvidence' =
-       [paymentEvidence EXCEPT !.noCommitRecovery = @ \cup {t}]
-  /\ UNCHANGED <<ledgerVars, payment, redemption, lifecycleVars,
-                  redemptionEvidence>>
-
-CloseAuthenticatedNoCommitRecovery(t) ==
-  /\ t \in TicketIds
-  /\ ticket[t].state = "RecoveryPending"
-  /\ ticket[t].intentState = "Ticketed"
-  /\ t \in paymentEvidence.noCommitRecovery
-  /\ t \notin paymentEvidence.noCommitClosures
-  /\ ticket[t].intentPredecessor \notin spentPredecessors
-  /\ \A c \in paymentEvidence.committed : PaymentTicket[c] # t
-  /\ \/ NoPaymentStartedForTicket(t)
-     \/ CancelledBoundPayment(t)
-  /\ ticket' =
-       [ticket EXCEPT
-         ![t].state = "Released",
-         ![t].intentState = "ClosedNoCommit"]
-  /\ paymentEvidence' =
-       [paymentEvidence EXCEPT !.noCommitClosures = @ \cup {t}]
-  /\ UNCHANGED <<ledgerVars, payment, redemption, lifecycleVars,
-                  redemptionEvidence>>
-
-(***************************************************************************
-No capacity, expiry, suite, profile, or policy check appears here. The locked
-ticket owns the exact receiver bytes, so every sender-committed canonical
-payment is stageable even after later traffic, suite rotation, or suspension.
-The acknowledgement is made durable in the same abstract transition.
-***************************************************************************)
 StagePayment(c) ==
-  LET t == PaymentTicket[c]
+  /\ c \in CreditIds
+  /\ PaymentStageEligible(c)
+  /\ payment' =
+       [payment EXCEPT
+         ![c] =
+           [@ EXCEPT
+             !.phase = "Staged",
+             !.acceptedEnvelope = c,
+             !.durableAck = c]]
+  /\ UNCHANGED <<ledgerVars, mint, conflictingDeliveries,
+                  duplicateAckCredits, senderObservedAcks, redemption,
+                  trustedTime>>
+
+RedeliverExactDuplicate(c) ==
+  /\ c \in CreditIds
+  /\ payment[c].phase \in {"Staged", "Folded"}
+  /\ payment[c].acceptedEnvelope = c
+  /\ payment[c].durableAck = c
+  /\ duplicateAckCredits' = duplicateAckCredits \cup {c}
+  /\ UNCHANGED <<ledgerVars, mint, payment, conflictingDeliveries,
+                  senderObservedAcks, redemption, trustedTime>>
+
+RejectConflictingDelivery(c) ==
+  LET conflict == [creditId |-> c, digest |-> ConflictingDigest]
   IN /\ c \in CreditIds
-     /\ CanStage(c)
-     /\ ticket' = [ticket EXCEPT ![t].state = "Consumed"]
-     /\ payment' =
-          [payment EXCEPT
-            ![c].phase = "Exposed",
-            ![c].recoveryFrom = "None",
-            ![c].creditState = "Staged"]
-     /\ paymentEvidence' =
-          [paymentEvidence EXCEPT
-            !.inbox = @ \cup {c},
-            !.acknowledgements = @ \cup {c}]
-     /\ UNCHANGED <<ledgerVars, redemption, lifecycleVars,
-                     redemptionEvidence>>
+     /\ payment[c].phase \in {"Exposed", "Staged", "Folded"}
+     /\ payment[c].outboxEnvelope = c
+     /\ ConflictingDigest # c
+     /\ conflictingDeliveries' = conflictingDeliveries \cup {conflict}
+     /\ UNCHANGED <<ledgerVars, mint, payment, duplicateAckCredits,
+                     senderObservedAcks, redemption, trustedTime>>
+
+PrepareReceiveFold(c) ==
+  LET d == CreditRecipient[c]
+      op == ReceiveKey(c)
+  IN /\ c \in CreditIds
+     /\ ReceiveCreditSemanticallyValid(c)
+     /\ preparedHead[op] = NoState
+     /\ preparedHead' = [preparedHead EXCEPT ![op] = StateHead(d)]
+     /\ UNCHANGED <<device, online, reserve, totalTopups,
+                     totalRedemptions, consumedHeads, transitionLog, mint,
+                     transportVars, redemption, trustedTime>>
+
+ReceiveFold(c) ==
+  LET d == CreditRecipient[c]
+      amount == payment[c].amount
+      op == ReceiveKey(c)
+      before == StateHead(d)
+      after == NormalSuccessor(before)
+      newRoot == device[d].replayRoot \cup {c}
+      transition ==
+        Transition("ReceiveFold", op, d, before, after,
+                   device[d].balance, device[d].balance + amount,
+                   device[d].replayRoot, newRoot)
+  IN /\ c \in CreditIds
+     /\ ReceiveCreditSemanticallyValid(c)
+     /\ preparedHead[op] = before
+     /\ CanAdvance(d)
+     /\ device[d].balance + amount <= MaxValue
+     /\ device' =
+          [device EXCEPT
+            ![d] =
+              [@ EXCEPT
+                !.balance = @ + amount,
+                !.logicalSequence = @ + 1,
+                !.hardwareCounter = @ + 1,
+                !.stateNonce = @ + 1,
+                !.replayRoot = newRoot]]
+     /\ consumedHeads' = consumedHeads \cup {before}
+     /\ transitionLog' = transitionLog \cup {transition}
+     /\ payment' = [payment EXCEPT ![c].phase = "Folded"]
+     /\ UNCHANGED <<online, reserve, totalTopups, totalRedemptions,
+                     preparedHead, mint, conflictingDeliveries,
+                     duplicateAckCredits, senderObservedAcks, redemption,
+                     trustedTime>>
 
 ObserveAcknowledgement(c) ==
   /\ c \in CreditIds
-  /\ c \in paymentEvidence.acknowledgements
-  /\ payment[c].outboxState = "Committed"
-  /\ payment' =
-       [payment EXCEPT ![c].outboxState = "Released"]
-  /\ UNCHANGED <<ledgerVars, ticket, redemption, lifecycleVars, evidenceVars>>
+  /\ payment[c].phase \in {"Staged", "Folded"}
+  /\ payment[c].durableAck = c
+  /\ payment[c].outboxRetained
+  /\ payment' = [payment EXCEPT ![c].outboxRetained = FALSE]
+  /\ senderObservedAcks' = senderObservedAcks \cup {c}
+  /\ UNCHANGED <<ledgerVars, mint, conflictingDeliveries,
+                  duplicateAckCredits, redemption, trustedTime>>
 
-RejectConflictingPayment(c, claimedDigest) ==
-  /\ c \in CreditIds
-  /\ claimedDigest \in DigestValues
-  /\ c \in paymentEvidence.canonical
-  /\ claimedDigest # CanonicalEnvelopeDigest(c)
-  /\ paymentEvidence' =
-       [paymentEvidence EXCEPT
-         !.conflicts =
-           @ \cup
-             {[creditId |-> c,
-               ticketId |-> PaymentTicket[c],
-               digest |-> claimedDigest]}]
-  /\ UNCHANGED <<ledgerVars, ticket, payment, redemption, lifecycleVars,
-                  redemptionEvidence>>
-
-(* One fixed-shape receive transition consumes exactly one staged credit. *)
-FoldReceive(d, credit) ==
-  /\ d \in Devices
-  /\ credit \in StagedCreditsFor(d)
-  /\ credit \notin paymentEvidence.consumed
-  /\ balance[d] + payment[credit].amount <= MaxAmount
-  /\ sequence[d] < MaxSequence
-  /\ Predecessor(d) \notin spentPredecessors
-  /\ Predecessor(d) \notin LockedPredecessors
-  /\ balance' =
-       [balance EXCEPT
-         ![d] = @ + payment[credit].amount]
-  /\ sequence' = [sequence EXCEPT ![d] = @ + 1]
-  /\ spentPredecessors' = spentPredecessors \cup {Predecessor(d)}
-  /\ payment' =
-       [c \in CreditIds |->
-         IF c = credit
-           THEN [payment[c] EXCEPT !.creditState = "Consumed"]
-           ELSE payment[c]]
-  /\ paymentEvidence' =
-       [paymentEvidence EXCEPT
-         !.consumed = @ \cup {credit}]
-  /\ UNCHANGED <<epoch, online, reserve, totalTopups, totalRedemptions,
-                  ticket, redemption, lifecycleVars, redemptionEvidence>>
-
-(***************************************************************************
-Redemption uses the same prepare/candidate/hardware-commit/finalize/recovery
-shape and shares the sender outbox capacity pool with payments.
-***************************************************************************)
-PrepareRedemption(d, v, amount) ==
-  LET p == RedemptionProfile[v]
-      s == RedemptionSuite[v]
-  IN /\ d \in Devices
-     /\ v \in VoucherIds
-     /\ amount \in 1..MaxAmount
-     /\ redemption[v].phase = "Idle"
-     /\ redemption[v].voucherState = "Absent"
-     /\ HardwareQualified[p]
-     /\ NoSoftwareFallback[p]
-     /\ profileState[p] = "Active"
-     /\ suiteState[s] = "Active"
-     /\ balance[d] >= amount
-     /\ StagedCreditsFor(d) = {}
-     /\ sequence[d] < MaxSequence
-     /\ Predecessor(d) \notin spentPredecessors
-     /\ Predecessor(d) \notin LockedPredecessors
-     /\ OutboxUse(d) + RedemptionOutboxBytes[v] <= OutboxCapacity
-     /\ redemption' =
-          [redemption EXCEPT
-            ![v].phase = "Prepared",
-            ![v].recoveryFrom = "None",
-            ![v].owner = d,
-            ![v].predecessor = Predecessor(d),
-            ![v].policyEpoch = profilePolicyEpoch[p],
-            ![v].amount = amount,
-            ![v].outboxState = "Reserved"]
-     /\ redemptionEvidence' =
-          [redemptionEvidence EXCEPT !.sealed = @ \cup {v}]
-     /\ UNCHANGED <<ledgerVars, ticket, payment, lifecycleVars,
-                     paymentEvidence>>
-
-ProveAndPersistRedemptionCandidate(v) ==
-  /\ v \in VoucherIds
-  /\ redemption[v].phase = "Prepared"
-  /\ v \in redemptionEvidence.sealed
-  /\ redemption' = [redemption EXCEPT ![v].phase = "Candidate"]
-  /\ redemptionEvidence' =
-       [redemptionEvidence EXCEPT !.candidates = @ \cup {v}]
-  /\ UNCHANGED <<ledgerVars, ticket, payment, lifecycleVars, paymentEvidence>>
-
-HardwareCommitRedemption(v) ==
-  LET d == redemption[v].owner
-      p == RedemptionProfile[v]
+PrepareRedemption(v, d, amount) ==
+  LET op == RedeemKey(v)
   IN /\ v \in VoucherIds
-     /\ redemption[v].phase = "Candidate"
-     /\ redemption[v].voucherState = "Absent"
-     /\ redemption[v].outboxState = "Reserved"
-     /\ v \in redemptionEvidence.sealed
-     /\ v \in redemptionEvidence.candidates
-     /\ HardwareQualified[p]
-     /\ NoSoftwareFallback[p]
-     /\ profileState[p] = "Active"
-     /\ redemption[v].predecessor = Predecessor(d)
-     /\ Predecessor(d) \notin spentPredecessors
-     /\ balance[d] >= redemption[v].amount
-     /\ sequence[d] < MaxSequence
-     /\ balance' = [balance EXCEPT ![d] = @ - redemption[v].amount]
-     /\ sequence' = [sequence EXCEPT ![d] = @ + 1]
-     /\ spentPredecessors' = spentPredecessors \cup {Predecessor(d)}
+     /\ d \in Devices
+     /\ amount \in 1..MaxAmount
+     /\ redemption[v].phase = "Absent"
+     /\ preparedHead[op] = NoState
+     /\ device[d].bootstrapped
+     /\ device[d].balance >= amount
+     /\ preparedHead' = [preparedHead EXCEPT ![op] = StateHead(d)]
      /\ redemption' =
           [redemption EXCEPT
-            ![v].phase = "HardwareCommitted",
-            ![v].voucherState = "Pending",
-            ![v].outboxState = "Committed"]
-     /\ redemptionEvidence' =
-          [redemptionEvidence EXCEPT !.committed = @ \cup {v}]
-     /\ UNCHANGED <<epoch, online, reserve, totalTopups, totalRedemptions,
-                     ticket, payment, lifecycleVars, paymentEvidence>>
+            ![v] = [@ EXCEPT !.owner = d, !.amount = amount]]
+     /\ UNCHANGED <<device, online, reserve, totalTopups,
+                     totalRedemptions, consumedHeads, transitionLog, mint,
+                     transportVars, trustedTime>>
 
-GenerateRedemptionWrapper(v) ==
+RedeemSplit(v) ==
+  LET d == redemption[v].owner
+      amount == redemption[v].amount
+      op == RedeemKey(v)
+      before == StateHead(d)
+      after == NormalSuccessor(before)
+      transition ==
+        Transition("RedeemSplit", op, d, before, after,
+                   device[d].balance, device[d].balance - amount,
+                   device[d].replayRoot, device[d].replayRoot)
+  IN /\ v \in VoucherIds
+     /\ redemption[v].phase = "Absent"
+     /\ preparedHead[op] = before
+     /\ CanAdvance(d)
+     /\ amount > 0
+     /\ device[d].balance >= amount
+     /\ HardwareQualified(d)
+     /\ NoSoftwareFallback(d)
+     /\ device' =
+          [device EXCEPT
+            ![d] =
+              [@ EXCEPT
+                !.balance = @ - amount,
+                !.logicalSequence = @ + 1,
+                !.hardwareCounter = @ + 1,
+                !.stateNonce = @ + 1]]
+     /\ consumedHeads' = consumedHeads \cup {before}
+     /\ transitionLog' = transitionLog \cup {transition}
+     /\ redemption' =
+          [redemption EXCEPT
+            ![v] =
+              [@ EXCEPT
+                !.phase = "HardwareCommitted",
+                !.before = before,
+                !.after = after,
+                !.beforeBalance = device[d].balance,
+                !.afterBalance = device[d].balance - amount,
+                !.hardwareCertificate = TRUE,
+                !.outboxRetained = TRUE]]
+     /\ UNCHANGED <<online, reserve, totalTopups, totalRedemptions,
+                     preparedHead, mint, transportVars, trustedTime>>
+
+GenerateRedemptionProof(v) ==
   /\ v \in VoucherIds
   /\ redemption[v].phase = "HardwareCommitted"
-  /\ redemption[v].voucherState = "Pending"
-  /\ v \in redemptionEvidence.candidates
+  /\ redemption[v].hardwareCertificate
+  /\ ~redemption[v].crashed
+  /\ redemption[v].after = NormalSuccessor(redemption[v].before)
   /\ redemption' =
-       [redemption EXCEPT ![v].phase = "WrapperGenerated"]
-  /\ redemptionEvidence' =
-       [redemptionEvidence EXCEPT !.wrappers = @ \cup {v}]
-  /\ UNCHANGED <<ledgerVars, ticket, payment, lifecycleVars, paymentEvidence>>
+       [redemption EXCEPT
+         ![v] = [@ EXCEPT !.phase = "Proofed", !.recursiveProof = TRUE]]
+  /\ UNCHANGED <<ledgerVars, mint, transportVars, trustedTime>>
 
-InstallRedemptionEnvelope(v) ==
+PersistRedemptionEnvelope(v) ==
   /\ v \in VoucherIds
-  /\ redemption[v].phase = "WrapperGenerated"
-  /\ redemption[v].voucherState = "Pending"
-  /\ v \in redemptionEvidence.wrappers
-  /\ redemption' = [redemption EXCEPT ![v].phase = "Installed"]
-  /\ redemptionEvidence' =
-       [redemptionEvidence EXCEPT !.canonical = @ \cup {v}]
-  /\ UNCHANGED <<ledgerVars, ticket, payment, lifecycleVars, paymentEvidence>>
+  /\ redemption[v].phase = "Proofed"
+  /\ redemption[v].recursiveProof
+  /\ ~redemption[v].crashed
+  /\ redemption' =
+       [redemption EXCEPT
+         ![v] = [@ EXCEPT !.phase = "Canonical", !.outboxEnvelope = v]]
+  /\ UNCHANGED <<ledgerVars, mint, transportVars, trustedTime>>
 
-ExposeRedemptionEnvelope(v) ==
+ExposeRedemption(v) ==
   /\ v \in VoucherIds
-  /\ redemption[v].phase = "Installed"
-  /\ redemption[v].voucherState = "Pending"
-  /\ v \in redemptionEvidence.canonical
+  /\ redemption[v].phase = "Canonical"
+  /\ redemption[v].outboxEnvelope = v
+  /\ ~redemption[v].crashed
   /\ redemption' = [redemption EXCEPT ![v].phase = "Exposed"]
-  /\ redemptionEvidence' =
-       [redemptionEvidence EXCEPT !.exposed = @ \cup {v}]
-  /\ UNCHANGED <<ledgerVars, ticket, payment, lifecycleVars, paymentEvidence>>
+  /\ UNCHANGED <<ledgerVars, mint, transportVars, trustedTime>>
 
 CrashRedemption(v) ==
   /\ v \in VoucherIds
-  /\ redemption[v].phase \in
-       {"Prepared", "Candidate", "HardwareCommitted",
-        "WrapperGenerated", "Installed", "Exposed"}
-  /\ redemption' =
-       [redemption EXCEPT
-         ![v].recoveryFrom = redemption[v].phase,
-         ![v].phase = "Recovery"]
-  /\ UNCHANGED <<ledgerVars, ticket, payment, lifecycleVars, evidenceVars>>
+  /\ redemption[v].phase # "Absent"
+  /\ ~redemption[v].crashed
+  /\ redemption' = [redemption EXCEPT ![v].crashed = TRUE]
+  /\ UNCHANGED <<ledgerVars, mint, transportVars, trustedTime>>
 
-ResumePrecommitRedemption(v) ==
+RecoverRedemption(v) ==
   /\ v \in VoucherIds
-  /\ redemption[v].phase = "Recovery"
-  /\ redemption[v].recoveryFrom \in {"Prepared", "Candidate"}
+  /\ redemption[v].crashed
   /\ redemption' =
        [redemption EXCEPT
-         ![v].phase = redemption[v].recoveryFrom,
-         ![v].recoveryFrom = "None"]
-  /\ UNCHANGED <<ledgerVars, ticket, payment, lifecycleVars, evidenceVars>>
+         ![v] = [@ EXCEPT !.crashed = FALSE, !.recovered = TRUE]]
+  /\ UNCHANGED <<ledgerVars, mint, transportVars, trustedTime>>
 
-ResumeCommittedRedemption(v) ==
-  /\ v \in VoucherIds
-  /\ redemption[v].phase = "Recovery"
-  /\ redemption[v].recoveryFrom \in
-       {"HardwareCommitted", "WrapperGenerated", "Installed", "Exposed"}
-  /\ v \in redemptionEvidence.candidates
-  /\ v \in redemptionEvidence.committed
-  /\ redemption' =
-       [redemption EXCEPT
-         ![v].phase = redemption[v].recoveryFrom,
-         ![v].recoveryFrom = "None"]
-  /\ UNCHANGED <<ledgerVars, ticket, payment, lifecycleVars, evidenceVars>>
-
-CancelPrecommitRedemption(v) ==
-  /\ v \in VoucherIds
-  /\ \/ redemption[v].phase \in {"Prepared", "Candidate"}
-     \/ /\ redemption[v].phase = "Recovery"
-        /\ redemption[v].recoveryFrom \in {"Prepared", "Candidate"}
-  /\ redemption[v].voucherState = "Absent"
-  /\ redemption[v].outboxState = "Reserved"
-  /\ redemption' =
-       [redemption EXCEPT
-         ![v].phase = "Cancelled",
-         ![v].recoveryFrom = "None",
-         ![v].outboxState = "Released"]
-  /\ UNCHANGED <<ledgerVars, ticket, payment, lifecycleVars, evidenceVars>>
-
-(***************************************************************************
-Server application deliberately has no current suite/profile/policy guard.
-Thus a voucher legitimately hardware-committed before an emergency profile
-suspension retains its online redemption/recovery path.
-***************************************************************************)
 ApplyRedemption(v) ==
   LET d == redemption[v].owner
+      amount == redemption[v].amount
   IN /\ v \in VoucherIds
-     /\ v \in redemptionEvidence.exposed
-     /\ \/ redemption[v].phase = "Exposed"
-        \/ /\ redemption[v].phase = "Recovery"
-           /\ redemption[v].recoveryFrom = "Exposed"
-     /\ redemption[v].voucherState = "Pending"
-     /\ redemption[v].outboxState = "Committed"
-     /\ v \in redemptionEvidence.canonical
-     /\ v \notin redemptionEvidence.consumedNullifiers
-     /\ reserve >= redemption[v].amount
-     /\ totalRedemptions + redemption[v].amount <= totalTopups
-     /\ online[d] + redemption[v].amount <= MaxAmount
-     /\ online' = [online EXCEPT ![d] = @ + redemption[v].amount]
-     /\ reserve' = reserve - redemption[v].amount
-     /\ totalRedemptions' = totalRedemptions + redemption[v].amount
+     /\ redemption[v].phase = "Exposed"
+     /\ redemption[v].recursiveProof
+     /\ redemption[v].outboxEnvelope = v
+     /\ reserve >= amount
+     /\ online[d] + amount <= MaxValue
+     /\ reserve' = reserve - amount
+     /\ online' = [online EXCEPT ![d] = @ + amount]
+     /\ totalRedemptions' = totalRedemptions + amount
      /\ redemption' =
           [redemption EXCEPT
-            ![v].phase = "Exposed",
-            ![v].recoveryFrom = "None",
-            ![v].voucherState = "Applied",
-            ![v].outboxState = "Released"]
-     /\ redemptionEvidence' =
-          [redemptionEvidence EXCEPT
-            !.consumedNullifiers = @ \cup {v}]
-     /\ UNCHANGED <<balance, sequence, epoch, totalTopups, spentPredecessors,
-                     ticket, payment, lifecycleVars, paymentEvidence>>
+            ![v] =
+              [@ EXCEPT !.phase = "Applied", !.outboxRetained = FALSE]]
+     /\ UNCHANGED <<device, totalTopups, consumedHeads, transitionLog,
+                     preparedHead, mint, transportVars, trustedTime>>
 
-(***************************************************************************
-Counter rollover installs a fresh hardware epoch and resets the bounded model
-counter. MaxSequence and the finite epoch range are exploration bounds, not a
-production transition count or cumulative history limit.
-***************************************************************************)
-RotateHardwareEpoch(d) ==
-  /\ d \in Devices
-  /\ epoch[d] < MaxSequence
-  /\ Predecessor(d) \notin spentPredecessors
-  /\ Predecessor(d) \notin LockedPredecessors
-  /\ sequence' = [sequence EXCEPT ![d] = 0]
-  /\ epoch' = [epoch EXCEPT ![d] = @ + 1]
-  /\ spentPredecessors' = spentPredecessors \cup {Predecessor(d)}
-  /\ UNCHANGED <<balance, online, reserve, totalTopups, totalRedemptions,
-                  ticket, payment, redemption, lifecycleVars, evidenceVars>>
+PrepareRotate(r) ==
+  LET d == RotationDevice[r]
+      op == RotateKey(r)
+  IN /\ r \in RotationIds
+     /\ preparedHead[op] = NoState
+     /\ device[d].bootstrapped
+     /\ preparedHead' = [preparedHead EXCEPT ![op] = StateHead(d)]
+     /\ UNCHANGED <<device, online, reserve, totalTopups,
+                     totalRedemptions, consumedHeads, transitionLog, mint,
+                     transportVars, redemption, trustedTime>>
 
-(***************************************************************************
-Ordinary verifier rotation retains the old verifier. Suspension is
-prospective: it stops new tickets and hardware commits, while post-commit
-recovery, staging, acknowledgement, and online redemption remain available.
-***************************************************************************)
-RotateVerifierSuite(nextSuite) ==
-  /\ nextSuite \in SuiteIds
-  /\ suiteState[nextSuite] = "Pending"
-  /\ suiteState' =
-       [s \in SuiteIds |->
-         IF s = nextSuite
-           THEN "Active"
-           ELSE IF suiteState[s] = "Active"
-             THEN "Retained"
-             ELSE suiteState[s]]
-  /\ UNCHANGED <<ledgerVars, ticket, payment, redemption, profileState,
-                  profilePolicyEpoch, evidenceVars>>
-
-SuspendHardwareProfile(p) ==
-  /\ p \in ProfileIds
-  /\ profileState[p] = "Active"
-  /\ profileState' = [profileState EXCEPT ![p] = "Suspended"]
-  /\ UNCHANGED <<ledgerVars, ticket, payment, redemption, suiteState,
-                  profilePolicyEpoch, evidenceVars>>
-
-ReinstateHardwareProfile(p) ==
-  /\ p \in ProfileIds
-  /\ profileState[p] = "Suspended"
-  /\ HardwareQualified[p]
-  /\ NoSoftwareFallback[p]
-  /\ profileState' = [profileState EXCEPT ![p] = "Active"]
-  /\ UNCHANGED <<ledgerVars, ticket, payment, redemption, suiteState,
-                  profilePolicyEpoch, evidenceVars>>
-
-AdvanceProfilePolicyEpoch(p) ==
-  /\ p \in ProfileIds
-  /\ profilePolicyEpoch[p] < MaxSequence
-  /\ profilePolicyEpoch' =
-       [profilePolicyEpoch EXCEPT ![p] = @ + 1]
-  /\ UNCHANGED <<ledgerVars, ticket, payment, redemption, suiteState,
-                  profileState, evidenceVars>>
+Rotate(r) ==
+  LET d == RotationDevice[r]
+      op == RotateKey(r)
+      before == StateHead(d)
+      after == RotationSuccessor(before)
+      transition ==
+        Transition("Rotate", op, d, before, after,
+                   device[d].balance, device[d].balance,
+                   device[d].replayRoot, device[d].replayRoot)
+  IN /\ r \in RotationIds
+     /\ preparedHead[op] = before
+     /\ CanRotate(d)
+     /\ HardwareQualified(d)
+     /\ NoSoftwareFallback(d)
+     /\ device' =
+          [device EXCEPT
+            ![d] =
+              [@ EXCEPT
+                !.hardwareEpoch = @ + 1,
+                !.logicalSequence = @ + 1,
+                !.hardwareCounter = 0,
+                !.stateNonce = @ + 1]]
+     /\ consumedHeads' = consumedHeads \cup {before}
+     /\ transitionLog' = transitionLog \cup {transition}
+     /\ UNCHANGED <<online, reserve, totalTopups, totalRedemptions,
+                     preparedHead, mint, transportVars, redemption,
+                     trustedTime>>
 
 Next ==
-  \/ \E d \in Devices, amount \in 1..MaxAmount : TopUp(d, amount)
-  \/ \E d \in Devices, t \in TicketIds : CreateAcceptanceIntent(d, t)
-  \/ \E t \in TicketIds : AuthorizeAcceptanceIntent(t)
-  \/ \E t \in TicketIds : IssueAcceptanceTicket(t)
-  \/ \E c \in CreditIds : PreparePayment(c)
-  \/ \E c \in CreditIds : ProveAndPersistPaymentCandidate(c)
-  \/ \E c \in CreditIds : HardwareCommitPayment(c)
-  \/ \E c \in CreditIds : GeneratePaymentWrapper(c)
-  \/ \E c \in CreditIds : InstallPaymentEnvelope(c)
-  \/ \E c \in CreditIds : ExposePaymentEnvelope(c)
+  \/ \E d \in Devices : Bootstrap(d)
+  \/ \E t \in 0..MaxTime : AdvanceTrustedTime(t)
+  \/ \E d \in Devices, m \in MintIds, amount \in 1..MaxAmount :
+       TopUp(d, m, amount)
+  \/ \E m \in MintIds : PrepareMintFold(m)
+  \/ \E m \in MintIds : MintFold(m)
+  \/ \E c \in CreditIds : PrepareSend(c)
+  \/ \E c \in CreditIds : SendSplit(c)
+  \/ \E c \in CreditIds : GeneratePaymentProof(c)
+  \/ \E c \in CreditIds : PersistPaymentEnvelope(c)
+  \/ \E c \in CreditIds : ExposePayment(c)
   \/ \E c \in CreditIds : CrashPayment(c)
-  \/ \E c \in CreditIds : ResumePrecommitPayment(c)
-  \/ \E c \in CreditIds : ResumeCommittedPayment(c)
-  \/ \E t \in TicketIds : ObserveTicketExpiry(t)
-  \/ \E c \in CreditIds : BeginPaymentNoCommitRecovery(c)
-  \/ \E t \in TicketIds : BeginUnusedTicketNoCommitRecovery(t)
-  \/ \E t \in TicketIds : CloseAuthenticatedNoCommitRecovery(t)
+  \/ \E c \in CreditIds : RecoverPayment(c)
   \/ \E c \in CreditIds : StagePayment(c)
+  \/ \E c \in CreditIds : RedeliverExactDuplicate(c)
+  \/ \E c \in CreditIds : RejectConflictingDelivery(c)
+  \/ \E c \in CreditIds : PrepareReceiveFold(c)
+  \/ \E c \in CreditIds : ReceiveFold(c)
   \/ \E c \in CreditIds : ObserveAcknowledgement(c)
-  \/ \E c \in CreditIds, claimedDigest \in DigestValues :
-       RejectConflictingPayment(c, claimedDigest)
-  \/ \E d \in Devices, c \in CreditIds : FoldReceive(d, c)
-  \/ \E d \in Devices, v \in VoucherIds, amount \in 1..MaxAmount :
-       PrepareRedemption(d, v, amount)
-  \/ \E v \in VoucherIds : ProveAndPersistRedemptionCandidate(v)
-  \/ \E v \in VoucherIds : HardwareCommitRedemption(v)
-  \/ \E v \in VoucherIds : GenerateRedemptionWrapper(v)
-  \/ \E v \in VoucherIds : InstallRedemptionEnvelope(v)
-  \/ \E v \in VoucherIds : ExposeRedemptionEnvelope(v)
+  \/ \E v \in VoucherIds, d \in Devices, amount \in 1..MaxAmount :
+       PrepareRedemption(v, d, amount)
+  \/ \E v \in VoucherIds : RedeemSplit(v)
+  \/ \E v \in VoucherIds : GenerateRedemptionProof(v)
+  \/ \E v \in VoucherIds : PersistRedemptionEnvelope(v)
+  \/ \E v \in VoucherIds : ExposeRedemption(v)
   \/ \E v \in VoucherIds : CrashRedemption(v)
-  \/ \E v \in VoucherIds : ResumePrecommitRedemption(v)
-  \/ \E v \in VoucherIds : ResumeCommittedRedemption(v)
-  \/ \E v \in VoucherIds : CancelPrecommitRedemption(v)
+  \/ \E v \in VoucherIds : RecoverRedemption(v)
   \/ \E v \in VoucherIds : ApplyRedemption(v)
-  \/ \E d \in Devices : RotateHardwareEpoch(d)
-  \/ \E s \in SuiteIds : RotateVerifierSuite(s)
-  \/ \E p \in ProfileIds : SuspendHardwareProfile(p)
-  \/ \E p \in ProfileIds : ReinstateHardwareProfile(p)
-  \/ \E p \in ProfileIds : AdvanceProfilePolicyEpoch(p)
+  \/ \E r \in RotationIds : PrepareRotate(r)
+  \/ \E r \in RotationIds : Rotate(r)
 
 Spec == Init /\ [][Next]_vars
 
+(***************************************************************************
+Safety invariants.
+***************************************************************************)
+
 TypeOK ==
-  /\ balance \in [Devices -> 0..MaxAmount]
-  /\ sequence \in [Devices -> 0..MaxSequence]
-  /\ epoch \in [Devices -> 1..MaxSequence]
-  /\ online \in [Devices -> 0..MaxAmount]
-  /\ reserve \in 0..MaxAmount
-  /\ totalTopups \in 0..MaxAmount
-  /\ totalRedemptions \in 0..MaxAmount
-  /\ spentPredecessors \subseteq PredecessorType
-  /\ ticket \in [TicketIds -> TicketRecordType]
+  /\ device \in [Devices -> DeviceStateType]
+  /\ online \in [Devices -> 0..MaxValue]
+  /\ reserve \in 0..MaxValue
+  /\ totalTopups \in 0..MaxValue
+  /\ totalRedemptions \in 0..MaxValue
+  /\ consumedHeads \subseteq StateHeadType
+  /\ transitionLog \subseteq TransitionRecordType
+  /\ preparedHead \in [OperationKeys -> StateHeadType \cup {NoState}]
+  /\ mint \in [MintIds -> MintRecordType]
   /\ payment \in [CreditIds -> PaymentRecordType]
   /\ redemption \in [VoucherIds -> RedemptionRecordType]
-  /\ suiteState \in [SuiteIds -> SuiteStates]
-  /\ profileState \in [ProfileIds -> ProfileStates]
-  /\ profilePolicyEpoch \in [ProfileIds -> 1..MaxSequence]
-  /\ paymentEvidence \in PaymentEvidenceType
-  /\ redemptionEvidence \in RedemptionEvidenceType
+  /\ conflictingDeliveries \subseteq ConflictRecordType
+  /\ duplicateAckCredits \subseteq CreditIds
+  /\ senderObservedAcks \subseteq CreditIds
+  /\ trustedTime \in 0..MaxTime
 
-ReserveEquation == totalTopups = reserve + totalRedemptions
+ReserveEquation == reserve = totalTopups - totalRedemptions
 
 LiabilityConservation == reserve = OfflineLiability
 
-TotalValueConservation ==
-  InitialOnlineTotal = SumDeviceSet(online, Devices) + reserve
+TotalValueConservation == SumOnline(Devices) + reserve = InitialOnlineTotal
 
-AcknowledgementsAreDurable ==
-  paymentEvidence.acknowledgements \subseteq paymentEvidence.inbox
+ThreeMessageWireShape ==
+  /\ PeerMessageOrder = <<"Request", "Payment", "Acknowledgement">>
+  /\ \A q \in RequestIds :
+       DOMAIN PaymentRequestV1(q) =
+         {"protocolVersion", "network", "asset", "amount",
+          "recipientAccount", "recipientLane", "recipientEncryptionKey",
+          "hardwarePolicy", "requestId", "issuedAt", "expiresAt"}
+  /\ \A c \in {x \in CreditIds : payment[x].phase # "Absent"} :
+       DOMAIN PaymentV1(c) =
+         {"protocolVersion", "creditId", "requestDigest", "amount",
+          "senderBeforeCommitment", "senderAfterCommitment",
+          "receiverBinding", "trustedSenderCommitTime",
+          "encryptedCreditOpening", "hardwareTransitionCommitment",
+          "recursiveProof"}
+  /\ \A c \in StagedCredits :
+       DOMAIN AcknowledgementV1(c) =
+         {"protocolVersion", "requestDigest", "paymentDigest", "creditId",
+          "inboxReceipt"}
 
-ConsumedCreditsWereStaged ==
-  /\ paymentEvidence.consumed =
-       {c \in CreditIds : payment[c].creditState = "Consumed"}
-  /\ paymentEvidence.consumed \subseteq paymentEvidence.inbox
+RequestsNeverBindReceiverState ==
+  \A q \in RequestIds :
+    /\ "receiverBalanceHead" \notin DOMAIN PaymentRequestV1(q)
+    /\ "receiverStateCommitment" \notin DOMAIN PaymentRequestV1(q)
+    /\ PaymentRequestV1(q).amount > 0
+    /\ PaymentRequestV1(q).issuedAt < PaymentRequestV1(q).expiresAt
 
-AppliedNullifiersAreUnique ==
-  redemptionEvidence.consumedNullifiers =
-    {v \in VoucherIds : redemption[v].voucherState = "Applied"}
+DistinctPaymentsMayShareARequest ==
+  /\ ModelCredit1 # ModelCredit2
+  /\ CreditRequest[ModelCredit1] = ModelRequest1
+  /\ CreditRequest[ModelCredit2] = ModelRequest1
+  /\ CreditAmount[ModelCredit1] = RequestAmount[ModelRequest1]
+  /\ CreditAmount[ModelCredit2] = RequestAmount[ModelRequest1]
 
-TerminalCommitRespectsTicketDeadline ==
-  \A c \in paymentEvidence.committed :
-    LET t == PaymentTicket[c]
-    IN /\ SenderCommitTime[c] >= TicketIssuedAt[t]
-       /\ SenderCommitTime[c] < TicketExpiresAt[t]
+SenderCommitWithinRequestWindow ==
+  \A c \in CommittedCredits :
+    /\ RequestValidAt(payment[c].request, payment[c].commitTime)
+    /\ payment[c].commitTime = CreditCommitTime[c]
+    /\ payment[c].request = CreditRequest[c]
 
-AcceptanceIntentTicketBinding ==
-  /\ \A t \in TicketIds :
-       /\ CASE ticket[t].intentState = "Absent" ->
-                 /\ ticket[t].state = "Absent"
-                 /\ ticket[t].exactAmount = 0
-            [] ticket[t].intentState = "Offered" ->
-                 ticket[t].state = "Absent"
-            [] ticket[t].intentState = "Authorized" ->
-                 /\ ticket[t].state = "Absent"
-                 /\ AcceptanceIntentAuthorizationBound(t)
-            [] ticket[t].intentState = "Ticketed" ->
-                 ticket[t].state \in
-                   {"Reserved", "Locked", "Consumed", "RecoveryPending"}
-            [] ticket[t].intentState = "ClosedNoCommit" ->
-                 ticket[t].state = "Released"
-            [] OTHER -> FALSE
-       /\ (ticket[t].intentState # "Absent") =>
-            /\ ticket[t].intentId = TicketIntent[t]
-            /\ ticket[t].intentRequest = TicketRequest[t]
-            /\ ticket[t].intentDigest = ticket[t].intentId
-            /\ ticket[t].exactAmount = IntentAmount[ticket[t].intentId]
-            /\ ticket[t].exactAmount =
-                 RequestAmount[ticket[t].intentRequest]
-            /\ ticket[t].senderCommitment =
-                 RandomSenderCommitment(
-                   ticket[t].intentId, ticket[t].intentSender)
-            /\ ticket[t].intentSender #
-                 RequestOwner[ticket[t].intentRequest]
-  /\ \A t1 \in TicketIds, t2 \in TicketIds :
-       /\ ticket[t1].intentState # "Absent"
-       /\ ticket[t2].intentState # "Absent"
-       /\ ticket[t1].intentId = ticket[t2].intentId
-       => t1 = t2
+PaymentsBindExactRequests ==
+  \A c \in CommittedCredits :
+    /\ payment[c].amount = RequestAmount[payment[c].request]
+    /\ payment[c].amount > 0
+    /\ payment[c].recipient = RequestRecipient[payment[c].request]
+    /\ PaymentV1(c).requestDigest = RequestDigest(payment[c].request)
 
-AcceptanceIntentAuthorizationGate ==
-  /\ \A t \in TicketIds :
-       ticket[t].intentState \in
-         {"Authorized", "Ticketed", "ClosedNoCommit"} =>
-           /\ AcceptanceIntentAuthorizationBound(t)
-           /\ ticket[t].authorizationProfile =
-                IntentAuthorizationProfile[ticket[t].intentId]
-  /\ \A t \in TicketIds :
-       ticket[t].intentState = "Offered" =>
-         ticket[t].authorizationPolicyEpoch = 0
-  /\ ticket[ModelTicket3].intentState \in
-       {"Authorized", "Ticketed", "ClosedNoCommit"} =>
-         ticket[ModelTicket3].authorizationProfile #
-           TicketProfile[ModelTicket3]
-
-MintAuthorizationIsPreDebitAndAcyclic ==
-  \A d \in Devices, amount \in 1..MaxAmount :
-    /\ MintAuthorizationShape(d, amount)
-    /\ MintAuthorizationStatement(d, amount).creditBinding =
-         MintCreditBinding(d, amount)
-    /\ MintAuthorizationStatement(d, amount).creditBinding.creditCommitment =
-         MintCreditCommitment(d, amount)
-
-TerminalCertificateConstructionIsSelfFree ==
-  \A c \in paymentEvidence.committed :
-    LET body == PaymentTerminalCertificateBody(c)
-        bodyDigest == PaymentTerminalCertificateBodyDigest(c)
-        certificateId == PaymentTerminalCertificateId(c)
-        certificate == PaymentCommitCertificate(c)
-    IN /\ DOMAIN body =
-             {"canonicalFieldOrder", "candidateDigest",
-              "lifecycleBindingDigest", "commitEvidence"}
-       /\ body.canonicalFieldOrder = TerminalBodyFieldOrder
-       /\ "terminalCertificateId" \notin DOMAIN body
-       /\ certificate.terminalBody = body
-       /\ certificate.terminalBodyDigest = bodyDigest
-       /\ certificate.terminalCertificateId = certificateId
-       /\ certificateId.terminalCertificateId = bodyDigest
-
-ExpiryAloneNeverReclaims ==
-  \A t \in paymentEvidence.expiredTickets :
-    \/ /\ t \notin paymentEvidence.noCommitClosures
-       /\ ticket[t].state \in
-            {"Reserved", "Locked", "Consumed", "RecoveryPending"}
-    \/ /\ t \in paymentEvidence.noCommitClosures
-       /\ ticket[t].state = "Released"
-
-AuthenticatedNoCommitRecoveryIntegrity ==
-  /\ paymentEvidence.noCommitClosures
-       \subseteq paymentEvidence.noCommitRecovery
-  /\ \A t \in
-       (paymentEvidence.noCommitRecovery \ paymentEvidence.noCommitClosures) :
-       /\ ticket[t].state = "RecoveryPending"
-       /\ ticket[t].intentState = "Ticketed"
-       /\ t \in ReservedTicketsFor(RequestOwner[TicketRequest[t]])
-       /\ ticket[t].intentPredecessor \notin spentPredecessors
-       /\ \A c \in paymentEvidence.committed : PaymentTicket[c] # t
-  /\ \A t \in paymentEvidence.noCommitClosures :
-       /\ ticket[t].state = "Released"
-       /\ ticket[t].intentState = "ClosedNoCommit"
-       /\ \A c \in paymentEvidence.committed : PaymentTicket[c] # t
-  /\ \A t \in TicketIds :
-       ticket[t].state = "Released" <=>
-         t \in paymentEvidence.noCommitClosures
-  /\ \A t \in TicketIds :
-       ticket[t].state = "Consumed" =>
-         t \notin paymentEvidence.noCommitRecovery
-
-CapacityReservationsHold ==
-  /\ \A d \in Devices : InboxUse(d) <= InboxCapacity
-  /\ \A d \in Devices : OutboxUse(d) <= OutboxCapacity
-
-PaymentsMatchExactTicketAmount ==
+HardwareAuthorityIsRecursive ==
   \A c \in CreditIds :
-    payment[c].phase # "Idle" =>
-      LET t == PaymentTicket[c]
-      IN /\ PaymentAmountAllowed(t, payment[c].amount)
-         /\ payment[c].amount = ticket[t].exactAmount
-         /\ payment[c].sender = ticket[t].intentSender
-         /\ payment[c].predecessor = ticket[t].intentPredecessor
+    payment[c].phase \in {"Proofed", "Canonical", "Exposed", "Staged", "Folded"}
+      => /\ payment[c].hardwareCertificate
+         /\ payment[c].recursiveProof
+         /\ GuardBundleValid(c)
 
-TicketAmountsAreExactPositive ==
-  /\ RequestAmount \in [RequestIds -> 1..MaxAmount]
-  /\ \A i \in IntentIds :
-       IntentAmount[i] = RequestAmount[IntentRequest[i]]
-  /\ \A t \in TicketIds :
-       ticket[t].intentState # "Absent" =>
-         /\ ticket[t].exactAmount > 0
-         /\ ticket[t].exactAmount =
-              RequestAmount[TicketRequest[t]]
-         /\ ticket[t].exactAmount =
-              PublicAcceptanceIntent(t).exactAmount
-         /\ ticket[t].exactAmount =
-              PublicAcceptanceTicket(t).exactAmount
-  /\ \A t \in {ModelTicket1, ModelTicket2, ModelTicket3, ModelTicket4} :
-       TicketRequest[t] = ModelRequest1
+EveryTransitionWasPrepared ==
+  \A t \in transitionLog : preparedHead[t.operation] = t.before
 
-ConservationMakesStagedCreditsFoldable ==
+ExactNextNonForking ==
+  /\ consumedHeads = {t.before : t \in transitionLog}
+  /\ \A h \in consumedHeads :
+       Cardinality({t \in transitionLog : t.before = h}) = 1
+  /\ \A op \in OperationKeys :
+       Cardinality({t \in transitionLog : t.operation = op}) <= 1
+  /\ \A t \in transitionLog :
+       /\ t.before.deviceLane = t.device
+       /\ t.after.deviceLane = t.device
+       /\ IF t.kind = "Rotate"
+            THEN t.after = RotationSuccessor(t.before)
+            ELSE t.after = NormalSuccessor(t.before)
+
+SenderSplitIsConservative ==
+  \A c \in CommittedCredits :
+    /\ payment[c].beforeBalance >= payment[c].amount
+    /\ payment[c].afterBalance =
+         payment[c].beforeBalance - payment[c].amount
+    /\ payment[c].after = NormalSuccessor(payment[c].before)
+
+AcknowledgementsFollowDurableStaging ==
   \A c \in CreditIds :
-    payment[c].creditState = "Staged" =>
-      LET d == PaymentRecipient(c)
-      IN /\ balance[d] + payment[c].amount <= OfflineLiability
-         /\ OfflineLiability = reserve
-         /\ reserve <= MaxAmount
+    /\ (payment[c].durableAck # NoAck) =
+         (payment[c].phase \in {"Staged", "Folded"})
+    /\ payment[c].durableAck # NoAck =>
+         /\ payment[c].durableAck = c
+         /\ payment[c].acceptedEnvelope = c
+         /\ AcknowledgementV1(c).requestDigest =
+              RequestDigest(payment[c].request)
+         /\ AcknowledgementV1(c).paymentDigest = c
 
-StagedCreditsRemainValueFoldable ==
-  \A c \in CreditIds :
-    payment[c].creditState = "Staged" => StagedCreditCanEnterFold(c)
+ExactDuplicateReturnsSameDurableAcknowledgement ==
+  \A c \in duplicateAckCredits :
+    /\ payment[c].phase \in {"Staged", "Folded"}
+    /\ payment[c].acceptedEnvelope = c
+    /\ payment[c].durableAck = c
 
-SameIdDifferentDigestConflictsAreRejected ==
-  \A conflict \in paymentEvidence.conflicts :
+SameIdDifferentBytesAreRejected ==
+  \A conflict \in conflictingDeliveries :
     LET c == conflict.creditId
-    IN /\ conflict.ticketId = PaymentTicket[c]
-       /\ conflict.digest \in DigestValues
-       /\ conflict.digest # CanonicalEnvelopeDigest(c)
-       /\ c \in paymentEvidence.canonical
-       /\ PublicPayment(c).amountCiphertextCommitment =
-            CanonicalEnvelopeDigest(c)
+    IN /\ conflict.digest = ConflictingDigest
+       /\ conflict.digest # c
+       /\ payment[c].outboxEnvelope = c
+       /\ payment[c].acceptedEnvelope # ConflictingDigest
+       /\ payment[c].durableAck # ConflictingDigest
 
-TicketReservationIntegrity ==
-  \A t \in TicketIds :
-    /\ (ticket[t].state = "Locked") =>
-         LET c == ticket[t].boundCredit
-         IN /\ PaymentTicket[c] = t
-            /\ payment[c].phase \in
-                 {"Prepared", "Candidate", "HardwareCommitted",
-                  "WrapperGenerated", "Installed", "Exposed", "Recovery"}
-            /\ payment[c].creditState \in
-                 {"Absent", "Committed", "Available"}
-    /\ (ticket[t].state = "Consumed") =>
-         LET c == ticket[t].boundCredit
-         IN /\ PaymentTicket[c] = t
-            /\ c \in paymentEvidence.committed
-            /\ payment[c].phase \in {"Exposed", "Recovery"}
-            /\ payment[c].creditState \in {"Staged", "Consumed"}
-    /\ (ticket[t].state = "RecoveryPending") =>
-         /\ t \in paymentEvidence.noCommitRecovery
-         /\ t \notin paymentEvidence.noCommitClosures
-         /\ \A c \in paymentEvidence.committed : PaymentTicket[c] # t
-         /\ \/ NoPaymentStartedForTicket(t)
-            \/ CancelledBoundPayment(t)
-    /\ (ticket[t].state = "Released") =>
-         /\ t \in paymentEvidence.noCommitClosures
-         /\ ticket[t].intentState = "ClosedNoCommit"
-         /\ \A c \in paymentEvidence.committed : PaymentTicket[c] # t
+NoCountBasedReceiveRejection ==
+  \A c \in CreditIds :
+    payment[c].phase = "Staged" => ReceiveCreditSemanticallyValid(c)
 
-TicketsAreOneUse ==
-  \A c1 \in paymentEvidence.committed,
-     c2 \in paymentEvidence.committed :
-    PaymentTicket[c1] = PaymentTicket[c2] => c1 = c2
-
-CommittedOperationsUseOnePredecessor ==
-  /\ \A c \in paymentEvidence.committed :
-       payment[c].predecessor \in spentPredecessors
-  /\ \A v \in redemptionEvidence.committed :
-       redemption[v].predecessor \in spentPredecessors
-  /\ \A c1 \in paymentEvidence.committed,
-         c2 \in paymentEvidence.committed :
-       payment[c1].predecessor = payment[c2].predecessor => c1 = c2
-  /\ \A v1 \in redemptionEvidence.committed,
-         v2 \in redemptionEvidence.committed :
-       redemption[v1].predecessor = redemption[v2].predecessor => v1 = v2
-  /\ \A c \in paymentEvidence.committed,
-         v \in redemptionEvidence.committed :
-       payment[c].predecessor # redemption[v].predecessor
+ReceiveFoldUsesReplayNonmembership ==
+  /\ \A c \in FoldedCredits : c \in device[CreditRecipient[c]].replayRoot
+  /\ \A t \in {x \in transitionLog : x.kind = "ReceiveFold"} :
+       /\ t.afterReplayRoot = t.beforeReplayRoot \cup {t.operation[2]}
+       /\ t.operation[2] \notin t.beforeReplayRoot
+  /\ \A d \in Devices :
+       device[d].replayRoot =
+         {c \in FoldedCredits : CreditRecipient[c] = d}
 
 CommittedPaymentsRemainReceivable ==
-  \A c \in paymentEvidence.committed :
-    LET t == PaymentTicket[c]
-    IN CASE payment[c].creditState = "Committed" ->
-              /\ c \in paymentEvidence.sealed
-              /\ c \in paymentEvidence.candidates
-              /\ payment[c].outboxState = "Committed"
-              /\ ticket[t].state = "Locked"
-              /\ ticket[t].boundCredit = c
-              /\ \/ payment[c].phase \in
-                       {"HardwareCommitted", "WrapperGenerated", "Installed"}
-                 \/ /\ payment[c].phase = "Recovery"
-                    /\ payment[c].recoveryFrom \in
-                         {"HardwareCommitted", "WrapperGenerated", "Installed"}
-         [] payment[c].creditState = "Available" -> CanStage(c)
-         [] payment[c].creditState = "Staged" ->
-              /\ ticket[t].state = "Consumed"
-              /\ ticket[t].boundCredit = c
-              /\ c \in paymentEvidence.canonical
-              /\ c \in paymentEvidence.exposed
-              /\ c \in paymentEvidence.inbox
-              /\ c \in paymentEvidence.acknowledgements
-              /\ StagedCreditCanEnterFold(c)
-         [] payment[c].creditState = "Consumed" ->
-              /\ ticket[t].state = "Consumed"
-              /\ ticket[t].boundCredit = c
-              /\ c \in paymentEvidence.canonical
-              /\ c \in paymentEvidence.exposed
-              /\ c \in paymentEvidence.inbox
-              /\ c \in paymentEvidence.acknowledgements
-         [] OTHER -> FALSE
+  \A c \in CommittedCredits :
+    CASE payment[c].phase = "HardwareCommitted" ->
+           /\ payment[c].hardwareCertificate
+           /\ payment[c].outboxRetained
+      [] payment[c].phase = "Proofed" ->
+           /\ payment[c].recursiveProof
+           /\ payment[c].outboxRetained
+      [] payment[c].phase = "Canonical" ->
+           /\ payment[c].outboxEnvelope = c
+           /\ payment[c].outboxRetained
+      [] payment[c].phase = "Exposed" -> PaymentStageEligible(c)
+      [] payment[c].phase = "Staged" ->
+           /\ payment[c].acceptedEnvelope = c
+           /\ payment[c].durableAck = c
+           /\ c \notin device[CreditRecipient[c]].replayRoot
+      [] payment[c].phase = "Folded" ->
+           /\ payment[c].acceptedEnvelope = c
+           /\ payment[c].durableAck = c
+           /\ c \in device[CreditRecipient[c]].replayRoot
+      [] OTHER -> FALSE
 
-CommittedRedemptionsRemainRecoverable ==
-  \A v \in redemptionEvidence.committed :
-    /\ v \in redemptionEvidence.sealed
-    /\ v \in redemptionEvidence.candidates
-    /\ CASE redemption[v].voucherState = "Pending" ->
-              /\ redemption[v].outboxState = "Committed"
-              /\ \/ redemption[v].phase \in
-                       {"HardwareCommitted", "WrapperGenerated",
-                        "Installed", "Exposed"}
-                 \/ /\ redemption[v].phase = "Recovery"
-                    /\ redemption[v].recoveryFrom \in
-                         {"HardwareCommitted", "WrapperGenerated",
-                          "Installed", "Exposed"}
-          [] redemption[v].voucherState = "Applied" ->
-              /\ \/ redemption[v].phase = "Exposed"
-                 \/ /\ redemption[v].phase = "Recovery"
-                    /\ redemption[v].recoveryFrom = "Exposed"
-              /\ redemption[v].outboxState = "Released"
-              /\ v \in redemptionEvidence.canonical
-              /\ v \in redemptionEvidence.exposed
-              /\ v \in redemptionEvidence.consumedNullifiers
-          [] OTHER -> FALSE
+OutboxNeverFreezesSenderRemainder ==
+  \A c \in CommittedCredits :
+    /\ payment[c].afterBalance =
+         payment[c].beforeBalance - payment[c].amount
+    /\ payment[c].outboxRetained => payment[c].after # NoState
 
-CanonicalArtifactsWereHardwareCommitted ==
-  /\ paymentEvidence.wrappers \subseteq
-       (paymentEvidence.candidates \cap paymentEvidence.committed)
-  /\ paymentEvidence.canonical \subseteq paymentEvidence.wrappers
-  /\ paymentEvidence.exposed \subseteq paymentEvidence.canonical
-  /\ redemptionEvidence.wrappers \subseteq
-       (redemptionEvidence.candidates \cap redemptionEvidence.committed)
-  /\ redemptionEvidence.canonical \subseteq redemptionEvidence.wrappers
-  /\ redemptionEvidence.exposed \subseteq redemptionEvidence.canonical
+MintRequiresFinalityAndAuthorization ==
+  \A m \in MintIds :
+    mint[m].state # "Absent" =>
+      /\ mint[m].amount > 0
+      /\ mint[m].authorizationVerified
+      /\ mint[m].finalityVerified
 
-LifecycleBindingsAreComplete ==
-  /\ \A c \in paymentEvidence.committed :
-       /\ DOMAIN PaymentLifecycleBinding(c) = LifecycleBindingFields
-       /\ PaymentCandidateRecord(c).candidateDigest = c
-       /\ PaymentCandidateRecord(c).lifecycleBinding =
-            PaymentLifecycleBinding(c)
-       /\ PaymentCandidateRecord(c).privateIntentOpening =
-            [intentId |-> ticket[PaymentTicket[c]].intentId,
-             sender |-> ticket[PaymentTicket[c]].intentSender,
-             predecessor |-> ticket[PaymentTicket[c]].intentPredecessor]
-       /\ PaymentCommitCertificate(c).terminalBody.candidateDigest =
-            PaymentCandidateRecord(c).candidateDigest
-       /\ PaymentEnvelopeRecord(c).candidateDigest =
-            PaymentCandidateRecord(c).candidateDigest
-       /\ PaymentEnvelopeRecord(c).publicPayment = PublicPayment(c)
-  /\ \A v \in redemptionEvidence.committed :
-       DOMAIN RedemptionLifecycleBinding(v) =
-         {"networkId", "protocolVersion", "suiteId", "vkDigest", "assetId",
-          "assetIncarnation", "assetScale", "hardwareProfileId",
-          "policyEpoch", "laneCommitment", "hardwareEpoch", "operationKind",
-          "voucherId", "ciphertextDigest", "predecessorStateHead",
-          "successorStateHead"}
+RedemptionSplitsAreFullOrPartial ==
+  \A v \in VoucherIds :
+    redemption[v].phase # "Absent" =>
+      /\ redemption[v].amount > 0
+      /\ redemption[v].beforeBalance >= redemption[v].amount
+      /\ redemption[v].afterBalance =
+           redemption[v].beforeBalance - redemption[v].amount
+      /\ redemption[v].after = NormalSuccessor(redemption[v].before)
 
-PublicPaymentTranscriptBoundary ==
-  \A c \in paymentEvidence.exposed :
-    LET t == PaymentTicket[c]
-        forbidden ==
-          {"sender", "intentPredecessor", "laneCommitment", "hardwareEpoch",
-           "predecessorStateHead", "successorStateHead", "issuedAt",
-           "expiresAt", "deadline", "commitTime", "leaseId",
-           "authorizationCounter", "clockEpoch"}
-    IN /\ DOMAIN PublicPayment(c) = AllowedPublicPaymentFields
-       /\ DOMAIN PublicAcceptanceIntent(t) =
-            {"requestId", "intentId", "exactAmount", "senderCommitment"}
-       /\ DOMAIN PublicAcceptanceTicket(t) =
-            {"requestId", "acceptanceTicketId", "intentDigest", "exactAmount"}
-       /\ forbidden \cap DOMAIN PublicPayment(c) = {}
-       /\ forbidden \cap DOMAIN PublicAcceptanceIntent(t) = {}
-       /\ forbidden \cap DOMAIN PublicAcceptanceTicket(t) = {}
-       /\ PublicAcceptanceTicket(t).intentDigest =
-            PublicAcceptanceIntent(t).intentId
-       /\ PublicAcceptanceTicket(t).exactAmount = payment[c].amount
-       /\ PublicPayment(c).commitEvidence = c
-
-PostCommitArtifactIdentityIsStable ==
-  /\ \A c \in paymentEvidence.committed :
-       /\ (payment[c].phase = "WrapperGenerated"
-             \/ (payment[c].phase = "Recovery"
-                   /\ payment[c].recoveryFrom = "WrapperGenerated"))
-            => c \in paymentEvidence.wrappers
-       /\ (payment[c].phase = "Installed"
-             \/ (payment[c].phase = "Recovery"
-                   /\ payment[c].recoveryFrom = "Installed"))
-            => c \in paymentEvidence.canonical
-       /\ (payment[c].phase = "Exposed"
-             \/ (payment[c].phase = "Recovery"
-                   /\ payment[c].recoveryFrom = "Exposed"))
-            => c \in paymentEvidence.exposed
-  /\ \A v \in redemptionEvidence.committed :
-       /\ (redemption[v].phase = "WrapperGenerated"
-             \/ (redemption[v].phase = "Recovery"
-                   /\ redemption[v].recoveryFrom = "WrapperGenerated"))
-            => v \in redemptionEvidence.wrappers
-       /\ (redemption[v].phase = "Installed"
-             \/ (redemption[v].phase = "Recovery"
-                   /\ redemption[v].recoveryFrom = "Installed"))
-            => v \in redemptionEvidence.canonical
-       /\ (redemption[v].phase = "Exposed"
-             \/ (redemption[v].phase = "Recovery"
-                   /\ redemption[v].recoveryFrom = "Exposed"))
-            => v \in redemptionEvidence.exposed
-
-QualifiedHardwareOnly ==
-  /\ \A t \in TicketIds :
-       ticket[t].intentState \in
-         {"Authorized", "Ticketed", "ClosedNoCommit"} =>
-         /\ HardwareQualified[ticket[t].authorizationProfile]
-         /\ NoSoftwareFallback[ticket[t].authorizationProfile]
-         /\ ticket[t].authorizationPolicyEpoch > 0
-  /\ \A t \in TicketIds :
-       ticket[t].state # "Absent" =>
-         /\ HardwareQualified[TicketProfile[t]]
-         /\ NoSoftwareFallback[TicketProfile[t]]
-         /\ ticket[t].policyEpoch > 0
-  /\ \A c \in CreditIds :
-       payment[c].phase # "Idle" =>
-         /\ HardwareQualified[PaymentProfile[c]]
-         /\ NoSoftwareFallback[PaymentProfile[c]]
-         /\ payment[c].policyEpoch > 0
+AppliedRedemptionNullifiersAreUnique ==
+  /\ totalRedemptions <= totalTopups
   /\ \A v \in VoucherIds :
-       redemption[v].phase # "Idle" =>
-         /\ HardwareQualified[RedemptionProfile[v]]
-         /\ NoSoftwareFallback[RedemptionProfile[v]]
-         /\ redemption[v].policyEpoch > 0
+       redemption[v].phase = "Applied" =>
+         /\ redemption[v].recursiveProof
+         /\ redemption[v].outboxEnvelope = v
+         /\ ~redemption[v].outboxRetained
 
-ExactlyOneActiveSuite ==
-  Cardinality({s \in SuiteIds : suiteState[s] = "Active"}) = 1
+RotationCarriesCompleteState ==
+  \A t \in {x \in transitionLog : x.kind = "Rotate"} :
+    /\ t.afterBalance = t.beforeBalance
+    /\ t.afterReplayRoot = t.beforeReplayRoot
+    /\ t.after = RotationSuccessor(t.before)
+
+PublicStateAndProofShapeIsHistoryIndependent ==
+  /\ \A d \in Devices :
+       DOMAIN OpaqueStateCommitment(StateHead(d), device[d].balance) = 1..3
+  /\ \A c \in {x \in CreditIds : payment[x].phase \in
+                    {"Proofed", "Canonical", "Exposed", "Staged", "Folded"}} :
+       PaymentV1(c).recursiveProof = <<"paired-pasta-proof", c>>
+
+CumulativeEvidenceStep ==
+  /\ consumedHeads \subseteq consumedHeads'
+  /\ transitionLog \subseteq transitionLog'
+  /\ conflictingDeliveries \subseteq conflictingDeliveries'
+  /\ duplicateAckCredits \subseteq duplicateAckCredits'
+  /\ senderObservedAcks \subseteq senderObservedAcks'
+  /\ \A c \in CreditIds :
+       payment[c].phase # "Absent" => payment'[c].phase # "Absent"
+  /\ \A c \in CreditIds :
+       c \in device[CreditRecipient[c]].replayRoot =>
+         c \in device'[CreditRecipient[c]].replayRoot
+
+CumulativeEvidenceNeverShrinks == [] [CumulativeEvidenceStep]_vars
+
+PostCommitArtifactStep ==
+  /\ \A c \in CreditIds :
+       payment[c].outboxEnvelope # NoDigest =>
+         payment'[c].outboxEnvelope = payment[c].outboxEnvelope
+  /\ \A c \in CreditIds :
+       payment[c].durableAck # NoAck =>
+         payment'[c].durableAck = payment[c].durableAck
+  /\ \A c \in CreditIds :
+       payment[c].acceptedEnvelope # NoDigest =>
+         payment'[c].acceptedEnvelope = payment[c].acceptedEnvelope
+  /\ \A v \in VoucherIds :
+       redemption[v].outboxEnvelope # NoDigest =>
+         redemption'[v].outboxEnvelope = redemption[v].outboxEnvelope
+
+PostCommitArtifactsNeverChange == [] [PostCommitArtifactStep]_vars
 
 =============================================================================

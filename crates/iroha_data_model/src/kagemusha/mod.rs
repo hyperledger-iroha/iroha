@@ -1,15 +1,16 @@
-//! Canonical Kagemusha V1 wire and authenticated release data model.
+//! Canonical KAGEMUSHA V1 wire and authenticated release data model.
 //!
-//! Kagemusha V1 is the sole public hardware-backed cash protocol. Its public model
+//! KAGEMUSHA V1 is the sole public hardware-backed cash protocol. Its public model
 //! contains only aggregate-balance state, hardware-bound proofs, and pooled
 //! reserve settlement.
 
+pub mod kagemusha_device_v1;
 pub mod kagemusha_release_v1;
 pub mod kagemusha_v1;
 
-pub use self::{kagemusha_release_v1::*, kagemusha_v1::*};
+pub use self::{kagemusha_device_v1::*, kagemusha_release_v1::*, kagemusha_v1::*};
 
-/// Prefix embedded into Kagemusha V1 instruction rejection messages.
+/// Prefix embedded into KAGEMUSHA V1 instruction rejection messages.
 ///
 /// Torii extracts the label following this prefix as a stable machine-readable
 /// error code.

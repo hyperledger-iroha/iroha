@@ -150,9 +150,21 @@ def _atomicity_evidence(peer_index: int, participants: int) -> bytes:
         "staged_pool_heads",
         "staged_nullifiers",
         "staged_output_commitments",
+        "replicated_staged_locks",
         "staged_locks",
     )
     baseline = {name: 0 for name in count_names}
+    prepared = dict(baseline)
+    prepared["replicated_staged_locks"] = 1 + participants * 9
+    if peer_index >= MODULE.GLOBAL_VALIDATORS:
+        prepared.update(
+            {
+                "staged_pool_heads": 1,
+                "staged_nullifiers": 2,
+                "staged_output_commitments": 3,
+                "staged_locks": 6,
+            }
+        )
     final = dict(baseline)
     final.update(
         {
@@ -165,12 +177,37 @@ def _atomicity_evidence(peer_index: int, participants: int) -> bytes:
         }
     )
     observations = []
+    empty_replicated_staged = _iroha_hash_literal("4" * 64)
+    prepared_replicated_staged = _iroha_hash_literal("5" * 64)
     empty_staged = _iroha_hash_literal("3" * 64)
-    for index, (counts, ledger) in enumerate(
+    prepared_staged = (
+        _iroha_hash_literal(
+            f"{7 + (peer_index - MODULE.GLOBAL_VALIDATORS) // MODULE.VALIDATORS_PER_DATASPACE:02X}"
+            * 32
+        )
+        if peer_index >= MODULE.GLOBAL_VALIDATORS
+        else empty_staged
+    )
+    for index, (counts, ledger, replicated_staged, staged) in enumerate(
         (
-            (baseline, _iroha_hash_literal("1" * 64)),
-            (baseline, _iroha_hash_literal("1" * 64)),
-            (final, _iroha_hash_literal("2" * 64)),
+            (
+                baseline,
+                _iroha_hash_literal("1" * 64),
+                empty_replicated_staged,
+                empty_staged,
+            ),
+            (
+                prepared,
+                _iroha_hash_literal("1" * 64),
+                prepared_replicated_staged,
+                prepared_staged,
+            ),
+            (
+                final,
+                _iroha_hash_literal("2" * 64),
+                empty_replicated_staged,
+                empty_staged,
+            ),
         )
     ):
         response = json.dumps(
@@ -181,7 +218,8 @@ def _atomicity_evidence(peer_index: int, participants: int) -> bytes:
                     f"{peer_index + index + 4:02X}" * 32
                 ),
                 "ledger_commitment": ledger,
-                "staged_lock_commitment": empty_staged,
+                "replicated_staged_lock_commitment": replicated_staged,
+                "staged_lock_commitment": staged,
                 "counts": counts,
             },
             sort_keys=True,
@@ -197,12 +235,18 @@ def _atomicity_evidence(peer_index: int, participants: int) -> bytes:
                     f"{peer_index + index + 4:02X}" * 32
                 ),
                 "ledger_commitment": ledger,
-                "staged_lock_commitment": empty_staged,
+                "replicated_staged_lock_commitment": replicated_staged,
+                "staged_lock_commitment": staged,
                 "counts": counts,
             }
         )
     return json.dumps(
-        {"version": 1, "peer_index": peer_index, "observations": observations},
+        {
+            "version": 1,
+            "peer_index": peer_index,
+            "registered": observations[1],
+            "observations": observations,
+        },
         sort_keys=True,
         separators=(",", ":"),
     ).encode()
@@ -237,8 +281,18 @@ def leakage_payload(job: dict[str, Any], evidence: Path) -> dict[str, Any]:
     peer_count = 16
     variant_marker = b"L" if job.get("variant", "left") == "left" else b"R"
     torii_ports = list(range(20_000, 20_000 + peer_count))
-    public_ports = list(range(30_000, 30_004))
-    restricted_ports = list(range(40_000, 40_012))
+    participant_visibilities = MODULE.canonical_participant_visibilities(
+        MODULE.PRIMARY_PARTICIPANTS
+    )
+    public_peer_count = (
+        1
+        + participant_visibilities.count(MODULE.PUBLIC_PARTICIPANT_VISIBILITY)
+    ) * MODULE.VALIDATORS_PER_DATASPACE
+    restricted_peer_count = participant_visibilities.count(
+        MODULE.RESTRICTED_PARTICIPANT_VISIBILITY
+    ) * MODULE.VALIDATORS_PER_DATASPACE
+    public_ports = list(range(30_000, 30_000 + public_peer_count))
+    restricted_ports = list(range(40_000, 40_000 + restricted_peer_count))
     request_packet = _ethernet_ipv4_tcp(50_000, torii_ports[0])
     response_packet = _ethernet_ipv4_tcp(torii_ports[0], 50_000)
     public_packet = _ethernet_ipv4_tcp(public_ports[0], 50_001)
@@ -786,7 +840,13 @@ def _consensus_carrier_occurrence(
     }
 
 
-def _state_counts(participants: int, *, finalized: bool, staged: bool = False) -> dict[str, int]:
+def _state_counts(
+    participants: int,
+    *,
+    finalized: bool,
+    replicated_staged: bool = False,
+    local_staged: bool = False,
+) -> dict[str, int]:
     counts = {field: 0 for field in MODULE.FAULT_STATE_COUNT_FIELDS}
     counts.update({"governance": participants, "pools": participants})
     if finalized:
@@ -800,13 +860,15 @@ def _state_counts(participants: int, *, finalized: bool, staged: bool = False) -
                 "receipts": 1,
             }
         )
-    if staged:
+    if replicated_staged:
+        counts["replicated_staged_locks"] = 1 + participants * 9
+    if local_staged:
         counts.update(
             {
-                "staged_pool_heads": participants,
-                "staged_nullifiers": participants * 2,
-                "staged_output_commitments": participants * 3,
-                "staged_locks": participants,
+                "staged_pool_heads": 1,
+                "staged_nullifiers": 2,
+                "staged_output_commitments": 3,
+                "staged_locks": 6,
             }
         )
     return counts
@@ -818,18 +880,29 @@ def _state_observation(
     *,
     label: str,
     finalized: bool,
+    full_locks: bool,
 ) -> dict[str, Any]:
-    nonfinalized = label == "nonfinalized"
-    ledger = ("4" if finalized else "1") * 64
-    staged = ("3" if nonfinalized else "2") * 64
+    replicated_staged = label == "nonfinalized" and full_locks
+    local_staged = replicated_staged and peer_index >= MODULE.GLOBAL_VALIDATORS
+    ledger = _iroha_hash_literal(("4" if finalized else "1") * 64)
+    replicated_staged_commitment = _iroha_hash_literal(
+        ("5" if replicated_staged else "6") * 64
+    )
+    staged_commitment = _iroha_hash_literal(
+        ("3" if local_staged else "2") * 64
+    )
     response = {
         "format_version": 1,
         "height": 10 + (1 if finalized else 0),
-        "commitment": f"{(peer_index % 9) + 1:064x}",
+        "commitment": _iroha_hash_literal(f"{(peer_index % 9) + 1:064X}"),
         "ledger_commitment": ledger,
-        "staged_lock_commitment": staged,
+        "replicated_staged_lock_commitment": replicated_staged_commitment,
+        "staged_lock_commitment": staged_commitment,
         "counts": _state_counts(
-            participants, finalized=finalized, staged=nonfinalized
+            participants,
+            finalized=finalized,
+            replicated_staged=replicated_staged,
+            local_staged=local_staged,
         ),
     }
     response_bytes = MODULE.canonical_bytes(response)
@@ -837,8 +910,45 @@ def _state_observation(
         "peer_index": peer_index,
         "response_sha256": MODULE.hashlib.sha256(response_bytes).hexdigest(),
         "response_hex": response_bytes.hex(),
-        **{field: response[field] for field in ("height", "commitment", "ledger_commitment", "staged_lock_commitment", "counts")},
+        **{
+            field: response[field]
+            for field in (
+                "height",
+                "commitment",
+                "ledger_commitment",
+                "replicated_staged_lock_commitment",
+                "staged_lock_commitment",
+                "counts",
+            )
+        },
     }
+
+
+def _rewrite_state_observation(
+    observation: dict[str, Any], **changes: Any
+) -> None:
+    """Rewrite a bound state response and its public projection in place."""
+
+    response = json.loads(bytes.fromhex(observation["response_hex"]).decode())
+    response.update(copy.deepcopy(changes))
+    response_bytes = MODULE.canonical_bytes(response)
+    observation.update(
+        {
+            "response_sha256": MODULE.hashlib.sha256(response_bytes).hexdigest(),
+            "response_hex": response_bytes.hex(),
+            **{
+                field: copy.deepcopy(response[field])
+                for field in (
+                    "height",
+                    "commitment",
+                    "ledger_commitment",
+                    "replicated_staged_lock_commitment",
+                    "staged_lock_commitment",
+                    "counts",
+                )
+            },
+        }
+    )
 
 
 def write_fault_evidence(
@@ -858,9 +968,11 @@ def write_fault_evidence(
         "sidecar_fsync": "after_private_settlement_sidecar_fsync",
         "staged_delta_fsync": "after_private_settlement_staged_delta_fsync",
         "prepare_qc": "after_private_settlement_prepare_qc_fsync",
+        "prepare_registration_kura_append": "after_private_settlement_kura_append",
+        "prepare_registration_wsv_application": "after_private_settlement_wsv_application",
         "commit_qc": "after_private_settlement_commit_qc_fsync",
-        "kura_append": "after_private_settlement_kura_append",
-        "wsv_application": "after_private_settlement_wsv_application",
+        "finalization_kura_append": "after_private_settlement_kura_append",
+        "finalization_wsv_application": "after_private_settlement_wsv_application",
         "receipt_publication": "after_private_settlement_receipt_publication",
     }
     total_checks = 0
@@ -992,10 +1104,17 @@ def write_fault_evidence(
                 )
                 revision += 1
             else:
-                phase = crash_phases[trial["boundary"]]
-                target_peer = 0 if index in {4, 5} else 4
+                boundary = trial["boundary"]
+                phase = crash_phases[boundary]
+                global_boundary = boundary in {
+                    "prepare_registration_kura_append",
+                    "prepare_registration_wsv_application",
+                    "finalization_kura_append",
+                    "finalization_wsv_application",
+                }
+                target_peer = 0 if global_boundary else 4
                 restart_type = (
-                    "global_restart" if index in {4, 5} else "validator_restart"
+                    "global_restart" if global_boundary else "validator_restart"
                 )
                 cut = {
                     "version": 1,
@@ -1018,7 +1137,13 @@ def write_fault_evidence(
                     )
                 )
                 revision += 1
-                if index >= 4:
+                if boundary in {
+                    "prepare_registration_kura_append",
+                    "prepare_registration_wsv_application",
+                    "finalization_kura_append",
+                    "finalization_wsv_application",
+                    "receipt_publication",
+                }:
                     expected_after_state = "finalized"
             controls.append(
                 {
@@ -1033,6 +1158,13 @@ def write_fault_evidence(
                 }
             )
             snapshots = []
+            full_lock_boundary = collection != "crash_recoveries" or trial[
+                "boundary"
+            ] not in {
+                "sidecar_fsync",
+                "staged_delta_fsync",
+                "prepare_qc",
+            }
             for label in ("before", "nonfinalized", "after"):
                 finalized = label == "after" and expected_after_state == "finalized"
                 snapshots.append(
@@ -1044,6 +1176,8 @@ def write_fault_evidence(
                                 peer_index,
                                 label=label,
                                 finalized=finalized,
+                                full_locks=label == "nonfinalized"
+                                and full_lock_boundary,
                             )
                             for peer_index in range(peer_count)
                         ],
@@ -1175,6 +1309,37 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
         self.assertEqual(first[0]["kind"], "fault")
         self.assertEqual(first[-2]["variant"], "left")
         self.assertEqual(first[-1]["variant"], "right")
+
+    def test_participant_visibility_profiles_are_canonical_and_deterministic(self) -> None:
+        for participants in MODULE.PARTICIPANTS:
+            expected = ["public"] + ["restricted"] * (participants - 1)
+            self.assertEqual(
+                MODULE.canonical_participant_visibilities(participants), expected
+            )
+            configuration = MODULE.build_configuration(
+                participants,
+                seeds=tuple(range(MODULE.MIN_FAULT_SEEDS)),
+                warmups=MODULE.MIN_WARMUPS,
+                measured=MODULE.MIN_MEASURED,
+            )
+            self.assertEqual(configuration["participant_visibilities"], expected)
+        self.assertEqual(
+            MODULE.canonical_participant_visibilities(3),
+            ["public", "restricted", "restricted"],
+        )
+        primary = MODULE.canonical_participant_visibilities(3)
+        self.assertEqual(
+            (1 + primary.count(MODULE.PUBLIC_PARTICIPANT_VISIBILITY))
+            * MODULE.VALIDATORS_PER_DATASPACE,
+            8,
+        )
+        self.assertEqual(
+            primary.count(MODULE.RESTRICTED_PARTICIPANT_VISIBILITY)
+            * MODULE.VALIDATORS_PER_DATASPACE,
+            8,
+        )
+        with self.assertRaisesRegex(MODULE.RunnerError, "visibility policy"):
+            MODULE.canonical_participant_visibilities(255)
 
     def test_canary_sets_cover_both_secret_only_variants(self) -> None:
         manifest = MODULE.build_canary_manifest(COMMIT)
@@ -1312,6 +1477,117 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
                 MODULE.validate_fault_observation_records(
                     reused_bundle, participants=3, seed=7, run=2
                 )
+            missing_registration_recovery = copy.deepcopy(rows)
+            registration_row = next(
+                row
+                for row in missing_registration_recovery
+                if row["collection"] == "crash_recoveries"
+                and row["trial_index"] == 3
+            )
+            registration_row["snapshots"][1]["validators"] = copy.deepcopy(
+                registration_row["snapshots"][0]["validators"]
+            )
+            with self.assertRaisesRegex(
+                MODULE.RunnerError, "full replicated Prepare lock"
+            ):
+                MODULE.validate_fault_observation_records(
+                    missing_registration_recovery, participants=3, seed=7, run=2
+                )
+            mixed_lock_plane = copy.deepcopy(rows)
+            mixed_row = next(
+                row
+                for row in mixed_lock_plane
+                if row["collection"] == "loss_trials"
+            )
+            mixed_row["snapshots"][1]["validators"][4] = copy.deepcopy(
+                mixed_row["snapshots"][0]["validators"][4]
+            )
+            with self.assertRaisesRegex(
+                MODULE.RunnerError, "full replicated Prepare lock"
+            ):
+                MODULE.validate_fault_observation_records(
+                    mixed_lock_plane, participants=3, seed=7, run=2
+                )
+            divergent_replicated_lock = copy.deepcopy(rows)
+            divergent_replicated_row = next(
+                row
+                for row in divergent_replicated_lock
+                if row["collection"] == "loss_trials"
+            )
+            _rewrite_state_observation(
+                divergent_replicated_row["snapshots"][1]["validators"][4],
+                replicated_staged_lock_commitment=_iroha_hash_literal("7" * 64),
+            )
+            with self.assertRaisesRegex(
+                MODULE.RunnerError, "full replicated Prepare lock"
+            ):
+                MODULE.validate_fault_observation_records(
+                    divergent_replicated_lock, participants=3, seed=7, run=2
+                )
+            incomplete_local_lock = copy.deepcopy(rows)
+            incomplete_local_row = next(
+                row
+                for row in incomplete_local_lock
+                if row["collection"] == "loss_trials"
+            )
+            incomplete_counts = copy.deepcopy(
+                incomplete_local_row["snapshots"][1]["validators"][4]["counts"]
+            )
+            incomplete_counts.update(
+                {
+                    "staged_pool_heads": 0,
+                    "staged_nullifiers": 0,
+                    "staged_output_commitments": 0,
+                    "staged_locks": 0,
+                }
+            )
+            _rewrite_state_observation(
+                incomplete_local_row["snapshots"][1]["validators"][4],
+                staged_lock_commitment=_iroha_hash_literal("2" * 64),
+                counts=incomplete_counts,
+            )
+            with self.assertRaisesRegex(
+                MODULE.RunnerError, "complete local leg lock"
+            ):
+                MODULE.validate_fault_observation_records(
+                    incomplete_local_lock, participants=3, seed=7, run=2
+                )
+            divergent_local_lock = copy.deepcopy(rows)
+            divergent_local_row = next(
+                row
+                for row in divergent_local_lock
+                if row["collection"] == "loss_trials"
+            )
+            _rewrite_state_observation(
+                divergent_local_row["snapshots"][1]["validators"][5],
+                staged_lock_commitment=_iroha_hash_literal("8" * 64),
+            )
+            with self.assertRaisesRegex(
+                MODULE.RunnerError, "divergent committee-local locks"
+            ):
+                MODULE.validate_fault_observation_records(
+                    divergent_local_lock, participants=3, seed=7, run=2
+                )
+            bad_hash_checksum = copy.deepcopy(rows)
+            bad_hash_row = next(
+                row
+                for row in bad_hash_checksum
+                if row["collection"] == "loss_trials"
+            )
+            invalid_hash = bad_hash_row["snapshots"][0]["validators"][0][
+                "commitment"
+            ]
+            invalid_hash = invalid_hash[:-4] + (
+                "0000" if invalid_hash[-4:] != "0000" else "FFFF"
+            )
+            _rewrite_state_observation(
+                bad_hash_row["snapshots"][0]["validators"][0],
+                commitment=invalid_hash,
+            )
+            with self.assertRaisesRegex(MODULE.RunnerError, "checksum"):
+                MODULE.validate_fault_observation_records(
+                    bad_hash_checksum, participants=3, seed=7, run=2
+                )
             substituted_control_bundle = copy.deepcopy(control_rows)
             substituted_control_bundle[0]["bundle_id"] = "e" * 64
             with self.assertRaisesRegex(MODULE.RunnerError, "binds another APS bundle"):
@@ -1427,7 +1703,7 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
                 )
 
             wrong_receipt_target = copy.deepcopy(
-                by_record["n3:s7:r2:crash_recoveries:6"]
+                by_record["n3:s7:r2:crash_recoveries:8"]
             )
             for control in wrong_receipt_target["controls"]:
                 control["peer_index"] = 0
@@ -1437,7 +1713,7 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
                 MODULE.validate_fault_trial_control_semantics(
                     wrong_receipt_target,
                     collection="crash_recoveries",
-                    trial=payload["crash_recoveries"][6],
+                    trial=payload["crash_recoveries"][8],
                     label="receipt",
                 )
 
@@ -1734,49 +2010,166 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
     ) -> None:
         def rewrite_projection(observation: dict[str, Any]) -> None:
             raw = json.loads(bytes.fromhex(observation["response_hex"]).decode())
-            raw["height"] = observation["height"]
-            raw["staged_lock_commitment"] = observation["staged_lock_commitment"]
-            raw["counts"] = observation["counts"]
+            for field in (
+                "height",
+                "commitment",
+                "ledger_commitment",
+                "replicated_staged_lock_commitment",
+                "staged_lock_commitment",
+                "counts",
+            ):
+                raw[field] = observation[field]
             encoded = json.dumps(
                 raw, sort_keys=True, separators=(",", ":")
             ).encode()
             observation["response_hex"] = encoded.hex()
             observation["response_sha256"] = hashlib.sha256(encoded).hexdigest()
 
-        with tempfile.TemporaryDirectory() as temporary:
-            archive = Path(temporary) / "restricted.bin"
-            valid_source = _atomicity_evidence(0, 3)
-            _write_restricted_archive(
-                archive, [("atomicity_observation", "peer-000.json", valid_source)]
-            )
-            rows = MODULE._validate_restricted_leakage_source_archive(archive)[
-                "atomicity_observation"
-            ]["rows"]
-            self.assertEqual(
-                MODULE._validate_leakage_atomicity_observations(archive, rows, 3, 1),
-                3,
-            )
-
-            negative_height = json.loads(valid_source)
-            negative_height["observations"][0]["height"] = -1
-            rewrite_projection(negative_height["observations"][0])
+        def write_atomicity_archive(
+            archive: Path, replacements: dict[int, bytes]
+        ) -> list[dict[str, Any]]:
+            sources = [
+                replacements.get(index, _atomicity_evidence(index, 3))
+                for index in range(16)
+            ]
             _write_restricted_archive(
                 archive,
                 [
                     (
                         "atomicity_observation",
-                        "peer-000.json",
-                        json.dumps(
-                            negative_height, sort_keys=True, separators=(",", ":")
-                        ).encode(),
+                        f"peer-{index:03}.json",
+                        source,
                     )
+                    for index, source in enumerate(sources)
                 ],
             )
-            rows = MODULE._validate_restricted_leakage_source_archive(archive)[
+            return MODULE._validate_restricted_leakage_source_archive(archive)[
                 "atomicity_observation"
             ]["rows"]
+
+        with tempfile.TemporaryDirectory() as temporary:
+            archive = Path(temporary) / "restricted.bin"
+            valid_source = _atomicity_evidence(0, 3)
+            rows = write_atomicity_archive(archive, {0: valid_source})
+            self.assertEqual(
+                MODULE._validate_leakage_atomicity_observations(archive, rows, 3, 16),
+                48,
+            )
+
+            bad_checksum = json.loads(valid_source)
+            first_observation = bad_checksum["observations"][0]
+            literal = first_observation["commitment"]
+            first_observation["commitment"] = literal[:-4] + (
+                "0000" if literal[-4:] != "0000" else "FFFF"
+            )
+            rewrite_projection(first_observation)
+            rows = write_atomicity_archive(
+                archive,
+                {
+                    0: json.dumps(
+                        bad_checksum, sort_keys=True, separators=(",", ":")
+                    ).encode()
+                },
+            )
+            with self.assertRaisesRegex(MODULE.RunnerError, "checksum"):
+                MODULE._validate_leakage_atomicity_observations(archive, rows, 3, 16)
+
+            noncanonical_response = json.loads(valid_source)
+            first_observation = noncanonical_response["observations"][0]
+            decoded_response = json.loads(
+                bytes.fromhex(first_observation["response_hex"]).decode()
+            )
+            noncanonical_bytes = json.dumps(decoded_response, indent=1).encode()
+            first_observation["response_hex"] = noncanonical_bytes.hex()
+            first_observation["response_sha256"] = hashlib.sha256(
+                noncanonical_bytes
+            ).hexdigest()
+            rows = write_atomicity_archive(
+                archive,
+                {
+                    0: json.dumps(
+                        noncanonical_response,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                },
+            )
+            with self.assertRaisesRegex(MODULE.RunnerError, "canonical compact JSON"):
+                MODULE._validate_leakage_atomicity_observations(archive, rows, 3, 16)
+
+            missing_registered = json.loads(valid_source)
+            missing_registered["registered"] = copy.deepcopy(
+                missing_registered["observations"][0]
+            )
+            rows = write_atomicity_archive(
+                archive,
+                {
+                    0: json.dumps(
+                        missing_registered, sort_keys=True, separators=(",", ":")
+                    ).encode()
+                },
+            )
+            with self.assertRaisesRegex(
+                MODULE.RunnerError, "complete registered replicated Prepare lock"
+            ):
+                MODULE._validate_leakage_atomicity_observations(archive, rows, 3, 16)
+
+            missing_local = json.loads(_atomicity_evidence(4, 3))
+            registered = missing_local["registered"]
+            registered["counts"].update(
+                {
+                    "staged_pool_heads": 0,
+                    "staged_nullifiers": 0,
+                    "staged_output_commitments": 0,
+                    "staged_locks": 0,
+                }
+            )
+            registered["staged_lock_commitment"] = _iroha_hash_literal("3" * 64)
+            rewrite_projection(registered)
+            rows = write_atomicity_archive(
+                archive,
+                {
+                    4: json.dumps(
+                        missing_local, sort_keys=True, separators=(",", ":")
+                    ).encode()
+                },
+            )
+            with self.assertRaisesRegex(
+                MODULE.RunnerError, "registered committee-local leg lock"
+            ):
+                MODULE._validate_leakage_atomicity_observations(archive, rows, 3, 16)
+
+            divergent_local = json.loads(_atomicity_evidence(5, 3))
+            divergent_local["registered"]["staged_lock_commitment"] = (
+                _iroha_hash_literal("F" * 64)
+            )
+            rewrite_projection(divergent_local["registered"])
+            rows = write_atomicity_archive(
+                archive,
+                {
+                    5: json.dumps(
+                        divergent_local, sort_keys=True, separators=(",", ":")
+                    ).encode()
+                },
+            )
+            with self.assertRaisesRegex(
+                MODULE.RunnerError, "divergent registered committee-local locks"
+            ):
+                MODULE._validate_leakage_atomicity_observations(archive, rows, 3, 16)
+
+            negative_height = json.loads(valid_source)
+            negative_height["observations"][0]["height"] = -1
+            rewrite_projection(negative_height["observations"][0])
+            rows = write_atomicity_archive(
+                archive,
+                {
+                    0: json.dumps(
+                        negative_height, sort_keys=True, separators=(",", ":")
+                    ).encode()
+                },
+            )
             with self.assertRaisesRegex(MODULE.RunnerError, "height"):
-                MODULE._validate_leakage_atomicity_observations(archive, rows, 3, 1)
+                MODULE._validate_leakage_atomicity_observations(archive, rows, 3, 16)
 
             terminal_staged = json.loads(valid_source)
             final = terminal_staged["observations"][-1]
@@ -1790,23 +2183,36 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
             )
             final["staged_lock_commitment"] = _iroha_hash_literal("4" * 64)
             rewrite_projection(final)
-            _write_restricted_archive(
+            rows = write_atomicity_archive(
                 archive,
-                [
-                    (
-                        "atomicity_observation",
-                        "peer-000.json",
-                        json.dumps(
-                            terminal_staged, sort_keys=True, separators=(",", ":")
-                        ).encode(),
-                    )
-                ],
+                {
+                    0: json.dumps(
+                        terminal_staged, sort_keys=True, separators=(",", ":")
+                    ).encode()
+                },
             )
-            rows = MODULE._validate_restricted_leakage_source_archive(archive)[
-                "atomicity_observation"
-            ]["rows"]
             with self.assertRaisesRegex(MODULE.RunnerError, "retained staged locks"):
-                MODULE._validate_leakage_atomicity_observations(archive, rows, 3, 1)
+                MODULE._validate_leakage_atomicity_observations(archive, rows, 3, 16)
+
+            terminal_replicated = json.loads(valid_source)
+            final = terminal_replicated["observations"][-1]
+            final["counts"]["replicated_staged_locks"] = 1 + 3 * 9
+            final["replicated_staged_lock_commitment"] = _iroha_hash_literal(
+                "6" * 64
+            )
+            rewrite_projection(final)
+            rows = write_atomicity_archive(
+                archive,
+                {
+                    0: json.dumps(
+                        terminal_replicated,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                },
+            )
+            with self.assertRaisesRegex(MODULE.RunnerError, "retained staged locks"):
+                MODULE._validate_leakage_atomicity_observations(archive, rows, 3, 16)
 
     def test_differential_manifest_is_accepted_by_release_validator(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1993,6 +2399,10 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
             }
             request = MODULE.build_request(frozen_plan, root, job)
             self.assertEqual(request["payload"]["canaries"], selected)
+            self.assertEqual(
+                request["participant_visibilities"],
+                ["public", "restricted", "restricted"],
+            )
             canaries["canaries"][0]["value"] = "changed-secret"
             MODULE.write_json(canary_path, canaries)
             frozen_plan["canary_manifest"].update(
@@ -2077,6 +2487,26 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
         )
         self.assertEqual(
             configuration["topology"]["total_validator_processes"], 16
+        )
+        self.assertEqual(
+            configuration["execution"]["rayon_worker_threads"],
+            MODULE.RAYON_WORKER_THREADS,
+        )
+        self.assertEqual(
+            configuration["execution"]["validator_worker_threads"],
+            MODULE.VALIDATOR_WORKER_THREADS,
+        )
+        self.assertEqual(
+            configuration["execution"]["cargo_build_jobs"],
+            MODULE.CARGO_BUILD_JOBS,
+        )
+        self.assertEqual(
+            configuration["execution"]["cargo_release_codegen_units"],
+            MODULE.CARGO_RELEASE_CODEGEN_UNITS,
+        )
+        self.assertIs(
+            configuration["execution"]["cargo_incremental"],
+            MODULE.CARGO_INCREMENTAL,
         )
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary)

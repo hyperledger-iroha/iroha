@@ -38,7 +38,8 @@ pub use auditor::{
     PrivateSettlementAuditEvaluationV1, PrivateSettlementAuditPolicyEvaluatorV1,
     PrivateSettlementAuditorApprovalErrorV1, PrivateSettlementAuditorCredentialErrorV1,
     PrivateSettlementAuditorCredentialProviderV1, SoftwarePrivateSettlementAuditorCredentialsV1,
-    approve_private_settlement_leg_v1, approve_private_settlement_leg_with_provider_v1,
+    SoftwarePrivateSettlementAuditorKeyringCredentialsV1, approve_private_settlement_leg_v1,
+    approve_private_settlement_leg_with_provider_v1,
 };
 pub use availability::{
     PrivateSettlementAvailabilityErrorV1, PrivateSettlementAvailabilitySignerV1,
@@ -76,3 +77,4 @@ pub use sidecar_store::{
 pub use sidecar_store::{
     PrivateSettlementStagedLockCountsV1, PrivateSettlementStagedLockEvidenceV1,
 };
+pub use state::fetch_private_settlement_auditor_view_v1;

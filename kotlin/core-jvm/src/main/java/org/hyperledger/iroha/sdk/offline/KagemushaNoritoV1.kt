@@ -8,15 +8,17 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import java.util.Optional
 import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
+import org.hyperledger.iroha.sdk.norito.NoritoAdapters
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
 
 /**
- * Exact canonical codec and structural validation boundary for Kagemusha V1.
+ * Exact canonical codec and structural validation boundary for KAGEMUSHA V1.
  *
  * Every method is deliberately named `Shape`: canonical decoding, digest binding, and field
  * consistency grant no monetary authority. Production signature, recursive-proof, release,
@@ -24,6 +26,9 @@ import org.hyperledger.iroha.sdk.norito.TypeAdapter
  * qualified non-forking hardware service.
  */
 object KagemushaNoritoV1 {
+    /** Maximum canonical bytes for the request embedded in `TopUpKagemushaV1`. */
+    const val MAXIMUM_TOP_UP_REQUEST_BYTES: Int = 16 * 1024
+
     private const val MODEL = "iroha_data_model::kagemusha::kagemusha_v1::"
     private const val AGGREGATE_SCHEMA = MODEL + "KagemushaAggregateStateCommitmentV1"
     private const val PASTA_STATE_SCHEMA = MODEL + "KagemushaPastaStateCommitmentV1"
@@ -36,25 +41,47 @@ object KagemushaNoritoV1 {
     private const val CREDIT_AAD_SCHEMA = MODEL + "KagemushaEncryptedCreditAadV1"
     private const val CREDIT_ENVELOPE_SCHEMA = MODEL + "KagemushaEncryptedCreditEnvelopeV1"
     private const val LIFECYCLE_SCHEMA = MODEL + "KagemushaLifecycleBindingV1"
-    private const val STATEMENT_SCHEMA = MODEL + "KagemushaTransferStatementV1"
+    private const val COMMIT_CERTIFICATE_SCHEMA = MODEL + "KagemushaCommitCertificateV1"
+    private const val PAYMENT_PROOF_SCHEMA = MODEL + "KagemushaPaymentProofV1"
+    private const val REDEMPTION_PROOF_SCHEMA = MODEL + "KagemushaRedemptionProofV1"
+    private const val PAYMENT_OUTPUT_SCHEMA = MODEL + "KagemushaPaymentOutputV1"
     private const val PAYMENT_SCHEMA = MODEL + "KagemushaPaymentV1"
     private const val ACK_SCHEMA = MODEL + "KagemushaAcknowledgementV1"
     private const val MINT_AUTH_SCHEMA = MODEL + "KagemushaMintAuthorizationV1"
     private const val MINT_STATEMENT_SCHEMA = MODEL + "KagemushaMintCreditStatementV1"
     private const val MINT_SCHEMA = MODEL + "KagemushaMintCreditV1"
+    private const val DEVICE_MODEL =
+        "iroha_data_model::kagemusha::kagemusha_device_v1::"
+    private const val DEVICE_MINT_STAGE_COMMAND_SCHEMA =
+        DEVICE_MODEL + "KagemushaDeviceMintStageCommandV1"
+    private const val DEVICE_MINT_STAGE_RESULT_SCHEMA =
+        DEVICE_MODEL + "KagemushaDeviceMintStageResultV1"
     private const val REDEMPTION_STATEMENT_SCHEMA = MODEL + "KagemushaRedemptionStatementV1"
     private const val REDEMPTION_SCHEMA = MODEL + "KagemushaRedemptionVoucherV1"
+    private const val TOP_UP_REQUEST_SCHEMA = "iroha.torii.v1.kagemusha.top_up.request"
+    private const val TOP_UP_INSTRUCTION_SCHEMA =
+        "iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1"
+    private const val REDEMPTION_REQUEST_SCHEMA = "iroha.torii.v1.kagemusha.redeem.request"
+    private const val MAXIMUM_TOP_UP_INSTRUCTION_PAYLOAD_BYTES =
+        MAXIMUM_TOP_UP_REQUEST_BYTES + 1024
+
+    /** Maximum canonical bytes in the public body of secure-device operation 21. */
+    const val MAXIMUM_DEVICE_MINT_STAGE_COMMAND_BYTES: Int = 64 * 1024
+
+    /** Maximum canonical bytes in the fixed public result of secure-device operation 21. */
+    const val MAXIMUM_DEVICE_MINT_STAGE_RESULT_BYTES: Int = 128
 
     private val DEVICE_KEY_REFERENCE_DOMAIN = ascii("iroha:kagemusha:v1:device-key-reference")
     private val PASTA_STATE_COMMITMENT_DOMAIN = ascii("iroha:kagemusha:v1:pasta-state-commitment")
     private val LIABILITY_POOL_DOMAIN = ascii("iroha:kagemusha:v1:liability-pool")
     private val REQUEST_DIGEST_DOMAIN = ascii("iroha:kagemusha:v1:payment-request")
+    private val PREPARED_TRANSFER_DIGEST_DOMAIN = ascii("iroha:kagemusha:v1:prepared-transfer")
     private val LIFECYCLE_DIGEST_DOMAIN = ascii("iroha:kagemusha:v1:lifecycle-binding")
     private val CIPHERTEXT_DIGEST_DOMAIN = ascii("iroha:kagemusha:v1:ciphertext")
     private val PEER_CREDIT_CONTEXT_DIGEST_DOMAIN = ascii("iroha:kagemusha:v1:peer-credit-context")
-    private val PEER_CREDIT_LIFECYCLE_CONTEXT_DIGEST_DOMAIN =
-        ascii("iroha:kagemusha:v1:peer-credit-lifecycle-context")
     private val CREDIT_ID_DOMAIN = ascii("iroha:kagemusha:v1:credit-id")
+    private val PEER_CREDIT_OPENING_COMMITMENT_DOMAIN =
+        ascii("iroha:kagemusha:v1:peer-credit-opening-commitment")
     private val STATEMENT_DIGEST_DOMAIN = ascii("iroha:kagemusha:v1:send-split-statement")
     private val PAYMENT_DIGEST_DOMAIN = ascii("iroha:kagemusha:v1:payment")
     private val MINT_AUTH_CONTEXT_DIGEST_DOMAIN = ascii("iroha:kagemusha:v1:mint-authorization-context")
@@ -65,6 +92,8 @@ object KagemushaNoritoV1 {
     private val MINT_STATEMENT_DIGEST_DOMAIN = ascii("iroha:kagemusha:v1:mint-statement")
     private val REDEMPTION_ID_DOMAIN = ascii("iroha:kagemusha:v1:redemption-id")
     private val REDEMPTION_STATEMENT_DIGEST_DOMAIN = ascii("iroha:kagemusha:v1:redemption-statement")
+    private val COMMIT_CERTIFICATE_ID_DOMAIN = ascii("iroha:kagemusha:v1:commit-certificate-id")
+    private val COMMIT_CERTIFICATE_DIGEST_DOMAIN = ascii("iroha:kagemusha:v1:commit-certificate")
     private val ENCRYPTED_CREDIT_SALT_LABEL = ascii("iroha:kagemusha:v1:credit-envelope-salt\u0000")
     private val ENCRYPTED_CREDIT_INFO_LABEL = ascii("iroha:kagemusha:v1:credit-envelope-key\u0000")
 
@@ -105,6 +134,58 @@ object KagemushaNoritoV1 {
     @JvmStatic
     fun decodeHardwareCredentialShapeExact(bytes: ByteArray): KagemushaHardwareCredentialV1 =
         decodeExact(bytes, 768, HARDWARE_CREDENTIAL_SCHEMA, HARDWARE_CREDENTIAL_ADAPTER, ::encodeHardwareCredentialShape)
+
+    /** Encode one terminal hardware certificate. */
+    @JvmStatic
+    fun encodeCommitCertificateShape(value: KagemushaCommitCertificateV1): ByteArray {
+        require(value.certificateId().contentEquals(commitCertificateId(value))) {
+            "KAGEMUSHA V1 certificate identity does not match its canonical body"
+        }
+        return bounded(raw(value, COMMIT_CERTIFICATE_SCHEMA, COMMIT_CERTIFICATE_ADAPTER), KagemushaWireV1.MAXIMUM_COMMIT_CERTIFICATE_BYTES)
+    }
+
+    /** Decode one exact bounded terminal hardware certificate. */
+    @JvmStatic
+    fun decodeCommitCertificateShapeExact(bytes: ByteArray): KagemushaCommitCertificateV1 =
+        decodeExact(
+            bytes,
+            KagemushaWireV1.MAXIMUM_COMMIT_CERTIFICATE_BYTES,
+            COMMIT_CERTIFICATE_SCHEMA,
+            COMMIT_CERTIFICATE_ADAPTER,
+            ::encodeCommitCertificateShape,
+        )
+
+    /** Encode one final paired proof authorizing an offline payment. */
+    @JvmStatic
+    fun encodePaymentProofShape(value: KagemushaPaymentProofV1): ByteArray =
+        bounded(raw(value, PAYMENT_PROOF_SCHEMA, PAYMENT_PROOF_ADAPTER), KagemushaWireV1.MAXIMUM_PAIRED_PROOF_BYTES)
+
+    /** Decode one exact bounded final payment proof. */
+    @JvmStatic
+    fun decodePaymentProofShapeExact(bytes: ByteArray): KagemushaPaymentProofV1 =
+        decodeExact(
+            bytes,
+            KagemushaWireV1.MAXIMUM_PAIRED_PROOF_BYTES,
+            PAYMENT_PROOF_SCHEMA,
+            PAYMENT_PROOF_ADAPTER,
+            ::encodePaymentProofShape,
+        )
+
+    /** Encode one final paired proof authorizing an online redemption. */
+    @JvmStatic
+    fun encodeRedemptionProofShape(value: KagemushaRedemptionProofV1): ByteArray =
+        bounded(raw(value, REDEMPTION_PROOF_SCHEMA, REDEMPTION_PROOF_ADAPTER), KagemushaWireV1.MAXIMUM_REDEMPTION_PROOF_BYTES)
+
+    /** Decode one exact bounded final redemption proof. */
+    @JvmStatic
+    fun decodeRedemptionProofShapeExact(bytes: ByteArray): KagemushaRedemptionProofV1 =
+        decodeExact(
+            bytes,
+            KagemushaWireV1.MAXIMUM_REDEMPTION_PROOF_BYTES,
+            REDEMPTION_PROOF_SCHEMA,
+            REDEMPTION_PROOF_ADAPTER,
+            ::encodeRedemptionProofShape,
+        )
 
     /** Encode a signed request after shape and self-consistency checks only. */
     @JvmStatic
@@ -150,24 +231,27 @@ object KagemushaNoritoV1 {
             ::encodePeerCreditContextShape,
         )
 
-    /** Build the acyclic peer context from the exact request and payment statement. */
+    /** Build the acyclic peer context from the exact request and payment output. */
     @JvmStatic
     fun peerCreditContextShape(
-        statement: KagemushaTransferStatementV1,
         request: KagemushaPaymentRequestV1,
+        output: KagemushaPaymentOutputV1,
     ): KagemushaPeerCreditContextV1 {
-        validatePaymentRequestShape(request)
-        validatePeerStatementContextShape(statement, request)
+        validatePaymentOutputShape(output, request)
         return KagemushaPeerCreditContextV1(
             KagemushaWireV1.WIRE_VERSION,
             paymentRequestDigest(request),
-            statement.senderBeforeCommitment(),
-            statement.senderAfterCommitment(),
-            statement.recipientLaneId(),
-            statement.recipientEncryptionKey,
-            statement.committedAtMs,
-            statement.hardwareTransitionCommitment(),
-            peerLifecycleContextDigest(statement.lifecycle),
+            output.amount,
+            output.senderBeforeCommitment(),
+            output.senderAfterCommitment(),
+            preparedTransferDigest(
+                request,
+                output.senderBeforeCommitment(),
+                output.senderAfterCommitment(),
+                output.transitionNullifier(),
+                output.ciphertextCommitment(),
+            ),
+            request.recipientEncryptionKey,
         )
     }
 
@@ -182,17 +266,18 @@ object KagemushaNoritoV1 {
     /** Construct the exact typed AAD for a receiver-bound peer credit. */
     @JvmStatic
     fun encryptedCreditAadForPeerShape(
-        statement: KagemushaTransferStatementV1,
+        output: KagemushaPaymentOutputV1,
         request: KagemushaPaymentRequestV1,
     ): KagemushaEncryptedCreditAadV1 {
-        val context = peerCreditContextShape(statement, request)
+        validatePaymentOutputShape(output, request)
+        val context = peerCreditContextShape(request, output)
         return KagemushaEncryptedCreditAadV1(
             KagemushaWireV1.WIRE_VERSION,
             KagemushaEncryptedCreditPurposeV1.PEER,
             peerCreditContextDigestShape(context),
-            statement.hardwareTransitionCommitment(),
-            statement.lifecycle.creditId(),
-            statement.amount,
+            output.ciphertextCommitment(),
+            output.creditId(),
+            output.amount,
         )
     }
 
@@ -214,7 +299,10 @@ object KagemushaNoritoV1 {
 
     /** Encode a payment after exact request, statement, recursive-proof, and envelope shape checks. */
     @JvmStatic
-    fun encodePaymentShape(value: KagemushaPaymentV1, request: KagemushaPaymentRequestV1): ByteArray {
+    fun encodePaymentShape(
+        value: KagemushaPaymentV1,
+        request: KagemushaPaymentRequestV1,
+    ): ByteArray {
         validatePaymentShape(value, request)
         return bounded(raw(value, PAYMENT_SCHEMA, PAYMENT_ADAPTER), KagemushaWireV1.MAXIMUM_PAYMENT_BYTES)
     }
@@ -233,13 +321,23 @@ object KagemushaNoritoV1 {
 
     /** Encode a payment as strict `kgm1:` text after shape checks. */
     @JvmStatic
-    fun encodePaymentTextShape(value: KagemushaPaymentV1, request: KagemushaPaymentRequestV1): String =
-        KagemushaWireV1.encodeText(KagemushaWirePayloadKindV1.PAYMENT, encodePaymentShape(value, request))
+    fun encodePaymentTextShape(
+        value: KagemushaPaymentV1,
+        request: KagemushaPaymentRequestV1,
+    ): String = KagemushaWireV1.encodeText(
+        KagemushaWirePayloadKindV1.PAYMENT,
+        encodePaymentShape(value, request),
+    )
 
     /** Decode strict `kgm1:` payment text without granting monetary authority. */
     @JvmStatic
-    fun decodePaymentTextShapeExact(text: String, request: KagemushaPaymentRequestV1): KagemushaPaymentV1 =
-        decodePaymentShapeExact(KagemushaWireV1.decodeText(KagemushaWirePayloadKindV1.PAYMENT, text), request)
+    fun decodePaymentTextShapeExact(
+        text: String,
+        request: KagemushaPaymentRequestV1,
+    ): KagemushaPaymentV1 = decodePaymentShapeExact(
+        KagemushaWireV1.decodeText(KagemushaWirePayloadKindV1.PAYMENT, text),
+        request,
+    )
 
     /** Encode an acknowledgement after exact structural binding checks. */
     @JvmStatic
@@ -376,7 +474,79 @@ object KagemushaNoritoV1 {
         MINT_ADAPTER,
     ) { encodeMintCreditShape(it, authorization) }
 
-    /** Encode one terminal redemption voucher after wrapper/certificate shape checks. */
+    /** Encode a canonical operation-21 body after validating both nested public archives. */
+    @JvmStatic
+    fun encodeDeviceMintStageCommandShape(
+        value: KagemushaDeviceMintStageCommandV1,
+    ): ByteArray {
+        validateDeviceMintStageCommandShape(value)
+        return bounded(
+            raw(value, DEVICE_MINT_STAGE_COMMAND_SCHEMA, DEVICE_MINT_STAGE_COMMAND_ADAPTER),
+            MAXIMUM_DEVICE_MINT_STAGE_COMMAND_BYTES,
+        )
+    }
+
+    /** Build and encode a canonical operation-21 body from exact nested public archives. */
+    @JvmStatic
+    fun encodeDeviceMintStageCommandShape(
+        canonicalAuthorization: ByteArray,
+        canonicalMintCredit: ByteArray,
+    ): ByteArray = encodeDeviceMintStageCommandShape(
+        KagemushaDeviceMintStageCommandV1(
+            KagemushaWireV1.WIRE_VERSION,
+            canonicalAuthorization,
+            canonicalMintCredit,
+        ),
+    )
+
+    /** Decode one exact operation-21 body without granting staging or monetary authority. */
+    @JvmStatic
+    fun decodeDeviceMintStageCommandShapeExact(
+        bytes: ByteArray,
+    ): KagemushaDeviceMintStageCommandV1 = decodeExact(
+        bytes,
+        MAXIMUM_DEVICE_MINT_STAGE_COMMAND_BYTES,
+        DEVICE_MINT_STAGE_COMMAND_SCHEMA,
+        DEVICE_MINT_STAGE_COMMAND_ADAPTER,
+        ::encodeDeviceMintStageCommandShape,
+    )
+
+    /** Encode the fixed public operation-21 result. */
+    @JvmStatic
+    fun encodeDeviceMintStageResultShape(
+        value: KagemushaDeviceMintStageResultV1,
+    ): ByteArray = bounded(
+        raw(value, DEVICE_MINT_STAGE_RESULT_SCHEMA, DEVICE_MINT_STAGE_RESULT_ADAPTER),
+        MAXIMUM_DEVICE_MINT_STAGE_RESULT_BYTES,
+    )
+
+    /** Decode one exact public operation-21 result. */
+    @JvmStatic
+    fun decodeDeviceMintStageResultShapeExact(
+        bytes: ByteArray,
+    ): KagemushaDeviceMintStageResultV1 = decodeExact(
+        bytes,
+        MAXIMUM_DEVICE_MINT_STAGE_RESULT_BYTES,
+        DEVICE_MINT_STAGE_RESULT_SCHEMA,
+        DEVICE_MINT_STAGE_RESULT_ADAPTER,
+        ::encodeDeviceMintStageResultShape,
+    )
+
+    /** Decode and bind an operation-21 result to the exact command credit identity. */
+    @JvmStatic
+    fun decodeDeviceMintStageResultShapeExact(
+        bytes: ByteArray,
+        command: KagemushaDeviceMintStageCommandV1,
+    ): KagemushaDeviceMintStageResultV1 {
+        val result = decodeDeviceMintStageResultShapeExact(bytes)
+        val credit = validateDeviceMintStageCommandShape(command)
+        require(result.creditId().contentEquals(credit.statement.lifecycle.creditId())) {
+            "KAGEMUSHA V1 mint-stage result substituted the credit identity"
+        }
+        return result
+    }
+
+    /** Encode one terminal redemption voucher after direct-proof shape checks. */
     @JvmStatic
     fun encodeRedemptionVoucherShape(value: KagemushaRedemptionVoucherV1): ByteArray {
         validateRedemptionVoucherShape(value)
@@ -407,6 +577,57 @@ object KagemushaNoritoV1 {
     fun decodeRedemptionVoucherTextShapeExact(text: String): KagemushaRedemptionVoucherV1 =
         decodeRedemptionVoucherShapeExact(
             KagemushaWireV1.decodeText(KagemushaWirePayloadKindV1.REDEMPTION_VOUCHER, text),
+        )
+
+    /** Encode one exact reserve-backed request for a `TopUpKagemushaV1` instruction. */
+    @JvmStatic
+    fun encodeTopUpRequestShape(value: KagemushaTopUpRequestV1): ByteArray {
+        validateTopUpRequestShape(value)
+        return bounded(
+            raw(value, TOP_UP_REQUEST_SCHEMA, TOP_UP_REQUEST_ADAPTER),
+            MAXIMUM_TOP_UP_REQUEST_BYTES,
+        )
+    }
+
+    /** Decode one exact top-up request without granting the embedded proof monetary authority. */
+    @JvmStatic
+    fun decodeTopUpRequestShapeExact(bytes: ByteArray): KagemushaTopUpRequestV1 =
+        decodeExact(
+            bytes,
+            MAXIMUM_TOP_UP_REQUEST_BYTES,
+            TOP_UP_REQUEST_SCHEMA,
+            TOP_UP_REQUEST_ADAPTER,
+            ::encodeTopUpRequestShape,
+        )
+
+    /** Encode the concrete registered payload for one native `TopUpKagemushaV1` instruction. */
+    @JvmStatic
+    fun encodeTopUpInstructionPayloadShape(value: KagemushaTopUpRequestV1): ByteArray {
+        encodeTopUpRequestShape(value)
+        return bounded(
+            frame(TOP_UP_INSTRUCTION_SCHEMA, alignment = 16) { encoder ->
+                nestedField(encoder, TOP_UP_REQUEST_ADAPTER, value)
+            },
+            MAXIMUM_TOP_UP_INSTRUCTION_PAYLOAD_BYTES,
+        )
+    }
+
+    /** Encode one exact full or partial redemption request for the generic Torii route. */
+    @JvmStatic
+    fun encodeRedemptionRequestShape(value: KagemushaRedemptionRequestV1): ByteArray {
+        validateRedemptionRequestShape(value)
+        return bounded(raw(value, REDEMPTION_REQUEST_SCHEMA, REDEMPTION_REQUEST_ADAPTER), 8 * 1024)
+    }
+
+    /** Decode one exact redemption request without granting the voucher monetary authority. */
+    @JvmStatic
+    fun decodeRedemptionRequestShapeExact(bytes: ByteArray): KagemushaRedemptionRequestV1 =
+        decodeExact(
+            bytes,
+            8 * 1024,
+            REDEMPTION_REQUEST_SCHEMA,
+            REDEMPTION_REQUEST_ADAPTER,
+            ::encodeRedemptionRequestShape,
         )
 
     /** Encode the exact recipient-only credit-opening plaintext. */
@@ -516,27 +737,81 @@ object KagemushaNoritoV1 {
     @JvmStatic
     fun paymentRequestDigest(value: KagemushaPaymentRequestV1): ByteArray {
         validatePaymentRequestShape(value)
-        return digestEncoded(REQUEST_DIGEST_DOMAIN, raw(value, REQUEST_SCHEMA, REQUEST_ADAPTER))
+        return digestBytes(REQUEST_DIGEST_DOMAIN, paymentRequestTranscript(value))
     }
 
     /** Return the canonical public lifecycle digest used by terminal proofs. */
     @JvmStatic
     fun lifecycleDigestShape(value: KagemushaLifecycleBindingV1): ByteArray = lifecycleDigest(value)
 
+    /** Expected digest-derived identity for a terminal certificate body. */
+    @JvmStatic
+    fun expectedCommitCertificateIdShape(value: KagemushaCommitCertificateV1): ByteArray =
+        commitCertificateId(value)
+
+    /** Canonical certificate digest after exact lifecycle/evidence/nullifier binding. */
+    @JvmStatic
+    fun commitCertificateDigestShape(
+        value: KagemushaCommitCertificateV1,
+        lifecycle: KagemushaLifecycleBindingV1,
+        commitEvidence: KagemushaCommitEvidenceV1,
+        transitionNullifier: ByteArray,
+    ): ByteArray {
+        validateCommitCertificateShape(value, lifecycle, commitEvidence, transitionNullifier)
+        return commitCertificateDigest(value)
+    }
+
     /** Return the canonical ciphertext envelope digest without decrypting it. */
     @JvmStatic
     fun ciphertextDigestShape(bytes: ByteArray): ByteArray = ciphertextDigest(bytes.copyOf())
 
-    /** Return the unique peer-credit identity implied by an unlinkable send statement. */
+    /** Derive the direct request-bound transfer digest before encryption, proving and commit. */
     @JvmStatic
-    fun expectedPeerCreditIdShape(value: KagemushaTransferStatementV1): ByteArray =
-        expectedPeerCreditId(value)
+    fun preparedTransferDigestShape(
+        request: KagemushaPaymentRequestV1,
+        senderBeforeCommitment: ByteArray,
+        senderAfterCommitment: ByteArray,
+        transitionNullifier: ByteArray,
+        ciphertextCommitment: ByteArray,
+    ): ByteArray = preparedTransferDigest(
+        request,
+        senderBeforeCommitment,
+        senderAfterCommitment,
+        transitionNullifier,
+        ciphertextCommitment,
+    )
 
-    /** Return the semantic digest a payment wrapper must carry. */
+    /** Return the unique peer-credit identity implied by the compact output and context. */
     @JvmStatic
-    fun transferStatementDigestShape(value: KagemushaTransferStatementV1): ByteArray {
-        validateTransferStatementShape(value)
-        return statementDigest(value)
+    fun expectedPeerCreditIdShape(
+        output: KagemushaPaymentOutputV1,
+        request: KagemushaPaymentRequestV1,
+    ): ByteArray = expectedPeerCreditId(output, request)
+
+    /** Commit one private peer-credit opening before deriving its credit ID. */
+    @JvmStatic
+    fun peerCreditOpeningCommitmentShape(
+        requestDigest: ByteArray,
+        recipientOneTimeKey: KagemushaX25519PublicKeyV1,
+        amount: BigInteger,
+        creditCommitmentOpening: ByteArray,
+        recipientBindingOpening: ByteArray,
+        recoveryNonce: ByteArray,
+    ): ByteArray {
+        require(amount.signum() > 0 && amount.bitLength() <= 128) {
+            "KAGEMUSHA V1 peer credit opening amount must be positive and fit u128"
+        }
+        return sha256(
+            PEER_CREDIT_OPENING_COMMITMENT_DOMAIN,
+            byteArrayOf(0),
+            u16Le(KagemushaWireV1.WIRE_VERSION),
+            fixed32(requestDigest, "requestDigest"),
+            recipientOneTimeKey.bytes(),
+            u128Le(amount),
+            fixed32(creditCommitmentOpening, "creditCommitmentOpening"),
+            fixed32(recipientBindingOpening, "recipientBindingOpening"),
+            fixed32(recoveryNonce, "recoveryNonce"),
+        )
     }
 
     /** Return the canonical digest of a complete request-bound payment. */
@@ -594,16 +869,16 @@ object KagemushaNoritoV1 {
         return expectedRedemptionId(value)
     }
 
-    /** Return the semantic digest a redemption wrapper must carry. */
+    /** Return the semantic digest constrained by both redemption-proof parities. */
     @JvmStatic
     fun redemptionStatementDigestShape(value: KagemushaRedemptionStatementV1): ByteArray {
         validateRedemptionStatementShape(value)
         return redemptionStatementDigest(value)
     }
 
-    /** Validate the terminal request/payment/ack delivery trio and return raw bytes. */
+    /** Validate all three separately framed peer lifecycle messages and return total raw bytes. */
     @JvmStatic
-    fun validateTerminalDeliveryShape(
+    fun validateCompleteExchangeShape(
         request: KagemushaPaymentRequestV1,
         payment: KagemushaPaymentV1,
         acknowledgement: KagemushaAcknowledgementV1,
@@ -614,8 +889,8 @@ object KagemushaNoritoV1 {
             encodeAcknowledgementShape(acknowledgement, request, payment).size,
         )
         val raw = sizes.sum()
-        require(raw <= KagemushaWireV1.MAXIMUM_SESSION_RAW_BYTES)
-        require(sizes.sumOf(::textEnvelopeLength) <= KagemushaWireV1.MAXIMUM_SESSION_TEXT_BYTES)
+        require(raw <= KagemushaWireV1.MAXIMUM_COMPLETE_EXCHANGE_RAW_BYTES)
+        require(sizes.sumOf(::textEnvelopeLength) <= KagemushaWireV1.MAXIMUM_COMPLETE_EXCHANGE_TEXT_BYTES)
         return raw
     }
 
@@ -626,82 +901,88 @@ object KagemushaNoritoV1 {
     private fun validatePaymentRequestShape(value: KagemushaPaymentRequestV1) {
         require(value.liabilityPoolId().contentEquals(liabilityPoolId(value.networkId, value.asset, value.assetIncarnation)))
         require(value.hardwareCredential.networkId == value.networkId)
-        require(value.hardwareCredential.laneCommitment().contentEquals(value.recipientLaneId()))
+        requirePositiveU128(value.amount, "amount")
         require(value.hardwareCredential.deviceKeyReference().contentEquals(deviceKeyReference(value.hardwareCredential.devicePublicKey)))
         require(java.lang.Long.compareUnsigned(value.issuedAtMs, value.hardwareCredential.issuedAtMs) >= 0)
         require(java.lang.Long.compareUnsigned(value.expiresAtMs, value.hardwareCredential.expiresAtMs) <= 0)
+    }
+
+    /** Canonical framed typed asset identity used by the fixed request transcript. */
+    @JvmStatic
+    fun assetIdentityCanonicalShape(value: KagemushaAssetDefinitionIdV1): ByteArray =
+        frame("iroha_data_model::asset::id::model::AssetDefinitionId", 1) { it.writeBytes(value.canonicalPayload()) }
+
+    /** Canonical framed typed account identity used by the fixed request transcript. */
+    @JvmStatic
+    fun accountIdentityCanonicalShape(value: KagemushaAccountIdV1): ByteArray =
+        frame("iroha_data_model::account::model::AccountId", 8) { it.writeBytes(value.canonicalPayload()) }
+
+    private fun paymentRequestTranscript(value: KagemushaPaymentRequestV1): ByteArray =
+        fixedTranscript(
+            388, u16Le(value.version), value.releaseId(), value.networkId.bytes(),
+            digestEncoded(ascii("iroha:kagemusha:v1:asset-identity"), assetIdentityCanonicalShape(value.asset)),
+            value.assetIncarnation.bytes(), u32Le(value.scale), value.liabilityPoolId(),
+            digestEncoded(ascii("iroha:kagemusha:v1:account-identity"), accountIdentityCanonicalShape(value.recipient)),
+            u128Le(value.amount), value.recipientEncryptionKey.bytes(),
+            value.hardwareCredential.credentialId(), value.requestId(),
+            u64Le(value.issuedAtMs), u64Le(value.expiresAtMs), value.signature.rawBytes(),
+        )
+
+    /** Fixed semantic output digest, independent of ciphertext, certificate and proof bytes. */
+    @JvmStatic
+    fun paymentOutputDigestShape(value: KagemushaPaymentOutputV1): ByteArray =
+        digestBytes(STATEMENT_DIGEST_DOMAIN, fixedTranscript(
+            254, u16Le(value.version), value.requestDigest(), u128Le(value.amount),
+            value.senderBeforeCommitment(), value.senderAfterCommitment(),
+            value.transitionNullifier(), value.creditId(), value.ciphertextCommitment(),
+            commitEvidenceTranscript(value.commitEvidence), u64Le(value.committedAtMs),
+        ))
+
+    /** Acyclic body digest committed before hardware consumes the predecessor. */
+    @JvmStatic
+    fun paymentBodyDigestShape(output: KagemushaPaymentOutputV1, encryptedCredit: ByteArray): ByteArray {
+        decodeEncryptedCreditEnvelopeShapeExact(encryptedCredit)
+        return digestBytes(ascii("iroha:kagemusha:v1:payment-body"),
+            fixedTranscript(64, paymentOutputDigestShape(output), ciphertextDigest(encryptedCredit)))
     }
 
     private fun validateLifecycleShape(value: KagemushaLifecycleBindingV1) {
         require(value.liabilityPoolId().contentEquals(liabilityPoolId(value.networkId, value.asset, value.assetIncarnation)))
     }
 
-    private fun validatePaymentShape(value: KagemushaPaymentV1, request: KagemushaPaymentRequestV1) {
-        validatePaymentRequestShape(request)
-        val requestDigest = paymentRequestDigest(request)
-        val statement = value.statement
-        val lifecycle = statement.lifecycle
-        validateLifecycleShape(lifecycle)
-        require(lifecycle.operationKind == KagemushaOperationKindV1.SEND_SPLIT)
-        require(lifecycle.networkId == request.networkId)
-        require(lifecycle.asset == request.asset && lifecycle.assetIncarnation == request.assetIncarnation)
-        require(lifecycle.scale == request.scale && lifecycle.requestId().contentEquals(request.requestId()))
-        require(statement.amount == request.amount)
-        require(statement.requestDigest().contentEquals(requestDigest))
-        require(statement.recipientLaneId().contentEquals(request.recipientLaneId()))
-        require(statement.recipientEncryptionKey == request.recipientEncryptionKey)
-        require(!pastaStateCommitmentsEqual(statement.senderBeforeCommitment(), statement.senderAfterCommitment()))
-        require(java.lang.Long.compareUnsigned(statement.committedAtMs, request.issuedAtMs) >= 0)
-        require(java.lang.Long.compareUnsigned(statement.committedAtMs, request.expiresAtMs) < 0)
-        peerCreditContextShape(statement, request)
-        val envelope = decodeEncryptedCreditEnvelopeShapeExact(value.encryptedCredit())
-        require(envelope.version == value.version)
-        require(lifecycle.ciphertextDigest().contentEquals(ciphertextDigest(value.encryptedCredit())))
-        require(lifecycle.creditId().contentEquals(expectedPeerCreditId(statement)))
-        require(value.proof.semanticDigest().contentEquals(statementDigest(statement)))
-    }
-
-    private fun validatePeerStatementContextShape(
-        statement: KagemushaTransferStatementV1,
+    private fun validatePaymentOutputShape(
+        output: KagemushaPaymentOutputV1,
         request: KagemushaPaymentRequestV1,
     ) {
-        val lifecycle = statement.lifecycle
-        validateLifecycleShape(lifecycle)
-        require(statement.version == KagemushaWireV1.WIRE_VERSION)
-        require(statement.requestDigest().contentEquals(paymentRequestDigest(request)))
-        require(statement.recipientLaneId().contentEquals(request.recipientLaneId()))
-        require(statement.recipientEncryptionKey == request.recipientEncryptionKey)
-        require(statement.amount == request.amount)
-        require(lifecycle.releaseId().contentEquals(request.releaseId()))
-        require(lifecycle.networkId == request.networkId)
-        require(lifecycle.asset == request.asset && lifecycle.assetIncarnation == request.assetIncarnation)
-        require(lifecycle.scale == request.scale)
-        require(lifecycle.liabilityPoolId().contentEquals(request.liabilityPoolId()))
-        require(lifecycle.suiteId().contentEquals(request.hardwareCredential.suiteId()))
-        require(lifecycle.requestId().contentEquals(request.requestId()))
-        require(lifecycle.creditId().contentEquals(expectedPeerCreditId(statement)))
+        validatePaymentRequestShape(request)
+        require(output.version == KagemushaWireV1.WIRE_VERSION)
+        require(output.requestDigest().contentEquals(paymentRequestDigest(request)))
+        require(output.amount == request.amount)
+        require(output.creditId().contentEquals(expectedPeerCreditId(output, request)))
+        require(java.lang.Long.compareUnsigned(output.committedAtMs, request.issuedAtMs) >= 0)
+        require(java.lang.Long.compareUnsigned(output.committedAtMs, request.expiresAtMs) < 0)
     }
 
-    private fun peerLifecycleContextDigest(lifecycle: KagemushaLifecycleBindingV1): ByteArray =
-        digestEncoded(
-            PEER_CREDIT_LIFECYCLE_CONTEXT_DIGEST_DOMAIN,
-            frame("iroha.kagemusha.v1.peer-credit-lifecycle-context-preimage") { e ->
-                u16Field(e, lifecycle.version)
-                networkField(e, lifecycle.networkId)
-                u16Field(e, lifecycle.protocolVersion)
-                bytes32Field(e, lifecycle.suiteId())
-                bytes32Field(e, lifecycle.vkDigest())
-                bytes32Field(e, lifecycle.releaseId())
-                assetField(e, lifecycle.asset)
-                incarnationField(e, lifecycle.assetIncarnation)
-                u32Field(e, lifecycle.scale)
-                bytes32Field(e, lifecycle.liabilityPoolId())
-                bytes32Field(e, lifecycle.hardwareProfileId())
-                u64Field(e, lifecycle.policyEpoch)
-                enumUnitField(e, lifecycle.operationKind.ordinal)
-                bytes32Field(e, lifecycle.requestId())
-            },
-        )
+    private fun validatePaymentShape(
+        value: KagemushaPaymentV1,
+        request: KagemushaPaymentRequestV1,
+    ) {
+        require(value.version == KagemushaWireV1.WIRE_VERSION && value.output.version == value.version)
+        validatePaymentOutputShape(value.output, request)
+        val envelope = decodeEncryptedCreditEnvelopeShapeExact(value.encryptedCredit())
+        require(envelope.version == value.version)
+        encryptedCreditAadForPeerShape(value.output, request)
+        val certificate = value.commitCertificate
+        require(certificate.certificateId().contentEquals(commitCertificateId(certificate)))
+        require(certificate.transitionNullifier().contentEquals(value.output.transitionNullifier()))
+        require(commitEvidenceTranscript(certificate.commitEvidence).contentEquals(commitEvidenceTranscript(value.output.commitEvidence)))
+        require(raw(certificate, COMMIT_CERTIFICATE_SCHEMA, COMMIT_CERTIFICATE_ADAPTER).size <= KagemushaWireV1.MAXIMUM_COMMIT_CERTIFICATE_BYTES)
+        require(value.proof.semanticDigest().contentEquals(paymentBodyDigestShape(value.output, value.encryptedCredit())))
+        require(value.proof.candidateEnvelopeDigest().contentEquals(certificate.candidateEnvelopeDigest()))
+        require(value.proof.commitCertificateDigest().contentEquals(commitCertificateDigest(certificate)))
+        require(raw(value.proof, PAYMENT_PROOF_SCHEMA, PAYMENT_PROOF_ADAPTER).size <= KagemushaWireV1.MAXIMUM_PAIRED_PROOF_BYTES)
+        require(envelope.ephemeralX25519PublicKey != request.recipientEncryptionKey)
+    }
 
     private fun validateAcknowledgementShape(
         value: KagemushaAcknowledgementV1,
@@ -711,7 +992,60 @@ object KagemushaNoritoV1 {
         validatePaymentShape(payment, request)
         require(value.requestDigest().contentEquals(paymentRequestDigest(request)))
         require(value.paymentDigest().contentEquals(paymentDigest(payment, request)))
-        require(value.inboxReceipt.creditId().contentEquals(payment.statement.lifecycle.creditId()))
+        require(value.inboxReceipt.creditId().contentEquals(payment.output.creditId()))
+    }
+
+    private fun commitEvidenceTranscript(value: KagemushaCommitEvidenceV1): ByteArray =
+        fixedTranscript(36, u32Le(value.wireTag), value.evidenceCommitment())
+
+    private fun commitCertificateId(value: KagemushaCommitCertificateV1): ByteArray =
+        digestBytes(
+            COMMIT_CERTIFICATE_ID_DOMAIN,
+            fixedTranscript(
+                238,
+                u16Le(value.version),
+                value.candidateEnvelopeDigest(),
+                value.lifecycleBindingDigest(),
+                value.transitionNullifier(),
+                value.outboxReservationCommitment(),
+                commitEvidenceTranscript(value.commitEvidence),
+                value.hardwareProfileId(),
+                u64Le(value.policyEpoch),
+                value.hardwareTerminalCommitment(),
+            ),
+        )
+
+    private fun commitCertificateDigest(value: KagemushaCommitCertificateV1): ByteArray =
+        digestBytes(
+            COMMIT_CERTIFICATE_DIGEST_DOMAIN,
+            fixedTranscript(
+                270,
+                u16Le(value.version),
+                value.certificateId(),
+                value.candidateEnvelopeDigest(),
+                value.lifecycleBindingDigest(),
+                value.transitionNullifier(),
+                value.outboxReservationCommitment(),
+                commitEvidenceTranscript(value.commitEvidence),
+                value.hardwareProfileId(),
+                u64Le(value.policyEpoch),
+                value.hardwareTerminalCommitment(),
+            ),
+        )
+
+    private fun validateCommitCertificateShape(
+        value: KagemushaCommitCertificateV1,
+        lifecycle: KagemushaLifecycleBindingV1,
+        expectedEvidence: KagemushaCommitEvidenceV1,
+        expectedNullifier: ByteArray,
+    ) {
+        validateLifecycleShape(lifecycle)
+        require(value.lifecycleBindingDigest().contentEquals(lifecycleDigest(lifecycle)))
+        require(value.transitionNullifier().contentEquals(expectedNullifier))
+        require(commitEvidenceTranscript(value.commitEvidence).contentEquals(commitEvidenceTranscript(expectedEvidence)))
+        require(value.hardwareProfileId().contentEquals(lifecycle.hardwareProfileId()))
+        require(value.policyEpoch == lifecycle.policyEpoch)
+        require(value.certificateId().contentEquals(commitCertificateId(value)))
     }
 
     private fun validateMintAuthorizationStatementShape(
@@ -775,23 +1109,63 @@ object KagemushaNoritoV1 {
         encryptedCreditAadForMintShape(authorization.statement)
     }
 
+    private fun validateDeviceMintStageCommandShape(
+        value: KagemushaDeviceMintStageCommandV1,
+    ): KagemushaMintCreditV1 {
+        require(value.version == KagemushaWireV1.WIRE_VERSION)
+        val authorization = decodeMintAuthorizationShapeExact(value.canonicalAuthorization())
+        return decodeMintCreditShapeExact(value.canonicalMintCredit(), authorization)
+    }
+
     private fun validateRedemptionVoucherShape(value: KagemushaRedemptionVoucherV1) {
         val statement = value.statement
         validateRedemptionStatementShape(statement)
+        validateCommitCertificateShape(
+            value.commitCertificate,
+            statement.lifecycle,
+            statement.commitEvidence,
+            statement.terminalNullifier(),
+        )
         require(value.proof.semanticDigest().contentEquals(redemptionStatementDigest(statement)))
+        require(value.proof.candidateEnvelopeDigest().contentEquals(value.commitCertificate.candidateEnvelopeDigest()))
+        require(value.proof.commitCertificateDigest().contentEquals(commitCertificateDigest(value.commitCertificate)))
     }
 
-    private fun validateTransferStatementShape(value: KagemushaTransferStatementV1) {
-        validateLifecycleShape(value.lifecycle)
-        require(value.lifecycle.operationKind == KagemushaOperationKindV1.SEND_SPLIT)
-        require(value.lifecycle.creditId().contentEquals(expectedPeerCreditId(value)))
+    private fun validateTopUpRequestShape(value: KagemushaTopUpRequestV1) {
+        validateMintAuthorizationShape(value.mintAuthorization)
+        val statement = value.mintAuthorization.statement
+        val context = statement.context
+        require(value.liabilityPoolId().contentEquals(liabilityPoolId(value.networkId, value.asset, value.assetIncarnation)))
+        require(value.operationId().contentEquals(context.operationId()))
+        require(value.issuanceCommitment().contentEquals(statement.issuanceCommitment()))
+        require(value.creditId().contentEquals(statement.creditId()))
+        require(value.releaseId().contentEquals(context.releaseId()))
+        require(value.suiteId().contentEquals(context.suiteId()))
+        require(value.vkDigest().contentEquals(context.vkDigest()))
+        require(value.networkId == context.networkId)
+        require(value.asset == context.asset && value.assetIncarnation == context.assetIncarnation)
+        require(value.scale == context.scale && value.amount == context.amount)
+        require(value.liabilityPoolId().contentEquals(context.liabilityPoolId()))
+        require(value.payer == context.payer && value.recipient == context.recipient)
+        require(value.hardwareCredential.credentialId().contentEquals(context.hardwareCredentialId()))
+        require(value.hardwareCredential.hardwareProfileId().contentEquals(context.hardwareProfileId()))
+        require(value.hardwareCredential.policyEpoch == context.policyEpoch)
+        require(value.recipientCredentialCommitment().contentEquals(context.recipientCredentialCommitment()))
+        require(value.creditCommitment().contentEquals(context.creditCommitment()))
+        require(value.recipientOneTimeKey == context.recipientOneTimeKey)
+        require(value.artifactManifestDigest().contentEquals(context.artifactManifestDigest()))
+        decodeEncryptedCreditEnvelopeShapeExact(value.encryptedCredit())
+        require(ciphertextDigest(value.encryptedCredit()).contentEquals(statement.ciphertextDigest()))
+    }
+
+    private fun validateRedemptionRequestShape(value: KagemushaRedemptionRequestV1) {
+        validateRedemptionVoucherShape(value.voucher)
     }
 
     private fun validateRedemptionStatementShape(value: KagemushaRedemptionStatementV1) {
         val lifecycle = value.lifecycle
         validateLifecycleShape(lifecycle)
         require(lifecycle.operationKind == KagemushaOperationKindV1.REDEEM_SPLIT)
-        require(!pastaStateCommitmentsEqual(value.senderBeforeCommitment(), value.senderAfterCommitment()))
         require(!value.terminalNullifier().contentEquals(value.redemptionCommitment()))
         require(!value.terminalNullifier().contentEquals(value.redemptionId()))
         require(!value.redemptionCommitment().contentEquals(value.redemptionId()))
@@ -803,12 +1177,12 @@ object KagemushaNoritoV1 {
         return digestEncoded(LIFECYCLE_DIGEST_DOMAIN, raw(value, LIFECYCLE_SCHEMA, LIFECYCLE_ADAPTER))
     }
 
-    private fun statementDigest(value: KagemushaTransferStatementV1): ByteArray =
-        digestEncoded(STATEMENT_DIGEST_DOMAIN, raw(value, STATEMENT_SCHEMA, STATEMENT_ADAPTER))
-
     private fun ciphertextDigest(bytes: ByteArray): ByteArray = digestBytes(CIPHERTEXT_DIGEST_DOMAIN, bytes)
 
-    private fun paymentDigest(value: KagemushaPaymentV1, request: KagemushaPaymentRequestV1): ByteArray {
+    private fun paymentDigest(
+        value: KagemushaPaymentV1,
+        request: KagemushaPaymentRequestV1,
+    ): ByteArray {
         validatePaymentShape(value, request)
         return digestEncoded(PAYMENT_DIGEST_DOMAIN, raw(value, PAYMENT_SCHEMA, PAYMENT_ADAPTER))
     }
@@ -841,7 +1215,7 @@ object KagemushaNoritoV1 {
                 bytes32Field(e, value.liabilityPoolId())
                 bytes32Field(e, value.hardwareProfileId())
                 u64Field(e, value.policyEpoch)
-                enumUnitField(e, value.operationKind.ordinal)
+                enumUnitField(e, value.operationKind.wireTag)
             },
         )
 
@@ -871,36 +1245,41 @@ object KagemushaNoritoV1 {
             frame("iroha.kagemusha.v1.redemption-id-preimage", 16) { e ->
                 bytes32Field(e, lifecycleDigest(value.lifecycle))
                 bytes32Field(e, value.terminalNullifier())
-                nestedField(e, PASTA_STATE_ADAPTER, value.senderBeforeCommitment())
-                nestedField(e, PASTA_STATE_ADAPTER, value.senderAfterCommitment())
-                u64Field(e, value.committedAtMs)
                 u128Field(e, value.amount)
                 accountField(e, value.beneficiary)
                 bytes32Field(e, value.redemptionCommitment())
-                bytes32Field(e, value.hardwareTransitionCommitment())
             },
         )
 
-    private fun expectedPeerCreditId(value: KagemushaTransferStatementV1): ByteArray = digestEncoded(
-        CREDIT_ID_DOMAIN,
-        frame("iroha.kagemusha.v1.credit-id-preimage", 16) { encoder ->
-            field(encoder) { fixedArray(it, value.transitionNullifier()) }
-            field(encoder) { fixedArray(it, value.requestDigest()) }
-            nestedField(encoder, PASTA_STATE_ADAPTER, value.senderBeforeCommitment())
-            nestedField(encoder, PASTA_STATE_ADAPTER, value.senderAfterCommitment())
-            field(encoder) { fixedArray(it, value.recipientLaneId()) }
-            field(encoder) { fixedArray(it, value.recipientEncryptionKey.bytes()) }
-            field(encoder) { it.writeUInt(value.committedAtMs, 64) }
-            field(encoder) { uint128(it, value.amount) }
-            field(encoder) { fixedArray(it, value.ciphertextCommitment()) }
-            field(encoder) { fixedArray(it, value.hardwareTransitionCommitment()) }
-        },
-    )
+    private fun preparedTransferDigest(
+        request: KagemushaPaymentRequestV1,
+        senderBeforeCommitment: ByteArray,
+        senderAfterCommitment: ByteArray,
+        transitionNullifier: ByteArray,
+        ciphertextCommitment: ByteArray,
+    ): ByteArray {
+        validatePaymentRequestShape(request)
+        val before = fixed32(senderBeforeCommitment, "senderBeforeCommitment")
+        val after = fixed32(senderAfterCommitment, "senderAfterCommitment")
+        require(!before.contentEquals(after))
+        return digestBytes(
+            PREPARED_TRANSFER_DIGEST_DOMAIN,
+            fixedTranscript(
+                210, u16Le(KagemushaWireV1.WIRE_VERSION), paymentRequestDigest(request),
+                u128Le(request.amount), before, after,
+                fixed32(transitionNullifier, "transitionNullifier"),
+                request.recipientEncryptionKey.bytes(), fixed32(ciphertextCommitment, "ciphertextCommitment"),
+            ),
+        )
+    }
 
-    private fun pastaStateCommitmentsEqual(
-        left: KagemushaPastaStateCommitmentV1,
-        right: KagemushaPastaStateCommitmentV1,
-    ): Boolean = left.eq().contentEquals(right.eq()) && left.ep().contentEquals(right.ep())
+    private fun expectedPeerCreditId(
+        output: KagemushaPaymentOutputV1,
+        request: KagemushaPaymentRequestV1,
+    ): ByteArray = sha256(
+        CREDIT_ID_DOMAIN, byteArrayOf(0), output.transitionNullifier(),
+        paymentRequestDigest(request),
+    )
 
     private val AGGREGATE_ADAPTER = adapter<KagemushaAggregateStateCommitmentV1>(
         encode = { e, v ->
@@ -1025,9 +1404,8 @@ object KagemushaNoritoV1 {
             u32Field(e, v.scale)
             bytes32Field(e, v.liabilityPoolId())
             accountField(e, v.recipient)
-            bytes32Field(e, v.recipientLaneId())
-            bytes32Field(e, v.recipientEncryptionKey.bytes())
             u128Field(e, v.amount)
+            bytes32Field(e, v.recipientEncryptionKey.bytes())
             nestedField(e, HARDWARE_CREDENTIAL_ADAPTER, v.hardwareCredential)
             bytes32Field(e, v.requestId())
             u64Field(e, v.issuedAtMs)
@@ -1037,10 +1415,10 @@ object KagemushaNoritoV1 {
         decode = { d ->
             KagemushaPaymentRequestV1(
                 readU16(d), readFixed32(d), readNetwork(d), readAsset(d), readIncarnation(d),
-                readU32(d), readFixed32(d), readAccount(d), readFixed32(d),
-                KagemushaX25519PublicKeyV1(readRaw32(d)), readU128(d),
-                readNested(d, HARDWARE_CREDENTIAL_ADAPTER), readFixed32(d), readU64(d), readU64(d),
-                readSignature(d),
+                readU32(d), readFixed32(d), readAccount(d), readU128(d),
+                KagemushaX25519PublicKeyV1(readRaw32(d)),
+                readNested(d, HARDWARE_CREDENTIAL_ADAPTER),
+                readFixed32(d), readU64(d), readU64(d), readSignature(d),
             )
         },
     )
@@ -1049,19 +1427,16 @@ object KagemushaNoritoV1 {
         encode = { e, v ->
             u16Field(e, v.version)
             bytes32Field(e, v.requestDigest())
-            nestedField(e, PASTA_STATE_ADAPTER, v.senderBeforeCommitment())
-            nestedField(e, PASTA_STATE_ADAPTER, v.senderAfterCommitment())
-            bytes32Field(e, v.recipientLaneId())
+            u128Field(e, v.amount)
+            bytes32Field(e, v.senderBeforeCommitment())
+            bytes32Field(e, v.senderAfterCommitment())
+            bytes32Field(e, v.preparedTransferDigest())
             bytes32Field(e, v.recipientEncryptionKey.bytes())
-            u64Field(e, v.committedAtMs)
-            bytes32Field(e, v.hardwareTransitionCommitment())
-            bytes32Field(e, v.lifecycleContextDigest())
         },
         decode = { d ->
             KagemushaPeerCreditContextV1(
-                readU16(d), readFixed32(d), readNested(d, PASTA_STATE_ADAPTER),
-                readNested(d, PASTA_STATE_ADAPTER), readFixed32(d),
-                KagemushaX25519PublicKeyV1(readRaw32(d)), readU64(d), readFixed32(d), readFixed32(d),
+                readU16(d), readFixed32(d), readU128(d), readFixed32(d), readFixed32(d), readFixed32(d),
+                KagemushaX25519PublicKeyV1(readRaw32(d)),
             )
         },
     )
@@ -1127,8 +1502,9 @@ object KagemushaNoritoV1 {
             bytes32Field(e, v.liabilityPoolId())
             bytes32Field(e, v.hardwareProfileId())
             u64Field(e, v.policyEpoch)
-            enumUnitField(e, v.operationKind.ordinal)
+            enumUnitField(e, v.operationKind.wireTag)
             raw32Field(e, v.requestId())
+            raw32Field(e, v.receiverLaneCommitment())
             raw32Field(e, v.creditId())
             raw32Field(e, v.ciphertextDigest())
         },
@@ -1136,33 +1512,114 @@ object KagemushaNoritoV1 {
             KagemushaLifecycleBindingV1(
                 readU16(d), readNetwork(d), readU16(d), readFixed32(d), readFixed32(d), readFixed32(d),
                 readAsset(d), readIncarnation(d), readU32(d), readFixed32(d), readFixed32(d), readU64(d),
-                KagemushaOperationKindV1.values()[readEnumUnit(d, 6)], readRaw32(d), readRaw32(d),
-                readRaw32(d),
+                KagemushaOperationKindV1.values()[readEnumUnit(d, 7)], readRaw32(d), readRaw32(d),
+                readRaw32(d), readRaw32(d),
             )
         },
     )
 
-    private val STATEMENT_ADAPTER = adapter<KagemushaTransferStatementV1>(
+    private val COMMIT_EVIDENCE_ADAPTER = adapter<KagemushaCommitEvidenceV1>(
         encode = { e, v ->
-            u16Field(e, v.version)
-            nestedField(e, LIFECYCLE_ADAPTER, v.lifecycle)
-            u128Field(e, v.amount)
-            bytes32Field(e, v.transitionNullifier())
-            bytes32Field(e, v.requestDigest())
-            nestedField(e, PASTA_STATE_ADAPTER, v.senderBeforeCommitment())
-            nestedField(e, PASTA_STATE_ADAPTER, v.senderAfterCommitment())
-            bytes32Field(e, v.recipientLaneId())
-            bytes32Field(e, v.recipientEncryptionKey.bytes())
-            u64Field(e, v.committedAtMs)
-            bytes32Field(e, v.ciphertextCommitment())
-            bytes32Field(e, v.hardwareTransitionCommitment())
+            enumPayload(e, v.wireTag) { payload ->
+                bytes32Field(payload, v.evidenceCommitment())
+            }
         },
         decode = { d ->
-            KagemushaTransferStatementV1(
-                readU16(d), readNested(d, LIFECYCLE_ADAPTER), readU128(d), readFixed32(d),
-                readFixed32(d), readNested(d, PASTA_STATE_ADAPTER),
-                readNested(d, PASTA_STATE_ADAPTER), readFixed32(d),
-                KagemushaX25519PublicKeyV1(readRaw32(d)), readU64(d), readFixed32(d), readFixed32(d),
+            when (readEnumTag(d, 2)) {
+                0 -> readEnumPayload(d) { KagemushaTrustedCommitTimeV1(readFixed32(it)) }
+                else -> readEnumPayload(d) { KagemushaMonotonicLeaseV1(readFixed32(it)) }
+            }
+        },
+    )
+
+    private val COMMIT_CERTIFICATE_ADAPTER = adapter<KagemushaCommitCertificateV1>(
+        encode = { e, v ->
+            u16Field(e, v.version)
+            bytes32Field(e, v.certificateId())
+            bytes32Field(e, v.candidateEnvelopeDigest())
+            bytes32Field(e, v.lifecycleBindingDigest())
+            bytes32Field(e, v.transitionNullifier())
+            bytes32Field(e, v.outboxReservationCommitment())
+            nestedField(e, COMMIT_EVIDENCE_ADAPTER, v.commitEvidence)
+            bytes32Field(e, v.hardwareProfileId())
+            u64Field(e, v.policyEpoch)
+            bytes32Field(e, v.hardwareTerminalCommitment())
+        },
+        decode = { d ->
+            KagemushaCommitCertificateV1(
+                readU16(d), readFixed32(d), readFixed32(d), readFixed32(d), readFixed32(d),
+                readFixed32(d), readNested(d, COMMIT_EVIDENCE_ADAPTER), readFixed32(d),
+                readU64(d), readFixed32(d),
+            )
+        },
+    )
+
+    private val PAYMENT_PROOF_ADAPTER = adapter<KagemushaPaymentProofV1>(
+        encode = { e, v ->
+            u16Field(e, v.version)
+            bytes32Field(e, v.eqProtocolDigest())
+            bytes32Field(e, v.epProtocolDigest())
+            bytes32Field(e, v.semanticDigest())
+            bytes32Field(e, v.candidateEnvelopeDigest())
+            bytes32Field(e, v.commitCertificateDigest())
+            bytes32Field(e, v.eqDeferredAudit())
+            bytes32Field(e, v.epDeferredAudit())
+            vectorField(e, v.eqProof())
+            vectorField(e, v.epProof())
+            vectorField(e, v.eqHistory())
+            vectorField(e, v.epHistory())
+        },
+        decode = { d ->
+            KagemushaPaymentProofV1(
+                readU16(d), readFixed32(d), readFixed32(d), readFixed32(d), readFixed32(d),
+                readFixed32(d), readFixed32(d), readFixed32(d), readVector(d), readVector(d),
+                readVector(d), readVector(d),
+            )
+        },
+    )
+
+    private val REDEMPTION_PROOF_ADAPTER = adapter<KagemushaRedemptionProofV1>(
+        encode = { e, v ->
+            u16Field(e, v.version)
+            bytes32Field(e, v.eqProtocolDigest())
+            bytes32Field(e, v.epProtocolDigest())
+            bytes32Field(e, v.semanticDigest())
+            bytes32Field(e, v.candidateEnvelopeDigest())
+            bytes32Field(e, v.commitCertificateDigest())
+            bytes32Field(e, v.eqDeferredAudit())
+            bytes32Field(e, v.epDeferredAudit())
+            vectorField(e, v.eqProof())
+            vectorField(e, v.epProof())
+            vectorField(e, v.eqHistory())
+            vectorField(e, v.epHistory())
+        },
+        decode = { d ->
+            KagemushaRedemptionProofV1(
+                readU16(d), readFixed32(d), readFixed32(d), readFixed32(d), readFixed32(d),
+                readFixed32(d), readFixed32(d), readFixed32(d), readVector(d), readVector(d),
+                readVector(d), readVector(d),
+            )
+        },
+    )
+
+    private val PAYMENT_OUTPUT_ADAPTER = adapter<KagemushaPaymentOutputV1>(
+        encode = { e, v ->
+            u16Field(e, v.version)
+            bytes32Field(e, v.requestDigest())
+            u128Field(e, v.amount)
+            bytes32Field(e, v.senderBeforeCommitment())
+            bytes32Field(e, v.senderAfterCommitment())
+            bytes32Field(e, v.transitionNullifier())
+            bytes32Field(e, v.creditId())
+            bytes32Field(e, v.ciphertextCommitment())
+            nestedField(e, COMMIT_EVIDENCE_ADAPTER, v.commitEvidence)
+            u64Field(e, v.committedAtMs)
+        },
+        decode = { d ->
+            KagemushaPaymentOutputV1(
+                readU16(d), readFixed32(d), readU128(d), readFixed32(d), readFixed32(d),
+                readFixed32(d), readFixed32(d), readFixed32(d),
+                readNested(d, COMMIT_EVIDENCE_ADAPTER), readU64(d),
             )
         },
     )
@@ -1170,14 +1627,15 @@ object KagemushaNoritoV1 {
     private val PAYMENT_ADAPTER = adapter<KagemushaPaymentV1>(
         encode = { e, v ->
             u16Field(e, v.version)
-            nestedField(e, STATEMENT_ADAPTER, v.statement)
-            nestedField(e, PROOF_ADAPTER, v.proof)
+            nestedField(e, PAYMENT_OUTPUT_ADAPTER, v.output)
             vectorField(e, v.encryptedCredit())
+            nestedField(e, COMMIT_CERTIFICATE_ADAPTER, v.commitCertificate)
+            nestedField(e, PAYMENT_PROOF_ADAPTER, v.proof)
         },
         decode = { d ->
             KagemushaPaymentV1(
-                readU16(d), readNested(d, STATEMENT_ADAPTER),
-                readNested(d, PROOF_ADAPTER), readVector(d),
+                readU16(d), readNested(d, PAYMENT_OUTPUT_ADAPTER), readVector(d),
+                readNested(d, COMMIT_CERTIFICATE_ADAPTER), readNested(d, PAYMENT_PROOF_ADAPTER),
             )
         },
     )
@@ -1306,6 +1764,38 @@ object KagemushaNoritoV1 {
         },
     )
 
+    private val DEVICE_MINT_STAGE_COMMAND_ADAPTER =
+        adapter<KagemushaDeviceMintStageCommandV1>(
+            encode = { e, v ->
+                u16Field(e, v.version)
+                vectorField(e, v.canonicalAuthorization())
+                vectorField(e, v.canonicalMintCredit())
+            },
+            decode = { d ->
+                KagemushaDeviceMintStageCommandV1(
+                    readU16(d),
+                    readVector(d),
+                    readVector(d),
+                )
+            },
+        )
+
+    private val DEVICE_MINT_STAGE_RESULT_ADAPTER =
+        adapter<KagemushaDeviceMintStageResultV1>(
+            encode = { e, v ->
+                u16Field(e, v.version)
+                u8Field(e, v.disposition)
+                bytes32Field(e, v.creditId())
+            },
+            decode = { d ->
+                KagemushaDeviceMintStageResultV1(
+                    readU16(d),
+                    readU8(d),
+                    readFixed32(d),
+                )
+            },
+        )
+
     private val REDEMPTION_STATEMENT_ADAPTER = adapter<KagemushaRedemptionStatementV1>(
         encode = { e, v ->
             u16Field(e, v.version)
@@ -1313,19 +1803,15 @@ object KagemushaNoritoV1 {
             u128Field(e, v.amount)
             accountField(e, v.beneficiary)
             bytes32Field(e, v.terminalNullifier())
-            nestedField(e, PASTA_STATE_ADAPTER, v.senderBeforeCommitment())
-            nestedField(e, PASTA_STATE_ADAPTER, v.senderAfterCommitment())
-            u64Field(e, v.committedAtMs)
             bytes32Field(e, v.redemptionCommitment())
             bytes32Field(e, v.redemptionId())
-            bytes32Field(e, v.hardwareTransitionCommitment())
+            nestedField(e, COMMIT_EVIDENCE_ADAPTER, v.commitEvidence)
         },
         decode = { d ->
             KagemushaRedemptionStatementV1(
                 readU16(d), readNested(d, LIFECYCLE_ADAPTER), readU128(d), readAccount(d),
-                readFixed32(d), readNested(d, PASTA_STATE_ADAPTER),
-                readNested(d, PASTA_STATE_ADAPTER), readU64(d), readFixed32(d),
-                readFixed32(d), readFixed32(d),
+                readFixed32(d), readFixed32(d), readFixed32(d),
+                readNested(d, COMMIT_EVIDENCE_ADAPTER),
             )
         },
     )
@@ -1334,12 +1820,109 @@ object KagemushaNoritoV1 {
         encode = { e, v ->
             u16Field(e, v.version)
             nestedField(e, REDEMPTION_STATEMENT_ADAPTER, v.statement)
-            nestedField(e, PROOF_ADAPTER, v.proof)
+            nestedField(e, COMMIT_CERTIFICATE_ADAPTER, v.commitCertificate)
+            nestedField(e, REDEMPTION_PROOF_ADAPTER, v.proof)
+            bytes32Field(e, v.artifactManifestDigest())
         },
         decode = { d ->
             KagemushaRedemptionVoucherV1(
                 readU16(d), readNested(d, REDEMPTION_STATEMENT_ADAPTER),
-                readNested(d, PROOF_ADAPTER),
+                readNested(d, COMMIT_CERTIFICATE_ADAPTER), readNested(d, REDEMPTION_PROOF_ADAPTER),
+                readFixed32(d),
+            )
+        },
+    )
+
+    private val OPTIONAL_MINT_AUTH_ADAPTER = NoritoAdapters.option(MINT_AUTH_ADAPTER)
+
+    private val TOP_UP_REQUEST_ADAPTER = adapter<KagemushaTopUpRequestV1>(
+        encode = { e, v ->
+            u16Field(e, v.version)
+            bytes32Field(e, v.operationId())
+            bytes32Field(e, v.issuanceCommitment())
+            bytes32Field(e, v.creditId())
+            bytes32Field(e, v.releaseId())
+            bytes32Field(e, v.suiteId())
+            bytes32Field(e, v.vkDigest())
+            networkField(e, v.networkId)
+            assetField(e, v.asset)
+            incarnationField(e, v.assetIncarnation)
+            u32Field(e, v.scale)
+            u128Field(e, v.amount)
+            bytes32Field(e, v.liabilityPoolId())
+            accountField(e, v.payer)
+            accountField(e, v.recipient)
+            nestedField(e, HARDWARE_CREDENTIAL_ADAPTER, v.hardwareCredential)
+            bytes32Field(e, v.recipientCredentialCommitment())
+            bytes32Field(e, v.creditCommitment())
+            bytes32Field(e, v.recipientOneTimeKey.bytes())
+            vectorField(e, v.encryptedCredit())
+            bytes32Field(e, v.artifactManifestDigest())
+            nestedField(e, OPTIONAL_MINT_AUTH_ADAPTER, Optional.of(v.mintAuthorization))
+        },
+        decode = { d ->
+            val version = readU16(d)
+            val operationId = readFixed32(d)
+            val issuanceCommitment = readFixed32(d)
+            val creditId = readFixed32(d)
+            val releaseId = readFixed32(d)
+            val suiteId = readFixed32(d)
+            val vkDigest = readFixed32(d)
+            val networkId = readNetwork(d)
+            val asset = readAsset(d)
+            val assetIncarnation = readIncarnation(d)
+            val scale = readU32(d)
+            val amount = readU128(d)
+            val liabilityPoolId = readFixed32(d)
+            val payer = readAccount(d)
+            val recipient = readAccount(d)
+            val credential = readNested(d, HARDWARE_CREDENTIAL_ADAPTER)
+            val recipientCredentialCommitment = readFixed32(d)
+            val creditCommitment = readFixed32(d)
+            val recipientOneTimeKey = KagemushaX25519PublicKeyV1(readRaw32(d))
+            val encryptedCredit = readVector(d)
+            val artifactManifestDigest = readFixed32(d)
+            val authorization = readNested(d, OPTIONAL_MINT_AUTH_ADAPTER).orElseThrow {
+                IllegalArgumentException("canonical KAGEMUSHA V1 top-up requires mint authorization")
+            }
+            KagemushaTopUpRequestV1(
+                version,
+                operationId,
+                issuanceCommitment,
+                creditId,
+                releaseId,
+                suiteId,
+                vkDigest,
+                networkId,
+                asset,
+                assetIncarnation,
+                scale,
+                amount,
+                liabilityPoolId,
+                payer,
+                recipient,
+                credential,
+                recipientCredentialCommitment,
+                creditCommitment,
+                recipientOneTimeKey,
+                encryptedCredit,
+                artifactManifestDigest,
+                authorization,
+            )
+        },
+    )
+
+    private val REDEMPTION_REQUEST_ADAPTER = adapter<KagemushaRedemptionRequestV1>(
+        encode = { e, v ->
+            u16Field(e, v.version)
+            bytes32Field(e, v.operationId())
+            nestedField(e, REDEMPTION_ADAPTER, v.voucher)
+        },
+        decode = { d ->
+            KagemushaRedemptionRequestV1(
+                readU16(d),
+                readFixed32(d),
+                readNested(d, REDEMPTION_ADAPTER),
             )
         },
     )
@@ -1356,13 +1939,22 @@ object KagemushaNoritoV1 {
         encodeCanonical(value, schema, adapter, canonicalAlignment(schema))
 
     private fun canonicalAlignment(schema: String): Int = when (schema) {
+        PEER_CREDIT_CONTEXT_SCHEMA,
+        LIFECYCLE_SCHEMA,
+        COMMIT_CERTIFICATE_SCHEMA,
+        REDEMPTION_PROOF_SCHEMA,
+        PAYMENT_PROOF_SCHEMA,
+        PAYMENT_SCHEMA,
+        DEVICE_MINT_STAGE_COMMAND_SCHEMA,
+        -> 8
+        ACK_SCHEMA,
+        -> 2
         AGGREGATE_SCHEMA,
         PASTA_STATE_SCHEMA,
         REQUEST_SCHEMA,
         CREDIT_OPENING_SCHEMA,
         CREDIT_AAD_SCHEMA,
-        STATEMENT_SCHEMA,
-        PAYMENT_SCHEMA,
+        PAYMENT_OUTPUT_SCHEMA,
         MODEL + "KagemushaMintAuthorizationContextV1",
         MODEL + "KagemushaMintAuthorizationStatementV1",
         MINT_AUTH_SCHEMA,
@@ -1370,7 +1962,11 @@ object KagemushaNoritoV1 {
         MINT_SCHEMA,
         REDEMPTION_STATEMENT_SCHEMA,
         REDEMPTION_SCHEMA,
+        TOP_UP_REQUEST_SCHEMA,
+        REDEMPTION_REQUEST_SCHEMA,
         -> 16
+        DEVICE_MINT_STAGE_RESULT_SCHEMA,
+        -> 2
         else -> 1
     }
 
@@ -1415,7 +2011,7 @@ object KagemushaNoritoV1 {
 
     private fun readField(parent: NoritoDecoder): NoritoDecoder {
         val length = parent.readLength(true)
-        require(length <= parent.remaining().toLong()) { "truncated Kagemusha V1 field" }
+        require(length <= parent.remaining().toLong()) { "truncated KAGEMUSHA V1 field" }
         return NoritoDecoder(parent.readBytes(length.toInt()), parent.flags)
     }
 
@@ -1425,11 +2021,12 @@ object KagemushaNoritoV1 {
     private fun <T> readNested(parent: NoritoDecoder, adapter: TypeAdapter<T>): T {
         val child = readField(parent)
         val value = adapter.decode(child)
-        require(child.remaining() == 0) { "trailing nested Kagemusha V1 bytes" }
+        require(child.remaining() == 0) { "trailing nested KAGEMUSHA V1 bytes" }
         return value
     }
 
     private fun u16Field(e: NoritoEncoder, value: Int) = field(e) { it.writeUInt(value.toLong(), 16) }
+    private fun u8Field(e: NoritoEncoder, value: Int) = field(e) { it.writeUInt(value.toLong(), 8) }
     private fun u32Field(e: NoritoEncoder, value: Int) = field(e) { it.writeUInt(value.toLong(), 32) }
     private fun u64Field(e: NoritoEncoder, value: Long) = field(e) { it.writeUInt(value, 64) }
     private fun u128Field(e: NoritoEncoder, value: BigInteger) = field(e) { uint128(it, value) }
@@ -1519,6 +2116,13 @@ object KagemushaNoritoV1 {
         return value
     }
 
+    private fun readU8(decoder: NoritoDecoder): Int {
+        val child = readField(decoder)
+        val value = child.readUInt(8).toInt()
+        require(child.remaining() == 0)
+        return value
+    }
+
     private fun readU32(decoder: NoritoDecoder): Int {
         val child = readField(decoder)
         val value = child.readUInt(32)
@@ -1566,14 +2170,38 @@ object KagemushaNoritoV1 {
         adapter: TypeAdapter<T>,
         encode: (T) -> ByteArray,
     ): T {
-        require(bytes.isNotEmpty() && bytes.size <= maximum) { "Kagemusha V1 archive is empty or oversized" }
-        val value = NoritoCodec.decode(bytes, adapter, schema)
-        require(encode(value).contentEquals(bytes)) { "Kagemusha V1 archive is not canonical" }
+        require(bytes.isNotEmpty() && bytes.size <= maximum) { "KAGEMUSHA V1 archive is empty or oversized" }
+        val canonical = bytes.copyOf()
+        require(canonical.size >= NoritoHeader.HEADER_LENGTH) {
+            "KAGEMUSHA V1 archive has a truncated Norito header"
+        }
+        // The generic codec can decompress to the untrusted declared length. Reject noncanonical
+        // headers and bound the exact schema-aligned framing before entering that allocation path.
+        val compressionOffset = 4 + 1 + 1 + 16
+        require(canonical[compressionOffset].toInt() and 0xff == NoritoHeader.COMPRESSION_NONE) {
+            "KAGEMUSHA V1 canonical archive must be uncompressed"
+        }
+        require(canonical[NoritoHeader.HEADER_LENGTH - 1].toInt() and 0xff == NoritoHeader.COMPACT_LEN) {
+            "KAGEMUSHA V1 canonical archive has noncanonical layout flags"
+        }
+        val alignment = canonicalAlignment(schema)
+        val padding = (alignment - NoritoHeader.HEADER_LENGTH % alignment) % alignment
+        val framingBytes = NoritoHeader.HEADER_LENGTH + padding
+        val payloadLength = ByteBuffer.wrap(canonical).order(ByteOrder.LITTLE_ENDIAN)
+            .getLong(compressionOffset + 1)
+        require(payloadLength >= 0 && payloadLength <= (maximum - framingBytes).toLong()) {
+            "KAGEMUSHA V1 declared payload is oversized"
+        }
+        require(payloadLength == (canonical.size - framingBytes).toLong()) {
+            "KAGEMUSHA V1 payload length does not match canonical framing"
+        }
+        val value = NoritoCodec.decode(canonical, adapter, schema)
+        require(encode(value).contentEquals(canonical)) { "KAGEMUSHA V1 archive is not canonical" }
         return value
     }
 
     private fun bounded(bytes: ByteArray, maximum: Int): ByteArray {
-        require(bytes.size <= maximum) { "Kagemusha V1 archive exceeds $maximum bytes" }
+        require(bytes.size <= maximum) { "KAGEMUSHA V1 archive exceeds $maximum bytes" }
         return bytes
     }
 
@@ -1581,11 +2209,11 @@ object KagemushaNoritoV1 {
         val transcript = ByteArray(expectedSize)
         var offset = 0
         parts.forEach { part ->
-            require(offset + part.size <= transcript.size) { "Kagemusha V1 circuit transcript overflow" }
+            require(offset + part.size <= transcript.size) { "KAGEMUSHA V1 circuit transcript overflow" }
             part.copyInto(transcript, offset)
             offset += part.size
         }
-        require(offset == transcript.size) { "Kagemusha V1 circuit transcript width mismatch" }
+        require(offset == transcript.size) { "KAGEMUSHA V1 circuit transcript width mismatch" }
         return transcript
     }
 

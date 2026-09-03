@@ -9,9 +9,10 @@ use iroha_data_model::{
     nexus::{
         AtomicPrivateSettlementV1, PRIVATE_SETTLEMENT_BLS_BYTES_V1,
         PRIVATE_SETTLEMENT_COMMITTEE_QUORUM_V1, PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1,
-        PrivateSettlementCommitteeAuthorityV1, PrivateSettlementDeltaV1,
-        PrivateSettlementPhaseBodyV1, PrivateSettlementPhaseCertificateV1,
-        PrivateSettlementPhaseV1, PrivateSettlementPhaseVoteV1, PrivateSettlementPrepareBarrierV1,
+        PrivateSettlementAuthorityCatalogV1, PrivateSettlementCommitteeAuthorityV1,
+        PrivateSettlementDeltaV1, PrivateSettlementPhaseBodyV1,
+        PrivateSettlementPhaseCertificateV1, PrivateSettlementPhaseV1,
+        PrivateSettlementPhaseVoteV1, PrivateSettlementPrepareBarrierV1,
         PrivateSettlementReceiptV1,
     },
     peer::PeerId,
@@ -36,12 +37,12 @@ pub(crate) fn private_settlement_reserved_prepared_bundle_digest_v1() -> Hash {
 /// certificates cannot fork the bundle during crash recovery.
 pub(crate) fn private_settlement_prepared_bundle_digest_v1(
     manifest: &AtomicPrivateSettlementV1,
-    authority_catalog: &[PrivateSettlementCommitteeAuthorityV1],
+    authority_catalog: &PrivateSettlementAuthorityCatalogV1,
     deltas: &[PrivateSettlementDeltaV1],
     prepare_certificates: &[PrivateSettlementPhaseCertificateV1],
 ) -> Result<Hash, PrivateSettlementProtocolErrorV1> {
     let leg_count = manifest.legs.len();
-    if authority_catalog.len() != leg_count
+    if authority_catalog.validate_for_manifest(manifest).is_err()
         || deltas.len() != leg_count
         || prepare_certificates.len() != leg_count
     {
@@ -50,7 +51,7 @@ pub(crate) fn private_settlement_prepared_bundle_digest_v1(
     PrivateSettlementPrepareBarrierV1 {
         version: iroha_data_model::nexus::ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
         manifest: manifest.clone(),
-        authority_catalog: authority_catalog.to_vec(),
+        authority_catalog: authority_catalog.clone(),
         deltas: deltas.to_vec(),
         prepare_certificates: prepare_certificates.to_vec(),
         prepared_bundle_digest: private_settlement_reserved_prepared_bundle_digest_v1(),
@@ -66,6 +67,9 @@ pub(crate) fn private_settlement_prepare_barrier_v1(
     deltas: Vec<PrivateSettlementDeltaV1>,
     prepare_certificates: Vec<PrivateSettlementPhaseCertificateV1>,
 ) -> Result<PrivateSettlementPrepareBarrierV1, PrivateSettlementProtocolErrorV1> {
+    let authority_catalog =
+        PrivateSettlementAuthorityCatalogV1::from_leg_authorities(&manifest, &authority_catalog)
+            .map_err(|_| PrivateSettlementProtocolErrorV1::Binding)?;
     let prepared_bundle_digest = private_settlement_prepared_bundle_digest_v1(
         &manifest,
         &authority_catalog,
@@ -91,27 +95,30 @@ pub(crate) fn validate_private_settlement_prepare_barrier_v1(
     barrier
         .validate_shape()
         .map_err(|_| PrivateSettlementProtocolErrorV1::Binding)?;
-    for (index, (((authority, delta), certificate), manifest_leg)) in barrier
-        .authority_catalog
+    for (index, ((delta, certificate), manifest_leg)) in barrier
+        .deltas
         .iter()
-        .zip(&barrier.deltas)
         .zip(&barrier.prepare_certificates)
         .zip(&barrier.manifest.legs)
         .enumerate()
     {
         let ordinal = u8::try_from(index).map_err(|_| PrivateSettlementProtocolErrorV1::Binding)?;
-        validate_authority_cryptography_v1(authority)?;
+        let authority = barrier
+            .authority_catalog
+            .authority_for_leg(&barrier.manifest, index)
+            .map_err(|_| PrivateSettlementProtocolErrorV1::Binding)?;
+        validate_authority_cryptography_v1(&authority)?;
         let expected = private_settlement_phase_body_v1(
             &barrier.manifest,
             delta,
-            authority,
+            &authority,
             PrivateSettlementPhaseV1::Prepare,
             private_settlement_reserved_prepared_bundle_digest_v1(),
         )?;
         if manifest_leg.ordinal != ordinal || certificate.body != expected {
             return Err(PrivateSettlementProtocolErrorV1::Binding);
         }
-        verify_private_settlement_phase_certificate_v1(certificate, ordinal, authority)?;
+        verify_private_settlement_phase_certificate_v1(certificate, ordinal, &authority)?;
     }
     let recomputed = private_settlement_prepared_bundle_digest_v1(
         &barrier.manifest,
@@ -422,14 +429,13 @@ pub(crate) fn verify_private_settlement_receipt_v1(
         &deltas,
         &prepare_certificates,
     )?;
-    for (index, (authority, leg)) in receipt
-        .authority_catalog
-        .iter()
-        .zip(&receipt.legs)
-        .enumerate()
-    {
+    for (index, leg) in receipt.legs.iter().enumerate() {
         let catalog_index =
             u8::try_from(index).map_err(|_| PrivateSettlementProtocolErrorV1::Receipt)?;
+        let authority = receipt
+            .authority_catalog
+            .authority_for_leg(&receipt.manifest, index)
+            .map_err(|_| PrivateSettlementProtocolErrorV1::Receipt)?;
         for (phase, certificate) in [
             (PrivateSettlementPhaseV1::Prepare, &leg.prepare),
             (PrivateSettlementPhaseV1::Commit, &leg.commit),
@@ -437,7 +443,7 @@ pub(crate) fn verify_private_settlement_receipt_v1(
             let expected = private_settlement_phase_body_v1(
                 &receipt.manifest,
                 &leg.delta,
-                authority,
+                &authority,
                 phase,
                 match phase {
                     PrivateSettlementPhaseV1::Prepare => {
@@ -449,7 +455,7 @@ pub(crate) fn verify_private_settlement_receipt_v1(
             if certificate.body != expected {
                 return Err(PrivateSettlementProtocolErrorV1::Binding);
             }
-            verify_private_settlement_phase_certificate_v1(certificate, catalog_index, authority)?;
+            verify_private_settlement_phase_certificate_v1(certificate, catalog_index, &authority)?;
         }
     }
     Ok(())
@@ -632,7 +638,10 @@ mod tests {
         let (_, mut receipt, fixture) = crate::private_settlement::global_state::tests::fixture();
         let leg_index = 1_usize;
         let body = receipt.legs[leg_index].prepare.body;
-        let authority = &receipt.authority_catalog[leg_index];
+        let authority = receipt
+            .authority_catalog
+            .authority_for_leg(&receipt.manifest, leg_index)
+            .expect("fixture authority");
         let alternate_votes = fixture.validator_keys[1..]
             .iter()
             .map(|key| sign_private_settlement_phase_vote_v1(body, key).expect("phase vote"))
@@ -640,7 +649,7 @@ mod tests {
         let alternate_prepare = aggregate_private_settlement_phase_votes_v1(
             body,
             u8::try_from(leg_index).expect("fixture leg ordinal"),
-            authority,
+            &authority,
             &alternate_votes,
         )
         .expect("alternate valid Prepare QC");
@@ -648,7 +657,7 @@ mod tests {
         verify_private_settlement_phase_certificate_v1(
             &alternate_prepare,
             u8::try_from(leg_index).expect("fixture leg ordinal"),
-            authority,
+            &authority,
         )
         .expect("substituted Prepare QC is independently valid");
 
@@ -681,19 +690,19 @@ mod tests {
 
         let mut manifest = receipt.manifest.clone();
         manifest.expiry_height += 1;
-        assert_ne!(
+        assert_eq!(
             private_settlement_prepared_bundle_digest_v1(
                 &manifest,
                 &receipt.authority_catalog,
                 &deltas,
                 &prepares,
-            )
-            .expect("changed-manifest digest"),
-            digest
+            ),
+            Err(PrivateSettlementProtocolErrorV1::Binding),
+            "a manifest whose derived bundle id no longer matches must fail before hashing"
         );
 
         let mut authorities = receipt.authority_catalog.clone();
-        authorities[1].validator_pops[0][0] ^= 1;
+        authorities.rosters[0].validator_pops[0][0] ^= 1;
         assert_ne!(
             private_settlement_prepared_bundle_digest_v1(
                 &receipt.manifest,
@@ -740,7 +749,10 @@ mod tests {
         let alternate = aggregate_private_settlement_phase_votes_v1(
             body,
             u8::try_from(leg_index).expect("fixture leg ordinal"),
-            &receipt.authority_catalog[leg_index],
+            &receipt
+                .authority_catalog
+                .authority_for_leg(&receipt.manifest, leg_index)
+                .expect("fixture authority"),
             &alternate_votes,
         )
         .expect("alternate valid Prepare QC");
@@ -757,10 +769,12 @@ mod tests {
             digest,
             "signer-set and aggregate-signature encoding are not logical bundle content"
         );
+        let mut incomplete_catalog = receipt.authority_catalog.clone();
+        incomplete_catalog.leg_roster_indices.pop();
         assert_eq!(
             private_settlement_prepared_bundle_digest_v1(
                 &receipt.manifest,
-                &receipt.authority_catalog[..1],
+                &incomplete_catalog,
                 &deltas,
                 &prepares,
             ),
@@ -781,9 +795,17 @@ mod tests {
             .iter()
             .map(|leg| leg.prepare.clone())
             .collect::<Vec<_>>();
+        let authorities = (0..receipt.manifest.legs.len())
+            .map(|index| {
+                receipt
+                    .authority_catalog
+                    .authority_for_leg(&receipt.manifest, index)
+                    .expect("fixture authority")
+            })
+            .collect();
         let barrier = private_settlement_prepare_barrier_v1(
             receipt.manifest.clone(),
-            receipt.authority_catalog.clone(),
+            authorities,
             deltas,
             prepares,
         )

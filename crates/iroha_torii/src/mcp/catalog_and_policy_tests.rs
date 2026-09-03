@@ -4205,7 +4205,7 @@ fn kagemusha_routes_are_available_to_operator_mcp_tools() {
                 tool.route_backing()
                     .is_some_and(|(_, _, path_template)| path_template == path)
             }),
-            "universal offline route is missing from the operator MCP registry: {path}"
+            "universal KAGEMUSHA route is missing from the operator MCP registry: {path}"
         );
     }
 }
@@ -4409,7 +4409,7 @@ fn tool_registry_honors_universal_kagemusha_mcp_projection() {
     for route in route_catalog::kagemusha::ROUTES {
         let method = match route.method() {
             CatalogHttpMethod::Any => {
-                panic!("Kagemusha routes must never use protocol-wide ANY matching")
+                panic!("KAGEMUSHA routes must never use protocol-wide ANY matching")
             }
             CatalogHttpMethod::Get => Method::GET,
             CatalogHttpMethod::Post => Method::POST,
@@ -4423,7 +4423,7 @@ fn tool_registry_honors_universal_kagemusha_mcp_projection() {
                     tool_method == &method && path_template == route.path()
                 }
             )),
-            "cataloged universal offline route is missing from MCP: {} {}",
+            "cataloged universal KAGEMUSHA route is missing from MCP: {} {}",
             route.method().as_str(),
             route.path()
         );

@@ -256,6 +256,13 @@ def test_bundle_requires_authenticated_prebuilt_corridor_before_outputs(
     assert not output.exists()
 
 
+def test_bundle_does_not_ship_an_unmaterialized_genesis_manifest() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+
+    assert "for name in client.toml config.toml; do" in source
+    assert "for name in genesis.json client.toml config.toml; do" not in source
+
+
 def _outputs(
     root: Path, *, os_tag: str = "linux", arch: str = "x86_64"
 ) -> dict[str, Path]:
@@ -316,6 +323,9 @@ def test_bundle_replay_is_byte_identical_and_metadata_normalized(
         assert signer is not None and alias is not None
         assert signer.read() == alias.read()
         names = {member.name for member in members}
+        assert f"{bundle_root}/config/client.toml" in names
+        assert f"{bundle_root}/config/config.toml" in names
+        assert f"{bundle_root}/config/genesis.json" not in names
         assert (
             f"{bundle_root}/share/iroha/sorafs/external_software_signer/"
             "sorafs-external-software-signer@.service"

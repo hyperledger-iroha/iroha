@@ -3003,8 +3003,7 @@ pub mod isi {
             )?
         {
             return Err(InstructionExecutionError::InvariantViolation(
-                "Kagemusha V1 top-up capability does not match its payer and pooled reserve"
-                    .into(),
+                "Kagemusha V1 top-up capability does not match its payer and pooled reserve".into(),
             ));
         }
         let binding = canonical_numeric_movement_binding(&(

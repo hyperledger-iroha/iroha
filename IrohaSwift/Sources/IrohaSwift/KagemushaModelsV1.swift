@@ -1,6 +1,6 @@
 import Foundation
 
-/// Exact unsigned 128-bit little-endian integer used by Kagemusha V1.
+/// Exact unsigned 128-bit little-endian integer used by KAGEMUSHA V1.
 public struct KagemushaUInt128V1: Equatable, Hashable, Sendable {
   public let littleEndianBytes: Data
 
@@ -20,6 +20,29 @@ public struct KagemushaUInt128V1: Equatable, Hashable, Sendable {
 
   static let zero = KagemushaUInt128V1(0)
 
+  func isLessThanOrEqual(to other: KagemushaUInt128V1) -> Bool {
+    for index in littleEndianBytes.indices.reversed() {
+      if littleEndianBytes[index] != other.littleEndianBytes[index] {
+        return littleEndianBytes[index] < other.littleEndianBytes[index]
+      }
+    }
+    return true
+  }
+
+  func adding(_ other: KagemushaUInt128V1) throws -> KagemushaUInt128V1 {
+    var result = Data(repeating: 0, count: 16)
+    var carry: UInt16 = 0
+    for index in result.indices {
+      let sum =
+        UInt16(littleEndianBytes[index])
+        + UInt16(other.littleEndianBytes[index]) + carry
+      result[index] = UInt8(truncatingIfNeeded: sum)
+      carry = sum >> 8
+    }
+    guard carry == 0 else { throw kagemushaInvalid("u128.overflow") }
+    return try KagemushaUInt128V1(littleEndianBytes: result)
+  }
+
   func adding(_ value: UInt8) throws -> KagemushaUInt128V1 {
     var result = littleEndianBytes
     var carry = UInt16(value)
@@ -33,7 +56,7 @@ public struct KagemushaUInt128V1: Equatable, Hashable, Sendable {
   }
 }
 
-/// Exact typed `AssetDefinitionId` payload used by Kagemusha V1.
+/// Exact typed `AssetDefinitionId` payload used by KAGEMUSHA V1.
 public struct KagemushaAssetDefinitionIDV1: Equatable, Hashable, Sendable {
   public let canonicalPayload: Data
 
@@ -49,7 +72,7 @@ public struct KagemushaAssetDefinitionIDV1: Equatable, Hashable, Sendable {
   }
 }
 
-/// Exact typed universal `AccountId` payload used by Kagemusha V1.
+/// Exact typed universal `AccountId` payload used by KAGEMUSHA V1.
 public struct KagemushaAccountIDV1: Equatable, Hashable, Sendable {
   public let canonicalPayload: Data
 
@@ -91,7 +114,7 @@ public struct KagemushaDevicePublicKeyV1: Equatable, Hashable, Sendable {
   }
 }
 
-/// Canonical fixed-width low-S P-256 Kagemusha V1 signature.
+/// Canonical fixed-width low-S P-256 KAGEMUSHA V1 signature.
 public struct KagemushaDeviceSignatureV1: Equatable, Hashable, Sendable {
   public let rawBytes: Data
 
@@ -353,34 +376,29 @@ public struct KagemushaHardwareCredentialV1: Equatable, Sendable {
 public struct KagemushaPeerCreditContextV1: Equatable, Sendable {
   public let version: UInt16
   public let requestDigest: Data
-  public let senderBeforeCommitment: KagemushaPastaStateCommitmentV1
-  public let senderAfterCommitment: KagemushaPastaStateCommitmentV1
-  public let recipientLaneID: Data
+  public let amount: KagemushaUInt128V1
+  public let senderBeforeCommitment: Data
+  public let senderAfterCommitment: Data
+  public let preparedTransferDigest: Data
   public let recipientEncryptionKey: KagemushaX25519PublicKeyV1
-  public let committedAtMS: UInt64
-  public let hardwareTransitionCommitment: Data
-  public let lifecycleContextDigest: Data
 
   public init(
-    version: UInt16 = 1, requestDigest: Data,
-    senderBeforeCommitment: KagemushaPastaStateCommitmentV1,
-    senderAfterCommitment: KagemushaPastaStateCommitmentV1,
-    recipientLaneID: Data, recipientEncryptionKey: KagemushaX25519PublicKeyV1,
-    committedAtMS: UInt64, hardwareTransitionCommitment: Data,
-    lifecycleContextDigest: Data
+    version: UInt16 = 1, requestDigest: Data, amount: KagemushaUInt128V1,
+    senderBeforeCommitment: Data, senderAfterCommitment: Data,
+    preparedTransferDigest: Data, recipientEncryptionKey: KagemushaX25519PublicKeyV1
   ) throws {
-    guard version == 1 else { throw kagemushaInvalid("peerCreditContext") }
+    guard version == 1, !amount.isZero, senderBeforeCommitment != senderAfterCommitment
+    else { throw kagemushaInvalid("peerCreditContext") }
     self.version = version
     self.requestDigest = try kagemushaDigest(requestDigest, "requestDigest")
-    self.senderBeforeCommitment = senderBeforeCommitment
-    self.senderAfterCommitment = senderAfterCommitment
-    self.recipientLaneID = try kagemushaDigest(recipientLaneID, "recipientLaneID")
+    self.amount = amount
+    self.senderBeforeCommitment = try kagemushaDigest(
+      senderBeforeCommitment, "senderBeforeCommitment")
+    self.senderAfterCommitment = try kagemushaDigest(
+      senderAfterCommitment, "senderAfterCommitment")
+    self.preparedTransferDigest = try kagemushaDigest(
+      preparedTransferDigest, "preparedTransferDigest")
     self.recipientEncryptionKey = recipientEncryptionKey
-    self.committedAtMS = committedAtMS
-    self.hardwareTransitionCommitment = try kagemushaDigest(
-      hardwareTransitionCommitment, "hardwareTransitionCommitment")
-    self.lifecycleContextDigest = try kagemushaDigest(
-      lifecycleContextDigest, "lifecycleContextDigest")
   }
 }
 
@@ -452,7 +470,7 @@ public struct KagemushaEncryptedCreditEnvelopeV1: Equatable, Sendable {
     nonce: Data, ciphertextAndTag: Data
   ) throws {
     guard version == 1, nonce.count == KagemushaWireV1.xchachaNonceBytes,
-      ciphertextAndTag.count > KagemushaWireV1.xchachaTagBytes
+      ciphertextAndTag.count == KagemushaWireV1.encryptedCreditCiphertextAndTagBytes
     else { throw kagemushaInvalid("encryptedCreditEnvelope") }
     self.version = version
     self.ephemeralX25519PublicKey = ephemeralX25519PublicKey
@@ -461,14 +479,326 @@ public struct KagemushaEncryptedCreditEnvelopeV1: Equatable, Sendable {
   }
 }
 
+/// Qualified trusted-time evidence. Stable Norito tag: `0`.
+public struct KagemushaTrustedCommitTimeV1: Equatable, Sendable {
+  public let timeEvidenceCommitment: Data
+
+  public init(timeEvidenceCommitment: Data) throws {
+    self.timeEvidenceCommitment = try kagemushaDigest(
+      timeEvidenceCommitment, "timeEvidenceCommitment")
+  }
+}
+
+/// Secure monotonic-lease evidence. Stable Norito tag: `1`.
+public struct KagemushaMonotonicLeaseV1: Equatable, Sendable {
+  public let leaseEvidenceCommitment: Data
+
+  public init(leaseEvidenceCommitment: Data) throws {
+    self.leaseEvidenceCommitment = try kagemushaDigest(
+      leaseEvidenceCommitment, "leaseEvidenceCommitment")
+  }
+}
+
+/// Public evidence that qualified hardware committed before the applicable deadline.
+public enum KagemushaCommitEvidenceV1: Equatable, Sendable {
+  case trustedTime(KagemushaTrustedCommitTimeV1)
+  case monotonicLease(KagemushaMonotonicLeaseV1)
+
+  public var wireTag: UInt32 {
+    switch self {
+    case .trustedTime: 0
+    case .monotonicLease: 1
+    }
+  }
+
+  public var evidenceCommitment: Data {
+    switch self {
+    case .trustedTime(let value): value.timeEvidenceCommitment
+    case .monotonicLease(let value): value.leaseEvidenceCommitment
+    }
+  }
+}
+
+/// Sender outbox capacity reserved before hardware may consume its predecessor.
+public struct KagemushaOutboxReservationV1: Equatable, Sendable {
+  public let reservationID: Data
+  public let operationKind: KagemushaOperationKindV1
+  public let reservedOutboxBytes: UInt32
+  public let issuedAtMS: UInt64
+  public let expiresAtMS: UInt64
+
+  public init(
+    reservationID: Data, operationKind: KagemushaOperationKindV1,
+    reservedOutboxBytes: UInt32, issuedAtMS: UInt64, expiresAtMS: UInt64
+  ) throws {
+    guard issuedAtMS < expiresAtMS else { throw kagemushaInvalid("outboxReservation") }
+    self.reservationID = try kagemushaDigest(reservationID, "reservationID")
+    self.operationKind = operationKind
+    self.reservedOutboxBytes = reservedOutboxBytes
+    self.issuedAtMS = issuedAtMS
+    self.expiresAtMS = expiresAtMS
+  }
+}
+
+/// Self-free terminal body committed before a certificate identity exists.
+public struct KagemushaHardwareTerminalBodyV1: Equatable, Sendable {
+  public let version: UInt16
+  public let candidateEnvelopeDigest: Data
+  public let lifecycleBindingDigest: Data
+  public let transitionNullifier: Data
+  public let outboxReservationCommitment: Data
+  public let commitEvidence: KagemushaCommitEvidenceV1
+  public let hardwareProfileID: Data
+  public let policyEpoch: UInt64
+  public let privateSuccessorCommitment: Data
+  public let privateJournalCommitment: Data
+  public let privateRecoveryCommitment: Data
+
+  public init(
+    version: UInt16 = 1, candidateEnvelopeDigest: Data, lifecycleBindingDigest: Data,
+    transitionNullifier: Data, outboxReservationCommitment: Data,
+    commitEvidence: KagemushaCommitEvidenceV1, hardwareProfileID: Data,
+    policyEpoch: UInt64, privateSuccessorCommitment: Data,
+    privateJournalCommitment: Data, privateRecoveryCommitment: Data
+  ) throws {
+    guard version == 1, policyEpoch > 0 else { throw kagemushaInvalid("hardwareTerminalBody") }
+    self.version = version
+    self.candidateEnvelopeDigest = try kagemushaDigest(
+      candidateEnvelopeDigest, "candidateEnvelopeDigest")
+    self.lifecycleBindingDigest = try kagemushaDigest(
+      lifecycleBindingDigest, "lifecycleBindingDigest")
+    self.transitionNullifier = try kagemushaDigest(
+      transitionNullifier, "transitionNullifier")
+    self.outboxReservationCommitment = try kagemushaDigest(
+      outboxReservationCommitment, "outboxReservationCommitment")
+    self.commitEvidence = commitEvidence
+    self.hardwareProfileID = try kagemushaDigest(hardwareProfileID, "hardwareProfileID")
+    self.policyEpoch = policyEpoch
+    self.privateSuccessorCommitment = try kagemushaDigest(
+      privateSuccessorCommitment, "privateSuccessorCommitment")
+    self.privateJournalCommitment = try kagemushaDigest(
+      privateJournalCommitment, "privateJournalCommitment")
+    self.privateRecoveryCommitment = try kagemushaDigest(
+      privateRecoveryCommitment, "privateRecoveryCommitment")
+  }
+}
+
+/// Recoverable certificate returned by the atomic hardware commit.
+public struct KagemushaCommitCertificateV1: Equatable, Sendable {
+  public let version: UInt16
+  public let certificateID: Data
+  public let candidateEnvelopeDigest: Data
+  public let lifecycleBindingDigest: Data
+  public let transitionNullifier: Data
+  public let outboxReservationCommitment: Data
+  public let commitEvidence: KagemushaCommitEvidenceV1
+  public let hardwareProfileID: Data
+  public let policyEpoch: UInt64
+  public let hardwareTerminalCommitment: Data
+
+  public init(
+    version: UInt16 = 1, certificateID: Data, candidateEnvelopeDigest: Data,
+    lifecycleBindingDigest: Data, transitionNullifier: Data,
+    outboxReservationCommitment: Data, commitEvidence: KagemushaCommitEvidenceV1,
+    hardwareProfileID: Data, policyEpoch: UInt64, hardwareTerminalCommitment: Data
+  ) throws {
+    guard version == 1, policyEpoch > 0 else { throw kagemushaInvalid("commitCertificate") }
+    self.version = version
+    self.certificateID = try kagemushaDigest(certificateID, "certificateID")
+    self.candidateEnvelopeDigest = try kagemushaDigest(
+      candidateEnvelopeDigest, "candidateEnvelopeDigest")
+    self.lifecycleBindingDigest = try kagemushaDigest(
+      lifecycleBindingDigest, "lifecycleBindingDigest")
+    self.transitionNullifier = try kagemushaDigest(
+      transitionNullifier, "transitionNullifier")
+    self.outboxReservationCommitment = try kagemushaDigest(
+      outboxReservationCommitment, "outboxReservationCommitment")
+    self.commitEvidence = commitEvidence
+    self.hardwareProfileID = try kagemushaDigest(hardwareProfileID, "hardwareProfileID")
+    self.policyEpoch = policyEpoch
+    self.hardwareTerminalCommitment = try kagemushaDigest(
+      hardwareTerminalCommitment, "hardwareTerminalCommitment")
+  }
+}
+
+/// Final paired proof authorizing one committed offline payment.
+public struct KagemushaPaymentProofV1: Equatable, Sendable {
+  public let version: UInt16
+  public let eqProtocolDigest: Data
+  public let epProtocolDigest: Data
+  public let semanticDigest: Data
+  public let candidateEnvelopeDigest: Data
+  public let commitCertificateDigest: Data
+  public let eqDeferredAudit: Data
+  public let epDeferredAudit: Data
+  public let eqProof: Data
+  public let epProof: Data
+  public let eqHistory: Data
+  public let epHistory: Data
+
+  public init(
+    version: UInt16 = 1, eqProtocolDigest: Data, epProtocolDigest: Data,
+    semanticDigest: Data, candidateEnvelopeDigest: Data, commitCertificateDigest: Data,
+    eqDeferredAudit: Data, epDeferredAudit: Data, eqProof: Data, epProof: Data,
+    eqHistory: Data, epHistory: Data
+  ) throws {
+    guard version == 1, eqProtocolDigest != epProtocolDigest,
+      eqDeferredAudit != epDeferredAudit, !eqProof.isEmpty, !epProof.isEmpty,
+      eqProof.count <= KagemushaWireV1.maximumParityProofBytes,
+      epProof.count <= KagemushaWireV1.maximumParityProofBytes,
+      eqProof.count + epProof.count <= KagemushaWireV1.maximumCurrentProofsBytes,
+      eqHistory.count == KagemushaWireV1.historyAccumulatorBytes,
+      epHistory.count == KagemushaWireV1.historyAccumulatorBytes,
+      eqHistory.contains(where: { $0 != 0 }), epHistory.contains(where: { $0 != 0 }),
+      eqHistory != epHistory
+    else { throw kagemushaInvalid("paymentProof") }
+    self.version = version
+    self.eqProtocolDigest = try kagemushaDigest(eqProtocolDigest, "eqProtocolDigest")
+    self.epProtocolDigest = try kagemushaDigest(epProtocolDigest, "epProtocolDigest")
+    self.semanticDigest = try kagemushaDigest(semanticDigest, "semanticDigest")
+    self.candidateEnvelopeDigest = try kagemushaDigest(
+      candidateEnvelopeDigest, "candidateEnvelopeDigest")
+    self.commitCertificateDigest = try kagemushaDigest(
+      commitCertificateDigest, "commitCertificateDigest")
+    self.eqDeferredAudit = try kagemushaDigest(eqDeferredAudit, "eqDeferredAudit")
+    self.epDeferredAudit = try kagemushaDigest(epDeferredAudit, "epDeferredAudit")
+    self.eqProof = Data(eqProof)
+    self.epProof = Data(epProof)
+    self.eqHistory = Data(eqHistory)
+    self.epHistory = Data(epHistory)
+  }
+}
+
+/// Final paired proof authorizing one online redemption.
+public struct KagemushaRedemptionProofV1: Equatable, Sendable {
+  public let version: UInt16
+  public let eqProtocolDigest: Data
+  public let epProtocolDigest: Data
+  public let semanticDigest: Data
+  public let candidateEnvelopeDigest: Data
+  public let commitCertificateDigest: Data
+  public let eqDeferredAudit: Data
+  public let epDeferredAudit: Data
+  public let eqProof: Data
+  public let epProof: Data
+  public let eqHistory: Data
+  public let epHistory: Data
+
+  public init(
+    version: UInt16 = 1, eqProtocolDigest: Data, epProtocolDigest: Data,
+    semanticDigest: Data, candidateEnvelopeDigest: Data, commitCertificateDigest: Data,
+    eqDeferredAudit: Data, epDeferredAudit: Data, eqProof: Data, epProof: Data,
+    eqHistory: Data, epHistory: Data
+  ) throws {
+    guard version == 1, eqProtocolDigest != epProtocolDigest,
+      eqDeferredAudit != epDeferredAudit, !eqProof.isEmpty, !epProof.isEmpty,
+      eqProof.count <= KagemushaWireV1.maximumParityProofBytes,
+      epProof.count <= KagemushaWireV1.maximumParityProofBytes,
+      eqProof.count + epProof.count <= KagemushaWireV1.maximumCurrentProofsBytes,
+      eqHistory.count == KagemushaWireV1.historyAccumulatorBytes,
+      epHistory.count == KagemushaWireV1.historyAccumulatorBytes,
+      eqHistory.contains(where: { $0 != 0 }), epHistory.contains(where: { $0 != 0 }),
+      eqHistory != epHistory
+    else { throw kagemushaInvalid("redemptionProof") }
+    self.version = version
+    self.eqProtocolDigest = try kagemushaDigest(eqProtocolDigest, "eqProtocolDigest")
+    self.epProtocolDigest = try kagemushaDigest(epProtocolDigest, "epProtocolDigest")
+    self.semanticDigest = try kagemushaDigest(semanticDigest, "semanticDigest")
+    self.candidateEnvelopeDigest = try kagemushaDigest(
+      candidateEnvelopeDigest, "candidateEnvelopeDigest")
+    self.commitCertificateDigest = try kagemushaDigest(
+      commitCertificateDigest, "commitCertificateDigest")
+    self.eqDeferredAudit = try kagemushaDigest(eqDeferredAudit, "eqDeferredAudit")
+    self.epDeferredAudit = try kagemushaDigest(epDeferredAudit, "epDeferredAudit")
+    self.eqProof = Data(eqProof)
+    self.epProof = Data(epProof)
+    self.eqHistory = Data(eqHistory)
+    self.epHistory = Data(epHistory)
+  }
+}
+
+/// One active 144-byte slot in the fixed-shape receive-fold batch.
+public struct KagemushaReceiveFoldBatchSlotV1: Equatable, Sendable {
+  public let amount: KagemushaUInt128V1
+  public let creditID: Data
+  public let recipientLaneID: Data
+  public let incomingProofBindingDigest: Data
+  public let envelopeDigest: Data
+
+  public init(
+    amount: KagemushaUInt128V1, creditID: Data, recipientLaneID: Data,
+    incomingProofBindingDigest: Data, envelopeDigest: Data
+  ) throws {
+    guard !amount.isZero else { throw kagemushaInvalid("receiveFoldBatch.amount") }
+    self.amount = amount
+    self.creditID = try kagemushaDigest(creditID, "creditID")
+    self.recipientLaneID = try kagemushaDigest(recipientLaneID, "recipientLaneID")
+    self.incomingProofBindingDigest = try kagemushaDigest(
+      incomingProofBindingDigest, "incomingProofBindingDigest")
+    self.envelopeDigest = try kagemushaDigest(envelopeDigest, "envelopeDigest")
+  }
+
+  private init(padding: Void) {
+    amount = .zero
+    creditID = Data(repeating: 0, count: 32)
+    recipientLaneID = Data(repeating: 0, count: 32)
+    incomingProofBindingDigest = Data(repeating: 0, count: 32)
+    envelopeDigest = Data(repeating: 0, count: 32)
+  }
+
+  static let padding = KagemushaReceiveFoldBatchSlotV1(padding: ())
+
+  var isPadding: Bool { self == .padding }
+
+  public var canonicalTranscript: Data {
+    var bytes = amount.littleEndianBytes
+    bytes.append(creditID)
+    bytes.append(recipientLaneID)
+    bytes.append(incomingProofBindingDigest)
+    bytes.append(envelopeDigest)
+    return bytes
+  }
+}
+
+/// An active prefix of 1...16 receive credits followed by canonical all-zero padding.
+public struct KagemushaReceiveFoldBatchV1: Equatable, Sendable {
+  public static let slotCount = 16
+  public static let slotBytes = 144
+  public static let bodyBytes = 1 + slotCount * slotBytes
+
+  public let activeCount: UInt8
+  public let paddedSlots: [KagemushaReceiveFoldBatchSlotV1]
+  public let aggregateAmount: KagemushaUInt128V1
+
+  public init(activeSlots: [KagemushaReceiveFoldBatchSlotV1]) throws {
+    guard (1...Self.slotCount).contains(activeSlots.count),
+      Set(activeSlots.map(\.creditID)).count == activeSlots.count
+    else { throw kagemushaInvalid("receiveFoldBatch.activeSlots") }
+    var total = KagemushaUInt128V1.zero
+    for slot in activeSlots { total = try total.adding(slot.amount) }
+    activeCount = UInt8(activeSlots.count)
+    paddedSlots =
+      activeSlots
+      + Array(repeating: .padding, count: Self.slotCount - activeSlots.count)
+    aggregateAmount = total
+  }
+
+  public var canonicalBody: Data {
+    var bytes = Data([activeCount])
+    for slot in paddedSlots { bytes.append(slot.canonicalTranscript) }
+    return bytes
+  }
+}
+
 /// Monetary operation bound by a released V1 transition.
 public enum KagemushaOperationKindV1: UInt32, CaseIterable, Sendable {
   case bootstrap = 0
   case mintFold = 1
   case sendSplit = 2
-  case receiveFold = 3
+  case receiveFoldBatch = 3
   case redeemSplit = 4
-  case rotate = 5
+  case suiteUpgrade = 5
+  case rotate = 6
 }
 
 /// Complete public lifecycle context, without history or private state links.
@@ -487,6 +817,7 @@ public struct KagemushaLifecycleBindingV1: Equatable, Sendable {
   public let policyEpoch: UInt64
   public let operationKind: KagemushaOperationKindV1
   public let requestID: Data
+  public let receiverLaneCommitment: Data
   public let creditID: Data
   public let ciphertextDigest: Data
 
@@ -495,7 +826,7 @@ public struct KagemushaLifecycleBindingV1: Equatable, Sendable {
     suiteID: Data, vkDigest: Data, releaseID: Data, asset: KagemushaAssetDefinitionIDV1,
     assetIncarnation: KagemushaAssetIncarnationV1, scale: UInt32, liabilityPoolID: Data,
     hardwareProfileID: Data, policyEpoch: UInt64, operationKind: KagemushaOperationKindV1,
-    requestID: Data, creditID: Data, ciphertextDigest: Data
+    requestID: Data, receiverLaneCommitment: Data, creditID: Data, ciphertextDigest: Data
   ) throws {
     try kagemushaHeader(version, networkID, scale)
     guard protocolVersion == 1, policyEpoch > 0 else { throw kagemushaInvalid("lifecycle") }
@@ -503,13 +834,14 @@ public struct KagemushaLifecycleBindingV1: Equatable, Sendable {
     let validOperationFields: Bool
     switch operationKind {
     case .sendSplit:
-      validOperationFields = [requestID, creditID, ciphertextDigest]
+      validOperationFields = [requestID, receiverLaneCommitment, creditID, ciphertextDigest]
         .allSatisfy(kagemushaIsDigest)
     case .mintFold:
       validOperationFields =
-        requestID == zero && kagemushaIsDigest(creditID) && kagemushaIsDigest(ciphertextDigest)
-    case .bootstrap, .receiveFold, .redeemSplit, .rotate:
-      validOperationFields = [requestID, creditID, ciphertextDigest]
+        requestID == zero && receiverLaneCommitment == zero
+        && kagemushaIsDigest(creditID) && kagemushaIsDigest(ciphertextDigest)
+    case .bootstrap, .receiveFoldBatch, .redeemSplit, .suiteUpgrade, .rotate:
+      validOperationFields = [requestID, receiverLaneCommitment, creditID, ciphertextDigest]
         .allSatisfy { $0 == zero }
     }
     guard validOperationFields else { throw kagemushaInvalid("lifecycle.operationFields") }
@@ -527,12 +859,13 @@ public struct KagemushaLifecycleBindingV1: Equatable, Sendable {
     self.policyEpoch = policyEpoch
     self.operationKind = operationKind
     self.requestID = Data(requestID)
+    self.receiverLaneCommitment = Data(receiverLaneCommitment)
     self.creditID = Data(creditID)
     self.ciphertextDigest = Data(ciphertextDigest)
   }
 }
 
-/// Receiver-created exact-amount request reusable by any number of valid payments.
+/// Receiver authorization for any number of distinct exact-amount payments.
 public struct KagemushaPaymentRequestV1: Equatable, Sendable {
   public let version: UInt16
   public let releaseID: Data
@@ -542,9 +875,8 @@ public struct KagemushaPaymentRequestV1: Equatable, Sendable {
   public let scale: UInt32
   public let liabilityPoolID: Data
   public let recipient: KagemushaAccountIDV1
-  public let recipientLaneID: Data
-  public let recipientEncryptionKey: KagemushaX25519PublicKeyV1
   public let amount: KagemushaUInt128V1
+  public let recipientEncryptionKey: KagemushaX25519PublicKeyV1
   public let hardwareCredential: KagemushaHardwareCredentialV1
   public let requestID: Data
   public let issuedAtMS: UInt64
@@ -555,16 +887,16 @@ public struct KagemushaPaymentRequestV1: Equatable, Sendable {
     version: UInt16 = 1, releaseID: Data, networkID: Data,
     asset: KagemushaAssetDefinitionIDV1, assetIncarnation: KagemushaAssetIncarnationV1,
     scale: UInt32, liabilityPoolID: Data, recipient: KagemushaAccountIDV1,
-    recipientLaneID: Data, recipientEncryptionKey: KagemushaX25519PublicKeyV1,
     amount: KagemushaUInt128V1,
-    hardwareCredential: KagemushaHardwareCredentialV1, requestID: Data,
+    recipientEncryptionKey: KagemushaX25519PublicKeyV1,
+    hardwareCredential: KagemushaHardwareCredentialV1,
+    requestID: Data,
     issuedAtMS: UInt64, expiresAtMS: UInt64, signature: KagemushaDeviceSignatureV1
   ) throws {
     try kagemushaHeader(version, networkID, scale)
     guard !amount.isZero, hardwareCredential.networkID == networkID, expiresAtMS > issuedAtMS,
       expiresAtMS - issuedAtMS <= KagemushaWireV1.requestMaximumTTLMS,
-      expiresAtMS <= hardwareCredential.expiresAtMS,
-      hardwareCredential.laneCommitment == recipientLaneID
+      expiresAtMS <= hardwareCredential.expiresAtMS
     else { throw kagemushaInvalid("paymentRequest") }
     self.version = version
     self.releaseID = try kagemushaDigest(releaseID, "releaseID")
@@ -574,9 +906,8 @@ public struct KagemushaPaymentRequestV1: Equatable, Sendable {
     self.scale = scale
     self.liabilityPoolID = try kagemushaDigest(liabilityPoolID, "liabilityPoolID")
     self.recipient = recipient
-    self.recipientLaneID = try kagemushaDigest(recipientLaneID, "recipientLaneID")
-    self.recipientEncryptionKey = recipientEncryptionKey
     self.amount = amount
+    self.recipientEncryptionKey = recipientEncryptionKey
     self.hardwareCredential = hardwareCredential
     self.requestID = try kagemushaDigest(requestID, "requestID")
     self.issuedAtMS = issuedAtMS
@@ -585,69 +916,66 @@ public struct KagemushaPaymentRequestV1: Equatable, Sendable {
   }
 }
 
-/// Unlinkable public send statement decided by both recursive-proof parities.
-public struct KagemushaTransferStatementV1: Equatable, Sendable {
+/// Public output bound by the final payment proof.
+public struct KagemushaPaymentOutputV1: Equatable, Sendable {
   public let version: UInt16
-  public let lifecycle: KagemushaLifecycleBindingV1
-  public let amount: KagemushaUInt128V1
-  public let transitionNullifier: Data
   public let requestDigest: Data
-  public let senderBeforeCommitment: KagemushaPastaStateCommitmentV1
-  public let senderAfterCommitment: KagemushaPastaStateCommitmentV1
-  public let recipientLaneID: Data
-  public let recipientEncryptionKey: KagemushaX25519PublicKeyV1
-  public let committedAtMS: UInt64
+  public let amount: KagemushaUInt128V1
+  public let senderBeforeCommitment: Data
+  public let senderAfterCommitment: Data
+  public let transitionNullifier: Data
+  public let creditID: Data
   public let ciphertextCommitment: Data
-  public let hardwareTransitionCommitment: Data
+  public let commitEvidence: KagemushaCommitEvidenceV1
+  public let committedAtMS: UInt64
 
   public init(
-    version: UInt16 = 1, lifecycle: KagemushaLifecycleBindingV1,
-    amount: KagemushaUInt128V1, transitionNullifier: Data, requestDigest: Data,
-    senderBeforeCommitment: KagemushaPastaStateCommitmentV1,
-    senderAfterCommitment: KagemushaPastaStateCommitmentV1,
-    recipientLaneID: Data, recipientEncryptionKey: KagemushaX25519PublicKeyV1,
-    committedAtMS: UInt64, ciphertextCommitment: Data,
-    hardwareTransitionCommitment: Data
+    version: UInt16 = 1, requestDigest: Data, amount: KagemushaUInt128V1,
+    senderBeforeCommitment: Data, senderAfterCommitment: Data,
+    transitionNullifier: Data, creditID: Data, ciphertextCommitment: Data,
+    commitEvidence: KagemushaCommitEvidenceV1, committedAtMS: UInt64
   ) throws {
-    guard version == 1, lifecycle.version == version, lifecycle.operationKind == .sendSplit,
-      !amount.isZero, senderBeforeCommitment != senderAfterCommitment
-    else { throw kagemushaInvalid("transferStatement") }
+    guard version == 1, !amount.isZero, senderBeforeCommitment != senderAfterCommitment,
+      committedAtMS > 0
+    else { throw kagemushaInvalid("paymentOutput") }
     self.version = version
-    self.lifecycle = lifecycle
-    self.amount = amount
-    self.transitionNullifier = try kagemushaDigest(transitionNullifier, "transitionNullifier")
     self.requestDigest = try kagemushaDigest(requestDigest, "requestDigest")
-    self.senderBeforeCommitment = senderBeforeCommitment
-    self.senderAfterCommitment = senderAfterCommitment
-    self.recipientLaneID = try kagemushaDigest(recipientLaneID, "recipientLaneID")
-    self.recipientEncryptionKey = recipientEncryptionKey
-    self.committedAtMS = committedAtMS
+    self.amount = amount
+    self.senderBeforeCommitment = try kagemushaDigest(
+      senderBeforeCommitment, "senderBeforeCommitment")
+    self.senderAfterCommitment = try kagemushaDigest(
+      senderAfterCommitment, "senderAfterCommitment")
+    self.transitionNullifier = try kagemushaDigest(transitionNullifier, "transitionNullifier")
+    self.creditID = try kagemushaDigest(creditID, "creditID")
     self.ciphertextCommitment = try kagemushaDigest(
       ciphertextCommitment, "ciphertextCommitment")
-    self.hardwareTransitionCommitment = try kagemushaDigest(
-      hardwareTransitionCommitment, "hardwareTransitionCommitment")
+    self.commitEvidence = commitEvidence
+    self.committedAtMS = committedAtMS
   }
 }
 
-/// Sender response with one receiver-bound encrypted credit and no public state links.
+/// Sender terminal response carrying the post-commit certificate and paired payment proof.
 public struct KagemushaPaymentV1: Equatable, Sendable {
   public let version: UInt16
-  public let statement: KagemushaTransferStatementV1
-  public let proof: KagemushaPairedProofV1
-  public let encryptedCredit: KagemushaEncryptedCreditEnvelopeV1
+  public let output: KagemushaPaymentOutputV1
+  public let encryptedCredit: Data
+  public let commitCertificate: KagemushaCommitCertificateV1
+  public let proof: KagemushaPaymentProofV1
 
   public init(
-    version: UInt16 = 1, statement: KagemushaTransferStatementV1,
-    proof: KagemushaPairedProofV1,
-    encryptedCredit: KagemushaEncryptedCreditEnvelopeV1
+    version: UInt16 = 1, output: KagemushaPaymentOutputV1,
+    encryptedCredit: Data, commitCertificate: KagemushaCommitCertificateV1,
+    proof: KagemushaPaymentProofV1
   ) throws {
-    guard version == 1, statement.version == version, proof.version == version,
-      encryptedCredit.version == version
+    guard version == 1, output.version == version, commitCertificate.version == version,
+      proof.version == version, !encryptedCredit.isEmpty,
+      encryptedCredit.count <= KagemushaWireV1.maximumEncryptedCreditBytes
     else { throw kagemushaInvalid("payment") }
     self.version = version
-    self.statement = statement
+    self.output = output
+    self.encryptedCredit = Data(encryptedCredit)
+    self.commitCertificate = commitCertificate
     self.proof = proof
-    self.encryptedCredit = encryptedCredit
   }
 }
 
@@ -791,6 +1119,76 @@ public struct KagemushaMintAuthorizationV1: Equatable, Sendable {
   }
 }
 
+/// Canonical chain-facing request for one reserve-backed KAGEMUSHA mint.
+public struct KagemushaTopUpRequestV1: Equatable, Sendable {
+  public let version: UInt16
+  public let operationID: Data
+  public let issuanceCommitment: Data
+  public let creditID: Data
+  public let releaseID: Data
+  public let suiteID: Data
+  public let vkDigest: Data
+  public let networkID: Data
+  public let asset: KagemushaAssetDefinitionIDV1
+  public let assetIncarnation: KagemushaAssetIncarnationV1
+  public let scale: UInt32
+  public let amount: KagemushaUInt128V1
+  public let liabilityPoolID: Data
+  public let payer: KagemushaAccountIDV1
+  public let recipient: KagemushaAccountIDV1
+  public let hardwareCredential: KagemushaHardwareCredentialV1
+  public let recipientCredentialCommitment: Data
+  public let creditCommitment: Data
+  public let recipientOneTimeKey: KagemushaX25519PublicKeyV1
+  public let encryptedCredit: Data
+  public let artifactManifestDigest: Data
+  public let mintAuthorization: KagemushaMintAuthorizationV1
+
+  public init(
+    version: UInt16 = 1, operationID: Data, issuanceCommitment: Data,
+    creditID: Data, releaseID: Data, suiteID: Data, vkDigest: Data,
+    networkID: Data, asset: KagemushaAssetDefinitionIDV1,
+    assetIncarnation: KagemushaAssetIncarnationV1, scale: UInt32,
+    amount: KagemushaUInt128V1, liabilityPoolID: Data,
+    payer: KagemushaAccountIDV1, recipient: KagemushaAccountIDV1,
+    hardwareCredential: KagemushaHardwareCredentialV1,
+    recipientCredentialCommitment: Data, creditCommitment: Data,
+    recipientOneTimeKey: KagemushaX25519PublicKeyV1, encryptedCredit: Data,
+    artifactManifestDigest: Data, mintAuthorization: KagemushaMintAuthorizationV1
+  ) throws {
+    try kagemushaHeader(version, networkID, scale)
+    guard !amount.isZero, hardwareCredential.version == version,
+      mintAuthorization.version == version, !encryptedCredit.isEmpty,
+      encryptedCredit.count <= KagemushaWireV1.maximumEncryptedCreditBytes
+    else { throw kagemushaInvalid("topUpRequest") }
+    self.version = version
+    self.operationID = try kagemushaDigest(operationID, "operationID")
+    self.issuanceCommitment = try kagemushaDigest(
+      issuanceCommitment, "issuanceCommitment")
+    self.creditID = try kagemushaDigest(creditID, "creditID")
+    self.releaseID = try kagemushaDigest(releaseID, "releaseID")
+    self.suiteID = try kagemushaDigest(suiteID, "suiteID")
+    self.vkDigest = try kagemushaDigest(vkDigest, "vkDigest")
+    self.networkID = Data(networkID)
+    self.asset = asset
+    self.assetIncarnation = assetIncarnation
+    self.scale = scale
+    self.amount = amount
+    self.liabilityPoolID = try kagemushaDigest(liabilityPoolID, "liabilityPoolID")
+    self.payer = payer
+    self.recipient = recipient
+    self.hardwareCredential = hardwareCredential
+    self.recipientCredentialCommitment = try kagemushaDigest(
+      recipientCredentialCommitment, "recipientCredentialCommitment")
+    self.creditCommitment = try kagemushaDigest(creditCommitment, "creditCommitment")
+    self.recipientOneTimeKey = recipientOneTimeKey
+    self.encryptedCredit = Data(encryptedCredit)
+    self.artifactManifestDigest = try kagemushaDigest(
+      artifactManifestDigest, "artifactManifestDigest")
+    self.mintAuthorization = mintAuthorization
+  }
+}
+
 /// Public top-up statement creating one foldable aggregate credit.
 public struct KagemushaMintCreditStatementV1: Equatable, Sendable {
   public let version: UInt16
@@ -870,43 +1268,35 @@ public struct KagemushaMintCreditV1: Equatable, Sendable {
   }
 }
 
-/// Unlinkable terminal transition that converts aggregate cash to an online claim.
+/// Unlinkable terminal transition that converts an aggregate KAGEMUSHA balance to an online claim.
 public struct KagemushaRedemptionStatementV1: Equatable, Sendable {
   public let version: UInt16
   public let lifecycle: KagemushaLifecycleBindingV1
   public let amount: KagemushaUInt128V1
   public let beneficiary: KagemushaAccountIDV1
   public let terminalNullifier: Data
-  public let senderBeforeCommitment: KagemushaPastaStateCommitmentV1
-  public let senderAfterCommitment: KagemushaPastaStateCommitmentV1
-  public let committedAtMS: UInt64
   public let redemptionCommitment: Data
   public let redemptionID: Data
-  public let hardwareTransitionCommitment: Data
+  public let commitEvidence: KagemushaCommitEvidenceV1
 
   public init(
     version: UInt16 = 1, lifecycle: KagemushaLifecycleBindingV1,
     amount: KagemushaUInt128V1, beneficiary: KagemushaAccountIDV1,
-    terminalNullifier: Data, senderBeforeCommitment: KagemushaPastaStateCommitmentV1,
-    senderAfterCommitment: KagemushaPastaStateCommitmentV1, committedAtMS: UInt64,
-    redemptionCommitment: Data, redemptionID: Data, hardwareTransitionCommitment: Data
+    terminalNullifier: Data, redemptionCommitment: Data, redemptionID: Data,
+    commitEvidence: KagemushaCommitEvidenceV1
   ) throws {
     guard version == 1, lifecycle.version == version, lifecycle.operationKind == .redeemSplit,
-      !amount.isZero, senderBeforeCommitment != senderAfterCommitment
+      !amount.isZero
     else { throw kagemushaInvalid("redemptionStatement") }
     self.version = version
     self.lifecycle = lifecycle
     self.amount = amount
     self.beneficiary = beneficiary
     self.terminalNullifier = try kagemushaDigest(terminalNullifier, "terminalNullifier")
-    self.senderBeforeCommitment = senderBeforeCommitment
-    self.senderAfterCommitment = senderAfterCommitment
-    self.committedAtMS = committedAtMS
     self.redemptionCommitment = try kagemushaDigest(
       redemptionCommitment, "redemptionCommitment")
     self.redemptionID = try kagemushaDigest(redemptionID, "redemptionID")
-    self.hardwareTransitionCommitment = try kagemushaDigest(
-      hardwareTransitionCommitment, "hardwareTransitionCommitment")
+    self.commitEvidence = commitEvidence
   }
 }
 
@@ -914,17 +1304,42 @@ public struct KagemushaRedemptionStatementV1: Equatable, Sendable {
 public struct KagemushaRedemptionVoucherV1: Equatable, Sendable {
   public let version: UInt16
   public let statement: KagemushaRedemptionStatementV1
-  public let proof: KagemushaPairedProofV1
+  public let commitCertificate: KagemushaCommitCertificateV1
+  public let proof: KagemushaRedemptionProofV1
+  public let artifactManifestDigest: Data
 
   public init(
     version: UInt16 = 1, statement: KagemushaRedemptionStatementV1,
-    proof: KagemushaPairedProofV1
+    commitCertificate: KagemushaCommitCertificateV1,
+    proof: KagemushaRedemptionProofV1, artifactManifestDigest: Data
   ) throws {
-    guard version == 1, statement.version == version, proof.version == version
+    guard version == 1, statement.version == version,
+      commitCertificate.version == version, proof.version == version
     else { throw kagemushaInvalid("redemptionVoucher") }
     self.version = version
     self.statement = statement
+    self.commitCertificate = commitCertificate
     self.proof = proof
+    self.artifactManifestDigest = try kagemushaDigest(
+      artifactManifestDigest, "artifactManifestDigest")
+  }
+}
+
+/// Canonical chain-facing request for one full or partial reserve redemption.
+public struct KagemushaRedemptionRequestV1: Equatable, Sendable {
+  public let version: UInt16
+  public let operationID: Data
+  public let voucher: KagemushaRedemptionVoucherV1
+
+  public init(
+    version: UInt16 = 1, operationID: Data, voucher: KagemushaRedemptionVoucherV1
+  ) throws {
+    guard version == 1, voucher.version == version else {
+      throw kagemushaInvalid("redemptionRequest")
+    }
+    self.version = version
+    self.operationID = try kagemushaDigest(operationID, "operationID")
+    self.voucher = voucher
   }
 }
 

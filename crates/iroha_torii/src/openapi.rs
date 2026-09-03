@@ -236,7 +236,7 @@ fn ensure_catalog_security_schemes(document: &mut Value) {
     }
 }
 
-/// Replace the pre-release offline API projection with the sole aggregate-balance V1 contract.
+/// Replace the pre-release KAGEMUSHA API projection with the sole aggregate-balance V1 contract.
 ///
 /// The checked-in document is shared with release tooling, so this closed rewrite happens before
 /// feature projection is exposed by a running node. It intentionally removes every lineage,
@@ -251,10 +251,12 @@ fn install_kagemusha_v1_contract(document: &mut Value) {
             .expect("package-local Torii OpenAPI authority must contain a paths object");
 
         let readiness = kagemusha_operation_mut(paths, "/v1/kagemusha/readiness", "get");
+        readiness.insert("operationId".to_owned(), Value::from("kagemushaReadiness"));
+        readiness.insert("tags".to_owned(), norito::json!(["KAGEMUSHA"]));
         readiness.insert(
             "description".to_owned(),
             Value::from(
-                "Report the sole Kagemusha V1 aggregate-balance capability. The protocol has no hop, ancestry, origin, input, fan-in, or proof-depth admission limit.",
+                "Report the sole KAGEMUSHA V1 aggregate-balance capability. The protocol has no hop, ancestry, origin, input, fan-in, or proof-depth admission limit.",
             ),
         );
         set_kagemusha_response_schema(
@@ -266,16 +268,19 @@ fn install_kagemusha_v1_contract(document: &mut Value) {
         );
 
         let top_up = kagemusha_operation_mut(paths, "/v1/kagemusha/top-up", "post");
+        top_up.insert("operationId".to_owned(), Value::from("kagemushaTopUp"));
+        top_up.insert("tags".to_owned(), norito::json!(["KAGEMUSHA"]));
+        set_kagemusha_idempotency_key_parameter(top_up);
         top_up.insert(
             "description".to_owned(),
             Value::from(
-                "Atomically debit online funds, increase the asset's pooled Kagemusha V1 reserve, and create one device-bound aggregate mint credit.",
+                "Submit one canonical versioned payer-signed `SignedTransaction` containing exactly one native `iroha.kagemusha.v1.top_up` instruction. The transaction must target this network, bind `QueuePlanSynced` admission, and name the embedded payer as its authority. Torii verifies and queues the original transaction unchanged; it never rebuilds or signs it. The HTTP body uses the configured `torii.max_content_len` transaction-ingress limit: KAGEMUSHA-enabled nodes require at least 32 KiB, and the first-release Torii protocol permits at most 64,000,000 bytes. The embedded top-up request is limited to 16 KiB.",
             ),
         );
         set_kagemusha_norito_request(
             top_up,
-            iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_NAME_V1,
-            iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1,
+            iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_SIGNED_TRANSACTION_SCHEMA_NAME_V1,
+            None,
         );
         set_kagemusha_response_schema(
             top_up,
@@ -284,8 +289,13 @@ fn install_kagemusha_v1_contract(document: &mut Value) {
             iroha_torii_shared::kagemusha_api::KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V1,
             iroha_torii_shared::kagemusha_api::KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
         );
+        install_kagemusha_terminal_replay_response(top_up);
+        set_kagemusha_operation_location_header(top_up);
 
         let redeem = kagemusha_operation_mut(paths, "/v1/kagemusha/redeem", "post");
+        redeem.insert("operationId".to_owned(), Value::from("kagemushaRedeem"));
+        redeem.insert("tags".to_owned(), norito::json!(["KAGEMUSHA"]));
+        set_kagemusha_idempotency_key_parameter(redeem);
         redeem.insert(
             "description".to_owned(),
             Value::from(
@@ -295,7 +305,7 @@ fn install_kagemusha_v1_contract(document: &mut Value) {
         set_kagemusha_norito_request(
             redeem,
             iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_SCHEMA_NAME_V1,
-            iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1,
+            Some(iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1),
         );
         set_kagemusha_response_schema(
             redeem,
@@ -304,12 +314,21 @@ fn install_kagemusha_v1_contract(document: &mut Value) {
             iroha_torii_shared::kagemusha_api::KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V1,
             iroha_torii_shared::kagemusha_api::KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
         );
+        install_kagemusha_terminal_replay_response(redeem);
+        set_kagemusha_operation_location_header(redeem);
 
-        let status = kagemusha_operation_mut(paths, "/v1/kagemusha/operations/{operation_id}", "get");
+        let status =
+            kagemusha_operation_mut(paths, "/v1/kagemusha/operations/{operation_id}", "get");
+        status.insert(
+            "operationId".to_owned(),
+            Value::from("kagemushaOperationStatus"),
+        );
+        status.insert("tags".to_owned(), norito::json!(["KAGEMUSHA"]));
+        set_kagemusha_operation_id_path_parameter(status);
         status.insert(
             "description".to_owned(),
             Value::from(
-                "Return one idempotent Kagemusha V1 reserve operation. Applied results carry consensus finality and an exact ordinary-write receipt witness; clients authenticate them against an independently pinned context.",
+                "Return one idempotent KAGEMUSHA V1 reserve operation. Applied results carry consensus finality and an exact ordinary-write receipt witness; clients authenticate them against an independently pinned context.",
             ),
         );
         set_kagemusha_response_schema(
@@ -320,6 +339,27 @@ fn install_kagemusha_v1_contract(document: &mut Value) {
             iroha_torii_shared::kagemusha_api::KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
         );
     }
+
+    let tags = document
+        .as_object_mut()
+        .and_then(|document| document.get_mut("tags"))
+        .and_then(Value::as_array_mut)
+        .expect("package-local Torii OpenAPI authority must contain top-level tags");
+    let mut kagemusha_tag_count = 0_usize;
+    for tag in tags.iter_mut().filter_map(Value::as_object_mut) {
+        let is_kagemusha = tag
+            .get("name")
+            .and_then(Value::as_str)
+            .is_some_and(|name| name.eq_ignore_ascii_case("KAGEMUSHA"));
+        if is_kagemusha {
+            kagemusha_tag_count += 1;
+            tag.insert("name".to_owned(), Value::from("KAGEMUSHA"));
+        }
+    }
+    assert_eq!(
+        kagemusha_tag_count, 1,
+        "package-local Torii OpenAPI authority must declare exactly one KAGEMUSHA tag"
+    );
 
     let schemas = document
         .as_object_mut()
@@ -428,28 +468,126 @@ fn install_kagemusha_v1_contract(document: &mut Value) {
     );
 }
 
+const KAGEMUSHA_NONZERO_OPERATION_ID_PATTERN_V1: &str = "^(?!0{64}$)[0-9a-f]{64}$";
+const KAGEMUSHA_OPERATION_LOCATION_PATTERN_V1: &str =
+    "^/v1/kagemusha/operations/(?!0{64}$)[0-9a-f]{64}$";
+
+fn set_kagemusha_idempotency_key_parameter(operation: &mut Map) {
+    operation.insert(
+        "parameters".to_owned(),
+        norito::json!([{
+            "description": "Exact lowercase hexadecimal form of the request's nonzero 32-byte operation ID. Reusing an ID with the same canonical operation payload is idempotent; binding it to any different payload conflicts.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+                "type": "string",
+                "minLength": 64,
+                "maxLength": 64,
+                "pattern": KAGEMUSHA_NONZERO_OPERATION_ID_PATTERN_V1
+            }
+        }]),
+    );
+}
+
+fn set_kagemusha_operation_id_path_parameter(operation: &mut Map) {
+    operation.insert(
+        "parameters".to_owned(),
+        norito::json!([{
+            "description": "Exact lowercase hexadecimal form of one nonzero 32-byte KAGEMUSHA V1 operation ID.",
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+                "type": "string",
+                "minLength": 64,
+                "maxLength": 64,
+                "pattern": KAGEMUSHA_NONZERO_OPERATION_ID_PATTERN_V1
+            }
+        }]),
+    );
+}
+
+fn set_kagemusha_operation_location_header(operation: &mut Map) {
+    let responses = operation
+        .get_mut("responses")
+        .and_then(Value::as_object_mut)
+        .expect("KAGEMUSHA V1 operation must expose responses");
+    for status in ["200", "202"] {
+        let schema = responses
+            .get_mut(status)
+            .and_then(Value::as_object_mut)
+            .and_then(|response| response.get_mut("headers"))
+            .and_then(Value::as_object_mut)
+            .and_then(|headers| headers.get_mut("Location"))
+            .and_then(Value::as_object_mut)
+            .and_then(|location| location.get_mut("schema"))
+            .and_then(Value::as_object_mut)
+            .unwrap_or_else(|| {
+                panic!("KAGEMUSHA V1 submission response {status} must expose a Location schema")
+            });
+        schema.insert(
+            "pattern".to_owned(),
+            Value::from(KAGEMUSHA_OPERATION_LOCATION_PATTERN_V1),
+        );
+    }
+}
+
+fn install_kagemusha_terminal_replay_response(operation: &mut Map) {
+    let responses = operation
+        .get_mut("responses")
+        .and_then(Value::as_object_mut)
+        .expect("KAGEMUSHA V1 operation must expose responses");
+    let mut response = responses
+        .get("202")
+        .cloned()
+        .expect("KAGEMUSHA V1 submission must expose an accepted response");
+    let response_object = response
+        .as_object_mut()
+        .expect("KAGEMUSHA V1 accepted response must be an object");
+    response_object.insert(
+        "description".to_owned(),
+        Value::from("An exact replay resolved to the operation's terminal status."),
+    );
+    response_object
+        .get_mut("headers")
+        .and_then(Value::as_object_mut)
+        .expect("KAGEMUSHA V1 accepted response must expose headers")
+        .remove("Retry-After");
+    responses.insert("200".to_owned(), response);
+}
+
 fn kagemusha_operation_mut<'a>(paths: &'a mut Map, path: &str, method: &str) -> &'a mut Map {
     paths
         .get_mut(path)
         .and_then(Value::as_object_mut)
         .and_then(|path_item| path_item.get_mut(method))
         .and_then(Value::as_object_mut)
-        .unwrap_or_else(|| panic!("cataloged Kagemusha V1 operation {method} {path} is missing"))
+        .unwrap_or_else(|| panic!("cataloged KAGEMUSHA V1 operation {method} {path} is missing"))
 }
 
-fn set_kagemusha_norito_request(operation: &mut Map, schema_name: &str, maximum_bytes: usize) {
+fn set_kagemusha_norito_request(
+    operation: &mut Map,
+    schema_name: &str,
+    maximum_bytes: Option<usize>,
+) {
+    let mut schema = Map::new();
+    schema.insert("type".to_owned(), Value::from("string"));
+    schema.insert("format".to_owned(), Value::from("binary"));
+    schema.insert("x-iroha-norito-schema".to_owned(), Value::from(schema_name));
+    if let Some(maximum_bytes) = maximum_bytes {
+        schema.insert(
+            "x-iroha-max-bytes".to_owned(),
+            Value::from(maximum_bytes as u64),
+        );
+    }
     operation.insert(
         "requestBody".to_owned(),
         norito::json!({
             "required": true,
             "content": {
                 "application/x-norito": {
-                    "schema": {
-                        "type": "string",
-                        "format": "binary",
-                        "x-iroha-norito-schema": (schema_name),
-                        "x-iroha-max-bytes": (maximum_bytes as u64)
-                    }
+                    "schema": (Value::Object(schema))
                 }
             }
         }),
@@ -468,12 +606,12 @@ fn set_kagemusha_response_schema(
         .and_then(Value::as_object_mut)
         .and_then(|responses| responses.get_mut(status))
         .and_then(Value::as_object_mut)
-        .unwrap_or_else(|| panic!("Kagemusha V1 response {status} is missing"));
+        .unwrap_or_else(|| panic!("KAGEMUSHA V1 response {status} is missing"));
     let content = response
         .entry("content".to_owned())
         .or_insert_with(|| Value::Object(Map::new()))
         .as_object_mut()
-        .expect("Kagemusha V1 response content must be an object");
+        .expect("KAGEMUSHA V1 response content must be an object");
     for (media_type, maximum_bytes) in [
         ("application/json", maximum_json_bytes),
         ("application/x-norito", maximum_norito_bytes),
@@ -694,9 +832,9 @@ mod tests {
     fn kagemusha_command_bad_request_reject_codes(operation_id: &str) -> Vec<&'static str> {
         let mut codes = KAGEMUSHA_COMMAND_COMMON_BAD_REQUEST_REJECT_CODES.to_vec();
         match operation_id {
-            "offlineTopUp" => codes.extend_from_slice(KAGEMUSHA_TOP_UP_BAD_REQUEST_REJECT_CODES),
-            "offlineRedeem" => codes.extend_from_slice(KAGEMUSHA_REDEEM_BAD_REQUEST_REJECT_CODES),
-            _ => panic!("unexpected offline command operation id"),
+            "kagemushaTopUp" => codes.extend_from_slice(KAGEMUSHA_TOP_UP_BAD_REQUEST_REJECT_CODES),
+            "kagemushaRedeem" => codes.extend_from_slice(KAGEMUSHA_REDEEM_BAD_REQUEST_REJECT_CODES),
+            _ => panic!("unexpected KAGEMUSHA command operation id"),
         }
         codes.extend_from_slice(TRANSACTION_ACCEPTANCE_BAD_REQUEST_REJECT_CODES);
         codes
@@ -1274,7 +1412,7 @@ mod tests {
                     let component = reference
                         .strip_prefix(COMPONENT_SCHEMA_REF_PREFIX)
                         .unwrap_or_else(|| {
-                            panic!("Kagemusha schema has a non-component reference: {reference}")
+                            panic!("KAGEMUSHA schema has a non-component reference: {reference}")
                         });
                     refs.insert(component.to_owned());
                 }
@@ -4316,7 +4454,7 @@ mod tests {
                             .unwrap_or_else(|| panic!("{variant} OpenAPI paths"));
                         assert!(
                             paths.contains_key("/v1/kagemusha/readiness"),
-                            "universal offline capability route missing from {variant} OpenAPI",
+                            "universal KAGEMUSHA capability route missing from {variant} OpenAPI",
                         );
                     }
                 }
@@ -4683,7 +4821,7 @@ mod tests {
         {
             assert!(
                 paths.contains_key(path),
-                "missing final offline route {path}"
+                "missing final KAGEMUSHA route {path}"
             );
         }
         assert!(!paths.contains_key("/v1/attestation/issue"));
@@ -4692,29 +4830,31 @@ mod tests {
             .and_then(Value::as_object)
             .and_then(|path| path.get("post"))
             .and_then(Value::as_object)
-            .expect("offline top-up post operation");
+            .expect("KAGEMUSHA top-up post operation");
         let topup_description = topup_post
             .get("description")
             .and_then(Value::as_str)
-            .expect("offline top-up description");
-        assert!(topup_description.contains("pooled Kagemusha V1 reserve"));
+            .expect("KAGEMUSHA top-up description");
+        assert!(topup_description.contains("payer-signed `SignedTransaction`"));
+        assert!(topup_description.contains("configured `torii.max_content_len`"));
+        assert!(topup_description.contains("embedded top-up request is limited to 16 KiB"));
         let redeem_post = paths
             .get("/v1/kagemusha/redeem")
             .and_then(Value::as_object)
             .and_then(|path| path.get("post"))
             .and_then(Value::as_object)
-            .expect("offline redeem post operation");
+            .expect("KAGEMUSHA redeem post operation");
         let redeem_description = redeem_post
             .get("description")
             .and_then(Value::as_str)
-            .expect("offline redeem description");
+            .expect("KAGEMUSHA redeem description");
         assert!(redeem_description.contains("redemption voucher"));
         let topup_request_content = topup_post
             .get("requestBody")
             .and_then(Value::as_object)
             .and_then(|body| body.get("content"))
             .and_then(Value::as_object)
-            .expect("Kagemusha V1 top-up request content");
+            .expect("KAGEMUSHA V1 top-up request content");
         assert_eq!(
             topup_request_content
                 .keys()
@@ -4732,20 +4872,20 @@ mod tests {
             topup_norito_schema
                 .get("x-iroha-norito-schema")
                 .and_then(Value::as_str),
-            Some(iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_NAME_V1)
+            Some(
+                iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_SIGNED_TRANSACTION_SCHEMA_NAME_V1
+            )
         );
-        assert_eq!(
-            topup_norito_schema
-                .get("x-iroha-max-bytes")
-                .and_then(Value::as_u64),
-            Some(iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1 as u64)
+        assert!(
+            !topup_norito_schema.contains_key("x-iroha-max-bytes"),
+            "the static document must not claim one numeric value for runtime-configured transaction ingress"
         );
         let redeem_request_content = redeem_post
             .get("requestBody")
             .and_then(Value::as_object)
             .and_then(|body| body.get("content"))
             .and_then(Value::as_object)
-            .expect("Kagemusha V1 redeem request content");
+            .expect("KAGEMUSHA V1 redeem request content");
         assert_eq!(
             redeem_request_content
                 .keys()
@@ -4770,8 +4910,7 @@ mod tests {
                 .get("x-iroha-max-bytes")
                 .and_then(Value::as_u64),
             Some(
-                iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1
-                    as u64
+                iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1 as u64
             )
         );
         let accepted = topup_post
@@ -4779,13 +4918,37 @@ mod tests {
             .and_then(Value::as_object)
             .and_then(|responses| responses.get("202"))
             .and_then(Value::as_object)
-            .expect("offline top-up accepted response");
+            .expect("KAGEMUSHA top-up accepted response");
         let accepted_headers = accepted
             .get("headers")
             .and_then(Value::as_object)
-            .expect("offline top-up accepted headers");
+            .expect("KAGEMUSHA top-up accepted headers");
         assert!(accepted_headers.contains_key("Location"));
         assert!(accepted_headers.contains_key("Retry-After"));
+        let terminal_replay = topup_post
+            .get("responses")
+            .and_then(Value::as_object)
+            .and_then(|responses| responses.get("200"))
+            .and_then(Value::as_object)
+            .expect("KAGEMUSHA top-up terminal replay response");
+        let terminal_headers = terminal_replay
+            .get("headers")
+            .and_then(Value::as_object)
+            .expect("KAGEMUSHA top-up terminal replay headers");
+        assert!(terminal_headers.contains_key("Location"));
+        assert!(!terminal_headers.contains_key("Retry-After"));
+        assert_eq!(
+            terminal_headers["Location"]["schema"]["pattern"].as_str(),
+            Some(KAGEMUSHA_OPERATION_LOCATION_PATTERN_V1)
+        );
+        assert_eq!(
+            operation_response_schema_ref(
+                topup_post,
+                "200",
+                "/v1/kagemusha/top-up terminal replay"
+            ),
+            "#/components/schemas/KagemushaOperationStatusV1"
+        );
     }
     #[test]
     fn generated_spec_exposes_only_kagemusha_v1() {
@@ -4795,6 +4958,23 @@ mod tests {
             .and_then(Value::as_object)
             .expect("paths section");
         let schemas = component_schemas(&document);
+        let kagemusha_tags = document
+            .get("tags")
+            .and_then(Value::as_array)
+            .expect("top-level tags")
+            .iter()
+            .filter_map(|tag| tag.get("name").and_then(Value::as_str))
+            .filter(|name| name.eq_ignore_ascii_case("KAGEMUSHA"))
+            .collect::<Vec<_>>();
+        assert_eq!(kagemusha_tags, ["KAGEMUSHA"]);
+        let retired_product = ["line", "off"].into_iter().rev().collect::<String>();
+        for suffix in ["readiness", "top-up", "redeem", "operations/{operation_id}"] {
+            let retired_path = format!("/v1/{retired_product}/{suffix}");
+            assert!(
+                !paths.contains_key(&retired_path),
+                "retired product route leaked into the first-release OpenAPI: {retired_path}"
+            );
+        }
 
         assert_eq!(
             schemas
@@ -4828,27 +5008,57 @@ mod tests {
         for (path, request_schema, request_maximum) in [
             (
                 "/v1/kagemusha/top-up",
-                iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_NAME_V1,
-                iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1,
+                iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_SIGNED_TRANSACTION_SCHEMA_NAME_V1,
+                None,
             ),
             (
                 "/v1/kagemusha/redeem",
                 iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_SCHEMA_NAME_V1,
-                iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1,
+                Some(iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1),
             ),
         ] {
-            let operation = paths[path]["post"].as_object().expect("offline operation");
+            let operation = paths[path]["post"]
+                .as_object()
+                .expect("KAGEMUSHA operation");
             let wire = &operation["requestBody"]["content"]["application/x-norito"]["schema"];
             assert_eq!(wire["x-iroha-norito-schema"].as_str(), Some(request_schema));
             assert_eq!(
-                wire["x-iroha-max-bytes"].as_u64(),
-                Some(request_maximum as u64)
+                wire.get("x-iroha-max-bytes").and_then(Value::as_u64),
+                request_maximum.map(|maximum| maximum as u64)
             );
             assert_eq!(
                 operation_response_schema_ref(operation, "202", path),
                 "#/components/schemas/KagemushaOperationStatusV1"
             );
+            assert_eq!(
+                operation_response_schema_ref(operation, "200", path),
+                "#/components/schemas/KagemushaOperationStatusV1"
+            );
+            assert_eq!(
+                operation["parameters"][0]["schema"]["pattern"].as_str(),
+                Some(KAGEMUSHA_NONZERO_OPERATION_ID_PATTERN_V1)
+            );
+            for status in ["200", "202"] {
+                assert_eq!(
+                    operation["responses"][status]["headers"]["Location"]["schema"]["pattern"]
+                        .as_str(),
+                    Some(KAGEMUSHA_OPERATION_LOCATION_PATTERN_V1)
+                );
+            }
+            assert!(operation["responses"]["200"]["headers"]
+                .get("Retry-After")
+                .is_none());
+            assert!(operation["responses"]["202"]["headers"]
+                .get("Retry-After")
+                .is_some());
         }
+        let status = paths["/v1/kagemusha/operations/{operation_id}"]["get"]
+            .as_object()
+            .expect("KAGEMUSHA status operation");
+        assert_eq!(
+            status["parameters"][0]["schema"]["pattern"].as_str(),
+            Some(KAGEMUSHA_NONZERO_OPERATION_ID_PATTERN_V1)
+        );
     }
     #[test]
     fn musubi_v1_openapi_matches_the_complete_catalog_and_declares_models() {

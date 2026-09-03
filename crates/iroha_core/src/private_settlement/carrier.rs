@@ -8,7 +8,10 @@
 use iroha_crypto::Hash;
 use iroha_data_model::{
     ValidationFail,
-    isi::private_settlement::{AbortAtomicPrivateSettlementV1, FinalizeAtomicPrivateSettlementV1},
+    isi::private_settlement::{
+        AbortAtomicPrivateSettlementV1, FinalizeAtomicPrivateSettlementV1,
+        RegisterAtomicPrivateSettlementPrepareV1,
+    },
     nexus::PrivateSettlementCommitBundleV1,
     transaction::{Executable, SignedTransaction},
 };
@@ -20,6 +23,8 @@ const CARRIER_INSTRUCTION_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:nexus:private-settlement:carrier-instruction:v1\0";
 const ABORT_CARRIER_INSTRUCTION_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:nexus:private-settlement:abort-carrier-instruction:v1\0";
+const PREPARE_LOCK_CARRIER_INSTRUCTION_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:nexus:private-settlement:prepare-lock-carrier-instruction:v1\0";
 
 fn canonical_digest_v1<T: Encode>(domain: &[u8], value: &T) -> Result<Hash, norito::Error> {
     let encoded = norito::encode_canonical(value)?;
@@ -51,6 +56,16 @@ pub(crate) fn private_settlement_abort_carrier_instruction_digest_v1(
     instruction: &AbortAtomicPrivateSettlementV1,
 ) -> Result<Hash, norito::Error> {
     canonical_digest_v1(ABORT_CARRIER_INSTRUCTION_DIGEST_DOMAIN_V1, instruction)
+}
+
+/// Hash the exact direct all-Prepare control-lock carrier instruction.
+pub(crate) fn private_settlement_prepare_lock_carrier_instruction_digest_v1(
+    instruction: &RegisterAtomicPrivateSettlementPrepareV1,
+) -> Result<Hash, norito::Error> {
+    canonical_digest_v1(
+        PREPARE_LOCK_CARRIER_INSTRUCTION_DIGEST_DOMAIN_V1,
+        instruction,
+    )
 }
 
 /// One-shot identity installed from an exact signed carrier transaction.
@@ -116,6 +131,9 @@ pub(crate) fn signed_private_settlement_carrier_binding_v1(
                 .downcast_ref::<FinalizeAtomicPrivateSettlementV1>()
                 .is_some()
                 || instruction
+                    .downcast_ref::<RegisterAtomicPrivateSettlementPrepareV1>()
+                    .is_some()
+                || instruction
                     .downcast_ref::<AbortAtomicPrivateSettlementV1>()
                     .is_some()
         })
@@ -155,6 +173,26 @@ pub(crate) fn signed_private_settlement_carrier_binding_v1(
                 ))
             })?;
         (manifest, payload_digest, instruction_digest)
+    } else if let Some(carrier) =
+        instruction.downcast_ref::<RegisterAtomicPrivateSettlementPrepareV1>()
+    {
+        carrier
+            .barrier
+            .validate_shape()
+            .map_err(|_| not_permitted())?;
+        let instruction_digest = private_settlement_prepare_lock_carrier_instruction_digest_v1(
+            carrier,
+        )
+        .map_err(|error| {
+            ValidationFail::InternalError(format!(
+                "failed to encode private-settlement Prepare-lock carrier: {error}"
+            ))
+        })?;
+        (
+            &carrier.barrier.manifest,
+            carrier.barrier.prepared_bundle_digest,
+            instruction_digest,
+        )
     } else if let Some(carrier) = instruction.downcast_ref::<AbortAtomicPrivateSettlementV1>() {
         carrier.manifest.validate().map_err(|_| not_permitted())?;
         let payload_digest = carrier.manifest.manifest_digest().map_err(|error| {
@@ -196,7 +234,7 @@ pub(crate) fn signed_private_settlement_carrier_binding_v1(
 
 fn not_permitted() -> ValidationFail {
     ValidationFail::NotPermitted(
-        "private-settlement termination requires one exact sponsor-signed direct carrier with the committed fee intent"
+        "private-settlement control/finality requires one exact sponsor-signed direct carrier with the committed fee intent"
             .to_owned(),
     )
 }
@@ -305,6 +343,60 @@ mod tests {
         );
         assert_eq!(
             binding.consume(bundle_digest, instruction_digest, exact_signed_bytes),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn signed_prepare_registration_binds_barrier_fee_and_complete_transaction() {
+        use iroha_data_model::nexus::PrivateSettlementPrepareBarrierV1;
+
+        let (bundle, sponsor_key) = certified_commit_bundle_fixture();
+        let barrier = PrivateSettlementPrepareBarrierV1 {
+            version: bundle.version,
+            manifest: bundle.manifest.clone(),
+            authority_catalog: bundle.authority_catalog.clone(),
+            deltas: bundle.legs.iter().map(|leg| leg.delta.clone()).collect(),
+            prepare_certificates: bundle.legs.iter().map(|leg| leg.prepare.clone()).collect(),
+            prepared_bundle_digest: bundle.legs[0].commit.body.prepared_bundle_digest,
+        };
+        barrier.validate_shape().expect("fixture Prepare barrier");
+        let instruction = RegisterAtomicPrivateSettlementPrepareV1::new(barrier.clone());
+        let transaction = TransactionBuilder::new(
+            barrier.manifest.network_id,
+            barrier.manifest.sponsor.clone(),
+            barrier.manifest.public_fee_intent.clone(),
+        )
+        .with_instructions([instruction.clone()])
+        .sign(sponsor_key.private_key());
+        let exact_signed_bytes = u64::try_from(
+            transaction
+                .encode_wire_v1()
+                .expect("fixed V1 signed registration transaction encodes")
+                .len(),
+        )
+        .expect("fixture signed transaction length fits u64");
+        let mut binding = signed_private_settlement_carrier_binding_v1(&transaction)
+            .expect("registration binding derives")
+            .expect("fixture contains one direct registration carrier");
+        let instruction_digest =
+            private_settlement_prepare_lock_carrier_instruction_digest_v1(&instruction)
+                .expect("registration instruction digest encodes");
+        assert_eq!(binding.signed_transaction_bytes, exact_signed_bytes);
+        assert_eq!(
+            binding.consume(
+                barrier.prepared_bundle_digest,
+                instruction_digest,
+                exact_signed_bytes - 1,
+            ),
+            Err(PrivateSettlementCarrierBindingErrorV1::CarrierTooLarge)
+        );
+        assert_eq!(
+            binding.consume(
+                barrier.prepared_bundle_digest,
+                instruction_digest,
+                exact_signed_bytes,
+            ),
             Ok(())
         );
     }
@@ -448,7 +540,7 @@ mod tests {
                 reimbursement_leg_ordinal: 0,
                 legs: Vec::new(),
             },
-            authority_catalog: Vec::new(),
+            authority_catalog: Default::default(),
             legs: Vec::new(),
         };
         let first = private_settlement_commit_bundle_digest_v1(&bundle)

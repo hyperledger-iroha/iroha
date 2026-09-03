@@ -21,14 +21,14 @@ summary: Operational plan for bringing the core Nexus validator cluster online b
 - **Sora Taira (testnet)** – persistent public testnet with prefix `taira`, mirroring mainnet configuration for integration testing and pre-release validation (chain UUID `fc56984b-2be7-431d-840e-21514d1883f0`).
 - Maintain separate genesis files, governance keys, and infrastructure footprints for each environment. Taira acts as the proving ground for all SoraFS/SoraNet rollouts before promotion to Nexus.
 - Operator-owned release pipelines should deploy to Taira first, execute automated smoke tests, and require manual promotion to Nexus once checks pass. This repository ships the durable `iroha taira public-reset` coordinator for authorized reset mutations; ordinary public-node joining remains a separate signed-bootstrap workflow.
-- Reference configuration bundles live under `configs/soranexus/nexus/` (mainnet) and `configs/soranexus/taira/` (testnet). Both contain `config.toml` and `genesis.json`; Taira also retains `configs/soranexus/taira/sorafs_admission/`. Minamoto admission material remains operator-owned.
+- Reference configuration bundles live under `configs/soranexus/nexus/` (mainnet) and `configs/soranexus/taira/` (testnet). Both contain `config.toml` and a non-signable `genesis.template.json`; Taira also retains `configs/soranexus/taira/sorafs_admission/`. Complete genesis manifests and Minamoto admission material remain operator-owned.
 
 ## Step 1 – Configuration Review
 1. Audit existing documentation:
    - `specs/nexus.md` (consensus and Nexus architecture).
    - `specs/nexus_operations.md` (operational lifecycle and evidence requirements).
    - `specs/sora_nexus_operator_onboarding.md` (configuration, key custody, and onboarding checks).
-2. Validate `configs/soranexus/nexus/genesis.json` and `configs/soranexus/taira/genesis.json` against the deployment's final validator roster and staking policy before signing.
+2. Materialize `configs/soranexus/nexus/genesis.template.json` or `configs/soranexus/taira/genesis.template.json` with operator-provisioned public mint-finality parameters, inject the final validator topology, and require exact identity, canonical-point, and staking-policy validation before signing.
 3. Confirm network parameters:
    - Consensus committee size & quorum.
    - Block interval / finality thresholds.

@@ -8,9 +8,9 @@ Not published to Maven Central yet. Build locally and consume via `mavenLocal()`
 
 | Artifact | Type | Description |
 |----------|------|-------------|
-| `org.hyperledger.iroha.sdk:core-jvm` | JAR | Pure Kotlin/JVM models, codecs, cryptography, clients, and Kagemusha V1 wire support |
-| `org.hyperledger.iroha.sdk:client-android` | AAR | Android keystore, device telemetry, IrohaKeyManager, shared JNI bridge for ML-DSA-65 / Kagemusha flows |
-| `org.hyperledger.iroha.sdk:kagemusha-wallet-android` | AAR | Kagemusha wallet integration built on `client-android`; use this artifact for Android Kagemusha |
+| `org.hyperledger.iroha.sdk:core-jvm` | JAR | Pure Kotlin/JVM models, codecs, cryptography, clients, and KAGEMUSHA V1 wire support |
+| `org.hyperledger.iroha.sdk:client-android` | AAR | Android keystore, device telemetry, IrohaKeyManager, shared JNI bridge for ML-DSA-65 / KAGEMUSHA flows |
+| `org.hyperledger.iroha.sdk:kagemusha-wallet-android` | AAR | KAGEMUSHA wallet integration built on `client-android`; use this artifact for Android KAGEMUSHA |
 
 ### Consumer usage
 
@@ -23,10 +23,10 @@ repositories {
 // Pure JVM — business logic modules, JUnit tests, server-side
 implementation("org.hyperledger.iroha.sdk:core-jvm:0.1.0")
 
-// Android wallet without Kagemusha payments
+// Android wallet without KAGEMUSHA payments
 implementation("org.hyperledger.iroha.sdk:client-android:0.1.0")
 
-// Android wallet with Kagemusha payments
+// Android wallet with KAGEMUSHA payments
 implementation("org.hyperledger.iroha.sdk:kagemusha-wallet-android:0.1.0")
 ```
 
@@ -34,17 +34,26 @@ implementation("org.hyperledger.iroha.sdk:kagemusha-wallet-android:0.1.0")
 `KagemushaHardwareProviderV1` that attests the complete exact-next counter, rollback-resistant
 journal/inbox/outbox, trusted-time, atomic recovery, and hardware-epoch rotation contract. Incoming
 payments are acknowledged only after durable staging; duplicate delivery returns the provider's
-same durable ACK. Before every send or redemption, the wallet drains all pending credits without a
-count limit. `KagemushaAndroidWalletV1.openProduction(...)` additionally binds an OEM adapter to
+same durable ACK. Sends and redemptions require the native provider to fold the staged credits
+needed to cover the amount; unrelated backlog must not delay an already-covered spend.
+`foldReceiveBatch()` and `drainPendingCredits()` expose bounded batches and a stable-snapshot
+drain without a cumulative count limit. The drain releases the lane after each batch for queued
+foreground work. Concurrent epoch rotation interrupts the drain; start a new pass for the new
+epoch's watermark. Continuous background scheduling remains an integration
+requirement. `KagemushaAndroidWalletV1.openProduction(...)` additionally binds an OEM adapter to
 the native device service. Stock KeyMint and StrongBox remain online-only because signing keys do
 not supply the required non-forking persistence contract; there is no software fallback.
-Managed Kagemusha X25519 types enforce only the canonical 32-byte nonzero wire shape. They do
+Staging advances native inbox bookkeeping, not the monetary-state journal. Core's typed mint
+reservation/inbox implementation is under validation; its SDK-to-OEM operation-21 adapter is
+still required. A completed MintFold is a separate proved transition, not a staging result.
+Managed KAGEMUSHA X25519 types enforce only the canonical 32-byte nonzero wire shape. They do
 not perform scalar multiplication or low-order probing; the shared native core authenticates
-canonical X25519 elements during object and complete-exchange validation before monetary use.
+canonical X25519 elements during object and complete five-message exchange validation before monetary use.
 Logical sequence and durable journal revision are per hardware epoch. Authenticated rotation carries
 the full balance and replay root into the exact successor epoch, replaces the device-policy binding,
-and resets both counters to zero. The wallet rotates automatically before either `u128` counter can
-overflow, so counter exhaustion cannot strand funds.
+and resets both counters to zero. `rotateHardwareEpoch()` does not first drain the inbox, so it
+remains callable with saturated counters and pending receipts. The native provider must arrange
+rollover before counter exhaustion; the managed wallet does not schedule automatic rotation.
 
 ### Transaction identity
 
@@ -197,14 +206,29 @@ fields and tags, and current Native AMX V2 evidence. The parsers reject
 status/diagnostics swaps, legacy receipt shapes, unordered or oversized Native
 participant rows, and inconsistent carrier identities.
 
-### Kagemusha peer transports
+### KAGEMUSHA peer transports
 
-`KagemushaV1` is the only Kagemusha payment API. Kotlin/JVM and Android
-encode the same payment request, payment, acknowledgement, mint credit, and
-redemption voucher bytes, with `kgm1:` as the sole text transport. QR, NFC,
-and Nearby consume `../fixtures/offline/kagemusha_v1.json`. Public wire
+`KagemushaNoritoV1` is the canonical KAGEMUSHA wire codec. Kotlin/JVM and Android
+encode the same five-message payment exchange—request, compact acceptance intent,
+fresh-key acceptance ticket, post-commit proof-bearing payment, and acknowledgement.
+Mint authorization, mint credit, and redemption vouchers are separately framed;
+`kgm1:` is the sole text transport. NoCommit cannot release capacity until its
+proof-authenticated relation is implemented; wallet cancellation is unavailable. QR, NFC, and Nearby consume
+`../fixtures/offline/kagemusha_v1.json`. Public wire
 size and verification work are independent of balance history; no hop, input,
 origin, ancestry, fan-in, or proof-depth limit is encoded.
+
+Online reserve top-ups use the same payer authority as the debit. Build one
+`TopUpKagemushaV1Instruction` from the proof-bearing request, put that sole
+instruction in a transaction, and sign it with `TransactionBuilder`.
+`TransactionBuilder` always signature-binds `QueuePlanSynced` for public
+submission. Send the resulting `SignedTransaction` and the request's exact
+nonzero 32-byte `operationId` through
+`KagemushaToriiClientV1.submitTopUp(...)`. The client posts the canonical
+versioned signed-transaction bytes unchanged to `/v1/kagemusha/top-up` and
+uses the lowercase operation ID as `Idempotency-Key`; there is no unsigned or
+request-only top-up overload. The embedded request ceiling is 16 KiB so both
+maximum-size recursive proof parities remain usable.
 
 ### Fee quotes and sponsorship
 
@@ -424,7 +448,7 @@ the generated native bridge task.
 
 ### Step 2: Build native libraries (for `client-android`)
 
-The `libconnect_norito_bridge.so` files are **not tracked in git** — they are built from the Rust crate at `crates/connect_norito_bridge` in the same iroha repository. The Gradle task now lives on `client-android`, which owns the shared native bridge used for ML-DSA-65 signing and Kagemusha V1 device lifecycle operations. It defaults to `../..` as the iroha root (override via `iroha.dir` in `local.properties` if needed).
+The `libconnect_norito_bridge.so` files are **not tracked in git** — they are built from the Rust crate at `crates/connect_norito_bridge` in the same iroha repository. The Gradle task now lives on `client-android`, which owns the shared native bridge used for ML-DSA-65 signing and KAGEMUSHA V1 device lifecycle operations. It defaults to `../..` as the iroha root (override via `iroha.dir` in `local.properties` if needed).
 
 **One-time setup:**
 
@@ -486,7 +510,20 @@ provenance, and the AAR.
 
 Debug/JVM unit-test compilation deliberately does not register the shipping JNI
 and provenance directories, so it never launches Cargo/NDK merely to compile
-tests. An unchanged raw build is reusable only while its saved source seal still
+tests. An actual Debug app or instrumentation run that needs native calls must
+pass `-PirohaDebugNativeBridge=true` with the same external artifact root and
+authenticated NDK configuration. This registers the maintained generated JNI
+and provenance outputs for the Debug AAR; it does not copy source-tree libraries,
+enable native proving, or qualify an Offline device provider. Only exact `true`
+and `false` property values are accepted. For example:
+
+```bash
+./gradlew :client-android:assembleDebug -PirohaDebugNativeBridge=true
+```
+
+The property also applies to this SDK when an Android app includes it as a
+composite build. Release packaging always includes the bridge independently of
+this Debug property. An unchanged raw build is reusable only while its saved source seal still
 matches the live checkout; release packaging always re-runs the inexpensive
 strip/provenance phase and its final seal check.
 

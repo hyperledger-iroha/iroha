@@ -390,14 +390,14 @@ mod tests {
     #[cfg(feature = "json")]
     #[test]
     fn genesis_context_json_uses_explicit_policy_hash_names_only() {
-        let context = context(&[1, 1, 1, 1]);
-        let parameters = SumeragiV2GenesisContextParameters::recommended(
-            context.kagemusha_mint_finality_epoch_roster,
-            None,
-        );
+        let parameters = SumeragiV2GenesisContextParameters::recommended();
         let json = norito::json::to_json(&parameters).expect("serialize v2 genesis context");
         assert!(json.contains("\"nexus_amx_context_hash\""));
         assert!(json.contains("\"execution_policy_hash\""));
+        assert!(
+            !json.contains("kagemusha"),
+            "network-independent authority templates are signed beside this secondary context"
+        );
         assert!(!json.contains("active_nexus_lane_hash"));
         let obsolete = json.replace("nexus_amx_context_hash", "active_nexus_lane_hash");
         assert!(
@@ -418,6 +418,11 @@ mod tests {
             norito::json::from_str::<SumeragiV2GenesisContextParameters>(&unknown).is_err(),
             "signed v2 genesis context must reject unknown fields"
         );
+    }
+    #[test]
+    fn genesis_context_parameters_remain_snapshot_copyable() {
+        fn assert_copy<T: Copy>() {}
+        assert_copy::<SumeragiV2GenesisContextParameters>();
     }
     fn peer(seed: u8) -> PeerId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)

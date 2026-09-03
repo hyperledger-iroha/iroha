@@ -4,7 +4,7 @@
 package org.hyperledger.iroha.android.offline;
 
 /**
- * Java migration surface for the mandatory Kagemusha V1 non-forking hardware provider.
+ * Java surface for the mandatory KAGEMUSHA V1 non-forking hardware provider.
  *
  * <p>The behavioral contract and implementation live in the default Kotlin SDK. Implementations
  * must provide every inherited hardware operation and may not use a software fallback.

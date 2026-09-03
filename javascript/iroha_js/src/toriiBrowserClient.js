@@ -28,8 +28,9 @@ import {
   normalizeKagemushaReadinessV1,
   normalizeUnverifiedKagemushaOperationStatusV1,
   requireKagemushaJsonContentTypeV1,
+  requireKagemushaSubmissionResponseV1,
 } from "./kagemushaToriiV1.js";
-import { KagemushaV1 } from "./kagemushaV1.js";
+import { Kagemusha } from "./kagemusha.js";
 import {
   SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES,
   SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
@@ -2079,26 +2080,51 @@ export class ToriiBrowserClient {
       maximumBodyBytes: KAGEMUSHA_READINESS_JSON_MAX_BYTES_V1,
       jsonParser: (text) => parseStrictLosslessIntegerJson(
         text,
-        "Kagemusha readiness response",
+        "KAGEMUSHA readiness response",
       ),
       responseObserver: (response) => requireKagemushaJsonContentTypeV1(
         response.headers.get("content-type"),
-        "Kagemusha readiness response",
+        "KAGEMUSHA readiness response",
       ),
     }).then((payload) => normalizeKagemushaReadinessV1(payload));
   }
 
-  /** Submit one canonical Kagemusha V1 top-up intent. */
-  submitKagemushaTopUp(request, options = {}) {
-    return this._submitKagemushaOperationV1("/v1/kagemusha/top-up", "top_up", request, options);
+  /** Submit one payer-signed canonical KAGEMUSHA V1 top-up transaction. */
+  submitKagemushaTopUp(signedTransaction, operationId, options = {}) {
+    const opts = signalOnlyOptions(options, "submitKagemushaTopUp options");
+    if (typeof operationId === "string") {
+      throw new TypeError(
+        "submitKagemushaTopUp operationId must be exact nonzero 32-byte binary data",
+      );
+    }
+    const operationIdHex = kagemushaOperationIdHexV1(operationId);
+    const body = requireTransactionBytes(
+      signedTransaction,
+      "submitKagemushaTopUp signedTransaction",
+    );
+    browserSignedTransactionHashHex(body);
+    return this._submitKagemushaOperationBodyV1(
+      "/v1/kagemusha/top-up",
+      "top_up",
+      body,
+      operationIdHex,
+      opts.signal,
+    );
   }
 
-  /** Submit one canonical Kagemusha V1 full or partial redemption intent. */
+  /** Submit one canonical KAGEMUSHA V1 full or partial redemption intent. */
   submitKagemushaRedemption(request, options = {}) {
-    return this._submitKagemushaOperationV1("/v1/kagemusha/redeem", "redemption", request, options);
+    const opts = signalOnlyOptions(options, "submitKagemushaRedemption options");
+    return this._submitKagemushaOperationBodyV1(
+      "/v1/kagemusha/redeem",
+      "redemption",
+      Kagemusha.encodeRedemptionRequest(request),
+      kagemushaOperationIdHexV1(request.operationId),
+      opts.signal,
+    );
   }
 
-  /** Read one Kagemusha V1 operation without exposing an unverified monetary result. */
+  /** Read one KAGEMUSHA V1 operation without exposing an unverified monetary result. */
   getKagemushaOperation(operationId, options = {}) {
     const opts = signalOnlyOptions(options, "getKagemushaOperation options");
     const operationIdHex = kagemushaOperationIdHexV1(operationId);
@@ -2106,44 +2132,52 @@ export class ToriiBrowserClient {
       signal: opts.signal,
       oneShot: true,
       maximumBodyBytes: KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
-      jsonParser: (text) => parseStrictLosslessIntegerJson(text, "Kagemusha operation response"),
+      jsonParser: (text) => parseStrictLosslessIntegerJson(text, "KAGEMUSHA operation response"),
       responseObserver: (response) => requireKagemushaJsonContentTypeV1(
         response.headers.get("content-type"),
-        "Kagemusha operation response",
+        "KAGEMUSHA operation response",
       ),
     }).then((payload) => {
       const status = normalizeUnverifiedKagemushaOperationStatusV1(payload);
       if (kagemushaOperationIdHexV1(status.operationId) !== operationIdHex) {
-        throw new TypeError("Kagemusha operation response ID does not match the requested resource");
+        throw new TypeError("KAGEMUSHA operation response ID does not match the requested resource");
       }
       return status;
     });
   }
 
-  _submitKagemushaOperationV1(path, kind, request, options) {
-    const opts = signalOnlyOptions(options, "submitKagemushaOperation options");
-    const body = kind === "top_up"
-      ? KagemushaV1.encodeTopUpRequest(request)
-      : KagemushaV1.encodeRedemptionRequest(request);
-    const operationIdHex = kagemushaOperationIdHexV1(request.operationId);
+  _submitKagemushaOperationBodyV1(path, kind, body, operationIdHex, signal) {
+    let transportResponse = null;
     return this._json("POST", path, {
       rawBody: body,
       contentType: "application/x-norito",
       headers: { Accept: "application/json", "Idempotency-Key": operationIdHex },
-      signal: opts.signal,
+      signal,
       oneShot: true,
       successStatuses: [200, 202],
       maximumBodyBytes: KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
-      jsonParser: (text) => parseStrictLosslessIntegerJson(text, "Kagemusha operation response"),
-      responseObserver: (response) => requireKagemushaJsonContentTypeV1(
-        response.headers.get("content-type"),
-        "Kagemusha operation response",
-      ),
+      jsonParser: (text) => parseStrictLosslessIntegerJson(text, "KAGEMUSHA operation response"),
+      responseObserver: (response) => {
+        requireKagemushaJsonContentTypeV1(
+          response.headers.get("content-type"),
+          "KAGEMUSHA operation response",
+        );
+        transportResponse = {
+          statusCode: response.status,
+          location: response.headers.get("location"),
+          retryAfter: response.headers.get("retry-after"),
+        };
+      },
     }).then((payload) => {
       const status = normalizeUnverifiedKagemushaOperationStatusV1(payload);
       if (kagemushaOperationIdHexV1(status.operationId) !== operationIdHex || status.kind !== kind) {
-        throw new TypeError("Kagemusha operation response does not match the submitted request");
+        throw new TypeError("KAGEMUSHA operation response does not match the submitted request");
       }
+      requireKagemushaSubmissionResponseV1({
+        ...transportResponse,
+        operationIdHex,
+        operationState: status.state,
+      });
       return status;
     });
   }

@@ -32,7 +32,7 @@ use iroha_data_model::{
 use rand::TryRngCore;
 
 /// Exact settlement proof relation and transcript descriptor.
-pub(crate) const ATOMIC_PRIVATE_SETTLEMENT_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"iroha-atomic-private-settlement-stark-v1:wire=APZ1-v1:shared-proof-managed-note-geometry:trace=2^14:base=556:profile-aux=1:profile-fixed=122:profile-constraints=1372:constraint-degree=4:max-proof=8388608:relation=ivm-private-note-fixed-2-input-3-output-balanced-with-zero-cover:public-input=poseidon-x7-goldilocks-6x64(canonical-manifest-intent-proof-binding,canonical-leg-statement,canonical-internal-statement,canonical-genesis):post-proof-artifacts=manifest+committee-qc+carrier:output-memos=auditor-plaintext-commitment+payer-change-role+sponsor-reimbursement-terms:transparent-amx=separate:governed-disabled-by-default";
+pub(crate) const ATOMIC_PRIVATE_SETTLEMENT_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"iroha-atomic-private-settlement-stark-v1:wire=APZ1-v1:shared-proof-managed-note-geometry:trace=2^14:base=556:profile-aux=1:profile-fixed=122:profile-constraints=1372:constraint-degree=4:max-proof=8388608:relation=ivm-private-note-fixed-2-input-3-output-balanced-with-zero-cover:public-input=poseidon-x7-goldilocks-6x64(canonical-manifest-intent-proof-binding,canonical-leg-statement-including-successor-root+epoch,canonical-internal-statement,canonical-genesis):successor-correctness=validator-derived-frontier:post-proof-artifacts=manifest+committee-qc+carrier:output-memos=auditor-plaintext-commitment+payer-change-role+sponsor-reimbursement-terms+success-fee-carriers-2:transparent-amx=separate:governed-disabled-by-default";
 
 const SETTLEMENT_PARAMETERS_V1: aggregate::AggregateStarkParametersV1 =
     aggregate::AggregateStarkParametersV1 {
@@ -346,5 +346,52 @@ mod tests {
         .expect("finalized public input");
 
         assert_eq!(provisional, finalized);
+    }
+
+    #[test]
+    fn public_input_and_action_digest_bind_successor_root_and_epoch() {
+        let fixture = sidecar_fixture();
+        let manifest = &fixture.sidecar.manifest;
+        let statement = &fixture.sidecar.payload.statement;
+        let canonical_genesis_hash = *manifest.network_id.as_genesis_hash().as_ref();
+        let internal = internal_statement_v1(manifest, statement).expect("internal statement");
+        let profile = relation_profile_v1(manifest, statement).expect("relation profile");
+        let original = AtomicPrivateSettlementStarkAdapterV1::new(
+            manifest,
+            statement,
+            &internal,
+            canonical_genesis_hash,
+            manifest.authority_context_height,
+            profile,
+        )
+        .public_input_digest_v1()
+        .expect("original public input");
+
+        let mut substituted = statement.clone();
+        substituted.new_root = iroha_data_model::privacy::PrivacyRootV1::new([0xE7; 32]);
+        substituted
+            .validate()
+            .expect("substituted successor remains structurally valid");
+        let substituted_internal =
+            internal_statement_v1(manifest, &substituted).expect("substituted internal statement");
+        let substituted_profile =
+            relation_profile_v1(manifest, &substituted).expect("substituted relation profile");
+        let substituted_digest = AtomicPrivateSettlementStarkAdapterV1::new(
+            manifest,
+            &substituted,
+            &substituted_internal,
+            canonical_genesis_hash,
+            manifest.authority_context_height,
+            substituted_profile,
+        )
+        .public_input_digest_v1()
+        .expect("substituted public input");
+
+        assert_ne!(original, substituted_digest);
+        assert_ne!(internal.action_digest, substituted_internal.action_digest);
+
+        let mut invalid_epoch = statement.clone();
+        invalid_epoch.new_epoch = invalid_epoch.new_epoch.saturating_add(1);
+        assert!(invalid_epoch.validate().is_err());
     }
 }

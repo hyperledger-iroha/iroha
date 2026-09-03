@@ -18,12 +18,12 @@ use iroha_data_model::{
     },
     isi::kagemusha_v1::{
         KAGEMUSHA_CHAIN_VERSION_V1, KAGEMUSHA_MINT_FINALITY_TREE_DEPTH_V1,
-        KagemushaMintFinalityEpochRosterV1, KagemushaMintFinalitySealBundleV1,
-        KagemushaMintFinalitySealMessageV1, KagemushaMintFinalitySealShareV1,
-        KagemushaMintFinalityValidatorKeysV1, KagemushaMintFinalityValidatorSealV1,
-        KagemushaOperationKindV1, KagemushaPastaSchnorrSignatureV1,
-        KagemushaReserveReceiptV1, KagemushaTopUpLeafV1, KagemushaTopUpMembershipWitnessV1,
-        kagemusha_mint_finality_root_v1,
+        KagemushaMintFinalityEpochRosterV1, KagemushaMintFinalityGenesisParametersV1,
+        KagemushaMintFinalitySealBundleV1, KagemushaMintFinalitySealMessageV1,
+        KagemushaMintFinalitySealShareV1, KagemushaMintFinalityValidatorKeysV1,
+        KagemushaMintFinalityValidatorSealV1, KagemushaOperationKindV1,
+        KagemushaPastaSchnorrSignatureV1, KagemushaReserveReceiptV1, KagemushaTopUpLeafV1,
+        KagemushaTopUpMembershipWitnessV1, kagemusha_mint_finality_root_v1,
     },
     kagemusha::KagemushaPastaStateCommitmentV1,
 };
@@ -40,12 +40,11 @@ use crate::zk::kagemusha_v1_poseidon::{
     KagemushaPoseidonFieldV1, decode, digest_limbs, encode, from_u128, hash,
 };
 
-const MINT_LEAF_DOMAIN_V1: u64 = u64::from_le_bytes(*b"ocmintl1");
-const MINT_EMPTY_DOMAIN_V1: u64 = u64::from_le_bytes(*b"ocminte1");
-const MINT_NODE_DOMAIN_V1: u64 = u64::from_le_bytes(*b"ocmintn1");
+pub(super) const MINT_LEAF_DOMAIN_V1: u64 = u64::from_le_bytes(*b"kgmmntl1");
+const MINT_EMPTY_DOMAIN_V1: u64 = u64::from_le_bytes(*b"kgminte1");
+pub(super) const MINT_NODE_DOMAIN_V1: u64 = u64::from_le_bytes(*b"kgmmntn1");
 const SUBJECT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-finality:subject";
-const EXECUTION_DIGEST_DOMAIN_V1: &[u8] =
-    b"iroha:kagemusha:v1:mint-finality:execution-commitment";
+const EXECUTION_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-finality:execution-commitment";
 const KEY_DERIVATION_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-finality:key";
 const NONCE_DERIVATION_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-finality:nonce";
 const CHALLENGE_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-finality:challenge";
@@ -342,7 +341,55 @@ pub fn validate_kagemusha_mint_finality_epoch_v1(
                 .to_owned(),
         ));
     }
-    for keys in &epoch.validators {
+    validate_kagemusha_mint_finality_roster_keys_v1(epoch)
+}
+
+/// Decode every paired-Pasta public key in a structurally valid epoch roster.
+///
+/// Genesis freeze calls this immediately after binding a networkless signed
+/// template to the final network. Runtime verification calls it again at the
+/// point of use, so malformed compressed points fail closed before any share
+/// can be accepted.
+///
+/// # Errors
+///
+/// Returns an error unless the roster is structurally valid and every Pallas
+/// and Vesta encoding is canonical and non-identity.
+pub fn validate_kagemusha_mint_finality_roster_keys_v1(
+    epoch: &KagemushaMintFinalityEpochRosterV1,
+) -> Result<(), KagemushaMintFinalityErrorV1> {
+    epoch
+        .validate()
+        .map_err(|error| KagemushaMintFinalityErrorV1::InvalidEpochRoster(error.to_string()))?;
+    validate_kagemusha_mint_finality_validator_keys_v1(&epoch.validators)
+}
+
+/// Decode every paired-Pasta public key in network-independent genesis authority parameters.
+///
+/// Operator tooling calls this before a genesis network identity exists, so malformed compressed
+/// points fail closed before a manifest can be generated or signed.
+///
+/// # Errors
+///
+/// Returns an error unless both roster templates are structurally valid and every Pallas and
+/// Vesta encoding is canonical and non-identity.
+pub fn validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
+    parameters: &KagemushaMintFinalityGenesisParametersV1,
+) -> Result<(), KagemushaMintFinalityErrorV1> {
+    parameters
+        .validate()
+        .map_err(|error| KagemushaMintFinalityErrorV1::InvalidEpochRoster(error.to_string()))?;
+    validate_kagemusha_mint_finality_validator_keys_v1(&parameters.epoch_roster.validators)?;
+    if let Some(next_epoch_roster) = &parameters.next_epoch_roster {
+        validate_kagemusha_mint_finality_validator_keys_v1(&next_epoch_roster.validators)?;
+    }
+    Ok(())
+}
+
+fn validate_kagemusha_mint_finality_validator_keys_v1(
+    validators: &[KagemushaMintFinalityValidatorKeysV1],
+) -> Result<(), KagemushaMintFinalityErrorV1> {
+    for keys in validators {
         decode_nonidentity_point::<EpAffine>(keys.eq_proof_public_key).ok_or_else(|| {
             KagemushaMintFinalityErrorV1::InvalidEpochRoster(
                 "Eq/Fp helper key is not a canonical non-identity Pallas point".to_owned(),
@@ -360,7 +407,9 @@ pub fn validate_kagemusha_mint_finality_epoch_v1(
 /// Derive one validator's epoch-scoped public keys from separately provisioned seed material.
 ///
 /// This helper is for provisioning only.  It never accepts a consensus private
-/// key and there is no BLS-to-Pasta fallback.
+/// key and there is no BLS-to-Pasta fallback. Deployments must provision an
+/// independent seed per network; the final network identity remains bound by
+/// the runtime roster identifier, signature statement, and deterministic nonce.
 ///
 /// # Errors
 ///
@@ -368,29 +417,12 @@ pub fn validate_kagemusha_mint_finality_epoch_v1(
 /// its counter space.
 pub fn derive_kagemusha_mint_finality_validator_keys_v1(
     seed: &[u8; 32],
-    network_id: iroha_data_model::NetworkId,
     epoch: u64,
     validator: iroha_data_model::peer::PeerId,
 ) -> Result<KagemushaMintFinalityValidatorKeysV1, KagemushaMintFinalityErrorV1> {
     let validator_bytes = validator.encode();
-    let eq_secret = derive_nonzero_scalar::<Fq>(
-        KEY_DERIVATION_DOMAIN_V1,
-        EQ_PARITY_TAG,
-        seed,
-        &network_id,
-        epoch,
-        &validator_bytes,
-        &[],
-    )?;
-    let ep_secret = derive_nonzero_scalar::<Fp>(
-        KEY_DERIVATION_DOMAIN_V1,
-        EP_PARITY_TAG,
-        seed,
-        &network_id,
-        epoch,
-        &validator_bytes,
-        &[],
-    )?;
+    let eq_secret = derive_nonzero_key_scalar::<Fq>(EQ_PARITY_TAG, seed, epoch, &validator_bytes)?;
+    let ep_secret = derive_nonzero_key_scalar::<Fp>(EP_PARITY_TAG, seed, epoch, &validator_bytes)?;
     Ok(KagemushaMintFinalityValidatorKeysV1 {
         validator,
         eq_proof_public_key: encode_point::<EpAffine>(
@@ -415,7 +447,7 @@ pub struct KagemushaMintFinalitySignerV1 {
 /// Runtime authority for one node's exact epoch roster and local signing seed.
 ///
 /// Sumeragi may share this object through `Arc`; no key material is cloned or
-/// exposed by the wrapper.
+/// exposed by the recursive relation.
 pub struct KagemushaMintFinalityLocalAuthorityV1 {
     epoch: Arc<KagemushaMintFinalityEpochRosterV1>,
     signer: KagemushaMintFinalitySignerV1,
@@ -499,7 +531,6 @@ impl KagemushaMintFinalitySignerV1 {
         })?;
         let derived = derive_kagemusha_mint_finality_validator_keys_v1(
             &seed,
-            epoch.network_id,
             epoch.epoch,
             expected.validator.clone(),
         )?;
@@ -513,9 +544,9 @@ impl KagemushaMintFinalitySignerV1 {
             validator_index,
             network_id: epoch.network_id,
             epoch: epoch.epoch,
-            finality_epoch_id: epoch.finality_epoch_id().map_err(|error| {
-                KagemushaMintFinalityErrorV1::InvalidSigner(error.to_string())
-            })?,
+            finality_epoch_id: epoch
+                .finality_epoch_id()
+                .map_err(|error| KagemushaMintFinalityErrorV1::InvalidSigner(error.to_string()))?,
             validator: expected.validator.clone(),
         })
     }
@@ -551,23 +582,17 @@ impl KagemushaMintFinalitySignerV1 {
             .signing_digest()
             .map_err(|error| KagemushaMintFinalityErrorV1::InvalidStatement(error.to_string()))?;
         let validator_bytes = self.validator.encode();
-        let eq_secret = derive_nonzero_scalar::<Fq>(
-            KEY_DERIVATION_DOMAIN_V1,
+        let eq_secret = derive_nonzero_key_scalar::<Fq>(
             EQ_PARITY_TAG,
             &self.seed,
-            &self.network_id,
             self.epoch,
             &validator_bytes,
-            &[],
         )?;
-        let ep_secret = derive_nonzero_scalar::<Fp>(
-            KEY_DERIVATION_DOMAIN_V1,
+        let ep_secret = derive_nonzero_key_scalar::<Fp>(
             EP_PARITY_TAG,
             &self.seed,
-            &self.network_id,
             self.epoch,
             &validator_bytes,
-            &[],
         )?;
         Ok(KagemushaMintFinalityValidatorSealV1 {
             validator_index: self.validator_index,
@@ -626,8 +651,7 @@ pub fn build_kagemusha_mint_finality_seal_message_v1(
             if vote.phase != GlobalPhase::Commit {
                 return Ok(None);
             }
-            let root =
-                kagemusha_mint_finality_root_v1(kagemusha_mint_finality_empty_root_v1()?);
+            let root = kagemusha_mint_finality_root_v1(kagemusha_mint_finality_empty_root_v1()?);
             seal_message_from_parts(
                 epoch,
                 context,
@@ -794,10 +818,9 @@ pub fn decode_kagemusha_mint_finality_seal_bundle_v1(
     bytes: &[u8],
 ) -> Result<KagemushaMintFinalitySealBundleV1, KagemushaMintFinalityErrorV1> {
     let mut cursor = bytes;
-    let decoded =
-        KagemushaMintFinalitySealBundleV1::decode_all(&mut cursor).map_err(|error| {
-            KagemushaMintFinalityErrorV1::InvalidAuxiliaryPayload(error.to_string())
-        })?;
+    let decoded = KagemushaMintFinalitySealBundleV1::decode_all(&mut cursor).map_err(|error| {
+        KagemushaMintFinalityErrorV1::InvalidAuxiliaryPayload(error.to_string())
+    })?;
     if decoded.encode() != bytes {
         return Err(KagemushaMintFinalityErrorV1::InvalidAuxiliaryPayload(
             "bundle encoding is not canonical".to_owned(),
@@ -849,17 +872,13 @@ fn top_up_node_commitment_v1(
         KagemushaMintFinalityErrorV1::InvalidTopUpTree("left Eq root is not canonical".to_owned())
     })?;
     let right_eq = decode::<Fp>(right.eq).ok_or_else(|| {
-        KagemushaMintFinalityErrorV1::InvalidTopUpTree(
-            "right Eq root is not canonical".to_owned(),
-        )
+        KagemushaMintFinalityErrorV1::InvalidTopUpTree("right Eq root is not canonical".to_owned())
     })?;
     let left_ep = decode::<Fq>(left.ep).ok_or_else(|| {
         KagemushaMintFinalityErrorV1::InvalidTopUpTree("left Ep root is not canonical".to_owned())
     })?;
     let right_ep = decode::<Fq>(right.ep).ok_or_else(|| {
-        KagemushaMintFinalityErrorV1::InvalidTopUpTree(
-            "right Ep root is not canonical".to_owned(),
-        )
+        KagemushaMintFinalityErrorV1::InvalidTopUpTree("right Ep root is not canonical".to_owned())
     })?;
     Ok(KagemushaPastaStateCommitmentV1 {
         eq: encode(hash(MINT_NODE_DOMAIN_V1, &[left_eq, right_eq])),
@@ -936,9 +955,9 @@ fn seal_message_from_parts(
 ) -> Result<KagemushaMintFinalitySealMessageV1, KagemushaMintFinalityErrorV1> {
     let message = KagemushaMintFinalitySealMessageV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
-        finality_epoch_id: epoch.finality_epoch_id().map_err(|error| {
-            KagemushaMintFinalityErrorV1::InvalidEpochRoster(error.to_string())
-        })?,
+        finality_epoch_id: epoch
+            .finality_epoch_id()
+            .map_err(|error| KagemushaMintFinalityErrorV1::InvalidEpochRoster(error.to_string()))?,
         validator_count: u32::try_from(epoch.validators.len()).map_err(|_| {
             KagemushaMintFinalityErrorV1::InvalidEpochRoster(
                 "validator count does not fit u32".to_owned(),
@@ -1014,8 +1033,7 @@ where
     let public = (C::CurveExt::generator() * secret).to_affine();
     let public_bytes = encode_point(public);
     for counter in 0..u32::MAX {
-        let nonce = derive_nonzero_scalar::<C::ScalarExt>(
-            NONCE_DERIVATION_DOMAIN_V1,
+        let nonce = derive_nonzero_nonce_scalar::<C::ScalarExt>(
             parity,
             seed,
             network_id,
@@ -1095,9 +1113,41 @@ where
     Ok(())
 }
 
+fn derive_nonzero_key_scalar<F>(
+    parity: u8,
+    seed: &[u8; 32],
+    epoch: u64,
+    validator_bytes: &[u8],
+) -> Result<F, KagemushaMintFinalityErrorV1>
+where
+    F: Field + FromUniformBytes<64>,
+{
+    for counter in 0..u32::MAX {
+        let mut hasher = Sha512::new();
+        hasher.update(KEY_DERIVATION_DOMAIN_V1);
+        hasher.update([0, parity]);
+        hasher.update(seed);
+        hasher.update(epoch.to_le_bytes());
+        hasher.update(
+            u32::try_from(validator_bytes.len())
+                .expect("bounded PeerId encoding length fits u32")
+                .to_le_bytes(),
+        );
+        hasher.update(validator_bytes);
+        hasher.update(counter.to_le_bytes());
+        let uniform: [u8; 64] = hasher.finalize().into();
+        let scalar = F::from_uniform_bytes(&uniform);
+        if !bool::from(scalar.is_zero()) {
+            return Ok(scalar);
+        }
+    }
+    Err(KagemushaMintFinalityErrorV1::InvalidSigner(
+        "non-zero scalar derivation counter exhausted".to_owned(),
+    ))
+}
+
 #[allow(clippy::too_many_arguments)]
-fn derive_nonzero_scalar<F>(
-    domain: &[u8],
+fn derive_nonzero_nonce_scalar<F>(
     parity: u8,
     seed: &[u8; 32],
     network_id: &iroha_data_model::NetworkId,
@@ -1110,7 +1160,7 @@ where
 {
     for counter in 0..u32::MAX {
         let mut hasher = Sha512::new();
-        hasher.update(domain);
+        hasher.update(NONCE_DERIVATION_DOMAIN_V1);
         hasher.update([0, parity]);
         hasher.update(seed);
         hasher.update(network_id.as_bytes());
@@ -1135,7 +1185,7 @@ where
         }
     }
     Err(KagemushaMintFinalityErrorV1::InvalidSigner(
-        "non-zero scalar derivation counter exhausted".to_owned(),
+        "non-zero nonce derivation counter exhausted".to_owned(),
     ))
 }
 
@@ -1193,4 +1243,144 @@ fn decode_scalar<F: PrimeField>(bytes: [u8; 32]) -> Option<F> {
     let mut repr = F::Repr::default();
     repr.as_mut().copy_from_slice(&bytes);
     Option::from(F::from_repr(repr))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_data_model::{
+        NetworkId,
+        block::BlockHeader,
+        isi::kagemusha_v1::{KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1},
+        peer::PeerId,
+    };
+
+    fn peer(seed: u8) -> PeerId {
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive deterministic mint-finality test peer");
+        PeerId::new(key_pair.public_key().clone())
+    }
+
+    #[test]
+    fn validator_key_derivation_is_deterministic_and_context_separated() {
+        let seed = [0xA5; 32];
+        let validator = peer(1);
+        let baseline =
+            derive_kagemusha_mint_finality_validator_keys_v1(&seed, 7, validator.clone())
+                .expect("derive baseline keys");
+        assert_eq!(
+            baseline,
+            derive_kagemusha_mint_finality_validator_keys_v1(&seed, 7, validator.clone())
+                .expect("repeat deterministic derivation")
+        );
+        assert_ne!(
+            baseline,
+            derive_kagemusha_mint_finality_validator_keys_v1(&[0xA6; 32], 7, validator.clone())
+                .expect("derive with another seed")
+        );
+        assert_ne!(
+            baseline,
+            derive_kagemusha_mint_finality_validator_keys_v1(&seed, 8, validator)
+                .expect("derive in another epoch")
+        );
+        assert_ne!(
+            baseline,
+            derive_kagemusha_mint_finality_validator_keys_v1(&seed, 7, peer(2))
+                .expect("derive for another validator")
+        );
+    }
+
+    #[test]
+    fn mint_merkle_domain_tags_match_the_circuit_contract() {
+        assert_eq!(MINT_LEAF_DOMAIN_V1.to_le_bytes(), *b"kgmmntl1");
+        assert_eq!(MINT_NODE_DOMAIN_V1.to_le_bytes(), *b"kgmmntn1");
+    }
+
+    #[test]
+    fn roster_key_validation_rejects_a_noncanonical_curve_point() {
+        let mut validators = (1_u8..=4).map(peer).collect::<Vec<_>>();
+        validators.sort();
+        let keys = validators
+            .into_iter()
+            .enumerate()
+            .map(|(index, validator)| {
+                derive_kagemusha_mint_finality_validator_keys_v1(
+                    &[0xB0_u8.wrapping_add(u8::try_from(index).expect("small roster")); 32],
+                    0,
+                    validator,
+                )
+                .expect("derive canonical fixture keys")
+            })
+            .collect::<Vec<_>>();
+        let network_id = NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"roster key validation")),
+        );
+        let mut roster = KagemushaMintFinalityEpochRosterV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            network_id,
+            epoch: 0,
+            validators: keys,
+        };
+        validate_kagemusha_mint_finality_roster_keys_v1(&roster)
+            .expect("derived keys are canonical points");
+        roster.validators[0].eq_proof_public_key = [0xFF; 32];
+        assert!(validate_kagemusha_mint_finality_roster_keys_v1(&roster).is_err());
+    }
+
+    #[test]
+    fn genesis_parameter_key_validation_rejects_a_noncanonical_curve_point() {
+        use iroha_data_model::isi::kagemusha_v1::{
+            KagemushaMintFinalityEpochRosterTemplateV1, KagemushaMintFinalityGenesisParametersV1,
+        };
+
+        let mut validators = (1_u8..=4).map(peer).collect::<Vec<_>>();
+        validators.sort();
+        let derive_keys = |epoch, seed_base: u8| {
+            validators
+                .iter()
+                .cloned()
+                .enumerate()
+                .map(|(index, validator)| {
+                    derive_kagemusha_mint_finality_validator_keys_v1(
+                        &[seed_base.wrapping_add(u8::try_from(index).expect("small roster")); 32],
+                        epoch,
+                        validator,
+                    )
+                    .expect("derive canonical fixture keys")
+                })
+                .collect::<Vec<_>>()
+        };
+        let epoch_zero_keys = derive_keys(0, 0xC0);
+        let epoch_one_keys = derive_keys(1, 0xD0);
+        let mut parameters = KagemushaMintFinalityGenesisParametersV1 {
+            epoch_roster: KagemushaMintFinalityEpochRosterTemplateV1 {
+                version: KAGEMUSHA_CHAIN_VERSION_V1,
+                epoch: 0,
+                validators: epoch_zero_keys.clone(),
+            },
+            next_epoch_roster: Some(KagemushaMintFinalityEpochRosterTemplateV1 {
+                version: KAGEMUSHA_CHAIN_VERSION_V1,
+                epoch: 1,
+                validators: epoch_one_keys,
+            }),
+        };
+        validate_kagemusha_mint_finality_genesis_parameter_keys_v1(&parameters)
+            .expect("derived genesis keys are canonical points");
+        parameters.epoch_roster.validators[0].eq_proof_public_key = [0xFF; 32];
+        let error = validate_kagemusha_mint_finality_genesis_parameter_keys_v1(&parameters)
+            .expect_err("non-canonical Pallas point must fail closed");
+        assert!(error.to_string().contains("Pallas point"));
+
+        parameters.epoch_roster.validators = epoch_zero_keys;
+        parameters
+            .next_epoch_roster
+            .as_mut()
+            .expect("epoch-one fixture exists")
+            .validators[0]
+            .ep_proof_public_key = [0xFF; 32];
+        let error = validate_kagemusha_mint_finality_genesis_parameter_keys_v1(&parameters)
+            .expect_err("non-canonical Vesta point must fail closed");
+        assert!(error.to_string().contains("Vesta point"));
+    }
 }

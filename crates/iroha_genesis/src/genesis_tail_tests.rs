@@ -1,8 +1,34 @@
+fn complete_test_builder(builder: GenesisBuilder) -> GenesisBuilder {
+    builder
+        .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+        .with_kagemusha_mint_finality_genesis_parameters(
+            deterministic_test_kagemusha_mint_finality_genesis_parameters(),
+        )
+}
+
+fn complete_test_builder_for_peers(
+    builder: GenesisBuilder,
+    peers: Vec<iroha_data_model::peer::PeerId>,
+) -> GenesisBuilder {
+    builder
+        .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+        .with_kagemusha_mint_finality_genesis_parameters(
+            deterministic_test_kagemusha_mint_finality_genesis_parameters_for(peers),
+        )
+}
+
+fn load_default_genesis_source_template_for_test() -> Result<RawGenesisTransaction> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../defaults/genesis.template.json");
+    GenesisSourceTemplate::from_path(path)?
+        .materialize(deterministic_test_kagemusha_mint_finality_genesis_parameters())
+}
+
 #[test]
 fn roundtrip_raw_genesis_serialization() -> Result<()> {
     let (_tmp_dir, builder) = test_builder();
     let raw = builder
-        .build_raw()
+        .build_raw()?
         .with_consensus_mode(SumeragiConsensusMode::Permissioned);
     let json = norito::json::to_json(&raw)?;
     let de: RawGenesisTransaction = norito::json::from_str(&json)?;
@@ -14,16 +40,18 @@ fn roundtrip_raw_genesis_serialization() -> Result<()> {
 fn build_raw_coalesces_parameters_into_one_authoritative_snapshot() -> Result<()> {
     use iroha_data_model::parameter::system::SumeragiParameter;
     init_instruction_registry();
-    let raw = GenesisBuilder::new_without_executor(
-        ChainId::from("iroha:test:build-raw-authoritative"),
-        ".",
+    let raw = complete_test_builder(
+        GenesisBuilder::new_without_executor(
+            ChainId::from("iroha:test:build-raw-authoritative"),
+            ".",
+        )
+        .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(100)))
+        .next_transaction()
+        .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(667)))
+        .next_transaction()
+        .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333))),
     )
-    .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(100)))
-    .next_transaction()
-    .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(667)))
-    .next_transaction()
-    .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333)))
-    .build_raw()
+    .build_raw()?
     .with_consensus_mode(SumeragiConsensusMode::Permissioned);
     let transactions = &raw.transactions;
     assert_eq!(transactions.len(), 3);
@@ -73,24 +101,22 @@ fn build_raw_coalesces_parameters_into_one_authoritative_snapshot() -> Result<()
     Ok(())
 }
 #[test]
-fn default_genesis_deserializes() {
+fn default_genesis_source_template_is_not_a_raw_manifest() {
     init_instruction_registry();
-    let genesis_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../defaults/genesis.json");
+    let genesis_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../defaults/genesis.template.json");
     let result = RawGenesisTransaction::from_path(&genesis_path);
-    assert!(result.is_ok());
+    assert!(result.is_err());
 }
 #[test]
-fn default_genesis_proposal_roundtrips() -> Result<()> {
+fn completed_default_genesis_source_template_proposal_roundtrips() -> Result<()> {
     use iroha_data_model::parameter::system::SumeragiNposParameters;
     init_instruction_registry();
     if norito::debug_trace_enabled() {
         // Debug tracing interferes with ConstVec decode guards; skip engineering checks in this mode.
         return Ok(());
     }
-    let genesis_path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../defaults/genesis.json");
-    let genesis = RawGenesisTransaction::from_path(&genesis_path)?;
+    let genesis = load_default_genesis_source_template_for_test()?;
     let kp = checked_genesis_fixture_keypair();
     let proposal = genesis.build_and_sign(&kp)?;
     assert!(
@@ -180,11 +206,15 @@ fn prepared_proposal_fixture() -> (RawGenesisTransaction, KeyPair, SignedBlock, 
             GenesisTopologyEntry::new(PeerId::new(key_pair.public_key().clone()), pop)
         })
         .collect::<Vec<_>>();
-    let manifest =
+    let mint_finality_peers = topology.iter().map(|entry| entry.peer.clone()).collect();
+    let manifest = complete_test_builder_for_peers(
         GenesisBuilder::new_without_executor(ChainId::from("prepared-verifier-fixture"), ".")
-            .set_topology(topology)
-            .build_raw()
-            .with_consensus_meta();
+            .set_topology(topology),
+        mint_finality_peers,
+    )
+    .build_raw()
+    .expect("complete prepared-verifier fixture genesis")
+    .with_consensus_meta();
     let genesis_key = checked_genesis_fixture_keypair();
     let proposal = manifest
         .clone()
@@ -416,6 +446,7 @@ fn prepared_bundle_verifier_rejects_manifest_semantics_and_validator_pops() {
             DomainId::try_new("drift", "universal").expect("domain id"),
         )))
         .build_raw()
+        .expect("preserve complete prepared-verifier genesis authority")
         .with_consensus_meta();
     let error = validate_prepared_genesis_bundle(
         &wire,
@@ -434,11 +465,15 @@ fn prepared_bundle_verifier_rejects_manifest_semantics_and_validator_pops() {
         })
         .collect::<Vec<_>>();
     bad_entries[0].pop_hex = Some(hex::encode([0_u8; 8]));
-    let bad_manifest =
+    let mint_finality_peers = bad_entries.iter().map(|entry| entry.peer.clone()).collect();
+    let bad_manifest = complete_test_builder_for_peers(
         GenesisBuilder::new_without_executor(ChainId::from("prepared-verifier-bad-pop"), ".")
-            .set_topology(bad_entries)
-            .build_raw()
-            .with_consensus_meta();
+            .set_topology(bad_entries),
+        mint_finality_peers,
+    )
+    .build_raw()
+    .expect("complete bad-PoP verifier fixture genesis")
+    .with_consensus_meta();
     let bad_proposal = bad_manifest
         .clone()
         .build_and_sign(&key_pair)

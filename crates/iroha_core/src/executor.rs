@@ -9623,6 +9623,7 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     if is_any!(
         iroha_data_model::isi::settlement::SettlementInstructionBox,
         iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1,
+        iroha_data_model::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1,
         iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1,
         iroha_data_model::isi::private_settlement::FinalizeAtomicPrivateSettlementV1,
         iroha_data_model::isi::bridge::SubmitBridgeProof,
@@ -12526,9 +12527,7 @@ mod tests {
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; 32])),
         );
         let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                network_id, 0, &roster,
-            );
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
         let context = HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,

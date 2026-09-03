@@ -12,7 +12,7 @@ import org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEnco
  * A negative signed carrier therefore remains a valid upper-half unsigned value.
  */
 
-/** Exact typed `AssetDefinitionId` payload used by Kagemusha V1. */
+/** Exact typed `AssetDefinitionId` payload used by KAGEMUSHA V1. */
 class KagemushaAssetDefinitionIdV1 private constructor(payload: ByteArray) {
     private val value = payload.copyOf()
 
@@ -41,7 +41,7 @@ class KagemushaAssetDefinitionIdV1 private constructor(payload: ByteArray) {
     }
 }
 
-/** Exact typed universal `AccountId` payload used by Kagemusha V1. */
+/** Exact typed universal `AccountId` payload used by KAGEMUSHA V1. */
 class KagemushaAccountIdV1 private constructor(payload: ByteArray) {
     private val value = payload.copyOf()
 
@@ -63,12 +63,12 @@ class KagemushaAccountIdV1 private constructor(payload: ByteArray) {
         @JvmStatic
         fun fromCanonicalPayload(payload: ByteArray): KagemushaAccountIdV1 {
             require(payload.isNotEmpty() && payload.size <= 512) {
-                "Kagemusha V1 account payload is empty or oversized"
+                "KAGEMUSHA V1 account payload is empty or oversized"
             }
             val rendered = TransferWirePayloadEncoder.decodeAccountIdPayload(payload, 0)
             require(
                 TransferWirePayloadEncoder.encodeAccountIdPayload(rendered).contentEquals(payload),
-            ) { "Kagemusha V1 account payload is not canonical" }
+            ) { "KAGEMUSHA V1 account payload is not canonical" }
             return KagemushaAccountIdV1(payload)
         }
     }
@@ -93,7 +93,7 @@ class KagemushaAssetIncarnationV1(bytes: ByteArray) {
     override fun hashCode(): Int = value.contentHashCode()
 }
 
-/** Canonical uncompressed SEC1 P-256 Kagemusha V1 authority key. */
+/** Canonical uncompressed SEC1 P-256 KAGEMUSHA V1 authority key. */
 class KagemushaDevicePublicKeyV1(sec1Bytes: ByteArray) {
     private val value = KagemushaP256Codec.requireUncompressedPublicKey(sec1Bytes)
 
@@ -106,7 +106,8 @@ class KagemushaDevicePublicKeyV1(sec1Bytes: ByteArray) {
     override fun hashCode(): Int = value.contentHashCode()
 }
 
-/** Canonical fixed-width low-S P-256 Kagemusha V1 signature. */
+
+/** Canonical fixed-width low-S P-256 KAGEMUSHA V1 signature. */
 class KagemushaDeviceSignatureV1(rawBytes: ByteArray) {
     private val value = KagemushaP256Codec.requireRawLowSSignature(rawBytes)
 
@@ -133,8 +134,8 @@ class KagemushaDeviceSignatureV1(rawBytes: ByteArray) {
  * Canonical 32-byte nonzero X25519 wire shape used by recipient-only envelopes.
  *
  * This codec type deliberately performs no scalar multiplication or managed group validation.
- * The shared native Kagemusha core authenticates canonical X25519 elements during object and
- * complete-exchange validation before any monetary use.
+ * The shared native KAGEMUSHA core authenticates canonical X25519 elements during object and
+ * direct three-message session validation before any monetary use.
  */
 class KagemushaX25519PublicKeyV1(bytes: ByteArray) {
     private val value = requireX25519PublicKey(bytes)
@@ -284,7 +285,7 @@ class KagemushaHardwareProfileV1(
 
     init {
         require(version == 1 && protocolVersion == 1 && policyEpoch != 0L)
-        require(capabilityMask == 0xffff) { "the complete Kagemusha V1 hardware capability mask is required" }
+        require(capabilityMask == 0xffff) { "the complete KAGEMUSHA V1 hardware capability mask is required" }
         require(java.lang.Long.compareUnsigned(validFromMs, expiresAtMs) < 0)
     }
 
@@ -343,32 +344,27 @@ class KagemushaHardwareCredentialV1(
 class KagemushaPeerCreditContextV1(
     @JvmField val version: Int,
     requestDigest: ByteArray,
-    senderBeforeCommitment: KagemushaPastaStateCommitmentV1,
-    senderAfterCommitment: KagemushaPastaStateCommitmentV1,
-    recipientLaneId: ByteArray,
+    @JvmField val amount: BigInteger,
+    senderBeforeCommitment: ByteArray,
+    senderAfterCommitment: ByteArray,
+    preparedTransferDigest: ByteArray,
     @JvmField val recipientEncryptionKey: KagemushaX25519PublicKeyV1,
-    @JvmField val committedAtMs: Long,
-    hardwareTransitionCommitment: ByteArray,
-    lifecycleContextDigest: ByteArray,
 ) {
     private val requestDigestValue = fixed32(requestDigest, "requestDigest")
-    private val senderBeforeCommitmentValue = senderBeforeCommitment
-    private val senderAfterCommitmentValue = senderAfterCommitment
-    private val recipientLaneIdValue = fixed32(recipientLaneId, "recipientLaneId")
-    private val hardwareTransitionCommitmentValue =
-        fixed32(hardwareTransitionCommitment, "hardwareTransitionCommitment")
-    private val lifecycleContextDigestValue = fixed32(lifecycleContextDigest, "lifecycleContextDigest")
+    private val senderBeforeCommitmentValue = fixed32(senderBeforeCommitment, "senderBeforeCommitment")
+    private val senderAfterCommitmentValue = fixed32(senderAfterCommitment, "senderAfterCommitment")
+    private val preparedTransferDigestValue = fixed32(preparedTransferDigest, "preparedTransferDigest")
 
     init {
         require(version == KagemushaWireV1.WIRE_VERSION)
+        requirePositiveU128(amount, "amount")
+        require(!senderBeforeCommitmentValue.contentEquals(senderAfterCommitmentValue))
     }
 
     fun requestDigest(): ByteArray = requestDigestValue.copyOf()
-    fun senderBeforeCommitment(): KagemushaPastaStateCommitmentV1 = senderBeforeCommitmentValue
-    fun senderAfterCommitment(): KagemushaPastaStateCommitmentV1 = senderAfterCommitmentValue
-    fun recipientLaneId(): ByteArray = recipientLaneIdValue.copyOf()
-    fun hardwareTransitionCommitment(): ByteArray = hardwareTransitionCommitmentValue.copyOf()
-    fun lifecycleContextDigest(): ByteArray = lifecycleContextDigestValue.copyOf()
+    fun senderBeforeCommitment(): ByteArray = senderBeforeCommitmentValue.copyOf()
+    fun senderAfterCommitment(): ByteArray = senderAfterCommitmentValue.copyOf()
+    fun preparedTransferDigest(): ByteArray = preparedTransferDigestValue.copyOf()
 }
 
 /** Exact fixed-size recipient-only plaintext protected by the encrypted credit envelope. */
@@ -444,14 +440,207 @@ class KagemushaEncryptedCreditEnvelopeV1(
     fun ciphertextAndTag(): ByteArray = ciphertextAndTagValue.copyOf()
 }
 
+/** Public evidence that qualified hardware committed before the applicable deadline. */
+sealed interface KagemushaCommitEvidenceV1 {
+    /** Frozen Norito variant tag. */
+    val wireTag: Int
+    /** Hiding commitment to the trusted clock or monotonic lease. */
+    fun evidenceCommitment(): ByteArray
+}
+
+/** Qualified trusted-time evidence. Stable tag: `0`. */
+class KagemushaTrustedCommitTimeV1(timeEvidenceCommitment: ByteArray) : KagemushaCommitEvidenceV1 {
+    private val value = fixed32(timeEvidenceCommitment, "timeEvidenceCommitment")
+    override val wireTag: Int = 0
+    override fun evidenceCommitment(): ByteArray = value.copyOf()
+}
+
+/** Secure monotonic-lease evidence. Stable tag: `1`. */
+class KagemushaMonotonicLeaseV1(leaseEvidenceCommitment: ByteArray) : KagemushaCommitEvidenceV1 {
+    private val value = fixed32(leaseEvidenceCommitment, "leaseEvidenceCommitment")
+    override val wireTag: Int = 1
+    override fun evidenceCommitment(): ByteArray = value.copyOf()
+}
+
+/** Sender outbox capacity reserved before hardware may consume its predecessor. */
+class KagemushaOutboxReservationV1(
+    reservationId: ByteArray,
+    @JvmField val operationKind: KagemushaOperationKindV1,
+    @JvmField val reservedOutboxBytes: Int,
+    @JvmField val issuedAtMs: Long,
+    @JvmField val expiresAtMs: Long,
+) {
+    private val reservationIdValue = fixed32(reservationId, "reservationId")
+    init { require(java.lang.Long.compareUnsigned(issuedAtMs, expiresAtMs) < 0) }
+    fun reservationId(): ByteArray = reservationIdValue.copyOf()
+}
+
+/** Self-free terminal body committed before a certificate identity exists. */
+class KagemushaHardwareTerminalBodyV1(
+    @JvmField val version: Int,
+    candidateEnvelopeDigest: ByteArray,
+    lifecycleBindingDigest: ByteArray,
+    transitionNullifier: ByteArray,
+    outboxReservationCommitment: ByteArray,
+    @JvmField val commitEvidence: KagemushaCommitEvidenceV1,
+    hardwareProfileId: ByteArray,
+    @JvmField val policyEpoch: Long,
+    privateSuccessorCommitment: ByteArray,
+    privateJournalCommitment: ByteArray,
+    privateRecoveryCommitment: ByteArray,
+) {
+    private val values = listOf(
+        candidateEnvelopeDigest, lifecycleBindingDigest, transitionNullifier,
+        outboxReservationCommitment, hardwareProfileId, privateSuccessorCommitment,
+        privateJournalCommitment, privateRecoveryCommitment,
+    ).mapIndexed { index, value -> fixed32(value, "terminalBodyBinding[$index]") }
+
+    init { require(version == KagemushaWireV1.WIRE_VERSION && policyEpoch != 0L) }
+
+    fun candidateEnvelopeDigest() = values[0].copyOf()
+    fun lifecycleBindingDigest() = values[1].copyOf()
+    fun transitionNullifier() = values[2].copyOf()
+    fun outboxReservationCommitment() = values[3].copyOf()
+    fun hardwareProfileId() = values[4].copyOf()
+    fun privateSuccessorCommitment() = values[5].copyOf()
+    fun privateJournalCommitment() = values[6].copyOf()
+    fun privateRecoveryCommitment() = values[7].copyOf()
+}
+
+/** Recoverable certificate returned by the atomic hardware commit. */
+class KagemushaCommitCertificateV1(
+    @JvmField val version: Int,
+    certificateId: ByteArray,
+    candidateEnvelopeDigest: ByteArray,
+    lifecycleBindingDigest: ByteArray,
+    transitionNullifier: ByteArray,
+    outboxReservationCommitment: ByteArray,
+    @JvmField val commitEvidence: KagemushaCommitEvidenceV1,
+    hardwareProfileId: ByteArray,
+    @JvmField val policyEpoch: Long,
+    hardwareTerminalCommitment: ByteArray,
+) {
+    private val values = listOf(
+        certificateId, candidateEnvelopeDigest, lifecycleBindingDigest, transitionNullifier,
+        outboxReservationCommitment, hardwareProfileId, hardwareTerminalCommitment,
+    ).mapIndexed { index, value -> fixed32(value, "commitCertificateBinding[$index]") }
+
+    init { require(version == KagemushaWireV1.WIRE_VERSION && policyEpoch != 0L) }
+
+    fun certificateId() = values[0].copyOf()
+    fun candidateEnvelopeDigest() = values[1].copyOf()
+    fun lifecycleBindingDigest() = values[2].copyOf()
+    fun transitionNullifier() = values[3].copyOf()
+    fun outboxReservationCommitment() = values[4].copyOf()
+    fun hardwareProfileId() = values[5].copyOf()
+    fun hardwareTerminalCommitment() = values[6].copyOf()
+}
+
+/** Post-commit paired proof binding one payment body to its hardware certificate. */
+class KagemushaPaymentProofV1(
+    @JvmField val version: Int,
+    eqProtocolDigest: ByteArray,
+    epProtocolDigest: ByteArray,
+    semanticDigest: ByteArray,
+    candidateEnvelopeDigest: ByteArray,
+    commitCertificateDigest: ByteArray,
+    eqDeferredAudit: ByteArray,
+    epDeferredAudit: ByteArray,
+    eqProof: ByteArray,
+    epProof: ByteArray,
+    eqHistory: ByteArray,
+    epHistory: ByteArray,
+) {
+    private val eqProtocolDigestValue = fixed32(eqProtocolDigest, "eqProtocolDigest")
+    private val epProtocolDigestValue = fixed32(epProtocolDigest, "epProtocolDigest")
+    private val semanticDigestValue = fixed32(semanticDigest, "semanticDigest")
+    private val candidateEnvelopeDigestValue = fixed32(candidateEnvelopeDigest, "candidateEnvelopeDigest")
+    private val commitCertificateDigestValue = fixed32(commitCertificateDigest, "commitCertificateDigest")
+    private val eqDeferredAuditValue = fixed32(eqDeferredAudit, "eqDeferredAudit")
+    private val epDeferredAuditValue = fixed32(epDeferredAudit, "epDeferredAudit")
+    private val eqProofValue = boundedProof(eqProof, "eqProof")
+    private val epProofValue = boundedProof(epProof, "epProof")
+    private val eqHistoryValue = exactHistory(eqHistory, "eqHistory")
+    private val epHistoryValue = exactHistory(epHistory, "epHistory")
+
+    init {
+        require(version == KagemushaWireV1.WIRE_VERSION)
+        require(!eqProtocolDigestValue.contentEquals(epProtocolDigestValue))
+        require(!eqDeferredAuditValue.contentEquals(epDeferredAuditValue))
+        require(eqProofValue.size + epProofValue.size <= KagemushaWireV1.MAXIMUM_CURRENT_PROOFS_BYTES)
+        require(!eqHistoryValue.contentEquals(epHistoryValue))
+    }
+
+    fun eqProtocolDigest() = eqProtocolDigestValue.copyOf()
+    fun epProtocolDigest() = epProtocolDigestValue.copyOf()
+    fun semanticDigest() = semanticDigestValue.copyOf()
+    fun candidateEnvelopeDigest() = candidateEnvelopeDigestValue.copyOf()
+    fun commitCertificateDigest() = commitCertificateDigestValue.copyOf()
+    fun eqDeferredAudit() = eqDeferredAuditValue.copyOf()
+    fun epDeferredAudit() = epDeferredAuditValue.copyOf()
+    fun eqProof() = eqProofValue.copyOf()
+    fun epProof() = epProofValue.copyOf()
+    fun eqHistory() = eqHistoryValue.copyOf()
+    fun epHistory() = epHistoryValue.copyOf()
+}
+
+/** Final paired proof authorizing one online redemption. */
+class KagemushaRedemptionProofV1(
+    @JvmField val version: Int,
+    eqProtocolDigest: ByteArray,
+    epProtocolDigest: ByteArray,
+    semanticDigest: ByteArray,
+    candidateEnvelopeDigest: ByteArray,
+    commitCertificateDigest: ByteArray,
+    eqDeferredAudit: ByteArray,
+    epDeferredAudit: ByteArray,
+    eqProof: ByteArray,
+    epProof: ByteArray,
+    eqHistory: ByteArray,
+    epHistory: ByteArray,
+) {
+    private val eqProtocolDigestValue = fixed32(eqProtocolDigest, "eqProtocolDigest")
+    private val epProtocolDigestValue = fixed32(epProtocolDigest, "epProtocolDigest")
+    private val semanticDigestValue = fixed32(semanticDigest, "semanticDigest")
+    private val candidateEnvelopeDigestValue = fixed32(candidateEnvelopeDigest, "candidateEnvelopeDigest")
+    private val commitCertificateDigestValue = fixed32(commitCertificateDigest, "commitCertificateDigest")
+    private val eqDeferredAuditValue = fixed32(eqDeferredAudit, "eqDeferredAudit")
+    private val epDeferredAuditValue = fixed32(epDeferredAudit, "epDeferredAudit")
+    private val eqProofValue = boundedProof(eqProof, "eqProof")
+    private val epProofValue = boundedProof(epProof, "epProof")
+    private val eqHistoryValue = exactHistory(eqHistory, "eqHistory")
+    private val epHistoryValue = exactHistory(epHistory, "epHistory")
+
+    init {
+        require(version == KagemushaWireV1.WIRE_VERSION)
+        require(!eqProtocolDigestValue.contentEquals(epProtocolDigestValue))
+        require(!eqDeferredAuditValue.contentEquals(epDeferredAuditValue))
+        require(eqProofValue.size + epProofValue.size <= KagemushaWireV1.MAXIMUM_CURRENT_PROOFS_BYTES)
+        require(!eqHistoryValue.contentEquals(epHistoryValue))
+    }
+
+    fun eqProtocolDigest() = eqProtocolDigestValue.copyOf()
+    fun epProtocolDigest() = epProtocolDigestValue.copyOf()
+    fun semanticDigest() = semanticDigestValue.copyOf()
+    fun candidateEnvelopeDigest() = candidateEnvelopeDigestValue.copyOf()
+    fun commitCertificateDigest() = commitCertificateDigestValue.copyOf()
+    fun eqDeferredAudit() = eqDeferredAuditValue.copyOf()
+    fun epDeferredAudit() = epDeferredAuditValue.copyOf()
+    fun eqProof() = eqProofValue.copyOf()
+    fun epProof() = epProofValue.copyOf()
+    fun eqHistory() = eqHistoryValue.copyOf()
+    fun epHistory() = epHistoryValue.copyOf()
+}
+
 /** Released monetary operation. */
-enum class KagemushaOperationKindV1 {
-    BOOTSTRAP,
-    MINT_FOLD,
-    SEND_SPLIT,
-    RECEIVE_FOLD,
-    REDEEM_SPLIT,
-    ROTATE,
+enum class KagemushaOperationKindV1(@JvmField val wireTag: Int) {
+    BOOTSTRAP(0),
+    MINT_FOLD(1),
+    SEND_SPLIT(2),
+    RECEIVE_FOLD_BATCH(3),
+    REDEEM_SPLIT(4),
+    SUITE_UPGRADE(5),
+    ROTATE(6),
 }
 
 /** Complete history-independent lifecycle context for one released transition. */
@@ -470,6 +659,7 @@ class KagemushaLifecycleBindingV1(
     @JvmField val policyEpoch: Long,
     @JvmField val operationKind: KagemushaOperationKindV1,
     requestId: ByteArray,
+    receiverLaneCommitment: ByteArray,
     creditId: ByteArray,
     ciphertextDigest: ByteArray,
 ) {
@@ -479,14 +669,17 @@ class KagemushaLifecycleBindingV1(
     private val liabilityPoolIdValue = fixed32(liabilityPoolId, "liabilityPoolId")
     private val hardwareProfileIdValue = fixed32(hardwareProfileId, "hardwareProfileId")
     private val requestIdValue = raw32(requestId, "requestId")
+    private val receiverLaneCommitmentValue = raw32(receiverLaneCommitment, "receiverLaneCommitment")
     private val creditIdValue = raw32(creditId, "creditId")
     private val ciphertextDigestValue = raw32(ciphertextDigest, "ciphertextDigest")
 
     init {
         requireHeader(version, networkId, scale, null)
         require(protocolVersion == 1 && policyEpoch != 0L)
-        val requestFieldsPresent = requestIdValue.any { it != 0.toByte() }
-        val requestFieldsAbsent = requestIdValue.all { it == 0.toByte() }
+        val requestFieldsPresent = listOf(requestIdValue, receiverLaneCommitmentValue)
+            .all { bytes -> bytes.any { it != 0.toByte() } }
+        val requestFieldsAbsent = listOf(requestIdValue, receiverLaneCommitmentValue)
+            .all { bytes -> bytes.all { it == 0.toByte() } }
         val creditFieldsPresent = listOf(creditIdValue, ciphertextDigestValue)
             .all { bytes -> bytes.any { it != 0.toByte() } }
         val creditFieldsAbsent = listOf(creditIdValue, ciphertextDigestValue)
@@ -506,11 +699,12 @@ class KagemushaLifecycleBindingV1(
     fun liabilityPoolId(): ByteArray = liabilityPoolIdValue.copyOf()
     fun hardwareProfileId(): ByteArray = hardwareProfileIdValue.copyOf()
     fun requestId(): ByteArray = requestIdValue.copyOf()
+    fun receiverLaneCommitment(): ByteArray = receiverLaneCommitmentValue.copyOf()
     fun creditId(): ByteArray = creditIdValue.copyOf()
     fun ciphertextDigest(): ByteArray = ciphertextDigestValue.copyOf()
 }
 
-/** Receiver-created exact-amount request reusable by any number of valid payments. */
+/** Receiver authorization for any number of distinct exact-amount payments. */
 class KagemushaPaymentRequestV1(
     @JvmField val version: Int,
     releaseId: ByteArray,
@@ -520,9 +714,8 @@ class KagemushaPaymentRequestV1(
     @JvmField val scale: Int,
     liabilityPoolId: ByteArray,
     @JvmField val recipient: KagemushaAccountIdV1,
-    recipientLaneId: ByteArray,
-    @JvmField val recipientEncryptionKey: KagemushaX25519PublicKeyV1,
     @JvmField val amount: BigInteger,
+    @JvmField val recipientEncryptionKey: KagemushaX25519PublicKeyV1,
     @JvmField val hardwareCredential: KagemushaHardwareCredentialV1,
     requestId: ByteArray,
     @JvmField val issuedAtMs: Long,
@@ -531,13 +724,12 @@ class KagemushaPaymentRequestV1(
 ) {
     private val releaseIdValue = fixed32(releaseId, "releaseId")
     private val liabilityPoolIdValue = fixed32(liabilityPoolId, "liabilityPoolId")
-    private val recipientLaneIdValue = fixed32(recipientLaneId, "recipientLaneId")
     private val requestIdValue = fixed32(requestId, "requestId")
 
     init {
-        requireHeader(version, networkId, scale, amount)
+        requireHeader(version, networkId, scale, null)
+        requirePositiveU128(amount, "amount")
         require(hardwareCredential.version == version && hardwareCredential.networkId == networkId)
-        require(hardwareCredential.laneCommitment().contentEquals(recipientLaneIdValue))
         require(java.lang.Long.compareUnsigned(issuedAtMs, expiresAtMs) < 0)
         require(
             java.lang.Long.compareUnsigned(
@@ -549,60 +741,57 @@ class KagemushaPaymentRequestV1(
 
     fun releaseId(): ByteArray = releaseIdValue.copyOf()
     fun liabilityPoolId(): ByteArray = liabilityPoolIdValue.copyOf()
-    fun recipientLaneId(): ByteArray = recipientLaneIdValue.copyOf()
     fun requestId(): ByteArray = requestIdValue.copyOf()
 }
 
-/** Public send statement exposing only opaque predecessor and successor commitments. */
-class KagemushaTransferStatementV1(
+/** Compact terminal output authenticated by the post-commit payment proof. */
+class KagemushaPaymentOutputV1(
     @JvmField val version: Int,
-    @JvmField val lifecycle: KagemushaLifecycleBindingV1,
-    @JvmField val amount: BigInteger,
-    transitionNullifier: ByteArray,
     requestDigest: ByteArray,
-    senderBeforeCommitment: KagemushaPastaStateCommitmentV1,
-    senderAfterCommitment: KagemushaPastaStateCommitmentV1,
-    recipientLaneId: ByteArray,
-    @JvmField val recipientEncryptionKey: KagemushaX25519PublicKeyV1,
-    @JvmField val committedAtMs: Long,
+    @JvmField val amount: BigInteger,
+    senderBeforeCommitment: ByteArray,
+    senderAfterCommitment: ByteArray,
+    transitionNullifier: ByteArray,
+    creditId: ByteArray,
     ciphertextCommitment: ByteArray,
-    hardwareTransitionCommitment: ByteArray,
+    @JvmField val commitEvidence: KagemushaCommitEvidenceV1,
+    @JvmField val committedAtMs: Long,
 ) {
-    private val transitionNullifierValue = fixed32(transitionNullifier, "transitionNullifier")
     private val requestDigestValue = fixed32(requestDigest, "requestDigest")
-    private val senderBeforeCommitmentValue = senderBeforeCommitment
-    private val senderAfterCommitmentValue = senderAfterCommitment
-    private val recipientLaneIdValue = fixed32(recipientLaneId, "recipientLaneId")
+    private val senderBeforeCommitmentValue = fixed32(senderBeforeCommitment, "senderBeforeCommitment")
+    private val senderAfterCommitmentValue = fixed32(senderAfterCommitment, "senderAfterCommitment")
+    private val transitionNullifierValue = fixed32(transitionNullifier, "transitionNullifier")
+    private val creditIdValue = fixed32(creditId, "creditId")
     private val ciphertextCommitmentValue = fixed32(ciphertextCommitment, "ciphertextCommitment")
-    private val hardwareTransitionCommitmentValue =
-        fixed32(hardwareTransitionCommitment, "hardwareTransitionCommitment")
 
     init {
-        require(version == 1 && lifecycle.version == version)
-        require(lifecycle.operationKind == KagemushaOperationKindV1.SEND_SPLIT)
+        require(version == KagemushaWireV1.WIRE_VERSION)
         requirePositiveU128(amount, "amount")
+        require(!senderBeforeCommitmentValue.contentEquals(senderAfterCommitmentValue))
+        require(committedAtMs != 0L)
     }
 
-    fun transitionNullifier(): ByteArray = transitionNullifierValue.copyOf()
     fun requestDigest(): ByteArray = requestDigestValue.copyOf()
-    fun senderBeforeCommitment(): KagemushaPastaStateCommitmentV1 = senderBeforeCommitmentValue
-    fun senderAfterCommitment(): KagemushaPastaStateCommitmentV1 = senderAfterCommitmentValue
-    fun recipientLaneId(): ByteArray = recipientLaneIdValue.copyOf()
+    fun senderBeforeCommitment(): ByteArray = senderBeforeCommitmentValue.copyOf()
+    fun senderAfterCommitment(): ByteArray = senderAfterCommitmentValue.copyOf()
+    fun transitionNullifier(): ByteArray = transitionNullifierValue.copyOf()
+    fun creditId(): ByteArray = creditIdValue.copyOf()
     fun ciphertextCommitment(): ByteArray = ciphertextCommitmentValue.copyOf()
-    fun hardwareTransitionCommitment(): ByteArray = hardwareTransitionCommitmentValue.copyOf()
 }
 
-/** Sender response with the recursively authenticated hardware transition and paired proof. */
+/** Sender response containing the recoverable certificate and post-commit proof. */
 class KagemushaPaymentV1(
     @JvmField val version: Int,
-    @JvmField val statement: KagemushaTransferStatementV1,
-    @JvmField val proof: KagemushaPairedProofV1,
+    @JvmField val output: KagemushaPaymentOutputV1,
     encryptedCredit: ByteArray,
+    @JvmField val commitCertificate: KagemushaCommitCertificateV1,
+    @JvmField val proof: KagemushaPaymentProofV1,
 ) {
     private val encryptedCreditValue = boundedEncryptedCredit(encryptedCredit)
 
     init {
-        require(version == 1 && statement.version == version && proof.version == version)
+        require(version == KagemushaWireV1.WIRE_VERSION && output.version == version)
+        require(commitCertificate.version == version && proof.version == version)
     }
 
     fun encryptedCredit(): ByteArray = encryptedCreditValue.copyOf()
@@ -793,27 +982,75 @@ class KagemushaMintCreditV1(
     fun artifactManifestDigest(): ByteArray = artifactManifestDigestValue.copyOf()
 }
 
-/** Unlinkable terminal transition converting aggregate cash to an online claim. */
+/** Canonical public body for secure-device operation 21. */
+class KagemushaDeviceMintStageCommandV1(
+    @JvmField val version: Int,
+    canonicalAuthorization: ByteArray,
+    canonicalMintCredit: ByteArray,
+) {
+    private val canonicalAuthorizationValue =
+        boundedCopy(
+            canonicalAuthorization,
+            KagemushaWireV1.MAXIMUM_MINT_AUTHORIZATION_BYTES,
+            "canonicalAuthorization",
+        )
+    private val canonicalMintCreditValue =
+        boundedCopy(
+            canonicalMintCredit,
+            KagemushaWireV1.MAXIMUM_MINT_CREDIT_BYTES,
+            "canonicalMintCredit",
+        )
+
+    init {
+        require(version == KagemushaWireV1.WIRE_VERSION)
+    }
+
+    /** Return the exact independently framed pre-debit authorization. */
+    fun canonicalAuthorization(): ByteArray = canonicalAuthorizationValue.copyOf()
+
+    /** Return the exact independently framed finalized mint credit. */
+    fun canonicalMintCredit(): ByteArray = canonicalMintCreditValue.copyOf()
+}
+
+/** Bounded public summary returned after secure-device operation 21 completes durably. */
+class KagemushaDeviceMintStageResultV1(
+    @JvmField val version: Int,
+    @JvmField val disposition: Int,
+    creditId: ByteArray,
+) {
+    private val creditIdValue = fixed32(creditId, "creditId")
+
+    init {
+        require(version == KagemushaWireV1.WIRE_VERSION)
+        require(disposition == STAGED || disposition == EXACT_DUPLICATE)
+    }
+
+    /** Return the identity of the supplied finalized credit. */
+    fun creditId(): ByteArray = creditIdValue.copyOf()
+
+    companion object {
+        /** A previously unseen credit was installed into the durable inbox. */
+        const val STAGED: Int = 0
+
+        /** The exact credit was already pending or consumed. */
+        const val EXACT_DUPLICATE: Int = 1
+    }
+}
+
+/** Unlinkable terminal transition converting an aggregate KAGEMUSHA balance to an online claim. */
 class KagemushaRedemptionStatementV1(
     @JvmField val version: Int,
     @JvmField val lifecycle: KagemushaLifecycleBindingV1,
     @JvmField val amount: BigInteger,
     @JvmField val beneficiary: KagemushaAccountIdV1,
     terminalNullifier: ByteArray,
-    senderBeforeCommitment: KagemushaPastaStateCommitmentV1,
-    senderAfterCommitment: KagemushaPastaStateCommitmentV1,
-    @JvmField val committedAtMs: Long,
     redemptionCommitment: ByteArray,
     redemptionId: ByteArray,
-    hardwareTransitionCommitment: ByteArray,
+    @JvmField val commitEvidence: KagemushaCommitEvidenceV1,
 ) {
     private val terminalNullifierValue = fixed32(terminalNullifier, "terminalNullifier")
-    private val senderBeforeCommitmentValue = senderBeforeCommitment
-    private val senderAfterCommitmentValue = senderAfterCommitment
     private val redemptionCommitmentValue = fixed32(redemptionCommitment, "redemptionCommitment")
     private val redemptionIdValue = fixed32(redemptionId, "redemptionId")
-    private val hardwareTransitionCommitmentValue =
-        fixed32(hardwareTransitionCommitment, "hardwareTransitionCommitment")
 
     init {
         require(version == 1 && lifecycle.version == version)
@@ -822,22 +1059,98 @@ class KagemushaRedemptionStatementV1(
     }
 
     fun terminalNullifier(): ByteArray = terminalNullifierValue.copyOf()
-    fun senderBeforeCommitment(): KagemushaPastaStateCommitmentV1 = senderBeforeCommitmentValue
-    fun senderAfterCommitment(): KagemushaPastaStateCommitmentV1 = senderAfterCommitmentValue
     fun redemptionCommitment(): ByteArray = redemptionCommitmentValue.copyOf()
     fun redemptionId(): ByteArray = redemptionIdValue.copyOf()
-    fun hardwareTransitionCommitment(): ByteArray = hardwareTransitionCommitmentValue.copyOf()
 }
 
 /** Constant-size terminal voucher submitted for online redemption. */
 class KagemushaRedemptionVoucherV1(
     @JvmField val version: Int,
     @JvmField val statement: KagemushaRedemptionStatementV1,
-    @JvmField val proof: KagemushaPairedProofV1,
+    @JvmField val commitCertificate: KagemushaCommitCertificateV1,
+    @JvmField val proof: KagemushaRedemptionProofV1,
+    artifactManifestDigest: ByteArray,
 ) {
+    private val artifactManifestDigestValue = fixed32(artifactManifestDigest, "artifactManifestDigest")
+
     init {
-        require(version == 1 && statement.version == version && proof.version == version)
+        require(version == 1 && statement.version == version)
+        require(commitCertificate.version == version && proof.version == version)
     }
+
+    fun artifactManifestDigest(): ByteArray = artifactManifestDigestValue.copyOf()
+}
+
+/** Canonical chain-facing request for one reserve-backed mint. */
+class KagemushaTopUpRequestV1(
+    @JvmField val version: Int,
+    operationId: ByteArray,
+    issuanceCommitment: ByteArray,
+    creditId: ByteArray,
+    releaseId: ByteArray,
+    suiteId: ByteArray,
+    vkDigest: ByteArray,
+    @JvmField val networkId: NetworkId,
+    @JvmField val asset: KagemushaAssetDefinitionIdV1,
+    @JvmField val assetIncarnation: KagemushaAssetIncarnationV1,
+    @JvmField val scale: Int,
+    @JvmField val amount: BigInteger,
+    liabilityPoolId: ByteArray,
+    @JvmField val payer: KagemushaAccountIdV1,
+    @JvmField val recipient: KagemushaAccountIdV1,
+    @JvmField val hardwareCredential: KagemushaHardwareCredentialV1,
+    recipientCredentialCommitment: ByteArray,
+    creditCommitment: ByteArray,
+    @JvmField val recipientOneTimeKey: KagemushaX25519PublicKeyV1,
+    encryptedCredit: ByteArray,
+    artifactManifestDigest: ByteArray,
+    @JvmField val mintAuthorization: KagemushaMintAuthorizationV1,
+) {
+    private val operationIdValue = fixed32(operationId, "operationId")
+    private val issuanceCommitmentValue = fixed32(issuanceCommitment, "issuanceCommitment")
+    private val creditIdValue = fixed32(creditId, "creditId")
+    private val releaseIdValue = fixed32(releaseId, "releaseId")
+    private val suiteIdValue = fixed32(suiteId, "suiteId")
+    private val vkDigestValue = fixed32(vkDigest, "vkDigest")
+    private val liabilityPoolIdValue = fixed32(liabilityPoolId, "liabilityPoolId")
+    private val recipientCredentialCommitmentValue =
+        fixed32(recipientCredentialCommitment, "recipientCredentialCommitment")
+    private val creditCommitmentValue = fixed32(creditCommitment, "creditCommitment")
+    private val encryptedCreditValue = boundedEncryptedCredit(encryptedCredit)
+    private val artifactManifestDigestValue =
+        fixed32(artifactManifestDigest, "artifactManifestDigest")
+
+    init {
+        requireHeader(version, networkId, scale, amount)
+        require(hardwareCredential.version == version && mintAuthorization.version == version)
+    }
+
+    fun operationId(): ByteArray = operationIdValue.copyOf()
+    fun issuanceCommitment(): ByteArray = issuanceCommitmentValue.copyOf()
+    fun creditId(): ByteArray = creditIdValue.copyOf()
+    fun releaseId(): ByteArray = releaseIdValue.copyOf()
+    fun suiteId(): ByteArray = suiteIdValue.copyOf()
+    fun vkDigest(): ByteArray = vkDigestValue.copyOf()
+    fun liabilityPoolId(): ByteArray = liabilityPoolIdValue.copyOf()
+    fun recipientCredentialCommitment(): ByteArray = recipientCredentialCommitmentValue.copyOf()
+    fun creditCommitment(): ByteArray = creditCommitmentValue.copyOf()
+    fun encryptedCredit(): ByteArray = encryptedCreditValue.copyOf()
+    fun artifactManifestDigest(): ByteArray = artifactManifestDigestValue.copyOf()
+}
+
+/** Canonical chain-facing request for one full or partial reserve redemption. */
+class KagemushaRedemptionRequestV1(
+    @JvmField val version: Int,
+    operationId: ByteArray,
+    @JvmField val voucher: KagemushaRedemptionVoucherV1,
+) {
+    private val operationIdValue = fixed32(operationId, "operationId")
+
+    init {
+        require(version == KagemushaWireV1.WIRE_VERSION && voucher.version == version)
+    }
+
+    fun operationId(): ByteArray = operationIdValue.copyOf()
 }
 
 internal val KAGEMUSHA_UINT128_MAX: BigInteger = BigInteger.ONE.shiftLeft(128).subtract(BigInteger.ONE)
@@ -856,6 +1169,13 @@ internal fun exactBytes(value: ByteArray, width: Int, field: String): ByteArray 
     return copy
 }
 
+private fun boundedCopy(value: ByteArray, maximum: Int, field: String): ByteArray {
+    require(value.isNotEmpty() && value.size <= maximum) {
+        "$field must contain at most $maximum bytes"
+    }
+    return value.copyOf()
+}
+
 internal fun requireUnsigned128(value: BigInteger, field: String) {
     require(value.signum() >= 0 && value <= KAGEMUSHA_UINT128_MAX) {
         "$field must fit unsigned 128-bit arithmetic"
@@ -868,7 +1188,7 @@ internal fun requirePositiveU128(value: BigInteger, field: String) {
 }
 
 private fun requireHeader(version: Int, networkId: NetworkId, scale: Int, amount: BigInteger?) {
-    require(version == KagemushaWireV1.WIRE_VERSION) { "Kagemusha wire version must be 1" }
+    require(version == KagemushaWireV1.WIRE_VERSION) { "KAGEMUSHA wire version must be 1" }
     require(networkId.bytes().any { it != 0.toByte() }) { "networkId is zero" }
     require(scale in 0..KagemushaWireV1.MAXIMUM_ASSET_SCALE) { "asset scale is out of range" }
     amount?.let { requirePositiveU128(it, "amount") }

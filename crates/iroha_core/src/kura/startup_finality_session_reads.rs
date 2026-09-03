@@ -92,4 +92,31 @@ impl V2StartupFinalityVerificationSession<'_> {
         }
         Ok(artifact)
     }
+
+    /// Read a self-contained canonical autonomous replica without consulting
+    /// committee-owned attempt or lifecycle state.
+    pub(crate) fn durable_canonical_autonomous_lane_replica(
+        &self,
+        proposal: &LaneBlockProposalV1,
+        expected_network_id: iroha_data_model::NetworkId,
+        expected_epoch: u64,
+    ) -> Result<Option<DurableAutonomousLaneMergeSource>> {
+        let descriptor = &proposal.descriptor;
+        self.kura
+            .durable_canonical_autonomous_lane_replica_under_prune_and_canonical_guards(
+                descriptor.lane_id,
+                descriptor.lane_block_height,
+                expected_network_id,
+                Some(expected_epoch),
+            )
+            .and_then(|source| match source {
+                Some(source) if source.bundle.certified.proposal != *proposal => {
+                    Err(Kura::invalid_lane_artifact_error(
+                        self.kura.store_root.clone(),
+                        "startup canonical autonomous replica conflicts with the finalized proposal",
+                    ))
+                }
+                source => Ok(source),
+            })
+    }
 }

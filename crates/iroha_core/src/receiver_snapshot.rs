@@ -40,9 +40,7 @@ pub(crate) fn kagemusha_reserve_receipt_witnesses_v1(
         .filter(|pair| pair.key.first() == Some(&KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1))
         .collect::<Vec<_>>();
     if targets.len() != tagged_write_count {
-        return Err(
-            "execution witness contains duplicate Kagemusha V1 receipt writes".to_owned(),
-        );
+        return Err("execution witness contains duplicate Kagemusha V1 receipt writes".to_owned());
     }
     let ordinary_root = crate::sumeragi::smt::compute_post_state_root(&[], &ordinary);
     let mut proofs = Vec::with_capacity(targets.len());

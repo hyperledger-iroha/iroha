@@ -428,8 +428,16 @@ public enum IrohaPeerNfcCardAvailabilityV1: Equatable, Sendable {
 }
 
 public enum IrohaPeerNfcCardFailureV1: Error, Equatable, Sendable {
-    case authorizationRejected
-    case authorizationCancelled
+    case intentRejected
+    case intentCancelled
+    case intentAdmissionRejected
+    case intentAdmissionPersistenceFailed
+    case intentAdmissionTimedOut
+    case intentAdmissionCancelled
+    case acceptanceTicketRejected
+    case acceptanceTicketPersistenceFailed
+    case acceptanceTicketTimedOut
+    case acceptanceTicketCancelled
     case paymentAdmissionRejected
     case paymentAdmissionPersistenceFailed
     case paymentAdmissionTimedOut
@@ -446,6 +454,8 @@ public enum IrohaPeerNfcCardFailureV1: Error, Equatable, Sendable {
 
 public enum IrohaPeerNfcCardEventV1: Equatable, Sendable {
     case emulationStarted
+    case intentAdmitted
+    case acceptanceTicketReady
     case paymentAdmitted
     case acknowledgementReady
     case acknowledgementConfirmed
@@ -459,6 +469,12 @@ public enum IrohaPeerNfcCardEventV1: Equatable, Sendable {
 @available(iOS 17.4, *)
 public final class IrohaPeerNfcCardSessionControllerV1: @unchecked Sendable {
     public typealias AuthorizeRequest = @Sendable () async throws -> Void
+    public typealias AdmitIntent = @Sendable (
+        IrohaPeerNfcIntentAdmissionContextV1
+    ) async throws -> IrohaPeerNfcDurableIntentAdmissionV1
+    public typealias IssueAcceptanceTicket = @Sendable (
+        IrohaPeerNfcIntentCommitContextV1
+    ) async throws -> IrohaPeerNfcDurableAcceptanceTicketV1
     public typealias AdmitPayment = @Sendable (
         IrohaPeerNfcPaymentAdmissionContextV1
     ) async throws -> IrohaPeerNfcDurablePaymentAdmissionV1
@@ -505,12 +521,16 @@ public final class IrohaPeerNfcCardSessionControllerV1: @unchecked Sendable {
     public func start(
         sessionID: Data,
         receiveRequest: Data,
+        restoredIntentAdmission: IrohaPeerNfcDurableIntentAdmissionV1? = nil,
+        restoredAcceptanceTicket: IrohaPeerNfcDurableAcceptanceTicketV1? = nil,
         restoredDurableAcknowledgement: IrohaPeerNfcDurableAcknowledgementV1? = nil,
         restoredPaymentAdmission: IrohaPeerNfcDurablePaymentAdmissionV1? = nil,
         profilePolicy: IrohaPeerNfcProfilePolicyV1,
         limits: IrohaPeerNfcLimitsV1 = .default,
         onEvent: @escaping EventHandler,
         authorizeRequest: @escaping AuthorizeRequest,
+        admitIntent: @escaping AdmitIntent,
+        issueAcceptanceTicket: @escaping IssueAcceptanceTicket,
         admitPayment: @escaping AdmitPayment,
         durableCommit: @escaping DurableCommit
     ) async throws -> IrohaPeerNfcRequestIdentityV1 {
@@ -526,6 +546,8 @@ public final class IrohaPeerNfcCardSessionControllerV1: @unchecked Sendable {
         let receiver = try IrohaPeerNfcReceiverSessionV1(
             sessionID: sessionID,
             receiveRequest: receiveRequest,
+            restoredIntentAdmission: restoredIntentAdmission,
+            restoredAcceptanceTicket: restoredAcceptanceTicket,
             durableAcknowledgement: restoredDurableAcknowledgement,
             restoredPaymentAdmission: restoredPaymentAdmission,
             profilePolicy: profilePolicy,
@@ -537,6 +559,8 @@ public final class IrohaPeerNfcCardSessionControllerV1: @unchecked Sendable {
             receiver: receiver,
             onEvent: onEvent,
             authorizeRequest: authorizeRequest,
+            admitIntent: admitIntent,
+            issueAcceptanceTicket: issueAcceptanceTicket,
             admitPayment: admitPayment,
             durableCommit: durableCommit
         )
@@ -617,6 +641,9 @@ private final class IrohaPeerNfcCardRuntimeV1: @unchecked Sendable {
     private var receiver: IrohaPeerNfcReceiverSessionV1
     private let onEvent: IrohaPeerNfcCardSessionControllerV1.EventHandler
     private let authorizeRequest: IrohaPeerNfcCardSessionControllerV1.AuthorizeRequest
+    private let admitIntent: IrohaPeerNfcCardSessionControllerV1.AdmitIntent
+    private let issueAcceptanceTicket:
+        IrohaPeerNfcCardSessionControllerV1.IssueAcceptanceTicket
     private let admitPayment: IrohaPeerNfcCardSessionControllerV1.AdmitPayment
     private let durableCommit: IrohaPeerNfcCardSessionControllerV1.DurableCommit
     private let lock = NSLock()
@@ -638,6 +665,9 @@ private final class IrohaPeerNfcCardRuntimeV1: @unchecked Sendable {
         receiver: IrohaPeerNfcReceiverSessionV1,
         onEvent: @escaping IrohaPeerNfcCardSessionControllerV1.EventHandler,
         authorizeRequest: @escaping IrohaPeerNfcCardSessionControllerV1.AuthorizeRequest,
+        admitIntent: @escaping IrohaPeerNfcCardSessionControllerV1.AdmitIntent,
+        issueAcceptanceTicket: @escaping
+            IrohaPeerNfcCardSessionControllerV1.IssueAcceptanceTicket,
         admitPayment: @escaping IrohaPeerNfcCardSessionControllerV1.AdmitPayment,
         durableCommit: @escaping IrohaPeerNfcCardSessionControllerV1.DurableCommit
     ) {
@@ -646,6 +676,8 @@ private final class IrohaPeerNfcCardRuntimeV1: @unchecked Sendable {
         self.receiver = receiver
         self.onEvent = onEvent
         self.authorizeRequest = authorizeRequest
+        self.admitIntent = admitIntent
+        self.issueAcceptanceTicket = issueAcceptanceTicket
         self.admitPayment = admitPayment
         self.durableCommit = durableCommit
     }
@@ -798,14 +830,143 @@ private final class IrohaPeerNfcCardRuntimeV1: @unchecked Sendable {
                             requestAuthorized = true
                             response = receiver.process(apdu: apdu.payload)
                         } catch is CancellationError {
-                            terminalFailure = .authorizationCancelled
+                            terminalFailure = .intentCancelled
                             response = IrohaPeerNfcAPDUResponseV1(
                                 statusWord: .securityStatusNotSatisfied
                             )
                         } catch {
-                            terminalFailure = .authorizationRejected
+                            terminalFailure = .intentRejected
                             response = IrohaPeerNfcAPDUResponseV1(
                                 statusWord: .securityStatusNotSatisfied
+                            )
+                        }
+                    } else if let command, case .beginIntent = command {
+                        do {
+                            switch try receiver.prepareIntentAdmission(command) {
+                            case .alreadyAdmitted:
+                                response = IrohaPeerNfcAPDUResponseV1(statusWord: .success)
+                                onEvent(.intentAdmitted)
+                            case .requiresDurableAdmission(let context):
+                                guard beginProtectedBoundary(session) else { return }
+                                protectedCommand = true
+                                let record: IrohaPeerNfcDurableIntentAdmissionV1
+                                do {
+                                    record = try await irohaPeerNfcWithDurabilityDeadlineV1(
+                                        timeoutNanoseconds: configuration
+                                            .durabilityTimeoutNanoseconds,
+                                        operation: { [admitIntent] in
+                                            try await admitIntent(context)
+                                        }
+                                    )
+                                } catch let failure as IrohaPeerNfcDurabilityDeadlineErrorV1 {
+                                    terminalFailure = failure == .timedOut
+                                        ? .intentAdmissionTimedOut
+                                        : .durabilityWorkerSaturated
+                                    response = IrohaPeerNfcAPDUResponseV1(
+                                        statusWord: .storageFailure
+                                    )
+                                    break
+                                } catch is CancellationError {
+                                    terminalFailure = .intentAdmissionCancelled
+                                    response = IrohaPeerNfcAPDUResponseV1(
+                                        statusWord: .storageFailure
+                                    )
+                                    break
+                                } catch {
+                                    terminalFailure = .intentAdmissionPersistenceFailed
+                                    response = IrohaPeerNfcAPDUResponseV1(
+                                        statusWord: .storageFailure
+                                    )
+                                    break
+                                }
+                                do {
+                                    guard mayInstallProtectedResult(session) else {
+                                        terminalFailure = .intentAdmissionCancelled
+                                        response = IrohaPeerNfcAPDUResponseV1(
+                                            statusWord: .storageFailure
+                                        )
+                                        break
+                                    }
+                                    guard record.context == context else {
+                                        throw IrohaPeerNfcErrorV1.continuityMismatch
+                                    }
+                                    try receiver.installIntentAdmission(record)
+                                    response = IrohaPeerNfcAPDUResponseV1(statusWord: .success)
+                                    onEvent(.intentAdmitted)
+                                } catch {
+                                    terminalFailure = .intentAdmissionRejected
+                                    response = IrohaPeerNfcAPDUResponseV1(
+                                        statusWord: .conditionsNotSatisfied
+                                    )
+                                }
+                            }
+                        } catch {
+                            terminalFailure = .intentAdmissionRejected
+                            response = IrohaPeerNfcAPDUResponseV1(
+                                statusWord: .conditionsNotSatisfied
+                            )
+                        }
+                    } else if let command, case .commitIntent = command {
+                        do {
+                            switch try receiver.prepareIntentCommit(command) {
+                            case .alreadyIssued:
+                                response = IrohaPeerNfcAPDUResponseV1(statusWord: .success)
+                                onEvent(.acceptanceTicketReady)
+                            case .requiresDurableTicket(let context):
+                                guard beginProtectedBoundary(session) else { return }
+                                protectedCommand = true
+                                let record: IrohaPeerNfcDurableAcceptanceTicketV1
+                                do {
+                                    record = try await irohaPeerNfcWithDurabilityDeadlineV1(
+                                        timeoutNanoseconds: configuration
+                                            .durabilityTimeoutNanoseconds,
+                                        operation: { [issueAcceptanceTicket] in
+                                            try await issueAcceptanceTicket(context)
+                                        }
+                                    )
+                                } catch let failure as IrohaPeerNfcDurabilityDeadlineErrorV1 {
+                                    terminalFailure = failure == .timedOut
+                                        ? .acceptanceTicketTimedOut
+                                        : .durabilityWorkerSaturated
+                                    response = IrohaPeerNfcAPDUResponseV1(
+                                        statusWord: .storageFailure
+                                    )
+                                    break
+                                } catch is CancellationError {
+                                    terminalFailure = .acceptanceTicketCancelled
+                                    response = IrohaPeerNfcAPDUResponseV1(
+                                        statusWord: .storageFailure
+                                    )
+                                    break
+                                } catch {
+                                    terminalFailure = .acceptanceTicketPersistenceFailed
+                                    response = IrohaPeerNfcAPDUResponseV1(
+                                        statusWord: .storageFailure
+                                    )
+                                    break
+                                }
+                                do {
+                                    guard mayInstallProtectedResult(session) else {
+                                        terminalFailure = .acceptanceTicketCancelled
+                                        response = IrohaPeerNfcAPDUResponseV1(
+                                            statusWord: .storageFailure
+                                        )
+                                        break
+                                    }
+                                    try receiver.installAcceptanceTicket(record)
+                                    response = IrohaPeerNfcAPDUResponseV1(statusWord: .success)
+                                    onEvent(.acceptanceTicketReady)
+                                } catch {
+                                    terminalFailure = .acceptanceTicketRejected
+                                    response = IrohaPeerNfcAPDUResponseV1(
+                                        statusWord: .conditionsNotSatisfied
+                                    )
+                                }
+                            }
+                        } catch {
+                            terminalFailure = .acceptanceTicketRejected
+                            response = IrohaPeerNfcAPDUResponseV1(
+                                statusWord: .conditionsNotSatisfied
                             )
                         }
                     } else if let command, case .beginPayment = command {
@@ -876,7 +1037,7 @@ private final class IrohaPeerNfcCardRuntimeV1: @unchecked Sendable {
                                 statusWord: .conditionsNotSatisfied
                             )
                         }
-                    } else if let command, case .commit = command {
+                    } else if let command, case .commitPayment = command {
                         do {
                             switch try receiver.prepareCommit(command) {
                             case .alreadyCommitted:
@@ -1126,7 +1287,7 @@ private final class IrohaPeerNfcCardRuntimeV1: @unchecked Sendable {
         return startGate.stopRequested
     }
 
-    /// Awaited authorization and unprotected APDU callbacks may finish after a
+    /// Awaited intent and unprotected APDU callbacks may finish after a
     /// synchronous stop. Durable admission/commit deliberately do not use this
     /// check: their protected boundary must install the returned record and
     /// attempt the APDU response before honoring a deferred stop.
@@ -1328,6 +1489,8 @@ public final class IrohaPeerNfcReaderServiceV1: NSObject, @unchecked Sendable,
         onTypedProgress: ((IrohaPeerNfcProgressEventV1) -> Void)? = nil,
         loadOrCreateDurableCheckpoint: @escaping
             IrohaPeerNfcReaderExchangeV1.LoadOrCreateDurableCheckpoint,
+        preparePaymentCheckpoint: @escaping
+            IrohaPeerNfcReaderExchangeV1.PreparePaymentCheckpoint,
         updateDurableCheckpoint: @escaping
             IrohaPeerNfcReaderExchangeV1.UpdateDurableCheckpoint
     ) async throws -> IrohaPeerNfcReaderExchangeResultV1 {
@@ -1442,6 +1605,44 @@ public final class IrohaPeerNfcReaderServiceV1: NSObject, @unchecked Sendable,
                         // returns so a CoreNFC reconnect can resume without
                         // invoking value creation again.
                         checkpointBox.store(checkpoint.encoded)
+                        progressReporter.emit(
+                            .intentPrepared,
+                            bytes: checkpoint.intent.encoded.count
+                        )
+                        return checkpoint
+                    },
+                    preparePaymentCheckpoint: { intentCheckpoint, ticket in
+                        try validate()
+                        progressReporter.emit(
+                            .acceptanceTicketReceived,
+                            bytes: ticket.encoded.count
+                        )
+                        let checkpoint = try await irohaPeerNfcGuardedAwaitV1(
+                            validate: validate,
+                            operation: {
+                                try await preparePaymentCheckpoint(
+                                    intentCheckpoint,
+                                    ticket
+                                )
+                            }
+                        )
+                        guard checkpoint.identity == intentCheckpoint.identity,
+                              checkpoint.profilePolicy
+                                == intentCheckpoint.profilePolicy,
+                              checkpoint.receiveRequest
+                                == intentCheckpoint.receiveRequest,
+                              checkpoint.intent
+                                == intentCheckpoint.intent,
+                              checkpoint.ticket == ticket,
+                              let payment = checkpoint.payment,
+                              checkpoint.durableAcknowledgement == nil else {
+                            throw IrohaPeerNfcErrorV1.continuityMismatch
+                        }
+                        checkpointBox.store(checkpoint.encoded)
+                        progressReporter.emit(
+                            .paymentPrepared,
+                            bytes: payment.encoded.count
+                        )
                         return checkpoint
                     },
                     updateDurableCheckpoint: { encoded in
@@ -1451,7 +1652,8 @@ public final class IrohaPeerNfcReaderServiceV1: NSObject, @unchecked Sendable,
                             profilePolicy: profilePolicy,
                             limits: exchangeLimits
                         )
-                        guard checkpoint.durableAcknowledgement != nil else {
+                        guard checkpoint.durableAcknowledgement != nil,
+                              let payment = checkpoint.payment else {
                             throw IrohaPeerNfcErrorV1.continuityMismatch
                         }
                         // A validated acknowledgement can only be read after
@@ -1460,7 +1662,7 @@ public final class IrohaPeerNfcReaderServiceV1: NSObject, @unchecked Sendable,
                         // durability boundaries retain their order.
                         progressReporter.emit(
                             .paymentCommitted,
-                            bytes: checkpoint.payment.encoded.count
+                            bytes: payment.encoded.count
                         )
                         _ = try await irohaPeerNfcGuardedAwaitV1(
                             validate: validate,

@@ -7293,14 +7293,17 @@ mod tests {
     }
     #[test]
     fn validation_only_consensus_slash_rolls_back_every_world_write() {
+        let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
         let lane_id = LaneId::new(13);
-        let (validator, escrow_asset) = {
+        let (validator, escrow_asset, sink_asset, staking_config) = {
             let mut transaction = state_block.transaction();
-            let (validator, _delegator, escrow, asset_definition_id) =
+            let (validator, delegator, escrow, asset_definition_id) =
                 prepare_accounts(&mut transaction);
+            transaction.nexus.staking.slash_sink_account_id = delegator.to_string();
             RegisterPublicLaneValidator {
                 lane_id,
                 peer_id: validator_peer_id(&validator),
@@ -7311,10 +7314,17 @@ mod tests {
             }
             .execute(&validator, &mut transaction)
             .expect("register validation-only slash target");
-            let escrow_asset = AssetId::new(asset_definition_id, escrow.clone());
+            let escrow_asset = AssetId::new(asset_definition_id.clone(), escrow.clone());
+            let sink_asset = AssetId::new(asset_definition_id, delegator);
+            let staking_config = transaction.nexus.staking.clone();
             transaction.apply();
-            (validator, escrow_asset)
+            (validator, escrow_asset, sink_asset, staking_config)
         };
+        // `prepare_accounts` configures the transaction snapshot. Preserve that
+        // exact custody policy for the independent consensus-validation scope.
+        state_block.nexus.staking = staking_config;
+        state_block.world.take_external_events();
+        let status_before = crate::sumeragi::status::lane_scoped_status_fingerprint_for_tests();
         let record_before = state_block
             .world
             .public_lane_validators
@@ -7326,9 +7336,21 @@ mod tests {
             .assets
             .get(&escrow_asset)
             .map_or_else(Quantity::zero, |asset| asset.as_ref().clone());
+        let sink_before = state_block
+            .world
+            .assets
+            .get(&sink_asset)
+            .map_or_else(Quantity::zero, |asset| asset.as_ref().clone());
+        let share_key = (lane_id, validator.clone(), validator.clone());
+        let share_before = state_block
+            .world
+            .public_lane_stake_shares
+            .get(&share_key)
+            .cloned()
+            .expect("registered validator retains a self-stake share");
 
         {
-            let mut validation = state_block.transaction();
+            let mut validation = state_block.consensus_effects_transaction();
             let now_ms = validation.block_unix_timestamp_ms();
             apply_slash_to_validator_without_observability(
                 &mut validation,
@@ -7345,6 +7367,33 @@ mod tests {
                 .get(&(lane_id, validator.clone()))
                 .expect("validation overlay retains the slashed validator");
             assert_eq!(validation_record.total_stake, Quantity::from(900_u64));
+            assert_eq!(
+                validation
+                    .world
+                    .public_lane_stake_shares
+                    .get(&share_key)
+                    .expect("validation overlay retains the reduced self-stake share")
+                    .bonded,
+                Quantity::from(900_u64)
+            );
+            assert_eq!(
+                validation
+                    .world
+                    .assets
+                    .get(&escrow_asset)
+                    .expect("validation overlay retains escrow")
+                    .as_ref(),
+                &Quantity::from(900_u64)
+            );
+            assert_eq!(
+                validation
+                    .world
+                    .assets
+                    .get(&sink_asset)
+                    .expect("validation overlay credits the slash sink")
+                    .as_ref(),
+                &Quantity::from(10_100_u64)
+            );
         }
 
         assert_eq!(
@@ -7363,6 +7412,32 @@ mod tests {
                 .map_or_else(Quantity::zero, |asset| asset.as_ref().clone()),
             escrow_before
         );
+        assert_eq!(
+            state_block
+                .world
+                .assets
+                .get(&sink_asset)
+                .map_or_else(Quantity::zero, |asset| asset.as_ref().clone()),
+            sink_before
+        );
+        assert_eq!(
+            state_block
+                .world
+                .public_lane_stake_shares
+                .get(&share_key)
+                .expect("discarded validation leaves the self-stake share intact"),
+            &share_before
+        );
+        assert!(
+            state_block.world.take_external_events().is_empty(),
+            "discarded consensus validation must not publish world events"
+        );
+        assert_eq!(
+            crate::sumeragi::status::lane_scoped_status_fingerprint_for_tests(),
+            status_before,
+            "discarded consensus validation must not publish process-global status"
+        );
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
     }
     #[test]
     fn slash_public_lane_validator_rejects_mismatched_public_lane_validator_row() {
@@ -7837,9 +7912,7 @@ mod tests {
         roster.sort_by(|left, right| left.validator.cmp(&right.validator));
         let network_id = *state.network_id_ref();
         let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                network_id, 0, &roster,
-            );
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
         let context = HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,
@@ -7871,14 +7944,13 @@ mod tests {
             height: context.height,
             view: 0,
         };
-        let execution_commitment =
-            ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-                Hash::new(b"staking cancellation parent state"),
-                Hash::new(b"staking cancellation post state"),
-                Hash::new(b"staking cancellation ordinary writes"),
-                1,
-                Hash::new(b"staking cancellation block"),
-            );
+        let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"staking cancellation parent state"),
+            Hash::new(b"staking cancellation post state"),
+            Hash::new(b"staking cancellation ordinary writes"),
+            1,
+            Hash::new(b"staking cancellation block"),
+        );
         let vote = |seed: u8| Vote {
             round,
             proposal_round: round,

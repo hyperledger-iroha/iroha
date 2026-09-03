@@ -34,20 +34,19 @@ pub(crate) const KAGEMUSHA_POSEIDON_SECURE_MDS_V1: usize = 0;
 const KAGEMUSHA_POSEIDON_INLINE_ARITY_V1: usize = 32;
 
 /// Empty consumed-credit leaf domain.
-pub(crate) const KAGEMUSHA_REPLAY_EMPTY_DOMAIN_V1: u64 = u64::from_le_bytes(*b"ocempty1");
+pub(crate) const KAGEMUSHA_REPLAY_EMPTY_DOMAIN_V1: u64 = u64::from_le_bytes(*b"kgmemp_1");
 /// Present consumed-credit leaf domain.
-pub(crate) const KAGEMUSHA_REPLAY_LEAF_DOMAIN_V1: u64 = u64::from_le_bytes(*b"ocleaf_1");
+pub(crate) const KAGEMUSHA_REPLAY_LEAF_DOMAIN_V1: u64 = u64::from_le_bytes(*b"kgmleaf1");
 /// Consumed-credit internal-node domain.
-pub(crate) const KAGEMUSHA_REPLAY_NODE_DOMAIN_V1: u64 = u64::from_le_bytes(*b"ocnode_1");
+pub(crate) const KAGEMUSHA_REPLAY_NODE_DOMAIN_V1: u64 = u64::from_le_bytes(*b"kgmnode1");
 /// Aggregate private-state commitment domain.
-pub(crate) const KAGEMUSHA_STATE_DOMAIN_V1: u64 = u64::from_le_bytes(*b"ocstate1");
+pub(crate) const KAGEMUSHA_STATE_DOMAIN_V1: u64 = u64::from_le_bytes(*b"kgmstate");
 /// Low limb of the canonical Pallas base/Vesta scalar field modulus.
 pub(crate) const KAGEMUSHA_FP_MODULUS_LOW_V1: u128 = 0x2246_98fc_094c_f91b_992d_30ed_0000_0001;
 /// Low limb of the canonical Vesta base/Pallas scalar field modulus.
 pub(crate) const KAGEMUSHA_FQ_MODULUS_LOW_V1: u128 = 0x2246_98fc_0994_a8dd_8c46_eb21_0000_0001;
 
-type Spec<F> =
-    OptimizedPoseidonSpec<F, KAGEMUSHA_POSEIDON_WIDTH_V1, KAGEMUSHA_POSEIDON_RATE_V1>;
+type Spec<F> = OptimizedPoseidonSpec<F, KAGEMUSHA_POSEIDON_WIDTH_V1, KAGEMUSHA_POSEIDON_RATE_V1>;
 type Native<F> = Poseidon<F, F, KAGEMUSHA_POSEIDON_WIDTH_V1, KAGEMUSHA_POSEIDON_RATE_V1>;
 
 fn fp_spec() -> &'static Spec<Fp> {
@@ -280,19 +279,10 @@ mod tests {
         let inputs_fq = [Fq::from(7), Fq::from(9)];
         let first_fp = hash(KAGEMUSHA_REPLAY_NODE_DOMAIN_V1, &inputs_fp);
         let first_fq = hash(KAGEMUSHA_REPLAY_NODE_DOMAIN_V1, &inputs_fq);
-        assert_eq!(
-            first_fp,
-            hash(KAGEMUSHA_REPLAY_NODE_DOMAIN_V1, &inputs_fp)
-        );
-        assert_eq!(
-            first_fq,
-            hash(KAGEMUSHA_REPLAY_NODE_DOMAIN_V1, &inputs_fq)
-        );
+        assert_eq!(first_fp, hash(KAGEMUSHA_REPLAY_NODE_DOMAIN_V1, &inputs_fp));
+        assert_eq!(first_fq, hash(KAGEMUSHA_REPLAY_NODE_DOMAIN_V1, &inputs_fq));
         assert_ne!(encode(first_fp), encode(first_fq));
-        assert_ne!(
-            first_fp,
-            hash(KAGEMUSHA_REPLAY_LEAF_DOMAIN_V1, &inputs_fp)
-        );
+        assert_ne!(first_fp, hash(KAGEMUSHA_REPLAY_LEAF_DOMAIN_V1, &inputs_fp));
     }
 
     #[test]

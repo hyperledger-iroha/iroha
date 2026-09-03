@@ -204,14 +204,76 @@ AUTONOMOUS_TERMINAL_ALL_BINDINGS = (
     (
         KURA_PIPELINE_AND_LANE_ARTIFACTS_RELATIVE,
         "method",
-        "AutonomousLifecycleTerminalOutcomeV1::validate_body",
+        "AutonomousLifecycleTerminalOutcomeV1::validate_body_parts",
         (
-            "match body.stage",
+            "match stage",
             "AutonomousLifecycleTerminalOutcomeStageV1::Pending { reserved_terminal }",
             "!reserved_terminal.is_terminal_outcome_pending_reservation()",
             "autonomous lifecycle pending terminal outcome changed its reserved terminal payload",
             "AutonomousLifecycleTerminalOutcomeStageV1::Complete { terminal }",
-            "body.binding.validate_state(terminal)?",
+            "binding.validate_state(terminal)?",
+        ),
+    ),
+    (
+        KURA_PIPELINE_AND_LANE_ARTIFACTS_RELATIVE,
+        "method",
+        "AutonomousLifecycleTerminalOutcomeV1::complete",
+        (
+            "Self::from_body(AutonomousLifecycleTerminalOutcomeBodyV1 {",
+            "version: Self::VERSION",
+            "binding: self.body.binding.clone()",
+            "basis: self.body.basis",
+            "source: self.body.source",
+        ),
+    ),
+    (
+        KURA_PIPELINE_AND_LANE_ARTIFACTS_RELATIVE,
+        "method",
+        "AutonomousLifecycleTerminalOutcomeV1::from_body",
+        (
+            "body.version != Self::VERSION",
+            "Self::validate_body_parts(&body.binding, body.basis, body.source, body.stage)?",
+            "AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN",
+            "Ok(Self { body, outcome_hash })",
+        ),
+    ),
+    (
+        KURA_PIPELINE_AND_LANE_ARTIFACTS_RELATIVE,
+        "method",
+        "AutonomousLifecycleTerminalOutcomeV1::validate_structure",
+        (
+            "self.body.version != Self::VERSION",
+            "&self.body.binding",
+            "self.body.basis",
+            "self.body.source",
+            "self.body.stage",
+            "AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN",
+            "self.outcome_hash != expected",
+        ),
+    ),
+    (
+        KURA_PIPELINE_AND_LANE_ARTIFACTS_RELATIVE,
+        "method",
+        "AutonomousLifecycleTerminalOutcomeV1::decode_framed_unvalidated",
+        ("norito::decode_canonical(bytes)",),
+    ),
+    (
+        KURA_PIPELINE_AND_LANE_ARTIFACTS_RELATIVE,
+        "method",
+        "AutonomousLifecycleTerminalOutcomeV1::decode_framed",
+        (
+            "Self::decode_framed_unvalidated(bytes)?",
+            ".validate_structure()",
+            "norito::Error::Message(message.to_owned())",
+        ),
+    ),
+    (
+        KURA_PIPELINE_AND_LANE_ARTIFACTS_RELATIVE,
+        "method",
+        "AutonomousLifecycleTerminalOutcomeV1::encode_framed",
+        (
+            "norito::encode_canonical(self)?",
+            "AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES",
         ),
     ),
     (
@@ -897,6 +959,22 @@ AUTONOMOUS_TERMINAL_ALL_BINDINGS = (
         "Kura::validate_configured_autonomous_mutation_disk_peak_with_allowed_view_temp_locked",
         (
             "allowed_view_temp: Option<&Path>",
+            "self.validate_configured_autonomous_mutation_disk_peak_with_reservation_deltas_locked(",
+            "additional_physical_peak_bytes",
+            "additional_identities",
+            "consumes_terminal_cas_transient",
+            "allowed_view_temp",
+        ),
+    ),
+    (
+        KURA_AUTONOMOUS_TERMINAL_CAPACITY_RELATIVE,
+        "method",
+        "Kura::validate_configured_autonomous_mutation_disk_peak_with_reservation_deltas_locked",
+        (
+            "additional_unreserved_stable_bytes: u64",
+            "additional_missing_terminal_identities: usize",
+            "additional_incomplete_terminal_identities: usize",
+            "allowed_view_temp: Option<&Path>",
             "autonomous_global_terminal_reservation_counts_with_allowed_view_temp_locked(",
             "allowed_view_temp",
             "AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES",
@@ -1050,6 +1128,12 @@ AUTONOMOUS_TERMINAL_ALL_BINDINGS = (
 AUTONOMOUS_TERMINAL_RECOVERY_BINDINGS = AUTONOMOUS_TERMINAL_ALL_BINDINGS[:-7]
 AUTONOMOUS_TERMINAL_TEST_BINDINGS = AUTONOMOUS_TERMINAL_ALL_BINDINGS[-7:]
 AUTONOMOUS_TERMINAL_ORDERED_SOURCE_CHECKS = (
+    (
+        KURA_PIPELINE_AND_LANE_ARTIFACTS_RELATIVE,
+        "method",
+        "AutonomousLifecycleTerminalOutcomeV1::decode_framed_unvalidated",
+        ("norito::decode_canonical(bytes)",),
+    ),
     (
         KURA_LANE_ARTIFACT_BUDGET_RELATIVE,
         "method",

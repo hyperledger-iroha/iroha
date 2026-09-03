@@ -12,10 +12,10 @@ use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSe
 pub mod da;
 /// Public Torii DTOs for certificate-only governance proposal drafts.
 pub mod governance_proposal_api;
+/// Public Torii DTOs for the KAGEMUSHA lifecycle.
+pub mod kagemusha_api;
 /// Shared MCP wire constants for Torii and repository clients.
 pub mod mcp;
-/// Public Torii DTOs for the Kagemusha lifecycle.
-pub mod kagemusha_api;
 /// Public Torii DTOs for authenticated SORA Parliament draft and read routes.
 pub mod parliament_api;
 /// Stable cross-SDK signing transcript for exact prepared transactions.
@@ -342,11 +342,11 @@ pub mod uri {
     //! URI that Torii uses to route incoming requests.
     /// Query URI is used to handle incoming Query requests.
     pub const QUERY: &str = "/v1/query";
-    /// URI used to evaluate Kagemusha readiness.
+    /// URI used to evaluate KAGEMUSHA readiness.
     pub const KAGEMUSHA_READINESS: &str = crate::route_catalog::kagemusha::READINESS_PATH;
-    /// URI used to submit a Kagemusha top-up operation.
+    /// URI used to submit a KAGEMUSHA top-up operation.
     pub const KAGEMUSHA_TOP_UP: &str = crate::route_catalog::kagemusha::TOP_UP_PATH;
-    /// URI used to submit a Kagemusha redemption operation.
+    /// URI used to submit a KAGEMUSHA redemption operation.
     pub const KAGEMUSHA_REDEEM: &str = crate::route_catalog::kagemusha::REDEEM_PATH;
     /// URI used to fetch a finality-bound current validation-fee registry.
     pub const VALIDATION_FEE_CURRENT_POLICY_PROOF: &str =
@@ -391,7 +391,7 @@ pub mod uri {
     /// URI used to draft one strict native validation-fee Parliament proposal.
     pub const VALIDATION_FEE_PROPOSAL_DRAFT: &str =
         crate::route_catalog::runtime_governance::VALIDATION_FEE_PROPOSAL_DRAFT_PATH;
-    /// URI used to fetch a Kagemusha operation by ID.
+    /// URI used to fetch a KAGEMUSHA operation by ID.
     pub const KAGEMUSHA_OPERATION: &str = crate::route_catalog::kagemusha::OPERATION_PATH;
     /// Transaction URI is used to handle incoming signed transaction requests.
     pub const TRANSACTION: &str = "/v1/pipeline/transactions";

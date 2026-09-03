@@ -6702,7 +6702,7 @@ redistributable schemas, and official trust/revocation bundles.
   ciphertext, and low-order-free X25519 ephemeral keys before envelope use;
   this structural validation is not value authorization. The proofless generic
   `zk::Shield` instruction and CLI/native/SDK transaction encoders are removed,
-  public-to-confidential ingress requires the proof-bound Kagemusha V1 top-up,
+  public-to-confidential ingress requires the proof-bound KAGEMUSHA V1 top-up,
   and the standalone envelope utility retains the same payload preflight;
   standalone ML-KEM public-key validation, secret-key validation,
   encapsulation, and decapsulation now reject all-zero public keys, all-zero
@@ -7464,12 +7464,14 @@ redistributable schemas, and official trust/revocation bundles.
 ## Torii Offline API follow-ups
 
 - Completed 2026-07-11: Torii now mounts only the first-release Offline API:
-  `GET /v1/kagemusha/readiness`, `POST /v1/kagemusha/top-up`,
+  `GET /v1/kagemusha/readiness`, payer-signed `POST /v1/kagemusha/top-up`,
   `POST /v1/kagemusha/redeem`, and
-  `GET /v1/kagemusha/operations/{operation_id}`. Top-up and redemption accept
-  their typed JSON or Norito request directly and return an asynchronous typed
-  operation reference; there is no version-nested route or whole-payload
-  wrapper.
+  `GET /v1/kagemusha/operations/{operation_id}`. Top-up accepts one canonical
+  versioned Norito `SignedTransaction` whose sole instruction is
+  `TopUpKagemushaV1` and whose authority equals the payer; redemption accepts
+  its typed canonical Norito request directly. Both return an asynchronous
+  typed operation reference; there is no version-nested route, JSON fallback,
+  or whole-payload wrapper.
 - Completed 2026-07-30 and finalized 2026-08-30: removed the unshipped
   governance council `derive-vrf` prototype, its `gov_vrf` feature, HTTP/MCP
   surfaces, and independently authorized persist/replace/manual epoch-roster
@@ -10213,7 +10215,7 @@ redistributable schemas, and official trust/revocation bundles.
     regressions consume account material;
     core ZK root-hint fixtures now use checked random Ed25519 key generation
     before stale/recent root-window regressions consume account material;
-    core kagemusha audit fixtures now use checked random Ed25519 key generation
+    core KAGEMUSHA audit fixtures now use checked random Ed25519 key generation
     before protocol-bound confidential-state regressions consume account
     material;
     core ZK asset verifier-key enforcement fixtures now use checked random
@@ -10480,14 +10482,14 @@ redistributable schemas, and official trust/revocation bundles.
     expansion before test-network regressions consume them;
     JS host multihash and smart-contract-code JSON fixtures now use checked
     deterministic Ed25519 seed expansion before binding regressions consume them;
-    connect-norito bridge Kagemusha prover, Connect/crypto FFI, identifier
+    connect-norito bridge KAGEMUSHA prover, Connect/crypto FFI, identifier
     receipt, account-address, ML-DSA signing, and signed-transaction fixtures now
     use checked deterministic Ed25519/ML-DSA seed and typed-signature
-    construction before bridge FFI/Kagemusha regressions consume them;
+    construction before bridge FFI/KAGEMUSHA regressions consume them;
     feature-gated core ZK-ACE STARK account fixtures now use checked
     deterministic Ed25519 seed expansion before STARK prover regressions consume
     them;
-    core ZK OpenVerify STARK prover and Kagemusha guardrail/real-prover
+    core ZK OpenVerify STARK prover and KAGEMUSHA guardrail/real-prover
     account plus one-use key-certificate fixtures now use checked deterministic
     Ed25519 seed expansion before STARK and offline recursive proof regressions
     consume them;

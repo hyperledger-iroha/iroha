@@ -87,6 +87,13 @@ that workflow for local release verification.
    `--expected-preimage-sha256` to exclusively create a reviewed projection in an
    external directory. The owner never rewrites `NativeBridge.swift`; incorporate an
    approved projection through the normal guarded source-edit workflow.
+   For a fingerprint-bound local integration artifact, pass `--allow-dirty-source`
+   explicitly to either pin-owner mode or to `archive_norito_xcframework.py`.
+   The builder forwards its own explicit allowance to both final projection and
+   archive creation. This changes only dirty-tree admission;
+   exact repository/tool provenance, artifact inventory, manifest link, locks,
+   and loader preimage verification remain mandatory. Release commands keep the
+   clean-source default.
    The Cargo target, artifact, build, and archive-parent directories must already
    exist as owned, writable, non-symbolic canonical directories. The archive output
    itself must be absent, and the external build directory used for retained archive
@@ -205,7 +212,7 @@ and both same-version specs are published in dependency order and a clean public
 
 ## CI considerations
 
-- The Kagemusha V1 artifact workflow alone may invoke the restricted CI producer modes.
+- The KAGEMUSHA V1 artifact workflow alone may invoke the restricted CI producer modes.
   Five isolated `--ci-apple-slice <target>` jobs each perform one fresh,
   offline, single-job Cargo build and emit a digest-bound source/tool
   attestation. The `swift` job supplies all five independent archive digests to

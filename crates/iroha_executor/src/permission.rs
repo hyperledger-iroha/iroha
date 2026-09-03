@@ -1058,7 +1058,7 @@ mod sccp {
     }
 }
 mod kagemusha {
-    //! Pass conditions for Kagemusha reserve settlement.
+    //! Pass conditions for KAGEMUSHA reserve settlement.
     use super::*;
     use iroha_executor_data_model::permission::kagemusha::CanManageKagemushaReserve;
     impl_validate_grant_revoke_via!(OnlyGenesis::from => CanManageKagemushaReserve,);

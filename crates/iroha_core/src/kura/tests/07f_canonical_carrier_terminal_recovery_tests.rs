@@ -434,6 +434,7 @@ fn canonical_terminal_projection_for_test(
     assert!(production_in_flight_first_release_state_kernel(projection));
     projection
 }
+
 #[test]
 fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
     let temp_dir = TempDir::new().expect("terminal-outcome temp dir");
@@ -662,36 +663,33 @@ fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
         "a Released claim without its Complete terminal source must not authorize Queue cleanup",
     );
     let mut tampered_reserved_terminal = first_pending.clone();
-    let AutonomousLifecycleTerminalOutcomeStageV1::Pending { reserved_terminal } =
-        &mut tampered_reserved_terminal.body.stage
+    let (_, _, tampered_stage) = tampered_reserved_terminal.body_parts_mut_for_test();
+    let AutonomousLifecycleTerminalOutcomeStageV1::Pending { reserved_terminal } = tampered_stage
     else {
         unreachable!("decoded fixture outcome is Pending")
     };
     reserved_terminal.version = AutonomousLifecycleStableStateV1::VERSION;
     assert!(
-        AutonomousLifecycleTerminalOutcomeV1::from_body(tampered_reserved_terminal.body).is_err(),
+        tampered_reserved_terminal.rehash_for_test().is_err(),
         "Pending must reject any non-canonical reserved terminal payload",
     );
     for case in 0_u8..6 {
         let mut tampered = first_pending.clone();
+        let (binding, _, _) = tampered.body_parts_mut_for_test();
         match case {
-            0 => tampered.body.binding.network_id = test_network_id(b"tampered-terminal-genesis"),
-            1 => tampered.body.binding.epoch = epoch.saturating_add(1),
-            2 => tampered.body.binding.dataspace_id = DataSpaceId::new(999),
-            3 => {
-                tampered.body.binding.lane_incarnation = Hash::new(b"tampered terminal incarnation")
-            }
-            4 => tampered.body.binding.proposal_height = 777,
+            0 => binding.network_id = test_network_id(b"tampered-terminal-genesis"),
+            1 => binding.epoch = epoch.saturating_add(1),
+            2 => binding.dataspace_id = DataSpaceId::new(999),
+            3 => binding.lane_incarnation = Hash::new(b"tampered terminal incarnation"),
+            4 => binding.proposal_height = 777,
             5 => {
-                tampered
-                    .body
-                    .binding
-                    .reservation_group
-                    .reservation_group_hash = Hash::new(b"tampered terminal group")
+                binding.reservation_group.reservation_group_hash =
+                    Hash::new(b"tampered terminal group")
             }
             _ => unreachable!(),
         }
-        let tampered = AutonomousLifecycleTerminalOutcomeV1::from_body(tampered.body)
+        let tampered = tampered
+            .rehash_for_test()
             .expect("rehash structurally valid tampered terminal outcome");
         fs::write(
             first_path,
@@ -708,10 +706,12 @@ fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
         fs::write(first_path, first_bytes).expect("restore Pending terminal outcome");
     }
     let mut wrong_retirement = first_pending.clone();
-    wrong_retirement.body.source = AutonomousLifecycleTerminalOutcomeSourceV1::RetiredRelease {
-        retirement_hash: Hash::new(b"tampered terminal retirement"),
-    };
-    let wrong_retirement = AutonomousLifecycleTerminalOutcomeV1::from_body(wrong_retirement.body)
+    *wrong_retirement.body_parts_mut_for_test().1 =
+        AutonomousLifecycleTerminalOutcomeSourceV1::RetiredRelease {
+            retirement_hash: Hash::new(b"tampered terminal retirement"),
+        };
+    let wrong_retirement = wrong_retirement
+        .rehash_for_test()
         .expect("rehash wrong-retirement terminal outcome");
     fs::write(
         first_path,
@@ -757,16 +757,18 @@ fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
     let first_terminal =
         release_terminal_projection_for_test(&kura, first_payload, first_retirement, first_barrier);
     let mut swapped = first_pending.clone();
-    swapped.body.source = AutonomousLifecycleTerminalOutcomeSourceV1::CanonicalCarrier {
-        merge_epoch_id: 9,
-        merge_entry_hash: HashOf::from_untyped_unchecked(Hash::new(b"swapped merge entry")),
-        carrier_block_height: 1,
-        carrier_block_hash: HashOf::from_untyped_unchecked(Hash::new(b"swapped carrier")),
-        application_receipt_hash: HashOf::from_untyped_unchecked(Hash::new(
-            b"swapped application receipt",
-        )),
-    };
-    let swapped = AutonomousLifecycleTerminalOutcomeV1::from_body(swapped.body)
+    *swapped.body_parts_mut_for_test().1 =
+        AutonomousLifecycleTerminalOutcomeSourceV1::CanonicalCarrier {
+            merge_epoch_id: 9,
+            merge_entry_hash: HashOf::from_untyped_unchecked(Hash::new(b"swapped merge entry")),
+            carrier_block_height: 1,
+            carrier_block_hash: HashOf::from_untyped_unchecked(Hash::new(b"swapped carrier")),
+            application_receipt_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"swapped application receipt",
+            )),
+        };
+    let swapped = swapped
+        .rehash_for_test()
         .expect("rehash swapped Pending source");
     fs::write(
         first_path,
@@ -975,7 +977,6 @@ fn canonical_carrier_terminal_recovery_materializes_and_partitions_the_full_lane
         "carrier members require distinct entrypoint identities",
     );
     let network_id = payloads[0].network_id;
-    let epoch = payloads[0].epoch;
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("canonical terminal Kura");
     kura.bind_local_peer_id(local_peer.clone())
@@ -1051,8 +1052,7 @@ fn canonical_carrier_terminal_recovery_materializes_and_partitions_the_full_lane
         batch_hash: Hash::prehashed([0; Hash::LENGTH]),
     };
     batch.batch_hash = crate::merge::merge_execution_batch_hash(&batch);
-    let mut merge_entry = sample_merge_entry(epoch);
-    merge_entry.epoch_id = epoch;
+    let mut merge_entry = sample_merge_entry(1);
     merge_entry.execution_batch = Some(batch);
     let bound_carrier = bind_merge_entry_to_carrier(raw_carrier, &mut merge_entry);
     let mut executed_carrier = bound_carrier.as_ref().clone();

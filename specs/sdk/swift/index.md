@@ -225,9 +225,9 @@ try archive.enqueue(envelope)
 This archive is storage only. The application remains responsible for inspecting and
 removing entries, and no queue operation transmits bytes to Torii.
 
-### Kagemusha V1
+### KAGEMUSHA V1
 
-Production offline value flows use the sole Kagemusha V1 aggregate-balance
+Production offline value flows use the sole KAGEMUSHA V1 aggregate-balance
 protocol for top-up, transfer, and recursive redemption.
 Torii's `GET /v1/kagemusha/readiness` endpoint reports universal
 protocol capability only. Offline UI and peer handoff must remain available
@@ -236,14 +236,18 @@ without making this or any other network discovery call.
 Peer transfers exchange a nonce-bound payment request, one constant-size recursive
 spend bundle, and a signed durable acknowledgement over QR or NFC with networking disabled.
 
-### Kagemusha V1 Torii API
+### KAGEMUSHA V1 Torii API
 
 Torii exposes the asset-neutral `GET /v1/kagemusha/readiness`
 universal capability endpoint,
-plus `POST /v1/kagemusha/top-up`, `POST /v1/kagemusha/redeem`, and
+plus payer-signed `POST /v1/kagemusha/top-up`, `POST /v1/kagemusha/redeem`, and
 `GET /v1/kagemusha/operations/{operation_id}` for separate online consensus
-lifecycles. Requests and responses use the sole canonical Kagemusha V1
-Norito schemas. Operation results are monetary authority and must remain
+lifecycles. Top-up sends one canonical versioned `SignedTransaction` containing
+exactly one `TopUpKagemushaV1`; Torii verifies that its authority is the
+embedded payer and submits the same transaction without rebuilding or signing
+it. Redemption retains its direct canonical request body. Requests and
+responses use the sole canonical KAGEMUSHA V1 Norito schemas. Operation results
+are monetary authority and must remain
 unusable until verified against the authenticated release artifacts.
 Capability discovery takes no selector.
 

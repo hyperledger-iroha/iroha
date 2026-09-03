@@ -84,6 +84,7 @@ fn verify_manifest(
 ) -> Result<VerificationReport> {
     let defaults = profile_defaults(profile);
     ensure_chain_id(manifest, &defaults)?;
+    crate::genesis::ensure_kagemusha_mint_finality_schedule_matches_consensus(manifest)?;
     let normalized = manifest.clone().with_consensus_meta();
     let params = normalized.effective_parameters()?;
     let sumeragi: SumeragiParameters = params.sumeragi().clone();
@@ -138,6 +139,10 @@ fn verify_manifest(
             unique_peers.len()
         ));
     }
+    crate::genesis::ensure_kagemusha_mint_finality_epoch_zero_authority_matches_topology(
+        manifest,
+        &peers_with_pops,
+    )?;
     let fingerprint = normalized
         .consensus_fingerprint()
         .ok_or_else(|| eyre!("consensus fingerprint missing after normalization"))?
@@ -323,7 +328,7 @@ fn collect_topology(manifest: &RawGenesisTransaction) -> Result<Vec<PeerId>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::genesis::profile::derive_vrf_seed_from_chain;
+    use crate::genesis::{CompleteTestGenesisBuilder as _, profile::derive_vrf_seed_from_chain};
     use iroha_crypto::{Algorithm, KeyPair, bls_normal_pop_prove};
     use iroha_data_model::{
         asset::{AssetDefinitionAlias, AssetDefinitionId},
@@ -375,6 +380,7 @@ mod tests {
                 None,
             ))
             .build_raw()
+            .expect("preserve complete profile fixture authority")
             .with_consensus_mode(consensus_mode)
             .with_chain_discriminant(chain_discriminant)
     }
@@ -385,8 +391,10 @@ mod tests {
         peers: &[(PublicKey, Vec<u8>)],
     ) -> RawGenesisTransaction {
         let defaults = profile_defaults(profile);
-        let builder =
-            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from("."));
+        let builder = complete_builder_for_test_peers(
+            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from(".")),
+            peers,
+        );
         let manifest = crate::genesis::generate_default(
             builder,
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
@@ -407,7 +415,7 @@ mod tests {
         manifest
             .into_builder()
             .next_transaction()
-            .set_topology(
+            .set_topology_for_test(
                 peers
                     .iter()
                     .map(|(pk, pop)| {
@@ -416,6 +424,19 @@ mod tests {
                     .collect(),
             )
             .build_raw()
+            .expect("preserve complete profile fixture authority")
+    }
+    fn complete_builder_for_test_peers(
+        builder: GenesisBuilder,
+        peers: &[(PublicKey, Vec<u8>)],
+    ) -> GenesisBuilder {
+        super::super::complete_test_genesis_builder_for_peers(
+            builder,
+            peers
+                .iter()
+                .map(|(public_key, _)| PeerId::new(public_key.clone()))
+                .collect(),
+        )
     }
     fn generate_peer_pop() -> (PublicKey, Vec<u8>) {
         let kp = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
@@ -525,8 +546,10 @@ mod tests {
         let seed = [9u8; 32];
         let peers = (0..4).map(|_| generate_peer_pop()).collect::<Vec<_>>();
         let defaults = profile_defaults(GenesisProfile::Iroha3Taira);
-        let builder =
-            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from("."));
+        let builder = complete_builder_for_test_peers(
+            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from(".")),
+            &peers,
+        );
         let manifest = crate::genesis::generate_default(
             builder,
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
@@ -538,13 +561,14 @@ mod tests {
         .expect("generate profile manifest")
         .into_builder()
         .next_transaction()
-        .set_topology(
+        .set_topology_for_test(
             peers
                 .iter()
                 .map(|(pk, pop)| GenesisTopologyEntry::new(PeerId::new(pk.clone()), pop.clone()))
                 .collect(),
         )
         .build_raw()
+        .expect("preserve complete Taira profile authority")
         .with_consensus_mode(SumeragiConsensusMode::Npos)
         .with_chain_discriminant(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT);
         let err = verify_manifest(&manifest, GenesisProfile::Iroha3Taira, Some(seed))
@@ -559,8 +583,10 @@ mod tests {
         let seed = [10u8; 32];
         let peers = (0..4).map(|_| generate_peer_pop()).collect::<Vec<_>>();
         let defaults = profile_defaults(GenesisProfile::Iroha3Taira);
-        let builder =
-            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from("."));
+        let builder = complete_builder_for_test_peers(
+            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from(".")),
+            &peers,
+        );
         let manifest = crate::genesis::generate_default(
             builder,
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
@@ -575,7 +601,7 @@ mod tests {
         let manifest = append_public_xor_binding_for_test(manifest, wrong_xor)
             .into_builder()
             .next_transaction()
-            .set_topology(
+            .set_topology_for_test(
                 peers
                     .iter()
                     .map(|(pk, pop)| {
@@ -584,6 +610,7 @@ mod tests {
                     .collect(),
             )
             .build_raw()
+            .expect("preserve complete Taira profile authority")
             .with_consensus_mode(SumeragiConsensusMode::Npos)
             .with_chain_discriminant(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT);
         let err = verify_manifest(&manifest, GenesisProfile::Iroha3Taira, Some(seed))
@@ -598,8 +625,10 @@ mod tests {
         let seed = [11u8; 32];
         let peers = (0..4).map(|_| generate_peer_pop()).collect::<Vec<_>>();
         let defaults = profile_defaults(GenesisProfile::Iroha3Taira);
-        let builder =
-            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from("."));
+        let builder = complete_builder_for_test_peers(
+            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from(".")),
+            &peers,
+        );
         let manifest = crate::genesis::generate_default(
             builder,
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
@@ -616,7 +645,7 @@ mod tests {
         let manifest = append_public_xor_binding_for_test(manifest, synthetic_xor)
             .into_builder()
             .next_transaction()
-            .set_topology(
+            .set_topology_for_test(
                 peers
                     .iter()
                     .map(|(pk, pop)| {
@@ -625,6 +654,7 @@ mod tests {
                     .collect(),
             )
             .build_raw()
+            .expect("preserve complete Taira profile authority")
             .with_consensus_mode(SumeragiConsensusMode::Npos)
             .with_chain_discriminant(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT);
         let err = verify_manifest(&manifest, GenesisProfile::Iroha3Taira, Some(seed))
@@ -639,8 +669,10 @@ mod tests {
         let seed = [12u8; 32];
         let peers = (0..4).map(|_| generate_peer_pop()).collect::<Vec<_>>();
         let defaults = profile_defaults(GenesisProfile::Iroha3Nexus);
-        let builder =
-            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from("."));
+        let builder = complete_builder_for_test_peers(
+            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from(".")),
+            &peers,
+        );
         let manifest = crate::genesis::generate_default(
             builder,
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
@@ -657,7 +689,7 @@ mod tests {
         let manifest = append_public_xor_binding_for_test(manifest, domain_derived_xor)
             .into_builder()
             .next_transaction()
-            .set_topology(
+            .set_topology_for_test(
                 peers
                     .iter()
                     .map(|(pk, pop)| {
@@ -666,6 +698,7 @@ mod tests {
                     .collect(),
             )
             .build_raw()
+            .expect("preserve complete Nexus profile authority")
             .with_consensus_mode(SumeragiConsensusMode::Npos)
             .with_chain_discriminant(crate::genesis::profile::NEXUS_CHAIN_DISCRIMINANT);
         let err = verify_manifest(&manifest, GenesisProfile::Iroha3Nexus, Some(seed))
@@ -680,7 +713,8 @@ mod tests {
         let defaults = profile_defaults(GenesisProfile::Iroha3Dev);
         let seed = derive_vrf_seed_from_chain(&defaults.chain_id);
         let builder =
-            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from("."));
+            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from("."))
+                .complete_for_test();
         let manifest = crate::genesis::generate_default(
             builder,
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
@@ -695,7 +729,8 @@ mod tests {
         .set_topology(vec![GenesisTopologyEntry::from(PeerId::new(
             generate_peer_pop().0,
         ))])
-        .build_raw();
+        .build_raw()
+        .expect("preserve complete development profile authority");
         let err = verify_manifest(&manifest, GenesisProfile::Iroha3Dev, Some(seed))
             .expect_err("missing PoP should fail");
         assert!(

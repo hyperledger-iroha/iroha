@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 
 namespace Hyperledger.Iroha.Torii;
 
-/// <summary>Asset-neutral first-release Kagemusha capability.</summary>
+/// <summary>Asset-neutral first-release KAGEMUSHA capability.</summary>
 public sealed record class ToriiKagemushaReadinessV1
 {
     [JsonPropertyName("kagemusha_handoff_capability")]
@@ -19,7 +19,7 @@ public sealed record class ToriiKagemushaReadinessV1
     public bool Ready { get; init; }
 }
 
-/// <summary>Stable terminal Kagemusha V1 rejection metadata.</summary>
+/// <summary>Stable terminal KAGEMUSHA V1 rejection metadata.</summary>
 public sealed record KagemushaOperationRejectionV1(string Code, ReadOnlyMemory<byte> DetailDigest);
 
 /// <summary>

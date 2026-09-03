@@ -30,7 +30,7 @@ isi! {
     /// Set or clear the post-credit balance limit for an account and asset definition.
     ///
     /// The limit applies to every future native credit, including transfers, mints,
-    /// settlements, and Kagemusha reserve movements. It is evaluated independently for each
+    /// settlements, and KAGEMUSHA reserve movements. It is evaluated independently for each
     /// concrete routed balance bucket. The limit may be set below the current balance; a
     /// zero limit therefore closes inbound credit without altering existing funds.
     #[cfg_attr(

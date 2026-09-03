@@ -1,273 +1,207 @@
-using System.Security.Cryptography;
-using System.Text.Json;
 using Hyperledger.Iroha.Kagemusha;
 using Hyperledger.Iroha.Norito;
+using KagemushaCodec = Hyperledger.Iroha.Kagemusha.Kagemusha;
 
 namespace Hyperledger.Iroha.Sdk.Tests;
 
+/// <summary>Focused first-release tests for the three-message KAGEMUSHA protocol.</summary>
 public sealed class KagemushaV1Tests
 {
-    [Fact]
-    public void ConsumesCanonicalThreeMessageSharedFixture()
+    [Theory]
+    [InlineData(1)]
+    [InlineData(1_283)]
+    [InlineData(KagemushaCodec.MaximumParityProofBytes)]
+    public void ThreeMessageExchangeRoundTripsAtEveryProofSize(int parityProofBytes)
     {
-        using var fixture = JsonDocument.Parse(File.ReadAllBytes(
-            Path.Combine(AppContext.BaseDirectory, "Fixtures", "kagemusha_v1.json")));
-        var root = fixture.RootElement;
+        var context = TestContext.Create();
+        var request = context.Request();
+        var payment = context.Payment(request, parityProofBytes);
+        var acknowledgement = context.Acknowledgement(request, payment);
+
+        var requestBytes = KagemushaCodec.EncodePaymentRequest(request);
+        var paymentBytes = KagemushaCodec.EncodePayment(payment, request);
+        var acknowledgementBytes = KagemushaCodec.EncodeAcknowledgement(
+            acknowledgement, request, payment);
+
+        Assert.Equal(requestBytes, KagemushaCodec.EncodePaymentRequest(
+            KagemushaCodec.DecodePaymentRequest(requestBytes)));
+        Assert.Equal(paymentBytes, KagemushaCodec.EncodePayment(
+            KagemushaCodec.DecodePayment(paymentBytes, request), request));
+        Assert.Equal(acknowledgementBytes, KagemushaCodec.EncodeAcknowledgement(
+            KagemushaCodec.DecodeAcknowledgement(acknowledgementBytes, request, payment),
+            request, payment));
+
+        Assert.Equal(
+            requestBytes.Length + paymentBytes.Length + acknowledgementBytes.Length,
+            KagemushaCodec.ValidateCompleteExchange(request, payment, acknowledgement));
+        Assert.True(payment.Proof.EqProof.Length + payment.Proof.EpProof.Length
+            <= KagemushaCodec.MaximumCurrentProofsBytes);
+    }
+
+    [Fact]
+    public void PublicPeerProtocolHasOnlyRequestPaymentAndAcknowledgement()
+    {
+        Assert.Equal(new byte[] { 1, 2, 3 },
+            Enum.GetValues<IrohaPeerPayloadKindV1>().Select(static value => (byte)value).ToArray());
+        Assert.Equal("kgm1:", KagemushaCodec.TextPrefix);
+    }
+
+    [Fact]
+    public void OperationSurfaceHasExactlySixHistoryIndependentTransitions()
+    {
         Assert.Equal(
             new[]
             {
-                "acknowledgement", "canonical_source", "fixture_version", "payment",
-                "payment_request", "protocol", "terminal_trio", "text_prefix",
+                KagemushaOperationKindV1.Bootstrap,
+                KagemushaOperationKindV1.MintFold,
+                KagemushaOperationKindV1.SendSplit,
+                KagemushaOperationKindV1.ReceiveFold,
+                KagemushaOperationKindV1.RedeemSplit,
+                KagemushaOperationKindV1.Rotate,
             },
-            root.EnumerateObject().Select(static property => property.Name)
-                .Order(StringComparer.Ordinal));
-        Assert.Equal(1, root.GetProperty("fixture_version").GetInt32());
-        Assert.Equal("KAGEMUSHA V1", root.GetProperty("protocol").GetString());
-        Assert.Equal(KagemushaV1.TextPrefix, root.GetProperty("text_prefix").GetString());
-
-        var requestBytes = FixtureBytes(root, "payment_request");
-        var paymentBytes = FixtureBytes(root, "payment");
-        var acknowledgementBytes = FixtureBytes(root, "acknowledgement");
-        var request = KagemushaV1.DecodePaymentRequest(requestBytes);
-        var payment = KagemushaV1.DecodePayment(paymentBytes, request);
-        var acknowledgement = KagemushaV1.DecodeAcknowledgement(
-            acknowledgementBytes, request, payment);
-
-        Assert.Equal(requestBytes, KagemushaV1.EncodePaymentRequest(request));
-        Assert.Equal(paymentBytes, KagemushaV1.EncodePayment(payment, request));
-        Assert.Equal(
-            acknowledgementBytes,
-            KagemushaV1.EncodeAcknowledgement(acknowledgement, request, payment));
-        AssertFixtureText(root, "payment_request", KagemushaV1.PayloadKind.PaymentRequest, requestBytes);
-        AssertFixtureText(root, "payment", KagemushaV1.PayloadKind.Payment, paymentBytes);
-        AssertFixtureText(
-            root, "acknowledgement", KagemushaV1.PayloadKind.Acknowledgement,
-            acknowledgementBytes);
-
-        var terminal = root.GetProperty("terminal_trio");
-        Assert.Equal(terminal.GetProperty("raw_bytes").GetInt32(),
-            KagemushaV1.ValidateSession(request, payment, acknowledgement));
-        Assert.Equal(
-            terminal.GetProperty("text_bytes").GetInt32(),
-            new[] { "payment_request", "payment", "acknowledgement" }
-                .Sum(name => root.GetProperty(name).GetProperty("kgm1").GetString()!.Length));
-        Assert.True(terminal.GetProperty("within_raw_hard_cap").GetBoolean());
-        Assert.True(terminal.GetProperty("within_text_hard_cap").GetBoolean());
+            Enum.GetValues<KagemushaOperationKindV1>());
+        Assert.Equal(new uint[] { 0, 1, 2, 3, 4, 5 },
+            Enum.GetValues<KagemushaOperationKindV1>().Select(static value => (uint)value).ToArray());
     }
 
     [Fact]
-    public void ThreeMessageExchangeRoundTripsAndFitsCompactEnvelope()
+    public void RequestCarriesOnePositiveExactAmountAndRecipientKey()
+    {
+        var context = TestContext.Create();
+        var request = context.Request((UInt128)1_000);
+        var decoded = KagemushaCodec.DecodePaymentRequest(
+            KagemushaCodec.EncodePaymentRequest(request));
+
+        Assert.Equal((UInt128)1_000, decoded.Amount);
+        Assert.Equal(request.RecipientEncryptionKey, decoded.RecipientEncryptionKey);
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            KagemushaCodec.EncodePaymentRequest(context.Request(0)));
+        Assert.Throws<ArgumentException>(() => new KagemushaX25519PublicKeyV1(new byte[32]));
+    }
+
+    [Fact]
+    public void PaymentBindsRequestStateTransitionCiphertextAndCommitWindow()
     {
         var context = TestContext.Create();
         var request = context.Request();
         var payment = context.Payment(request);
-        var acknowledgement = context.Acknowledgement(request, payment);
 
-        var requestBytes = KagemushaV1.EncodePaymentRequest(request);
-        var paymentBytes = KagemushaV1.EncodePayment(payment, request);
-        var acknowledgementBytes = KagemushaV1.EncodeAcknowledgement(
-            acknowledgement, request, payment);
+        Assert.Equal(KagemushaCodec.PaymentRequestDigest(request),
+            payment.Output.RequestDigest.ToArray());
+        Assert.Equal(
+            KagemushaCodec.CreditId(payment.Output.TransitionNullifier,
+                payment.Output.RequestDigest),
+            payment.Output.CreditId.ToArray());
+        Assert.Equal(request.Amount, payment.Output.Amount);
+        Assert.False(payment.Output.SenderBeforeCommitment.Span.SequenceEqual(
+            payment.Output.SenderAfterCommitment.Span));
 
-        Assert.Equal(
-            requestBytes,
-            KagemushaV1.EncodePaymentRequest(KagemushaV1.DecodePaymentRequest(requestBytes)));
-        Assert.Equal(
-            paymentBytes,
-            KagemushaV1.EncodePayment(KagemushaV1.DecodePayment(paymentBytes, request), request));
-        Assert.Equal(
-            acknowledgementBytes,
-            KagemushaV1.EncodeAcknowledgement(
-                KagemushaV1.DecodeAcknowledgement(acknowledgementBytes, request, payment),
-                request,
-                payment));
-        Assert.Equal(
-            requestBytes.Length + paymentBytes.Length + acknowledgementBytes.Length,
-            KagemushaV1.ValidateSession(request, payment, acknowledgement));
-        Assert.StartsWith(
-            KagemushaV1.TextPrefix,
-            KagemushaV1.EncodeText(KagemushaV1.PayloadKind.Payment, paymentBytes));
+        var stale = payment with
+        {
+            Output = payment.Output with { CommittedAtMilliseconds = request.ExpiresAtMilliseconds },
+        };
+        Assert.Throws<ArgumentException>(() => KagemushaCodec.EncodePayment(stale, request));
+        var substituted = payment with
+        {
+            Output = payment.Output with { RequestDigest = Repeat(0xee) },
+        };
+        Assert.Throws<ArgumentException>(() => KagemushaCodec.EncodePayment(substituted, request));
     }
 
     [Fact]
-    public void PeerCreditIdentityAndAadBindBothStateHeadsAndReceiverContext()
+    public void PeerContextAndAadBindRequestKeyAndBothStateHeads()
     {
         var context = TestContext.Create();
         var request = context.Request();
         var payment = context.Payment(request);
-        var statement = payment.Statement;
-        var peerContext = KagemushaV1.PeerCreditContext(statement, request);
-        var aad = KagemushaV1.PeerEncryptedCreditAad(statement, request);
+        var peerContext = KagemushaCodec.PeerCreditContext(payment.Output, request);
+        var aad = KagemushaCodec.PeerEncryptedCreditAad(payment.Output, request);
 
-        Assert.Equal(statement.SenderBeforeCommitment, peerContext.SenderBeforeCommitment);
-        Assert.Equal(statement.SenderAfterCommitment, peerContext.SenderAfterCommitment);
-        Assert.Equal(request.RecipientLaneId, peerContext.RecipientLaneId);
+        Assert.Equal(payment.Output.RequestDigest.ToArray(), peerContext.RequestDigest.ToArray());
+        Assert.Equal(payment.Output.SenderBeforeCommitment.ToArray(),
+            peerContext.SenderBeforeCommitment.ToArray());
+        Assert.Equal(payment.Output.SenderAfterCommitment.ToArray(),
+            peerContext.SenderAfterCommitment.ToArray());
         Assert.Equal(request.RecipientEncryptionKey, peerContext.RecipientEncryptionKey);
-        Assert.Equal(statement.CommittedAtMilliseconds, peerContext.CommittedAtMilliseconds);
-        Assert.Equal(statement.Lifecycle.CreditId, aad.CreditId);
-        Assert.Equal(statement.CiphertextCommitment, aad.IssuanceOrTransitionCommitment);
-
-        var substituted = statement with
-        {
-            SenderAfterCommitment = context.Pasta(0xe1, 0xe2),
-        };
-        Assert.NotEqual(KagemushaV1.CreditId(statement), KagemushaV1.CreditId(substituted));
-        Assert.Throws<ArgumentException>(() => KagemushaV1.EncodePayment(
-            payment with { Statement = substituted }, request));
+        Assert.Equal(payment.Output.CreditId.ToArray(), aad.CreditId.ToArray());
+        Assert.Equal(request.Amount, aad.Amount);
     }
 
     [Fact]
-    public void RequestScopedEncryptionKeyAndLaneAreMandatoryBindings()
+    public void AcknowledgementBindsDurableReceiptToRequestAndPayment()
     {
-        var context = TestContext.Create();
-        var request = context.Request();
-        var payment = context.Payment(request);
-
-        Assert.Throws<ArgumentException>(() => KagemushaV1.EncodePayment(
-            payment with
-            {
-                Statement = payment.Statement with { RecipientLaneId = Repeat(0xe3) },
-            },
-            request));
-        Assert.Throws<ArgumentException>(() => KagemushaV1.EncodePayment(
-            payment with
-            {
-                Statement = payment.Statement with
-                {
-                    RecipientEncryptionKey = new KagemushaX25519PublicKeyV1(Repeat(0xe4)),
-                },
-            },
-            request));
-        Assert.Throws<ArgumentException>(() => KagemushaV1.EncodePayment(
-            payment with
-            {
-                Statement = payment.Statement with
-                {
-                    CommittedAtMilliseconds = request.ExpiresAtMilliseconds,
-                },
-            },
-            request));
-        Assert.Throws<ArgumentException>(() => KagemushaV1.EncodePayment(
-            payment with
-            {
-                Statement = payment.Statement with
-                {
-                    SenderAfterCommitment = new KagemushaPastaStateCommitmentV1(
-                        new byte[32], new byte[32]),
-                },
-            },
-            request));
-    }
-
-    [Fact]
-    public void PeerWireExposesOnlyTheThreeV1PayloadKinds()
-    {
-        Assert.Equal(
-            new byte[] { 1, 2, 3 },
-            Enum.GetValues<IrohaPeerPayloadKindV1>().Select(static value => (byte)value));
-
         var context = TestContext.Create();
         var request = context.Request();
         var payment = context.Payment(request);
         var acknowledgement = context.Acknowledgement(request, payment);
-        var payloads = new[]
+
+        Assert.Equal(KagemushaCodec.PaymentRequestDigest(request),
+            acknowledgement.RequestDigest.ToArray());
+        Assert.Equal(KagemushaCodec.PaymentDigest(payment, request),
+            acknowledgement.PaymentDigest.ToArray());
+        Assert.Equal(payment.Output.CreditId.ToArray(),
+            acknowledgement.InboxReceipt.CreditId.ToArray());
+    }
+
+    [Fact]
+    public void TextAndPeerEnvelopesRoundTripAllThreeMessages()
+    {
+        var context = TestContext.Create();
+        var request = context.Request();
+        var payment = context.Payment(request);
+        var acknowledgement = context.Acknowledgement(request, payment);
+        var messages = new[]
         {
-            (IrohaPeerPayloadKindV1.ReceiveRequest, KagemushaV1.EncodePaymentRequest(request)),
-            (IrohaPeerPayloadKindV1.Payment, KagemushaV1.EncodePayment(payment, request)),
-            (IrohaPeerPayloadKindV1.Acknowledgement,
-                KagemushaV1.EncodeAcknowledgement(acknowledgement, request, payment)),
+            (IrohaPeerPayloadKindV1.Request, KagemushaCodec.PayloadKind.PaymentRequest,
+                KagemushaCodec.EncodePaymentRequest(request)),
+            (IrohaPeerPayloadKindV1.Payment, KagemushaCodec.PayloadKind.Payment,
+                KagemushaCodec.EncodePayment(payment, request)),
+            (IrohaPeerPayloadKindV1.Acknowledgement, KagemushaCodec.PayloadKind.Acknowledgement,
+                KagemushaCodec.EncodeAcknowledgement(acknowledgement, request, payment)),
         };
 
-        foreach (var (kind, canonical) in payloads)
+        foreach (var (kind, textKind, canonical) in messages)
         {
+            var text = KagemushaCodec.EncodeText(textKind, canonical);
+            Assert.Equal(canonical, KagemushaCodec.DecodeText(textKind, text));
             var wire = IrohaPeerKagemushaAdapterV1.Wrap(kind, canonical);
-            var decoded = IrohaPeerWireMessageV1.Decode(
-                wire.Encode(), expectedKind: kind);
-            Assert.Equal(canonical, IrohaPeerKagemushaAdapterV1.Decode(decoded));
+            var decodedWire = IrohaPeerWireMessageV1.Decode(wire.Encode(),
+                IrohaPeerPayloadProfileV1.KagemushaV1, kind);
+            Assert.Equal(canonical, IrohaPeerKagemushaAdapterV1.Decode(decodedWire));
         }
     }
 
     [Fact]
-    public void RemovedPreCommitProtocolTypesAndCodecsAreAbsent()
+    public void HardwareQualificationRequiresCompleteNonForkingContract()
     {
-        var assembly = typeof(KagemushaV1).Assembly;
-        foreach (var typeName in new[]
-                 {
-                     "KagemushaAcceptanceIntentV1",
-                     "KagemushaAcceptanceIntentAuthorizationV1",
-                     "KagemushaAcceptanceTicketV1",
-                     "KagemushaNoCommitClosureV1",
-                     "KagemushaCommitCertificateV1",
-                     "KagemushaCommitWrapperProofV1",
-                 })
-        {
-            Assert.Null(assembly.GetType($"Hyperledger.Iroha.Kagemusha.{typeName}"));
-        }
+        var context = TestContext.Create();
+        var profile = context.Profile();
+        var all = Enum.GetValues<KagemushaHardwareCapabilityV1>();
+        var complete = new KagemushaHardwareQualificationV1(
+            1, profile, context.Credential, context.ReleaseId, all);
+        complete.RequireProductionReady();
 
-        var publicMethodNames = typeof(KagemushaV1)
-            .GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
-            .Select(static method => method.Name)
-            .ToArray();
-        Assert.DoesNotContain(publicMethodNames, static name => name.Contains("Acceptance", StringComparison.Ordinal));
-        Assert.DoesNotContain(publicMethodNames, static name => name.Contains("NoCommit", StringComparison.Ordinal));
-        Assert.DoesNotContain(publicMethodNames, static name => name.Contains("CommitCertificate", StringComparison.Ordinal));
-        Assert.DoesNotContain(publicMethodNames, static name => name.Contains("CommitWrapper", StringComparison.Ordinal));
-
-        AssertPropertyNames<KagemushaLifecycleBindingV1>(
-            "Version", "NetworkId", "ProtocolVersion", "SuiteId", "VkDigest", "ReleaseId",
-            "Asset", "AssetIncarnation", "Scale", "LiabilityPoolId", "HardwareProfileId",
-            "PolicyEpoch", "OperationKind", "RequestId", "CreditId", "CiphertextDigest");
-        AssertPropertyNames<KagemushaPaymentRequestV1>(
-            "Version", "ReleaseId", "NetworkId", "Asset", "AssetIncarnation", "Scale",
-            "LiabilityPoolId", "Recipient", "RecipientLaneId", "RecipientEncryptionKey", "Amount",
-            "HardwareCredential", "RequestId", "IssuedAtMilliseconds", "ExpiresAtMilliseconds",
-            "Signature");
-        AssertPropertyNames<KagemushaTransferStatementV1>(
-            "Version", "Lifecycle", "Amount", "TransitionNullifier", "SenderBeforeCommitment",
-            "SenderAfterCommitment", "RequestDigest", "RecipientLaneId", "RecipientEncryptionKey",
-            "CiphertextCommitment", "CommittedAtMilliseconds", "HardwareTransitionCommitment");
-        AssertPropertyNames<KagemushaPaymentV1>("Version", "Statement", "Proof", "EncryptedCredit");
-        AssertPropertyNames<KagemushaPeerCreditContextV1>(
-            "Version", "RequestDigest", "SenderBeforeCommitment", "SenderAfterCommitment",
-            "LifecycleContextDigest", "RecipientLaneId", "RecipientEncryptionKey",
-            "CommittedAtMilliseconds", "HardwareTransitionCommitment");
-        AssertPropertyNames<KagemushaRedemptionStatementV1>(
-            "Version", "Lifecycle", "Amount", "Beneficiary", "TerminalNullifier",
-            "SenderBeforeCommitment", "SenderAfterCommitment", "RedemptionCommitment",
-            "RedemptionId", "CommittedAtMilliseconds", "HardwareTransitionCommitment");
-        AssertPropertyNames<KagemushaRedemptionVoucherV1>("Version", "Statement", "Proof");
+        var incomplete = new KagemushaHardwareQualificationV1(
+            1, profile, context.Credential, context.ReleaseId, all.Skip(1));
+        Assert.Throws<InvalidOperationException>(incomplete.RequireProductionReady);
     }
 
-    private static void AssertPropertyNames<T>(params string[] expected) => Assert.Equal(
-        expected,
-        typeof(T).GetProperties(System.Reflection.BindingFlags.Public
-            | System.Reflection.BindingFlags.Instance).Select(static property => property.Name));
-
-    private static byte[] FixtureBytes(JsonElement root, string name)
+    [Fact]
+    public void ReceiveFoldRepresentsExactlyOneCredit()
     {
-        var entry = root.GetProperty(name);
-        var bytes = Convert.FromHexString(entry.GetProperty("norito_hex").GetString()!);
-        Assert.Equal(entry.GetProperty("raw_bytes").GetInt32(), bytes.Length);
-        Assert.Equal(
-            entry.GetProperty("sha256").GetString(),
-            Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
-        return bytes;
+        Assert.NotEmpty(new KagemushaHardwareReceiveFoldV1(new byte[] { 1 }).AggregateState());
+        Assert.Throws<ArgumentException>(() =>
+            new KagemushaHardwareReceiveFoldV1(Array.Empty<byte>()));
     }
 
-    private static void AssertFixtureText(
-        JsonElement root,
-        string name,
-        KagemushaV1.PayloadKind kind,
-        byte[] bytes)
-    {
-        var text = root.GetProperty(name).GetProperty("kgm1").GetString()!;
-        Assert.Equal(text, KagemushaV1.EncodeText(kind, bytes));
-        Assert.Equal(bytes, KagemushaV1.DecodeText(kind, text));
-    }
-
-    private static byte[] Repeat(byte value) => Enumerable.Repeat(value, 32).ToArray();
+    private static byte[] Repeat(byte value, int count = 32) =>
+        Enumerable.Repeat(value, count).ToArray();
 
     private sealed class TestContext
     {
+        private const string AccountLiteral =
+            "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
+
         private TestContext(
             NetworkId networkId,
             KagemushaAssetDefinitionIdV1 asset,
@@ -275,7 +209,8 @@ public sealed class KagemushaV1Tests
             KagemushaAccountIdV1 account,
             KagemushaHardwareCredentialV1 credential,
             byte[] liabilityPoolId,
-            byte[] releaseId)
+            byte[] releaseId,
+            KagemushaX25519PublicKeyV1 recipientEncryptionKey)
         {
             NetworkId = networkId;
             Asset = asset;
@@ -284,15 +219,17 @@ public sealed class KagemushaV1Tests
             Credential = credential;
             LiabilityPoolId = liabilityPoolId;
             ReleaseId = releaseId;
+            RecipientEncryptionKey = recipientEncryptionKey;
         }
 
-        private NetworkId NetworkId { get; }
-        private KagemushaAssetDefinitionIdV1 Asset { get; }
-        private KagemushaAssetIncarnationV1 Incarnation { get; }
-        private KagemushaAccountIdV1 Account { get; }
-        private KagemushaHardwareCredentialV1 Credential { get; }
-        private byte[] LiabilityPoolId { get; }
-        private byte[] ReleaseId { get; }
+        internal NetworkId NetworkId { get; }
+        internal KagemushaAssetDefinitionIdV1 Asset { get; }
+        internal KagemushaAssetIncarnationV1 Incarnation { get; }
+        internal KagemushaAccountIdV1 Account { get; }
+        internal KagemushaHardwareCredentialV1 Credential { get; }
+        internal byte[] LiabilityPoolId { get; }
+        internal byte[] ReleaseId { get; }
+        internal KagemushaX25519PublicKeyV1 RecipientEncryptionKey { get; }
 
         internal static TestContext Create()
         {
@@ -304,9 +241,8 @@ public sealed class KagemushaV1Tests
             incarnationBytes[0] = 1;
             incarnationBytes[^1] = 1;
             var incarnation = new KagemushaAssetIncarnationV1(incarnationBytes);
-            var account = new KagemushaAccountIdV1(
-                "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV");
-            var sec1 = Enumerable.Repeat((byte)1, 65).ToArray();
+            var account = new KagemushaAccountIdV1(AccountLiteral);
+            var sec1 = Repeat(1, 65);
             sec1[0] = 4;
             var publicKey = new KagemushaDevicePublicKeyV1(sec1);
             var signatureBytes = new byte[64];
@@ -314,75 +250,90 @@ public sealed class KagemushaV1Tests
             signatureBytes[63] = 1;
             var signature = new KagemushaDeviceSignatureV1(signatureBytes);
             var profileId = Repeat(0x42);
-            var laneId = Repeat(0x53);
             var credential = new KagemushaHardwareCredentialV1(
                 1, Repeat(0x51), networkId, profileId, Repeat(0x52), Repeat(0x45), 9,
-                laneId, Repeat(0x54), 1, publicKey, KagemushaV1.DeviceKeyReference(publicKey),
-                100, 10_000, signature);
+                Repeat(0x53), Repeat(0x54), 1, publicKey,
+                KagemushaCodec.DeviceKeyReference(publicKey), 100, 10_000, signature);
             return new TestContext(
                 networkId,
                 asset,
                 incarnation,
                 account,
                 credential,
-                KagemushaV1.LiabilityPoolId(networkId, asset, incarnation),
-                Repeat(0x41));
+                KagemushaCodec.LiabilityPoolId(networkId, asset, incarnation),
+                Repeat(0x41),
+                new KagemushaX25519PublicKeyV1(Repeat(0xb6)));
         }
+
+        internal KagemushaHardwareProfileV1 Profile() => new(
+            1, 1, Credential.HardwareProfileId, Repeat(0x40),
+            KagemushaHardwarePlatformClassV1.DedicatedSecureElement,
+            Repeat(0x41), Credential.FirmwarePolicyDigest, Repeat(0x43), Repeat(0x44),
+            Repeat(0x45), Credential.PolicyEpoch, Credential.DevicePublicKey,
+            ushort.MaxValue, Repeat(0x46), 100, 10_000);
 
         internal KagemushaPaymentRequestV1 Request() => Request((UInt128)25);
 
         internal KagemushaPaymentRequestV1 Request(UInt128 amount) => new(
             1, ReleaseId, NetworkId, Asset, Incarnation, 4, LiabilityPoolId, Account,
-            Credential.LaneCommitment, new KagemushaX25519PublicKeyV1(Repeat(0xb6)),
-            amount, Credential, Repeat(0x61), 1_000, 2_000, Credential.GovernanceSignature);
+            amount, RecipientEncryptionKey, Credential, Repeat(0x61), 1_000, 2_000,
+            Credential.GovernanceSignature);
 
-        internal KagemushaPastaStateCommitmentV1 Pasta(byte eq, byte ep) =>
-            new(Repeat(eq), Repeat(ep));
-
-        internal KagemushaPaymentV1 Payment(KagemushaPaymentRequestV1 request)
+        internal KagemushaPaymentV1 Payment(
+            KagemushaPaymentRequestV1 request,
+            int parityProofBytes = 1)
         {
-            var encryptedCredit = KagemushaV1.EncodeEncryptedCreditEnvelope(
+            var encryptedCredit = KagemushaCodec.EncodeEncryptedCreditEnvelope(
                 new KagemushaEncryptedCreditEnvelopeV1(
                     1,
                     new KagemushaX25519PublicKeyV1(Repeat(0xcc)),
-                    Enumerable.Repeat((byte)0xcd, 24).ToArray(),
-                    Enumerable.Repeat(
-                        (byte)0xce,
-                        KagemushaV1.EncryptedCreditCiphertextAndTagBytes).ToArray()));
-            var lifecycle = new KagemushaLifecycleBindingV1(
-                1, request.NetworkId, 1, request.HardwareCredential.SuiteId, Repeat(0xba),
-                request.ReleaseId, request.Asset, request.AssetIncarnation, request.Scale,
-                request.LiabilityPoolId, request.HardwareCredential.HardwareProfileId,
-                request.HardwareCredential.PolicyEpoch, KagemushaOperationKindV1.SendSplit,
-                request.RequestId, Repeat(0xb7), KagemushaV1.CiphertextDigest(encryptedCredit));
-            var statement = new KagemushaTransferStatementV1(
-                1, lifecycle, request.Amount, Repeat(0xb8), Pasta(0xd0, 0xd1),
-                Pasta(0xd2, 0xd3), KagemushaV1.PaymentRequestDigest(request),
-                request.RecipientLaneId, request.RecipientEncryptionKey, Repeat(0xbb),
-                1_500, Repeat(0xbc));
-            statement = statement with
+                    Repeat(0xcd, 24),
+                    Repeat(0xce, KagemushaCodec.EncryptedCreditCiphertextAndTagBytes)));
+            var evidence = new KagemushaTrustedCommitTimeV1(Repeat(0xbc));
+            var requestDigest = KagemushaCodec.PaymentRequestDigest(request);
+            var transitionNullifier = Repeat(0xb8);
+            var output = new KagemushaPaymentOutputV1(
+                1,
+                requestDigest,
+                request.Amount,
+                Repeat(0xb9),
+                Repeat(0xba),
+                transitionNullifier,
+                KagemushaCodec.CreditId(transitionNullifier, requestDigest),
+                Repeat(0xbb),
+                evidence,
+                1_500);
+            var certificate = new KagemushaCommitCertificateV1(
+                1, Repeat(0xd1), Repeat(0xd2), Repeat(0xd3), transitionNullifier,
+                Repeat(0xd4), evidence, Credential.HardwareProfileId,
+                Credential.PolicyEpoch, Repeat(0xd5));
+            certificate = certificate with
             {
-                Lifecycle = lifecycle with { CreditId = KagemushaV1.CreditId(statement) },
+                CertificateId = KagemushaCodec.ExpectedCommitCertificateId(certificate),
             };
-            return new KagemushaPaymentV1(
-                1, statement, Proof(KagemushaV1.TransferStatementDigestUnchecked(statement)),
-                encryptedCredit);
+            var proof = new KagemushaPaymentProofV1(
+                1,
+                Repeat(0x81),
+                Repeat(0x82),
+                KagemushaCodec.PaymentBodyDigest(output, encryptedCredit, request),
+                certificate.CandidateEnvelopeDigest,
+                KagemushaCodec.CommitCertificateDigest(certificate),
+                Repeat(0x86),
+                Repeat(0x87),
+                Repeat(1, parityProofBytes),
+                Repeat(2, parityProofBytes),
+                Repeat(0x88, KagemushaCodec.HistoryAccumulatorBytes),
+                Repeat(0x89, KagemushaCodec.HistoryAccumulatorBytes));
+            return new KagemushaPaymentV1(1, output, encryptedCredit, certificate, proof);
         }
 
         internal KagemushaAcknowledgementV1 Acknowledgement(
             KagemushaPaymentRequestV1 request,
             KagemushaPaymentV1 payment) => new(
                 1,
-                KagemushaV1.PaymentRequestDigest(request),
-                KagemushaV1.PaymentDigest(payment, request),
-                new KagemushaInboxReceiptV1(
-                    1, payment.Statement.Lifecycle.CreditId, Repeat(0xcb)),
+                KagemushaCodec.PaymentRequestDigest(request),
+                KagemushaCodec.PaymentDigest(payment, request),
+                new KagemushaInboxReceiptV1(1, payment.Output.CreditId, Repeat(0xcb)),
                 request.HardwareCredential.GovernanceSignature);
-
-        private static KagemushaPairedProofV1 Proof(byte[] semanticDigest) => new(
-            1, Repeat(0x81), Repeat(0x82), semanticDigest, Repeat(0x84), Repeat(0x85),
-            Repeat(0x86), Repeat(0x87), new byte[] { 1 }, new byte[] { 2 },
-            Enumerable.Repeat((byte)0x88, KagemushaV1.HistoryAccumulatorBytes).ToArray(),
-            Enumerable.Repeat((byte)0x89, KagemushaV1.HistoryAccumulatorBytes).ToArray());
     }
 }

@@ -4,16 +4,14 @@ import {createHash} from 'node:crypto';
 
 import {blake3} from '@noble/hashes/blake3';
 
+import {scanJsonRejectDuplicateKeys} from './openapi-json.mjs';
 import {
   validateOpenApiEd25519PublicKeyHex,
   verifyOpenApiSignature,
 } from './openapi-signature.mjs';
-import {
-  scanJsonRejectDuplicateKeys,
-  validateOpenApiGeneratorProvenance,
-} from './openapi-provenance.mjs';
+import {validateOpenApiGeneratorProvenance} from './openapi-provenance.mjs';
 
-export {scanJsonRejectDuplicateKeys} from './openapi-provenance.mjs';
+export {scanJsonRejectDuplicateKeys} from './openapi-json.mjs';
 
 export const OPENAPI_MANIFEST_VERSION = 2;
 export const OPENAPI_MANIFEST_SIGNATURE_DOMAIN_V2 =

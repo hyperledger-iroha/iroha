@@ -135,6 +135,66 @@ enum LifecycleValidateSidecarCustodyV1 {
     Recovered,
 }
 
+/// Exact executor cleanup authority minted after an unwoken sidecar wait is
+/// durably cancelled.
+///
+/// This is deliberately distinct from a [`ReadyValidateSuccessorV1`]. A
+/// missing-sidecar Validate has not published or woken its same-address
+/// successor, so no preliminary retransmit owner exists yet. The sealed round,
+/// subject, and dispatch key let the executor retire only the ordinal-bound
+/// retry authority that backed the cancelled Waiting row.
+#[must_use = "a durable sidecar cancellation must retire its exact executor retry authority"]
+#[derive(Debug)]
+pub(in crate::sumeragi) struct CancelledLifecycleValidateSidecarV1 {
+    dispatch_key: LifecycleValidateDispatchKeyV1,
+    round: wire::ConsensusRound,
+    subject: wire::BlockSubject,
+}
+
+impl CancelledLifecycleValidateSidecarV1 {
+    fn after_durable_cancellation(
+        identity: &LifecycleValidateSidecarRegistrationIdentityV1,
+    ) -> Self {
+        debug_assert!(identity.is_structurally_exact());
+        Self {
+            dispatch_key: identity.dispatch_key(),
+            round: identity.round(),
+            subject: identity.subject(),
+        }
+    }
+
+    /// Return the exact cancelled lifecycle dispatch key.
+    pub(in crate::sumeragi) const fn dispatch_key(&self) -> LifecycleValidateDispatchKeyV1 {
+        self.dispatch_key
+    }
+
+    /// Return the immutable round of the cancelled Validate body.
+    pub(in crate::sumeragi) const fn round(&self) -> wire::ConsensusRound {
+        self.round
+    }
+
+    /// Return the immutable subject of the cancelled Validate body.
+    pub(in crate::sumeragi) const fn subject(&self) -> wire::BlockSubject {
+        self.subject
+    }
+
+    /// Construct an exact-shape cancellation authority for executor tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn for_test(
+        dispatch_key: LifecycleValidateDispatchKeyV1,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> Option<Self> {
+        dispatch_key
+            .matches_consensus_round(&round)
+            .then_some(Self {
+                dispatch_key,
+                round,
+                subject,
+            })
+    }
+}
+
 /// One fsynced sidecar registration retaining its live move-only dispatch, or
 /// the equivalent cold-open registration before the exact body is retried.
 #[must_use = "a registered Validate sidecar wait must remain parked or wake its exact row"]
@@ -151,10 +211,7 @@ pub(in crate::sumeragi) enum LifecycleValidateSidecarDriveV1 {
     /// The exact dependency became durable and the same row is Ready.
     Woken(ReadyValidateSuccessorV1),
     /// A certified newer view cancelled this unprotected losing proposal.
-    Superseded {
-        /// Exact lifecycle ordinal durably terminalized by the cancellation.
-        ordinal: u128,
-    },
+    Superseded(CancelledLifecycleValidateSidecarV1),
     /// The owner failed closed; dropping it arms the existing restart guard.
     RestartRequired(LifecycleValidateSidecarRegistrationErrorV1),
 }
@@ -243,13 +300,16 @@ impl RegisteredLifecycleValidateSidecarWaitV1 {
             {
                 return LifecycleValidateSidecarDriveV1::RestartRequired(error);
             }
+            let cancellation =
+                CancelledLifecycleValidateSidecarV1::after_durable_cancellation(&self.identity);
             if let LifecycleValidateSidecarCustodyV1::Live(completion) = self.custody {
                 let (dispatch, ack) = completion.into_sidecar_wake_parts();
                 debug_assert!(dispatch.matches_dispatch_key(self.identity.dispatch_key()));
                 drop(dispatch);
                 ack.acknowledge_after_publication();
             }
-            return LifecycleValidateSidecarDriveV1::Superseded { ordinal };
+            debug_assert_eq!(cancellation.dispatch_key().lifecycle_ordinal(), ordinal);
+            return LifecycleValidateSidecarDriveV1::Superseded(cancellation);
         }
         let disposition = lane_work.defer_missing_lifecycle_validate_sidecar(
             self.identity.round,

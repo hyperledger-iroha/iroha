@@ -215,13 +215,13 @@ public sealed record KagemushaHardwareCredentialV1(
     ReadOnlyMemory<byte> DeviceKeyReference, ulong IssuedAtMilliseconds,
     ulong ExpiresAtMilliseconds, KagemushaDeviceSignatureV1 GovernanceSignature);
 
+/// <summary>Exact peer-transfer context authenticated by encrypted-credit AAD.</summary>
 public sealed record KagemushaPeerCreditContextV1(
     ushort Version, ReadOnlyMemory<byte> RequestDigest,
-    KagemushaPastaStateCommitmentV1 SenderBeforeCommitment,
-    KagemushaPastaStateCommitmentV1 SenderAfterCommitment,
-    ReadOnlyMemory<byte> LifecycleContextDigest, ReadOnlyMemory<byte> RecipientLaneId,
-    KagemushaX25519PublicKeyV1 RecipientEncryptionKey, ulong CommittedAtMilliseconds,
-    ReadOnlyMemory<byte> HardwareTransitionCommitment);
+    UInt128 Amount, ReadOnlyMemory<byte> SenderBeforeCommitment,
+    ReadOnlyMemory<byte> SenderAfterCommitment,
+    ReadOnlyMemory<byte> PreparedTransferDigest,
+    KagemushaX25519PublicKeyV1 RecipientEncryptionKey);
 
 public sealed record KagemushaCreditOpeningV1(
     ushort Version, ReadOnlyMemory<byte> CreditId, UInt128 Amount,
@@ -260,19 +260,39 @@ public sealed record KagemushaLifecycleBindingV1(
     KagemushaAssetIncarnationV1 AssetIncarnation, uint Scale,
     ReadOnlyMemory<byte> LiabilityPoolId, ReadOnlyMemory<byte> HardwareProfileId,
     ulong PolicyEpoch, KagemushaOperationKindV1 OperationKind,
-    ReadOnlyMemory<byte> RequestId, ReadOnlyMemory<byte> CreditId,
+    ReadOnlyMemory<byte> RequestId, ReadOnlyMemory<byte> ReceiverLaneCommitment,
+    ReadOnlyMemory<byte> CreditId,
     ReadOnlyMemory<byte> CiphertextDigest);
 
-public abstract record KagemushaCommitEvidenceV1;
-public sealed record KagemushaTrustedCommitTimeV1(
-    ReadOnlyMemory<byte> TimeEvidenceCommitment) : KagemushaCommitEvidenceV1;
-public sealed record KagemushaMonotonicCommitLeaseV1(
-    ReadOnlyMemory<byte> LeaseEvidenceCommitment) : KagemushaCommitEvidenceV1;
+/// <summary>Closed commit-evidence source.</summary>
+public abstract record KagemushaCommitEvidenceV1
+{
+    internal abstract uint WireTag { get; }
+    internal abstract ReadOnlyMemory<byte> Commitment { get; }
+}
 
+/// <summary>Qualified trusted-time evidence. Stable tag: <c>0</c>.</summary>
+public sealed record KagemushaTrustedCommitTimeV1(ReadOnlyMemory<byte> TimeEvidenceCommitment)
+    : KagemushaCommitEvidenceV1
+{
+    internal override uint WireTag => 0;
+    internal override ReadOnlyMemory<byte> Commitment => TimeEvidenceCommitment;
+}
+
+/// <summary>Qualified monotonic-lease evidence. Stable tag: <c>1</c>.</summary>
+public sealed record KagemushaMonotonicLeaseV1(ReadOnlyMemory<byte> LeaseEvidenceCommitment)
+    : KagemushaCommitEvidenceV1
+{
+    internal override uint WireTag => 1;
+    internal override ReadOnlyMemory<byte> Commitment => LeaseEvidenceCommitment;
+}
+
+/// <summary>Sender outbox capacity reserved before hardware consumes its predecessor.</summary>
 public sealed record KagemushaOutboxReservationV1(
     ReadOnlyMemory<byte> ReservationId, KagemushaOperationKindV1 OperationKind,
     uint ReservedOutboxBytes, ulong IssuedAtMilliseconds, ulong ExpiresAtMilliseconds);
 
+/// <summary>Self-free terminal body committed before a certificate ID exists.</summary>
 public sealed record KagemushaHardwareTerminalBodyV1(
     ushort Version, ReadOnlyMemory<byte> CandidateEnvelopeDigest,
     ReadOnlyMemory<byte> LifecycleBindingDigest, ReadOnlyMemory<byte> TransitionNullifier,
@@ -282,27 +302,51 @@ public sealed record KagemushaHardwareTerminalBodyV1(
     ReadOnlyMemory<byte> PrivateJournalCommitment,
     ReadOnlyMemory<byte> PrivateRecoveryCommitment);
 
+/// <summary>Recoverable hardware terminal certificate emitted by atomic commit.</summary>
+public sealed record KagemushaCommitCertificateV1(
+    ushort Version, ReadOnlyMemory<byte> CertificateId,
+    ReadOnlyMemory<byte> CandidateEnvelopeDigest, ReadOnlyMemory<byte> LifecycleBindingDigest,
+    ReadOnlyMemory<byte> TransitionNullifier, ReadOnlyMemory<byte> OutboxReservationCommitment,
+    KagemushaCommitEvidenceV1 CommitEvidence, ReadOnlyMemory<byte> HardwareProfileId,
+    ulong PolicyEpoch, ReadOnlyMemory<byte> HardwareTerminalCommitment);
+
+/// <summary>Redemption-only paired proof binding a prepared redemption to its terminal certificate.</summary>
+public sealed record KagemushaRedemptionProofV1(
+    ushort Version, ReadOnlyMemory<byte> EqProtocolDigest, ReadOnlyMemory<byte> EpProtocolDigest,
+    ReadOnlyMemory<byte> SemanticDigest, ReadOnlyMemory<byte> CandidateEnvelopeDigest,
+    ReadOnlyMemory<byte> CommitCertificateDigest, ReadOnlyMemory<byte> EqDeferredAudit,
+    ReadOnlyMemory<byte> EpDeferredAudit, ReadOnlyMemory<byte> EqProof,
+    ReadOnlyMemory<byte> EpProof, ReadOnlyMemory<byte> EqHistory, ReadOnlyMemory<byte> EpHistory);
+
 public sealed record KagemushaPaymentRequestV1(
     ushort Version, ReadOnlyMemory<byte> ReleaseId, NetworkId NetworkId,
     KagemushaAssetDefinitionIdV1 Asset, KagemushaAssetIncarnationV1 AssetIncarnation,
     uint Scale, ReadOnlyMemory<byte> LiabilityPoolId, KagemushaAccountIdV1 Recipient,
-    ReadOnlyMemory<byte> RecipientLaneId, KagemushaX25519PublicKeyV1 RecipientEncryptionKey,
-    UInt128 Amount, KagemushaHardwareCredentialV1 HardwareCredential,
-    ReadOnlyMemory<byte> RequestId, ulong IssuedAtMilliseconds, ulong ExpiresAtMilliseconds,
+    UInt128 Amount, KagemushaX25519PublicKeyV1 RecipientEncryptionKey,
+    KagemushaHardwareCredentialV1 HardwareCredential,
+    ReadOnlyMemory<byte> RequestId,
+    ulong IssuedAtMilliseconds, ulong ExpiresAtMilliseconds,
     KagemushaDeviceSignatureV1 Signature);
 
-/// <summary>Unlinkable public send statement binding opaque sender predecessor and successor commitments.</summary>
-public sealed record KagemushaTransferStatementV1(
-    ushort Version, KagemushaLifecycleBindingV1 Lifecycle, UInt128 Amount,
-    ReadOnlyMemory<byte> TransitionNullifier, KagemushaPastaStateCommitmentV1 SenderBeforeCommitment,
-    KagemushaPastaStateCommitmentV1 SenderAfterCommitment, ReadOnlyMemory<byte> RequestDigest,
-    ReadOnlyMemory<byte> RecipientLaneId, KagemushaX25519PublicKeyV1 RecipientEncryptionKey,
-    ReadOnlyMemory<byte> CiphertextCommitment, ulong CommittedAtMilliseconds,
-    ReadOnlyMemory<byte> HardwareTransitionCommitment);
+/// <summary>Compact output authenticated by the post-commit payment proof.</summary>
+public sealed record KagemushaPaymentOutputV1(
+    ushort Version, ReadOnlyMemory<byte> RequestDigest, UInt128 Amount,
+    ReadOnlyMemory<byte> SenderBeforeCommitment, ReadOnlyMemory<byte> SenderAfterCommitment,
+    ReadOnlyMemory<byte> TransitionNullifier, ReadOnlyMemory<byte> CreditId,
+    ReadOnlyMemory<byte> CiphertextCommitment, KagemushaCommitEvidenceV1 CommitEvidence,
+    ulong CommittedAtMilliseconds);
 
 public sealed record KagemushaPaymentV1(
-    ushort Version, KagemushaTransferStatementV1 Statement,
-    KagemushaPairedProofV1 Proof, ReadOnlyMemory<byte> EncryptedCredit);
+    ushort Version, KagemushaPaymentOutputV1 Output, ReadOnlyMemory<byte> EncryptedCredit,
+    KagemushaCommitCertificateV1 CommitCertificate, KagemushaPaymentProofV1 Proof);
+
+/// <summary>History-independent paired proof of the committed payment and its hardware certificate.</summary>
+public sealed record KagemushaPaymentProofV1(
+    ushort Version, ReadOnlyMemory<byte> EqProtocolDigest, ReadOnlyMemory<byte> EpProtocolDigest,
+    ReadOnlyMemory<byte> SemanticDigest, ReadOnlyMemory<byte> CandidateEnvelopeDigest,
+    ReadOnlyMemory<byte> CommitCertificateDigest, ReadOnlyMemory<byte> EqDeferredAudit,
+    ReadOnlyMemory<byte> EpDeferredAudit, ReadOnlyMemory<byte> EqProof,
+    ReadOnlyMemory<byte> EpProof, ReadOnlyMemory<byte> EqHistory, ReadOnlyMemory<byte> EpHistory);
 
 public sealed record KagemushaInboxReceiptV1(
     ushort Version, ReadOnlyMemory<byte> CreditId, ReadOnlyMemory<byte> ReceiptCommitment);
@@ -349,14 +393,13 @@ public sealed record KagemushaMintCreditV1(
 public sealed record KagemushaRedemptionStatementV1(
     ushort Version, KagemushaLifecycleBindingV1 Lifecycle, UInt128 Amount,
     KagemushaAccountIdV1 Beneficiary, ReadOnlyMemory<byte> TerminalNullifier,
-    KagemushaPastaStateCommitmentV1 SenderBeforeCommitment,
-    KagemushaPastaStateCommitmentV1 SenderAfterCommitment,
     ReadOnlyMemory<byte> RedemptionCommitment, ReadOnlyMemory<byte> RedemptionId,
-    ulong CommittedAtMilliseconds, ReadOnlyMemory<byte> HardwareTransitionCommitment);
+    KagemushaCommitEvidenceV1 CommitEvidence);
 
 public sealed record KagemushaRedemptionVoucherV1(
     ushort Version, KagemushaRedemptionStatementV1 Statement,
-    KagemushaPairedProofV1 Proof);
+    KagemushaCommitCertificateV1 CommitCertificate,
+    KagemushaRedemptionProofV1 Proof, ReadOnlyMemory<byte> ArtifactManifestDigest);
 
 /// <summary>Canonical chain-facing request for a reserve-backed mint.</summary>
 public sealed record KagemushaTopUpRequestV1(
@@ -407,10 +450,10 @@ internal static class KagemushaModelValidation
     {
         if (payload.Length is 0 or > 512)
             throw new ArgumentException("Account payload is empty or oversized.", name);
-        var reader = new CanonicalNoritoReader(payload, "Kagemusha V1 account", name);
+        var reader = new CanonicalNoritoReader(payload, "KAGEMUSHA V1 account", name);
         if (reader.ReadUInt32LittleEndian("controller") != 0)
             throw new ArgumentException("Only canonical single-key accounts are supported.", name);
-        var key = new CanonicalNoritoReader(reader.ReadField("publicKey"), "Kagemusha V1 public key", name);
+        var key = new CanonicalNoritoReader(reader.ReadField("publicKey"), "KAGEMUSHA V1 public key", name);
         var count = key.ReadSequenceLength("count");
         if (count is 0 or > 4096) throw new ArgumentException("Account public key is empty or oversized.", name);
         for (ulong index = 0; index < count; index++)

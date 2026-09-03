@@ -688,26 +688,25 @@ fn execution_commitment_from_projection(
         })
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| "Kagemusha V1 top-up commitment is not canonical")?;
-    let (post_state_root, kagemusha_top_up_root, kagemusha_top_up_count) = if top_up_leaves
-        .is_empty()
-    {
-        (ordinary_post_state_root, None, 0)
-    } else {
-        let tree =
-            crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityTreeV1::new(top_up_leaves)
-                .map_err(|_| "Kagemusha V1 top-up commitment is not canonical")?;
-        let root = tree.execution_root();
-        let count = tree.leaf_count();
-        (
-            wire::ExecutionCommitment::kagemusha_post_state_root_v1(
+    let (post_state_root, kagemusha_top_up_root, kagemusha_top_up_count) =
+        if top_up_leaves.is_empty() {
+            (ordinary_post_state_root, None, 0)
+        } else {
+            let tree =
+                crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityTreeV1::new(top_up_leaves)
+                    .map_err(|_| "Kagemusha V1 top-up commitment is not canonical")?;
+            let root = tree.execution_root();
+            let count = tree.leaf_count();
+            (
+                wire::ExecutionCommitment::kagemusha_post_state_root_v1(
+                    count,
+                    ordinary_writes_root,
+                    root,
+                ),
+                Some(root),
                 count,
-                ordinary_writes_root,
-                root,
-            ),
-            Some(root),
-            count,
-        )
-    };
+            )
+        };
     wire::ExecutionCommitment::new_with_manifests(
         parent_state_root,
         post_state_root,
@@ -1345,13 +1344,11 @@ mod tests {
         );
         let commitment = execution_commitment_from_witness_for_tests(&witness, &manifest)
             .expect("canonical execution commitment");
-        let leaf = crate::zk::kagemusha_v1_recursion::kagemusha_top_up_leaf_from_receipt_v1(
-            &receipt,
-        )
-        .expect("top-up leaf");
-        let tree =
-            crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityTreeV1::new(vec![leaf])
-                .expect("top-up tree");
+        let leaf =
+            crate::zk::kagemusha_v1_recursion::kagemusha_top_up_leaf_from_receipt_v1(&receipt)
+                .expect("top-up leaf");
+        let tree = crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityTreeV1::new(vec![leaf])
+            .expect("top-up tree");
         let ordinary_writes_root = compute_post_state_root(&[], &witness_pairs(&witness).1);
 
         assert_eq!(commitment.ordinary_writes_root, ordinary_writes_root);

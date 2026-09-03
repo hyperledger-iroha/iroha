@@ -18,6 +18,7 @@ KURA_PRODUCTION_COMPONENT_FILES = (
     Path("crates/iroha_core/src/kura/block_store_definition_and_test_controls.rs"),
     Path("crates/iroha_core/src/kura/startup_finality_session_reads.rs"),
     Path("crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs"),
+    Path("crates/iroha_core/src/kura/canonical_autonomous_replica.rs"),
     Path("crates/iroha_core/src/kura/autonomous_terminal_capacity.rs"),
     Path("crates/iroha_core/src/kura/autonomous_publication_temp_recovery.rs"),
     Path("crates/iroha_core/src/kura/historical_autonomous_recovery_temp_reconciliation.rs"),
@@ -58,6 +59,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('block/bootstrap_and_genesis_tests.rs'),
     ),
     Path('crates/iroha_config/src/parameters/actual.rs'): (
+        Path('actual/torii_sccp_replay_archive.rs'),
         Path('actual/torii_tx_history.rs'),
         Path('actual/torii_http_transport.rs'),
         Path('actual/torii_mcp_profile.rs'),
@@ -73,6 +75,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('user_soranet_handshake_tests.rs'),
         Path('user/torii_peer_geo.rs'),
         Path('user/torii_soranet_privacy_ingest.rs'),
+        Path('user/torii_sccp_replay_archive.rs'),
         Path('user/torii_tx_history.rs'),
         Path('user/sorafs_moderation_query_bound_tests.rs'),
         Path('user/governance_dag_head_mode_tests.rs'),
@@ -80,6 +83,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('user/zk_attachment_retention_tests.rs'),
         Path('user/query_fanout_memory_tests.rs'),
         Path('user/app_routed_read_body_timeout_tests.rs'),
+        Path('user/torii_api_connect_exactness_tests.rs'),
         Path('user/operator_signature_body_timeout_tests.rs'),
         Path('user/verified_source_ingress_tests.rs'),
         Path('user/iso_bridge_store_memory_tests.rs'),
@@ -106,6 +110,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('kura/block_store_definition_and_test_controls.rs'),
         Path('kura/startup_finality_session_reads.rs'),
         Path('kura/pipeline_and_lane_artifacts.rs'),
+        Path('kura/canonical_autonomous_replica.rs'),
         Path('kura/autonomous_terminal_capacity.rs'),
         Path('kura/autonomous_publication_temp_recovery.rs'),
         Path('kura/historical_autonomous_recovery_temp_reconciliation.rs'),
@@ -154,6 +159,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('kura/tests/07j_certified_bundle_capacity_tests.rs'),
         Path('kura/tests/07k_historical_atomic_temp_recovery_tests.rs'),
         Path('kura/tests/07l_pending_canonical_capacity_tests.rs'),
+        Path('kura/tests/07m_canonical_autonomous_replica_tests.rs'),
         Path('kura/tests/08_lane_receipts_and_artifacts.rs'),
         Path('kura/tests/08a_certified_lane_block_read_tests.rs'),
         Path('kura/tests/08b_lane_history_compaction_capacity_tests.rs'),
@@ -567,6 +573,9 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
 }
 REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS = {
     Path("crates/iroha_config/src/parameters/actual.rs"): (Path("crates/iroha_config/src/parameters/actual/tests.rs"),),
+    Path("crates/iroha_core/src/snapshot.rs"): (
+        Path("crates/iroha_core/src/snapshot/support_policy_tests.rs"),
+    ),
     Path("integration_tests/tests/sumeragi_v2_runner.rs"): (
         Path(
             "integration_tests/tests/sumeragi_v2_runner/"
@@ -620,8 +629,8 @@ REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS = tuple(
     for parent in REVIEWED_RUST_INCLUDE_MANIFESTS
     if parent not in REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS
 )
-assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 70
-assert len(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS) == len(set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)) == 15
+assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 71
+assert len(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS) == len(set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)) == 16
 assert len(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS) == 55
 assert set(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS).isdisjoint(
     REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS

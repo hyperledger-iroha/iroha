@@ -40,6 +40,7 @@ private struct AtomicPrivateSettlementAcceptingVerifierV1:
 
     func verifyAuditorCapsule(
         responseJSON: Data,
+        requestJSON: Data,
         expectedNetworkID: Data,
         requestedPayloadDigest: Data,
         auditorSigningKey: String
@@ -69,6 +70,7 @@ private struct AtomicPrivateSettlementRejectingVerifierV1:
 
     func verifyAuditorCapsule(
         responseJSON: Data,
+        requestJSON: Data,
         expectedNetworkID: Data,
         requestedPayloadDigest: Data,
         auditorSigningKey: String
@@ -104,6 +106,7 @@ private struct AtomicPrivateSettlementUnavailableVerifierV1:
 
     func verifyAuditorCapsule(
         responseJSON: Data,
+        requestJSON: Data,
         expectedNetworkID: Data,
         requestedPayloadDigest: Data,
         auditorSigningKey: String
@@ -453,6 +456,7 @@ final class AtomicPrivateSettlementToriiClientV1Tests: XCTestCase {
         do {
             _ = try await makeClient(responseVerifier: verifier).getAuditorCapsule(
                 payloadDigest: payload,
+                request: try auditorCapsuleRequest(root),
                 auditorSigningContext: role
             )
             XCTFail("native capsule rejection must fail closed")
@@ -491,6 +495,7 @@ final class AtomicPrivateSettlementToriiClientV1Tests: XCTestCase {
             ) },
             { try await client.getAuditorCapsule(
                 payloadDigest: payload,
+                request: try self.auditorCapsuleRequest(root),
                 auditorSigningContext: role
             ) },
             { try await client.submitAuditApproval(
@@ -531,6 +536,7 @@ final class AtomicPrivateSettlementToriiClientV1Tests: XCTestCase {
         install(valid)
         _ = try await makeClient().getAuditorCapsule(
             payloadDigest: payload,
+            request: try auditorCapsuleRequest(root),
             auditorSigningContext: role
         )
         let captured = try XCTUnwrap(AtomicPrivateSettlementStubURLProtocolV1.lastRequest)
@@ -539,6 +545,11 @@ final class AtomicPrivateSettlementToriiClientV1Tests: XCTestCase {
             "/api/v1/nexus/private-settlements/legs/\(payload.pathComponent)/audit-capsule"
         )
         XCTAssertNotNil(captured.value(forHTTPHeaderField: "X-Iroha-Operator-Signature"))
+        XCTAssertEqual(captured.httpMethod, "POST")
+        XCTAssertEqual(
+            try XCTUnwrap(captured.httpBody),
+            try auditorCapsuleRequest(root).bytes()
+        )
 
         for invalidHeight: Any in [0, -1, 105.5, "105"] {
             var invalid = valid
@@ -547,6 +558,7 @@ final class AtomicPrivateSettlementToriiClientV1Tests: XCTestCase {
             do {
                 _ = try await makeClient().getAuditorCapsule(
                     payloadDigest: payload,
+                    request: try auditorCapsuleRequest(root),
                     auditorSigningContext: role
                 )
                 XCTFail("invalid authoritative height must fail closed")
@@ -568,6 +580,7 @@ final class AtomicPrivateSettlementToriiClientV1Tests: XCTestCase {
         do {
             _ = try await makeClient().getAuditorCapsule(
                 payloadDigest: payload,
+                request: try auditorCapsuleRequest(root),
                 auditorSigningContext: role
             )
             XCTFail("overflow authoritative height must fail closed")
@@ -611,6 +624,7 @@ final class AtomicPrivateSettlementToriiClientV1Tests: XCTestCase {
             do {
                 _ = try await makeClient().getAuditorCapsule(
                     payloadDigest: payload,
+                    request: try auditorCapsuleRequest(root),
                     auditorSigningContext: role
                 )
                 XCTFail("substituted or malformed capsule attestation must fail closed")
@@ -695,6 +709,7 @@ final class AtomicPrivateSettlementToriiClientV1Tests: XCTestCase {
         do {
             _ = try await makeClient().getAuditorCapsule(
                 payloadDigest: payload,
+                request: try auditorCapsuleRequest(root),
                 auditorSigningContext: wrongNetworkRole
             )
             XCTFail("a role identity from another network must fail before dispatch")
@@ -941,13 +956,32 @@ final class AtomicPrivateSettlementToriiClientV1Tests: XCTestCase {
             "new_root": String(repeating: "22", count: 32),
             "expiry_height": 200,
         ]
+        let responses = try XCTUnwrap(root["responses"] as? [String: Any])
+        let capsule = try XCTUnwrap(responses["auditor_capsule"] as? [String: Any])
+        let accessPolicy = try XCTUnwrap(capsule["access_audit_policy"] as? [String: Any])
         let object: [String: Any] = [
+            "audit_policy": accessPolicy,
             "approval": ["body": body, "signature": "opaque-native-signature"],
         ]
         return try AtomicPrivateSettlementPreparedRequestV1(
             operation: .auditApproval,
             nativePreparedJSON: try JSONSerialization.data(
                 withJSONObject: object,
+                options: [.sortedKeys]
+            )
+        )
+    }
+
+    private func auditorCapsuleRequest(
+        _ root: [String: Any]
+    ) throws -> AtomicPrivateSettlementPreparedRequestV1 {
+        let responses = try XCTUnwrap(root["responses"] as? [String: Any])
+        let capsule = try XCTUnwrap(responses["auditor_capsule"] as? [String: Any])
+        let accessPolicy = try XCTUnwrap(capsule["access_audit_policy"] as? [String: Any])
+        return try AtomicPrivateSettlementPreparedRequestV1(
+            operation: .auditorCapsule,
+            nativePreparedJSON: try JSONSerialization.data(
+                withJSONObject: ["audit_policy": accessPolicy],
                 options: [.sortedKeys]
             )
         )

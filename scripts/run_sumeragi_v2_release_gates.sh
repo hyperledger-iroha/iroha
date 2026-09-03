@@ -3660,6 +3660,7 @@ readonly multilane_autoscale_four_peer_release_test="nexus::autoscale_localnet::
 readonly multilane_autoscale_restart_release_test="nexus::autoscale_localnet::nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart"
 readonly multilane_autoscale_drain_release_test="nexus::autoscale_localnet::nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart"
 readonly multilane_native_amx_rotating_release_test="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
+readonly bpng_native_bootstrap_release_test="alias_registry_bootstrap_network::bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansion"
 readonly multilane_native_amx_grouped_pruning_marker="[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed"
 if [[ "$(grep -Fxc -- "readonly NATIVE_AMX_GROUPED_PRUNING_MARKER=\"${multilane_native_amx_grouped_pruning_marker}\"" scripts/run_nexus_cross_dataspace_atomic_swap.sh || true)" != 1 ]]; then
   echo "mandatory four-peer launcher is not source-bound to grouped Native AMX pruning evidence" >&2
@@ -4681,6 +4682,76 @@ if [[ "$profile" == "--release" && ! -s "$seed_completion_path_file" ]]; then
   exit 1
 fi
 verify_release_identity "after deterministic seed matrix"
+
+run_bpng_native_bootstrap_release_gate() {
+  local test_list ignored_test_list run_log
+  local -a run_pipeline_status
+  if ! test_list="$(
+    run_cargo test --locked --offline -p integration_tests \
+      --test network_functional -- --list
+  )"; then
+    echo "native BPNG release-test discovery failed" >&2
+    return 1
+  fi
+  if ! ignored_test_list="$(
+    run_cargo test --locked --offline -p integration_tests \
+      --test network_functional -- --list --ignored
+  )"; then
+    echo "native BPNG ignored-test discovery failed" >&2
+    return 1
+  fi
+  if [[ "$(grep -Fxc -- "${bpng_native_bootstrap_release_test}: test" \
+    <<<"$test_list" || true)" != 1 ]]; then
+    echo "missing or renamed native BPNG release test: ${bpng_native_bootstrap_release_test}" >&2
+    return 1
+  fi
+  if grep -Fqx -- "${bpng_native_bootstrap_release_test}: test" \
+    <<<"$ignored_test_list"; then
+    echo "native BPNG release test is ignored: ${bpng_native_bootstrap_release_test}" >&2
+    return 1
+  fi
+
+  if ! run_log="$(
+    mktemp "${TMPDIR%/}/bpng-native-bootstrap-release.XXXXXX.log"
+  )"; then
+    echo "native BPNG release gate could not allocate its private transcript" >&2
+    return 1
+  fi
+  set +e
+  (
+    export IROHA_TEST_SERIALIZE_NETWORKS=1
+    export IROHA_TEST_NETWORK_START_ATTEMPTS=1
+    run_cargo test --locked --offline -p integration_tests \
+      --test network_functional "$bpng_native_bootstrap_release_test" -- \
+      --exact --show-output --test-threads=1
+  ) 2>&1 | tee "$run_log"
+  run_pipeline_status=("${PIPESTATUS[@]}")
+  set -e
+  if ((run_pipeline_status[0] != 0 || run_pipeline_status[1] != 0)); then
+    echo "native BPNG release gate failed (cargo=${run_pipeline_status[0]}, tee=${run_pipeline_status[1]}); log retained at ${run_log}" >&2
+    return 1
+  fi
+  if [[ "$(grep -Fxc -- "running 1 test" "$run_log" || true)" != 1 \
+    || "$(grep -Fxc -- "test ${bpng_native_bootstrap_release_test} ... ok" \
+      "$run_log" || true)" != 1 \
+    || "$(grep -Ec \
+      '^test result: ok[.] 1 passed; 0 failed; 0 ignored; 0 measured; [0-9]+ filtered out; finished in .+$' \
+      "$run_log" || true)" != 1 ]]; then
+    echo "native BPNG release gate lacks one unambiguous passing result; log retained at ${run_log}" >&2
+    return 1
+  fi
+  if ! rm -f -- "$run_log"; then
+    echo "native BPNG release gate could not remove its validated temporary transcript" >&2
+    return 1
+  fi
+}
+
+if [[ "$profile" == "--release" ]]; then
+  verify_release_identity "before native BPNG bootstrap release gate"
+  run_cooperative_gate bpng-native-bootstrap-release \
+    run_bpng_native_bootstrap_release_gate
+  verify_release_identity "after native BPNG bootstrap release gate"
+fi
 
 if [[ "$profile" == "--release" ]]; then
   multilane_four_peer_completion_path_file="${IROHA_RELEASE_HOST_ROOT}/multilane-four-peer-completion-path"

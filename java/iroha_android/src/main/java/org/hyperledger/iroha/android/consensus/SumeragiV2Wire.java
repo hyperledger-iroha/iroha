@@ -357,16 +357,16 @@ public final class SumeragiV2Wire {
       if (kagemushaTopUpCount == 0) {
         require(
             kagemushaTopUpRoot == null,
-            "zero Kagemusha top-up count must not carry a root");
+            "zero KAGEMUSHA top-up count must not carry a root");
       } else {
         require(
             kagemushaTopUpRoot != null,
-            "non-zero Kagemusha top-up count requires a root");
+            "non-zero KAGEMUSHA top-up count requires a root");
         require(
             postStateRoot.equals(
                 kagemushaTopUpPostStateRoot(
                     kagemushaTopUpCount, ordinaryWritesRoot, kagemushaTopUpRoot)),
-            "post-state root does not bind the Kagemusha top-up projection");
+            "post-state root does not bind the KAGEMUSHA top-up projection");
       }
       require(
           nativeAmxApplicationManifestVersion == NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
@@ -381,7 +381,7 @@ public final class SumeragiV2Wire {
           "Native AMX application-manifest count/root projection is not canonical");
     }
 
-    /** Construct an execution commitment for a block with no Kagemusha top-ups. */
+    /** Construct an execution commitment for a block with no KAGEMUSHA top-ups. */
     public static ExecutionCommitment withoutKagemushaTopUps(
         Hash32 parentStateRoot,
         Hash32 postStateRoot,
@@ -406,14 +406,14 @@ public final class SumeragiV2Wire {
       return new Hash32(IrohaHash.prehash(NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT_DOMAIN));
     }
 
-    /** Derive the canonical post-state root for non-empty Kagemusha top-ups. */
+    /** Derive the canonical post-state root for non-empty KAGEMUSHA top-ups. */
     public static Hash32 kagemushaTopUpPostStateRoot(
         long kagemushaTopUpCount,
         Hash32 ordinaryWritesRoot,
         Hash32 kagemushaTopUpRoot) {
       require(
           kagemushaTopUpCount > 0 && kagemushaTopUpCount <= 0xffff_ffffL,
-          "Kagemusha top-up count must fit a non-zero unsigned 32-bit integer");
+          "KAGEMUSHA top-up count must fit a non-zero unsigned 32-bit integer");
       nonNull(ordinaryWritesRoot, "ordinaryWritesRoot");
       nonNull(kagemushaTopUpRoot, "kagemushaTopUpRoot");
       ByteArrayOutputStream preimage = new ByteArrayOutputStream();
@@ -452,10 +452,10 @@ public final class SumeragiV2Wire {
           new Hash32(reader.field("execution ordinary writes", SumeragiV2Wire::decodeHash));
       Hash32 kagemushaTopUpRoot =
           reader.field(
-              "execution Kagemusha top-up root",
+              "execution KAGEMUSHA top-up root",
               payload -> decodeOption(payload, data -> new Hash32(decodeHash(data))));
       long kagemushaTopUpCount =
-          reader.field("execution Kagemusha top-up count", SumeragiV2Wire::decodeU32);
+          reader.field("execution KAGEMUSHA top-up count", SumeragiV2Wire::decodeU32);
       int manifestVersion =
           reader.field(
               "execution Native AMX application manifest version",

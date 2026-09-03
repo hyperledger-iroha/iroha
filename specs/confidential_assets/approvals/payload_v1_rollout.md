@@ -14,7 +14,7 @@
 1. **SDK bindings & submitters** — confidential memo-envelope utilities and
    proof-bound transaction builders landed with parity tests and docs. The
    retired generic `ShieldRequest` is not an approved first-release surface;
-   public-to-confidential ingress requires Kagemusha V1 top-up evidence.
+   public-to-confidential ingress requires KAGEMUSHA V1 top-up evidence.
 2. **CLI ergonomics** — `iroha app zk envelope` helper covers encode/inspect workflows plus failure diagnostics, aligned with the roadmap ergonomics requirement.【crates/iroha_cli/src/zk.rs:1256】
 3. **Deterministic fixtures & parity suites** — shared fixture + Rust/Swift validation to keep Norito bytes/error surfaces aligned.【fixtures/confidential/encrypted_payload_v1.json:1】【crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs:1】【IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift:73】
 

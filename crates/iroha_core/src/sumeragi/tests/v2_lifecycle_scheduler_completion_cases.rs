@@ -1111,6 +1111,10 @@ mod recovered_sign_capacity_tests {
         );
         assert!(after.active_lease.is_none());
         assert!(after.fault.is_none());
+        assert!(
+            owner.all_live_registry_census_is_exact_for_test(),
+            "the exhaustive census accepts a parked Broadcast with its exact live paired Sign"
+        );
 
         let (
             mut bounded_owner,
@@ -1137,15 +1141,37 @@ mod recovered_sign_capacity_tests {
             !bounded_owner.finalization_registry_census_is_exact_for_test(),
             "finalization cannot consume the still-schedulable paired next Sign"
         );
+        assert!(
+            bounded_owner.all_live_registry_census_is_exact_for_test(),
+            "ordinary admission retains a complete census while the paired Sign is live"
+        );
         assert!(bounded_owner.retire_unrelated_sign_for_finalization_test(bounded_pair));
         assert!(
             bounded_owner.finalization_registry_census_is_exact_for_test(),
             "finalization accepts the exact volatile refanout wait after its next Sign retires"
         );
+        assert!(
+            bounded_owner.all_live_registry_census_is_exact_for_test(),
+            "ordinary admission accepts the exact terminal paired-Sign lineage"
+        );
+        assert!(bounded_owner.restore_recovered_broadcast_ready_for_census_test(bounded_broadcast));
+        assert!(
+            !bounded_owner.all_live_registry_census_is_exact_for_test(),
+            "ordinary admission rejects a Ready Broadcast whose declared paired Sign is terminal"
+        );
+        assert!(bounded_owner.park_recovered_broadcast_for_census_test(bounded_broadcast));
+        assert!(
+            bounded_owner.all_live_registry_census_is_exact_for_test(),
+            "restoring the exact post-refan wait repairs the terminal-pair census"
+        );
         assert!(bounded_owner.corrupt_recovered_broadcast_pair_link_for_test(bounded_broadcast));
         assert!(
             !bounded_owner.finalization_registry_census_is_exact_for_test(),
             "finalization rejects a corrupted retained digest after paired Sign retirement"
+        );
+        assert!(
+            !bounded_owner.all_live_registry_census_is_exact_for_test(),
+            "the exhaustive census rejects a corrupted terminal paired-Sign digest"
         );
     }
 
@@ -1214,6 +1240,10 @@ mod recovered_sign_capacity_tests {
         assert!(
             !owner.finalization_registry_census_is_exact_for_test(),
             "a foreign Recovery wait cannot borrow another Broadcast's output handoff"
+        );
+        assert!(
+            !owner.all_live_registry_census_is_exact_for_test(),
+            "the exhaustive census rejects a foreign recovered-Broadcast wait"
         );
         assert!(!output_guard.restart_required());
         planner_io.detach(&mut services);
@@ -1409,6 +1439,10 @@ mod recovered_sign_capacity_tests {
             !owner.finalization_registry_census_is_exact_for_test(),
             "finalization must reject the corrupted exact next-Sign link"
         );
+        assert!(
+            !owner.all_live_registry_census_is_exact_for_test(),
+            "the exhaustive census must reject the corrupted exact next-Sign link"
+        );
     }
 }
 #[cfg(test)]
@@ -1467,7 +1501,7 @@ impl ProductionLifecycleOwnerV1 {
     ///
     /// The returned scalars are ordinals only; every WAL, body, signature, and
     /// concrete-work authority remains owned by the production-shaped owner.
-    fn recovered_broadcast_pair_scheduler_fixture_for_test(
+    pub(in crate::sumeragi) fn recovered_broadcast_pair_scheduler_fixture_for_test(
         verified: crate::sumeragi::v2::VerifiedHeightContext,
         local_signer: &iroha_crypto::KeyPair,
         root: &std::path::Path,
@@ -1533,8 +1567,71 @@ impl ProductionLifecycleOwnerV1 {
         )
     }
 
+    /// Install the exact volatile post-refan wait without performing network I/O.
+    pub(in crate::sumeragi) fn park_recovered_broadcast_for_census_test(
+        &mut self,
+        ordinal: u128,
+    ) -> bool {
+        let Some(record) = self.coordinator.records.get(&ordinal) else {
+            return false;
+        };
+        let Some((_, &digest)) = record.physical_slots.first_key_value() else {
+            return false;
+        };
+        if record.work_class != LifecycleWorkClass::Broadcast
+            || record.state != LifecycleState::Ready
+            || !self.coordinator.ready_index.contains(&ordinal)
+        {
+            return false;
+        }
+        let source = super::WaitSource::Recovery(digest);
+        let generation = self
+            .coordinator
+            .observed_generation
+            .get(&source)
+            .copied()
+            .unwrap_or(0);
+        if generation == u64::MAX || !self.coordinator.ready_index.remove(&ordinal) {
+            return false;
+        }
+        self.coordinator
+            .observed_generation
+            .insert(source, generation);
+        self.coordinator
+            .records
+            .get_mut(&ordinal)
+            .expect("checked recovered Broadcast row remains installed")
+            .state = LifecycleState::Waiting(super::WaitToken::new(source, generation));
+        true
+    }
+
+    /// Restore one parked recovered Broadcast to Ready for a negative census.
+    fn restore_recovered_broadcast_ready_for_census_test(&mut self, ordinal: u128) -> bool {
+        let Some(record) = self.coordinator.records.get(&ordinal) else {
+            return false;
+        };
+        let Some((_, &digest)) = record.physical_slots.first_key_value() else {
+            return false;
+        };
+        let LifecycleState::Waiting(wait) = record.state else {
+            return false;
+        };
+        if record.work_class != LifecycleWorkClass::Broadcast
+            || wait.source() != super::WaitSource::Recovery(digest)
+            || self.coordinator.ready_index.contains(&ordinal)
+        {
+            return false;
+        }
+        self.coordinator
+            .records
+            .get_mut(&ordinal)
+            .expect("checked recovered Broadcast row remains installed")
+            .state = LifecycleState::Ready;
+        self.coordinator.ready_index.insert(ordinal)
+    }
+
     /// Add one exact unpaired recovered signed-Broadcast to this closed owner.
-    fn add_recovered_broadcast_scheduler_fixture_for_test(
+    pub(in crate::sumeragi) fn add_recovered_broadcast_scheduler_fixture_for_test(
         &mut self,
         local_signer: &iroha_crypto::KeyPair,
         marker: u8,
@@ -1830,7 +1927,10 @@ impl ProductionLifecycleOwnerV1 {
     }
 
     /// Remove the deliberately unrelated fixture Sign from the bounded owner.
-    fn retire_unrelated_sign_for_finalization_test(&mut self, ordinal: u128) -> bool {
+    pub(in crate::sumeragi) fn retire_unrelated_sign_for_finalization_test(
+        &mut self,
+        ordinal: u128,
+    ) -> bool {
         self.retire_ready_work_for_completion_test(ordinal)
     }
 
@@ -2103,6 +2203,13 @@ impl ProductionLifecycleOwnerV1 {
         self.registry
             .registry_for_test()
             .exactly_covers_finalization_work(&self.coordinator)
+    }
+
+    /// Recheck the ordinary exhaustive registry census without exposing it.
+    fn all_live_registry_census_is_exact_for_test(&self) -> bool {
+        self.registry
+            .registry_for_test()
+            .exactly_covers_all_live_work(&self.verified, &self.coordinator)
     }
 
     /// Build an empty storage-owning production owner for ingress admission tests.

@@ -182,18 +182,18 @@ whose marker appears on another route is replaced by the ordinary typed
 envelope. Errors after a stream has started follow that stream's terminal
 framing instead of the finite HTTP envelope.
 
-`GET /v1/kagemusha/readiness` is the canonical universal offline-wallet
+`GET /v1/kagemusha/readiness` is the canonical universal KAGEMUSHA-wallet
 capability discovery route. It does not evaluate a validator, asset,
 domain, dataspace, escrow account, verifier catalog, or deployment profile.
-Every app-API build returns the same asset-neutral Kagemusha V1
+Every app-API build returns the same asset-neutral KAGEMUSHA V1
 `kagemusha_handoff_v1` contract. Its only fields are `kagemusha_handoff_capability`,
 `wire_version`, `device_lifecycle_version`, and `ready`; both versions are
 exactly `1` and `ready` is always true. No hop, ancestry, input, or history
 limit is advertised. Clients must not use this response, `/health`,
 or `/readyz` as an offline-feature admission gate.
 
-Proof, authority, balance, release, and lineage errors belong to the specific
-top-up or redemption command that references them. Such an error uses the
+Proof, authority, balance, release, replay, and reserve errors belong to the
+specific top-up or redemption command that references them. Such an error uses the
 ordinary typed error-envelope contract and cannot make the process or node
 unready. Torii has no per-asset readiness response or selector query.
 
@@ -217,7 +217,7 @@ finite `429` or `503` response includes both `Retry-After` and a matching typed
 retry hint.
 
 Connection-level pre-authentication capacity and rate gates run before
-credential validation. For Offline command routes admitted by that bounded
+credential validation. For KAGEMUSHA command routes admitted by that bounded
 gate, API-token authentication is completed before request media-type,
 idempotency-key, or body validation. An unauthenticated or duplicate-token
 request therefore receives the authentication failure even if its
@@ -481,133 +481,58 @@ Internal wire and consensus types may keep implementation version suffixes.
 Those names do not create nested route versions and do not provide a second
 public response schema.
 
-## Offline operation locality
+## KAGEMUSHA operation locality
 
-Both Offline command routes use the configured Torii `max_content_len` request
-limit, the same operator-controlled ceiling used for transaction ingress. They
-do not inherit Axum's smaller framework default: an Kagemusha V1 redemption that is
-within the configured limit reaches typed decoding. A streamed or
-declared body that exceeds the configured limit fails with typed `413` code
-`request_payload_too_large` before command admission.
+The top-up command accepts only the canonical versioned Norito encoding of one
+caller-signed `SignedTransaction`. Its effective body limit is the ordinary
+transaction-ingress `torii.max_content_len`; enabling KAGEMUSHA commands
+requires that limit to be at least 32 KiB, and the protocol/configuration upper
+bound remains 64,000,000 bytes. The embedded fixed-shape top-up request is
+independently capped at 16 KiB. Redemption accepts one canonical request and is
+capped at the smaller of `torii.max_content_len` and 8 KiB. A declared or
+streamed body above the effective route limit fails with typed `413`
+`request_payload_too_large` before decoding.
 
-Offline command idempotency is globally bound by the signed `operation_id`, but
-pre-commit coordination is deliberately instance-local in this first release.
-The in-flight coordinator, admission cache, and transaction queue belong to the
-Torii instance that accepted the command. A load balancer must therefore keep a
-client on that instance from submission until the operation commits. A pending
-lookup sent to a different instance can return `404`; that response never
-authorizes the client to recycle or change the operation id.
+Top-up validation requires the outer transaction and embedded request to name
+the exact runtime `NetworkId`, a valid transaction signature, the
+signature-bound `QueuePlanSynced` admission intent, exactly one direct native
+`TopUpKagemushaV1` instruction, and transaction authority equal to the embedded
+payer. Torii submits those exact caller-signed bytes through strict durable
+ingress; it neither rebuilds nor signs a top-up. The optional configured issuer
+key is used only to construct redemption transactions.
 
-Accepted request bindings and in-flight reservations share the configured
-positive `operation_registry_max_entries` and `operation_registry_max_bytes`
-budgets under `torii.kagemusha_v1_commands`. They retain fixed-size canonical
-digests, not proof-bearing request DTOs. Each entry is charged exactly 145
-bytes; the default 4,096-entry registry therefore defaults to exactly 593,920
-bytes. Capacity never evicts an unexpired
-binding: a new unique command receives typed
-`503 kagemusha_operation_capacity_exhausted`, while an identical accepted replay
-or in-flight follower remains available.
+`Idempotency-Key` is the 64-character lowercase hexadecimal `operation_id`.
+That identifier is globally unique across both operation kinds. An admitted
+binding includes the kind and canonical request digest; top-up additionally
+binds the canonical signed transaction payload/entrypoint hash. Reusing an
+operation ID for another request, kind, or top-up carrier returns
+`409 operation_id_conflict`. The process-local in-flight/admission registry is
+bounded by `operation_registry_max_entries` and
+`operation_registry_max_bytes`; it retains fixed-size bindings rather than
+proof-bearing request objects. A new unique operation fails closed with
+`503 kagemusha_operation_capacity_exhausted` when full.
 
-Every Torii replica allowed to accept Kagemusha V1 commands for one deployment
-must use the same Kagemusha V1 submission authority and behaviorally identical
-command policy. Given the same signed request, those replicas consequently
-construct the same signed transaction. A cross-instance race can still admit
-the same candidate more than once into independent local queues, so the
-consensus/on-chain `operation_id` uniqueness rule is the final guard that
-permits at most one economic effect. This is not a distributed
-idempotency-cache guarantee.
+Before applying mutable snapshot, amount, balance, or signer-readiness policy,
+Torii recovers an existing consensus operation and checks the complete binding.
+It then checks an already-admitted local binding before evaluating those live
+policies for a genuinely new operation. Consequently an exact replay remains
+observable after policy or ledger state changes. Consensus `operation_id`
+uniqueness is the final cross-instance economic-effect guard; pending
+coordination and the bounded registry remain process-local.
 
-Pre-commit ownership and rejected attempts are keyed by the configured
-Kagemusha V1 submission authority together with the signed operation id. A
-transaction under another outer authority therefore cannot shadow a
-Torii-submitted attempt merely by copying its signed request body into a
-transaction that rejects. A rejected attempt is retryable under the same
-authority only when its complete economic request identity is unchanged. Torii
-removes only the exact rejected carrier from its local accepted registry and
-derives the replacement carrier's nonce by checked increment of the rejected
-wire's nonce (`None` becomes `1`). Retry wires therefore remain deterministic
-across replicas without colliding with Queue's committed-hash replay guard. If
-the increment would exceed the transaction nonce space, the command returns
-`409 kagemusha_operation_retry_exhausted`; the caller must authorize a new
-operation id. Rejected is therefore terminal only for one carrier attempt, not
-for the operation-id resource.
+The first successful submission of a pending operation, and an exact pending
+POST replay, return `202 Accepted` with the canonical `Location` and a positive
+`Retry-After`. An exact replay whose state is terminal (`Applied` or `Rejected`)
+returns `200 OK` with the same `Location` and no `Retry-After`. The status GET
+returns `200 OK`; pending GET responses retain `Retry-After`. Every response is
+`Cache-Control: no-store`. Top-up does not return `202` until the signed
+transaction has a durable queue-plan admission certificate.
 
-Queue keeps reciprocal `(authority, operation_id)` and transaction-hash
-ownership indexes. Each hot lookup, claim, or removal verifies equal
-cardinality and the exact reciprocal entry in logarithmic time; the complete
-bijection is scanned once after cold journal reconstruction. A newer exact
-Queue-owned attempt supersedes a stale process-local admitted transaction hash,
-while any logical carrier mismatch remains
-`503 kagemusha_operation_evidence_inconsistent`.
-
-Applied finality is instead unique by operation id across all authorized
-submission authorities. Only the authenticated fresh economic branch may
-stage that global claim, after its balance, anchor, and replay writes have
-succeeded. Finalization promotes exactly one such claim in canonical phase
-order; a rejected or exact-replay branch cannot claim application. Once
-present, the global Applied record supersedes every authority-scoped rejected
-attempt. This keeps the economic uniqueness boundary identical to the signed
-operation-id boundary without allowing an unauthorized or rejected carrier to
-poison it.
-
-Persisted outcome records use fixed canonical digests for both the request and
-outer authorities. Recovery recomputes those digests from the carrier rather
-than storing variable-size `AccountId` values, so even a large valid
-multisignature authority cannot make terminal recording exceed the bounded
-state-value budget after Queue acceptance.
-
-Maintained clients keep the complete nested request identity—operation id,
-request-authority digest, canonical request digest, kind, signed issue time, and
-signed expiry—plus the canonical status URI immutable across this lifecycle.
-They accept a 202 or status response only when that exact identity matches the
-one derived from the canonical submitted request archive. They accept a
-different canonical transaction hash for a newer exact Pending or Rejected
-attempt and for a global Applied winner under another authorized outer
-authority. Clients promote only that replacement hash to the reference checked
-by the next poll.
-Each command POST is a one-shot
-transport dispatch even when an ambient client policy would retry POST. An
-ambiguous dispatch is reconciled through the canonical status resource; another
-POST is permitted only after an exact Rejected attempt is observed and the same
-request is deliberately retried. Only Applied is globally final.
-
-Before commit, Torii recovers the configured authority's pending attempt
-through Queue's exact composite-key ownership index. If Queue startup recovery
-or an in-flight durability transition prevents a coherent ownership snapshot,
-status lookup and
-idempotent submission reconciliation return
-`503 kagemusha_operation_pending_unavailable` rather than guessing absent or
-pending. Any forward/reverse index or exact-carrier mismatch returns
-`503 kagemusha_operation_evidence_inconsistent`. A terminal consensus outcome,
-when present, takes precedence over process-local admission, Queue, and
-pipeline hints.
-
-After commit, synchronized replicas first recover the global Applied record by
-signed operation id and otherwise recover only the configured authority's
-Rejected attempt. Each record binds the complete request digest, signed
-transaction-wire digest, entrypoint intent hash, terminal result hash, and one
-exact height/phase/index locator. A global Applied record may name a different
-authorized submission authority and transaction hash when a cross-instance
-race committed the same economic request first; the request identity must still
-match exactly. Torii follows the locator directly to the retained ordinary
-block or flattened merge evidence; it never scans history or trusts a
-process-local pipeline hint over terminal consensus state. A replica that does
-not retain the referenced body or merge batch returns
-`503 kagemusha_operation_history_unavailable`. Malformed outcome state or any
-carrier/result mismatch returns
-`503 kagemusha_operation_evidence_inconsistent`. Applied results carry the
-non-zero finalized height from that exact evidence. The result wire deliberately
-omits server time because it is not authenticated by the operation's consensus
-proof. Deployments that cannot provide pre-commit affinity must not expose
-Offline command routes until shared admission coordination exists.
-
-Each command POST performs authoritative recovery before consulting transient
-readiness. Only the elected in-flight leader requires readiness to construct a
-new transaction; accepted replays and followers remain observable during a
-readiness outage. If claiming leadership, preflight, snapshot acquisition,
-amount conversion, signing, Queue admission, or accepted-binding publication
-fails, Torii performs one exact recovery before returning the stale failure, so
-a concurrently committed operation always wins reconciliation.
+An Applied body is not its own trust anchor. Maintained clients decode POST
+responses into a restricted unverified wrapper that exposes only operation ID,
+kind, lifecycle state, and finality-coordinate hints. They release the monetary
+result only after validation against a caller-pinned finality anchor; polling
+with that anchor remains the trusted terminal-result path.
 
 ## Sharp cutover and release gates
 

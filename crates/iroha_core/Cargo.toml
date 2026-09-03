@@ -345,6 +345,11 @@ name = "sccp_security"
 path = "tests/sccp_security.rs"
 required-features = ["iroha-core-tests"]
 
+[[test]]
+name = "alias_registry_routing"
+path = "tests/alias_registry_routing.rs"
+required-features = ["iroha-core-tests"]
+
 # Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
 
 [[test]]

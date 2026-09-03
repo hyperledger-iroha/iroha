@@ -89,7 +89,7 @@ class _AcceptingNativeVerifier:
     ) -> None:
         self.committee_calls.append(arguments)
 
-    def private_settlement_verify_auditor_capsule_response_v1(
+    def private_settlement_verify_auditor_capsule_response_with_request_v1(
         self, *arguments: Any
     ) -> None:
         self.capsule_calls.append(arguments)
@@ -106,7 +106,7 @@ class _RejectingNativeVerifier(_AcceptingNativeVerifier):
         raise ValueError("LEAK_CANARY_NATIVE_RESPONSE")
 
     private_settlement_verify_committee_proof_response_v1 = _reject
-    private_settlement_verify_auditor_capsule_response_v1 = _reject
+    private_settlement_verify_auditor_capsule_response_with_request_v1 = _reject
     private_settlement_verify_audit_approval_response_v1 = _reject
 
 
@@ -141,6 +141,7 @@ def _approval_request(fixture: dict[str, Any]) -> AtomicPrivateSettlementPrepare
         "body"
     ]["network_id"]
     body = {
+        "audit_policy": fixture["responses"]["auditor_capsule"]["access_audit_policy"],
         "approval": {
             "body": {
                 "version": 1,
@@ -163,6 +164,16 @@ def _approval_request(fixture: dict[str, Any]) -> AtomicPrivateSettlementPrepare
     }
     return AtomicPrivateSettlementPreparedRequestV1.from_native_prepared_json(
         AtomicPrivateSettlementOperationV1.AUDIT_APPROVAL,
+        json.dumps(body, separators=(",", ":")).encode("utf-8"),
+    )
+
+
+def _capsule_request(fixture: dict[str, Any]) -> AtomicPrivateSettlementPreparedRequestV1:
+    body = {
+        "audit_policy": fixture["responses"]["auditor_capsule"]["access_audit_policy"]
+    }
+    return AtomicPrivateSettlementPreparedRequestV1.from_native_prepared_json(
+        AtomicPrivateSettlementOperationV1.AUDITOR_CAPSULE,
         json.dumps(body, separators=(",", ":")).encode("utf-8"),
     )
 
@@ -345,12 +356,14 @@ def test_auditor_capsule_requires_exact_nonzero_authoritative_height() -> None:
         _ExactResponse(valid), verifier=verifier
     ).private_settlement_auditor_capsule_v1(
         fixture["identifiers"]["payload_hex"],
+        _capsule_request(fixture),
         auditor_signing_context=role,
     )
     assert json.loads(received.bytes()) == valid
     assert verifier.capsule_calls == [
         (
             json.dumps(valid, separators=(",", ":")).encode("utf-8"),
+            _capsule_request(fixture).bytes(),
             AtomicPrivateSettlementIdentifierV1(network_id).bytes,
             AtomicPrivateSettlementIdentifierV1(
                 fixture["identifiers"]["payload_hex"]
@@ -371,6 +384,7 @@ def test_auditor_capsule_requires_exact_nonzero_authoritative_height() -> None:
                 _ExactResponse(invalid)
             ).private_settlement_auditor_capsule_v1(
                 fixture["identifiers"]["payload_hex"],
+                _capsule_request(fixture),
                 auditor_signing_context=role,
             )
 
@@ -420,6 +434,7 @@ def test_auditor_capsule_attestation_rejects_substitution_and_type_confusion() -
                 _ExactResponse(candidate)
             ).private_settlement_auditor_capsule_v1(
                 fixture["identifiers"]["payload_hex"],
+                _capsule_request(fixture),
                 auditor_signing_context=role,
             )
 
@@ -427,6 +442,7 @@ def test_auditor_capsule_attestation_rejects_substitution_and_type_confusion() -
     with pytest.raises(AtomicPrivateSettlementToriiErrorV1, match="response is invalid"):
         _restricted_client(_ExactResponse(valid)).private_settlement_auditor_capsule_v1(
             fixture["identifiers"]["payload_hex"],
+            _capsule_request(fixture),
             auditor_signing_context=wrong_context,
         )
 
@@ -520,6 +536,7 @@ def test_approval_acknowledgement_binds_request_and_rejects_attestation_substitu
             )
 
     mismatched_request_body = {
+        "audit_policy": fixture["responses"]["auditor_capsule"]["access_audit_policy"],
         "approval": {
             "body": {
                 "version": 1,
@@ -567,6 +584,7 @@ def test_restricted_routes_require_and_redact_native_verification() -> None:
             "https://node.test", session=missing_session
         ).private_settlement_auditor_capsule_v1(
             payload,
+            _capsule_request(fixture),
             auditor_signing_context=role,
         )
     assert missing_session.calls == []
@@ -576,6 +594,7 @@ def test_restricted_routes_require_and_redact_native_verification() -> None:
             _ExactResponse(valid), verifier=_RejectingNativeVerifier()
         ).private_settlement_auditor_capsule_v1(
             payload,
+            _capsule_request(fixture),
             auditor_signing_context=role,
         )
     assert str(rejected.value) == "atomic private settlement response is invalid"

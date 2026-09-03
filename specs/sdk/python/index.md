@@ -82,18 +82,22 @@ print(assets, txs, holders)
 The first-release HTTP lifecycle consists of exactly four canonical routes:
 
 - `GET /v1/kagemusha/readiness`
-- `POST /v1/kagemusha/top-up`
+- payer-signed `POST /v1/kagemusha/top-up`
 - `POST /v1/kagemusha/redeem`
 - `GET /v1/kagemusha/operations/{operation_id}`
 
-POSTs send the typed request directly as canonical Norito and return `202
-Accepted` with a typed operation reference and `Location`. They do not accept
-JSON or whole-request base64 wrapper objects. The Python surface is
+Top-up submits one canonical versioned Norito `SignedTransaction` containing
+exactly one `TopUpKagemushaV1`; its verified authority must equal the embedded
+payer, and Torii forwards the same signed transaction without rebuilding it.
+Redemption sends its typed request directly as canonical Norito. Both return
+`202 Accepted` with a typed operation reference and `Location`, and neither
+accepts JSON or whole-request base64 wrapper objects. The Python surface is
 transport-only: it does not install recursive artifacts or claim a native
-prover. Top-up requests are limited to 512 KiB and redemption requests to 48
-MiB. The capability route is query-free and reports the universal,
-asset-neutral application capability. It is not backend readiness and does not
-evaluate an asset or dataspace.
+prover. The embedded top-up request is limited to 16 KiB and redemption requests
+to 8 KiB; top-up transaction framing uses the normal transaction ingress limit.
+The capability route is query-free and reports the universal, asset-neutral
+application capability. It is not backend readiness and does not evaluate an
+asset or dataspace.
 
 ```python
 from iroha_python import ToriiClient

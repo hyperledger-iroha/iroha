@@ -16,7 +16,8 @@ public final class IrohaPeerWireLimitsV1 {
     require(maximumCanonicalBytes > 0
         && maximumCanonicalBytes <= KagemushaWireV1.MAXIMUM_PAYMENT_BYTES);
     require(maximumKagemushaEncodedBytes > 0
-        && maximumKagemushaEncodedBytes <= KagemushaWireV1.MAXIMUM_PAYMENT_BYTES);
+        && maximumKagemushaEncodedBytes
+            <= KagemushaWireV1.MAXIMUM_PAYMENT_BYTES);
     this.maximumCanonicalBytes = maximumCanonicalBytes;
     this.maximumKagemushaEncodedBytes = maximumKagemushaEncodedBytes;
   }

@@ -1,4 +1,4 @@
-//! Catalog guards for the first-release Kagemusha API.
+//! Catalog guards for the first-release KAGEMUSHA API.
 #![cfg(feature = "app_api")]
 use iroha_torii_shared::{
     route_catalog::{CatalogProjection, EnabledFeatures, HttpMethod, RouteCatalog, kagemusha},
@@ -14,7 +14,9 @@ fn kagemusha_catalog_exposes_only_the_first_release_routes() {
         "/v1/kagemusha/operations/{operation_id}"
     );
     let catalog = RouteCatalog::new(kagemusha::ROUTES);
-    catalog.validate().expect("Kagemusha route catalog is valid");
+    catalog
+        .validate()
+        .expect("KAGEMUSHA route catalog is valid");
     let mounted = catalog.project(
         CatalogProjection::Mounted,
         EnabledFeatures::new(&["app_api"]),
@@ -51,6 +53,6 @@ fn kagemusha_catalog_projections_are_explicit() {
     assert_eq!(
         catalog.project(CatalogProjection::Mcp, features).len(),
         4,
-        "the universal Kagemusha interface must not require a separate feature flag"
+        "the universal KAGEMUSHA interface must not require a separate feature flag"
     );
 }

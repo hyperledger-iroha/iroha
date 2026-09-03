@@ -20,9 +20,10 @@ export {
   normalizeKagemushaReadinessV1,
   normalizeUnverifiedKagemushaOperationStatusV1,
   requireKagemushaJsonContentTypeV1,
+  requireKagemushaSubmissionResponseV1,
 } from "./kagemushaToriiV1.js";
 
-export { KagemushaV1 } from "./kagemushaV1.js";
+export { Kagemusha } from "./kagemusha.js";
 
 export {
   normalizeSccpCapabilities,

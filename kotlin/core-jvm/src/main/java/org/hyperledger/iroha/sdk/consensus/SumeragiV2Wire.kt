@@ -224,11 +224,11 @@ object SumeragiV2Wire {
             }
             if (kagemushaTopUpCount == 0L) {
                 require(kagemushaTopUpRoot == null) {
-                    "zero Kagemusha top-up count must not carry a root"
+                    "zero KAGEMUSHA top-up count must not carry a root"
                 }
             } else {
                 require(kagemushaTopUpRoot != null) {
-                    "non-zero Kagemusha top-up count requires a root"
+                    "non-zero KAGEMUSHA top-up count requires a root"
                 }
                 require(
                     postStateRoot == kagemushaTopUpPostStateRoot(
@@ -236,7 +236,7 @@ object SumeragiV2Wire {
                         ordinaryWritesRoot,
                         kagemushaTopUpRoot,
                     ),
-                ) { "post-state root does not bind the Kagemusha top-up projection" }
+                ) { "post-state root does not bind the KAGEMUSHA top-up projection" }
             }
             require(
                 nativeAmxApplicationManifestVersion ==
@@ -309,7 +309,7 @@ object SumeragiV2Wire {
                 kagemushaTopUpRoot: Hash32,
             ): Hash32 {
                 require(kagemushaTopUpCount in 1..0xffff_ffffL) {
-                    "Kagemusha top-up count must fit a non-zero unsigned 32-bit integer"
+                    "KAGEMUSHA top-up count must fit a non-zero unsigned 32-bit integer"
                 }
                 val preimage = ByteArrayOutputStream()
                 preimage.write(KAGEMUSHA_TOP_UP_POST_STATE_ROOT_DOMAIN)

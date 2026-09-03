@@ -314,13 +314,54 @@ fn load_node_config(path: &Path, allow_unresolved_hash: bool) -> Result<(actual:
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, bls_normal_pop_prove};
-    use iroha_data_model::peer::PeerId;
+    use iroha_data_model::{
+        block::consensus_v2::SumeragiV2GenesisContextParameters,
+        isi::kagemusha_v1::{
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
+            KagemushaMintFinalityGenesisParametersV1,
+        },
+        peer::PeerId,
+    };
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
     use std::fs;
     const CONFIGURED_HASH: &str =
         "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E";
     const FIXTURE_GENESIS_PUBLIC_KEY: &str =
         "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4";
+    fn complete_test_builder_for_topology(
+        builder: GenesisBuilder,
+        topology: &[GenesisTopologyEntry],
+    ) -> GenesisBuilder {
+        let mut validators = topology
+            .iter()
+            .map(|entry| entry.peer.clone())
+            .collect::<Vec<_>>();
+        validators.sort();
+        let validators = validators
+            .into_iter()
+            .enumerate()
+            .map(|(index, validator)| {
+                iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                    &[0xA0_u8.wrapping_add(u8::try_from(index).expect("small test roster")); 32],
+                    0,
+                    validator,
+                )
+                .expect("derive deterministic test mint-finality keys")
+            })
+            .collect();
+        builder
+            .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+            .with_kagemusha_mint_finality_genesis_parameters(
+                KagemushaMintFinalityGenesisParametersV1 {
+                    epoch_roster: KagemushaMintFinalityEpochRosterTemplateV1 {
+                        version: KAGEMUSHA_CHAIN_VERSION_V1,
+                        epoch: 0,
+                        validators,
+                    },
+                    next_epoch_roster: None,
+                },
+            )
+    }
     fn prepared_manifest(chain_id: ChainId) -> (RawGenesisTransaction, KeyPair) {
         let topology = (0..4)
             .map(|_| {
@@ -331,10 +372,13 @@ mod tests {
                 GenesisTopologyEntry::new(PeerId::new(validator.public_key().clone()), pop)
             })
             .collect::<Vec<_>>();
-        let manifest = GenesisBuilder::new_without_executor(chain_id, ".")
-            .set_topology(topology)
-            .build_raw()
-            .with_consensus_meta();
+        let manifest = complete_test_builder_for_topology(
+            GenesisBuilder::new_without_executor(chain_id, ".").set_topology(topology.clone()),
+            &topology,
+        )
+        .build_raw()
+        .expect("complete prepared-manifest fixture")
+        .with_consensus_meta();
         let genesis_key = KeyPair::try_random().expect("generate genesis key");
         (manifest, genesis_key)
     }

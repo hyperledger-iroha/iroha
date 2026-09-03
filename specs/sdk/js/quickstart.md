@@ -438,11 +438,11 @@ for await (const nft of torii.iterateAccountNfts("<i105-account-id>", {
 // env-driven pagination/filters so you can smoke-test permissions against a live Torii.
 ```
 
-## Kagemusha V1
+## KAGEMUSHA V1
 
 The JavaScript package exposes the universal readiness endpoint plus typed
-Kagemusha V1 top-up, redemption, and operation-status clients through
-`getOfflineCapability`, `submitKagemushaTopUp`,
+KAGEMUSHA V1 top-up, redemption, and operation-status clients through
+`getKagemushaReadiness`, `submitKagemushaTopUp`,
 `submitKagemushaRedemption`, and `getKagemushaOperation`. Submit only
 canonical V1 Norito requests. The client derives the idempotency key from the
 request, validates the returned operation identity and kind, and withholds an

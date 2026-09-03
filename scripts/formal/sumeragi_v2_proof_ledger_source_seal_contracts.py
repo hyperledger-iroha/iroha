@@ -594,6 +594,7 @@ _KURA_PRODUCTION_COMPONENT_FILES = (
     "kura/block_store_definition_and_test_controls.rs",
     "kura/startup_finality_session_reads.rs",
     "kura/pipeline_and_lane_artifacts.rs",
+    "kura/canonical_autonomous_replica.rs",
     "kura/autonomous_terminal_capacity.rs",
     "kura/autonomous_publication_temp_recovery.rs",
     "kura/historical_autonomous_recovery_temp_reconciliation.rs",
@@ -635,6 +636,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'block/bootstrap_and_genesis_tests.rs',
     ),
     'crates/iroha_config/src/parameters/actual.rs': (
+        'actual/torii_sccp_replay_archive.rs',
         'actual/torii_tx_history.rs',
         'actual/torii_http_transport.rs',
         'actual/torii_mcp_profile.rs',
@@ -650,6 +652,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'user_soranet_handshake_tests.rs',
         'user/torii_peer_geo.rs',
         'user/torii_soranet_privacy_ingest.rs',
+        'user/torii_sccp_replay_archive.rs',
         'user/torii_tx_history.rs',
         'user/sorafs_moderation_query_bound_tests.rs',
         'user/governance_dag_head_mode_tests.rs',
@@ -657,6 +660,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'user/zk_attachment_retention_tests.rs',
         'user/query_fanout_memory_tests.rs',
         'user/app_routed_read_body_timeout_tests.rs',
+        'user/torii_api_connect_exactness_tests.rs',
         'user/operator_signature_body_timeout_tests.rs',
         'user/verified_source_ingress_tests.rs',
         'user/iso_bridge_store_memory_tests.rs',
@@ -701,6 +705,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'kura/tests/07j_certified_bundle_capacity_tests.rs',
         'kura/tests/07k_historical_atomic_temp_recovery_tests.rs',
         'kura/tests/07l_pending_canonical_capacity_tests.rs',
+        'kura/tests/07m_canonical_autonomous_replica_tests.rs',
         'kura/tests/08_lane_receipts_and_artifacts.rs',
         'kura/tests/08a_certified_lane_block_read_tests.rs',
         'kura/tests/08b_lane_history_compaction_capacity_tests.rs',
@@ -3519,7 +3524,7 @@ _STABLE_LIVENESS_REPAIR_ITEM_SHA256 = {
         "9f93740ea85f6c7d320b25b97b182aa4fd19af763837dbe64473feed3ef89722"
     ),
     "V2LaneWorkAdapter::accept_historical_recovery_response": (
-        "56b8cb036dc038f74c2a6f92ad4ebd24016415182e3d26608cb6b4cf7bb02102"
+        "00e3349fcff2893bfd4e6c5907848d5f8081e839250cbd9e988e6cb2d33c9d4b"
     ),
     "V2LaneWorkAdapter::authenticates_certified_merge_sidecar_service_for_requester": (
         "4121046358ab568ad4f9730de806534e17b48aeec63541f123b61b60c88116db"

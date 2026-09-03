@@ -1,6 +1,6 @@
 //! Circuit components for reserve-backed mint credits and recursive roster authority.
 //!
-//! The mint certificate relation is deliberately split from the final recursive wrapper.  This
+//! The mint certificate relation is deliberately split from the final recursive relation.  This
 //! module proves the expensive, reusable part of the relation: an exact quorum of the dynamic
 //! epoch roster signed the block-local paired top-up root, and the credited statement/amount is a
 //! member of that root.  It also derives a circuit-authenticated roster-state digest.  The final
@@ -43,7 +43,10 @@ use iroha_data_model::{
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
 
-use super::{DigestV1, KagemushaPastaParityV1};
+use super::{
+    DigestV1, KagemushaPastaParityV1,
+    mint_finality::{MINT_LEAF_DOMAIN_V1, MINT_NODE_DOMAIN_V1},
+};
 use crate::zk::{
     kagemusha_v1_poseidon::{
         KagemushaPoseidonChipV1, KagemushaPoseidonFieldV1, decode, digest_limbs, from_u128,
@@ -55,8 +58,6 @@ use crate::zk::{
 };
 
 const MINIMUM_UNUSABLE_ROWS: usize = 9;
-const MINT_LEAF_DOMAIN_V1: u64 = u64::from_le_bytes(*b"ocmintl1");
-const MINT_NODE_DOMAIN_V1: u64 = u64::from_le_bytes(*b"ocmintn1");
 const MINT_ROOT_BRIDGE_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-finality-root";
 const MINT_SEAL_MESSAGE_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-finality-seal-message";
 const MINT_CHALLENGE_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-finality:challenge";
@@ -94,7 +95,7 @@ pub struct KagemushaMintCertificateWitnessV1 {
     pub membership: KagemushaTopUpMembershipWitnessV1,
     /// Exact current-epoch `2f + 1` paired Pasta seal bundle.
     pub seal_bundle: KagemushaMintFinalitySealBundleV1,
-    /// Complete dynamic epoch roster.  The recursive wrapper must authenticate its derived state
+    /// Complete dynamic epoch roster.  The recursive relation must authenticate its derived state
     /// digest; it is not trusted merely because it is present here.
     pub epoch_roster: KagemushaMintFinalityEpochRosterV1,
 }
@@ -382,8 +383,7 @@ pub(super) fn build_kagemusha_mint_certificate_pair_v1(
             .chain(ep_assigned.certificate_binding_digest)
             .collect(),
     ];
-    if eq_builder.assigned_instances[0].len()
-        != KAGEMUSHA_MINT_CERTIFICATE_PUBLIC_INSTANCE_COUNT_V1
+    if eq_builder.assigned_instances[0].len() != KAGEMUSHA_MINT_CERTIFICATE_PUBLIC_INSTANCE_COUNT_V1
         || ep_builder.assigned_instances[0].len()
             != KAGEMUSHA_MINT_CERTIFICATE_PUBLIC_INSTANCE_COUNT_V1
     {
@@ -574,12 +574,7 @@ where
     let marked_root = mark_iroha_hash(ctx, gate, bridge);
 
     let message = &witness.seal_bundle.message;
-    let top_up_count = assign_uint(
-        ctx,
-        &range,
-        u128::from(message.kagemusha_top_up_count),
-        32,
-    );
+    let top_up_count = assign_uint(ctx, &range, u128::from(message.kagemusha_top_up_count), 32);
     let top_up_count_is_zero = gate.is_zero(ctx, top_up_count);
     let enabled_zero_count = gate.mul(
         ctx,

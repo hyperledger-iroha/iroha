@@ -25,7 +25,7 @@ VALIDATOR = ROOT / "scripts/validate_norito_bridge_xcframework.py"
 SOURCE_DATE_EPOCH = "1700000001"
 NORMALIZED_ZIP_TIME = (2023, 11, 14, 22, 13, 20)
 KNOWN_FIXTURE_ARCHIVE_SHA256 = (
-    "2bf1628975247c1fe1ff42f88cede8eac80a8bd76f5516164eeddbecaa3bd302"
+    "b000afe2fe85917556269f8650e1af1e53f593fea03fe8f63853385127adccf7"
 )
 SLICE_METADATA = {
     "ios-arm64": ("ios", ["arm64"], None),
@@ -208,8 +208,16 @@ validator = load("mechanical_archive_validator", Path(sys.argv[2]))
 validator._validate_repository_provenance = lambda _root, _payload: None
 owner._load_generation_validator = lambda: validator
 owner._validate_native_binaries = lambda _snapshot, _validator: None
-digest, size = owner.archive_xcframework(sys.argv[3], sys.argv[4], sys.argv[5])
-print(f"{digest} {size}")
+if "--exercise-owner-cli" in sys.argv[6:]:
+    sys.argv = [
+        str(sys.argv[1]), "--xcframework", sys.argv[3],
+        "--output", sys.argv[4], "--scratch-dir", sys.argv[5],
+        *(["--allow-dirty-source"] if "--allow-dirty-source" in sys.argv[6:] else []),
+    ]
+    owner.main()
+else:
+    digest, size = owner.archive_xcframework(sys.argv[3], sys.argv[4], sys.argv[5])
+    print(f"{digest} {size}")
 """,
             encoding="utf-8",
         )
@@ -221,6 +229,8 @@ print(f"{digest} {size}")
         expect_success: bool = True,
         environment_updates: dict[str, str] | None = None,
         pass_fds: tuple[int, ...] = (),
+        owner_cli: bool = False,
+        allow_dirty_source: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         environment = os.environ.copy()
         environment["SOURCE_DATE_EPOCH"] = SOURCE_DATE_EPOCH
@@ -239,6 +249,8 @@ print(f"{digest} {size}")
                 str(self.framework),
                 str(output),
                 str(self.scratch_root),
+                *(["--exercise-owner-cli"] if owner_cli else []),
+                *(["--allow-dirty-source"] if allow_dirty_source else []),
             ],
             check=False,
             capture_output=True,
@@ -252,6 +264,87 @@ print(f"{digest} {size}")
         if not expect_success and result.returncode == 0:
             self.fail("archive owner unexpectedly succeeded")
         return result
+
+    def test_dirty_archive_cli_requires_explicit_allowance(self) -> None:
+        """Exercise full CLI publication with labeled provenance/native doubles."""
+        manifest_path = self.framework / "NoritoBridge.artifacts.json"
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        payload["source_tree_dirty"] = True
+        manifest_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        output = self.output_root / "dirty-local.zip"
+        rejected = self._run(output, expect_success=False, owner_cli=True)
+        self.assertIn("clean source tree", rejected.stderr)
+        self.assertFalse(output.exists())
+
+        accepted = self._run(output, owner_cli=True, allow_dirty_source=True)
+        self.assertIn("[norito-bridge-archive] sha256=", accepted.stdout)
+        with zipfile.ZipFile(output) as archive:
+            archived_manifest = json.loads(
+                archive.read("NoritoBridge.xcframework/NoritoBridge.artifacts.json")
+            )
+        self.assertTrue(archived_manifest["source_tree_dirty"])
+        self.assertEqual(
+            archived_manifest["source_fingerprint_sha256"],
+            payload["source_fingerprint_sha256"],
+        )
+
+    def test_dirty_archive_cli_keeps_real_tool_provenance(self) -> None:
+        """The actual owner/validator, without mocks, must reject absent Cargo."""
+        manifest_path = self.framework / "NoritoBridge.artifacts.json"
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        payload["source_tree_dirty"] = True
+        manifest_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        output = self.output_root / "unverified-dirty.zip"
+        environment = os.environ.copy()
+        environment.update({
+            "SOURCE_DATE_EPOCH": SOURCE_DATE_EPOCH,
+            "NORITO_BRIDGE_SEAL_CARGO": str(self.root / "missing-cargo"),
+        })
+        environment.pop("NORITO_BRIDGE_OUTPUT_LOCK_FD", None)
+        result = subprocess.run(
+            [
+                sys.executable, "-I", "-S", "-B", str(OWNER),
+                "--xcframework", str(self.framework),
+                "--output", str(output),
+                "--scratch-dir", str(self.scratch_root),
+                "--allow-dirty-source",
+            ],
+            env=environment, capture_output=True, text=True, check=False, timeout=30,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unable to authenticate artifact source provenance", result.stderr)
+        self.assertIn("missing-cargo", result.stderr)
+        self.assertFalse(output.exists())
+
+    def test_builder_forwards_only_explicit_dirty_archive_allowance(self) -> None:
+        """Execute actual argument assembly without invoking a native build."""
+        source = (ROOT / "scripts/build_norito_xcframework.sh").read_text(encoding="utf-8")
+        self.assertIn("ALLOW_DIRTY_SOURCE=0", source)
+        fragment = source.split("  ARCHIVE_OWNER_ARGUMENTS=(", 1)[1].split("\n  env -i \\\n", 1)[0]
+        fragment = "  ARCHIVE_OWNER_ARGUMENTS=(" + fragment
+        invocation = source.split('"$PYTHON_BINARY" -I -S -B "$ARCHIVE_OWNER"', 1)[1]
+        self.assertTrue(invocation.startswith(' \\\n      "${ARCHIVE_OWNER_ARGUMENTS[@]}"\n'))
+        environment = {
+            "PATH": "/usr/bin:/bin",
+            "FINAL_XCFRAMEWORK": "/external artifacts/NoritoBridge.xcframework",
+            "ARCHIVE_OUTPUT": "/external artifacts/NoritoBridge.xcframework.zip",
+            "BUILD_DIR": "/external scratch",
+        }
+        expected = [
+            "--xcframework", environment["FINAL_XCFRAMEWORK"],
+            "--output", environment["ARCHIVE_OUTPUT"],
+            "--scratch-dir", environment["BUILD_DIR"],
+        ]
+        for allowance in ("0", "1", "true"):
+            with self.subTest(allowance=allowance):
+                result = subprocess.run(
+                    ["/bin/bash", "-euc", fragment + '\nprintf "%s\\0" "${ARCHIVE_OWNER_ARGUMENTS[@]}"'],
+                    env={**environment, "ALLOW_DIRTY_SOURCE": allowance},
+                    capture_output=True, check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                arguments = result.stdout.decode().split("\0")[:-1]
+                self.assertEqual(arguments, expected + (["--allow-dirty-source"] if allowance == "1" else []))
 
     def test_sorted_archive_is_stable_across_source_mtime_and_mode_changes(self) -> None:
         first = self.output_root / "first.zip"
@@ -780,17 +873,17 @@ print(f"{digest} {size}")
         self.assertNotIn("write_embedded_manifest", builder)
         self.assertNotIn("after migration", builder)
 
-    def test_checker_nested_source_seal_is_no_site_and_no_bytecode(self) -> None:
+    def test_checker_source_authentication_is_no_site_and_no_bytecode(self) -> None:
         checker = (ROOT / "scripts/check_mobile_sdk_artifacts.sh").read_text(
             encoding="utf-8"
         )
         self.assertIn(
-            'source_seal_python,\n            "-I",\n            "-S",\n            "-B",',
+            '"$CHECK_PYTHON_BINARY" -I -S -B "$@"',
             checker,
         )
+        self.assertIn("run_source_authenticated_python", checker)
+        self.assertIn("--verify-repository-provenance", checker)
         self.assertIn('symbols="$(nm -gUj "$binary"', checker)
-        self.assertIn("for line in captured.splitlines()", checker)
-        self.assertNotIn('["nm", "-gUj", binary]', checker)
 
     def test_native_architecture_and_export_inventory_is_authenticated(self) -> None:
         owner = load_owner_module()

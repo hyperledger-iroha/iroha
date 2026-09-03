@@ -18,12 +18,16 @@ use iroha_core::private_settlement::{
     PrivateSettlementPhaseSignerV1, PrivateSettlementReconciliationCandidateV1,
     PrivateSettlementRestrictedSidecarV1, PrivateSettlementSidecarLifecycleV1,
     PrivateSettlementSidecarStoreConfigV1, PrivateSettlementSidecarStoreErrorV1,
-    PrivateSettlementSidecarStoreOutcomeV1, validate_private_settlement_committee_authority_v1,
+    PrivateSettlementSidecarStoreOutcomeV1, fetch_private_settlement_auditor_view_v1,
+    validate_private_settlement_committee_authority_v1,
 };
 use iroha_core::state::StateReadOnly as _;
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::{
-    isi::private_settlement::{AbortAtomicPrivateSettlementV1, FinalizeAtomicPrivateSettlementV1},
+    isi::private_settlement::{
+        AbortAtomicPrivateSettlementV1, FinalizeAtomicPrivateSettlementV1,
+        RegisterAtomicPrivateSettlementPrepareV1,
+    },
     nexus::{
         ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, PrivateSettlementAbortReasonV1,
         PrivateSettlementAuditApprovalAcknowledgementAttestationBodyV1,
@@ -36,16 +40,16 @@ use iroha_data_model::{
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_torii_shared::private_settlement_api::{
     PrivateSettlementAuditApprovalRequestV1, PrivateSettlementAuditApprovalResponseV1,
-    PrivateSettlementAuditorCapsuleResponseV1, PrivateSettlementAvailabilityShareRequestV1,
-    PrivateSettlementAvailabilityShareResponseV1, PrivateSettlementBundleReceiptResponseV1,
-    PrivateSettlementBundleStatusResponseV1, PrivateSettlementBundleSubmitRequestV1,
-    PrivateSettlementBundleSubmitResponseV1, PrivateSettlementCommitVoteRequestV1,
-    PrivateSettlementCommitteeProofResponseV1, PrivateSettlementLegStatusResponseV1,
-    PrivateSettlementLegUploadDispositionV1, PrivateSettlementLegUploadRequestV1,
-    PrivateSettlementLegUploadResponseV1, PrivateSettlementLifecycleDtoV1,
-    PrivateSettlementPhaseCertificateRequestV1, PrivateSettlementPhaseCertificateResponseV1,
-    PrivateSettlementPhaseCertificatesResponseV1, PrivateSettlementPhaseVoteResponseV1,
-    PrivateSettlementPrepareVoteRequestV1,
+    PrivateSettlementAuditorCapsuleRequestV1, PrivateSettlementAuditorCapsuleResponseV1,
+    PrivateSettlementAvailabilityShareRequestV1, PrivateSettlementAvailabilityShareResponseV1,
+    PrivateSettlementBundleReceiptResponseV1, PrivateSettlementBundleStatusResponseV1,
+    PrivateSettlementBundleSubmitRequestV1, PrivateSettlementBundleSubmitResponseV1,
+    PrivateSettlementCommitVoteRequestV1, PrivateSettlementCommitteeProofResponseV1,
+    PrivateSettlementLegStatusResponseV1, PrivateSettlementLegUploadDispositionV1,
+    PrivateSettlementLegUploadRequestV1, PrivateSettlementLegUploadResponseV1,
+    PrivateSettlementLifecycleDtoV1, PrivateSettlementPhaseCertificateRequestV1,
+    PrivateSettlementPhaseCertificateResponseV1, PrivateSettlementPhaseCertificatesResponseV1,
+    PrivateSettlementPhaseVoteResponseV1, PrivateSettlementPrepareVoteRequestV1,
 };
 use std::{path::PathBuf, str::FromStr as _, sync::Arc, time::Duration};
 
@@ -64,6 +68,17 @@ const fn private_settlement_carrier_height_is_live_v1(
         return false;
     };
     current_height >= authority_context_height && candidate_height <= expiry_height
+}
+
+const fn private_settlement_prepare_registration_height_is_live_v1(
+    current_height: u64,
+    authority_context_height: u64,
+    expiry_height: u64,
+) -> bool {
+    let Some(finalization_candidate_height) = current_height.checked_add(2) else {
+        return false;
+    };
+    current_height >= authority_context_height && finalization_candidate_height <= expiry_height
 }
 
 const fn private_settlement_abort_height_is_admissible_v1(
@@ -293,6 +308,27 @@ mod governed_sidecar_store_config_tests {
         assert!(!private_settlement_carrier_height_is_live_v1(20, 10, 20));
         assert!(!private_settlement_carrier_height_is_live_v1(21, 10, 20));
         assert!(!private_settlement_carrier_height_is_live_v1(
+            u64::MAX,
+            10,
+            u64::MAX,
+        ));
+    }
+
+    #[test]
+    fn prepare_registration_reserves_a_successor_finalization_block() {
+        assert!(!private_settlement_prepare_registration_height_is_live_v1(
+            9, 10, 20
+        ));
+        assert!(private_settlement_prepare_registration_height_is_live_v1(
+            10, 10, 20
+        ));
+        assert!(private_settlement_prepare_registration_height_is_live_v1(
+            18, 10, 20
+        ));
+        assert!(!private_settlement_prepare_registration_height_is_live_v1(
+            19, 10, 20
+        ));
+        assert!(!private_settlement_prepare_registration_height_is_live_v1(
             u64::MAX,
             10,
             u64::MAX,
@@ -581,6 +617,7 @@ struct PrivateSettlementTestNetworkStateCountsV1 {
     staged_pool_heads: u64,
     staged_nullifiers: u64,
     staged_output_commitments: u64,
+    replicated_staged_locks: u64,
     staged_locks: u64,
 }
 
@@ -594,6 +631,7 @@ struct PrivateSettlementTestNetworkStateEvidenceResponseV1 {
     height: u64,
     commitment: Hash,
     ledger_commitment: Hash,
+    replicated_staged_lock_commitment: Hash,
     staged_lock_commitment: Hash,
     counts: PrivateSettlementTestNetworkStateCountsV1,
 }
@@ -654,6 +692,20 @@ pub(crate) async fn handler_test_network_state_commitment(
             );
         }
     };
+    let replicated_staged = match app
+        .state
+        .view()
+        .world()
+        .private_settlement_replicated_staged_lock_evidence_v1()
+    {
+        Ok(evidence) => evidence,
+        Err(_) => {
+            return error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "private_settlement_state_evidence_unavailable",
+            );
+        }
+    };
     let staged = match runtime
         .store()
         .and_then(|store| store.staged_lock_evidence_v1().map_err(map_store_error))
@@ -671,6 +723,7 @@ pub(crate) async fn handler_test_network_state_commitment(
         PRIVATE_SETTLEMENT_TEST_NETWORK_STATE_EVIDENCE_DOMAIN_V1,
         &height.to_le_bytes(),
         ledger.commitment.as_ref(),
+        replicated_staged.commitment.as_ref(),
         staged.commitment.as_ref(),
     ]);
     let counts = PrivateSettlementTestNetworkStateCountsV1 {
@@ -686,6 +739,7 @@ pub(crate) async fn handler_test_network_state_commitment(
         staged_pool_heads: staged.counts.pool_heads,
         staged_nullifiers: staged.counts.nullifiers,
         staged_output_commitments: staged.counts.output_commitments,
+        replicated_staged_locks: replicated_staged.count,
         staged_locks: staged.counts.total,
     };
     let mut response = JsonBody(PrivateSettlementTestNetworkStateEvidenceResponseV1 {
@@ -693,6 +747,7 @@ pub(crate) async fn handler_test_network_state_commitment(
         height,
         commitment,
         ledger_commitment: ledger.commitment,
+        replicated_staged_lock_commitment: replicated_staged.commitment,
         staged_lock_commitment: staged.commitment,
         counts,
     })
@@ -1248,7 +1303,14 @@ pub(crate) async fn handler_commit_vote(
     {
         return response;
     }
-    let vote = match signer.commit_vote(store, request.payload_digest, &request.barrier, height) {
+    let state = app.state.view();
+    let vote = match signer.commit_vote(
+        &state,
+        store,
+        request.payload_digest,
+        &request.barrier,
+        height,
+    ) {
         Ok(vote) => vote,
         Err(error) => return map_phase_error(error),
     };
@@ -1523,6 +1585,7 @@ fn governed_auditor_view(
     app: &SharedAppState,
     runtime: &PrivateSettlementToriiRuntimeV1,
     payload_digest: &str,
+    access_policy: &iroha_data_model::nexus::PrivateSettlementAuditPolicyV1,
     signing_key: &PublicKey,
 ) -> Result<
     (
@@ -1533,12 +1596,18 @@ fn governed_auditor_view(
     Response,
 > {
     let store = runtime.store()?;
-    let height = authoritative_height(app)?;
+    let state = app.state.view();
+    let height = u64::try_from(state.height()).map_err(|_| {
+        error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "private_settlement_height_unavailable",
+        )
+    })?;
     active_config(app, height)?;
     let digest = parse_digest(payload_digest)?;
-    let authenticated = store
-        .fetch_for_auditor_signing_key(digest, signing_key, height)
-        .map_err(map_store_error)?;
+    let authenticated =
+        fetch_private_settlement_auditor_view_v1(&state, store, digest, access_policy, signing_key)
+            .map_err(map_store_error)?;
     Ok((digest, height, authenticated))
 }
 
@@ -1548,21 +1617,29 @@ pub(crate) async fn handler_auditor_capsule(
     Extension(runtime): Extension<PrivateSettlementToriiRuntimeV1>,
     Extension(authenticated): Extension<crate::operator_signatures::AuthenticatedOperatorPublicKey>,
     Path(payload_digest): Path<String>,
+    NoritoJson(request): NoritoJson<PrivateSettlementAuditorCapsuleRequestV1>,
 ) -> Response {
     let Ok(signer) = runtime.availability_signer() else {
         return private_settlement_unavailable();
     };
-    let (payload_digest, authoritative_height, authenticated_view) =
-        match governed_auditor_view(&app, &runtime, &payload_digest, &authenticated.0) {
-            Ok(value) => value,
-            Err(response) => return response,
-        };
+    let (payload_digest, authoritative_height, authenticated_view) = match governed_auditor_view(
+        &app,
+        &runtime,
+        &payload_digest,
+        &request.audit_policy,
+        &authenticated.0,
+    ) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let access_audit_policy = authenticated_view.access_policy;
     let view = authenticated_view.view;
     let lifecycle = lifecycle_dto(view.lifecycle);
     let view_digest = match (PrivateSettlementAuditorViewDigestMaterialV1 {
         version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
         authoritative_height,
         manifest: view.manifest.clone(),
+        access_audit_policy: access_audit_policy.clone(),
         audit_policy: view.policy.clone(),
         committee_authority: view.authority.clone(),
         statement: view.statement.clone(),
@@ -1609,6 +1686,7 @@ pub(crate) async fn handler_auditor_capsule(
     JsonBody(PrivateSettlementAuditorCapsuleResponseV1 {
         authoritative_height,
         manifest: view.manifest,
+        access_audit_policy,
         audit_policy: view.policy,
         committee_authority: view.authority,
         statement: view.statement,
@@ -1632,13 +1710,20 @@ pub(crate) async fn handler_auditor_approval(
     let Ok(signer) = runtime.availability_signer() else {
         return private_settlement_unavailable();
     };
-    let (digest, height, authenticated_view) =
-        match governed_auditor_view(&app, &runtime, &payload_digest, &authenticated.0) {
-            Ok(value) => value,
-            Err(response) => return response,
-        };
+    let (digest, height, authenticated_view) = match governed_auditor_view(
+        &app,
+        &runtime,
+        &payload_digest,
+        &request.audit_policy,
+        &authenticated.0,
+    ) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
     let approval: PrivateSettlementAuditApprovalV1 = request.approval;
-    if approval.body.auditor_id != authenticated_view.auditor_id {
+    if authenticated_view.access_policy != authenticated_view.view.policy
+        || approval.body.auditor_id != authenticated_view.auditor_id
+    {
         return private_settlement_unavailable();
     }
     let authority = authenticated_view.view.authority.clone();
@@ -1742,6 +1827,7 @@ pub(crate) async fn handler_auditor_approval(
 }
 
 enum ExactPrivateSettlementCarrierV1<'a> {
+    RegisterPrepare(&'a RegisterAtomicPrivateSettlementPrepareV1),
     Finalize(&'a FinalizeAtomicPrivateSettlementV1),
     Abort(&'a AbortAtomicPrivateSettlementV1),
 }
@@ -1749,6 +1835,7 @@ enum ExactPrivateSettlementCarrierV1<'a> {
 impl ExactPrivateSettlementCarrierV1<'_> {
     fn manifest(&self) -> &iroha_data_model::nexus::AtomicPrivateSettlementV1 {
         match self {
+            Self::RegisterPrepare(carrier) => &carrier.barrier.manifest,
             Self::Finalize(carrier) => &carrier.commit_bundle.manifest,
             Self::Abort(carrier) => &carrier.manifest,
         }
@@ -1760,6 +1847,15 @@ impl ExactPrivateSettlementCarrierV1<'_> {
             return false;
         }
         match self {
+            Self::RegisterPrepare(carrier) => {
+                private_settlement_prepare_registration_height_is_live_v1(
+                    current_height,
+                    manifest.authority_context_height,
+                    manifest.expiry_height,
+                ) && carrier.barrier.validate_shape().is_ok()
+                    && carrier.barrier.deltas.len() <= usize::from(max_participants)
+                    && carrier.barrier.prepare_certificates.len() == carrier.barrier.deltas.len()
+            }
             Self::Finalize(carrier) => {
                 let candidate_receipt = carrier
                     .commit_bundle
@@ -1798,6 +1894,9 @@ fn exact_private_settlement_carrier(
         ));
     }
     let instruction = instructions[0].as_any();
+    if let Some(carrier) = instruction.downcast_ref::<RegisterAtomicPrivateSettlementPrepareV1>() {
+        return Ok(ExactPrivateSettlementCarrierV1::RegisterPrepare(carrier));
+    }
     if let Some(carrier) = instruction.downcast_ref::<FinalizeAtomicPrivateSettlementV1>() {
         return Ok(ExactPrivateSettlementCarrierV1::Finalize(carrier));
     }
@@ -1810,7 +1909,7 @@ fn exact_private_settlement_carrier(
     ))
 }
 
-/// Admit one exact sponsor-signed global finalization or abort carrier.
+/// Admit one exact sponsor-signed global Prepare-lock, finalization, or abort carrier.
 pub(crate) async fn handler_bundle_submit(
     State(app): State<SharedAppState>,
     Extension(authenticated): Extension<VerifiedCanonicalRequest>,

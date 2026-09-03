@@ -3857,8 +3857,8 @@ fn native_instruction_ds_effect_disposition(
     // instructions under `PerQualifyingTransferInstruction`.
     if let Some(top_up) = instruction
         .as_any()
-        .downcast_ref::<iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1>(
-    ) {
+        .downcast_ref::<iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1>()
+    {
         return if &top_up.request.asset == fee_asset_definition_id {
             NativeInstructionDsEffectDisposition::AuditedKagemushaV1Conversion
         } else {
@@ -3867,8 +3867,8 @@ fn native_instruction_ds_effect_disposition(
     }
     if let Some(redeem) = instruction
         .as_any()
-        .downcast_ref::<iroha_data_model::isi::kagemusha_v1::RedeemKagemushaV1>(
-    ) {
+        .downcast_ref::<iroha_data_model::isi::kagemusha_v1::RedeemKagemushaV1>()
+    {
         return if &redeem.request.voucher.statement.lifecycle.asset == fee_asset_definition_id {
             NativeInstructionDsEffectDisposition::AuditedKagemushaV1Conversion
         } else {
@@ -4038,6 +4038,10 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::privacy::RotatePrivacyZkAcePolicyV1,
         iroha_data_model::isi::privacy::RevokePrivacyZkAcePolicyV1,
         iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1,
+        // The complete all-Prepare control-lock carrier is still an ordinary
+        // sponsor-paid transaction; this classification only avoids requiring
+        // a second legacy inline treasury transfer inside its one-ISI payload.
+        iroha_data_model::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1,
         iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1,
         // The global private-settlement carrier mutates only opaque roots,
         // nullifiers, commitments, ciphertexts, and its receipt. Its public
@@ -4171,17 +4175,14 @@ fn collect_instruction_asset_transfers(
                     .downcast_ref::<iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1>()
                 {
                     (
-                        core::any::type_name::<
-                            iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1,
-                        >(),
+                        core::any::type_name::<iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1>(
+                        ),
                         top_up.request.validate_shape().is_ok(),
                     )
-                } else if let Some(redeem) =
-                    instruction
-                        .as_any()
-                        .downcast_ref::<iroha_data_model::isi::kagemusha_v1::RedeemKagemushaV1>(
-                        )
-                {
+                } else if let Some(redeem) = instruction
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::kagemusha_v1::RedeemKagemushaV1>(
+                ) {
                     (
                         core::any::type_name::<
                             iroha_data_model::isi::kagemusha_v1::RedeemKagemushaV1,
@@ -4194,13 +4195,11 @@ fn collect_instruction_asset_transfers(
                     );
                 };
                 if !valid_public_binding {
-                    return Err(
-                        ValidationFeeAdmissionError::InvalidKagemushaV1Conversion {
-                            context_index,
-                            instruction_index,
-                            instruction_wire_id,
-                        },
-                    );
+                    return Err(ValidationFeeAdmissionError::InvalidKagemushaV1Conversion {
+                        context_index,
+                        instruction_index,
+                        instruction_wire_id,
+                    });
                 }
             }
             NativeInstructionDsEffectDisposition::GuardedDeferredEffect

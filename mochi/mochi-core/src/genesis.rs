@@ -1,13 +1,18 @@
 //! Mochi-specific extensions for Kagami-generated genesis manifests.
+use iroha_crypto::Hash;
 use iroha_data_model::{
     account::Account,
     asset::{AssetBalancePolicy, AssetDefinition},
     domain::Domain,
+    isi::kagemusha_v1::{
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
+        KagemushaMintFinalityGenesisParametersV1,
+    },
     isi::{Grant, GrantBox, Mint, MintBox, Register, RegisterBox},
     metadata::Metadata,
     nexus::DataSpaceId,
     permission::Permission,
-    prelude::{AccountId, AssetDefinitionId, AssetId, DomainId, NumericSpec},
+    prelude::{AccountId, AssetDefinitionId, AssetId, DomainId, NumericSpec, PeerId},
 };
 use iroha_executor_data_model::permission::{
     account::{AccountAliasPermissionScope, CanManageAccountAlias, CanRegisterAccount},
@@ -34,6 +39,71 @@ const LOCAL_ONBOARDING_FEE_ASSET_DOMAIN: &str = "universal.universal";
 const LOCAL_ONBOARDING_FEE_ASSET_NAME: &str = "xor";
 const LOCAL_ONBOARDING_FEE_ASSET_SCALE: u32 = 9;
 const LOCAL_ONBOARDING_FEE_BALANCE: u64 = 10;
+
+/// Derive the public mint-finality authority for a disposable Mochi developer sandbox.
+///
+/// Mochi intentionally derives throwaway, per-generation seed material from public sandbox
+/// identifiers. This keeps generated manifests reproducible within a generation while remaining
+/// separate from consensus BLS key material. It is not a deployment-key provisioning fallback.
+///
+/// # Errors
+///
+/// Returns an error if paired-Pasta key derivation fails or the exact validator roster is not a
+/// canonical `3f + 1` committee.
+pub(crate) fn dev_sandbox_kagemusha_mint_finality_parameters(
+    chain_id: &str,
+    generation_id: &str,
+    validators: impl IntoIterator<Item = PeerId>,
+) -> color_eyre::Result<KagemushaMintFinalityGenesisParametersV1> {
+    let mut validators = validators.into_iter().collect::<Vec<_>>();
+    validators.sort();
+    let validators = validators
+        .into_iter()
+        .enumerate()
+        .map(|(index, validator)| {
+            let validator_text = validator.to_string();
+            let mut seed_material = b"iroha:mochi:dev-sandbox:kagemusha-mint-finality:v1"
+                .as_slice()
+                .to_vec();
+            for component in [chain_id.as_bytes(), generation_id.as_bytes(), validator_text.as_bytes()] {
+                seed_material.extend_from_slice(
+                    &u64::try_from(component.len())
+                        .expect("Mochi sandbox seed component length fits u64")
+                        .to_le_bytes(),
+                );
+                seed_material.extend_from_slice(component);
+            }
+            seed_material.extend_from_slice(
+                &u64::try_from(index)
+                    .expect("Mochi sandbox validator index fits u64")
+                    .to_le_bytes(),
+            );
+            let seed = Hash::new(seed_material);
+            iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                seed.as_ref(),
+                0,
+                validator,
+            )
+            .map_err(|error| {
+                color_eyre::eyre::eyre!(
+                    "derive Mochi sandbox KAGEMUSHA mint-finality keys: {error}"
+                )
+            })
+        })
+        .collect::<color_eyre::Result<Vec<_>>>()?;
+    let parameters = KagemushaMintFinalityGenesisParametersV1 {
+        epoch_roster: KagemushaMintFinalityEpochRosterTemplateV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            epoch: 0,
+            validators,
+        },
+        next_epoch_roster: None,
+    };
+    parameters.validate().map_err(|error| {
+        color_eyre::eyre::eyre!("invalid Mochi sandbox KAGEMUSHA mint-finality roster: {error}")
+    })?;
+    Ok(parameters)
+}
 /// Canonical asset definition id for the bundled `rose` sample asset.
 #[must_use]
 pub fn sample_rose_definition_id() -> AssetDefinitionId {
@@ -153,13 +223,18 @@ pub fn with_local_account_onboarding_bootstrap(
         builder =
             builder.append_instruction(Grant::account_permission(permission, authority.clone()));
     }
-    Ok(builder.build_raw())
+    builder.build_raw()
 }
 /// Attach topology information to a genesis manifest inside a dedicated transaction.
+///
+/// # Errors
+///
+/// Returns an error if the existing manifest no longer carries all required signed genesis
+/// authority while it is rebuilt.
 pub fn with_topology(
     manifest: RawGenesisTransaction,
     topology: Vec<GenesisTopologyEntry>,
-) -> RawGenesisTransaction {
+) -> color_eyre::Result<RawGenesisTransaction> {
     manifest
         .into_builder()
         .next_transaction()
@@ -169,17 +244,73 @@ pub fn with_topology(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
+        block::consensus_v2::SumeragiV2GenesisContextParameters,
         isi::{GrantBox, MintBox, RegisterBox},
         prelude::ChainId,
     };
     use iroha_genesis::GenesisBuilder;
     use iroha_test_samples::ALICE_ID;
+
+    fn deterministic_test_validators() -> Vec<PeerId> {
+        (0x20_u8..0x24)
+            .map(|seed| {
+                PeerId::new(
+                    KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                        .expect("derive deterministic test validator")
+                        .public_key()
+                        .clone(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn dev_sandbox_mint_finality_authority_is_exact_and_generation_scoped() {
+        let validators = deterministic_test_validators();
+        let mut expected_validators = validators.clone();
+        expected_validators.sort();
+        let first = dev_sandbox_kagemusha_mint_finality_parameters(
+            "sandbox-chain",
+            "generation-a",
+            validators.clone(),
+        )
+        .expect("derive first sandbox roster");
+        let second = dev_sandbox_kagemusha_mint_finality_parameters(
+            "sandbox-chain",
+            "generation-b",
+            validators,
+        )
+        .expect("derive second sandbox roster");
+        assert_eq!(
+            first
+                .epoch_roster
+                .validators
+                .iter()
+                .map(|keys| keys.validator.clone())
+                .collect::<Vec<_>>(),
+            expected_validators
+        );
+        assert_ne!(first, second);
+    }
+
     #[test]
     fn local_onboarding_bootstrap_is_exact_funded_and_idempotent() {
         const EXPECTED_CANONICAL_XOR_ID: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
         let chain_id: ChainId = "local-onboarding".parse().expect("infallible chain id");
-        let manifest = GenesisBuilder::new_without_executor(chain_id, ".").build_raw();
+        let validators = deterministic_test_validators();
+        let kagemusha_mint_finality = dev_sandbox_kagemusha_mint_finality_parameters(
+            chain_id.as_ref(),
+            "onboarding-test-generation",
+            validators,
+        )
+        .expect("derive test mint-finality parameters");
+        let manifest = GenesisBuilder::new_without_executor(chain_id, ".")
+            .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+            .with_kagemusha_mint_finality_genesis_parameters(kagemusha_mint_finality)
+            .build_raw()
+            .expect("build complete test genesis");
         let manifest = with_local_account_onboarding_bootstrap(manifest, &ALICE_ID)
             .expect("append local onboarding bootstrap");
         let transaction_count = manifest.transactions().len();

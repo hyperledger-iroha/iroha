@@ -4,7 +4,10 @@ use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
 use iroha_config::base::toml::WriteExt as _;
-use iroha_genesis::{GenesisBuilder, RawGenesisTransaction, init_instruction_registry};
+use iroha_crypto::Algorithm;
+use iroha_genesis::{
+    GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction, init_instruction_registry,
+};
 use iroha_primitives::{json::Json, numeric::NumericSpec};
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
@@ -12,11 +15,76 @@ use std::{borrow::Cow, io::Write, path::PathBuf};
 use tempfile::NamedTempFile;
 use tokio::time::timeout;
 use toml::Table;
-fn ivm_build_profile_exists() -> bool {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../crates/ivm/target/prebuilt/build_config.toml")
-        .exists()
+
+fn deterministic_test_genesis_topology() -> Vec<GenesisTopologyEntry> {
+    (0_u8..4)
+        .map(|index| {
+            let key_pair = iroha_crypto::KeyPair::try_from_seed(
+                vec![0x40_u8.wrapping_add(index); 32],
+                Algorithm::BlsNormal,
+            )
+            .expect("derive deterministic integration-test genesis validator");
+            let pop = iroha_crypto::bls_normal_pop_prove(key_pair.private_key())
+                .expect("derive integration-test validator proof of possession");
+            GenesisTopologyEntry::new(PeerId::new(key_pair.public_key().clone()), pop)
+        })
+        .collect()
 }
+
+fn complete_test_genesis_builder_for_topology(
+    builder: GenesisBuilder,
+    topology: Vec<GenesisTopologyEntry>,
+) -> GenesisBuilder {
+    assert!(
+        !topology.is_empty(),
+        "integration-test genesis topology must contain validators"
+    );
+    let mut validators = topology
+        .iter()
+        .map(|entry| entry.peer.clone())
+        .collect::<Vec<_>>();
+    validators.sort();
+    let validators = validators
+        .into_iter()
+        .enumerate()
+        .map(|(index, validator)| {
+            let seed_byte = 0xA0_u8.wrapping_add(
+                u8::try_from(index).expect("integration-test validator index fits in one byte"),
+            );
+            iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                &[seed_byte; 32],
+                0,
+                validator,
+            )
+            .expect("derive deterministic paired-Pasta integration-test validator keys")
+        })
+        .collect();
+    let parameters =
+        iroha::data_model::isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1 {
+            epoch_roster:
+                iroha::data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterTemplateV1 {
+                    version: iroha::data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
+                    epoch: 0,
+                    validators,
+                },
+            next_epoch_roster: None,
+        };
+    parameters
+        .validate()
+        .expect("integration-test topology must form a canonical mint-finality roster");
+    builder
+        .set_topology(topology)
+        .with_sumeragi_v2_context_parameters(
+            iroha::data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(
+            ),
+        )
+        .with_kagemusha_mint_finality_genesis_parameters(parameters)
+}
+
+fn complete_test_genesis_builder(builder: GenesisBuilder) -> GenesisBuilder {
+    complete_test_genesis_builder_for_topology(builder, deterministic_test_genesis_topology())
+}
+
 fn has_legacy_domain_scoped_permission_grants(raw: &RawGenesisTransaction) -> bool {
     raw.instructions().any(|instruction| {
         let Some(grant_box) = instruction.as_any().downcast_ref::<GrantBox>() else {
@@ -30,26 +98,9 @@ fn has_legacy_domain_scoped_permission_grants(raw: &RawGenesisTransaction) -> bo
     })
 }
 fn load_raw_genesis_transaction() -> RawGenesisTransaction {
-    let genesis_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../defaults/genesis.json");
-    if ivm_build_profile_exists() && genesis_path.exists() {
-        match RawGenesisTransaction::from_path(&genesis_path) {
-            Ok(raw) => {
-                if has_legacy_domain_scoped_permission_grants(&raw) {
-                    eprintln!(
-                        "defaults/genesis.json contains legacy domain-scoped permission grants without payloads; falling back to synthetic genesis"
-                    );
-                } else {
-                    return raw;
-                }
-            }
-            Err(err) => {
-                eprintln!(
-                    "Failed to load defaults/genesis.json ({err:?}), falling back to synthetic genesis"
-                );
-            }
-        }
-    }
-    eprintln!("Using lightweight fallback genesis fixture for integration tests");
+    eprintln!(
+        "Using an explicit topology-bound integration-test genesis; checked-in `.template.json` sources are intentionally non-signable"
+    );
     fallback_raw_genesis_from_json()
 }
 fn fallback_raw_genesis_from_json() -> RawGenesisTransaction {
@@ -77,7 +128,9 @@ fn fallback_raw_genesis_from_json() -> RawGenesisTransaction {
         13_u32,
         AssetId::new(rose_definition_id, ALICE_ID.clone()),
     ));
-    builder.build_raw()
+    complete_test_genesis_builder(builder)
+        .build_raw()
+        .expect("build complete lightweight integration-test genesis fixture")
 }
 #[test]
 fn genesis_asset_minted_across_peers() -> Result<()> {
@@ -85,14 +138,14 @@ fn genesis_asset_minted_across_peers() -> Result<()> {
     let raw_genesis = load_raw_genesis_transaction();
     let builder = NetworkBuilder::new().with_min_peers(4).with_genesis_block(
         move |_topology, topology_entries| {
-            raw_genesis
-                .clone()
-                .into_builder()
-                .next_transaction()
-                .set_topology(topology_entries)
-                .build_raw()
-                .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
-                .expect("build canonical resultless custom genesis proposal")
+            complete_test_genesis_builder_for_topology(
+                raw_genesis.clone().into_builder().next_transaction(),
+                topology_entries,
+            )
+            .build_raw()
+            .expect("rebuild integration-test genesis for the exact network topology")
+            .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
+            .expect("build canonical resultless custom genesis proposal")
         },
     );
     let Some((network, rt)) = sandbox::build_network_blocking_or_skip(
@@ -167,24 +220,32 @@ fn missing_genesis_file_fails() {
 fn legacy_domain_scoped_permission_grants_are_detected() {
     init_instruction_registry();
     let chain = iroha_test_network::chain_id();
-    let legacy = GenesisBuilder::new_without_executor(chain.clone(), PathBuf::from("."))
-        .append_instruction(Grant::account_permission(
-            Permission::new(
-                "CanRegisterAccount".parse().expect("permission name"),
-                Json::default(),
+    let legacy = complete_test_genesis_builder(
+        GenesisBuilder::new_without_executor(chain.clone(), PathBuf::from(".")).append_instruction(
+            Grant::account_permission(
+                Permission::new(
+                    "CanRegisterAccount".parse().expect("permission name"),
+                    Json::default(),
+                ),
+                ALICE_ID.clone(),
             ),
-            ALICE_ID.clone(),
-        ))
-        .build_raw();
+        ),
+    )
+    .build_raw()
+    .expect("build complete legacy-permission genesis fixture");
     assert!(has_legacy_domain_scoped_permission_grants(&legacy));
-    let typed = GenesisBuilder::new_without_executor(chain, PathBuf::from("."))
-        .append_instruction(Grant::account_permission(
-            iroha_executor_data_model::permission::account::CanRegisterAccount {
-                domain: DomainId::try_new("wonderland", "universal").expect("domain id"),
-            },
-            ALICE_ID.clone(),
-        ))
-        .build_raw();
+    let typed = complete_test_genesis_builder(
+        GenesisBuilder::new_without_executor(chain, PathBuf::from(".")).append_instruction(
+            Grant::account_permission(
+                iroha_executor_data_model::permission::account::CanRegisterAccount {
+                    domain: DomainId::try_new("wonderland", "universal").expect("domain id"),
+                },
+                ALICE_ID.clone(),
+            ),
+        ),
+    )
+    .build_raw()
+    .expect("build complete typed-permission genesis fixture");
     assert!(!has_legacy_domain_scoped_permission_grants(&typed));
 }
 #[test]

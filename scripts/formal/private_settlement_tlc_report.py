@@ -16,6 +16,10 @@ PROTOCOL: Final = "AtomicPrivateSettlementV1"
 REPORT_VERSION: Final = 1
 SUCCESS_MARKER: Final = "Model checking completed. No error has been found."
 SAFETY_VIOLATION_MARKER: Final = "Error: Invariant Safety is violated."
+ACTION_PROPERTY_VIOLATION_MARKER: Final = (
+    "Error: Action property APSDurabilityTemporal is violated."
+)
+VIOLATION_BEHAVIOR_MARKER: Final = "Error: The behavior up to this point is:"
 SANY_VERSION_MARKER: Final = "****** SANY2 Version 2.1 created 24 February 2014"
 
 COUNT_MODEL: Final = "AtomicPrivateSettlementV1.tla"
@@ -61,6 +65,16 @@ CONFIGURATIONS: Final[tuple[tuple[str, str, str], ...]] = (
         "safety_violation",
         COUNT_MODEL,
     ),
+    (
+        "AtomicPrivateSettlementV1CommitteeFaults_commit_without_registration_bug.cfg",
+        "safety_violation",
+        INDEXED_MODEL,
+    ),
+    (
+        "AtomicPrivateSettlementV1CommitteeFaults_drop_stage_bug.cfg",
+        "action_property_violation",
+        INDEXED_MODEL,
+    ),
 )
 
 _STATE_SUMMARY = re.compile(
@@ -102,8 +116,13 @@ _PRIMARY_FAILURE_DIAGNOSTIC = re.compile(
     r"|Temporal properties were violated\.$)",
     re.MULTILINE,
 )
-_UNEXPECTED_NEGATIVE_DIAGNOSTIC = re.compile(
+_UNEXPECTED_SAFETY_DIAGNOSTIC = re.compile(
     r"^[ \t]*Error: (?!Invariant Safety is violated\.$"
+    r"|The behavior up to this point is:$).+$",
+    re.MULTILINE,
+)
+_UNEXPECTED_ACTION_PROPERTY_DIAGNOSTIC = re.compile(
+    r"^[ \t]*Error: (?!Action property APSDurabilityTemporal is violated\.$"
     r"|The behavior up to this point is:$).+$",
     re.MULTILINE,
 )
@@ -214,8 +233,12 @@ def parse_run(
 
     success_count = stdout.splitlines().count(SUCCESS_MARKER)
     safety_count = stdout.splitlines().count(SAFETY_VIOLATION_MARKER)
+    action_property_count = stdout.splitlines().count(ACTION_PROPERTY_VIOLATION_MARKER)
+    violation_behavior_count = stdout.splitlines().count(VIOLATION_BEHAVIOR_MARKER)
     success_offset = stdout.find(SUCCESS_MARKER)
     safety_offset = stdout.find(SAFETY_VIOLATION_MARKER)
+    action_property_offset = stdout.find(ACTION_PROPERTY_VIOLATION_MARKER)
+    violation_behavior_offset = stdout.find(VIOLATION_BEHAVIOR_MARKER)
     if not (
         version_matches[0].start()
         < run_header.start()
@@ -225,7 +248,12 @@ def parse_run(
     ):
         raise ReportError(f"{name}: TLC result markers are out of order")
     if expected_outcome == "pass":
-        if status != 0 or success_count != 1 or safety_count != 0:
+        if (
+            status != 0
+            or success_count != 1
+            or safety_count != 0
+            or action_property_count != 0
+        ):
             raise ReportError(f"{name}: TLC did not produce one clean passing result")
         diagnostics = _FAILURE_DIAGNOSTIC.findall(stdout)
         if diagnostics:
@@ -234,18 +262,50 @@ def parse_run(
             raise ReportError(f"{name}: passing TLC result markers are out of order")
         observed_outcome = "pass"
     elif expected_outcome == "safety_violation":
-        if status != 12 or safety_count != 1 or success_count != 0:
+        if (
+            status != 12
+            or safety_count != 1
+            or action_property_count != 0
+            or success_count != 0
+        ):
             raise ReportError(
                 f"{name}: negative control did not produce the exact Safety violation"
             )
         diagnostics = _PRIMARY_FAILURE_DIAGNOSTIC.findall(stdout)
         if len(diagnostics) != 1:
             raise ReportError(f"{name}: negative control emitted unexpected diagnostics")
-        if _UNEXPECTED_NEGATIVE_DIAGNOSTIC.search(stdout):
+        if _UNEXPECTED_SAFETY_DIAGNOSTIC.search(stdout):
             raise ReportError(f"{name}: negative control emitted unexpected diagnostics")
         if not run_header.end() < safety_offset < state.start():
             raise ReportError(f"{name}: negative TLC result markers are out of order")
         observed_outcome = "safety_violation"
+    elif expected_outcome == "action_property_violation":
+        if (
+            status != 13
+            or action_property_count != 1
+            or violation_behavior_count != 1
+            or safety_count != 0
+            or success_count != 0
+        ):
+            raise ReportError(
+                f"{name}: negative control did not produce the exact action-property violation"
+            )
+        diagnostics = _PRIMARY_FAILURE_DIAGNOSTIC.findall(stdout)
+        if len(diagnostics) != 1:
+            raise ReportError(f"{name}: negative control emitted unexpected diagnostics")
+        failure_diagnostics = _FAILURE_DIAGNOSTIC.findall(stdout)
+        if len(failure_diagnostics) != 2:
+            raise ReportError(f"{name}: negative control emitted unexpected diagnostics")
+        if _UNEXPECTED_ACTION_PROPERTY_DIAGNOSTIC.search(stdout):
+            raise ReportError(f"{name}: negative control emitted unexpected diagnostics")
+        if not (
+            run_header.end()
+            < action_property_offset
+            < violation_behavior_offset
+            < state.start()
+        ):
+            raise ReportError(f"{name}: negative TLC result markers are out of order")
+        observed_outcome = "action_property_violation"
     else:
         raise ReportError(f"{name}: unsupported expected outcome {expected_outcome!r}")
 

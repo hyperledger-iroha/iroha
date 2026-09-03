@@ -1922,6 +1922,22 @@
         "symbol": "Kura::validate_configured_autonomous_mutation_disk_peak_with_allowed_view_temp_locked",
         "required_tokens": [
           "allowed_view_temp: Option<&Path>",
+          "self.validate_configured_autonomous_mutation_disk_peak_with_reservation_deltas_locked(",
+          "additional_physical_peak_bytes",
+          "additional_identities",
+          "consumes_terminal_cas_transient",
+          "allowed_view_temp"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/autonomous_terminal_capacity.rs",
+        "kind": "method",
+        "symbol": "Kura::validate_configured_autonomous_mutation_disk_peak_with_reservation_deltas_locked",
+        "required_tokens": [
+          "additional_unreserved_stable_bytes: u64",
+          "additional_missing_terminal_identities: usize",
+          "additional_incomplete_terminal_identities: usize",
+          "allowed_view_temp: Option<&Path>",
           "autonomous_global_terminal_reservation_counts_with_allowed_view_temp_locked(",
           "allowed_view_temp",
           "AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES",
@@ -2330,7 +2346,14 @@
         "kind": "method",
         "symbol": "V2LaneWorkAdapter::retire_autonomous_payload_batch",
         "required_tokens": [
-          "for payload in payloads",
+          ".all(|payload| !self.local_can_own_autonomous_payload(&payload.origin_proposal))",
+          "for pending_payload in payloads",
+          "if !self.local_can_own_autonomous_payload(&pending_payload.origin_proposal)",
+          "current_autonomous_lane_payload(",
+          "durable_hint_free.origin_proposal.payload_block_hint = None",
+          "if durable_hint_free == *pending_payload",
+          "retirement_payload = durable",
+          "let payload = &retirement_payload",
           "retire_autonomous_lane_slot_and_release_reservations(",
           "retire_autonomous_lane_replica_with_queue_disposition(",
           "let terminal_authorizations = self",
@@ -4452,11 +4475,18 @@
       },
       {
         "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-        "kind": "method",
-        "symbol": "V2LaneWorkAdapter::retire_autonomous_payload_batch",
-        "tokens": [
-          "for payload in payloads",
-          "retire_autonomous_lane_slot_and_release_reservations(",
+          "kind": "method",
+          "symbol": "V2LaneWorkAdapter::retire_autonomous_payload_batch",
+          "tokens": [
+            ".all(|payload| !self.local_can_own_autonomous_payload(&payload.origin_proposal))",
+            "for pending_payload in payloads",
+            "if !self.local_can_own_autonomous_payload(&pending_payload.origin_proposal)",
+            "current_autonomous_lane_payload(",
+            "durable_hint_free.origin_proposal.payload_block_hint = None",
+            "if durable_hint_free == *pending_payload",
+            "retirement_payload = durable",
+            "let payload = &retirement_payload",
+            "retire_autonomous_lane_slot_and_release_reservations(",
           "retire_autonomous_lane_replica_with_queue_disposition(",
           "let terminal_authorizations = self",
           ".authorize_completed_autonomous_queue_cleanup_for_entrypoints(",
@@ -5543,7 +5573,11 @@
           ".note_durable_tip(durable_tip, now)?",
           ".begin_fail_stop_operation()",
           ".probe_kura_replica_advert_source(source_height, &self.key_pair)",
-          "|source| self.post_kura_replica_advert_while_guarded(source, operation.permit())",
+          "let mut released_kura_replica_advert_heights = BTreeSet::new()",
+          "self.post_kura_replica_advert_while_guarded(",
+          "operation.permit()",
+          "&mut released_kura_replica_advert_heights",
+          "self.schedule_released_kura_replica_advert_heights(released_kura_replica_advert_heights)?",
           "operation.complete()"
         ]
       },
@@ -5584,7 +5618,9 @@
           "advert_hash: HashOf::new(&advert)",
           "BlockMessage::KuraReplicaAdvert(advert)",
           "self.remote_voters()",
-          "self.enqueue_exact_fanout_while_guarded("
+          "released_kura_replica_advert_heights: &mut BTreeSet<u64>",
+          "self.enqueue_exact_fanout_while_guarded_collecting_released_adverts(",
+          "released_kura_replica_advert_heights"
         ]
       },
       {
@@ -6832,7 +6868,6 @@
           "symbol": "build_canonical_executed_block_response",
           "required_tokens": [
             "validate_canonical_executed_block_request",
-            "peer_is_global_finality_signer",
             "get_block_without_merge_sidecar",
             "canonical_executed_block_matches_need",
             "block.encode_wire()",
@@ -6986,8 +7021,6 @@
             "pair[0].height >= pair[1].height",
             "V2LaneWorkError::InvalidContext(error.to_string())",
             "validate_canonical_executed_block_need",
-            "finality.commit_qc.signers.iter().any",
-            "entry.validator != local_peer",
             "needs: needs.into()",
             "assembly: Vec::new()",
             "effects: VecDeque::new()"
@@ -6996,14 +7029,18 @@
         {
           "path": "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
           "kind": "method",
-          "symbol": "CanonicalExecutedBlockRecovery::service_next",
+          "symbol": "CanonicalExecutedBlockRecovery::service_next_with_archive_targets",
           "required_tokens": [
+            "current_archive_targets: &[PeerId]",
             "guard.acquire()",
             "self.reconcile_cached_front()",
             "validate_canonical_executed_block_need",
-            "let eligible_peers = finality",
+            "let mut eligible_peers = current_archive_targets",
+            ".filter(|peer| *peer != &self.local_peer",
+            "eligible_peers = finality",
             ".commit_qc",
             ".signers",
+            ".filter(|peer| peer != &self.local_peer",
             "outstanding.retry_sent",
             "self.abandon_front_responder()?",
             "LaneHistoricalRecoveryKindV1::CanonicalExecutedBlock",
@@ -7049,7 +7086,8 @@
             "HashOf::new(&outstanding.request)",
             "LaneHistoricalRecoveryKindV1::CanonicalExecutedBlock",
             "LaneHistoricalRecoveryPayloadV1::CanonicalExecutedBlockChunk",
-            "peer_is_global_finality_signer",
+            "&outstanding.responder.peer != sender",
+            "finality_artifact != local_finality",
             "CANONICAL_EXECUTED_BLOCK_MAX_CHUNKS",
             "decode_versioned_signed_block",
             "canonical_executed_block_matches_need",
@@ -7852,7 +7890,7 @@
           "required_tokens": [
             "canonical_executed_block_recovery_batches",
             "CanonicalExecutedBlockRecovery::new",
-            "body_recovery.service_next()",
+            "service_canonical_executed_block_recovery",
             "drain_canonical_executed_block_recovery_ingress",
             "dispatch_canonical_executed_block_recovery_effects"
           ]
@@ -7864,9 +7902,19 @@
           "required_tokens": [
             "canonical_executed_block_recovery_batches",
             "CanonicalExecutedBlockRecovery::new",
-            "body_recovery.service_next()",
+            "service_canonical_executed_block_recovery",
             "drain_canonical_executed_block_recovery_ingress",
             "dispatch_canonical_executed_block_recovery_effects"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner/canonical_recovery_ingress.rs",
+          "kind": "fn",
+          "symbol": "service_canonical_executed_block_recovery",
+          "required_tokens": [
+            "let current_archive_targets = services.current_archive_targets()",
+            "service_next_with_archive_targets(&current_archive_targets)",
+            ".map_err(V2RunnerError::from)"
           ]
         },
         {
@@ -7925,16 +7973,6 @@
             "LaneHistoricalRecoveryResponse",
             "fair_v2_ingress_required_lane_p2p_frame_bytes",
             "historical_recovery_response_frame_capacity"
-          ]
-        },
-        {
-          "path": "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
-          "kind": "fn",
-          "symbol": "peer_is_global_finality_signer",
-          "required_tokens": [
-            "height_context",
-            ".roster",
-            "commit_qc.signers.binary_search"
           ]
         },
         {
@@ -8109,7 +8147,7 @@
             "if terminal_planning_fenced && !ready_to_finish {",
             "let producer_turn = if terminal_planning_fenced {",
             "if !terminal_planning_fenced && (!ready_to_finish || producer_turn.is_some()) {",
-            "let finalization_ready = if ready_to_finish {",
+            "if ready_to_finish && !block_sync_server.has_pending_historical_body_serve() {",
             "if ready_to_finish && !finalization_ready {",
             "if finalization_ready && !rollover_ready {",
             "let mut next_lane_retransmit = deadline_after(height_started_at, retransmit_interval)",
@@ -9371,6 +9409,22 @@
           "symbol": "Kura::validate_configured_autonomous_mutation_disk_peak_with_allowed_view_temp_locked",
           "required_tokens": [
             "allowed_view_temp: Option<&Path>",
+            "self.validate_configured_autonomous_mutation_disk_peak_with_reservation_deltas_locked(",
+            "additional_physical_peak_bytes",
+            "additional_identities",
+            "consumes_terminal_cas_transient",
+            "allowed_view_temp"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/autonomous_terminal_capacity.rs",
+          "kind": "method",
+          "symbol": "Kura::validate_configured_autonomous_mutation_disk_peak_with_reservation_deltas_locked",
+          "required_tokens": [
+            "additional_unreserved_stable_bytes: u64",
+            "additional_missing_terminal_identities: usize",
+            "additional_incomplete_terminal_identities: usize",
+            "allowed_view_temp: Option<&Path>",
             "autonomous_global_terminal_reservation_counts_with_allowed_view_temp_locked(",
             "allowed_view_temp",
             "AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES",
@@ -9468,14 +9522,78 @@
         {
           "path": "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs",
           "kind": "method",
-          "symbol": "AutonomousLifecycleTerminalOutcomeV1::validate_body",
+          "symbol": "AutonomousLifecycleTerminalOutcomeV1::validate_body_parts",
           "required_tokens": [
-            "match body.stage",
+            "match stage",
             "AutonomousLifecycleTerminalOutcomeStageV1::Pending { reserved_terminal }",
             "!reserved_terminal.is_terminal_outcome_pending_reservation()",
             "autonomous lifecycle pending terminal outcome changed its reserved terminal payload",
             "AutonomousLifecycleTerminalOutcomeStageV1::Complete { terminal }",
-            "body.binding.validate_state(terminal)?"
+            "binding.validate_state(terminal)?"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs",
+          "kind": "method",
+          "symbol": "AutonomousLifecycleTerminalOutcomeV1::complete",
+          "required_tokens": [
+            "Self::from_body(AutonomousLifecycleTerminalOutcomeBodyV1 {",
+            "version: Self::VERSION",
+            "binding: self.body.binding.clone()",
+            "basis: self.body.basis",
+            "source: self.body.source"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs",
+          "kind": "method",
+          "symbol": "AutonomousLifecycleTerminalOutcomeV1::from_body",
+          "required_tokens": [
+            "body.version != Self::VERSION",
+            "Self::validate_body_parts(&body.binding, body.basis, body.source, body.stage)?",
+            "AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN",
+            "Ok(Self { body, outcome_hash })"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs",
+          "kind": "method",
+          "symbol": "AutonomousLifecycleTerminalOutcomeV1::validate_structure",
+          "required_tokens": [
+            "self.body.version != Self::VERSION",
+            "&self.body.binding",
+            "self.body.basis",
+            "self.body.source",
+            "self.body.stage",
+            "AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN",
+            "self.outcome_hash != expected"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs",
+          "kind": "method",
+          "symbol": "AutonomousLifecycleTerminalOutcomeV1::decode_framed_unvalidated",
+          "required_tokens": [
+            "norito::decode_canonical(bytes)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs",
+          "kind": "method",
+          "symbol": "AutonomousLifecycleTerminalOutcomeV1::decode_framed",
+          "required_tokens": [
+            "Self::decode_framed_unvalidated(bytes)?",
+            ".validate_structure()",
+            "norito::Error::Message(message.to_owned())"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs",
+          "kind": "method",
+          "symbol": "AutonomousLifecycleTerminalOutcomeV1::encode_framed",
+          "required_tokens": [
+            "norito::encode_canonical(self)?",
+            "AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES"
           ]
         },
         {
@@ -10761,10 +10879,23 @@
           "required_tokens": [
             "canonical_merged_lane_frontier_from_world",
             "validate_merge_execution_predecessor_against_frontier",
-            "durable_autonomous_lane_merge_source",
+            "durable_autonomous_merge_source_for_lane_slot",
             "MergeExecutionSource::from_durable",
             "merge_execution_canonical_order_key",
             "build_merge_execution_batch_from_source_prefix"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "durable_autonomous_merge_source_for_lane_slot",
+          "required_tokens": [
+            "read_certified_lane_block_artifact",
+            "epoch_for_height_from_world",
+            ".durable_autonomous_lane_merge_source(",
+            "source.bundle.certified != certified",
+            ".durable_canonical_autonomous_lane_replica_for_network(",
+            "payload.network_id != self.network_id || payload.epoch != expected_epoch"
           ]
         },
         {
@@ -10810,7 +10941,7 @@
           "symbol": "preexecute_merge_execution_sources_into",
           "required_tokens": [
             "decode_autonomous_lane_merge_bundle",
-            "validate_lane_block_execution_input_with_routing_context",
+            "validate_lane_block_execution_input_with_routing_and_kagemusha_context",
             "stage_merge_carrier_entrypoints",
             "drain_merge_lane_settlement_commitment",
             "seen_entrypoints",
@@ -11991,8 +12122,10 @@
           "required_tokens": [
             "bundle.queue_plan_admissions()",
             "merge_reference.is_some() && !queue_plan_admissions.is_empty()",
-            "block_with_queue_plan_admissions",
-            "block_with_certified_merge_reference"
+            "block_with_pristine_stage",
+            "stage_queue_plan_admissions_for_carrier",
+            "stage_certified_merge_reference",
+            "apply_npos(state_block)"
           ]
         },
         {

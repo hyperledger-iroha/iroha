@@ -16,9 +16,18 @@ import org.hyperledger.iroha.sdk.offline.KagemushaWalletV1
 fun interface KagemushaAndroidHardwareProviderFactoryV1 {
     /** Open the OEM provider backed exclusively by [bridge]. */
     fun open(bridge: KagemushaDeviceLifecycleBridgeV1): KagemushaHardwareProviderV1
+
+    /**
+     * Return the already admitted lifecycle bridge used by this provider.
+     *
+     * OEM integrations may override this with a cached OMAPI bridge opened during application
+     * startup. The default preserves JNI discovery for existing integrations.
+     */
+    fun deviceLifecycleBridge(): KagemushaDeviceLifecycleBridgeV1 =
+        KagemushaDeviceLifecycleBridgeV1.production()
 }
 
-/** Fail-closed Android entry point for aggregate-balance Kagemusha V1. */
+/** Fail-closed Android entry point for aggregate-balance KAGEMUSHA V1. */
 object KagemushaAndroidWalletV1 {
     /** Open a wallet around an already provisioned, completely qualified hardware provider. */
     @JvmStatic
@@ -35,7 +44,7 @@ object KagemushaAndroidWalletV1 {
     @JvmStatic
     fun openProduction(
         factory: KagemushaAndroidHardwareProviderFactoryV1,
-    ): KagemushaWalletV1 = openBridge(KagemushaDeviceLifecycleBridgeV1.production(), factory)
+    ): KagemushaWalletV1 = openBridge(factory.deviceLifecycleBridge(), factory)
 
     internal fun openBridge(
         bridge: KagemushaDeviceLifecycleBridgeV1,
@@ -43,7 +52,7 @@ object KagemushaAndroidWalletV1 {
     ): KagemushaWalletV1 {
         val bridgeCapabilities = bridge.capabilities()
             ?: throw IllegalStateException(
-                "Kagemusha V1 is online-only: no qualified non-forking Android hardware service",
+                "KAGEMUSHA V1 is online-only: no qualified non-forking Android hardware service",
             )
         val provider = factory.open(bridge)
         val qualification = provider.qualification()

@@ -48,11 +48,11 @@ Sample configuration assets live in the [`defaults`](../../defaults/) directory 
 
 - `client.toml` – default CLI configuration consumed by the tests.
 - `docker-compose*.yml` – Docker Compose manifests generated via `kagami docker` for local development networks.
-- `genesis.json` – default genesis block produced by `kagami genesis generate`, aligned with the CLI tests.
+- `genesis.template.json` – non-signable default source; test harnesses generate their own complete topology-bound `genesis.json` with explicit development authority.
 
 To customise the environment:
 
-1. Regenerate the Compose and genesis files with [`kagami`](../../crates/iroha_kagami/) (the workflow is automated in [`scripts/test_env.py`](../../scripts/test_env.py)).
+1. Regenerate Compose and a complete test genesis with [`kagami`](../../crates/iroha_kagami/), supplying explicit disposable authority parameters (the workflow is automated in [`scripts/test_env.py`](../../scripts/test_env.py)).
 2. Adjust the CLI configuration (for example, host, ports, or credentials) and point the test suite to the new files by updating the `.env` variables described in [Tests Configuration](#tests-configuration).
 3. When running in CI, ensure any regenerated artefacts are committed so the fixtures remain deterministic.
 

@@ -1,6 +1,10 @@
 //! Exact sparse-Merkle index for consumed Kagemusha credit identities.
 
-use std::collections::BTreeMap;
+/// External content-addressed persistence for unbounded authenticated history.
+#[path = "sparse_merkle_store.rs"]
+pub(super) mod authenticated_history;
+
+use std::{collections::BTreeMap, sync::OnceLock};
 
 use halo2_proofs::halo2curves::pasta::{Fp, Fq};
 use iroha_data_model::kagemusha::KagemushaPastaStateCommitmentV1;
@@ -20,47 +24,32 @@ struct NodePosition {
     prefix: DigestV1,
 }
 
-/// Opaque, prehashed replay-tree mutation assembled against one exact starting root.
+/// Opaque, prehashed replay-tree insertion assembled against one exact starting root.
 ///
-/// The successor paths are deliberately retained outside the public proof witness. Safe Rust
-/// callers can inspect the witnesses needed by the circuit, but cannot substitute the prehashed
+/// The successor path is deliberately retained outside the public proof witness. Safe Rust
+/// callers can inspect the witness needed by the circuit, but cannot substitute the prehashed
 /// nodes installed after transition authorization.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct PreparedConsumedCreditBatchV1 {
+pub(super) struct PreparedConsumedCreditInsertV1 {
     starting_root: KagemushaPastaStateCommitmentV1,
-    final_root: KagemushaPastaStateCommitmentV1,
-    inserts: Vec<PreparedConsumedCreditInsertV1>,
-    final_overlay: BTreeMap<NodePosition, Option<KagemushaPastaStateCommitmentV1>>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct PreparedConsumedCreditInsertV1 {
     credit_id: CreditIdV1,
     envelope_digest: DigestV1,
     witness: ConsumedCreditInsertWitnessV1,
-    successor_path:
-        [KagemushaPastaStateCommitmentV1; KAGEMUSHA_CONSUMED_CREDIT_TREE_DEPTH_V1 + 1],
+    successor_path: [KagemushaPastaStateCommitmentV1; KAGEMUSHA_CONSUMED_CREDIT_TREE_DEPTH_V1 + 1],
+    final_overlay: BTreeMap<NodePosition, Option<KagemushaPastaStateCommitmentV1>>,
 }
 
-impl PreparedConsumedCreditBatchV1 {
-    pub(super) fn len(&self) -> usize {
-        self.inserts.len()
-    }
-
-    pub(super) fn is_empty(&self) -> bool {
-        self.inserts.is_empty()
-    }
-
+impl PreparedConsumedCreditInsertV1 {
     pub(super) fn starting_root(&self) -> KagemushaPastaStateCommitmentV1 {
         self.starting_root
     }
 
     pub(super) fn final_root(&self) -> KagemushaPastaStateCommitmentV1 {
-        self.final_root
+        self.witness.successor_root
     }
 
-    pub(super) fn witness(&self, index: usize) -> Option<&ConsumedCreditInsertWitnessV1> {
-        self.inserts.get(index).map(|insert| &insert.witness)
+    pub(super) fn witness(&self) -> &ConsumedCreditInsertWitnessV1 {
+        &self.witness
     }
 }
 
@@ -79,12 +68,18 @@ pub(super) struct ExactConsumedCreditIndex {
 
 impl ExactConsumedCreditIndex {
     pub(super) fn empty() -> Self {
-        let mut empty_at_depth = [KagemushaPastaStateCommitmentV1::ZERO; 257];
-        empty_at_depth[256] = hash_empty_leaf();
-        for depth in (0..256).rev() {
-            empty_at_depth[depth] =
-                hash_node_unchecked(&empty_at_depth[depth + 1], &empty_at_depth[depth + 1]);
-        }
+        // These protocol-fixed hashes have no device, network, or credit inputs. Cache only
+        // their immutable construction; every index still owns its array and mutable maps.
+        static EMPTY_AT_DEPTH: OnceLock<[KagemushaPastaStateCommitmentV1; 257]> = OnceLock::new();
+        let empty_at_depth = *EMPTY_AT_DEPTH.get_or_init(|| {
+            let mut empty_at_depth = [KagemushaPastaStateCommitmentV1::ZERO; 257];
+            empty_at_depth[256] = hash_empty_leaf();
+            for depth in (0..256).rev() {
+                empty_at_depth[depth] =
+                    hash_node_unchecked(&empty_at_depth[depth + 1], &empty_at_depth[depth + 1]);
+            }
+            empty_at_depth
+        });
         Self {
             records: BTreeMap::new(),
             nodes: BTreeMap::new(),
@@ -172,8 +167,8 @@ impl ExactConsumedCreditIndex {
         credit_id: CreditIdV1,
         envelope_digest: DigestV1,
     ) -> Result<(), KagemushaStateErrorV1> {
-        let prepared = self.prepare_batch_inserts(&[(credit_id, envelope_digest)])?;
-        self.install_prepared_batch(prepared)
+        let prepared = self.prepare_insert(credit_id, envelope_digest)?;
+        self.install_prepared_insert(prepared)
     }
 
     pub(super) fn insert_with_witness(
@@ -220,150 +215,111 @@ impl ExactConsumedCreditIndex {
             credit_id,
             &successor_path,
         );
-        self.install_prepared_batch(PreparedConsumedCreditBatchV1 {
+        self.install_prepared_insert(PreparedConsumedCreditInsertV1 {
             starting_root: witness.predecessor_root,
-            final_root: witness.successor_root,
-            inserts: vec![PreparedConsumedCreditInsertV1 {
-                credit_id,
-                envelope_digest,
-                witness: witness.clone(),
-                successor_path,
-            }],
+            credit_id,
+            envelope_digest,
+            witness: witness.clone(),
+            successor_path,
             final_overlay,
         })
     }
 
-    /// Prepare one or more sequential inserts over a small node overlay without cloning the
-    /// retained replay dictionary or its base tree.
-    pub(super) fn prepare_batch_inserts(
+    /// Prepare one exact insertion over a small node overlay without cloning the retained replay
+    /// dictionary or its base tree.
+    pub(super) fn prepare_insert(
         &self,
-        inserts: &[(CreditIdV1, DigestV1)],
-    ) -> Result<PreparedConsumedCreditBatchV1, KagemushaStateErrorV1> {
-        if inserts.is_empty() {
+        credit_id: CreditIdV1,
+        envelope_digest: DigestV1,
+    ) -> Result<PreparedConsumedCreditInsertV1, KagemushaStateErrorV1> {
+        if let Some(existing) = self.get(credit_id) {
+            return if existing == envelope_digest {
+                Err(KagemushaStateErrorV1::CreditAlreadyConsumed(credit_id))
+            } else {
+                Err(KagemushaStateErrorV1::CreditConflict(credit_id))
+            };
+        }
+        if credit_id.is_zero() || envelope_digest == [0; 32] {
             return Err(KagemushaStateErrorV1::InvalidConsumedCreditInsertWitness);
         }
         let starting_root = self.root();
-        let mut predecessor_root = starting_root;
-        let mut overlay = BTreeMap::new();
-        let mut batch_records = BTreeMap::new();
-        let mut prepared = Vec::with_capacity(inserts.len());
-
-        for &(credit_id, envelope_digest) in inserts {
-            if let Some(existing) = self
-                .get(credit_id)
-                .or_else(|| batch_records.get(&credit_id).copied())
-            {
-                return if existing == envelope_digest {
-                    Err(KagemushaStateErrorV1::CreditAlreadyConsumed(credit_id))
-                } else {
-                    Err(KagemushaStateErrorV1::CreditConflict(credit_id))
-                };
-            }
-            if credit_id.is_zero() || envelope_digest == [0; 32] {
-                return Err(KagemushaStateErrorV1::InvalidConsumedCreditInsertWitness);
-            }
-
-            let siblings_root_to_leaf =
-                self.siblings_root_to_leaf_with_overlay(credit_id, &overlay);
-            let successor_path = path_hashes_from_siblings(
-                credit_id,
-                hash_present_leaf(credit_id, envelope_digest),
-                &siblings_root_to_leaf,
-            )?;
-            let successor_root = successor_path[0];
-            if successor_root.is_zero() || successor_root == predecessor_root {
-                return Err(KagemushaStateErrorV1::InvalidConsumedCreditInsertWitness);
-            }
-            let witness = ConsumedCreditInsertWitnessV1 {
-                credit_id,
-                envelope_digest,
-                predecessor_root,
-                successor_root,
-                siblings_root_to_leaf,
-            };
-            apply_successor_path_to_overlay(
-                &mut overlay,
-                &self.empty_at_depth,
-                credit_id,
-                &successor_path,
-            );
-            batch_records.insert(credit_id, envelope_digest);
-            prepared.push(PreparedConsumedCreditInsertV1 {
-                credit_id,
-                envelope_digest,
-                witness,
-                successor_path,
-            });
-            predecessor_root = successor_root;
+        let siblings_root_to_leaf = self.siblings_root_to_leaf(credit_id);
+        let successor_path = path_hashes_from_siblings(
+            credit_id,
+            hash_present_leaf(credit_id, envelope_digest),
+            &siblings_root_to_leaf,
+        )?;
+        let successor_root = successor_path[0];
+        if successor_root.is_zero() || successor_root == starting_root {
+            return Err(KagemushaStateErrorV1::InvalidConsumedCreditInsertWitness);
         }
-
-        Ok(PreparedConsumedCreditBatchV1 {
+        let witness = ConsumedCreditInsertWitnessV1 {
+            credit_id,
+            envelope_digest,
+            predecessor_root: starting_root,
+            successor_root,
+            siblings_root_to_leaf,
+        };
+        let mut final_overlay = BTreeMap::new();
+        apply_successor_path_to_overlay(
+            &mut final_overlay,
+            &self.empty_at_depth,
+            credit_id,
+            &successor_path,
+        );
+        Ok(PreparedConsumedCreditInsertV1 {
             starting_root,
-            final_root: predecessor_root,
-            inserts: prepared,
-            final_overlay: overlay,
+            credit_id,
+            envelope_digest,
+            witness,
+            successor_path,
+            final_overlay,
         })
     }
 
-    /// Atomically install one opaque batch after cheap stale-root/path binding checks.
+    /// Atomically install one opaque insertion after cheap stale-root/path binding checks.
     ///
-    /// All hashes were computed by [`Self::prepare_batch_inserts`] before hardware authorization.
-    /// This commit pass validates exact local siblings, root chaining, identities, and the private
-    /// prehashed overlay before mutating either retained map.
-    pub(super) fn install_prepared_batch(
+    /// All hashes were computed by [`Self::prepare_insert`] before hardware authorization. This
+    /// commit pass validates exact local siblings, roots, identities, and the private prehashed
+    /// overlay before mutating either retained map.
+    pub(super) fn install_prepared_insert(
         &mut self,
-        prepared: PreparedConsumedCreditBatchV1,
+        prepared: PreparedConsumedCreditInsertV1,
     ) -> Result<(), KagemushaStateErrorV1> {
-        if prepared.is_empty()
-            || prepared.starting_root != self.root()
-            || prepared.final_root.is_zero()
-            || prepared.final_root == prepared.starting_root
+        if let Some(existing) = self.get(prepared.credit_id) {
+            return if existing == prepared.envelope_digest {
+                Err(KagemushaStateErrorV1::CreditAlreadyConsumed(
+                    prepared.credit_id,
+                ))
+            } else {
+                Err(KagemushaStateErrorV1::CreditConflict(prepared.credit_id))
+            };
+        }
+        let expected_siblings = self.siblings_root_to_leaf(prepared.credit_id);
+        if prepared.starting_root != self.root()
+            || prepared.credit_id.is_zero()
+            || prepared.envelope_digest == [0; 32]
+            || prepared.witness.credit_id != prepared.credit_id
+            || prepared.witness.envelope_digest != prepared.envelope_digest
+            || prepared.witness.predecessor_root != prepared.starting_root
+            || prepared.witness.siblings_root_to_leaf != expected_siblings
+            || prepared.successor_path[0] != prepared.witness.successor_root
+            || prepared.successor_path[KAGEMUSHA_CONSUMED_CREDIT_TREE_DEPTH_V1]
+                != hash_present_leaf(prepared.credit_id, prepared.envelope_digest)
+            || prepared.witness.successor_root.is_zero()
+            || prepared.witness.successor_root == prepared.starting_root
         {
             return Err(KagemushaStateErrorV1::InvalidConsumedCreditInsertWitness);
         }
 
         let mut validation_overlay = BTreeMap::new();
-        let mut predecessor_root = prepared.starting_root;
-        let mut batch_records = BTreeMap::new();
-        for insert in &prepared.inserts {
-            if let Some(existing) = self
-                .get(insert.credit_id)
-                .or_else(|| batch_records.get(&insert.credit_id).copied())
-            {
-                return if existing == insert.envelope_digest {
-                    Err(KagemushaStateErrorV1::CreditAlreadyConsumed(
-                        insert.credit_id,
-                    ))
-                } else {
-                    Err(KagemushaStateErrorV1::CreditConflict(insert.credit_id))
-                };
-            }
-            let expected_siblings =
-                self.siblings_root_to_leaf_with_overlay(insert.credit_id, &validation_overlay);
-            if insert.credit_id.is_zero()
-                || insert.envelope_digest == [0; 32]
-                || insert.witness.credit_id != insert.credit_id
-                || insert.witness.envelope_digest != insert.envelope_digest
-                || insert.witness.predecessor_root != predecessor_root
-                || insert.witness.siblings_root_to_leaf != expected_siblings
-                || insert.successor_path[0] != insert.witness.successor_root
-                || insert.successor_path[KAGEMUSHA_CONSUMED_CREDIT_TREE_DEPTH_V1]
-                    != hash_present_leaf(insert.credit_id, insert.envelope_digest)
-                || insert.witness.successor_root.is_zero()
-                || insert.witness.successor_root == predecessor_root
-            {
-                return Err(KagemushaStateErrorV1::InvalidConsumedCreditInsertWitness);
-            }
-            apply_successor_path_to_overlay(
-                &mut validation_overlay,
-                &self.empty_at_depth,
-                insert.credit_id,
-                &insert.successor_path,
-            );
-            batch_records.insert(insert.credit_id, insert.envelope_digest);
-            predecessor_root = insert.witness.successor_root;
-        }
-        if predecessor_root != prepared.final_root || validation_overlay != prepared.final_overlay {
+        apply_successor_path_to_overlay(
+            &mut validation_overlay,
+            &self.empty_at_depth,
+            prepared.credit_id,
+            &prepared.successor_path,
+        );
+        if validation_overlay != prepared.final_overlay {
             return Err(KagemushaStateErrorV1::InvalidConsumedCreditInsertWitness);
         }
 
@@ -374,8 +330,9 @@ impl ExactConsumedCreditIndex {
                 self.nodes.remove(&position);
             }
         }
-        self.records.extend(batch_records);
-        debug_assert_eq!(self.root(), prepared.final_root);
+        self.records
+            .insert(prepared.credit_id, prepared.envelope_digest);
+        debug_assert_eq!(self.root(), prepared.witness.successor_root);
         Ok(())
     }
 
@@ -394,37 +351,13 @@ impl ExactConsumedCreditIndex {
                 .unwrap_or(self.empty_at_depth[child_depth])
         })
     }
-
-    fn siblings_root_to_leaf_with_overlay(
-        &self,
-        credit_id: CreditIdV1,
-        overlay: &BTreeMap<NodePosition, Option<KagemushaPastaStateCommitmentV1>>,
-    ) -> [KagemushaPastaStateCommitmentV1; KAGEMUSHA_CONSUMED_CREDIT_TREE_DEPTH_V1] {
-        core::array::from_fn(|parent_depth| {
-            let child_depth = parent_depth + 1;
-            let position = NodePosition {
-                depth: u16::try_from(child_depth).expect("sparse-Merkle depth is at most 256"),
-                prefix: sibling_prefix(&credit_id.0, parent_depth),
-            };
-            match overlay.get(&position) {
-                Some(Some(value)) => *value,
-                Some(None) => self.empty_at_depth[child_depth],
-                None => self
-                    .nodes
-                    .get(&position)
-                    .copied()
-                    .unwrap_or(self.empty_at_depth[child_depth]),
-            }
-        })
-    }
 }
 
 fn apply_successor_path_to_overlay(
     overlay: &mut BTreeMap<NodePosition, Option<KagemushaPastaStateCommitmentV1>>,
     empty_at_depth: &[KagemushaPastaStateCommitmentV1; 257],
     credit_id: CreditIdV1,
-    successor_path: &[KagemushaPastaStateCommitmentV1;
-         KAGEMUSHA_CONSUMED_CREDIT_TREE_DEPTH_V1 + 1],
+    successor_path: &[KagemushaPastaStateCommitmentV1; KAGEMUSHA_CONSUMED_CREDIT_TREE_DEPTH_V1 + 1],
 ) {
     for (depth, &path_hash) in successor_path.iter().enumerate() {
         let position = NodePosition {
@@ -574,21 +507,15 @@ fn hash_node(
 ) -> Result<KagemushaPastaStateCommitmentV1, KagemushaStateErrorV1> {
     let left_eq =
         decode::<Fp>(left.eq).ok_or(KagemushaStateErrorV1::InvalidConsumedCreditInsertWitness)?;
-    let right_eq = decode::<Fp>(right.eq)
-        .ok_or(KagemushaStateErrorV1::InvalidConsumedCreditInsertWitness)?;
+    let right_eq =
+        decode::<Fp>(right.eq).ok_or(KagemushaStateErrorV1::InvalidConsumedCreditInsertWitness)?;
     let left_ep =
         decode::<Fq>(left.ep).ok_or(KagemushaStateErrorV1::InvalidConsumedCreditInsertWitness)?;
-    let right_ep = decode::<Fq>(right.ep)
-        .ok_or(KagemushaStateErrorV1::InvalidConsumedCreditInsertWitness)?;
+    let right_ep =
+        decode::<Fq>(right.ep).ok_or(KagemushaStateErrorV1::InvalidConsumedCreditInsertWitness)?;
     Ok(KagemushaPastaStateCommitmentV1 {
-        eq: encode(hash(
-            KAGEMUSHA_REPLAY_NODE_DOMAIN_V1,
-            &[left_eq, right_eq],
-        )),
-        ep: encode(hash(
-            KAGEMUSHA_REPLAY_NODE_DOMAIN_V1,
-            &[left_ep, right_ep],
-        )),
+        eq: encode(hash(KAGEMUSHA_REPLAY_NODE_DOMAIN_V1, &[left_eq, right_eq])),
+        ep: encode(hash(KAGEMUSHA_REPLAY_NODE_DOMAIN_V1, &[left_ep, right_ep])),
     })
 }
 
@@ -643,56 +570,100 @@ mod tests {
     }
 
     #[test]
-    fn overlay_batch_matches_sequential_exact_inserts() {
+    fn cached_empty_tree_matches_independent_uncached_levels() {
+        let index = ExactConsumedCreditIndex::empty();
+        // Rebuild bottom-up without calling the cached constructor or reusing its array.
+        let mut rebuilt_leaf_to_root = vec![hash_empty_leaf()];
+        for _ in 0..KAGEMUSHA_CONSUMED_CREDIT_TREE_DEPTH_V1 {
+            let child = *rebuilt_leaf_to_root.last().expect("empty leaf is present");
+            rebuilt_leaf_to_root.push(hash_node_unchecked(&child, &child));
+        }
+        assert_eq!(rebuilt_leaf_to_root.len(), index.empty_at_depth.len());
+        assert_eq!(index.root(), *rebuilt_leaf_to_root.last().unwrap());
+        for (depth, expected) in rebuilt_leaf_to_root.into_iter().rev().enumerate() {
+            assert_eq!(index.empty_at_depth[depth], expected, "empty depth {depth}");
+        }
+    }
+
+    #[test]
+    fn cached_empty_tree_keeps_independent_index_records_and_nodes() {
+        let mut first = ExactConsumedCreditIndex::empty();
+        let mut second = ExactConsumedCreditIndex::empty();
+        let empty_at_depth = first.empty_at_depth;
+        let empty_root = first.root();
+        assert!(!std::ptr::eq(&first.empty_at_depth, &second.empty_at_depth));
+        assert_eq!(second.empty_at_depth, empty_at_depth);
+
+        let credit_id = credit(0x51);
+        let first_envelope = envelope(0xD1);
+        let second_envelope = envelope(0xD2);
+        first.insert(credit_id, first_envelope).unwrap();
+        let first_root = first.root();
+        let first_nodes = first.nodes.clone();
+        assert_ne!(first_root, empty_root);
+        assert_eq!(second.get(credit_id), None);
+        assert!(second.records.is_empty());
+        assert!(second.nodes.is_empty());
+        assert_eq!(second.root(), empty_root);
+
+        second.insert(credit_id, second_envelope).unwrap();
+        assert_eq!(first.get(credit_id), Some(first_envelope));
+        assert_eq!(second.get(credit_id), Some(second_envelope));
+        assert_eq!(first.root(), first_root);
+        assert_eq!(first.nodes, first_nodes);
+        assert_ne!(first.root(), second.root());
+        assert_eq!(first.empty_at_depth, empty_at_depth);
+        assert_eq!(second.empty_at_depth, empty_at_depth);
+
+        let fresh = ExactConsumedCreditIndex::empty();
+        assert_eq!(fresh.empty_at_depth, empty_at_depth);
+        assert_eq!(fresh.root(), empty_root);
+        assert!(fresh.records.is_empty());
+        assert!(fresh.nodes.is_empty());
+    }
+
+    #[test]
+    fn prepared_insert_matches_witness_installation() {
         let records = [
             (credit(0x11), envelope(0xA1)),
             (credit(0x80), envelope(0xA2)),
             (credit(0xC3), envelope(0xA3)),
         ];
-        let mut batch = ExactConsumedCreditIndex::empty();
-        let prepared = batch
-            .prepare_batch_inserts(&records)
-            .expect("prepare overlay batch");
-        for index in 1..prepared.len() {
-            assert_eq!(
-                prepared.witness(index - 1).expect("prior").successor_root,
-                prepared.witness(index).expect("next").predecessor_root
-            );
-        }
-        batch
-            .install_prepared_batch(prepared)
-            .expect("install overlay batch");
-
-        let mut sequential = ExactConsumedCreditIndex::empty();
+        let mut prepared_index = ExactConsumedCreditIndex::empty();
         for &(credit_id, envelope_digest) in &records {
-            let witness = sequential
-                .preview_insert_witness(credit_id, envelope_digest)
-                .expect("preview sequential insert");
-            sequential
-                .insert_with_witness(credit_id, envelope_digest, &witness)
-                .expect("install sequential insert");
+            let prepared = prepared_index
+                .prepare_insert(credit_id, envelope_digest)
+                .expect("prepare exact insert");
+            prepared_index
+                .install_prepared_insert(prepared)
+                .expect("install prepared insert");
         }
 
-        assert_eq!(batch.root(), sequential.root());
-        assert_eq!(batch.records(), sequential.records());
+        let mut witnessed_index = ExactConsumedCreditIndex::empty();
+        for &(credit_id, envelope_digest) in &records {
+            let witness = witnessed_index
+                .preview_insert_witness(credit_id, envelope_digest)
+                .expect("preview witnessed insert");
+            witnessed_index
+                .insert_with_witness(credit_id, envelope_digest, &witness)
+                .expect("install witnessed insert");
+        }
+
+        assert_eq!(prepared_index.root(), witnessed_index.root());
+        assert_eq!(prepared_index.records(), witnessed_index.records());
     }
 
     #[test]
-    fn prepared_batch_rejects_tampered_sibling_without_mutation() {
-        let inserts = [
-            (credit(0x21), envelope(0xB1)),
-            (credit(0xE2), envelope(0xB2)),
-        ];
+    fn prepared_insert_rejects_tampered_sibling_without_mutation() {
         let mut index = ExactConsumedCreditIndex::empty();
         let starting_root = index.root();
         let mut prepared = index
-            .prepare_batch_inserts(&inserts)
-            .expect("prepare overlay batch");
-        prepared.inserts[1].witness.siblings_root_to_leaf[0] =
-            KagemushaPastaStateCommitmentV1::ZERO;
+            .prepare_insert(credit(0x21), envelope(0xB1))
+            .expect("prepare exact insert");
+        prepared.witness.siblings_root_to_leaf[0] = KagemushaPastaStateCommitmentV1::ZERO;
 
         assert_eq!(
-            index.install_prepared_batch(prepared),
+            index.install_prepared_insert(prepared),
             Err(KagemushaStateErrorV1::InvalidConsumedCreditInsertWitness)
         );
         assert_eq!(index.root(), starting_root);
@@ -700,12 +671,11 @@ mod tests {
     }
 
     #[test]
-    fn prepared_batch_rejects_stale_starting_root_atomically() {
-        let pending = [(credit(0x31), envelope(0xC1))];
+    fn prepared_insert_rejects_stale_starting_root_atomically() {
         let mut index = ExactConsumedCreditIndex::empty();
         let prepared = index
-            .prepare_batch_inserts(&pending)
-            .expect("prepare pending batch");
+            .prepare_insert(credit(0x31), envelope(0xC1))
+            .expect("prepare pending insert");
         index
             .insert(credit(0x72), envelope(0xC2))
             .expect("advance exact index");
@@ -713,7 +683,7 @@ mod tests {
         let advanced_records = index.records();
 
         assert_eq!(
-            index.install_prepared_batch(prepared),
+            index.install_prepared_insert(prepared),
             Err(KagemushaStateErrorV1::InvalidConsumedCreditInsertWitness)
         );
         assert_eq!(index.root(), advanced_root);

@@ -1,12 +1,13 @@
-//! Fixed-shape Table16 SHA-256 jobs for paired-Pasta circuits.
+//! Fixed-shape Table8 SHA-256 jobs for paired-Pasta circuits.
 //!
 //! The Base circuit records each hash relation while it is built. After Base
-//! synthesis has established the virtual-to-physical cell map, five Table16
+//! synthesis has established the virtual-to-physical cell map, five Table8
 //! lanes realize those relations. Source bytes and digest words are
 //! copy-constrained across the two layouts.
-use super::pasta_sha256_table16::{
-    AssignedByte, BLOCK_BYTE_SIZE, DIGEST_SIZE, PaddedByte, Sha256Instructions,
-    TABLE16_SPREAD_TABLE_ROWS, Table16Chip, Table16Config, canonical_padding_suffix,
+use super::pasta_sha256_table8::{
+    AssignedBlockWord, AssignedByte, BLOCK_BYTE_SIZE, DIGEST_SIZE, IV, PaddedByte,
+    Sha256Instructions, TABLE8_SPREAD_TABLE_ROWS, Table8Chip, Table8Config,
+    canonical_padding_suffix,
 };
 use ff::PrimeField;
 use halo2_base::{
@@ -17,16 +18,19 @@ use halo2_base::{
         plonk::{ConstraintSystem, Error},
     },
     utils::{BigPrimeField, ScalarField, fe_to_biguint},
-    virtual_region::copy_constraints::SharedCopyConstraintManager,
+    virtual_region::copy_constraints::{CopyConstraintManager, SharedCopyConstraintManager},
 };
-use sha2::{Digest as _, Sha256};
-/// Independent Table16 lanes fixed by the V1 circuit identity.
+use sha2::{Digest as _, Sha256, compress256, digest::generic_array::GenericArray};
+/// Independent Table8 lanes fixed by the V1 circuit identity.
 pub(crate) const PASTA_SHA256_LANES_V1: usize = 5;
-// Table16 uses about 2,267 rows per compression block. Keep a small explicit
+// Table8 uses about 2,267 rows per compression block. Keep a small explicit
 // margin for layout evolution, plus per-job IV and digest regions.
 const SHA256_ROWS_PER_BLOCK_V1: usize = 2_304;
 const SHA256_ROWS_PER_JOB_V1: usize = 64;
-const SHA256_TABLE_ROWS_V1: usize = TABLE16_SPREAD_TABLE_ROWS;
+// A bounded job exposes every chaining state, not only its final one. The
+// existing per-job allowance already includes one four-row digest region.
+const SHA256_ROWS_PER_EXTRA_SNAPSHOT_V1: usize = 4;
+const SHA256_TABLE_ROWS_V1: usize = TABLE8_SPREAD_TABLE_ROWS;
 /// One Boolean cell produced or checked by the SHA-byte provenance API.
 ///
 /// The assigned cell is deliberately private: callers can only obtain this
@@ -64,7 +68,7 @@ enum PastaSha256ByteSourceV1<F: ScalarField> {
 }
 /// A SHA-256 message byte carrying its circuit provenance.
 ///
-/// Constants remain Table16 constants. Dynamic bytes can only be constructed
+/// Constants remain Table8 constants. Dynamic bytes can only be constructed
 /// from eight proven Boolean cells or an explicit caller-side Range8 check.
 /// The test-only generic digest helper applies the same checked fallback.
 /// Consequently
@@ -170,6 +174,14 @@ impl<F: BigPrimeField> PastaSha256ByteV1<F> {
 struct PastaSha256JobV1<F: ScalarField> {
     message: Vec<PastaSha256ByteV1<F>>,
     output_words: [AssignedValue<F>; DIGEST_SIZE],
+    bounded: Option<PastaSha256BoundedJobV1<F>>,
+}
+#[derive(Clone, Debug)]
+struct PastaSha256BoundedJobV1<F: ScalarField> {
+    padded: Vec<PastaSha256ByteV1<F>>,
+    block_outputs: Vec<[AssignedValue<F>; DIGEST_SIZE]>,
+    #[cfg(test)]
+    final_block_selectors: Vec<AssignedValue<F>>,
 }
 /// Explicit, circuit-owned SHA jobs. There is deliberately no global or
 /// thread-local queue: witness stripping clones this exact job shape.
@@ -270,11 +282,174 @@ where
         self.jobs.push(PastaSha256JobV1 {
             message: message.to_vec(),
             output_words,
+            bounded: None,
+        });
+        Ok(output_words)
+    }
+    /// Hash an active prefix of a fixed-capacity message without changing the key shape.
+    ///
+    /// `message.len()` and each source byte's constant/assigned provenance must be fixed by the
+    /// calling circuit. `message_len` is a byte length, constrained to at most that capacity;
+    /// every inactive source byte is constrained to zero. Padding bytes, the full big-endian
+    /// 64-bit bit length, and the selected final block are constrained in Base. Table8 always
+    /// compresses the capacity's maximum padded block count and copy-binds every intermediate
+    /// chaining state. Later zero blocks do not contribute to the selected digest.
+    ///
+    /// The return value uses the same eight big-endian u32 words as `digest_constrained`.
+    /// Domain separators and any application length framing belong in `message`; this method
+    /// neither changes an application hash nor introduces an application-specific length cap.
+    pub(super) fn digest_bounded_constrained(
+        &mut self,
+        ctx: &mut Context<F>,
+        range: &RangeChip<F>,
+        message: &[PastaSha256ByteV1<F>],
+        message_len: AssignedValue<F>,
+    ) -> Result<[AssignedValue<F>; DIGEST_SIZE], String> {
+        let capacity = u64::try_from(message.len())
+            .map_err(|_| "Paired Pasta bounded SHA-256 capacity exceeds u64".to_owned())?;
+        let suffix = canonical_padding_suffix(message.len())
+            .ok_or_else(|| "Paired Pasta bounded SHA-256 capacity is not encodable".to_owned())?;
+        let padded_len = message
+            .len()
+            .checked_add(suffix.len())
+            .ok_or_else(|| "Paired Pasta bounded SHA-256 padded capacity overflow".to_owned())?;
+        let max_blocks = padded_len / BLOCK_BYTE_SIZE;
+        let max_blocks_u64 = u64::try_from(max_blocks)
+            .map_err(|_| "Paired Pasta bounded SHA-256 block count exceeds u64".to_owned())?;
+        if message_len.cell.is_none() {
+            return Err(
+                "Paired Pasta bounded SHA-256 length has no virtual-cell identity".to_owned(),
+            );
+        }
+        let native_len = u64::try_from(fe_to_biguint(message_len.value()))
+            .map_err(|_| "Paired Pasta bounded SHA-256 length exceeds u64".to_owned())?;
+        if native_len > capacity {
+            return Err("Paired Pasta bounded SHA-256 length exceeds its capacity".to_owned());
+        }
+        for (index, byte) in message.iter().copied().enumerate() {
+            byte.value(index)?;
+        }
+
+        let gate = range.gate();
+        // canonical_padding_suffix has already established capacity <= u64::MAX / 8. All
+        // padding arithmetic below therefore fits an ordinary u64 without Pasta-field wrap.
+        range.check_less_than_safe(ctx, message_len, capacity + 1);
+        let length_bits = (u64::BITS - capacity.leading_zeros()).max(1) as usize;
+        range.range_check(ctx, message_len, length_bits);
+        let native_blocks = (native_len + 9).div_ceil(BLOCK_BYTE_SIZE as u64);
+        let blocks = ctx.load_witness(F::from(native_blocks));
+        range.check_less_than_safe(ctx, blocks, max_blocks_u64 + 1);
+        let blocks_zero = gate.is_zero(ctx, blocks);
+        gate.assert_is_const(ctx, &blocks_zero, &F::ZERO);
+        let padded_length = gate.mul(
+            ctx,
+            blocks,
+            QuantumCell::Constant(F::from(BLOCK_BYTE_SIZE as u64)),
+        );
+        let message_and_trailer = gate.add(ctx, message_len, QuantumCell::Constant(F::from(9)));
+        let zero_padding = gate.sub(ctx, padded_length, message_and_trailer);
+        range.range_check(ctx, zero_padding, 6);
+        let final_block_selectors = (1..=max_blocks_u64)
+            .map(|block| gate.is_equal(ctx, blocks, QuantumCell::Constant(F::from(block))))
+            .collect::<Vec<_>>();
+        let one_final_block = gate.sum(ctx, final_block_selectors.iter().copied());
+        gate.assert_is_const(ctx, &one_final_block, &F::ONE);
+
+        let bit_length = gate.mul(ctx, message_len, QuantumCell::Constant(F::from(8)));
+        let bit_length_bits = PastaSha256BitV1::decompose(ctx, gate, bit_length, 64);
+        let bit_length_bytes: [PastaSha256ByteV1<F>; 8] = std::array::from_fn(|index| {
+            let start = (7 - index) * 8;
+            PastaSha256ByteV1::from_bits_le(ctx, gate, &bit_length_bits[start..start + 8])
+        });
+        let mut padded = Vec::new();
+        padded
+            .try_reserve_exact(padded_len)
+            .map_err(|_| "Paired Pasta bounded SHA-256 padded allocation failed".to_owned())?;
+        for index in 0..padded_len {
+            let index_u64 = u64::try_from(index)
+                .map_err(|_| "Paired Pasta bounded SHA-256 offset exceeds u64".to_owned())?;
+            let mut terms = Vec::with_capacity(3);
+            if let Some(byte) = message.get(index) {
+                let active = range.is_less_than(
+                    ctx,
+                    QuantumCell::Constant(F::from(index_u64)),
+                    message_len,
+                    length_bits,
+                );
+                let inactive_byte = gate.mul_not(ctx, active, byte.quantum_cell());
+                gate.assert_is_const(ctx, &inactive_byte, &F::ZERO);
+                terms.push(gate.mul(ctx, active, byte.quantum_cell()));
+            }
+            if index <= message.len() {
+                let marker =
+                    gate.is_equal(ctx, message_len, QuantumCell::Constant(F::from(index_u64)));
+                terms.push(gate.mul(ctx, marker, QuantumCell::Constant(F::from(0x80))));
+            }
+            let block_offset = index % BLOCK_BYTE_SIZE;
+            if block_offset >= BLOCK_BYTE_SIZE - 8 {
+                terms.push(gate.mul(
+                    ctx,
+                    final_block_selectors[index / BLOCK_BYTE_SIZE],
+                    bit_length_bytes[block_offset - (BLOCK_BYTE_SIZE - 8)].quantum_cell(),
+                ));
+            }
+            // Always retain an assigned source, including zero bytes outside the actual final
+            // block. Neither witness values nor length can change Table8's fixed constants.
+            let value = gate.sum(ctx, terms);
+            padded.push(PastaSha256ByteV1::range_checked(ctx, range, value));
+        }
+
+        let native_padded = padded
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, byte)| byte.value(index))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut state = IV;
+        let mut block_outputs = Vec::new();
+        block_outputs
+            .try_reserve_exact(max_blocks)
+            .map_err(|_| "Paired Pasta bounded SHA-256 snapshot allocation failed".to_owned())?;
+        for block in native_padded.chunks_exact(BLOCK_BYTE_SIZE) {
+            compress256(
+                &mut state,
+                core::slice::from_ref(GenericArray::from_slice(block)),
+            );
+            block_outputs.push(state.map(|word| ctx.load_witness(F::from(u64::from(word)))));
+        }
+        let output_words = std::array::from_fn(|word| {
+            gate.inner_product(
+                ctx,
+                block_outputs.iter().map(|output| output[word]),
+                final_block_selectors
+                    .iter()
+                    .copied()
+                    .map(QuantumCell::Existing),
+            )
+        });
+        if output_words
+            .iter()
+            .chain(block_outputs.iter().flatten())
+            .any(|word| word.cell.is_none())
+        {
+            return Err(
+                "Paired Pasta bounded SHA-256 output has no virtual-cell identity".to_owned(),
+            );
+        }
+        self.jobs.push(PastaSha256JobV1 {
+            message: message.to_vec(),
+            output_words,
+            bounded: Some(PastaSha256BoundedJobV1 {
+                padded,
+                block_outputs,
+                #[cfg(test)]
+                final_block_selectors,
+            }),
         });
         Ok(output_words)
     }
     /// Preserve job count, lengths, and virtual cells while hiding all raw
-    /// Table16 witnesses during key generation.
+    /// Table8 witnesses during key generation.
     pub(crate) fn unknown(&self) -> Self {
         let mut clone = self.clone();
         clone.use_unknown = true;
@@ -282,24 +457,59 @@ where
     }
     pub(crate) fn compression_blocks(&self) -> Result<usize, String> {
         self.jobs.iter().try_fold(0_usize, |total, job| {
-            let suffix = canonical_padding_suffix(job.message.len())
-                .ok_or_else(|| "Paired Pasta SHA-256 message length is not encodable".to_owned())?;
-            let blocks = job
-                .message
-                .len()
-                .checked_add(suffix.len())
-                .ok_or_else(|| "Paired Pasta SHA-256 padded length overflow".to_owned())?
-                / BLOCK_BYTE_SIZE;
+            let blocks = if let Some(bounded) = &job.bounded {
+                bounded.block_outputs.len()
+            } else {
+                let suffix = canonical_padding_suffix(job.message.len()).ok_or_else(|| {
+                    "Paired Pasta SHA-256 message length is not encodable".to_owned()
+                })?;
+                job.message
+                    .len()
+                    .checked_add(suffix.len())
+                    .ok_or_else(|| "Paired Pasta SHA-256 padded length overflow".to_owned())?
+                    / BLOCK_BYTE_SIZE
+            };
             total
                 .checked_add(blocks)
                 .ok_or_else(|| "Paired Pasta SHA-256 block count overflow".to_owned())
         })
+    }
+    /// Copy the exact queued message bytes for private proof-stage planning.
+    ///
+    /// This does not serialize or publish the preimages.  It lets a bounded helper plan derive
+    /// its canonical padding and ordered compression leaves from the same typed cells that built
+    /// the monolithic relation, preventing a second host encoder from drifting from circuit
+    /// semantics.
+    pub(crate) fn canonical_messages(&self) -> Result<Vec<Vec<u8>>, String> {
+        self.jobs
+            .iter()
+            .enumerate()
+            .map(|(job_index, job)| {
+                job.message
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .map(|(byte_index, byte)| {
+                        byte.value(byte_index).map_err(|error| {
+                            format!("Paired Pasta SHA-256 job {job_index}: {error}")
+                        })
+                    })
+                    .collect()
+            })
+            .collect()
     }
     /// Return the exact queued-job, compression-block, and per-lane row
     /// geometry used by the authenticated composite-circuit capacity check.
     pub(crate) fn capacity_profile(&self) -> Result<(usize, usize, usize), String> {
         let blocks = self.compression_blocks()?;
         let lane_blocks = blocks.div_ceil(PASTA_SHA256_LANES_V1);
+        let extra_snapshots = self.jobs.iter().try_fold(0_usize, |count, job| {
+            count.checked_add(
+                job.bounded
+                    .as_ref()
+                    .map_or(0, |bounded| bounded.block_outputs.len().saturating_sub(1)),
+            )
+        });
         let required = lane_blocks
             .checked_mul(SHA256_ROWS_PER_BLOCK_V1)
             .and_then(|rows| {
@@ -307,6 +517,11 @@ where
                     .len()
                     .checked_mul(SHA256_ROWS_PER_JOB_V1)
                     .and_then(|job_rows| rows.checked_add(job_rows))
+            })
+            .and_then(|rows| {
+                extra_snapshots?
+                    .checked_mul(SHA256_ROWS_PER_EXTRA_SNAPSHOT_V1)
+                    .and_then(|snapshot_rows| rows.checked_add(snapshot_rows))
             })
             .ok_or_else(|| "Paired Pasta SHA-256 row count overflow".to_owned())?
             .max(SHA256_TABLE_ROWS_V1);
@@ -317,7 +532,7 @@ where
         let (_, blocks, required) = self.capacity_profile()?;
         if required > usable_rows {
             return Err(format!(
-                "Paired Pasta SHA-256 requires {required} rows per Table16 lane for {blocks} blocks, \
+                "Paired Pasta SHA-256 requires {required} rows per Table8 lane for {blocks} blocks, \
                  exceeding {usable_rows} authenticated usable rows"
             ));
         }
@@ -371,8 +586,8 @@ where
     ) -> Result<(), Error> {
         self.validate_capacity(usable_rows)
             .map_err(|_| Error::Synthesis)?;
-        Table16Chip::<F>::load(config.lanes[0].clone(), layouter)?;
-        let chips = config.lanes.clone().map(Table16Chip::<F>::construct);
+        Table8Chip::<F>::load(config.lanes[0].clone(), layouter)?;
+        let chips = config.lanes.clone().map(Table8Chip::<F>::construct);
         // Base synthesis has finished populating this immutable map. Borrow it
         // for the SHA pass instead of cloning millions of virtual-to-physical
         // entries while the populated circuit and keygen assembly are live.
@@ -381,9 +596,21 @@ where
         #[cfg(test)]
         let mut previous_job_state = None;
         for (job_index, job) in self.jobs.iter().enumerate() {
-            let suffix = canonical_padding_suffix(job.message.len()).ok_or(Error::Synthesis)?;
-            let padded_len = job
-                .message
+            let (message, suffix) = if let Some(bounded) = &job.bounded {
+                if bounded.block_outputs.is_empty()
+                    || bounded.block_outputs.len().checked_mul(BLOCK_BYTE_SIZE)
+                        != Some(bounded.padded.len())
+                {
+                    return Err(Error::Synthesis);
+                }
+                (bounded.padded.as_slice(), Vec::new())
+            } else {
+                (
+                    job.message.as_slice(),
+                    canonical_padding_suffix(job.message.len()).ok_or(Error::Synthesis)?,
+                )
+            };
+            let padded_len = message
                 .len()
                 .checked_add(suffix.len())
                 .ok_or(Error::Synthesis)?;
@@ -391,7 +618,7 @@ where
             padded
                 .try_reserve_exact(padded_len)
                 .map_err(|_| Error::Synthesis)?;
-            for (byte_index, byte) in job.message.iter().copied().enumerate() {
+            for (byte_index, byte) in message.iter().copied().enumerate() {
                 #[cfg(not(test))]
                 let _ = byte_index;
                 let source_xor = {
@@ -493,9 +720,19 @@ where
                 }
             };
             state = chips[first_lane].compress(layouter, &state, first_words)?;
+            if let Some(bounded) = &job.bounded {
+                let digest = chips[first_lane].digest(layouter, &state)?;
+                bind_sha256_digest_v1(
+                    layouter,
+                    &physical_cells,
+                    &digest,
+                    &bounded.block_outputs[0],
+                    format!("bind Paired Pasta bounded SHA-256 digest {job_index} block 0"),
+                )?;
+            }
             let mut final_lane = first_lane;
             global_block_index += 1;
-            for block in blocks {
+            for (block_index, block) in blocks.enumerate() {
                 let lane = global_block_index % PASTA_SHA256_LANES_V1;
                 let block: [PaddedByte<F>; BLOCK_BYTE_SIZE] =
                     block.to_vec().try_into().map_err(|_| Error::Synthesis)?;
@@ -505,53 +742,80 @@ where
                     state = chips[lane].initialization_vector(layouter)?;
                 }
                 state = chips[lane].compress(layouter, &state, words)?;
+                if let Some(bounded) = &job.bounded {
+                    let digest = chips[lane].digest(layouter, &state)?;
+                    bind_sha256_digest_v1(
+                        layouter,
+                        &physical_cells,
+                        &digest,
+                        &bounded.block_outputs[block_index + 1],
+                        format!(
+                            "bind Paired Pasta bounded SHA-256 digest {job_index} block {}",
+                            block_index + 1
+                        ),
+                    )?;
+                }
                 final_lane = lane;
                 global_block_index += 1;
             }
-            let digest = chips[final_lane].digest(layouter, &state)?;
+            if job.bounded.is_none() {
+                let digest = chips[final_lane].digest(layouter, &state)?;
+                bind_sha256_digest_v1(
+                    layouter,
+                    &physical_cells,
+                    &digest,
+                    &job.output_words,
+                    format!("bind Paired Pasta SHA-256 digest {job_index}"),
+                )?;
+            }
             #[cfg(test)]
             {
                 previous_job_state = Some(state);
             }
-            layouter.assign_region(
-                || format!("bind Paired Pasta SHA-256 digest {job_index}"),
-                |mut region| {
-                    for (word_index, (actual, expected)) in
-                        digest.iter().zip(&job.output_words).enumerate()
-                    {
-                        let virtual_cell = expected.cell.ok_or_else(|| {
-                            iroha_logger::error!(
-                                job_index,
-                                word_index,
-                                "Paired Pasta SHA-256 output lost its Base virtual-cell identity"
-                            );
-                            Error::Synthesis
-                        })?;
-                        let physical_cell = *physical_cells
-                            .assigned_advices
-                            .get(&virtual_cell)
-                            .ok_or_else(|| {
-                                iroha_logger::error!(
-                                    job_index,
-                                    word_index,
-                                    ?virtual_cell,
-                                    "Paired Pasta SHA-256 output is missing from the Base physical-cell map"
-                                );
-                                Error::Synthesis
-                            })?;
-                        region.constrain_equal(actual.cell(), physical_cell);
-                    }
-                    Ok(())
-                },
-            )?;
         }
         Ok(())
     }
 }
-/// Five Table16 lanes sharing one spread table and one fixed constant column.
+
+fn bind_sha256_digest_v1<F: BigPrimeField>(
+    layouter: &mut impl Layouter<F>,
+    physical_cells: &CopyConstraintManager<F>,
+    digest: &[AssignedBlockWord<F>; DIGEST_SIZE],
+    output_words: &[AssignedValue<F>; DIGEST_SIZE],
+    label: String,
+) -> Result<(), Error> {
+    layouter.assign_region(
+        || label.clone(),
+        |mut region| {
+            for (word_index, (actual, expected)) in digest.iter().zip(output_words).enumerate() {
+                let virtual_cell = expected.cell.ok_or_else(|| {
+                    iroha_logger::error!(
+                        word_index,
+                        "Paired Pasta SHA-256 output lost its Base virtual-cell identity"
+                    );
+                    Error::Synthesis
+                })?;
+                let physical_cell = *physical_cells
+                    .assigned_advices
+                    .get(&virtual_cell)
+                    .ok_or_else(|| {
+                        iroha_logger::error!(
+                            word_index,
+                            ?virtual_cell,
+                            "Paired Pasta SHA-256 output is missing from the Base physical-cell map"
+                        );
+                        Error::Synthesis
+                    })?;
+                region.constrain_equal(actual.cell(), physical_cell);
+            }
+            Ok(())
+        },
+    )
+}
+/// Five Table8 lanes sharing one spread table and one fixed constant column.
 #[derive(Clone, Debug)]
 pub(crate) struct PastaSha256ConfigV1 {
-    lanes: [Table16Config; PASTA_SHA256_LANES_V1],
+    lanes: [Table8Config; PASTA_SHA256_LANES_V1],
 }
 impl PastaSha256ConfigV1 {
     pub(crate) fn configure<F>(meta: &mut ConstraintSystem<F>) -> Self
@@ -559,10 +823,14 @@ impl PastaSha256ConfigV1 {
         F: PrimeField,
     {
         Self {
-            lanes: Table16Chip::<F>::configure_lanes::<PASTA_SHA256_LANES_V1>(meta),
+            lanes: Table8Chip::<F>::configure_lanes::<PASTA_SHA256_LANES_V1>(meta),
         }
     }
 }
+#[cfg(test)]
+#[path = "pasta_sha256_bounded_tests.rs"]
+mod bounded_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -858,12 +1126,12 @@ mod tests {
         assert!(jobs.jobs.is_empty());
     }
     #[test]
-    fn k16_capacity_uses_only_the_loaded_spread_table_rows() {
+    fn capacity_uses_only_the_loaded_spread_table_rows() {
         let jobs = PastaSha256JobsV1::<Fp>::default();
-        assert_eq!(TABLE16_SPREAD_TABLE_ROWS, (1 << 16) - TEST_UNUSABLE_ROWS);
-        assert_eq!(jobs.validate_capacity(TABLE16_SPREAD_TABLE_ROWS), Ok(()));
+        assert_eq!(TABLE8_SPREAD_TABLE_ROWS, 1 << 8);
+        assert_eq!(jobs.validate_capacity(TABLE8_SPREAD_TABLE_ROWS), Ok(()));
         assert!(
-            jobs.validate_capacity(TABLE16_SPREAD_TABLE_ROWS - 1)
+            jobs.validate_capacity(TABLE8_SPREAD_TABLE_ROWS - 1)
                 .is_err()
         );
     }

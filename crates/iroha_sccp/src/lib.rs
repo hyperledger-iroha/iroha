@@ -187,9 +187,12 @@ pub const SCCP_DOMAIN_TON: u32 = 4;
 pub const SCCP_DOMAIN_TRON: u32 = 3;
 /// Public TAIRA chain label retained as SCCP deployment metadata.
 pub const SCCP_TAIRA_CHAIN_ID_V1: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
+/// Canonical public TAIRA genesis hash bound into TAIRA-origin SCCP finality proofs.
+pub const SCCP_TAIRA_GENESIS_HASH_V1: &str =
+    "0466da18c70ca8cbd51b8cc60b1d4a4802fc5d7f928d505806d7cd6cb61d60ef";
 /// Canonical checked TAIRA network identity bound into TAIRA-origin SCCP finality proofs.
 pub const SCCP_TAIRA_FINALITY_NETWORK_ID_V1: &str =
-    "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94";
+    "hash:0466DA18C70CA8CBD51B8CC60B1D4A4802FC5D7F928D505806D7CD6CB61D60EF#BA85";
 /// Return the exact genesis-derived TAIRA network identity governed by SCCP V1.
 #[must_use]
 pub fn sccp_taira_finality_network_id_v1() -> NetworkId {
@@ -6488,10 +6491,17 @@ mod tests {
     }
     #[test]
     fn taira_finality_network_id_matches_the_governed_genesis_vector() {
+        let genesis_hash = SCCP_TAIRA_GENESIS_HASH_V1
+            .parse::<iroha_crypto::HashOf<BlockHeader>>()
+            .expect("compiled SCCP Taira genesis hash must be canonical and marked");
+        let derived = NetworkId::from_genesis_hash(genesis_hash);
+
         assert_eq!(
-            sccp_taira_finality_network_id_v1().to_string(),
-            SCCP_TAIRA_FINALITY_NETWORK_ID_V1
+            derived.to_string(),
+            SCCP_TAIRA_FINALITY_NETWORK_ID_V1,
+            "the checked SCCP identity must be derived from the governed genesis hash"
         );
+        assert_eq!(sccp_taira_finality_network_id_v1(), derived);
     }
     fn word_u64(value: u64) -> H256 {
         let mut word = [0; 32];

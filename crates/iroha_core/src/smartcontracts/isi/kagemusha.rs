@@ -16,24 +16,22 @@ use iroha_data_model::{
     isi::kagemusha_v1::{
         KAGEMUSHA_MINT_FINALITY_TREE_DEPTH_V1, KagemushaMintFinalityEpochRosterV1,
         KagemushaMintFinalitySealBundleV1, KagemushaMintFinalitySealMessageV1,
-        KagemushaTopUpLeafV1, KagemushaTopUpMembershipWitnessV1,
-        kagemusha_mint_finality_root_v1,
+        KagemushaTopUpLeafV1, KagemushaTopUpMembershipWitnessV1, kagemusha_mint_finality_root_v1,
     },
     isi::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaFinalityTrustAnchorV1,
-        KagemushaOperationFinalityV1, KagemushaRedemptionRequestV1, KagemushaTopUpRequestV1,
-        KagemushaTopUpResultV1, RedeemKagemushaV1, TopUpKagemushaV1,
-        error::InstructionExecutionError,
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaFinalityTrustAnchorV1, KagemushaOperationFinalityV1,
+        KagemushaRedemptionRequestV1, KagemushaTopUpRequestV1, KagemushaTopUpResultV1,
+        RedeemKagemushaV1, TopUpKagemushaV1, error::InstructionExecutionError,
     },
-    nexus::AxtAssetIncarnationV1,
     kagemusha::{
         KAGEMUSHA_V1_REJECTION_REASON_PREFIX, KAGEMUSHA_WIRE_VERSION_V1,
-        KagemushaAuthenticatedReleaseV1, KagemushaEnabledProfileV1,
-        KagemushaHardwareProfileV1, KagemushaInternalValidationReceiptV1,
-        KagemushaLifecycleBindingV1, KagemushaMintCreditStatementV1, KagemushaMintCreditV1,
-        KagemushaReleaseAttestationV1, KagemushaReleaseAuthorityPolicyV1,
-        KagemushaReleaseManifestV1, kagemusha_liability_pool_id_v1,
+        KagemushaAuthenticatedReleaseV1, KagemushaEnabledProfileV1, KagemushaHardwareProfileV1,
+        KagemushaInternalValidationReceiptV1, KagemushaLifecycleBindingV1,
+        KagemushaMintCreditStatementV1, KagemushaMintCreditV1, KagemushaReleaseAttestationV1,
+        KagemushaReleaseAuthorityPolicyV1, KagemushaReleaseManifestV1,
+        kagemusha_liability_pool_id_v1,
     },
+    nexus::AxtAssetIncarnationV1,
 };
 use iroha_primitives::numeric::{Numeric, Quantity};
 use norito::JsonDeserialize;
@@ -45,9 +43,9 @@ use crate::zk::{
         KagemushaDirectoryArtifactResolverV1, KagemushaLoadedEpMintAuthorityArtifactsV1,
         KagemushaLoadedEqMintAuthorityArtifactsV1, KagemushaMintAuthorityCheckpointV1,
         KagemushaMintCertificateWitnessV1, KagemushaRecursiveVerifierProfileV1,
-        decode_kagemusha_mint_finality_seal_bundle_v1,
+        decode_kagemusha_mint_finality_seal_bundle_v1, kagemusha_mint_finality_empty_root_v1,
         load_kagemusha_ep_mint_authority_artifacts_v1,
-        load_kagemusha_eq_mint_authority_artifacts_v1, kagemusha_mint_finality_empty_root_v1,
+        load_kagemusha_eq_mint_authority_artifacts_v1,
         prove_kagemusha_finalized_mint_from_checkpoint_v1,
         prove_kagemusha_mint_authority_bootstrap_v1,
         prove_kagemusha_mint_authority_rotation_from_checkpoint_v1,
@@ -77,16 +75,24 @@ struct KagemushaBaseCircuitProfileFileV1 {
 #[derive(Debug, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct KagemushaRecursiveVerifierProfileFileV1 {
+    inner_state_eq: KagemushaBaseCircuitProfileFileV1,
+    inner_state_ep: KagemushaBaseCircuitProfileFileV1,
     state_eq: KagemushaBaseCircuitProfileFileV1,
     state_ep: KagemushaBaseCircuitProfileFileV1,
     guard_eq: KagemushaBaseCircuitProfileFileV1,
     guard_ep: KagemushaBaseCircuitProfileFileV1,
-    wrapper_eq: KagemushaBaseCircuitProfileFileV1,
-    wrapper_ep: KagemushaBaseCircuitProfileFileV1,
+    terminal_authorization_eq: KagemushaBaseCircuitProfileFileV1,
+    terminal_authorization_ep: KagemushaBaseCircuitProfileFileV1,
+    commit_wrapper_eq: KagemushaBaseCircuitProfileFileV1,
+    commit_wrapper_ep: KagemushaBaseCircuitProfileFileV1,
     mint_authorization_eq: KagemushaBaseCircuitProfileFileV1,
     mint_authorization_ep: KagemushaBaseCircuitProfileFileV1,
     mint_eq: KagemushaBaseCircuitProfileFileV1,
     mint_ep: KagemushaBaseCircuitProfileFileV1,
+    inner_mint_authorization_eq: KagemushaBaseCircuitProfileFileV1,
+    inner_mint_authorization_ep: KagemushaBaseCircuitProfileFileV1,
+    inner_mint_eq: KagemushaBaseCircuitProfileFileV1,
+    inner_mint_ep: KagemushaBaseCircuitProfileFileV1,
     mint_eq_protocol_digest: [u8; 32],
     mint_ep_protocol_digest: [u8; 32],
     mint_genesis_roster_id: [u8; 32],
@@ -286,8 +292,7 @@ impl KagemushaV1RuntimeVerifier for RejectAllKagemushaV1RuntimeVerifier {
     fn verify_redemption_request(
         &self,
         _request: KagemushaRedemptionRequestV1,
-    ) -> Result<crate::zk::kagemusha_v1_recursion::VerifiedKagemushaRedemptionProofV1, String>
-    {
+    ) -> Result<crate::zk::kagemusha_v1_recursion::VerifiedKagemushaRedemptionProofV1, String> {
         Err("authenticated Kagemusha V1 recursive verifier is unavailable".to_owned())
     }
 
@@ -327,6 +332,123 @@ struct AuthenticatedKagemushaV1ReleaseRuntime {
     enabled_profiles: Vec<KagemushaEnabledProfileV1>,
 }
 
+/// Operational state of one authenticated KAGEMUSHA verifier release.
+///
+/// Installation never removes an older verifier. The first authenticated release becomes
+/// active, later releases enter standby, and a successful exact activation retains the old
+/// release for delayed-credit verification.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KagemushaVerifierReleaseStatusV1 {
+    /// Accept new top-ups and verify already-issued terminal objects.
+    Active,
+    /// Authenticated and preloaded, but unable to admit payments, top-ups, or redemptions.
+    Standby,
+    /// Retained for delayed-credit verification, redemption, and committed recovery only.
+    VerificationOnly,
+}
+
+#[derive(Debug, Default)]
+struct KagemushaVerifierReleaseLifecycleV1 {
+    statuses: BTreeMap<[u8; 32], KagemushaVerifierReleaseStatusV1>,
+    active_release_id: Option<[u8; 32]>,
+}
+
+impl KagemushaVerifierReleaseLifecycleV1 {
+    fn register(&mut self, release_id: [u8; 32]) -> Result<(), String> {
+        if release_id == [0; 32] {
+            return Err("Kagemusha V1 release identifier must be nonzero".to_owned());
+        }
+        if self.statuses.contains_key(&release_id) {
+            return Err("Kagemusha V1 release is already installed".to_owned());
+        }
+        let status = if self.active_release_id.is_none() {
+            self.active_release_id = Some(release_id);
+            KagemushaVerifierReleaseStatusV1::Active
+        } else {
+            KagemushaVerifierReleaseStatusV1::Standby
+        };
+        self.statuses.insert(release_id, status);
+        self.validate()
+    }
+
+    fn activate(
+        &mut self,
+        expected_active_release_id: [u8; 32],
+        successor_release_id: [u8; 32],
+    ) -> Result<(), String> {
+        let active_release_id = self
+            .active_release_id
+            .ok_or_else(|| "Kagemusha V1 release registry has no active release".to_owned())?;
+        if active_release_id != expected_active_release_id {
+            return Err("Kagemusha V1 active release changed before activation".to_owned());
+        }
+        if successor_release_id == active_release_id {
+            return Ok(());
+        }
+        match self.statuses.get(&successor_release_id) {
+            Some(KagemushaVerifierReleaseStatusV1::Standby) => {}
+            Some(KagemushaVerifierReleaseStatusV1::VerificationOnly) => {
+                return Err(
+                    "Kagemusha V1 verification-only release cannot be reactivated".to_owned(),
+                );
+            }
+            Some(KagemushaVerifierReleaseStatusV1::Active) => {
+                return Err("Kagemusha V1 release lifecycle has multiple active entries".to_owned());
+            }
+            None => return Err("Kagemusha V1 successor release is not installed".to_owned()),
+        }
+        *self
+            .statuses
+            .get_mut(&active_release_id)
+            .ok_or_else(|| "Kagemusha V1 active release is not installed".to_owned())? =
+            KagemushaVerifierReleaseStatusV1::VerificationOnly;
+        *self
+            .statuses
+            .get_mut(&successor_release_id)
+            .expect("standby successor was resolved above") =
+            KagemushaVerifierReleaseStatusV1::Active;
+        self.active_release_id = Some(successor_release_id);
+        self.validate()
+    }
+
+    fn status(&self, release_id: [u8; 32]) -> Option<KagemushaVerifierReleaseStatusV1> {
+        self.statuses.get(&release_id).copied()
+    }
+
+    fn allows_new_top_up(&self, release_id: [u8; 32]) -> bool {
+        self.status(release_id) == Some(KagemushaVerifierReleaseStatusV1::Active)
+    }
+
+    fn allows_terminal_verification(&self, release_id: [u8; 32]) -> bool {
+        matches!(
+            self.status(release_id),
+            Some(
+                KagemushaVerifierReleaseStatusV1::Active
+                    | KagemushaVerifierReleaseStatusV1::VerificationOnly
+            )
+        )
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        let active_count = self
+            .statuses
+            .values()
+            .filter(|status| **status == KagemushaVerifierReleaseStatusV1::Active)
+            .count();
+        if active_count != usize::from(self.active_release_id.is_some()) {
+            return Err(
+                "Kagemusha V1 release lifecycle must contain exactly one active release".to_owned(),
+            );
+        }
+        if let Some(active_release_id) = self.active_release_id
+            && self.status(active_release_id) != Some(KagemushaVerifierReleaseStatusV1::Active)
+        {
+            return Err("Kagemusha V1 active release pointer is inconsistent".to_owned());
+        }
+        Ok(())
+    }
+}
+
 /// Runtime registry of threshold-authenticated Kagemusha V1 proof releases.
 ///
 /// Every installed release reauthenticates its complete content-addressed artifact inventory,
@@ -334,6 +456,7 @@ struct AuthenticatedKagemushaV1ReleaseRuntime {
 /// threshold-signed manifest before it becomes visible to instruction execution.
 pub struct AuthenticatedKagemushaV1RuntimeVerifier {
     releases: BTreeMap<[u8; 32], AuthenticatedKagemushaV1ReleaseRuntime>,
+    lifecycle: KagemushaVerifierReleaseLifecycleV1,
 }
 
 impl AuthenticatedKagemushaV1RuntimeVerifier {
@@ -350,6 +473,7 @@ impl AuthenticatedKagemushaV1RuntimeVerifier {
     ) -> Result<Self, String> {
         let mut registry = Self {
             releases: BTreeMap::new(),
+            lifecycle: KagemushaVerifierReleaseLifecycleV1::default(),
         };
         registry.install_authenticated_release(release, artifact_root, profile)?;
         Ok(registry)
@@ -371,10 +495,8 @@ impl AuthenticatedKagemushaV1RuntimeVerifier {
         if self.releases.contains_key(&release_id) {
             return Err("Kagemusha V1 release is already installed".to_owned());
         }
-        let resolver =
-            KagemushaDirectoryArtifactResolverV1::new(artifact_root).map_err(|error| {
-                format!("failed to open Kagemusha V1 artifact directory: {error}")
-            })?;
+        let resolver = KagemushaDirectoryArtifactResolverV1::new(artifact_root)
+            .map_err(|error| format!("failed to open Kagemusha V1 artifact directory: {error}"))?;
         let state_release = KagemushaStateProofReleaseV1::from_authenticated_release(release)
             .map_err(|error| format!("invalid Kagemusha V1 state proof release: {error}"))?;
         let artifacts = KagemushaAuthenticatedArtifactSetV1::new(
@@ -383,20 +505,18 @@ impl AuthenticatedKagemushaV1RuntimeVerifier {
             resolver,
         )
         .map_err(|error| format!("invalid Kagemusha V1 artifact set: {error}"))?;
-        let eq_mint_prover = load_kagemusha_eq_mint_authority_artifacts_v1(
-            &artifacts,
-            profile.mint_eq.clone(),
-        )
-        .map_err(|error| format!("failed to load Kagemusha V1 Eq mint prover: {error}"))?;
-        let ep_mint_prover = load_kagemusha_ep_mint_authority_artifacts_v1(
-            &artifacts,
-            profile.mint_ep.clone(),
-        )
-        .map_err(|error| format!("failed to load Kagemusha V1 Ep mint prover: {error}"))?;
+        // Profile widths must be authenticated before either mint prover configures a circuit.
+        // The accepting verifier independently repeats this check before its own key reads.
+        profile
+            .validate_against_artifacts(&artifacts)
+            .map_err(|error| format!("invalid Kagemusha V1 recursive profile: {error}"))?;
+        let eq_mint_prover = load_kagemusha_eq_mint_authority_artifacts_v1(&artifacts, &profile)
+            .map_err(|error| format!("failed to load Kagemusha V1 Eq mint prover: {error}"))?;
+        let ep_mint_prover = load_kagemusha_ep_mint_authority_artifacts_v1(&artifacts, &profile)
+            .map_err(|error| format!("failed to load Kagemusha V1 Ep mint prover: {error}"))?;
         let verifier = KagemushaAuthenticatedRecursiveVerifierV1::load(&artifacts, profile)
-            .map_err(|error| {
-                format!("failed to load Kagemusha V1 recursive verifier: {error}")
-            })?;
+            .map_err(|error| format!("failed to load Kagemusha V1 recursive verifier: {error}"))?;
+        self.lifecycle.register(release_id)?;
         self.releases.insert(
             release_id,
             AuthenticatedKagemushaV1ReleaseRuntime {
@@ -410,6 +530,119 @@ impl AuthenticatedKagemushaV1RuntimeVerifier {
         Ok(())
     }
 
+    /// Atomically activate one preloaded standby release while retaining the old verifier.
+    ///
+    /// The expected active identifier makes the transition an exact from/to operation and rejects
+    /// stale control-plane updates. Release authentication occurs at installation; the caller is
+    /// responsible for admitting the corresponding governed suite-upgrade authorization before
+    /// selecting the successor. Repeating an already-applied exact activation is idempotent.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the expected active release changed, the successor is absent, or an
+    /// obsolete verification-only release is selected.
+    pub fn activate_authenticated_standby_release(
+        &mut self,
+        expected_active_release_id: [u8; 32],
+        successor_release_id: [u8; 32],
+    ) -> Result<(), String> {
+        self.lifecycle
+            .activate(expected_active_release_id, successor_release_id)
+    }
+
+    /// Return the unique active authenticated release identifier.
+    #[must_use]
+    pub fn active_release_id(&self) -> Option<[u8; 32]> {
+        self.lifecycle.active_release_id
+    }
+
+    /// Return one installed release's operational lifecycle status.
+    #[must_use]
+    pub fn release_status(&self, release_id: [u8; 32]) -> Option<KagemushaVerifierReleaseStatusV1> {
+        self.lifecycle.status(release_id)
+    }
+
+    fn runtime_for_new_top_up(
+        &self,
+        release_id: [u8; 32],
+    ) -> Result<&AuthenticatedKagemushaV1ReleaseRuntime, String> {
+        let runtime = self
+            .releases
+            .get(&release_id)
+            .ok_or_else(|| "Kagemusha V1 proof release is not installed".to_owned())?;
+        if !self.lifecycle.allows_new_top_up(release_id) {
+            return Err("Kagemusha V1 proof release is not active for new top-ups".to_owned());
+        }
+        Ok(runtime)
+    }
+
+    fn runtime_for_terminal_verification(
+        &self,
+        release_id: [u8; 32],
+    ) -> Result<&AuthenticatedKagemushaV1ReleaseRuntime, String> {
+        let runtime = self
+            .releases
+            .get(&release_id)
+            .ok_or_else(|| "Kagemusha V1 proof release is not installed".to_owned())?;
+        if !self.lifecycle.allows_terminal_verification(release_id) {
+            return Err(
+                "Kagemusha V1 standby release cannot verify terminal monetary objects".to_owned(),
+            );
+        }
+        Ok(runtime)
+    }
+
+    fn verify_top_up_authorization_against_runtime(
+        request: &KagemushaTopUpRequestV1,
+        runtime: &AuthenticatedKagemushaV1ReleaseRuntime,
+    ) -> Result<VerifiedKagemushaTopUpAuthorizationV1, String> {
+        let artifacts = runtime.artifacts.recursion_artifacts();
+        if request.artifact_manifest_digest != artifacts.artifact_manifest_digest {
+            return Err("Kagemusha V1 artifact manifest identity mismatch".to_owned());
+        }
+        let enabled = runtime
+            .enabled_profiles
+            .binary_search_by_key(
+                &request.hardware_credential.hardware_profile_id,
+                |profile| profile.hardware_profile_id,
+            )
+            .ok()
+            .map(|index| &runtime.enabled_profiles[index])
+            .ok_or_else(|| {
+                "Kagemusha V1 hardware profile is not enabled by the release".to_owned()
+            })?;
+        if request.suite_id != enabled.suite_id
+            || request.vk_digest != enabled.vk_digest
+            || request.hardware_credential.policy_epoch != enabled.policy_epoch
+        {
+            return Err("Kagemusha V1 release profile binding mismatch".to_owned());
+        }
+        request
+            .validate_against_profile(&enabled.hardware_profile)
+            .map_err(|error| format!("invalid Kagemusha V1 hardware credential: {error}"))?;
+        let mint_authorization = request
+            .mint_authorization
+            .as_ref()
+            .ok_or_else(|| "Kagemusha V1 top-up lacks mint authorization".to_owned())?;
+        runtime
+            .verifier
+            .verify_mint_authorization(mint_authorization)
+            .map_err(|error| {
+                format!("invalid Kagemusha V1 paired mint authorization proof: {error}")
+            })?;
+        let request_digest = request
+            .canonical_digest()
+            .map_err(|error| format!("invalid Kagemusha V1 top-up request: {error}"))?;
+        let mint_authorization_digest = mint_authorization
+            .canonical_digest()
+            .map_err(|error| format!("invalid Kagemusha V1 mint authorization: {error}"))?;
+        Ok(VerifiedKagemushaTopUpAuthorizationV1 {
+            request_digest,
+            mint_authorization_digest,
+            profile: enabled.hardware_profile.clone(),
+        })
+    }
+
     /// Return the number of authenticated releases available to replay and new instructions.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -420,6 +653,95 @@ impl AuthenticatedKagemushaV1RuntimeVerifier {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.releases.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod release_lifecycle_tests {
+    use super::{KagemushaVerifierReleaseLifecycleV1, KagemushaVerifierReleaseStatusV1};
+
+    fn release(tag: u8) -> [u8; 32] {
+        [tag; 32]
+    }
+
+    #[test]
+    fn first_release_is_active_and_later_releases_are_standby() {
+        let mut lifecycle = KagemushaVerifierReleaseLifecycleV1::default();
+        assert!(lifecycle.validate().is_ok());
+        assert!(lifecycle.register([0; 32]).is_err());
+
+        let first = release(1);
+        let second = release(2);
+        lifecycle.register(first).expect("register first release");
+        lifecycle
+            .register(second)
+            .expect("register standby release");
+
+        assert_eq!(lifecycle.active_release_id, Some(first));
+        assert_eq!(
+            lifecycle.status(first),
+            Some(KagemushaVerifierReleaseStatusV1::Active)
+        );
+        assert_eq!(
+            lifecycle.status(second),
+            Some(KagemushaVerifierReleaseStatusV1::Standby)
+        );
+        assert!(lifecycle.allows_new_top_up(first));
+        assert!(lifecycle.allows_terminal_verification(first));
+        assert!(!lifecycle.allows_new_top_up(second));
+        assert!(!lifecycle.allows_terminal_verification(second));
+        assert!(lifecycle.register(first).is_err());
+    }
+
+    #[test]
+    fn exact_activation_retains_old_verifiers_and_rejects_reactivation() {
+        let mut lifecycle = KagemushaVerifierReleaseLifecycleV1::default();
+        let first = release(1);
+        let second = release(2);
+        let third = release(3);
+        lifecycle.register(first).expect("register first release");
+        lifecycle.register(second).expect("register second release");
+        lifecycle.register(third).expect("register third release");
+
+        assert!(lifecycle.activate(release(9), second).is_err());
+        assert!(lifecycle.activate(first, release(9)).is_err());
+        lifecycle
+            .activate(first, second)
+            .expect("activate exact successor");
+        lifecycle
+            .activate(second, second)
+            .expect("repeat exact activation");
+
+        assert_eq!(lifecycle.active_release_id, Some(second));
+        assert_eq!(
+            lifecycle.status(first),
+            Some(KagemushaVerifierReleaseStatusV1::VerificationOnly)
+        );
+        assert_eq!(
+            lifecycle.status(second),
+            Some(KagemushaVerifierReleaseStatusV1::Active)
+        );
+        assert!(!lifecycle.allows_new_top_up(first));
+        assert!(lifecycle.allows_terminal_verification(first));
+        assert!(lifecycle.activate(second, first).is_err());
+
+        lifecycle
+            .activate(second, third)
+            .expect("activate next exact successor");
+        assert_eq!(lifecycle.active_release_id, Some(third));
+        assert!(lifecycle.allows_terminal_verification(first));
+        assert!(lifecycle.allows_terminal_verification(second));
+        assert!(lifecycle.allows_new_top_up(third));
+        assert!(lifecycle.validate().is_ok());
+    }
+
+    #[test]
+    fn lifecycle_validation_detects_active_pointer_corruption() {
+        let mut lifecycle = KagemushaVerifierReleaseLifecycleV1::default();
+        let first = release(1);
+        lifecycle.register(first).expect("register first release");
+        lifecycle.active_release_id = Some(release(9));
+        assert!(lifecycle.validate().is_err());
     }
 }
 
@@ -436,8 +758,7 @@ fn kagemusha_mint_authority_bootstrap_certificate_v1(
         .map_err(|error| format!("failed to digest Kagemusha genesis roster: {error}"))?;
     if release_id == [0; 32] || actual_roster_id != genesis_roster_id {
         return Err(
-            "Kagemusha bootstrap roster differs from the authenticated release profile"
-                .to_owned(),
+            "Kagemusha bootstrap roster differs from the authenticated release profile".to_owned(),
         );
     }
     let first_validator = epoch_roster
@@ -486,7 +807,7 @@ fn kagemusha_mint_authority_bootstrap_certificate_v1(
             policy_epoch: 1,
             operation_kind: iroha_data_model::kagemusha::KagemushaOperationKindV1::MintFold,
             request_id: [0; 32],
-            acceptance_ticket_id: [0; 32],
+            receiver_lane_commitment: [0; 32],
             credit_id: [0; 32],
             ciphertext_digest: binding(b"ciphertext"),
         },
@@ -558,72 +879,17 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
         &self,
         request: &KagemushaTopUpRequestV1,
     ) -> Result<VerifiedKagemushaTopUpAuthorizationV1, String> {
-        let runtime = self
-            .releases
-            .get(&request.release_id)
-            .ok_or_else(|| "Kagemusha V1 proof release is not installed".to_owned())?;
-        let artifacts = runtime.artifacts.recursion_artifacts();
-        if request.artifact_manifest_digest != artifacts.artifact_manifest_digest {
-            return Err("Kagemusha V1 artifact manifest identity mismatch".to_owned());
-        }
-        let enabled = runtime
-            .enabled_profiles
-            .binary_search_by_key(
-                &request.hardware_credential.hardware_profile_id,
-                |profile| profile.hardware_profile_id,
-            )
-            .ok()
-            .map(|index| &runtime.enabled_profiles[index])
-            .ok_or_else(|| {
-                "Kagemusha V1 hardware profile is not enabled by the release".to_owned()
-            })?;
-        if request.suite_id != enabled.suite_id
-            || request.vk_digest != enabled.vk_digest
-            || request.hardware_credential.policy_epoch != enabled.policy_epoch
-        {
-            return Err("Kagemusha V1 release profile binding mismatch".to_owned());
-        }
-        request
-            .validate_against_profile(&enabled.hardware_profile)
-            .map_err(|error| format!("invalid Kagemusha V1 hardware credential: {error}"))?;
-        let mint_authorization = request
-            .mint_authorization
-            .as_ref()
-            .ok_or_else(|| "Kagemusha V1 top-up lacks mint authorization".to_owned())?;
-        runtime
-            .verifier
-            .verify_mint_authorization(mint_authorization)
-            .map_err(|error| {
-                format!("invalid Kagemusha V1 paired mint authorization proof: {error}")
-            })?;
-        let request_digest = request
-            .canonical_digest()
-            .map_err(|error| format!("invalid Kagemusha V1 top-up request: {error}"))?;
-        let mint_authorization_digest = mint_authorization
-            .canonical_digest()
-            .map_err(|error| format!("invalid Kagemusha V1 mint authorization: {error}"))?;
-        Ok(VerifiedKagemushaTopUpAuthorizationV1 {
-            request_digest,
-            mint_authorization_digest,
-            profile: enabled.hardware_profile.clone(),
-        })
+        let runtime = self.runtime_for_new_top_up(request.release_id)?;
+        Self::verify_top_up_authorization_against_runtime(request, runtime)
     }
 
     fn verify_redemption_request(
         &self,
         request: KagemushaRedemptionRequestV1,
-    ) -> Result<crate::zk::kagemusha_v1_recursion::VerifiedKagemushaRedemptionProofV1, String>
-    {
+    ) -> Result<crate::zk::kagemusha_v1_recursion::VerifiedKagemushaRedemptionProofV1, String> {
         let lifecycle = &request.voucher.statement.lifecycle;
         let release_id = lifecycle.release_id;
-        let runtime = self
-            .releases
-            .get(&release_id)
-            .ok_or_else(|| "Kagemusha V1 proof release is not installed".to_owned())?;
-        let artifacts = runtime.artifacts.recursion_artifacts();
-        if request.voucher.artifact_manifest_digest != artifacts.artifact_manifest_digest {
-            return Err("Kagemusha V1 artifact manifest identity mismatch".to_owned());
-        }
+        let runtime = self.runtime_for_terminal_verification(release_id)?;
         let enabled = runtime
             .enabled_profiles
             .binary_search_by_key(&lifecycle.hardware_profile_id, |profile| {
@@ -632,8 +898,7 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
             .ok()
             .map(|index| &runtime.enabled_profiles[index])
             .ok_or_else(|| {
-                "Kagemusha V1 redemption hardware profile is not enabled by the release"
-                    .to_owned()
+                "Kagemusha V1 redemption hardware profile is not enabled by the release".to_owned()
             })?;
         if lifecycle.suite_id != enabled.suite_id
             || lifecycle.vk_digest != enabled.vk_digest
@@ -682,10 +947,7 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
         authority_checkpoint: &KagemushaMintAuthorityCheckpointV1,
     ) -> Result<KagemushaTopUpResultV1, String> {
         let request = &record.issuance_intent.request;
-        let runtime = self
-            .releases
-            .get(&record.release_id)
-            .ok_or_else(|| "Kagemusha V1 proof release is not installed".to_owned())?;
+        let runtime = self.runtime_for_terminal_verification(record.release_id)?;
         if request.release_id != record.release_id
             || request.artifact_manifest_digest
                 != runtime
@@ -706,7 +968,8 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
         if finality.reserve_receipt_witness.receipt != record.reserve_receipt {
             return Err("canonical finality receipt differs from reserve state".to_owned());
         }
-        let verified_authorization = self.verify_top_up_authorization(request)?;
+        let verified_authorization =
+            Self::verify_top_up_authorization_against_runtime(request, runtime)?;
         let statement = verified_authorization
             .mint_statement(request, record.reserve_receipt.committed_at_ms)?;
         let membership = finality
@@ -870,9 +1133,8 @@ pub fn load_authenticated_kagemusha_v1_runtime_verifier(
     let receipt =
         KagemushaInternalValidationReceiptV1::decode_canonical_exact(validation_receipt_bytes)
             .map_err(|error| format!("invalid Kagemusha V1 validation receipt: {error}"))?;
-    let policy =
-        KagemushaReleaseAuthorityPolicyV1::decode_canonical_exact(authority_policy_bytes)
-            .map_err(|error| format!("invalid Kagemusha V1 authority policy: {error}"))?;
+    let policy = KagemushaReleaseAuthorityPolicyV1::decode_canonical_exact(authority_policy_bytes)
+        .map_err(|error| format!("invalid Kagemusha V1 authority policy: {error}"))?;
     let attestation = KagemushaReleaseAttestationV1::decode_canonical_exact(attestation_bytes)
         .map_err(|error| format!("invalid Kagemusha V1 release attestation: {error}"))?;
     if recursive_profile_json.is_empty()
@@ -899,12 +1161,20 @@ pub fn load_authenticated_kagemusha_v1_runtime_verifier(
 impl KagemushaRecursiveVerifierProfileFileV1 {
     fn try_into_profile(self) -> Result<KagemushaRecursiveVerifierProfileV1, String> {
         Ok(KagemushaRecursiveVerifierProfileV1 {
-            state_eq: self.state_eq.try_into_params("state Eq")?,
-            state_ep: self.state_ep.try_into_params("state Ep")?,
+            inner_state_eq: self.inner_state_eq.try_into_params("inner state Eq")?,
+            inner_state_ep: self.inner_state_ep.try_into_params("inner state Ep")?,
+            state_eq: self.state_eq.try_into_params("transport state Eq")?,
+            state_ep: self.state_ep.try_into_params("transport state Ep")?,
             guard_eq: self.guard_eq.try_into_params("GuardBundle Eq")?,
             guard_ep: self.guard_ep.try_into_params("GuardBundle Ep")?,
-            wrapper_eq: self.wrapper_eq.try_into_params("commit wrapper Eq")?,
-            wrapper_ep: self.wrapper_ep.try_into_params("commit wrapper Ep")?,
+            terminal_authorization_eq: self
+                .terminal_authorization_eq
+                .try_into_params("TerminalAuthorization Eq")?,
+            terminal_authorization_ep: self
+                .terminal_authorization_ep
+                .try_into_params("TerminalAuthorization Ep")?,
+            commit_wrapper_eq: self.commit_wrapper_eq.try_into_params("CommitWrapper Eq")?,
+            commit_wrapper_ep: self.commit_wrapper_ep.try_into_params("CommitWrapper Ep")?,
             mint_authorization_eq: self
                 .mint_authorization_eq
                 .try_into_params("mint authorization Eq")?,
@@ -913,10 +1183,129 @@ impl KagemushaRecursiveVerifierProfileFileV1 {
                 .try_into_params("mint authorization Ep")?,
             mint_eq: self.mint_eq.try_into_params("mint authority Eq")?,
             mint_ep: self.mint_ep.try_into_params("mint authority Ep")?,
+            inner_mint_authorization_eq: self
+                .inner_mint_authorization_eq
+                .try_into_params("inner mint authorization Eq")?,
+            inner_mint_authorization_ep: self
+                .inner_mint_authorization_ep
+                .try_into_params("inner mint authorization Ep")?,
+            inner_mint_eq: self
+                .inner_mint_eq
+                .try_into_params("inner mint authority Eq")?,
+            inner_mint_ep: self
+                .inner_mint_ep
+                .try_into_params("inner mint authority Ep")?,
             mint_eq_protocol_digest: self.mint_eq_protocol_digest,
             mint_ep_protocol_digest: self.mint_ep_protocol_digest,
             mint_genesis_roster_id: self.mint_genesis_roster_id,
         })
+    }
+}
+
+#[cfg(test)]
+mod recursive_profile_file_tests {
+    use super::*;
+
+    fn profile_json_fields() -> BTreeMap<String, norito::json::Value> {
+        let mut fields = BTreeMap::new();
+        for (name, fixed) in [
+            ("inner_state_eq", 1),
+            ("inner_state_ep", 1),
+            ("state_eq", 1),
+            ("state_ep", 1),
+            ("guard_eq", 1),
+            ("guard_ep", 1),
+            ("terminal_authorization_eq", 1),
+            ("terminal_authorization_ep", 1),
+            ("commit_wrapper_eq", 3),
+            ("commit_wrapper_ep", 5),
+            ("mint_authorization_eq", 1),
+            ("mint_authorization_ep", 1),
+            ("mint_eq", 1),
+            ("mint_ep", 1),
+            ("inner_mint_authorization_eq", 7),
+            ("inner_mint_authorization_ep", 9),
+            ("inner_mint_eq", 11),
+            ("inner_mint_ep", 13),
+        ] {
+            fields.insert(
+                name.to_owned(),
+                norito::json!({
+                    "k": 12,
+                    "num_advice_per_phase": [1],
+                    "num_fixed": fixed,
+                    "num_lookup_advice_per_phase": [1],
+                    "lookup_bits": 11,
+                    "num_instance_columns": 1,
+                }),
+            );
+        }
+        for (name, tag) in [
+            ("mint_eq_protocol_digest", 1_u8),
+            ("mint_ep_protocol_digest", 2_u8),
+            ("mint_genesis_roster_id", 3_u8),
+        ] {
+            fields.insert(name.to_owned(), norito::json::to_value(&[tag; 32]).unwrap());
+        }
+        fields
+    }
+
+    #[test]
+    fn recursive_profile_maps_distinct_commit_wrapper_parities() {
+        let bytes = norito::json::to_vec(&profile_json_fields()).unwrap();
+        let decoded: KagemushaRecursiveVerifierProfileFileV1 =
+            norito::json::from_slice(&bytes).unwrap();
+        let profile = decoded.try_into_profile().unwrap();
+        assert_eq!(profile.commit_wrapper_eq.num_fixed, 3);
+        assert_eq!(profile.commit_wrapper_ep.num_fixed, 5);
+        assert_eq!(profile.terminal_authorization_eq.num_fixed, 1);
+        assert_eq!(profile.mint_genesis_roster_id, [3; 32]);
+    }
+
+    #[test]
+    fn recursive_profile_requires_and_preserves_all_private_mint_layouts() {
+        let fields = profile_json_fields();
+        let bytes = norito::json::to_vec(&fields).unwrap();
+        let decoded: KagemushaRecursiveVerifierProfileFileV1 =
+            norito::json::from_slice(&bytes).unwrap();
+        let profile = decoded.try_into_profile().unwrap();
+        assert_eq!(profile.inner_mint_authorization_eq.num_fixed, 7);
+        assert_eq!(profile.inner_mint_authorization_ep.num_fixed, 9);
+        assert_eq!(profile.inner_mint_eq.num_fixed, 11);
+        assert_eq!(profile.inner_mint_ep.num_fixed, 13);
+        assert_eq!(profile.mint_authorization_eq.num_fixed, 1);
+        assert_eq!(profile.mint_eq.num_fixed, 1);
+        for name in [
+            "inner_mint_authorization_eq",
+            "inner_mint_authorization_ep",
+            "inner_mint_eq",
+            "inner_mint_ep",
+        ] {
+            let mut incomplete = fields.clone();
+            incomplete.remove(name).unwrap();
+            let bytes = norito::json::to_vec(&incomplete).unwrap();
+            assert!(
+                norito::json::from_slice::<KagemushaRecursiveVerifierProfileFileV1>(&bytes)
+                    .is_err(),
+                "missing private layout {name} must not default to an outer layout"
+            );
+        }
+    }
+
+    #[test]
+    fn recursive_profile_rejects_removed_pre_ticket_proof_profile_names() {
+        let mut fields = profile_json_fields();
+        for (current, removed) in [
+            ("commit_wrapper_eq", "acceptance_intent_authorization_eq"),
+            ("commit_wrapper_ep", "acceptance_intent_authorization_ep"),
+        ] {
+            let profile = fields.remove(current).unwrap();
+            fields.insert(removed.to_owned(), profile);
+        }
+        let bytes = norito::json::to_vec(&fields).unwrap();
+        assert!(
+            norito::json::from_slice::<KagemushaRecursiveVerifierProfileFileV1>(&bytes).is_err()
+        );
     }
 }
 
@@ -966,8 +1355,7 @@ impl KagemushaBaseCircuitProfileFileV1 {
 
 fn labeled_invariant(label: &str, message: impl Into<String>) -> InstructionExecutionError {
     let message = message.into();
-    let boxed: Box<str> =
-        format!("{KAGEMUSHA_V1_REJECTION_REASON_PREFIX}{label}:{message}").into();
+    let boxed: Box<str> = format!("{KAGEMUSHA_V1_REJECTION_REASON_PREFIX}{label}:{message}").into();
     InstructionExecutionError::InvariantViolation(boxed)
 }
 
@@ -1383,7 +1771,8 @@ pub mod isi {
             state_transaction,
             &AssetId::new(lifecycle.asset.clone(), statement.beneficiary.clone()),
         )?;
-        let reserve_account = resolve_kagemusha_reserve_account(state_transaction, &lifecycle.asset)?;
+        let reserve_account =
+            resolve_kagemusha_reserve_account(state_transaction, &lifecycle.asset)?;
         ensure_distinct_kagemusha_reserve_account(
             &reserve_account,
             &statement.beneficiary,
@@ -1428,9 +1817,8 @@ pub mod isi {
             )
             .map_err(|error| kagemusha_v1_error("reserve_invalid", error))?
         };
-        let KagemushaReservePlanOutcomeV1::Commit(KagemushaReserveMutationPlanV1::Redemption(
-            plan,
-        )) = outcome
+        let KagemushaReservePlanOutcomeV1::Commit(KagemushaReserveMutationPlanV1::Redemption(plan)) =
+            outcome
         else {
             return Ok(());
         };

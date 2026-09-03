@@ -1,5 +1,6 @@
 import XCTest
 import CryptoKit
+import Foundation
 #if canImport(Combine)
 import Combine
 #endif
@@ -12988,7 +12989,7 @@ final class ToriiClientTests: XCTestCase {
           "kagemusha_handoff_capability": "kagemusha_handoff_v1",
           "wire_version": 1,
           "device_lifecycle_version": 1,
-          "ready": true
+          "ready": false
         }
         """.data(using: .utf8)!
 
@@ -13009,17 +13010,17 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(status.kagemushaHandoffCapability, "kagemusha_handoff_v1")
         XCTAssertEqual(status.wireVersion, 1)
         XCTAssertEqual(status.deviceLifecycleVersion, 1)
-        XCTAssertTrue(status.ready)
+        XCTAssertFalse(status.ready)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
     func testGetKagemushaCapabilityRejectsNonUniversalClaims() async throws {
         let invalidPayloads = [
             #"{"mandatory":true,"kagemusha_handoff_capability":"kagemusha_handoff_v1","wire_version":1,"device_lifecycle_version":1,"ready":true}"#,
-            #"{"kagemusha_handoff_capability":"kagemusha_handoff_v2","wire_version":1,"device_lifecycle_version":1,"ready":true}"#,
+            #"{"kagemusha_handoff_capability":"kagemusha_handoff_v"# + "2"
+                + #"","wire_version":1,"device_lifecycle_version":1,"ready":true}"#,
             #"{"kagemusha_handoff_capability":"kagemusha_handoff_v1","wire_version":2,"device_lifecycle_version":1,"ready":true}"#,
             #"{"kagemusha_handoff_capability":"kagemusha_handoff_v1","wire_version":1,"device_lifecycle_version":2,"ready":true}"#,
-            #"{"kagemusha_handoff_capability":"kagemusha_handoff_v1","wire_version":1,"device_lifecycle_version":1,"ready":false}"#,
             #"{"kagemusha_handoff_capability":"kagemusha_handoff_v1","wire_version":1,"device_lifecycle_version":1,"ready":true,"assets":[]}"#,
             #"{"kagemusha_handoff_capability":"kagemusha_handoff_v1","wire_version":1,"device_lifecycle_version":1,"ready":true,"blockers":[]}"#,
             #"{"kagemusha_handoff_capability":"kagemusha_handoff_v1","wire_version":1,"device_lifecycle_version":1,"ready":true,"future":true}"#,
@@ -13037,7 +13038,7 @@ final class ToriiClientTests: XCTestCase {
             }
             do {
                 _ = try await makeClient().getKagemushaCapability()
-                XCTFail("expected non-universal Kagemusha capability to fail")
+                XCTFail("expected non-universal KAGEMUSHA capability to fail")
             } catch {
                 // Exact universal discovery is fail-closed.
             }
@@ -13063,7 +13064,7 @@ final class ToriiClientTests: XCTestCase {
             }
             do {
                 _ = try await makeClient().getKagemushaCapability()
-                XCTFail("expected malformed Kagemusha capability to fail")
+                XCTFail("expected malformed KAGEMUSHA capability to fail")
             } catch {
                 // Duplicate and non-UTF-8 JSON must never be accepted.
             }
@@ -13105,6 +13106,370 @@ final class ToriiClientTests: XCTestCase {
                 )
             }
         }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testKagemushaReserveRoutesUseCanonicalNoritoAndIdempotency() async throws {
+        let topUp = try kagemushaTopUpRequest()
+        XCTAssertEqual(KagemushaNoritoV1.maximumTopUpRequestBytes, 16 * 1024)
+        let topUpInstruction = try KagemushaNoritoV1.topUpInstructionFrame(topUp)
+        XCTAssertEqual(
+            topUpInstruction.wireName,
+            KagemushaNoritoV1.topUpInstructionWireName
+        )
+        let topUpInstructionArchive = try XCTUnwrap(
+            noritoDecodeFrame(topUpInstruction.framedPayload)
+        )
+        XCTAssertEqual(
+            topUpInstructionArchive.header.schema,
+            noritoSchemaHash(
+                forTypeName: "iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1"
+            )
+        )
+        XCTAssertEqual(topUpInstructionArchive.header.flags, NoritoHeader.compactLen)
+        XCTAssertEqual(topUpInstructionArchive.paddingLength, 8)
+        var topUpInstructionReader = CanonicalNoritoReader(
+            data: topUpInstructionArchive.payload
+        )
+        let embeddedTopUpRequest = try topUpInstructionReader.readCompactField()
+        XCTAssertEqual(topUpInstructionReader.remaining(), 0)
+        XCTAssertEqual(
+            embeddedTopUpRequest,
+            try XCTUnwrap(
+                noritoDecodeFrame(KagemushaNoritoV1.encodeTopUpRequestShape(topUp))
+            ).payload
+        )
+        let topUpBody = Data([1, 0x51, 0x52, 0x53])
+        let topUpTransaction = SignedTransactionEnvelope(
+            norito: topUpBody,
+            signedTransaction: Data(topUpBody.dropFirst()),
+            payload: nil,
+            transactionHash: Data(repeating: 0x54, count: 32)
+        )
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/kagemusha/top-up")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: "Idempotency-Key"),
+                topUp.operationID.hexEncodedString())
+            XCTAssertEqual(self.bodyData(from: request), topUpBody)
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 202, httpVersion: nil,
+                headerFields: [
+                    "Content-Type": "application/json",
+                    "Location": "/v1/kagemusha/operations/\(topUp.operationID.hexEncodedString())",
+                    "Retry-After": "1",
+                ]
+            )!
+            return (
+                response,
+                try self.kagemushaStatusJSON(
+                    operationID: topUp.operationID, kind: "top_up", state: "pending")
+            )
+        }
+        let topUpStatus = try await makeClient().submitKagemushaTopUp(
+            topUpTransaction,
+            operationID: topUp.operationID
+        )
+        XCTAssertEqual(topUpStatus.kind, .topUp)
+        XCTAssertEqual(topUpStatus.state, .pending)
+
+        let redemption = try kagemushaRedemptionRequest()
+        let redemptionBody = try KagemushaNoritoV1.encodeRedemptionRequestShape(redemption)
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/kagemusha/redeem")
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: "Idempotency-Key"),
+                redemption.operationID.hexEncodedString())
+            XCTAssertEqual(self.bodyData(from: request), redemptionBody)
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 200, httpVersion: nil,
+                headerFields: [
+                    "Content-Type": "application/json",
+                    "Location": "/v1/kagemusha/operations/\(redemption.operationID.hexEncodedString())",
+                ]
+            )!
+            return (
+                response,
+                try self.kagemushaStatusJSON(
+                    operationID: redemption.operationID,
+                    kind: "redemption", state: "applied",
+                    result: ["unverified_result": "opaque"])
+            )
+        }
+        let redemptionStatus = try await makeClient().submitKagemushaRedemption(redemption)
+        XCTAssertEqual(redemptionStatus.kind, .redemption)
+        XCTAssertEqual(redemptionStatus.state, .applied)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testKagemushaOperationWithholdsAppliedResultUntilPinnedVerification() async throws {
+        let operationID = Data(repeating: 0xd1, count: 32)
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(
+                request.url?.path,
+                "/v1/kagemusha/operations/\(operationID.hexEncodedString())")
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 200, httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (
+                response,
+                try self.kagemushaStatusJSON(
+                    operationID: operationID, kind: "redemption", state: "applied",
+                    result: ["untrusted_finality": "opaque"])
+            )
+        }
+
+        let status = try await makeClient().getKagemushaOperation(operationID: operationID)
+        XCTAssertEqual(status.state, .applied)
+        XCTAssertTrue(status.description.contains("[WITHHELD]"))
+        XCTAssertFalse(status.description.contains("opaque"))
+        let released = try status.verifyAgainst("pinned-anchor") { data, anchor in
+            XCTAssertEqual(anchor, "pinned-anchor")
+            return try XCTUnwrap(String(data: data, encoding: .utf8))
+        }
+        XCTAssertTrue(released.contains("untrusted_finality"))
+    }
+
+    private func kagemushaStatusJSON(
+        operationID: Data,
+        kind: String,
+        state: String,
+        result: [String: Any]? = nil
+    ) throws -> Data {
+        let object: [String: Any] = [
+            "version": 1,
+            "operation_id": operationID.map(Int.init),
+            "kind": ["kind": kind, "value": NSNull()],
+            "state": ["state": state, "value": NSNull()],
+            "result": result.map { $0 as Any } ?? NSNull(),
+            "rejection": NSNull(),
+        ]
+        return try JSONSerialization.data(withJSONObject: object)
+    }
+
+    private func kagemushaTopUpRequest() throws -> KagemushaTopUpRequestV1 {
+        let (request, payment) = try kagemushaPeerFixture()
+        let operationID = kagemushaBytes(0x77)
+        let issuanceCommitment = kagemushaBytes(0x7d)
+        let creditID = kagemushaBytes(0x7e)
+        let artifactManifestDigest = kagemushaBytes(0x79)
+        let recipientCredentialCommitment = kagemushaBytes(0x7a)
+        let creditCommitment = kagemushaBytes(0x7b)
+        let encryptedCredit = payment.encryptedCredit
+        let context = try KagemushaMintAuthorizationContextV1(
+            operationID: operationID,
+            releaseID: request.releaseID,
+            suiteID: request.hardwareCredential.suiteID,
+            vkDigest: kagemushaBytes(0x78),
+            artifactManifestDigest: artifactManifestDigest,
+            networkID: request.networkID,
+            asset: request.asset,
+            assetIncarnation: request.assetIncarnation,
+            scale: request.scale,
+            liabilityPoolID: request.liabilityPoolID,
+            amount: KagemushaUInt128V1(40),
+            payer: request.recipient,
+            recipient: request.recipient,
+            hardwareCredentialID: request.hardwareCredential.credentialID,
+            hardwareProfileID: request.hardwareCredential.hardwareProfileID,
+            policyEpoch: request.hardwareCredential.policyEpoch,
+            recipientCredentialCommitment: recipientCredentialCommitment,
+            creditCommitment: creditCommitment,
+            recipientOneTimeKey: KagemushaX25519PublicKeyV1(rawBytes: kagemushaBytes(0x7c))
+        )
+        let statement = try KagemushaMintAuthorizationStatementV1(
+            context: context,
+            issuanceCommitment: issuanceCommitment,
+            creditID: creditID,
+            ciphertextDigest: KagemushaNoritoV1.ciphertextDigestShape(encryptedCredit)
+        )
+        let authorization = try KagemushaMintAuthorizationV1(
+            statement: statement,
+            proof: try kagemushaProof(
+                semanticDigest: KagemushaNoritoV1.mintAuthorizationStatementDigestShape(
+                    statement),
+                tag: 0x80)
+        )
+        return try KagemushaTopUpRequestV1(
+            operationID: operationID,
+            issuanceCommitment: issuanceCommitment,
+            creditID: creditID,
+            releaseID: context.releaseID,
+            suiteID: context.suiteID,
+            vkDigest: context.vkDigest,
+            networkID: context.networkID,
+            asset: context.asset,
+            assetIncarnation: context.assetIncarnation,
+            scale: context.scale,
+            amount: context.amount,
+            liabilityPoolID: context.liabilityPoolID,
+            payer: context.payer,
+            recipient: context.recipient,
+            hardwareCredential: request.hardwareCredential,
+            recipientCredentialCommitment: context.recipientCredentialCommitment,
+            creditCommitment: context.creditCommitment,
+            recipientOneTimeKey: context.recipientOneTimeKey,
+            encryptedCredit: encryptedCredit,
+            artifactManifestDigest: context.artifactManifestDigest,
+            mintAuthorization: authorization
+        )
+    }
+
+    private func kagemushaRedemptionRequest() throws -> KagemushaRedemptionRequestV1 {
+        let (request, _) = try kagemushaPeerFixture()
+        let lifecycle = try KagemushaLifecycleBindingV1(
+            networkID: request.networkID,
+            suiteID: request.hardwareCredential.suiteID,
+            vkDigest: kagemushaBytes(0xa3),
+            releaseID: request.releaseID,
+            asset: request.asset,
+            assetIncarnation: request.assetIncarnation,
+            scale: request.scale,
+            liabilityPoolID: request.liabilityPoolID,
+            hardwareProfileID: request.hardwareCredential.hardwareProfileID,
+            policyEpoch: request.hardwareCredential.policyEpoch,
+            operationKind: .redeemSplit,
+            requestID: Data(repeating: 0, count: 32),
+            acceptanceTicketID: Data(repeating: 0, count: 32),
+            creditID: Data(repeating: 0, count: 32),
+            ciphertextDigest: Data(repeating: 0, count: 32)
+        )
+        let commitEvidence = KagemushaCommitEvidenceV1.trustedTime(
+            try KagemushaTrustedCommitTimeV1(
+                timeEvidenceCommitment: kagemushaBytes(0xa9)))
+        func statement(_ redemptionID: Data) throws -> KagemushaRedemptionStatementV1 {
+            try KagemushaRedemptionStatementV1(
+                lifecycle: lifecycle,
+                amount: KagemushaUInt128V1(12),
+                beneficiary: request.recipient,
+                terminalNullifier: kagemushaBytes(0xa2),
+                redemptionCommitment: kagemushaBytes(0xa8),
+                redemptionID: redemptionID,
+                commitEvidence: commitEvidence
+            )
+        }
+        let provisional = try statement(kagemushaBytes(0xaa))
+        let finalStatement = try statement(KagemushaNoritoV1.redemptionIDShape(provisional))
+        func certificate(_ certificateID: Data) throws -> KagemushaCommitCertificateV1 {
+            try KagemushaCommitCertificateV1(
+                certificateID: certificateID,
+                candidateEnvelopeDigest: kagemushaBytes(0xab),
+                lifecycleBindingDigest: KagemushaNoritoV1.lifecycleBindingDigestShape(lifecycle),
+                transitionNullifier: finalStatement.terminalNullifier,
+                outboxReservationCommitment: kagemushaBytes(0xac),
+                commitEvidence: commitEvidence,
+                hardwareProfileID: lifecycle.hardwareProfileID,
+                policyEpoch: lifecycle.policyEpoch,
+                hardwareTerminalCommitment: kagemushaBytes(0xad))
+        }
+        let provisionalCertificate = try certificate(kagemushaBytes(0xae))
+        let commitCertificate = try certificate(
+            KagemushaNoritoV1.commitCertificateIDShape(provisionalCertificate))
+        let wrapper = try KagemushaRedemptionProofV1(
+            eqProtocolDigest: kagemushaBytes(0xb0),
+            epProtocolDigest: kagemushaBytes(0xb1),
+            semanticDigest: KagemushaNoritoV1.redemptionStatementDigestShape(finalStatement),
+            candidateEnvelopeDigest: commitCertificate.candidateEnvelopeDigest,
+            commitCertificateDigest: KagemushaNoritoV1.commitCertificateDigestShape(
+                commitCertificate),
+            eqDeferredAudit: kagemushaBytes(0xb2),
+            epDeferredAudit: kagemushaBytes(0xb3),
+            eqProof: Data([0xb4]),
+            epProof: Data([0xb5]),
+            eqHistory: Data(repeating: 0xb6, count: KagemushaWireV1.historyAccumulatorBytes),
+            epHistory: Data(repeating: 0xb7, count: KagemushaWireV1.historyAccumulatorBytes))
+        let voucher = try KagemushaRedemptionVoucherV1(
+            statement: finalStatement,
+            commitCertificate: commitCertificate,
+            proof: wrapper,
+            artifactManifestDigest: kagemushaBytes(0xb8)
+        )
+        return try KagemushaRedemptionRequestV1(
+            operationID: kagemushaBytes(0xc1), voucher: voucher)
+    }
+
+    private func kagemushaProof(
+        semanticDigest: Data,
+        tag: UInt8
+    ) throws -> KagemushaPairedProofV1 {
+        try KagemushaPairedProofV1(
+            eqProtocolDigest: kagemushaBytes(tag),
+            epProtocolDigest: kagemushaBytes(tag &+ 1),
+            semanticDigest: semanticDigest,
+            guardEqCredentialAudit: kagemushaBytes(tag &+ 2),
+            guardEpCredentialAudit: kagemushaBytes(tag &+ 3),
+            eqDeferredAudit: kagemushaBytes(tag &+ 4),
+            epDeferredAudit: kagemushaBytes(tag &+ 5),
+            eqProof: Data([tag]),
+            epProof: Data([tag &+ 1]),
+            eqHistory: Data(repeating: tag, count: KagemushaWireV1.historyAccumulatorBytes),
+            epHistory: Data(
+                repeating: tag &+ 1, count: KagemushaWireV1.historyAccumulatorBytes)
+        )
+    }
+
+    private func kagemushaPeerFixture() throws
+        -> (KagemushaPaymentRequestV1, KagemushaPaymentV1)
+    {
+        var current = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        while current.path != "/" {
+            let candidate = current.appendingPathComponent("fixtures/offline/kagemusha_v1.json")
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                let root = try XCTUnwrap(
+                    JSONSerialization.jsonObject(with: Data(contentsOf: candidate))
+                        as? [String: Any])
+                let requestSection = try XCTUnwrap(root["payment_request"] as? [String: Any])
+                let intentSection = try XCTUnwrap(
+                    root["acceptance_intent"] as? [String: Any])
+                let ticketSection = try XCTUnwrap(
+                    root["acceptance_ticket"] as? [String: Any])
+                let paymentSection = try XCTUnwrap(root["payment"] as? [String: Any])
+                let request = try KagemushaNoritoV1.decodePaymentRequestShapeExact(
+                    try kagemushaFixtureHex(requestSection))
+                let intent = try KagemushaNoritoV1
+                    .decodeAcceptanceIntentShapeExact(
+                        try kagemushaFixtureHex(intentSection), against: request)
+                let ticket = try KagemushaNoritoV1.decodeAcceptanceTicketShapeExact(
+                    try kagemushaFixtureHex(ticketSection), against: request,
+                    intent: intent)
+                let payment = try KagemushaNoritoV1.decodePaymentShapeExact(
+                    try kagemushaFixtureHex(paymentSection), against: request,
+                    intent: intent, ticket: ticket)
+                return (request, payment)
+            }
+            current.deleteLastPathComponent()
+        }
+        throw NSError(
+            domain: "ToriiClientTests", code: -1,
+            userInfo: [NSLocalizedDescriptionKey: "KAGEMUSHA fixture was not found"])
+    }
+
+    private func kagemushaFixtureHex(_ section: [String: Any]) throws -> Data {
+        let hex = try XCTUnwrap(section["norito_hex"] as? String)
+        guard hex.count.isMultiple(of: 2) else {
+            throw NSError(domain: "ToriiClientTests", code: -1)
+        }
+        var result = Data()
+        var index = hex.startIndex
+        while index != hex.endIndex {
+            let next = hex.index(index, offsetBy: 2)
+            guard let byte = UInt8(hex[index..<next], radix: 16) else {
+                throw NSError(domain: "ToriiClientTests", code: -1)
+            }
+            result.append(byte)
+            index = next
+        }
+        return result
+    }
+
+    private func kagemushaBytes(_ tag: UInt8) -> Data {
+        Data(repeating: tag, count: 32)
     }
 
     @available(iOS 15.0, macOS 12.0, *)

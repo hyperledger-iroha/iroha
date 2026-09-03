@@ -148,13 +148,15 @@ export IROHA_GENESIS_EXPECTED_HASH_FILE="$PWD/target/compose-genesis/genesis.exp
 docker compose -f defaults/docker-compose.yml up
 ```
 
-The checked-in manifest is an explicit deterministic development fixture, so
-prepare those artifacts for its exact seeded validator roster before startup.
-It contains no genesis signing key or runtime signer and fails closed when any
-read-only trust-root input is missing. For a normal generated network, use
-`kagami localnet` followed by `kagami docker` without `--seed`; Kagami validates
-and reuses the authoritative validator bundle, then embeds the three artifact
-paths directly. See the
+The checked-in `defaults/genesis.template.json` is a non-signable source and is
+not consumed by this path. `kagami localnet` creates a complete disposable
+manifest whose mint-finality authority is bound to its generated validator
+topology; it retains the matching development-only authority material in the
+owner-controlled output directory. It contains no production signing key or
+runtime signer and fails closed when any read-only trust-root input is missing.
+For a normal generated network, use `kagami localnet` followed by `kagami docker`
+without `--seed`; Kagami validates and reuses the authoritative validator
+bundle, then embeds the three artifact paths directly. See the
 [Kagami swarm guide](./crates/iroha_kagami/docs/swarm.md).
 
 Use the CLI against the default client config:

@@ -26055,7 +26055,11 @@ def _transport_geometry_production_source_fidelity_errors(
             repo_root / "configs" / "soranexus" / "taira" / "config.toml"
         ),
         "taira_genesis": (
-            repo_root / "configs" / "soranexus" / "taira" / "genesis.json"
+            repo_root
+            / "configs"
+            / "soranexus"
+            / "taira"
+            / "genesis.template.json"
         ),
     }
     sources: dict[str, str] = {}
@@ -57216,6 +57220,94 @@ if accepts_current_archive {
             "outstanding.canonical_body_destinations.contains(sender)",
             "canonical-body acceptance must require the responder retained by the exact live request before and after local persistence validation",
             2,
+        ),
+        (
+            "V2LaneWorkAdapter::accept_historical_recovery_response",
+            """
+HistoricalRecoveryIdentity::from_proposal(&request_session.proposal).ok()
+    != Some(identity)
+    || Kura::validate_certified_lane_block_artifact(&CertifiedLaneBlockArtifact::new(
+        request_session.clone(),
+        request.signer_pops.clone(),
+    ))
+    .is_err()
+""",
+            "historical autonomous recovery must authenticate the exact request certificate before inspecting response payload custody",
+        ),
+        (
+            "V2LaneWorkAdapter::accept_historical_recovery_response",
+            """
+prepare_qc != certificate.prepare_qc
+    || commit_qc != certificate.commit_qc
+    || HashOf::new(&prepare_qc) != *prepare_qc_hash
+    || HashOf::new(&commit_qc) != *commit_qc_hash
+    || payload.origin_proposal != *proposal
+    || payload.payload_hash != *executable_payload_hash
+    || availability.body.executable_payload_hash != *executable_payload_hash
+""",
+            "historical autonomous recovery must bind the response QCs and payload to the exact certified request",
+        ),
+        (
+            "V2LaneWorkAdapter::accept_historical_recovery_response",
+            """
+!Self::peer_is_ready_signer(availability, sender)
+    || payload
+        .validate(self.native_network_id(), expected_epoch)
+        .is_err()
+    || validate_lane_block_qc_aggregate(&prepare_qc, &signer_pops).is_err()
+    || validate_lane_block_qc_aggregate(&commit_qc, &signer_pops).is_err()
+    || crate::lane_consensus::validate_lane_payload_availability_certificate(
+""",
+            "historical autonomous recovery must authenticate READY custody, epoch-bound payload validity, both QCs, and the availability certificate",
+        ),
+        (
+            "V2LaneWorkAdapter::accept_historical_recovery_response",
+            """
+let candidate =
+    CertifiedLaneBlockArtifact::new(session.clone(), signer_pops.clone());
+if Kura::validate_certified_lane_block_artifact(&candidate).is_err() {
+""",
+            "historical autonomous recovery must validate the complete certified candidate before selecting committee-local or canonical-replica custody",
+        ),
+        (
+            "V2LaneWorkAdapter::accept_historical_recovery_response",
+            """
+if !self.local_can_own_autonomous_payload(proposal) {
+    let replica_result = match self
+        .canonical_finalized_autonomous_payload_for_proposal(proposal)
+""",
+            "a noncommittee historical response may enter only the exact canonical-finality replica corridor",
+        ),
+        (
+            "V2LaneWorkAdapter::accept_historical_recovery_response",
+            "Ok(Some(public_payload)) if payload != public_payload => Err(",
+            "canonical-replica import must reject an authenticated private payload that differs from the exact finalized public carrier",
+        ),
+        (
+            "V2LaneWorkAdapter::accept_historical_recovery_response",
+            ".persist_canonical_autonomous_lane_replica(&candidate)",
+            "canonical-replica import must use the dedicated public replica persistence owner",
+        ),
+        (
+            "V2LaneWorkAdapter::accept_historical_recovery_response",
+            """
+certified_lane_artifacts_certify_same_decision(
+    &replica.bundle.certified,
+    &candidate,
+) && replica.bundle.executable_payload() == &public_payload
+""",
+            "canonical-replica import must re-read the exact certified decision and finalized public payload after persistence",
+        ),
+        (
+            "V2LaneWorkAdapter::accept_historical_recovery_response",
+            """
+self.output_guard.close_admission_for_restart();
+return V2LaneIngressOutcome::Rejected;
+}
+self.retire_historical_recovery_request(identity);
+return V2LaneIngressOutcome::Inserted;
+""",
+            "canonical-replica import must fail closed and retire the live request only after successful authenticated persistence",
         ),
         (
             "V2LaneWorkAdapter::retire_historical_recovery_request",

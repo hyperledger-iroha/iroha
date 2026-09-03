@@ -31,8 +31,8 @@ public final class IrohaPeerCanonicalPayload {
     final byte[] requiredBytes = Objects.requireNonNull(bytes, "bytes");
     require(requiredBytes.length > 0, "Peer payload is empty");
     require(
-        requiredBytes.length <= IrohaPeerWireMessageV1.MAXIMUM_CANONICAL_BYTES,
-        "Peer payload exceeds its bound");
+        requiredBytes.length <= maximumCanonicalBytes(this.profile, this.kind),
+        "Peer payload exceeds the frozen " + this.kind + " bound");
     this.bytes = requiredBytes.clone();
     validateTypedCanonicalPayload(this.profile, this.kind, this.bytes);
     this.schemaVersion = schemaVersion;
@@ -83,14 +83,21 @@ public final class IrohaPeerCanonicalPayload {
       final byte[] bytes) {
     if (profile != IrohaPeerPayloadProfile.KAGEMUSHA_V1) return;
     final String schema = switch (kind) {
-      case RECEIVE_REQUEST ->
+      case REQUEST ->
           "iroha_data_model::kagemusha::kagemusha_v1::KagemushaPaymentRequestV1";
+      case INTENT ->
+          "iroha_data_model::kagemusha::kagemusha_v1::KagemushaAcceptanceIntentV1";
+      case TICKET ->
+          "iroha_data_model::kagemusha::kagemusha_v1::KagemushaAcceptanceTicketV1";
       case PAYMENT ->
           "iroha_data_model::kagemusha::kagemusha_v1::KagemushaPaymentV1";
       case ACKNOWLEDGEMENT ->
           "iroha_data_model::kagemusha::kagemusha_v1::KagemushaAcknowledgementV1";
     };
-    final int requiredPadding = kind == IrohaPeerPayloadKind.ACKNOWLEDGEMENT ? 0 : 8;
+    final int requiredPadding = switch (kind) {
+      case REQUEST, INTENT -> 8;
+      case TICKET, PAYMENT, ACKNOWLEDGEMENT -> 0;
+    };
     try {
       final NoritoHeader.DecodeResult decoded =
           NoritoHeader.decode(bytes, SchemaHash.hash16(schema));
@@ -103,11 +110,24 @@ public final class IrohaPeerCanonicalPayload {
                   == NoritoHeader.HEADER_LENGTH + requiredPadding + decoded.payload().length
               && Arrays.equals(
                   header.encode(), Arrays.copyOfRange(bytes, 0, NoritoHeader.HEADER_LENGTH)),
-          "Kagemusha V1 payload must use canonical compact Norito framing");
+          "KAGEMUSHA V1 payload must use canonical compact Norito framing");
       header.validateChecksum(decoded.payload());
     } catch (RuntimeException failure) {
       throw new IllegalArgumentException(
-          "Invalid Kagemusha V1 payload for " + kind, failure);
+          "Invalid KAGEMUSHA V1 payload for " + kind, failure);
     }
+  }
+
+  private static int maximumCanonicalBytes(
+      final IrohaPeerPayloadProfile profile, final IrohaPeerPayloadKind kind) {
+    return switch (profile) {
+      case KAGEMUSHA_V1 -> switch (kind) {
+        case REQUEST -> KagemushaWireV1.MAXIMUM_PAYMENT_REQUEST_BYTES;
+        case INTENT -> KagemushaWireV1.MAXIMUM_ACCEPTANCE_INTENT_BYTES;
+        case TICKET -> KagemushaWireV1.MAXIMUM_ACCEPTANCE_TICKET_BYTES;
+        case PAYMENT -> KagemushaWireV1.MAXIMUM_PAYMENT_BYTES;
+        case ACKNOWLEDGEMENT -> KagemushaWireV1.MAXIMUM_ACKNOWLEDGEMENT_BYTES;
+      };
+    };
   }
 }

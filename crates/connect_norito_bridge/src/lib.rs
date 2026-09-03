@@ -1,6 +1,21 @@
 //! FFI bridge exposing Norito/Connect helpers for the mobile SDKs and bridge targets.
 #![deny(unsafe_op_in_unsafe_fn)]
 #![allow(clippy::missing_safety_doc)]
+
+// pqcrypto-internals 0.2.11 emits untyped link directives after cc's static
+// directives. Explicitly bundle its C helpers into this final staticlib so
+// Swift/C consumers receive the same SHA3/SHAKE closure as Rust executables.
+// These conditions match the helper archives built by pqcrypto-internals;
+// the bridge's iroha_crypto dependency always enables the pqc feature.
+#[link(name = "pqclean_common", kind = "static", modifiers = "+bundle")]
+unsafe extern "C" {}
+#[cfg(all(target_arch = "aarch64", not(target_env = "msvc")))]
+#[link(name = "keccak2x", kind = "static", modifiers = "+bundle")]
+unsafe extern "C" {}
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[link(name = "keccak4x", kind = "static", modifiers = "+bundle")]
+unsafe extern "C" {}
+
 use base64::{Engine as _, engine::general_purpose as b64gp};
 use blake3::hash as blake3_hash;
 #[cfg(test)]
@@ -42,15 +57,15 @@ use iroha_data_model::{
         transfer::Transfer,
         zk,
     },
+    kagemusha::{
+        KagemushaAcknowledgementV1, KagemushaDeviceMintStageCommandV1,
+        KagemushaDeviceMintStageResultV1, KagemushaIpm1PayloadKindV1, KagemushaMintAuthorizationV1,
+        KagemushaMintCreditV1, KagemushaPaymentRequestV1, KagemushaPaymentV1,
+        KagemushaRedemptionVoucherV1, validate_kagemusha_complete_exchange_shape_v1,
+    },
     metadata::Metadata,
     name::Name,
     nexus::DataSpaceId,
-    kagemusha::{
-        KagemushaAcceptanceIntentAuthorizationV1, KagemushaAcceptanceTicketV1,
-        KagemushaAcknowledgementV1, KagemushaMintAuthorizationV1, KagemushaMintCreditV1,
-        KagemushaNoCommitClosureV1, KagemushaPaymentRequestV1, KagemushaPaymentV1,
-        KagemushaRedemptionVoucherV1, validate_kagemusha_complete_exchange_shape_v1,
-    },
     privacy::{
         PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1,
         PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1,
@@ -121,6 +136,9 @@ use std::{
 use zeroize::{Zeroize, Zeroizing};
 mod account_onboarding;
 pub use account_onboarding::connect_norito_encode_account_onboarding_plan_body_v1;
+mod kagemusha_device_bridge_v1;
+#[cfg(test)]
+mod kagemusha_fixture_tests;
 mod parliament_timed_ovn_ffi;
 pub use parliament_timed_ovn_ffi::{
     CONNECT_NORITO_PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_BYTES_V1,
@@ -148,7 +166,7 @@ pub use private_settlement_ffi::{
     CONNECT_NORITO_PRIVATE_SETTLEMENT_REQUEST_MAX_BYTES_V1,
     CONNECT_NORITO_PRIVATE_SETTLEMENT_RESPONSE_MAX_BYTES_V1,
     connect_norito_private_settlement_audit_approval_response_verify_v1,
-    connect_norito_private_settlement_auditor_capsule_response_verify_v1,
+    connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1,
     connect_norito_private_settlement_committee_proof_response_verify_v1,
 };
 const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = PRIVACY_BRIDGE_ABI_VERSION_V1;
@@ -289,84 +307,82 @@ const ERR_PARLIAMENT_TIMED_OVN: c_int = -505;
 const ERR_VALIDATION_FEE_HIJIRI_QUOTE: c_int = -506;
 const ERR_PRIVATE_SETTLEMENT_RESPONSE: c_int = -507;
 
-/// Exact capability mask required by the Kagemusha V1 secure-device frame.
+/// Exact capability mask required by the KAGEMUSHA V1 secure-device frame.
 ///
 /// The frame stores this value in a `u32`, while the governed hardware profile
 /// and its circuit-visible credential use the same complete lower sixteen bits.
 pub const CONNECT_NORITO_KAGEMUSHA_DEVICE_REQUIRED_CAPABILITIES_V1: u32 =
     iroha_data_model::kagemusha::KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1 as u32;
 
-/// Closed operation-code inventory in the Kagemusha V1 secure-device command frame.
+/// Frozen IPM1 lifecycle kind tags in their only accepted session order.
+pub const CONNECT_NORITO_KAGEMUSHA_IPM1_MESSAGE_KIND_TAGS_V1: [u8; 3] = [
+    KagemushaIpm1PayloadKindV1::Request.wire_tag(),
+    KagemushaIpm1PayloadKindV1::Payment.wire_tag(),
+    KagemushaIpm1PayloadKindV1::Acknowledgement.wire_tag(),
+];
+
+/// Closed operation-code inventory in the KAGEMUSHA V1 secure-device command frame.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KagemushaDeviceLifecycleOperationV1 {
     /// Read the active compact hardware credential and profile reference.
     ReadActiveHardwareCredential = 1,
-    /// Prepare a proof-bearing acceptance-intent authorization.
-    PrepareAcceptanceIntentAuthorization = 2,
-    /// Recover a byte-identical prepared acceptance-intent authorization.
-    RecoverAcceptanceIntentAuthorization = 3,
-    /// Verify authorization, reserve inbox bytes, and issue an acceptance ticket.
-    VerifyAuthorizationReserveInboxAndIssueAcceptanceTicket = 4,
-    /// Recover an existing acceptance ticket and its reservation.
-    RecoverAcceptanceTicket = 5,
-    /// Stage one authenticated inbound payment against its reservation.
-    StageInboundPayment = 6,
+    /// Stage one authenticated inbound payment in the durable credit inbox.
+    StageInboundPayment = 2,
     /// Recover a byte-identical staged inbound payment and receipt.
-    RecoverStagedInboundPayment = 7,
+    RecoverStagedInboundPayment = 3,
     /// Recover one bounded page of durable inbox entries.
-    RecoverInboundInboxPage = 8,
+    RecoverInboundInboxPage = 4,
     /// Reserve terminal bytes and prepare one exact-next transition.
-    PrepareExactNextTransition = 9,
+    PrepareExactNextTransition = 5,
     /// Recover one sealed prepared transition.
-    RecoverPreparedTransition = 10,
-    /// Abandon a prepared transition proven not to have committed.
-    AbandonUncommittedPreparedTransition = 11,
-    /// Atomically commit one Core-verified candidate digest.
-    CommitVerifiedCandidate = 12,
-    /// Recover the terminal commit certificate and candidate binding.
-    RecoverTerminalCommitCertificate = 13,
-    /// Install the verified final commit-wrapper artifact.
-    InstallFinalCommitWrapper = 14,
+    RecoverPreparedTransition = 6,
+    /// Atomically commit one Core-verified candidate and authenticate its terminal outcome.
+    CommitVerifiedCandidateAndSignTerminal = 7,
+    /// Recover the byte-identical authenticated terminal outcome.
+    RecoverTerminalOutcome = 8,
+    /// Install the verified terminal envelope.
+    InstallTerminalEnvelope = 9,
     /// Recover the installed envelope or state proof byte-identically.
-    RecoverInstalledEnvelopeOrStateProof = 15,
+    RecoverInstalledEnvelopeOrStateProof = 10,
     /// Sign an acknowledgement for a committed inbox receipt.
-    SignReceiveAcknowledgement = 16,
+    SignReceiveAcknowledgement = 11,
     /// Release an outbox entry after authenticated terminal delivery.
-    ReleaseOutboxEntry = 17,
+    ReleaseOutboxEntry = 12,
     /// Read trusted time or obtain or inspect the active monotonic lease.
-    ReadTrustedTimeOrLease = 18,
+    ReadTrustedTimeOrLease = 13,
     /// Prepare a proof-bearing mint authorization before reserve debit.
-    PrepareMintAuthorization = 19,
+    PrepareMintAuthorization = 14,
     /// Recover a byte-identical prepared mint authorization.
-    RecoverMintAuthorization = 20,
+    RecoverMintAuthorization = 15,
     /// Verify mint authorization and stage the matching finalized mint credit.
-    VerifyAuthorizationAndStageMintCredit = 21,
+    VerifyAuthorizationAndStageMintCredit = 16,
     /// Fold one staged credit into the aggregate balance.
-    FoldReceive = 22,
+    FoldReceiveCredit = 17,
     /// Read the stable pending-credit high-water mark.
-    ReadPendingCreditWatermark = 23,
+    ReadPendingCreditWatermark = 18,
     /// Rotate aggregate state into the next qualified hardware epoch.
-    RotateHardwareEpoch = 24,
+    RotateHardwareEpoch = 19,
+    /// Bootstrap the first aggregate state under native-owned authority.
+    BootstrapAggregateState = 20,
+    /// Read one atomic whole-wallet recovery snapshot.
+    RecoverWalletSnapshot = 21,
+    /// Construct and sign a recipient payment request under active qualification.
+    CreateSignedPaymentRequest = 22,
 }
 
 impl KagemushaDeviceLifecycleOperationV1 {
     /// All V1 operations in canonical wire-code order.
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 22] = [
         Self::ReadActiveHardwareCredential,
-        Self::PrepareAcceptanceIntentAuthorization,
-        Self::RecoverAcceptanceIntentAuthorization,
-        Self::VerifyAuthorizationReserveInboxAndIssueAcceptanceTicket,
-        Self::RecoverAcceptanceTicket,
         Self::StageInboundPayment,
         Self::RecoverStagedInboundPayment,
         Self::RecoverInboundInboxPage,
         Self::PrepareExactNextTransition,
         Self::RecoverPreparedTransition,
-        Self::AbandonUncommittedPreparedTransition,
-        Self::CommitVerifiedCandidate,
-        Self::RecoverTerminalCommitCertificate,
-        Self::InstallFinalCommitWrapper,
+        Self::CommitVerifiedCandidateAndSignTerminal,
+        Self::RecoverTerminalOutcome,
+        Self::InstallTerminalEnvelope,
         Self::RecoverInstalledEnvelopeOrStateProof,
         Self::SignReceiveAcknowledgement,
         Self::ReleaseOutboxEntry,
@@ -374,38 +390,39 @@ impl KagemushaDeviceLifecycleOperationV1 {
         Self::PrepareMintAuthorization,
         Self::RecoverMintAuthorization,
         Self::VerifyAuthorizationAndStageMintCredit,
-        Self::FoldReceive,
+        Self::FoldReceiveCredit,
         Self::ReadPendingCreditWatermark,
         Self::RotateHardwareEpoch,
+        Self::BootstrapAggregateState,
+        Self::RecoverWalletSnapshot,
+        Self::CreateSignedPaymentRequest,
     ];
 
     /// Decode one closed V1 command-frame operation code.
     pub const fn from_code(code: u8) -> Option<Self> {
         match code {
             1 => Some(Self::ReadActiveHardwareCredential),
-            2 => Some(Self::PrepareAcceptanceIntentAuthorization),
-            3 => Some(Self::RecoverAcceptanceIntentAuthorization),
-            4 => Some(Self::VerifyAuthorizationReserveInboxAndIssueAcceptanceTicket),
-            5 => Some(Self::RecoverAcceptanceTicket),
-            6 => Some(Self::StageInboundPayment),
-            7 => Some(Self::RecoverStagedInboundPayment),
-            8 => Some(Self::RecoverInboundInboxPage),
-            9 => Some(Self::PrepareExactNextTransition),
-            10 => Some(Self::RecoverPreparedTransition),
-            11 => Some(Self::AbandonUncommittedPreparedTransition),
-            12 => Some(Self::CommitVerifiedCandidate),
-            13 => Some(Self::RecoverTerminalCommitCertificate),
-            14 => Some(Self::InstallFinalCommitWrapper),
-            15 => Some(Self::RecoverInstalledEnvelopeOrStateProof),
-            16 => Some(Self::SignReceiveAcknowledgement),
-            17 => Some(Self::ReleaseOutboxEntry),
-            18 => Some(Self::ReadTrustedTimeOrLease),
-            19 => Some(Self::PrepareMintAuthorization),
-            20 => Some(Self::RecoverMintAuthorization),
-            21 => Some(Self::VerifyAuthorizationAndStageMintCredit),
-            22 => Some(Self::FoldReceive),
-            23 => Some(Self::ReadPendingCreditWatermark),
-            24 => Some(Self::RotateHardwareEpoch),
+            2 => Some(Self::StageInboundPayment),
+            3 => Some(Self::RecoverStagedInboundPayment),
+            4 => Some(Self::RecoverInboundInboxPage),
+            5 => Some(Self::PrepareExactNextTransition),
+            6 => Some(Self::RecoverPreparedTransition),
+            7 => Some(Self::CommitVerifiedCandidateAndSignTerminal),
+            8 => Some(Self::RecoverTerminalOutcome),
+            9 => Some(Self::InstallTerminalEnvelope),
+            10 => Some(Self::RecoverInstalledEnvelopeOrStateProof),
+            11 => Some(Self::SignReceiveAcknowledgement),
+            12 => Some(Self::ReleaseOutboxEntry),
+            13 => Some(Self::ReadTrustedTimeOrLease),
+            14 => Some(Self::PrepareMintAuthorization),
+            15 => Some(Self::RecoverMintAuthorization),
+            16 => Some(Self::VerifyAuthorizationAndStageMintCredit),
+            17 => Some(Self::FoldReceiveCredit),
+            18 => Some(Self::ReadPendingCreditWatermark),
+            19 => Some(Self::RotateHardwareEpoch),
+            20 => Some(Self::BootstrapAggregateState),
+            21 => Some(Self::RecoverWalletSnapshot),
+            22 => Some(Self::CreateSignedPaymentRequest),
             _ => None,
         }
     }
@@ -416,13 +433,13 @@ impl KagemushaDeviceLifecycleOperationV1 {
     }
 }
 
-/// Closed status-code inventory in the Kagemusha V1 secure-device response frame.
+/// Closed status-code inventory in the KAGEMUSHA V1 secure-device response frame.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KagemushaDeviceLifecycleStatusV1 {
     /// The authenticated operation completed successfully.
     Success = 0,
-    /// The service or pre-reservation capacity is unavailable.
+    /// The complete qualified service is unavailable.
     Unavailable = 1,
     /// Retry after a stale or concurrent operation.
     StaleOrConcurrent = 2,
@@ -611,6 +628,26 @@ unsafe fn read_kagemusha_v1_text<'a>(
     std::str::from_utf8(bytes).map_err(|_| BridgeError::KagemushaV1)
 }
 
+fn decode_kagemusha_v1_text_payload(text: &str, raw_maximum: usize) -> BridgeResult<Vec<u8>> {
+    let encoded = text
+        .strip_prefix(iroha_data_model::kagemusha::KAGEMUSHA_TEXT_PREFIX_V1)
+        .ok_or(BridgeError::KagemushaV1)?;
+    if encoded.is_empty() || encoded.contains('=') {
+        return Err(BridgeError::KagemushaV1);
+    }
+    let bytes = b64gp::URL_SAFE_NO_PAD
+        .decode(encoded)
+        .map_err(|_| BridgeError::KagemushaV1)?;
+    if bytes.is_empty() || bytes.len() > raw_maximum {
+        return Err(BridgeError::KagemushaV1);
+    }
+    let canonical = b64gp::URL_SAFE_NO_PAD.encode(&bytes);
+    if canonical != encoded {
+        return Err(BridgeError::KagemushaV1);
+    }
+    Ok(bytes)
+}
+
 fn validate_kagemusha_v1_aggregate_input_lengths(
     lengths: &[c_ulong],
     maximum: usize,
@@ -625,7 +662,28 @@ fn validate_kagemusha_v1_aggregate_input_lengths(
     Ok(())
 }
 
-/// Validate one exact bounded canonical Kagemusha V1 payment request.
+fn decode_kagemusha_v1_request(bytes: &[u8]) -> BridgeResult<KagemushaPaymentRequestV1> {
+    KagemushaPaymentRequestV1::decode_canonical_exact(bytes).map_err(|_| BridgeError::KagemushaV1)
+}
+
+fn decode_kagemusha_v1_payment(
+    bytes: &[u8],
+    request: &KagemushaPaymentRequestV1,
+) -> BridgeResult<KagemushaPaymentV1> {
+    KagemushaPaymentV1::decode_canonical_shape_exact_against(bytes, request)
+        .map_err(|_| BridgeError::KagemushaV1)
+}
+
+fn decode_kagemusha_v1_acknowledgement(
+    bytes: &[u8],
+    request: &KagemushaPaymentRequestV1,
+    payment: &KagemushaPaymentV1,
+) -> BridgeResult<KagemushaAcknowledgementV1> {
+    KagemushaAcknowledgementV1::decode_canonical_shape_exact_against(bytes, request, payment)
+        .map_err(|_| BridgeError::KagemushaV1)
+}
+
+/// Validate one exact bounded canonical KAGEMUSHA V1 payment request.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_v1_payment_request_validate(
     request_ptr: *const c_uchar,
@@ -639,128 +697,12 @@ pub unsafe extern "C" fn connect_norito_kagemusha_v1_payment_request_validate(
                 iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1,
             )
         }?;
-        KagemushaPaymentRequestV1::decode_canonical_exact(bytes)
-            .map(|_| ())
-            .map_err(|_| BridgeError::KagemushaV1)
+        decode_kagemusha_v1_request(bytes).map(|_| ())
     })()
-    .map_or_else(BridgeError::code, |()| 0)
+    .map_or_else(BridgeError::code, |_| 0)
 }
 
-/// Validate one exact bounded proof-bearing acceptance authorization against its request.
-///
-/// This codec boundary does not authenticate a proof release or grant reservation authority.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_v1_acceptance_intent_authorization_validate(
-    request_ptr: *const c_uchar,
-    request_len: c_ulong,
-    authorization_ptr: *const c_uchar,
-    authorization_len: c_ulong,
-) -> c_int {
-    (|| {
-        let request_bytes = unsafe {
-            read_kagemusha_v1_bytes(
-                request_ptr,
-                request_len,
-                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1,
-            )
-        }?;
-        let authorization_bytes = unsafe {
-            read_kagemusha_v1_bytes(
-                authorization_ptr,
-                authorization_len,
-                iroha_data_model::kagemusha::KAGEMUSHA_ACCEPTANCE_INTENT_AUTHORIZATION_MAX_BYTES_V1,
-            )
-        }?;
-        let request = KagemushaPaymentRequestV1::decode_canonical_exact(request_bytes)
-            .map_err(|_| BridgeError::KagemushaV1)?;
-        KagemushaAcceptanceIntentAuthorizationV1::decode_canonical_shape_exact_against(
-            authorization_bytes,
-            &request,
-        )
-        .map(|_| ())
-        .map_err(|_| BridgeError::KagemushaV1)
-    })()
-    .map_or_else(BridgeError::code, |()| 0)
-}
-
-/// Validate one exact bounded acceptance ticket against its request and authorization.
-///
-/// This codec boundary does not reserve receiver capacity or grant monetary authority.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_v1_acceptance_ticket_validate(
-    request_ptr: *const c_uchar,
-    request_len: c_ulong,
-    authorization_ptr: *const c_uchar,
-    authorization_len: c_ulong,
-    ticket_ptr: *const c_uchar,
-    ticket_len: c_ulong,
-) -> c_int {
-    (|| {
-        let request_bytes = unsafe {
-            read_kagemusha_v1_bytes(
-                request_ptr,
-                request_len,
-                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1,
-            )
-        }?;
-        let authorization_bytes = unsafe {
-            read_kagemusha_v1_bytes(
-                authorization_ptr,
-                authorization_len,
-                iroha_data_model::kagemusha::KAGEMUSHA_ACCEPTANCE_INTENT_AUTHORIZATION_MAX_BYTES_V1,
-            )
-        }?;
-        let ticket_bytes = unsafe {
-            read_kagemusha_v1_bytes(
-                ticket_ptr,
-                ticket_len,
-                iroha_data_model::kagemusha::KAGEMUSHA_ACCEPTANCE_TICKET_MAX_BYTES_V1,
-            )
-        }?;
-        let request = KagemushaPaymentRequestV1::decode_canonical_exact(request_bytes)
-            .map_err(|_| BridgeError::KagemushaV1)?;
-        let authorization =
-            KagemushaAcceptanceIntentAuthorizationV1::decode_canonical_shape_exact_against(
-                authorization_bytes,
-                &request,
-            )
-            .map_err(|_| BridgeError::KagemushaV1)?;
-        KagemushaAcceptanceTicketV1::decode_canonical_shape_exact_against(
-            ticket_bytes,
-            &request,
-            &authorization.intent(),
-        )
-        .map(|_| ())
-        .map_err(|_| BridgeError::KagemushaV1)
-    })()
-    .map_or_else(BridgeError::code, |()| 0)
-}
-
-/// Validate one self-contained, exact, bounded Kagemusha V1 no-commit closure.
-///
-/// This codec boundary checks every embedded request, authorization, ticket, and proof-shape
-/// binding. It does not authenticate a proof release or grant cancellation authority.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_v1_no_commit_closure_validate(
-    closure_ptr: *const c_uchar,
-    closure_len: c_ulong,
-) -> c_int {
-    (|| {
-        let bytes = unsafe {
-            read_kagemusha_v1_bytes(
-                closure_ptr,
-                closure_len,
-                iroha_data_model::kagemusha::KAGEMUSHA_NO_COMMIT_CLOSURE_MAX_BYTES_V1,
-            )
-        }?;
-        KagemushaNoCommitClosureV1::decode_canonical_shape_exact(bytes)
-            .map(|_| ())
-            .map_err(|_| BridgeError::KagemushaV1)
-    })()
-    .map_or_else(BridgeError::code, |()| 0)
-}
-
-/// Validate one exact bounded canonical Kagemusha V1 payment shape against its request.
+/// Validate IPM1 message 2 against exact message 1.
 ///
 /// This codec boundary does not authenticate a proof release or grant monetary authority.
 #[unsafe(no_mangle)]
@@ -771,6 +713,10 @@ pub unsafe extern "C" fn connect_norito_kagemusha_v1_payment_validate(
     payment_len: c_ulong,
 ) -> c_int {
     (|| {
+        validate_kagemusha_v1_aggregate_input_lengths(
+            &[request_len, payment_len],
+            iroha_data_model::kagemusha::KAGEMUSHA_COMPLETE_EXCHANGE_MAX_BYTES_V1,
+        )?;
         let request_bytes = unsafe {
             read_kagemusha_v1_bytes(
                 request_ptr,
@@ -785,18 +731,15 @@ pub unsafe extern "C" fn connect_norito_kagemusha_v1_payment_validate(
                 iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_MAX_BYTES_V1,
             )
         }?;
-        let request = KagemushaPaymentRequestV1::decode_canonical_exact(request_bytes)
-            .map_err(|_| BridgeError::KagemushaV1)?;
-        KagemushaPaymentV1::decode_canonical_shape_exact_against(payment_bytes, &request)
-            .map(|_| ())
-            .map_err(|_| BridgeError::KagemushaV1)
+        let request = decode_kagemusha_v1_request(request_bytes)?;
+        decode_kagemusha_v1_payment(payment_bytes, &request).map(|_| ())
     })()
     .map_or_else(BridgeError::code, |()| 0)
 }
 
-/// Validate one exact bounded Kagemusha V1 acknowledgement shape against its session.
+/// Validate IPM1 message 3 against exact messages 1 and 2.
 ///
-/// This codec boundary does not authenticate a proof release or grant monetary authority.
+/// This codec boundary checks durable-inbox bindings but grants no monetary authority.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_v1_acknowledgement_validate(
     request_ptr: *const c_uchar,
@@ -807,70 +750,8 @@ pub unsafe extern "C" fn connect_norito_kagemusha_v1_acknowledgement_validate(
     acknowledgement_len: c_ulong,
 ) -> c_int {
     (|| {
-        let request_bytes = unsafe {
-            read_kagemusha_v1_bytes(
-                request_ptr,
-                request_len,
-                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1,
-            )
-        }?;
-        let payment_bytes = unsafe {
-            read_kagemusha_v1_bytes(
-                payment_ptr,
-                payment_len,
-                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_MAX_BYTES_V1,
-            )
-        }?;
-        let acknowledgement_bytes = unsafe {
-            read_kagemusha_v1_bytes(
-                acknowledgement_ptr,
-                acknowledgement_len,
-                iroha_data_model::kagemusha::KAGEMUSHA_ACKNOWLEDGEMENT_MAX_BYTES_V1,
-            )
-        }?;
-        let request = KagemushaPaymentRequestV1::decode_canonical_exact(request_bytes)
-            .map_err(|_| BridgeError::KagemushaV1)?;
-        let payment =
-            KagemushaPaymentV1::decode_canonical_shape_exact_against(payment_bytes, &request)
-                .map_err(|_| BridgeError::KagemushaV1)?;
-        KagemushaAcknowledgementV1::decode_canonical_shape_exact_against(
-            acknowledgement_bytes,
-            &request,
-            &payment,
-        )
-        .map(|_| ())
-        .map_err(|_| BridgeError::KagemushaV1)
-    })()
-    .map_or_else(BridgeError::code, |()| 0)
-}
-
-/// Validate all five exact canonical Kagemusha V1 transport messages as one exchange.
-///
-/// The authoritative data-model validator enforces both aggregate transport caps and requires the
-/// standalone authorization intent and ticket to be the exact values embedded by the payment.
-/// This remains a codec/shape boundary and grants no monetary authority.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_v1_complete_exchange_validate(
-    request_ptr: *const c_uchar,
-    request_len: c_ulong,
-    authorization_ptr: *const c_uchar,
-    authorization_len: c_ulong,
-    ticket_ptr: *const c_uchar,
-    ticket_len: c_ulong,
-    payment_ptr: *const c_uchar,
-    payment_len: c_ulong,
-    acknowledgement_ptr: *const c_uchar,
-    acknowledgement_len: c_ulong,
-) -> c_int {
-    (|| {
         validate_kagemusha_v1_aggregate_input_lengths(
-            &[
-                request_len,
-                authorization_len,
-                ticket_len,
-                payment_len,
-                acknowledgement_len,
-            ],
+            &[request_len, payment_len, acknowledgement_len],
             iroha_data_model::kagemusha::KAGEMUSHA_COMPLETE_EXCHANGE_MAX_BYTES_V1,
         )?;
         let request_bytes = unsafe {
@@ -880,18 +761,50 @@ pub unsafe extern "C" fn connect_norito_kagemusha_v1_complete_exchange_validate(
                 iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1,
             )
         }?;
-        let authorization_bytes = unsafe {
+        let payment_bytes = unsafe {
             read_kagemusha_v1_bytes(
-                authorization_ptr,
-                authorization_len,
-                iroha_data_model::kagemusha::KAGEMUSHA_ACCEPTANCE_INTENT_AUTHORIZATION_MAX_BYTES_V1,
+                payment_ptr,
+                payment_len,
+                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_MAX_BYTES_V1,
             )
         }?;
-        let ticket_bytes = unsafe {
+        let acknowledgement_bytes = unsafe {
             read_kagemusha_v1_bytes(
-                ticket_ptr,
-                ticket_len,
-                iroha_data_model::kagemusha::KAGEMUSHA_ACCEPTANCE_TICKET_MAX_BYTES_V1,
+                acknowledgement_ptr,
+                acknowledgement_len,
+                iroha_data_model::kagemusha::KAGEMUSHA_ACKNOWLEDGEMENT_MAX_BYTES_V1,
+            )
+        }?;
+        let request = decode_kagemusha_v1_request(request_bytes)?;
+        let payment = decode_kagemusha_v1_payment(payment_bytes, &request)?;
+        decode_kagemusha_v1_acknowledgement(acknowledgement_bytes, &request, &payment).map(|_| ())
+    })()
+    .map_or_else(BridgeError::code, |_| 0)
+}
+
+/// Validate the sole exact three-message KAGEMUSHA IPM1 exchange in tag order `1..=3`.
+///
+/// All three messages are decoded canonically once and validated as one cross-bound exchange.
+/// This remains a codec/shape boundary and grants no monetary authority.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_v1_complete_exchange_validate(
+    request_ptr: *const c_uchar,
+    request_len: c_ulong,
+    payment_ptr: *const c_uchar,
+    payment_len: c_ulong,
+    acknowledgement_ptr: *const c_uchar,
+    acknowledgement_len: c_ulong,
+) -> c_int {
+    (|| {
+        validate_kagemusha_v1_aggregate_input_lengths(
+            &[request_len, payment_len, acknowledgement_len],
+            iroha_data_model::kagemusha::KAGEMUSHA_COMPLETE_EXCHANGE_MAX_BYTES_V1,
+        )?;
+        let request_bytes = unsafe {
+            read_kagemusha_v1_bytes(
+                request_ptr,
+                request_len,
+                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1,
             )
         }?;
         let payment_bytes = unsafe {
@@ -908,43 +821,18 @@ pub unsafe extern "C" fn connect_norito_kagemusha_v1_complete_exchange_validate(
                 iroha_data_model::kagemusha::KAGEMUSHA_ACKNOWLEDGEMENT_MAX_BYTES_V1,
             )
         }?;
-        let request = KagemushaPaymentRequestV1::decode_canonical_exact(request_bytes)
-            .map_err(|_| BridgeError::KagemushaV1)?;
-        let authorization =
-            KagemushaAcceptanceIntentAuthorizationV1::decode_canonical_shape_exact_against(
-                authorization_bytes,
-                &request,
-            )
-            .map_err(|_| BridgeError::KagemushaV1)?;
-        let ticket = KagemushaAcceptanceTicketV1::decode_canonical_shape_exact_against(
-            ticket_bytes,
-            &request,
-            &authorization.intent(),
-        )
-        .map_err(|_| BridgeError::KagemushaV1)?;
-        let payment =
-            KagemushaPaymentV1::decode_canonical_shape_exact_against(payment_bytes, &request)
-                .map_err(|_| BridgeError::KagemushaV1)?;
-        let acknowledgement = KagemushaAcknowledgementV1::decode_canonical_shape_exact_against(
-            acknowledgement_bytes,
-            &request,
-            &payment,
-        )
-        .map_err(|_| BridgeError::KagemushaV1)?;
-        validate_kagemusha_complete_exchange_shape_v1(
-            &request,
-            &authorization,
-            &ticket,
-            &payment,
-            &acknowledgement,
-        )
-        .map(|_| ())
-        .map_err(|_| BridgeError::KagemushaV1)
+        let request = decode_kagemusha_v1_request(request_bytes)?;
+        let payment = decode_kagemusha_v1_payment(payment_bytes, &request)?;
+        let acknowledgement =
+            decode_kagemusha_v1_acknowledgement(acknowledgement_bytes, &request, &payment)?;
+        validate_kagemusha_complete_exchange_shape_v1(&request, &payment, &acknowledgement)
+            .map(|_| ())
+            .map_err(|_| BridgeError::KagemushaV1)
     })()
     .map_or_else(BridgeError::code, |()| 0)
 }
 
-/// Validate one exact bounded canonical Kagemusha V1 pre-debit mint authorization.
+/// Validate one exact bounded canonical KAGEMUSHA V1 pre-debit mint authorization.
 ///
 /// This codec boundary does not authenticate a proof release or grant debit authority.
 #[unsafe(no_mangle)]
@@ -967,7 +855,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_v1_mint_authorization_validate
     .map_or_else(BridgeError::code, |()| 0)
 }
 
-/// Validate one exact bounded canonical Kagemusha V1 reserve mint-credit shape.
+/// Validate one exact bounded canonical KAGEMUSHA V1 reserve mint-credit shape.
 ///
 /// This codec boundary does not authenticate a proof release or grant monetary authority.
 #[unsafe(no_mangle)]
@@ -1028,7 +916,69 @@ pub unsafe extern "C" fn connect_norito_kagemusha_v1_mint_credit_against_authori
     .map_or_else(BridgeError::code, |()| 0)
 }
 
-/// Validate one exact bounded canonical Kagemusha V1 redemption-voucher shape.
+/// Validate one exact canonical operation-16 mint-stage command body.
+///
+/// This parses and binds the two public nested archives but performs no proof verification,
+/// durable staging, or monetary mutation. A qualified secure-device service must do all three.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_device_mint_stage_command_v1_validate(
+    command_ptr: *const c_uchar,
+    command_len: c_ulong,
+) -> c_int {
+    (|| {
+        let bytes = unsafe {
+            read_kagemusha_v1_bytes(
+                command_ptr,
+                command_len,
+                iroha_data_model::kagemusha::KAGEMUSHA_DEVICE_MINT_STAGE_COMMAND_MAX_BYTES_V1,
+            )
+        }?;
+        KagemushaDeviceMintStageCommandV1::decode_canonical_shape_exact(bytes)
+            .map(|_| ())
+            .map_err(|_| BridgeError::KagemushaV1)
+    })()
+    .map_or_else(BridgeError::code, |()| 0)
+}
+
+/// Validate a canonical operation-16 result against its exact command body.
+///
+/// This structural binding does not authenticate the native response. The platform adapter must
+/// authenticate the complete response frame and retain the full Guard certificate privately.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_device_mint_stage_result_v1_validate(
+    command_ptr: *const c_uchar,
+    command_len: c_ulong,
+    result_ptr: *const c_uchar,
+    result_len: c_ulong,
+) -> c_int {
+    (|| {
+        let command_bytes = unsafe {
+            read_kagemusha_v1_bytes(
+                command_ptr,
+                command_len,
+                iroha_data_model::kagemusha::KAGEMUSHA_DEVICE_MINT_STAGE_COMMAND_MAX_BYTES_V1,
+            )
+        }?;
+        let result_bytes = unsafe {
+            read_kagemusha_v1_bytes(
+                result_ptr,
+                result_len,
+                iroha_data_model::kagemusha::KAGEMUSHA_DEVICE_MINT_STAGE_RESULT_MAX_BYTES_V1,
+            )
+        }?;
+        let command =
+            KagemushaDeviceMintStageCommandV1::decode_canonical_shape_exact(command_bytes)
+                .map_err(|_| BridgeError::KagemushaV1)?;
+        let result = KagemushaDeviceMintStageResultV1::decode_canonical_shape_exact(result_bytes)
+            .map_err(|_| BridgeError::KagemushaV1)?;
+        result
+            .validate_shape_against_command(&command)
+            .map_err(|_| BridgeError::KagemushaV1)
+    })()
+    .map_or_else(BridgeError::code, |()| 0)
+}
+
+/// Validate one exact bounded canonical KAGEMUSHA V1 redemption-voucher shape.
 ///
 /// This codec boundary does not authenticate a proof release or grant monetary authority.
 #[unsafe(no_mangle)]
@@ -1051,7 +1001,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_v1_redemption_voucher_validate
     .map_or_else(BridgeError::code, |()| 0)
 }
 
-/// Validate one exact canonical `kgm1:` Kagemusha V1 payment request.
+/// Validate one exact canonical `kgm1:` KAGEMUSHA V1 payment request.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_v1_payment_request_text_validate(
     request_ptr: *const c_char,
@@ -1065,128 +1015,18 @@ pub unsafe extern "C" fn connect_norito_kagemusha_v1_payment_request_text_valida
                 iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_TEXT_MAX_BYTES_V1,
             )
         }?;
-        KagemushaPaymentRequestV1::decode_text_exact(text)
-            .map(|_| ())
-            .map_err(|_| BridgeError::KagemushaV1)
+        let bytes = decode_kagemusha_v1_text_payload(
+            text,
+            iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1,
+        )?;
+        decode_kagemusha_v1_request(&bytes).map(|_| ())
     })()
     .map_or_else(BridgeError::code, |()| 0)
 }
 
-/// Validate one exact canonical `kgm1:` acceptance authorization against its text request.
+/// Validate text IPM1 message 2 against exact text message 1.
 ///
-/// This codec boundary does not authenticate a proof release or grant reservation authority.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_v1_acceptance_intent_authorization_text_validate(
-    request_ptr: *const c_char,
-    request_len: c_ulong,
-    authorization_ptr: *const c_char,
-    authorization_len: c_ulong,
-) -> c_int {
-    (|| {
-        let request_text = unsafe {
-            read_kagemusha_v1_text(
-                request_ptr,
-                request_len,
-                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_TEXT_MAX_BYTES_V1,
-            )
-        }?;
-        let authorization_text = unsafe {
-            read_kagemusha_v1_text(
-                authorization_ptr,
-                authorization_len,
-                iroha_data_model::kagemusha::KAGEMUSHA_ACCEPTANCE_INTENT_AUTHORIZATION_TEXT_MAX_BYTES_V1,
-            )
-        }?;
-        let request = KagemushaPaymentRequestV1::decode_text_exact(request_text)
-            .map_err(|_| BridgeError::KagemushaV1)?;
-        KagemushaAcceptanceIntentAuthorizationV1::decode_text_shape_exact_against(
-            authorization_text,
-            &request,
-        )
-        .map(|_| ())
-        .map_err(|_| BridgeError::KagemushaV1)
-    })()
-    .map_or_else(BridgeError::code, |()| 0)
-}
-
-/// Validate one exact canonical `kgm1:` acceptance ticket against its text context.
-///
-/// This codec boundary does not reserve receiver capacity or grant monetary authority.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_v1_acceptance_ticket_text_validate(
-    request_ptr: *const c_char,
-    request_len: c_ulong,
-    authorization_ptr: *const c_char,
-    authorization_len: c_ulong,
-    ticket_ptr: *const c_char,
-    ticket_len: c_ulong,
-) -> c_int {
-    (|| {
-        let request_text = unsafe {
-            read_kagemusha_v1_text(
-                request_ptr,
-                request_len,
-                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_TEXT_MAX_BYTES_V1,
-            )
-        }?;
-        let authorization_text = unsafe {
-            read_kagemusha_v1_text(
-                authorization_ptr,
-                authorization_len,
-                iroha_data_model::kagemusha::KAGEMUSHA_ACCEPTANCE_INTENT_AUTHORIZATION_TEXT_MAX_BYTES_V1,
-            )
-        }?;
-        let ticket_text = unsafe {
-            read_kagemusha_v1_text(
-                ticket_ptr,
-                ticket_len,
-                iroha_data_model::kagemusha::KAGEMUSHA_ACCEPTANCE_TICKET_TEXT_MAX_BYTES_V1,
-            )
-        }?;
-        let request = KagemushaPaymentRequestV1::decode_text_exact(request_text)
-            .map_err(|_| BridgeError::KagemushaV1)?;
-        let authorization =
-            KagemushaAcceptanceIntentAuthorizationV1::decode_text_shape_exact_against(
-                authorization_text,
-                &request,
-            )
-            .map_err(|_| BridgeError::KagemushaV1)?;
-        KagemushaAcceptanceTicketV1::decode_text_shape_exact_against(
-            ticket_text,
-            &request,
-            &authorization.intent(),
-        )
-        .map(|_| ())
-        .map_err(|_| BridgeError::KagemushaV1)
-    })()
-    .map_or_else(BridgeError::code, |()| 0)
-}
-
-/// Validate one self-contained, exact canonical `kgm1:` Kagemusha V1 no-commit closure.
-///
-/// This codec boundary checks every embedded request, authorization, ticket, and proof-shape
-/// binding. It does not authenticate a proof release or grant cancellation authority.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_v1_no_commit_closure_text_validate(
-    closure_ptr: *const c_char,
-    closure_len: c_ulong,
-) -> c_int {
-    (|| {
-        let text = unsafe {
-            read_kagemusha_v1_text(
-                closure_ptr,
-                closure_len,
-                iroha_data_model::kagemusha::KAGEMUSHA_NO_COMMIT_CLOSURE_TEXT_MAX_BYTES_V1,
-            )
-        }?;
-        KagemushaNoCommitClosureV1::decode_text_shape_exact(text)
-            .map(|_| ())
-            .map_err(|_| BridgeError::KagemushaV1)
-    })()
-    .map_or_else(BridgeError::code, |()| 0)
-}
-
-/// Validate one exact canonical `kgm1:` Kagemusha V1 payment against its text request.
+/// This codec boundary does not authenticate a proof release or grant monetary authority.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_v1_payment_text_validate(
     request_ptr: *const c_char,
@@ -1195,6 +1035,10 @@ pub unsafe extern "C" fn connect_norito_kagemusha_v1_payment_text_validate(
     payment_len: c_ulong,
 ) -> c_int {
     (|| {
+        validate_kagemusha_v1_aggregate_input_lengths(
+            &[request_len, payment_len],
+            iroha_data_model::kagemusha::KAGEMUSHA_COMPLETE_TEXT_EXCHANGE_MAX_BYTES_V1,
+        )?;
         let request_text = unsafe {
             read_kagemusha_v1_text(
                 request_ptr,
@@ -1209,16 +1053,21 @@ pub unsafe extern "C" fn connect_norito_kagemusha_v1_payment_text_validate(
                 iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_TEXT_MAX_BYTES_V1,
             )
         }?;
-        let request = KagemushaPaymentRequestV1::decode_text_exact(request_text)
-            .map_err(|_| BridgeError::KagemushaV1)?;
-        KagemushaPaymentV1::decode_text_exact_against(payment_text, &request)
-            .map(|_| ())
-            .map_err(|_| BridgeError::KagemushaV1)
+        let request_bytes = decode_kagemusha_v1_text_payload(
+            request_text,
+            iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1,
+        )?;
+        let payment_bytes = decode_kagemusha_v1_text_payload(
+            payment_text,
+            iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_MAX_BYTES_V1,
+        )?;
+        let request = decode_kagemusha_v1_request(&request_bytes)?;
+        decode_kagemusha_v1_payment(&payment_bytes, &request).map(|_| ())
     })()
     .map_or_else(BridgeError::code, |()| 0)
 }
 
-/// Validate one exact canonical `kgm1:` Kagemusha V1 acknowledgement and its text context.
+/// Validate text IPM1 message 3 against exact text messages 1 and 2.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_v1_acknowledgement_text_validate(
     request_ptr: *const c_char,
@@ -1229,69 +1078,8 @@ pub unsafe extern "C" fn connect_norito_kagemusha_v1_acknowledgement_text_valida
     acknowledgement_len: c_ulong,
 ) -> c_int {
     (|| {
-        let request_text = unsafe {
-            read_kagemusha_v1_text(
-                request_ptr,
-                request_len,
-                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_TEXT_MAX_BYTES_V1,
-            )
-        }?;
-        let payment_text = unsafe {
-            read_kagemusha_v1_text(
-                payment_ptr,
-                payment_len,
-                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_TEXT_MAX_BYTES_V1,
-            )
-        }?;
-        let acknowledgement_text = unsafe {
-            read_kagemusha_v1_text(
-                acknowledgement_ptr,
-                acknowledgement_len,
-                iroha_data_model::kagemusha::KAGEMUSHA_ACKNOWLEDGEMENT_TEXT_MAX_BYTES_V1,
-            )
-        }?;
-        let request = KagemushaPaymentRequestV1::decode_text_exact(request_text)
-            .map_err(|_| BridgeError::KagemushaV1)?;
-        let payment = KagemushaPaymentV1::decode_text_exact_against(payment_text, &request)
-            .map_err(|_| BridgeError::KagemushaV1)?;
-        KagemushaAcknowledgementV1::decode_text_exact_against(
-            acknowledgement_text,
-            &request,
-            &payment,
-        )
-        .map(|_| ())
-        .map_err(|_| BridgeError::KagemushaV1)
-    })()
-    .map_or_else(BridgeError::code, |()| 0)
-}
-
-/// Validate all five exact canonical `kgm1:` Kagemusha V1 messages as one exchange.
-///
-/// The authoritative data-model validator enforces aggregate raw/text caps and requires the
-/// standalone authorization intent and ticket to be the exact values embedded by the payment.
-/// This remains a codec/shape boundary and grants no monetary authority.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_v1_complete_exchange_text_validate(
-    request_ptr: *const c_char,
-    request_len: c_ulong,
-    authorization_ptr: *const c_char,
-    authorization_len: c_ulong,
-    ticket_ptr: *const c_char,
-    ticket_len: c_ulong,
-    payment_ptr: *const c_char,
-    payment_len: c_ulong,
-    acknowledgement_ptr: *const c_char,
-    acknowledgement_len: c_ulong,
-) -> c_int {
-    (|| {
         validate_kagemusha_v1_aggregate_input_lengths(
-            &[
-                request_len,
-                authorization_len,
-                ticket_len,
-                payment_len,
-                acknowledgement_len,
-            ],
+            &[request_len, payment_len, acknowledgement_len],
             iroha_data_model::kagemusha::KAGEMUSHA_COMPLETE_TEXT_EXCHANGE_MAX_BYTES_V1,
         )?;
         let request_text = unsafe {
@@ -1301,18 +1089,59 @@ pub unsafe extern "C" fn connect_norito_kagemusha_v1_complete_exchange_text_vali
                 iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_TEXT_MAX_BYTES_V1,
             )
         }?;
-        let authorization_text = unsafe {
+        let payment_text = unsafe {
             read_kagemusha_v1_text(
-                authorization_ptr,
-                authorization_len,
-                iroha_data_model::kagemusha::KAGEMUSHA_ACCEPTANCE_INTENT_AUTHORIZATION_TEXT_MAX_BYTES_V1,
+                payment_ptr,
+                payment_len,
+                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_TEXT_MAX_BYTES_V1,
             )
         }?;
-        let ticket_text = unsafe {
+        let acknowledgement_text = unsafe {
             read_kagemusha_v1_text(
-                ticket_ptr,
-                ticket_len,
-                iroha_data_model::kagemusha::KAGEMUSHA_ACCEPTANCE_TICKET_TEXT_MAX_BYTES_V1,
+                acknowledgement_ptr,
+                acknowledgement_len,
+                iroha_data_model::kagemusha::KAGEMUSHA_ACKNOWLEDGEMENT_TEXT_MAX_BYTES_V1,
+            )
+        }?;
+        let request_bytes = decode_kagemusha_v1_text_payload(
+            request_text,
+            iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1,
+        )?;
+        let payment_bytes = decode_kagemusha_v1_text_payload(
+            payment_text,
+            iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_MAX_BYTES_V1,
+        )?;
+        let acknowledgement_bytes = decode_kagemusha_v1_text_payload(
+            acknowledgement_text,
+            iroha_data_model::kagemusha::KAGEMUSHA_ACKNOWLEDGEMENT_MAX_BYTES_V1,
+        )?;
+        let request = decode_kagemusha_v1_request(&request_bytes)?;
+        let payment = decode_kagemusha_v1_payment(&payment_bytes, &request)?;
+        decode_kagemusha_v1_acknowledgement(&acknowledgement_bytes, &request, &payment).map(|_| ())
+    })()
+    .map_or_else(BridgeError::code, |_| 0)
+}
+
+/// Validate the sole exact three-message canonical `kgm1:` IPM1 exchange in tag order `1..=3`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_v1_complete_exchange_text_validate(
+    request_ptr: *const c_char,
+    request_len: c_ulong,
+    payment_ptr: *const c_char,
+    payment_len: c_ulong,
+    acknowledgement_ptr: *const c_char,
+    acknowledgement_len: c_ulong,
+) -> c_int {
+    (|| {
+        validate_kagemusha_v1_aggregate_input_lengths(
+            &[request_len, payment_len, acknowledgement_len],
+            iroha_data_model::kagemusha::KAGEMUSHA_COMPLETE_TEXT_EXCHANGE_MAX_BYTES_V1,
+        )?;
+        let request_text = unsafe {
+            read_kagemusha_v1_text(
+                request_ptr,
+                request_len,
+                iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_TEXT_MAX_BYTES_V1,
             )
         }?;
         let payment_text = unsafe {
@@ -1329,42 +1158,30 @@ pub unsafe extern "C" fn connect_norito_kagemusha_v1_complete_exchange_text_vali
                 iroha_data_model::kagemusha::KAGEMUSHA_ACKNOWLEDGEMENT_TEXT_MAX_BYTES_V1,
             )
         }?;
-        let request = KagemushaPaymentRequestV1::decode_text_exact(request_text)
-            .map_err(|_| BridgeError::KagemushaV1)?;
-        let authorization =
-            KagemushaAcceptanceIntentAuthorizationV1::decode_text_shape_exact_against(
-                authorization_text,
-                &request,
-            )
-            .map_err(|_| BridgeError::KagemushaV1)?;
-        let ticket = KagemushaAcceptanceTicketV1::decode_text_shape_exact_against(
-            ticket_text,
-            &request,
-            &authorization.intent(),
-        )
-        .map_err(|_| BridgeError::KagemushaV1)?;
-        let payment = KagemushaPaymentV1::decode_text_exact_against(payment_text, &request)
-            .map_err(|_| BridgeError::KagemushaV1)?;
-        let acknowledgement = KagemushaAcknowledgementV1::decode_text_exact_against(
+        let request_bytes = decode_kagemusha_v1_text_payload(
+            request_text,
+            iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1,
+        )?;
+        let payment_bytes = decode_kagemusha_v1_text_payload(
+            payment_text,
+            iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_MAX_BYTES_V1,
+        )?;
+        let acknowledgement_bytes = decode_kagemusha_v1_text_payload(
             acknowledgement_text,
-            &request,
-            &payment,
-        )
-        .map_err(|_| BridgeError::KagemushaV1)?;
-        validate_kagemusha_complete_exchange_shape_v1(
-            &request,
-            &authorization,
-            &ticket,
-            &payment,
-            &acknowledgement,
-        )
-        .map(|_| ())
-        .map_err(|_| BridgeError::KagemushaV1)
+            iroha_data_model::kagemusha::KAGEMUSHA_ACKNOWLEDGEMENT_MAX_BYTES_V1,
+        )?;
+        let request = decode_kagemusha_v1_request(&request_bytes)?;
+        let payment = decode_kagemusha_v1_payment(&payment_bytes, &request)?;
+        let acknowledgement =
+            decode_kagemusha_v1_acknowledgement(&acknowledgement_bytes, &request, &payment)?;
+        validate_kagemusha_complete_exchange_shape_v1(&request, &payment, &acknowledgement)
+            .map(|_| ())
+            .map_err(|_| BridgeError::KagemushaV1)
     })()
-    .map_or_else(BridgeError::code, |()| 0)
+    .map_or_else(BridgeError::code, |_| 0)
 }
 
-/// Validate one exact canonical `kgm1:` Kagemusha V1 pre-debit mint authorization.
+/// Validate one exact canonical `kgm1:` KAGEMUSHA V1 pre-debit mint authorization.
 ///
 /// This codec boundary does not authenticate a proof release or grant debit authority.
 #[unsafe(no_mangle)]
@@ -1387,7 +1204,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_v1_mint_authorization_text_val
     .map_or_else(BridgeError::code, |()| 0)
 }
 
-/// Validate one exact canonical `kgm1:` Kagemusha V1 mint-credit shape.
+/// Validate one exact canonical `kgm1:` KAGEMUSHA V1 mint-credit shape.
 ///
 /// This codec boundary does not authenticate a proof release or grant monetary authority.
 #[unsafe(no_mangle)]
@@ -1448,7 +1265,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_v1_mint_credit_against_authori
     .map_or_else(BridgeError::code, |()| 0)
 }
 
-/// Validate one exact canonical `kgm1:` Kagemusha V1 redemption-voucher shape.
+/// Validate one exact canonical `kgm1:` KAGEMUSHA V1 redemption-voucher shape.
 ///
 /// This codec boundary does not authenticate a proof release or grant monetary authority.
 #[unsafe(no_mangle)]
@@ -1471,7 +1288,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_v1_redemption_voucher_text_val
     .map_or_else(BridgeError::code, |()| 0)
 }
 
-/// Query the optional audited Kagemusha V1 device service.
+/// Query the optional audited KAGEMUSHA V1 device service.
 ///
 /// The generic bridge intentionally ships no software implementation. It returns unavailable
 /// unless a platform-qualified build replaces this symbol with its non-forking hardware service.
@@ -1490,9 +1307,11 @@ pub unsafe extern "C" fn connect_norito_kagemusha_device_capabilities_v1(
     ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1
 }
 
-/// Execute one bounded command on the optional audited Kagemusha V1 device service.
+/// Execute one bounded command on the optional audited KAGEMUSHA V1 device service.
 ///
-/// The generic bridge has no monetary software fallback and therefore always returns unavailable.
+/// The generic bridge validates exact command framing and every closed operation payload, then
+/// returns unavailable. Malformed commands return `ERR_KAGEMUSHA_V1`; no result bytes or monetary
+/// software fallback are exposed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_device_execute_v1(
     command_ptr: *const c_uchar,
@@ -1508,11 +1327,111 @@ pub unsafe extern "C" fn connect_norito_kagemusha_device_execute_v1(
     if command_ptr.is_null() || output_ptr.is_null() {
         return ERR_NULL_PTR;
     }
-    const MAX_COMMAND_BYTES_V1: usize = 80 + 64 * 1024;
-    if command_len < 80 || command_len > MAX_COMMAND_BYTES_V1 || output_capacity < 116 {
+    if !(kagemusha_device_bridge_v1::COMMAND_HEADER_BYTES_V1
+        ..=kagemusha_device_bridge_v1::MAX_COMMAND_BYTES_V1)
+        .contains(&command_len)
+        || output_capacity < kagemusha_device_bridge_v1::RESPONSE_HEADER_BYTES_V1
+    {
         return ERR_KAGEMUSHA_V1;
     }
-    ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1
+    let command = unsafe { slice::from_raw_parts(command_ptr, command_len) };
+    match kagemusha_device_bridge_v1::classify_stock_device_command_v1(command) {
+        kagemusha_device_bridge_v1::StockDeviceCommandDispositionV1::Malformed => ERR_KAGEMUSHA_V1,
+        kagemusha_device_bridge_v1::StockDeviceCommandDispositionV1::Unavailable => {
+            ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1
+        }
+    }
+}
+
+/// Verify the fixed low-S P-256 authenticator on one successful device response.
+///
+/// `hardware_policy_id` and `qualification_report_digest` are the exact
+/// 32-byte bindings accepted from the capability frame. For operation 1,
+/// `device_public_key_ptr` must be null and `device_public_key_len` zero; the
+/// verifier validates the returned profile and governance credential before
+/// using its embedded key. Every other operation requires the 65-byte SEC1 key
+/// accepted from that operation-1 exchange. Authenticated release membership
+/// remains a Core wallet-session check outside this codec boundary.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_device_response_authenticator_v1_verify(
+    response_ptr: *const c_uchar,
+    response_len: usize,
+    expected_operation: c_uchar,
+    expected_request_id_ptr: *const c_uchar,
+    expected_request_id_len: usize,
+    hardware_policy_id_ptr: *const c_uchar,
+    hardware_policy_id_len: usize,
+    qualification_report_digest_ptr: *const c_uchar,
+    qualification_report_digest_len: usize,
+    device_public_key_ptr: *const c_uchar,
+    device_public_key_len: usize,
+) -> c_int {
+    if response_ptr.is_null()
+        || expected_request_id_ptr.is_null()
+        || hardware_policy_id_ptr.is_null()
+        || qualification_report_digest_ptr.is_null()
+    {
+        return ERR_NULL_PTR;
+    }
+    if expected_request_id_len != 32
+        || hardware_policy_id_len != 32
+        || qualification_report_digest_len != 32
+        || !(kagemusha_device_bridge_v1::RESPONSE_HEADER_BYTES_V1
+            ..=kagemusha_device_bridge_v1::MAX_RESPONSE_BYTES_V1)
+            .contains(&response_len)
+    {
+        return ERR_KAGEMUSHA_V1;
+    }
+    let Some(operation) = KagemushaDeviceLifecycleOperationV1::from_code(expected_operation) else {
+        return ERR_KAGEMUSHA_V1;
+    };
+    let response = unsafe { slice::from_raw_parts(response_ptr, response_len) };
+    let request_id = unsafe { slice::from_raw_parts(expected_request_id_ptr, 32) }
+        .try_into()
+        .expect("fixed request ID slice");
+    let hardware_policy_id = unsafe { slice::from_raw_parts(hardware_policy_id_ptr, 32) }
+        .try_into()
+        .expect("fixed hardware policy slice");
+    let qualification_report_digest =
+        unsafe { slice::from_raw_parts(qualification_report_digest_ptr, 32) }
+            .try_into()
+            .expect("fixed qualification digest slice");
+
+    let verified = if operation == KagemushaDeviceLifecycleOperationV1::ReadActiveHardwareCredential
+    {
+        if !device_public_key_ptr.is_null() || device_public_key_len != 0 {
+            return ERR_KAGEMUSHA_V1;
+        }
+        kagemusha_device_bridge_v1::verify_qualification_response_authenticator_v1(
+            response,
+            request_id,
+            hardware_policy_id,
+            qualification_report_digest,
+        )
+        .is_some()
+    } else {
+        if device_public_key_ptr.is_null() || device_public_key_len != 65 {
+            return ERR_KAGEMUSHA_V1;
+        }
+        let device_public_key =
+            unsafe { slice::from_raw_parts(device_public_key_ptr, device_public_key_len) };
+        let Ok(device_public_key) =
+            iroha_data_model::kagemusha::KagemushaDevicePublicKeyV1::from_sec1_bytes(
+                device_public_key,
+            )
+        else {
+            return ERR_KAGEMUSHA_V1;
+        };
+        kagemusha_device_bridge_v1::verify_success_response_authenticator_v1(
+            response,
+            operation,
+            request_id,
+            hardware_policy_id,
+            qualification_report_digest,
+            &device_public_key,
+        )
+    };
+    if verified { 0 } else { ERR_KAGEMUSHA_V1 }
 }
 #[cfg(any(
     test,
@@ -5701,6 +5620,7 @@ pub unsafe extern "C" fn connect_norito_decode_ciphertext_frame(
         0
     }
 }
+#[unsafe(no_mangle)]
 pub extern "C" fn connect_norito_free(ptr_: *mut c_uchar) {
     if !ptr_.is_null() {
         unsafe {
@@ -9846,11 +9766,27 @@ pub use platform_jni::*;
 ))]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeCapabilitiesV1(
-    _env: jni::JNIEnv<'_>,
+    mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jbyteArray {
-    // Stock platform keystores do not satisfy the complete non-forking journal contract.
-    ptr::null_mut()
+    let mut output = [0_u8; 96];
+    let status = unsafe {
+        connect_norito_kagemusha_device_capabilities_v1(output.as_mut_ptr(), output.len())
+    };
+    match status {
+        0 => env
+            .byte_array_from_slice(&output)
+            .map(jni::objects::JByteArray::into_raw)
+            .unwrap_or(ptr::null_mut()),
+        ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1 => ptr::null_mut(),
+        _ => {
+            let _ = env.throw_new(
+                "java/lang/IllegalStateException",
+                "native Offline device capabilities failed",
+            );
+            ptr::null_mut()
+        }
+    }
 }
 
 #[cfg(any(
@@ -9861,17 +9797,132 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLif
 ))]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeExecuteV1(
-    env: jni::JNIEnv<'_>,
+    mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
     command: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    const MAX_COMMAND_BYTES_V1: i32 = (80 + 64 * 1024) as i32;
-    let bounded = env
-        .get_array_length(&command)
-        .is_ok_and(|length| (80..=MAX_COMMAND_BYTES_V1).contains(&length));
-    let _ = bounded;
-    // No software or partial hardware fallback is permitted.
-    ptr::null_mut()
+    let Ok(signed_length) = env.get_array_length(&command) else {
+        return ptr::null_mut();
+    };
+    let Some(command_length) =
+        kagemusha_device_bridge_v1::bounded_jni_command_length_v1(signed_length)
+    else {
+        let _ = env.throw_new(
+            "java/lang/IllegalArgumentException",
+            "Offline device command length is outside the ABI-23 bound",
+        );
+        return ptr::null_mut();
+    };
+    let Ok(command_bytes) = env.convert_byte_array(&command) else {
+        return ptr::null_mut();
+    };
+    let command_bytes = Zeroizing::new(command_bytes);
+    if command_bytes.len() != command_length {
+        let _ = env.throw_new(
+            "java/lang/IllegalArgumentException",
+            "Offline device command length changed during JNI transfer",
+        );
+        return ptr::null_mut();
+    }
+
+    let mut output = Zeroizing::new(vec![
+        0_u8;
+        kagemusha_device_bridge_v1::MAX_RESPONSE_BYTES_V1
+    ]);
+    let mut output_length = 0_usize;
+    let status = unsafe {
+        connect_norito_kagemusha_device_execute_v1(
+            command_bytes.as_ptr(),
+            command_bytes.len(),
+            output.as_mut_ptr(),
+            output.len(),
+            &mut output_length,
+        )
+    };
+    match kagemusha_device_bridge_v1::classify_jni_execution_v1(status, output_length, output.len())
+    {
+        kagemusha_device_bridge_v1::JniExecutionDispositionV1::Response(written) => env
+            .byte_array_from_slice(&output[..written])
+            .map(jni::objects::JByteArray::into_raw)
+            .unwrap_or(ptr::null_mut()),
+        kagemusha_device_bridge_v1::JniExecutionDispositionV1::Unavailable => ptr::null_mut(),
+        kagemusha_device_bridge_v1::JniExecutionDispositionV1::Malformed => {
+            let _ = env.throw_new(
+                "java/lang/IllegalArgumentException",
+                "Offline device command is malformed",
+            );
+            ptr::null_mut()
+        }
+        kagemusha_device_bridge_v1::JniExecutionDispositionV1::Failed => {
+            let _ = env.throw_new(
+                "java/lang/IllegalStateException",
+                "native Offline device execution failed",
+            );
+            ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLifecycleBridgeV1_00024NativeEndpoint_nativeVerifyResponseAuthenticatorV1(
+    env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    response: jni::objects::JByteArray<'_>,
+    operation: jni::sys::jint,
+    request_id: jni::objects::JByteArray<'_>,
+    hardware_policy_id: jni::objects::JByteArray<'_>,
+    qualification_report_digest: jni::objects::JByteArray<'_>,
+    accepted_device_public_key: jni::objects::JObject<'_>,
+) -> jni::sys::jboolean {
+    use jni::sys::{JNI_FALSE, JNI_TRUE};
+
+    let Ok(response) = env.convert_byte_array(&response) else {
+        return JNI_FALSE;
+    };
+    let Ok(request_id) = env.convert_byte_array(&request_id) else {
+        return JNI_FALSE;
+    };
+    let Ok(hardware_policy_id) = env.convert_byte_array(&hardware_policy_id) else {
+        return JNI_FALSE;
+    };
+    let Ok(qualification_report_digest) = env.convert_byte_array(&qualification_report_digest)
+    else {
+        return JNI_FALSE;
+    };
+    let device_public_key = if accepted_device_public_key.is_null() {
+        None
+    } else {
+        let key = jni::objects::JByteArray::from(accepted_device_public_key);
+        let Ok(bytes) = env.convert_byte_array(&key) else {
+            return JNI_FALSE;
+        };
+        Some(bytes)
+    };
+    let (device_public_key_ptr, device_public_key_len) = device_public_key
+        .as_ref()
+        .map_or((ptr::null(), 0), |key| (key.as_ptr(), key.len()));
+    let status = unsafe {
+        connect_norito_kagemusha_device_response_authenticator_v1_verify(
+            response.as_ptr(),
+            response.len(),
+            operation as u8,
+            request_id.as_ptr(),
+            request_id.len(),
+            hardware_policy_id.as_ptr(),
+            hardware_policy_id.len(),
+            qualification_report_digest.as_ptr(),
+            qualification_report_digest.len(),
+            device_public_key_ptr,
+            device_public_key_len,
+        )
+    };
+    if status == 0 { JNI_TRUE } else { JNI_FALSE }
 }
 fn providers_from_json(value: &JsonValue) -> Result<Vec<LocalProviderInput>, c_int> {
     let arr = value.as_array().ok_or(ERR_FETCH_PROVIDERS_JSON)?;
@@ -11591,14 +11642,17 @@ mod tests {
     #[test]
     fn kagemusha_device_bridge_v1_numeric_inventory_is_closed_and_header_exact() {
         assert_eq!(
+            CONNECT_NORITO_KAGEMUSHA_IPM1_MESSAGE_KIND_TAGS_V1,
+            [1, 2, 3]
+        );
+        assert_eq!(
             CONNECT_NORITO_KAGEMUSHA_DEVICE_REQUIRED_CAPABILITIES_V1,
             0x0000_ffff,
         );
         assert_eq!(
             KagemushaDeviceLifecycleOperationV1::ALL.map(|operation| operation.code()),
             [
-                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-                24,
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
             ],
         );
         for operation in KagemushaDeviceLifecycleOperationV1::ALL {
@@ -11607,7 +11661,7 @@ mod tests {
                 Some(operation),
             );
         }
-        for unknown in [0, 25, u8::MAX] {
+        for unknown in [0, 23, u8::MAX] {
             assert_eq!(
                 KagemushaDeviceLifecycleOperationV1::from_code(unknown),
                 None,
@@ -11634,13 +11688,18 @@ mod tests {
         assert!(compact_header.contains(
             "CONNECT_NORITO_KAGEMUSHA_DEVICE_REQUIRED_CAPABILITIES_V1UINT32_C(0x0000FFFF)"
         ));
+        for (name, tag) in [("REQUEST", 1), ("PAYMENT", 2), ("ACKNOWLEDGEMENT", 3)] {
+            assert!(compact_header.contains(&format!(
+                "CONNECT_NORITO_KAGEMUSHA_IPM1_PAYLOAD_{name}_V1={tag}"
+            )));
+        }
         let capability_names = [
             "EXACT_NEXT_PREDECESSOR_CONSUMPTION",
             "ONE_USE_SUCCESSOR_AUTHORIZATION",
             "ROLLBACK_RESISTANT_COUNTER_AND_JOURNAL",
             "SEALED_TRANSITION_RECOVERY",
-            "ONE_USE_ACCEPTANCE_TICKETS",
-            "DURABLE_INBOX_RESERVATION",
+            "RECEIVER_BOUND_CREDIT_COMMIT",
+            "ROLLBACK_RESISTANT_ACCEPTED_CREDIT_INBOX",
             "AUTHENTICATED_INBOUND_STAGING",
             "AUTHORITATIVE_REPLAY_ROOT_RECOVERY",
             "SENDER_OUTBOX_RESERVATION",
@@ -11659,19 +11718,14 @@ mod tests {
         }
         let operation_names = [
             "READ_ACTIVE_HARDWARE_CREDENTIAL",
-            "PREPARE_ACCEPTANCE_INTENT_AUTHORIZATION",
-            "RECOVER_ACCEPTANCE_INTENT_AUTHORIZATION",
-            "VERIFY_AUTHORIZATION_RESERVE_INBOX_AND_ISSUE_ACCEPTANCE_TICKET",
-            "RECOVER_ACCEPTANCE_TICKET",
             "STAGE_INBOUND_PAYMENT",
             "RECOVER_STAGED_INBOUND_PAYMENT",
             "RECOVER_INBOUND_INBOX_PAGE",
             "PREPARE_EXACT_NEXT_TRANSITION",
             "RECOVER_PREPARED_TRANSITION",
-            "ABANDON_UNCOMMITTED_PREPARED_TRANSITION",
-            "COMMIT_VERIFIED_CANDIDATE",
-            "RECOVER_TERMINAL_COMMIT_CERTIFICATE",
-            "INSTALL_FINAL_COMMIT_WRAPPER",
+            "COMMIT_VERIFIED_CANDIDATE_AND_SIGN_TERMINAL",
+            "RECOVER_TERMINAL_OUTCOME",
+            "INSTALL_TERMINAL_ENVELOPE",
             "RECOVER_INSTALLED_ENVELOPE_OR_STATE_PROOF",
             "SIGN_RECEIVE_ACKNOWLEDGEMENT",
             "RELEASE_OUTBOX_ENTRY",
@@ -11679,9 +11733,12 @@ mod tests {
             "PREPARE_MINT_AUTHORIZATION",
             "RECOVER_MINT_AUTHORIZATION",
             "VERIFY_AUTHORIZATION_AND_STAGE_MINT_CREDIT",
-            "FOLD_RECEIVE",
+            "FOLD_RECEIVE_CREDIT",
             "READ_PENDING_CREDIT_WATERMARK",
             "ROTATE_HARDWARE_EPOCH",
+            "BOOTSTRAP_AGGREGATE_STATE",
+            "RECOVER_WALLET_SNAPSHOT",
+            "CREATE_SIGNED_PAYMENT_REQUEST",
         ];
         for (index, name) in operation_names.iter().enumerate() {
             let code = index + 1;
@@ -11710,7 +11767,7 @@ mod tests {
     }
 
     #[test]
-    fn stock_kagemusha_device_bridge_v1_remains_unavailable_for_every_operation() {
+    fn stock_kagemusha_device_bridge_v1_remains_unavailable_after_shape_validation() {
         let mut capabilities = [0xa5_u8; 96];
         assert_eq!(
             unsafe {
@@ -11723,10 +11780,15 @@ mod tests {
         );
         assert_eq!(capabilities, [0_u8; 96]);
 
-        let mut command = [0_u8; 80];
         let mut output = [0xa5_u8; 116];
+        let mut validated = 0;
         for operation in KagemushaDeviceLifecycleOperationV1::ALL {
-            command[10] = operation.code();
+            let Some(command) =
+                kagemusha_device_bridge_v1::canonical_stock_command_for_tests(operation)
+            else {
+                continue;
+            };
+            validated += 1;
             let mut output_len = usize::MAX;
             assert_eq!(
                 unsafe {
@@ -11742,249 +11804,74 @@ mod tests {
             );
             assert_eq!(output_len, 0);
         }
-    }
-
-    fn kagemusha_v1_fixture_v2() -> JsonValue {
-        let fixture: JsonValue = norito::json::from_str(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../fixtures/offline/kagemusha_v1.json"
-        )))
-        .expect("shared Kagemusha V1 fixture JSON");
-        assert_eq!(
-            fixture.get("fixture_version").and_then(JsonValue::as_u64),
-            Some(2),
-            "bridge tests require the native-generated fixture v2",
-        );
-        fixture
-    }
-
-    fn kagemusha_v1_fixture_raw(fixture: &JsonValue, name: &str) -> Vec<u8> {
-        let hex = fixture
-            .get(name)
-            .and_then(JsonValue::as_object)
-            .and_then(|entry| entry.get("norito_hex"))
-            .and_then(JsonValue::as_str)
-            .unwrap_or_else(|| panic!("fixture entry {name} must carry norito_hex"));
-        hex::decode(hex).unwrap_or_else(|error| panic!("decode fixture {name}: {error}"))
-    }
-
-    fn kagemusha_v1_fixture_text(fixture: &JsonValue, name: &str) -> Vec<u8> {
-        fixture
-            .get(name)
-            .and_then(JsonValue::as_object)
-            .and_then(|entry| entry.get("kgm1"))
-            .and_then(JsonValue::as_str)
-            .unwrap_or_else(|| panic!("fixture entry {name} must carry kgm1"))
-            .as_bytes()
-            .to_vec()
-    }
-
-    fn resign_kagemusha_v1_fixture_ticket(ticket: &mut KagemushaAcceptanceTicketV1) {
-        use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _};
-
-        let signing_key =
-            SigningKey::from_bytes((&[7_u8; 32]).into()).expect("fixture P-256 signing key");
-        let signature: P256Signature = signing_key.sign(
-            &ticket
-                .canonical_signing_bytes()
-                .expect("fixture ticket signing bytes"),
-        );
-        let signature = signature.normalize_s().unwrap_or(signature);
-        ticket.signature = iroha_data_model::kagemusha::KagemushaDeviceSignatureV1::from_raw_bytes(
-            signature.to_bytes().as_ref(),
-        )
-        .expect("canonical fixture ticket signature");
+        assert!(validated >= 10, "expected broad operation-family coverage");
     }
 
     #[test]
-    fn native_signer_jni_contract_revision_is_the_v5_network_id_hard_cut() {
-        assert_eq!(native_signer_jni_contract_revision(), 5);
-    }
-
-    #[test]
-    fn kagemusha_v1_bridge_accepts_native_fixture_v2_recovery_and_complete_exchange() {
-        let fixture = kagemusha_v1_fixture_v2();
-        let request = kagemusha_v1_fixture_raw(&fixture, "payment_request");
-        let authorization =
-            kagemusha_v1_fixture_raw(&fixture, "acceptance_intent_authorization");
-        let ticket = kagemusha_v1_fixture_raw(&fixture, "acceptance_ticket");
-        let closure = kagemusha_v1_fixture_raw(&fixture, "no_commit_closure");
-        let payment = kagemusha_v1_fixture_raw(&fixture, "payment");
-        let acknowledgement = kagemusha_v1_fixture_raw(&fixture, "acknowledgement");
-        let mint_authorization = kagemusha_v1_fixture_raw(&fixture, "mint_authorization");
-        let mint_credit = kagemusha_v1_fixture_raw(&fixture, "mint_credit");
-
+    fn kagemusha_device_mint_stage_ffi_rejects_noncanonical_public_bodies() {
+        let malformed_command = [0xa5_u8];
+        let malformed_result = [0x5a_u8];
         assert_eq!(
             unsafe {
-                connect_norito_kagemusha_v1_no_commit_closure_validate(
-                    closure.as_ptr(),
-                    closure.len() as c_ulong,
+                connect_norito_kagemusha_device_mint_stage_command_v1_validate(
+                    malformed_command.as_ptr(),
+                    malformed_command.len() as c_ulong,
                 )
             },
-            0,
+            ERR_KAGEMUSHA_V1,
         );
         assert_eq!(
             unsafe {
-                connect_norito_kagemusha_v1_complete_exchange_validate(
-                    request.as_ptr(),
-                    request.len() as c_ulong,
-                    authorization.as_ptr(),
-                    authorization.len() as c_ulong,
-                    ticket.as_ptr(),
-                    ticket.len() as c_ulong,
-                    payment.as_ptr(),
-                    payment.len() as c_ulong,
-                    acknowledgement.as_ptr(),
-                    acknowledgement.len() as c_ulong,
+                connect_norito_kagemusha_device_mint_stage_result_v1_validate(
+                    malformed_command.as_ptr(),
+                    malformed_command.len() as c_ulong,
+                    malformed_result.as_ptr(),
+                    malformed_result.len() as c_ulong,
                 )
             },
-            0,
-        );
-        assert_eq!(
-            unsafe {
-                connect_norito_kagemusha_v1_mint_credit_against_authorization_validate(
-                    mint_authorization.as_ptr(),
-                    mint_authorization.len() as c_ulong,
-                    mint_credit.as_ptr(),
-                    mint_credit.len() as c_ulong,
-                )
-            },
-            0,
-        );
-
-        let request = kagemusha_v1_fixture_text(&fixture, "payment_request");
-        let authorization =
-            kagemusha_v1_fixture_text(&fixture, "acceptance_intent_authorization");
-        let ticket = kagemusha_v1_fixture_text(&fixture, "acceptance_ticket");
-        let closure = kagemusha_v1_fixture_text(&fixture, "no_commit_closure");
-        let payment = kagemusha_v1_fixture_text(&fixture, "payment");
-        let acknowledgement = kagemusha_v1_fixture_text(&fixture, "acknowledgement");
-        let mint_authorization = kagemusha_v1_fixture_text(&fixture, "mint_authorization");
-        let mint_credit = kagemusha_v1_fixture_text(&fixture, "mint_credit");
-
-        assert_eq!(
-            unsafe {
-                connect_norito_kagemusha_v1_no_commit_closure_text_validate(
-                    closure.as_ptr().cast(),
-                    closure.len() as c_ulong,
-                )
-            },
-            0,
-        );
-        assert_eq!(
-            unsafe {
-                connect_norito_kagemusha_v1_complete_exchange_text_validate(
-                    request.as_ptr().cast(),
-                    request.len() as c_ulong,
-                    authorization.as_ptr().cast(),
-                    authorization.len() as c_ulong,
-                    ticket.as_ptr().cast(),
-                    ticket.len() as c_ulong,
-                    payment.as_ptr().cast(),
-                    payment.len() as c_ulong,
-                    acknowledgement.as_ptr().cast(),
-                    acknowledgement.len() as c_ulong,
-                )
-            },
-            0,
-        );
-        assert_eq!(
-            unsafe {
-                connect_norito_kagemusha_v1_mint_credit_against_authorization_text_validate(
-                    mint_authorization.as_ptr().cast(),
-                    mint_authorization.len() as c_ulong,
-                    mint_credit.as_ptr().cast(),
-                    mint_credit.len() as c_ulong,
-                )
-            },
-            0,
+            ERR_KAGEMUSHA_V1,
         );
     }
 
     #[test]
-    fn kagemusha_v1_bridge_rejects_untrusted_recovery_buffers_and_aggregate_overruns() {
-        let byte = 0_u8;
-        assert_eq!(
-            unsafe { connect_norito_kagemusha_v1_no_commit_closure_validate(ptr::null(), 1) },
-            ERR_NULL_PTR,
-        );
-        assert_eq!(
-            unsafe { connect_norito_kagemusha_v1_no_commit_closure_validate(&byte, 0) },
-            ERR_KAGEMUSHA_V1,
-        );
-        assert_eq!(
-            unsafe {
-                connect_norito_kagemusha_v1_no_commit_closure_validate(
-                    &byte,
-                    (iroha_data_model::kagemusha::KAGEMUSHA_NO_COMMIT_CLOSURE_MAX_BYTES_V1 + 1)
-                        as c_ulong,
-                )
-            },
-            ERR_KAGEMUSHA_V1,
-        );
-        let invalid_utf8 = [0xFF_u8];
-        assert_eq!(
-            unsafe {
-                connect_norito_kagemusha_v1_no_commit_closure_text_validate(
-                    invalid_utf8.as_ptr().cast(),
-                    invalid_utf8.len() as c_ulong,
-                )
-            },
-            ERR_KAGEMUSHA_V1,
-        );
+    fn kagemusha_device_mint_stage_ffi_binds_the_rust_canonical_fixture() {
+        use kagemusha_device_bridge_v1::canonical_mint_stage_fixture_bytes_for_tests as fixture;
 
-        let raw_maxima = [
-            iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1,
-            iroha_data_model::kagemusha::KAGEMUSHA_ACCEPTANCE_INTENT_AUTHORIZATION_MAX_BYTES_V1,
-            iroha_data_model::kagemusha::KAGEMUSHA_ACCEPTANCE_TICKET_MAX_BYTES_V1,
-            iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_MAX_BYTES_V1,
-            iroha_data_model::kagemusha::KAGEMUSHA_ACKNOWLEDGEMENT_MAX_BYTES_V1,
-        ];
-        assert!(
-            raw_maxima.iter().sum::<usize>()
-                > iroha_data_model::kagemusha::KAGEMUSHA_COMPLETE_EXCHANGE_MAX_BYTES_V1
-        );
+        let command = fixture("command");
         assert_eq!(
             unsafe {
-                connect_norito_kagemusha_v1_complete_exchange_validate(
-                    &byte,
-                    raw_maxima[0] as c_ulong,
-                    &byte,
-                    raw_maxima[1] as c_ulong,
-                    &byte,
-                    raw_maxima[2] as c_ulong,
-                    &byte,
-                    raw_maxima[3] as c_ulong,
-                    &byte,
-                    raw_maxima[4] as c_ulong,
+                connect_norito_kagemusha_device_mint_stage_command_v1_validate(
+                    command.as_ptr(),
+                    command.len() as c_ulong,
                 )
             },
-            ERR_KAGEMUSHA_V1,
+            0,
         );
-        let text_maxima = [
-            iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_REQUEST_TEXT_MAX_BYTES_V1,
-            iroha_data_model::kagemusha::KAGEMUSHA_ACCEPTANCE_INTENT_AUTHORIZATION_TEXT_MAX_BYTES_V1,
-            iroha_data_model::kagemusha::KAGEMUSHA_ACCEPTANCE_TICKET_TEXT_MAX_BYTES_V1,
-            iroha_data_model::kagemusha::KAGEMUSHA_PAYMENT_TEXT_MAX_BYTES_V1,
-            iroha_data_model::kagemusha::KAGEMUSHA_ACKNOWLEDGEMENT_TEXT_MAX_BYTES_V1,
-        ];
-        assert!(
-            text_maxima.iter().sum::<usize>()
-                > iroha_data_model::kagemusha::KAGEMUSHA_COMPLETE_TEXT_EXCHANGE_MAX_BYTES_V1
-        );
+        for name in ["staged_result", "exact_duplicate_result"] {
+            let result = fixture(name);
+            assert_eq!(
+                unsafe {
+                    connect_norito_kagemusha_device_mint_stage_result_v1_validate(
+                        command.as_ptr(),
+                        command.len() as c_ulong,
+                        result.as_ptr(),
+                        result.len() as c_ulong,
+                    )
+                },
+                0,
+            );
+        }
+        let substituted = KagemushaDeviceMintStageResultV1::staged([0xee; 32])
+            .unwrap()
+            .encode_canonical_shape()
+            .unwrap();
         assert_eq!(
             unsafe {
-                connect_norito_kagemusha_v1_complete_exchange_text_validate(
-                    (&byte as *const u8).cast(),
-                    text_maxima[0] as c_ulong,
-                    (&byte as *const u8).cast(),
-                    text_maxima[1] as c_ulong,
-                    (&byte as *const u8).cast(),
-                    text_maxima[2] as c_ulong,
-                    (&byte as *const u8).cast(),
-                    text_maxima[3] as c_ulong,
-                    (&byte as *const u8).cast(),
-                    text_maxima[4] as c_ulong,
+                connect_norito_kagemusha_device_mint_stage_result_v1_validate(
+                    command.as_ptr(),
+                    command.len() as c_ulong,
+                    substituted.as_ptr(),
+                    substituted.len() as c_ulong,
                 )
             },
             ERR_KAGEMUSHA_V1,
@@ -11992,171 +11879,8 @@ mod tests {
     }
 
     #[test]
-    fn kagemusha_v1_bridge_rejects_context_substitution_and_mint_misbinding() {
-        let fixture = kagemusha_v1_fixture_v2();
-        let request_bytes = kagemusha_v1_fixture_raw(&fixture, "payment_request");
-        let authorization_bytes =
-            kagemusha_v1_fixture_raw(&fixture, "acceptance_intent_authorization");
-        let ticket_bytes = kagemusha_v1_fixture_raw(&fixture, "acceptance_ticket");
-        let closure_bytes = kagemusha_v1_fixture_raw(&fixture, "no_commit_closure");
-        let payment_bytes = kagemusha_v1_fixture_raw(&fixture, "payment");
-        let acknowledgement_bytes = kagemusha_v1_fixture_raw(&fixture, "acknowledgement");
-
-        let request = KagemushaPaymentRequestV1::decode_canonical_exact(&request_bytes)
-            .expect("fixture request");
-        let authorization =
-            KagemushaAcceptanceIntentAuthorizationV1::decode_canonical_shape_exact_against(
-                &authorization_bytes,
-                &request,
-            )
-            .expect("fixture authorization");
-        let ticket = KagemushaAcceptanceTicketV1::decode_canonical_shape_exact_against(
-            &ticket_bytes,
-            &request,
-            &authorization.intent(),
-        )
-        .expect("fixture ticket");
-
-        let mut substituted_ticket = ticket.clone();
-        substituted_ticket.acceptance_ticket_id[0] ^= 1;
-        resign_kagemusha_v1_fixture_ticket(&mut substituted_ticket);
-        substituted_ticket
-            .validate_shape_against(&request, &authorization.intent())
-            .expect("independently valid substituted ticket");
-        let substituted_ticket_bytes =
-            norito::encode_canonical(&substituted_ticket).expect("encode substituted ticket");
-        assert_eq!(
-            unsafe {
-                connect_norito_kagemusha_v1_complete_exchange_validate(
-                    request_bytes.as_ptr(),
-                    request_bytes.len() as c_ulong,
-                    authorization_bytes.as_ptr(),
-                    authorization_bytes.len() as c_ulong,
-                    substituted_ticket_bytes.as_ptr(),
-                    substituted_ticket_bytes.len() as c_ulong,
-                    payment_bytes.as_ptr(),
-                    payment_bytes.len() as c_ulong,
-                    acknowledgement_bytes.as_ptr(),
-                    acknowledgement_bytes.len() as c_ulong,
-                )
-            },
-            ERR_KAGEMUSHA_V1,
-        );
-
-        let mut substituted_authorization = authorization.clone();
-        substituted_authorization.statement.intent.intent_id[0] ^= 1;
-        substituted_authorization.proof.semantic_digest = substituted_authorization
-            .statement
-            .canonical_digest_against(&request)
-            .expect("substituted authorization semantic digest");
-        substituted_authorization
-            .validate_shape_against(&request)
-            .expect("independently valid substituted authorization");
-        let substituted_authorization_bytes = norito::encode_canonical(&substituted_authorization)
-            .expect("encode substituted authorization");
-        let mut substituted_authorization_ticket = ticket.clone();
-        substituted_authorization_ticket.intent_digest = substituted_authorization
-            .intent()
-            .canonical_digest_against(&request)
-            .expect("substituted intent digest");
-        resign_kagemusha_v1_fixture_ticket(&mut substituted_authorization_ticket);
-        substituted_authorization_ticket
-            .validate_shape_against(&request, &substituted_authorization.intent())
-            .expect("ticket bound to substituted authorization");
-        let substituted_authorization_ticket_bytes =
-            norito::encode_canonical(&substituted_authorization_ticket)
-                .expect("encode substituted authorization ticket");
-        assert_eq!(
-            unsafe {
-                connect_norito_kagemusha_v1_complete_exchange_validate(
-                    request_bytes.as_ptr(),
-                    request_bytes.len() as c_ulong,
-                    substituted_authorization_bytes.as_ptr(),
-                    substituted_authorization_bytes.len() as c_ulong,
-                    substituted_authorization_ticket_bytes.as_ptr(),
-                    substituted_authorization_ticket_bytes.len() as c_ulong,
-                    payment_bytes.as_ptr(),
-                    payment_bytes.len() as c_ulong,
-                    acknowledgement_bytes.as_ptr(),
-                    acknowledgement_bytes.len() as c_ulong,
-                )
-            },
-            ERR_KAGEMUSHA_V1,
-        );
-
-        let mut invalid_closure =
-            KagemushaNoCommitClosureV1::decode_canonical_shape_exact(&closure_bytes)
-                .expect("fixture no-commit closure");
-        invalid_closure.statement.intent_authorization_digest[0] ^= 1;
-        invalid_closure.proof.semantic_digest = invalid_closure
-            .statement
-            .canonical_digest()
-            .expect("substituted closure statement digest");
-        let invalid_closure_bytes =
-            norito::encode_canonical(&invalid_closure).expect("encode invalid closure");
-        assert_eq!(
-            unsafe {
-                connect_norito_kagemusha_v1_no_commit_closure_validate(
-                    invalid_closure_bytes.as_ptr(),
-                    invalid_closure_bytes.len() as c_ulong,
-                )
-            },
-            ERR_KAGEMUSHA_V1,
-        );
-        let invalid_closure_text = format!(
-            "{}{}",
-            iroha_data_model::kagemusha::KAGEMUSHA_TEXT_PREFIX_V1,
-            b64gp::URL_SAFE_NO_PAD.encode(&invalid_closure_bytes),
-        );
-        assert_eq!(
-            unsafe {
-                connect_norito_kagemusha_v1_no_commit_closure_text_validate(
-                    invalid_closure_text.as_ptr().cast(),
-                    invalid_closure_text.len() as c_ulong,
-                )
-            },
-            ERR_KAGEMUSHA_V1,
-        );
-
-        let mint_authorization_bytes = kagemusha_v1_fixture_raw(&fixture, "mint_authorization");
-        let mint_credit_bytes = kagemusha_v1_fixture_raw(&fixture, "mint_credit");
-        let mut substituted_mint_authorization =
-            KagemushaMintAuthorizationV1::decode_canonical_shape_exact(&mint_authorization_bytes)
-                .expect("fixture mint authorization");
-        substituted_mint_authorization.proof.eq_proof[0] ^= 1;
-        substituted_mint_authorization
-            .validate_shape()
-            .expect("independently valid substituted mint authorization");
-        let substituted_mint_authorization_bytes =
-            norito::encode_canonical(&substituted_mint_authorization)
-                .expect("encode substituted mint authorization");
-        assert_eq!(
-            unsafe {
-                connect_norito_kagemusha_v1_mint_credit_against_authorization_validate(
-                    substituted_mint_authorization_bytes.as_ptr(),
-                    substituted_mint_authorization_bytes.len() as c_ulong,
-                    mint_credit_bytes.as_ptr(),
-                    mint_credit_bytes.len() as c_ulong,
-                )
-            },
-            ERR_KAGEMUSHA_V1,
-        );
-        let substituted_mint_authorization_text = substituted_mint_authorization
-            .encode_text_shape()
-            .expect("encode substituted mint authorization text")
-            .into_bytes();
-        let mint_credit_text = kagemusha_v1_fixture_text(&fixture, "mint_credit");
-        assert_eq!(
-            unsafe {
-                connect_norito_kagemusha_v1_mint_credit_against_authorization_text_validate(
-                    substituted_mint_authorization_text.as_ptr().cast(),
-                    substituted_mint_authorization_text.len() as c_ulong,
-                    mint_credit_text.as_ptr().cast(),
-                    mint_credit_text.len() as c_ulong,
-                )
-            },
-            ERR_KAGEMUSHA_V1,
-        );
+    fn native_signer_jni_contract_revision_is_the_v5_network_id_hard_cut() {
+        assert_eq!(native_signer_jni_contract_revision(), 5);
     }
 
     fn c_and_jni_transaction_network_ids_require_exact_canonical_encodings() {

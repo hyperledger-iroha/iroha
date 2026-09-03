@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage and compare the complete checked-in Kagami Iroha 3 profile bundles.
+"""Stage and compare complete operator-owned Kagami Iroha 3 profile bundles.
 
 This proposed owner wrapper is intentionally narrower than ``cargo xtask
 kagami-profiles``.  It admits only the complete ``iroha3-dev`` bundle, builds
@@ -359,12 +359,19 @@ def _cargo_command(cargo: Path, package: str, binary: str, expectation: LockExpe
     ]
 
 
-def _profile_command(tools: BuiltTools, profile: str, temporary_root: Path) -> list[str]:
+def _profile_command(
+    tools: BuiltTools,
+    profile: str,
+    temporary_root: Path,
+    authority_parameters: Path,
+) -> list[str]:
     return [
         os.fspath(tools.xtask),
         "kagami-profiles",
         "--profile",
         profile,
+        "--kagemusha-mint-finality-parameters-dir",
+        os.fspath(authority_parameters),
         "--out",
         os.fspath(temporary_root / "defaults" / "kagami"),
         "--kagami",
@@ -494,13 +501,18 @@ def _generate_stage(
     tools: BuiltTools,
     environment: Mapping[str, str],
     expectation: LockExpectation,
+    authority_parameters: Path,
 ) -> dict[str, ManagedFile]:
     temporary = Path(
         tempfile.mkdtemp(prefix=f".{destination.name}.kagami-owner-", dir=destination.parent)
     )
     published = False
     try:
-        _sealed_child(_profile_command(tools, profile, temporary), environment, expectation)
+        _sealed_child(
+            _profile_command(tools, profile, temporary, authority_parameters),
+            environment,
+            expectation,
+        )
         managed = _snapshot(temporary, profile, closed_stage=True)
         _authenticate_lock(ROOT_CARGO_LOCK, expectation)
         _fsync_stage(temporary, managed)
@@ -528,6 +540,7 @@ def _parse_args(arguments: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--stage-b")
     parser.add_argument("--cargo", required=True)
     parser.add_argument("--cargo-target-dir", required=True)
+    parser.add_argument("--kagemusha-mint-finality-parameters-dir", required=True)
     parser.add_argument("--cargo-lock-size", required=True, type=int)
     parser.add_argument("--cargo-lock-sha256", required=True)
     parsed = parser.parse_args(arguments)
@@ -561,12 +574,25 @@ def run(parsed: argparse.Namespace) -> None:
         external=True,
         private=True,
     )
+    authority_parameters = _existing_directory(
+        parsed.kagemusha_mint_finality_parameters_dir,
+        "KAGEMUSHA mint-finality public-parameter directory",
+        external=True,
+        private=False,
+    )
     if parsed.write:
         output = _absent_external_root(parsed.output_root, "output root")
         if _overlap(output, target):
             _fail("output root and Cargo target directory must not overlap")
         tools, environment = _build_tools(cargo, target, expectation)
-        _generate_stage(output, parsed.profile, tools, environment, expectation)
+        _generate_stage(
+            output,
+            parsed.profile,
+            tools,
+            environment,
+            expectation,
+            authority_parameters,
+        )
         return
 
     candidate = _existing_directory(parsed.root, "candidate root", external=False, private=False)
@@ -582,8 +608,22 @@ def run(parsed: argparse.Namespace) -> None:
         if _overlap(left, right):
             _fail(f"{left_label} and {right_label} must not overlap")
     tools, environment = _build_tools(cargo, target, expectation)
-    first = _generate_stage(stage_a, parsed.profile, tools, environment, expectation)
-    second = _generate_stage(stage_b, parsed.profile, tools, environment, expectation)
+    first = _generate_stage(
+        stage_a,
+        parsed.profile,
+        tools,
+        environment,
+        expectation,
+        authority_parameters,
+    )
+    second = _generate_stage(
+        stage_b,
+        parsed.profile,
+        tools,
+        environment,
+        expectation,
+        authority_parameters,
+    )
     checked = _snapshot(candidate, parsed.profile, closed_stage=False)
     _compare_snapshots(first, second, "two fresh profile generations")
     _compare_snapshots(first, checked, "checked-in profile bundle")

@@ -783,9 +783,7 @@ where
                 if term.source_index >= source_count {
                     return Err(Error::Transcript(
                         std::io::ErrorKind::InvalidData,
-                        format!(
-                            "Kagemusha V1 equation {equation_index} source index is invalid"
-                        ),
+                        format!("Kagemusha V1 equation {equation_index} source index is invalid"),
                     ));
                 }
                 elements.push(ctx.main().load_constant(Inner::<C>::from(
@@ -1630,7 +1628,7 @@ where
                     || previous.is_some_and(|previous| previous >= *source_index)
                 {
                     return Err(
-                        "Kagemusha deferred point equation source order is invalid".to_owned(),
+                        "Kagemusha deferred point equation source order is invalid".to_owned()
                     );
                 }
                 previous = Some(*source_index);
@@ -1700,9 +1698,7 @@ where
             self.base.gate().assert_bit(ctx.main(), selector);
             for (source_index, coefficient) in equation {
                 if *source_index >= audit.sources.len() {
-                    return Err(
-                        "Kagemusha V1 deferred-equation source index is invalid".to_owned()
-                    );
+                    return Err("Kagemusha V1 deferred-equation source index is invalid".to_owned());
                 }
                 let weighted = self
                     .scalar
@@ -1756,8 +1752,12 @@ where
             .collect::<Vec<_>>();
         dense_jobs.queue_constrained(ctx.main(), self.scalar.field, &sources)
     }
-    /// Retain the generic MSM only for focused dense/reference equivalence tests.
-    #[cfg(test)]
+    /// Enforce all selector-gated equations through the Base graph's serialized
+    /// variable-base MSM.
+    ///
+    /// Transport deciders use this layout because its existing advice columns
+    /// keep the externally carried proof narrow.  Larger internal recursive
+    /// relations retain the dedicated dense machine and its lower row count.
     pub(super) fn constrain_deferred_equation_batch_generic_v1(
         &mut self,
         ctx: &mut SinglePhaseCoreManager<Outer<C>>,

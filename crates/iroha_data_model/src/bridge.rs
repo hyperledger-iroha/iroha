@@ -1158,17 +1158,13 @@ mod tests {
             validators: roster
                 .iter()
                 .enumerate()
-                .map(
-                    |(index, validator)| KagemushaMintFinalityValidatorKeysV1 {
-                        validator: validator.validator.clone(),
-                        eq_proof_public_key: [u8::try_from(index + 1)
-                            .expect("small fixture roster");
-                            32],
-                        ep_proof_public_key: [u8::try_from(index + 17)
-                            .expect("small fixture roster");
-                            32],
-                    },
-                )
+                .map(|(index, validator)| KagemushaMintFinalityValidatorKeysV1 {
+                    validator: validator.validator.clone(),
+                    eq_proof_public_key: [u8::try_from(index + 1).expect("small fixture roster");
+                        32],
+                    ep_proof_public_key: [u8::try_from(index + 17).expect("small fixture roster");
+                        32],
+                })
                 .collect(),
         }
     }

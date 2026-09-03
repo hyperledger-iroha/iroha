@@ -1,10 +1,12 @@
 package org.hyperledger.iroha.android.offline;
 
-/** Stable three-message Kagemusha V1 exchange identifiers carried by IPM1. */
+/** Frozen five-message KAGEMUSHA V1 exchange identifiers carried by IPM1. */
 public enum IrohaPeerPayloadKind {
-  RECEIVE_REQUEST(1),
-  PAYMENT(2),
-  ACKNOWLEDGEMENT(3);
+  REQUEST(1),
+  INTENT(2),
+  TICKET(3),
+  PAYMENT(4),
+  ACKNOWLEDGEMENT(5);
 
   private final int code;
 

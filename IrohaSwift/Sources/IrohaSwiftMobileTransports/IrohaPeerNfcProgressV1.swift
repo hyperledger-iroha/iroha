@@ -252,6 +252,8 @@ public enum IrohaPeerNfcProgressStageV1: String, CaseIterable, Sendable {
     case phase1SessionActive = "phase1_session_active"
     case tagDetected = "tag_detected"
     case requestRead = "request_read"
+    case intentPrepared = "intent_prepared"
+    case acceptanceTicketReceived = "acceptance_ticket_received"
     case readerEnded = "reader_ended"
     case ownerAuthRequested = "owner_auth_requested"
     case ownerAuthSucceeded = "owner_auth_succeeded"

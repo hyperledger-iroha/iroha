@@ -143,14 +143,14 @@ def validate_server_template(path: pathlib.Path) -> str:
         if isinstance(kagemusha_v1_commands, Mapping) and kagemusha_v1_commands.get(
             "enabled", True
         ):
-            if "private_key" in kagemusha_v1_commands:
+            if "redemption_private_key" in kagemusha_v1_commands:
                 raise ProvisioningTemplateError(
-                    f"{path} embeds forbidden runtime secret field `torii.kagemusha_v1_commands.private_key`"
+                    f"{path} embeds forbidden runtime secret field `torii.kagemusha_v1_commands.redemption_private_key`"
                 )
             secret_paths.append(
                 _require_secret_file(
                     kagemusha_v1_commands,
-                    "private_key_file",
+                    "redemption_private_key_file",
                     f"{path}.torii.kagemusha_v1_commands",
                 )
             )

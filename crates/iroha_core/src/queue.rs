@@ -3666,11 +3666,11 @@ fn kagemusha_operation_request_v1(
 ) -> Option<KagemushaOperationRequestV1<'_>> {
     let instruction = instruction.as_any();
     if let Some(top_up) = instruction.downcast_ref::<TopUpKagemushaV1>() {
-        Some(KagemushaOperationRequestV1::TopUp(&top_up.request))
+        Some(KagemushaOperationRequestV1::TopUp(top_up.request()))
     } else {
         instruction
             .downcast_ref::<RedeemKagemushaV1>()
-            .map(|redeem| KagemushaOperationRequestV1::Redemption(&redeem.request))
+            .map(|redeem| KagemushaOperationRequestV1::Redemption(redeem.request()))
     }
 }
 
@@ -4010,9 +4010,7 @@ pub enum PendingKagemushaOperationLookupError {
         reason: String,
     },
     /// The matching operation is crossing its pending-plan durability boundary.
-    #[error(
-        "Kagemusha V1 pending operation {entrypoint_hash} is crossing a durability boundary"
-    )]
+    #[error("Kagemusha V1 pending operation {entrypoint_hash} is crossing a durability boundary")]
     DurabilityTransition {
         /// Exact entrypoint whose transition must finish before retry.
         entrypoint_hash: HashOf<TransactionEntrypoint>,
@@ -5447,14 +5445,18 @@ impl Queue {
                 Ok(None)
             };
         };
+        crate::tx::validate_kagemusha_top_up_admission_invariants_v1(transaction).map_err(
+            |reason| Error::KagemushaV1OperationCarrierRejected {
+                reason: reason.to_owned(),
+            },
+        )?;
         if !executable_contains_kagemusha_operation_v1(transaction.instructions()) {
             return Ok(None);
         }
         let Executable::Instructions(instructions) = transaction.instructions() else {
             return Err(Error::KagemushaV1OperationCarrierRejected {
-                reason:
-                    "Kagemusha V1 operations cannot be carried by proved or overlay execution"
-                        .to_owned(),
+                reason: "Kagemusha V1 operations cannot be carried by proved or overlay execution"
+                    .to_owned(),
             });
         };
         let [instruction] = instructions.as_ref() else {
@@ -11840,8 +11842,7 @@ impl Queue {
         let mut projected_retained = self.retained_bytes();
         let mut per_user_increments = HashMap::<AccountId, usize>::new();
         let mut projected_fee_reservations = self.fee_admission_reservations.lock().clone();
-        let mut projected_pending_kagemusha_operations =
-            PendingKagemushaOperationIndex::default();
+        let mut projected_pending_kagemusha_operations = PendingKagemushaOperationIndex::default();
         for (
             admission,
             _claim,
@@ -14299,32 +14300,31 @@ impl Queue {
             self.latch_pending_kagemusha_operation_index_fault(binding.entrypoint_hash, &reason);
             return Err(PendingKagemushaOperationLookupError::Inconsistent { reason });
         };
-        let exact_binding =
-            match Self::classify_pending_kagemusha_operation(transaction.as_ref()) {
-                Ok(Some(exact_binding)) => exact_binding,
-                Ok(None) => {
-                    let reason = format!(
-                        "operation key points to a non-Kagemusha-V1 transaction {}",
-                        binding.entrypoint_hash
-                    );
-                    self.latch_pending_kagemusha_operation_index_fault(
-                        binding.entrypoint_hash,
-                        &reason,
-                    );
-                    return Err(PendingKagemushaOperationLookupError::Inconsistent { reason });
-                }
-                Err(error) => {
-                    let reason = format!(
-                        "operation key points to invalid Kagemusha V1 transaction {}: {error}",
-                        binding.entrypoint_hash
-                    );
-                    self.latch_pending_kagemusha_operation_index_fault(
-                        binding.entrypoint_hash,
-                        &reason,
-                    );
-                    return Err(PendingKagemushaOperationLookupError::Inconsistent { reason });
-                }
-            };
+        let exact_binding = match Self::classify_pending_kagemusha_operation(transaction.as_ref()) {
+            Ok(Some(exact_binding)) => exact_binding,
+            Ok(None) => {
+                let reason = format!(
+                    "operation key points to a non-Kagemusha-V1 transaction {}",
+                    binding.entrypoint_hash
+                );
+                self.latch_pending_kagemusha_operation_index_fault(
+                    binding.entrypoint_hash,
+                    &reason,
+                );
+                return Err(PendingKagemushaOperationLookupError::Inconsistent { reason });
+            }
+            Err(error) => {
+                let reason = format!(
+                    "operation key points to invalid Kagemusha V1 transaction {}: {error}",
+                    binding.entrypoint_hash
+                );
+                self.latch_pending_kagemusha_operation_index_fault(
+                    binding.entrypoint_hash,
+                    &reason,
+                );
+                return Err(PendingKagemushaOperationLookupError::Inconsistent { reason });
+            }
+        };
         if exact_binding != binding {
             let reason = format!(
                 "operation key disagrees with immutable transaction {}",
@@ -14334,11 +14334,9 @@ impl Queue {
             return Err(PendingKagemushaOperationLookupError::Inconsistent { reason });
         }
         if self.durability_transition_active(&binding.entrypoint_hash) {
-            return Err(
-                PendingKagemushaOperationLookupError::DurabilityTransition {
-                    entrypoint_hash: binding.entrypoint_hash,
-                },
-            );
+            return Err(PendingKagemushaOperationLookupError::DurabilityTransition {
+                entrypoint_hash: binding.entrypoint_hash,
+            });
         }
         let pending = match self
             .pending_status_with_stable_durability_owner(transaction.as_ref(), state_view)
@@ -16436,8 +16434,8 @@ impl Queue {
                 err,
             });
         }
-        let kagemusha_operation = Self::classify_pending_kagemusha_operation(&checked)
-            .map_err(|err| Failure {
+        let kagemusha_operation =
+            Self::classify_pending_kagemusha_operation(&checked).map_err(|err| Failure {
                 tx: Box::new(checked.as_accepted().clone()),
                 err,
             })?;
@@ -17758,8 +17756,8 @@ impl Queue {
         let lane_id = routing_decision.lane_id;
         let dataspace_id = routing_decision.dataspace_id;
         let enqueue_at_ms = self.validation_timestamp_ms(checked.as_accepted());
-        let kagemusha_operation = Self::classify_pending_kagemusha_operation(&checked)
-            .map_err(|err| Failure {
+        let kagemusha_operation =
+            Self::classify_pending_kagemusha_operation(&checked).map_err(|err| Failure {
                 tx: Box::new(checked.as_accepted().clone()),
                 err,
             })?;
@@ -30127,6 +30125,7 @@ pub mod tests {
     include!("queue/transaction_guard_return_tests.rs");
     include!("queue/queue_metadata_and_admission_tests.rs");
     include!("queue/instruction_and_state_routing_tests.rs");
+    include!("queue/kagemusha_top_up_admission_tests.rs");
     include!("queue/routing_batch_admission_tests.rs");
     include!("queue/config_factory_test_support.rs");
     fn install_test_nexus_routes(state: &mut State, routes: &[(LaneId, DataSpaceId)]) {

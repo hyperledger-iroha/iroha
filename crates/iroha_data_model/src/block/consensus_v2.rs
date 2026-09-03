@@ -74,14 +74,14 @@ const MAX_LIVENESS_IGNORE_REASONS: usize = 12;
 /// Allocation bound for one consensus signature or aggregate.
 ///
 /// Ordinary BLS signatures remain compact. A Commit vote for a block containing
-/// Kagemusha V1 top-ups additionally carries one paired Pasta finality-seal
+/// KAGEMUSHA V1 top-ups additionally carries one paired Pasta finality-seal
 /// share, while its `CommitQC` carries the exact `2f + 1` share bundle. The
 /// bound covers the largest admitted 31-validator committee without making the
 /// auxiliary proof payload unbounded.
 pub const MAX_CONSENSUS_SIGNATURE_BYTES: usize = 16 * 1024;
-/// Reserved envelope kind for one Kagemusha V1 Commit-vote seal share.
+/// Reserved envelope kind for one KAGEMUSHA V1 Commit-vote seal share.
 pub const KAGEMUSHA_COMMIT_VOTE_SIGNATURE_ENVELOPE_KIND_V1: u8 = 1;
-/// Reserved envelope kind for an Kagemusha V1 CommitQC seal bundle.
+/// Reserved envelope kind for an KAGEMUSHA V1 CommitQC seal bundle.
 pub const KAGEMUSHA_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1: u8 = 2;
 const KAGEMUSHA_CONSENSUS_SIGNATURE_ENVELOPE_MAGIC_V1: [u8; 16] = *b"iroha-kgm-sig-v1";
 const KAGEMUSHA_CONSENSUS_SIGNATURE_ENVELOPE_HEADER_BYTES_V1: usize = 16 + 1 + 2 + 4;
@@ -102,8 +102,7 @@ pub const NPOS_BLS_DOMAIN: &str = "bls-iroha2:npos-sumeragi:v2";
 /// Kura hard limit; runtime configuration may select a lower bound but must
 /// never admit a larger consensus value.
 pub const MAX_EXECUTED_BLOCK_WIRE_BYTES: u64 = 256 * 1024 * 1024;
-const KAGEMUSHA_TOP_UP_POST_STATE_ROOT_DOMAIN_V1: &[u8] =
-    b"iroha:kagemusha:v1:post-state-root";
+const KAGEMUSHA_TOP_UP_POST_STATE_ROOT_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:post-state-root";
 /// Canonical Native AMX application-manifest wire version.
 pub const NATIVE_AMX_APPLICATION_MANIFEST_VERSION: u16 = 1;
 /// Maximum participant route/incarnation leaves committed by one global block.
@@ -355,8 +354,12 @@ pub enum PayloadEncoding {
 ///
 /// The value is embedded in the signed consensus-genesis parameters. Live v2
 /// startup must reject a genesis which omits it; it must never reconstruct
-/// these fields from a node's mutable runtime configuration.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+/// these fields from a node's mutable runtime configuration. The separately
+/// signed, network-independent KAGEMUSHA authority templates live beside
+/// this value in [`crate::parameter::system::ConsensusHandshakeMetadata`]; they
+/// are deliberately absent from this snapshot-reconstructible context and its
+/// secondary consensus fingerprint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct SumeragiV2GenesisContextParameters {
@@ -370,13 +373,6 @@ pub struct SumeragiV2GenesisContextParameters {
     pub nexus_amx_context_hash: [u8; 32],
     /// Canonical V1 identity of every process-local policy input which can affect execution.
     pub execution_policy_hash: [u8; 32],
-    /// Complete epoch-zero public Pasta roster authenticated by signed genesis.
-    pub kagemusha_mint_finality_epoch_roster:
-        crate::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
-    /// Complete epoch-one public Pasta roster when height one is also the epoch-zero boundary.
-    #[norito(required)]
-    pub next_kagemusha_mint_finality_epoch_roster:
-        Option<crate::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1>,
 }
 impl SumeragiV2GenesisContextParameters {
     /// Recommended profile emitted by programmatic genesis builders.
@@ -384,18 +380,11 @@ impl SumeragiV2GenesisContextParameters {
     /// This value is serialized into, fingerprinted by, and signed with the
     /// genesis block. It is not a live-node fallback.
     #[must_use]
-    pub fn recommended(
-        kagemusha_mint_finality_epoch_roster: crate::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
-        next_kagemusha_mint_finality_epoch_roster: Option<
-            crate::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
-        >,
-    ) -> Self {
+    pub const fn recommended() -> Self {
         Self {
             da_layout: recommended_data_availability_layout(),
             nexus_amx_context_hash: RECOMMENDED_NEXUS_AMX_CONTEXT_HASH,
             execution_policy_hash: RECOMMENDED_EXECUTION_POLICY_HASH,
-            kagemusha_mint_finality_epoch_roster,
-            next_kagemusha_mint_finality_epoch_roster,
         }
     }
     /// Validate the signed context parameters using the same structural rules
@@ -418,17 +407,6 @@ impl SumeragiV2GenesisContextParameters {
                 != self.execution_policy_hash
         {
             return Err(ValidationError::InvalidExecutionPolicyHash);
-        }
-        if self
-            .kagemusha_mint_finality_epoch_roster
-            .validate()
-            .is_err()
-            || self
-                .next_kagemusha_mint_finality_epoch_roster
-                .as_ref()
-                .is_some_and(|roster| roster.validate().is_err())
-        {
-            return Err(ValidationError::InvalidKagemushaMintFinalityEpochRoster);
         }
         validate_data_availability_layout(self.da_layout)
     }
@@ -513,7 +491,7 @@ pub struct HeightContext {
     /// Finalized validator-election epoch.
     pub epoch: u64,
     /// Canonical identifier of the exact paired-Pasta validator-key roster authorized for this
-    /// epoch's Kagemusha V1 mint-finality seals.
+    /// epoch's KAGEMUSHA V1 mint-finality seals.
     pub kagemusha_mint_finality_epoch_id: [u8; 32],
     /// Complete bounded paired-Pasta public-key roster whose canonical digest equals
     /// [`Self::kagemusha_mint_finality_epoch_id`]. Keeping the roster in the immutable context
@@ -570,9 +548,7 @@ impl HeightContext {
             height: self.height,
             epoch: self.epoch,
             kagemusha_mint_finality_epoch_id: self.kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster: self
-                .kagemusha_mint_finality_epoch_roster
-                .clone(),
+            kagemusha_mint_finality_epoch_roster: self.kagemusha_mint_finality_epoch_roster.clone(),
             epoch_end_height: self.epoch_end_height,
             next_epoch_snapshot: self.next_epoch_snapshot.clone(),
             mode: self.mode,
@@ -627,8 +603,7 @@ impl HeightContext {
                 .iter()
                 .zip(&self.roster)
                 .any(|(mint, consensus)| mint.validator != consensus.validator)
-            || mint_roster.finality_epoch_id().ok()
-                != Some(self.kagemusha_mint_finality_epoch_id)
+            || mint_roster.finality_epoch_id().ok() != Some(self.kagemusha_mint_finality_epoch_id)
         {
             return Err(ValidationError::InvalidKagemushaMintFinalityEpochRoster);
         }
@@ -1018,12 +993,12 @@ pub struct ExecutionCommitment {
     pub parent_state_root: Hash,
     /// Root of the complete deterministic post-state projection.
     pub post_state_root: Hash,
-    /// Root of all canonical last-write-wins writes other than Kagemusha V1 top-ups.
+    /// Root of all canonical last-write-wins writes other than KAGEMUSHA V1 top-ups.
     pub ordinary_writes_root: Hash,
-    /// Root of the canonical balanced Kagemusha V1 top-up tree, when present.
+    /// Root of the canonical balanced KAGEMUSHA V1 top-up tree, when present.
     #[norito(required)]
     pub kagemusha_top_up_root: Option<Hash>,
-    /// Number of real Kagemusha V1 top-up leaves committed by `kagemusha_top_up_root`.
+    /// Number of real KAGEMUSHA V1 top-up leaves committed by `kagemusha_top_up_root`.
     pub kagemusha_top_up_count: u32,
     /// Exact Native AMX application-manifest schema version.
     pub native_amx_application_manifest_version: u16,
@@ -1051,7 +1026,7 @@ pub struct ExecutionCommitment {
     pub executed_block_wire_hash: Hash,
 }
 impl ExecutionCommitment {
-    /// Construct a transition that contains neither Kagemusha V1 top-ups
+    /// Construct a transition that contains neither KAGEMUSHA V1 top-ups
     /// nor a compact merge carrier.
     #[must_use]
     pub fn without_kagemusha_top_ups_or_merge_carrier(
@@ -1236,10 +1211,7 @@ impl ExecutionCommitment {
         if let Some(merge_carrier) = self.merge_carrier {
             merge_carrier.validate()?;
         }
-        match (
-            self.kagemusha_top_up_count,
-            self.kagemusha_top_up_root,
-        ) {
+        match (self.kagemusha_top_up_count, self.kagemusha_top_up_root) {
             (0, None) => {}
             (0, Some(_)) | (_, None) => {
                 return Err(ValidationError::InvalidExecutionCommitment);
@@ -1296,11 +1268,11 @@ impl ExecutionCommitment {
     }
 }
 
-/// Borrowed components of one Kagemusha V1 consensus-signature envelope.
+/// Borrowed components of one KAGEMUSHA V1 consensus-signature envelope.
 ///
 /// The framing deliberately keeps the ordinary BLS signature first-class so
 /// generic finality verification can authenticate the same vote preimage while
-/// the Kagemusha verifier separately checks the paired Pasta payload.
+/// the KAGEMUSHA verifier separately checks the paired Pasta payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KagemushaConsensusSignatureEnvelopePartsV1<'a> {
     /// Whether the auxiliary payload is a Commit-vote share or CommitQC bundle.
@@ -1311,7 +1283,7 @@ pub struct KagemushaConsensusSignatureEnvelopePartsV1<'a> {
     pub auxiliary_payload: &'a [u8],
 }
 
-/// Encode one bounded Kagemusha V1 consensus-signature envelope.
+/// Encode one bounded KAGEMUSHA V1 consensus-signature envelope.
 ///
 /// # Errors
 ///
@@ -1353,7 +1325,7 @@ pub fn encode_kagemusha_consensus_signature_envelope_v1(
     Ok(envelope)
 }
 
-/// Decode one reserved Kagemusha V1 consensus-signature envelope.
+/// Decode one reserved KAGEMUSHA V1 consensus-signature envelope.
 ///
 /// A byte string without the complete 128-bit reserved prefix is an ordinary
 /// BLS signature and returns `Ok(None)`. A prefixed but non-canonical frame
@@ -1448,7 +1420,7 @@ impl Vote {
         signature_preimage(b"iroha:sumeragi:v2:vote", &payload.encode())
     }
     /// Borrow the ordinary BLS signature from either its raw representation or
-    /// the required Kagemusha V1 Commit-vote envelope.
+    /// the required KAGEMUSHA V1 Commit-vote envelope.
     ///
     /// # Errors
     ///
@@ -1463,7 +1435,7 @@ impl Vote {
         }
     }
     /// Borrow the canonical paired-Pasta Commit-vote seal payload when this vote certifies a
-    /// non-empty Kagemusha V1 top-up root or carries an epoch-boundary roster rotation.
+    /// non-empty KAGEMUSHA V1 top-up root or carries an epoch-boundary roster rotation.
     ///
     /// # Errors
     ///
@@ -1587,7 +1559,7 @@ impl QuorumCertificate {
         }
     }
     /// Borrow the ordinary BLS aggregate from either its raw representation or
-    /// the required Kagemusha V1 CommitQC envelope.
+    /// the required KAGEMUSHA V1 CommitQC envelope.
     ///
     /// # Errors
     ///
@@ -1595,24 +1567,21 @@ impl QuorumCertificate {
     /// with the certificate phase/top-up commitment.
     pub fn bls_aggregate_signature(&self) -> Result<&[u8], ValidationError> {
         match self.kagemusha_finality_seal_payload()? {
-            Some(_) => {
-                decode_kagemusha_consensus_signature_envelope_v1(&self.aggregate_signature)?
-                    .map(|parts| parts.bls_signature)
-                    .ok_or(ValidationError::InvalidKagemushaSignatureEnvelope)
-            }
+            Some(_) => decode_kagemusha_consensus_signature_envelope_v1(&self.aggregate_signature)?
+                .map(|parts| parts.bls_signature)
+                .ok_or(ValidationError::InvalidKagemushaSignatureEnvelope),
             None => Ok(&self.aggregate_signature),
         }
     }
     /// Borrow the canonical paired-Pasta CommitQC seal bundle payload when the certificate
-    /// commits a non-empty Kagemusha V1 top-up root or an epoch-boundary roster rotation.
+    /// commits a non-empty KAGEMUSHA V1 top-up root or an epoch-boundary roster rotation.
     ///
     /// # Errors
     ///
     /// Returns an error when a required envelope is absent, an envelope occurs
     /// on another certificate kind, or its framing is malformed.
     pub fn kagemusha_finality_seal_payload(&self) -> Result<Option<&[u8]>, ValidationError> {
-        let envelope =
-            decode_kagemusha_consensus_signature_envelope_v1(&self.aggregate_signature)?;
+        let envelope = decode_kagemusha_consensus_signature_envelope_v1(&self.aggregate_signature)?;
         let commit = self.phase == GlobalPhase::Commit;
         let required = commit && self.execution_commitment.kagemusha_top_up_count != 0;
         match (commit, required, envelope) {
@@ -4101,7 +4070,7 @@ pub enum ValidationError {
     InvalidNexusAmxContextHash,
     /// The mandatory process-local execution-policy commitment is zero or non-canonical.
     InvalidExecutionPolicyHash,
-    /// The mandatory Kagemusha V1 mint-finality epoch-roster commitment is zero.
+    /// The mandatory KAGEMUSHA V1 mint-finality epoch-roster commitment is zero.
     InvalidKagemushaMintFinalityEpochId,
     /// The embedded public Pasta roster does not exactly match its context commitment/election.
     InvalidKagemushaMintFinalityEpochRoster,
@@ -4148,7 +4117,7 @@ pub enum ValidationError {
     MissingAggregateSignature,
     /// A signature or aggregate exceeds the protocol allocation bound.
     SignatureTooLarge,
-    /// A paired-Pasta Kagemusha V1 signature envelope is missing,
+    /// A paired-Pasta KAGEMUSHA V1 signature envelope is missing,
     /// unexpected, malformed, or uses the wrong vote/certificate kind.
     InvalidKagemushaSignatureEnvelope,
     /// Too few distinct validators signed.
@@ -4290,10 +4259,10 @@ impl fmt::Display for ValidationError {
                 f.write_str("height context has an invalid execution-policy hash")
             }
             Self::InvalidKagemushaMintFinalityEpochId => {
-                f.write_str("height context has an invalid Kagemusha V1 mint-finality epoch id")
+                f.write_str("height context has an invalid KAGEMUSHA V1 mint-finality epoch id")
             }
             Self::InvalidKagemushaMintFinalityEpochRoster => f.write_str(
-                "height context Kagemusha V1 mint-finality roster does not match its commitment",
+                "height context KAGEMUSHA V1 mint-finality roster does not match its commitment",
             ),
             Self::WrongHeightContext => f.write_str("message is bound to another height context"),
             Self::TooManySigners => f.write_str("signer count exceeds the wire range"),
@@ -4345,7 +4314,7 @@ impl fmt::Display for ValidationError {
             }
             Self::SignatureTooLarge => f.write_str("consensus signature exceeds protocol bound"),
             Self::InvalidKagemushaSignatureEnvelope => {
-                f.write_str("Kagemusha V1 consensus signature envelope is invalid")
+                f.write_str("KAGEMUSHA V1 consensus signature envelope is invalid")
             }
             Self::InsufficientSignerCount => {
                 f.write_str("insufficient distinct validator signatures")
@@ -4597,15 +4566,11 @@ pub(crate) fn test_kagemusha_mint_finality_roster(
         validators: roster
             .iter()
             .enumerate()
-            .map(
-                |(index, validator)| KagemushaMintFinalityValidatorKeysV1 {
-                    validator: validator.validator.clone(),
-                    eq_proof_public_key: [u8::try_from(index + 1).expect("small fixture roster");
-                        32],
-                    ep_proof_public_key: [u8::try_from(index + 17).expect("small fixture roster");
-                        32],
-                },
-            )
+            .map(|(index, validator)| KagemushaMintFinalityValidatorKeysV1 {
+                validator: validator.validator.clone(),
+                eq_proof_public_key: [u8::try_from(index + 1).expect("small fixture roster"); 32],
+                ep_proof_public_key: [u8::try_from(index + 17).expect("small fixture roster"); 32],
+            })
             .collect(),
     }
 }
@@ -4613,6 +4578,17 @@ pub(crate) fn test_kagemusha_mint_finality_roster(
 /// Build deterministic signed-genesis context parameters for unit tests.
 #[cfg(test)]
 pub(crate) fn test_genesis_context_parameters() -> SumeragiV2GenesisContextParameters {
+    SumeragiV2GenesisContextParameters::recommended()
+}
+
+/// Build deterministic network-independent KAGEMUSHA genesis authority for unit tests.
+#[cfg(test)]
+pub(crate) fn test_kagemusha_mint_finality_genesis_parameters()
+-> crate::isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1 {
+    use crate::isi::kagemusha_v1::{
+        KagemushaMintFinalityEpochRosterTemplateV1, KagemushaMintFinalityGenesisParametersV1,
+    };
+
     let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
         Hash::new(b"Sumeragi v2 unit-test genesis"),
     ));
@@ -4627,10 +4603,15 @@ pub(crate) fn test_genesis_context_parameters() -> SumeragiV2GenesisContextParam
         })
         .collect::<Vec<_>>();
     roster.sort_by(|left, right| left.validator.cmp(&right.validator));
-    SumeragiV2GenesisContextParameters::recommended(
-        test_kagemusha_mint_finality_roster(network_id, 0, &roster),
-        None,
-    )
+    let bound = test_kagemusha_mint_finality_roster(network_id, 0, &roster);
+    KagemushaMintFinalityGenesisParametersV1 {
+        epoch_roster: KagemushaMintFinalityEpochRosterTemplateV1 {
+            version: bound.version,
+            epoch: bound.epoch,
+            validators: bound.validators,
+        },
+        next_epoch_roster: None,
+    }
 }
 include!("consensus_v2_tests.rs");
 
@@ -4671,14 +4652,13 @@ mod terminal_height_context_tests {
                 )),
                 payload_hash: Hash::new(b"terminal-height parent payload"),
             },
-            execution_commitment:
-                ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-                    Hash::new(b"terminal-height parent state"),
-                    Hash::new(b"terminal-height post state"),
-                    Hash::new(b"terminal-height ordinary writes"),
-                    1,
-                    Hash::new(b"terminal-height executed block wire"),
-                ),
+            execution_commitment: ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                Hash::new(b"terminal-height parent state"),
+                Hash::new(b"terminal-height post state"),
+                Hash::new(b"terminal-height ordinary writes"),
+                1,
+                Hash::new(b"terminal-height executed block wire"),
+            ),
             signers: vec![0, 1, 2],
             aggregate_signature: vec![0xA5; 48],
         };

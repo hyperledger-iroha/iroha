@@ -88,7 +88,7 @@ function acceptingNativeVerifier(calls = undefined) {
     privateSettlementVerifyCommitteeProofResponseV1(...arguments_) {
       calls?.committee.push(arguments_);
     },
-    privateSettlementVerifyAuditorCapsuleResponseV1(...arguments_) {
+    privateSettlementVerifyAuditorCapsuleResponseWithRequestV1(...arguments_) {
       calls?.capsule.push(arguments_);
     },
     privateSettlementVerifyAuditApprovalResponseV1(...arguments_) {
@@ -109,6 +109,7 @@ function auditApprovalRequest(networkId = attestationNetworkId()) {
   return new AtomicPrivateSettlementPreparedRequestV1(
     AtomicPrivateSettlementOperationV1.AUDIT_APPROVAL,
     JSON.stringify({
+      audit_policy: fixture.responses.auditor_capsule.access_audit_policy,
       approval: {
         body: {
           version: 1,
@@ -128,6 +129,15 @@ function auditApprovalRequest(networkId = attestationNetworkId()) {
         },
         signature: "opaque-native-signature",
       },
+    }),
+  );
+}
+
+function auditorCapsuleRequest() {
+  return new AtomicPrivateSettlementPreparedRequestV1(
+    AtomicPrivateSettlementOperationV1.AUDITOR_CAPSULE,
+    JSON.stringify({
+      audit_policy: fixture.responses.auditor_capsule.access_audit_policy,
     }),
   );
 }
@@ -171,7 +181,7 @@ test("settlement identifiers enforce marker, checksum, and canonical literals", 
 test("prepared requests are operation-bound, strict, redacted, and erasable", () => {
   const prepared = new AtomicPrivateSettlementPreparedRequestV1(
     AtomicPrivateSettlementOperationV1.AUDIT_APPROVAL,
-    '{"approval":{"signature":"canary-secret"}}',
+    '{"audit_policy":{},"approval":{"signature":"canary-secret"}}',
   );
   assert.match(prepared.toString(), /body=\[REDACTED\]/u);
   assert.doesNotMatch(prepared.toString(), /canary-secret/u);
@@ -476,9 +486,12 @@ test("auditor capsule requires one exact nonzero authoritative height", async ()
       return response(valid, target);
     },
   });
-  const received = await client.getAuditorCapsule(fixture.identifiers.payload_hex, {
-    roleHeaderProvider: roleHeaders,
-  });
+  const capsuleRequest = auditorCapsuleRequest();
+  const received = await client.getAuditorCapsule(
+    fixture.identifiers.payload_hex,
+    capsuleRequest,
+    { roleHeaderProvider: roleHeaders },
+  );
   assert.deepEqual(
     JSON.parse(new TextDecoder().decode(received.bytes())),
     valid,
@@ -490,6 +503,7 @@ test("auditor capsule requires one exact nonzero authoritative height", async ()
     )),
     [
       Buffer.from(jsonBytes(valid)).toString("hex"),
+      Buffer.from(capsuleRequest.bytes()).toString("hex"),
       attestationNetworkId().slice(5, 69).toLowerCase(),
       fixture.identifiers.payload_hex,
       roleHeaders()["x-iroha-operator-public-key"],
@@ -514,9 +528,11 @@ test("auditor capsule requires one exact nonzero authoritative height", async ()
       },
     });
     await assert.rejects(
-      () => invalid.getAuditorCapsule(fixture.identifiers.payload_hex, {
-        roleHeaderProvider: roleHeaders,
-      }),
+      () => invalid.getAuditorCapsule(
+        fixture.identifiers.payload_hex,
+        auditorCapsuleRequest(),
+        { roleHeaderProvider: roleHeaders },
+      ),
       /atomic private settlement response is invalid/u,
     );
   }
@@ -561,9 +577,11 @@ test("auditor capsule attestation rejects substitutions and malformed scalar typ
       },
     });
     await assert.rejects(
-      () => client.getAuditorCapsule(fixture.identifiers.payload_hex, {
-        roleHeaderProvider: roleHeaders,
-      }),
+      () => client.getAuditorCapsule(
+        fixture.identifiers.payload_hex,
+        auditorCapsuleRequest(),
+        { roleHeaderProvider: roleHeaders },
+      ),
       /atomic private settlement response is invalid/u,
     );
   }
@@ -576,9 +594,11 @@ test("auditor capsule attestation rejects substitutions and malformed scalar typ
     },
   });
   await assert.rejects(
-    () => wrongContext.getAuditorCapsule(fixture.identifiers.payload_hex, {
-      roleHeaderProvider: roleHeaders,
-    }),
+    () => wrongContext.getAuditorCapsule(
+      fixture.identifiers.payload_hex,
+      auditorCapsuleRequest(),
+      { roleHeaderProvider: roleHeaders },
+    ),
     /response is invalid/u,
   );
 
@@ -590,9 +610,11 @@ test("auditor capsule attestation rejects substitutions and malformed scalar typ
     },
   });
   await assert.rejects(
-    () => unconfigured.getAuditorCapsule(fixture.identifiers.payload_hex, {
-      roleHeaderProvider: roleHeaders,
-    }),
+    () => unconfigured.getAuditorCapsule(
+      fixture.identifiers.payload_hex,
+      auditorCapsuleRequest(),
+      { roleHeaderProvider: roleHeaders },
+    ),
     /configured settlement networkId/u,
   );
   assert.equal(fetched, false);
@@ -773,7 +795,7 @@ test("committee proof is network-bound and restricted routes fail closed nativel
   assert.equal(fetched, false);
 
   const rejecting = acceptingNativeVerifier();
-  rejecting.privateSettlementVerifyAuditorCapsuleResponseV1 = () => {
+  rejecting.privateSettlementVerifyAuditorCapsuleResponseWithRequestV1 = () => {
     throw new Error("LEAK_CANARY_NATIVE_RESPONSE");
   };
   const rejected = new AtomicPrivateSettlementToriiClientV1("https://torii.example", {
@@ -786,6 +808,7 @@ test("committee proof is network-bound and restricted routes fail closed nativel
   await assert.rejects(
     () => rejected.getAuditorCapsule(
       fixture.identifiers.payload_hex,
+      auditorCapsuleRequest(),
       { roleHeaderProvider: roleHeaders },
     ),
     (error) => {

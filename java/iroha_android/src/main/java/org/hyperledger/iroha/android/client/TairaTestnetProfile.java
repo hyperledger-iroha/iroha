@@ -15,13 +15,13 @@ public final class TairaTestnetProfile {
   /** Canonical I105 address discriminant for Taira. */
   public static final int I105_DISCRIMINANT = 369;
 
-  /** Canonical Digital Shekel asset-definition ID used by Kagemusha V1 on Taira. */
+  /** Canonical Digital Shekel asset-definition ID used by KAGEMUSHA V1 on Taira. */
   public static final String KAGEMUSHA_ASSET_DEFINITION_ID = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
 
-  /** Canonical Digital Shekel alias used by Kagemusha V1 on Taira. */
+  /** Canonical Digital Shekel alias used by KAGEMUSHA V1 on Taira. */
   public static final String KAGEMUSHA_ASSET_ALIAS = "ds#boi.is";
 
-  /** Canonical Digital Shekel fixed-point scale used by Kagemusha V1 on Taira. */
+  /** Canonical Digital Shekel fixed-point scale used by KAGEMUSHA V1 on Taira. */
   public static final int KAGEMUSHA_ASSET_SCALE = 2;
 
   /** Public Taira XOR asset-definition ID used for transaction fees. */

@@ -2786,7 +2786,7 @@ fn decided_mixed_carrier_accepts_canonical_successor_while_local_sidecars_lag() 
         .reopen(successor_context, true)
         .expect("open successor while predecessor sidecars remain pending");
     let (autonomous_source_block, mut autonomous_proposal) =
-        planned_lane_candidate_block_for_route_at_view(
+        planned_autonomous_lane_candidate_block_for_route_at_view(
             &successor,
             &keys,
             0,
@@ -2966,13 +2966,29 @@ fn decided_mixed_carrier_accepts_canonical_successor_while_local_sidecars_lag() 
         .expect("persist exact raw successor carrier");
     let successor_finality =
         verified_finality_artifact_for_block(&successor, &keys, &executed_successor_block);
-    let successor_receipt = KuraV2CommitReceipt::for_test(&successor_finality);
+    let successor_receipt = successor
+        .kura
+        .store_v2_finality_artifact(&successor_finality)
+        .expect("persist exact raw-successor finality authority");
     let committed_successor =
         ValidBlock::committed_from_replay_signed_block(executed_successor_block.clone());
     commit_test_block_to_state(
         successor.state.as_ref(),
         &committed_successor,
         &successor.context,
+    );
+    assert!(
+        successor
+            .canonical_finalized_autonomous_payload_for_vote_body(
+                &autonomous_payload
+                    .origin_proposal
+                    .vote_body(CertPhase::Prepare),
+            )
+            .expect("strict scanner accepts an exact canonical raw ordinary predecessor")
+            .is_some_and(|payload| payload
+                .origin_proposal
+                .same_consensus_identity(&autonomous_payload.origin_proposal)),
+        "the strict finalized-carrier scanner must match block admission's exact raw-predecessor fallback",
     );
     assert!(
         !canonical_v2_lane_payload_matches_kura(
@@ -3112,6 +3128,116 @@ fn decided_mixed_carrier_accepts_canonical_successor_while_local_sidecars_lag() 
             .kura
             .lane_block_application_receipt_available(&successor_proposal)
     );
+}
+#[test]
+fn finalized_carrier_malformed_cross_kind_fail_stops_proposal_and_payload_ingress() {
+    for ingress_payload in [false, true] {
+        let (mut adapter, keys) =
+            fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
+        let (source_block, mut proposal) =
+            planned_autonomous_lane_candidate_block_at_view(&adapter, &keys, 0);
+        proposal.payload_block_hint = None;
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+        let entrypoint = source_block
+            .external_entrypoints_cloned()
+            .next()
+            .expect("cross-kind carrier autonomous entrypoint");
+        let (payload, producer) = signed_autonomous_payload_for_entrypoint(
+            &adapter,
+            &keys,
+            &proposal,
+            entrypoint,
+            b"cross-kind-carrier-queue-plan-admission-binding",
+            b"cross-kind-carrier-reservation-owner",
+            "deterministic cross-kind carrier producer",
+            "cross-kind carrier producer key",
+            "signed cross-kind carrier autonomous payload",
+        );
+        let envelope = autonomous_lane_payload_envelope(
+            &payload,
+            adapter.native_network_id(),
+            adapter.context.epoch,
+        )
+        .expect("encode cross-kind carrier autonomous envelope");
+        let mut ordinary_alias = ownership_from_proposal(&proposal);
+        ordinary_alias.accepted_transaction_hashes =
+            vec![Hash::new(b"cross-kind ordinary replay identity")];
+        let ordinary_replay = ordinary_alias
+            .compute_replay_hashes()
+            .expect("derive distinct cross-kind ordinary replay material");
+        ordinary_alias.subject_hash = ordinary_replay.subject_hash;
+        ordinary_alias.payload_ownership_hash = ordinary_replay.payload_ownership_hash;
+        ordinary_alias.rbc_instance_hash = ordinary_replay.rbc_instance_hash;
+        ordinary_alias.lane_block_descriptor_hash =
+            Some(ordinary_replay.lane_block_descriptor_hash);
+        let header = BlockHeader::new(
+            NonZeroU64::new(adapter.context.height).expect("non-zero carrier height"),
+            adapter
+                .context
+                .parent_commit_qc
+                .as_ref()
+                .map(|qc| qc.subject.block_hash),
+            None,
+            None,
+            adapter.context.height,
+            0,
+        );
+        let mut builder = BlockBuilder::new(header);
+        builder.set_execution_context(Some(
+            BlockExecutionContextBundle::new(Vec::new())
+                .with_lane_payload_ownerships(vec![ordinary_alias])
+                .with_autonomous_lane_payloads(vec![envelope]),
+        ));
+        let leader = usize::try_from(adapter.context.leader(0)).expect("global leader index");
+        let carrier = builder.build_with_signature(
+            u64::try_from(leader).expect("global leader index fits u64"),
+            keys[leader].private_key(),
+        );
+        adapter
+            .kura
+            .store_block(carrier.clone())
+            .expect("persist malformed cross-kind carrier fixture");
+        let finality = verified_finality_artifact_for_block(&adapter, &keys, &carrier);
+        let _finality_receipt = adapter
+            .kura
+            .store_v2_finality_artifact(&finality)
+            .expect("persist malformed cross-kind carrier finality");
+        let committed = ValidBlock::committed_from_replay_signed_block(carrier);
+        commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
+
+        let scanner_error = adapter
+            .canonical_finalized_autonomous_payload_for_vote_body(
+                &proposal.vote_body(CertPhase::Prepare),
+            )
+            .expect_err("the strict scanner must reject an ordinary/autonomous route alias");
+        assert!(
+            scanner_error.contains("repeats a route across ordinary/autonomous payloads"),
+            "unexpected strict-scanner error: {scanner_error}"
+        );
+        assert!(!adapter.output_guard.restart_required());
+
+        let message = if ingress_payload {
+            BlockMessage::LaneExecutablePayload(payload)
+        } else {
+            BlockMessage::LaneBlockProposal(proposal.clone())
+        };
+        let sender = if ingress_payload {
+            producer
+        } else {
+            lane_proposal_author(&proposal)
+                .expect("cross-kind proposal author")
+                .clone()
+        };
+        assert_eq!(
+            accept_lane_message_from(&mut adapter, message, sender, 0),
+            V2LaneIngressOutcome::Rejected
+        );
+        assert!(
+            adapter.output_guard.restart_required(),
+            "a malformed durable carrier must fail-stop {} ingress before any early rejection",
+            if ingress_payload { "payload" } else { "proposal" }
+        );
+    }
 }
 #[test]
 fn cold_restart_hydrates_two_link_raw_lane_chain_without_receipts() {

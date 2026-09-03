@@ -6,7 +6,7 @@ import java.net.URI;
 import org.hyperledger.iroha.android.model.NetworkId;
 import org.junit.Test;
 
-/** Tests for the public Taira config and Kagemusha V1 asset profile. */
+/** Tests for the public Taira config and KAGEMUSHA V1 asset profile. */
 public final class TairaTestnetProfileTests {
   private static final String TEST_NETWORK_ID =
       "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Publish one authenticated, reproducible NoritoBridge XCFramework archive."""
+"""Publish one authenticated, reproducible NoritoBridge XCFramework archive.
+
+Requires isolated no-site Python 3.12 and an explicit SOURCE_DATE_EPOCH.
+Dirty local artifacts require explicit opt-in; provenance remains mandatory.
+"""
 
 from __future__ import annotations
 
@@ -465,7 +469,7 @@ def _load_generation_validator():
     return module
 
 
-def _validate_generation(snapshot: Path):
+def _validate_generation(snapshot: Path, *, allow_dirty_source: bool = False):
     validator = _load_generation_validator()
     manifest_path = snapshot / MANIFEST_NAME
     manifest_link = snapshot.parent / MANIFEST_NAME
@@ -480,6 +484,7 @@ def _validate_generation(snapshot: Path):
             expected_link_target=expected_link_target,
             swift_loader=None,
             verify_repository_provenance=True,
+            allow_dirty_source=allow_dirty_source,
         )
     except validator.ValidationError as error:
         fail(f"XCFramework generation is not canonical: {error}")
@@ -780,6 +785,8 @@ def archive_xcframework(
     source_raw: str,
     output_raw: str,
     scratch_raw: str,
+    *,
+    allow_dirty_source: bool = False,
 ) -> tuple[str, int]:
     repository_root = _repository_root()
     source = _canonical_existing_directory(source_raw, "NoritoBridge XCFramework")
@@ -827,7 +834,9 @@ def archive_xcframework(
                 f"[norito-bridge-archive] retained-snapshot={snapshot_container}",
                 file=sys.stderr,
             )
-            validator = _validate_generation(snapshot)
+            validator = _validate_generation(
+                snapshot, allow_dirty_source=allow_dirty_source
+            )
             _validate_native_binaries(snapshot, validator)
             temporary_archive = _write_archive(
                 snapshot,
@@ -864,6 +873,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--xcframework", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--scratch-dir", required=True)
+    parser.add_argument(
+        "--allow-dirty-source",
+        action="store_true",
+        help="allow fingerprint-bound local integration artifacts; never release evidence",
+    )
     return parser.parse_args()
 
 
@@ -880,6 +894,7 @@ def main() -> None:
         args.xcframework,
         args.output,
         args.scratch_dir,
+        allow_dirty_source=args.allow_dirty_source,
     )
     print(f"[norito-bridge-archive] sha256={digest} bytes={size} path={args.output}")
 

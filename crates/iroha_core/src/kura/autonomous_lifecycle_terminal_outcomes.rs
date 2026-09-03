@@ -23,6 +23,19 @@ enum LaneExecutablePayloadPersistenceMode<'bootstrap> {
     /// Live so canonical terminal reconciliation retains a complete lifecycle unit.
     SignedBootstrap(&'bootstrap AutonomousLifecycleBootstrapRecoveryAuthority),
 }
+impl LaneExecutablePayloadPersistenceMode<'_> {
+    fn authorizes_global_hint_rebind(self) -> bool {
+        match self {
+            #[cfg(test)]
+            Self::Ordinary => false,
+            Self::SignedBootstrap(authority) => {
+                Kura::autonomous_payload_custody_source_authorizes_hint_rebind(
+                    authority.bootstrap.body.custody.source,
+                )
+            }
+        }
+    }
+}
 #[must_use = "the authenticated bootstrap permit must be completed or deliberately dropped"]
 pub(crate) struct AutonomousLifecycleBootstrapCompletionPermit<'queue> {
     authority: AutonomousLifecycleBootstrapRecoveryAuthority,
@@ -125,7 +138,163 @@ struct AutonomousLifecycleTerminalPendingPublicationPlan {
     outcome: AutonomousLifecycleTerminalOutcomeV1,
     pending_bytes: Option<Vec<u8>>,
 }
+#[derive(Debug, Default, PartialEq, Eq)]
+struct AutonomousTerminalEvidenceReferences {
+    receipt_heights: BTreeSet<u64>,
+    replica_heights: BTreeSet<u64>,
+}
 impl Kura {
+    /// Collect exact global carrier identities referenced by every active or
+    /// archived canonical-replica terminal outcome.
+    ///
+    /// This is an early startup preservation guard, not the authorization
+    /// audit. It runs before canonical-storage recovery can classify or remove
+    /// a DA sidecar, so it deliberately trusts no route catalog and scans the
+    /// same bounded active/retired roots as the later peer-bound audit. The
+    /// complete authenticated validation still runs after Kura construction.
+    fn canonical_replica_terminal_carrier_pins_for_store(
+        store_root: &Path,
+        active_blocks_root: &Path,
+    ) -> Result<BTreeMap<u64, HashOf<BlockHeader>>> {
+        let mut candidate_roots = vec![
+            store_root.join("blocks"),
+            store_root.join("retired").join("blocks"),
+            store_root.join("retired").join("lane_geometry"),
+            active_blocks_root.to_path_buf(),
+        ];
+        candidate_roots.sort_by_key(|path| path.components().count());
+        let mut roots = Vec::<PathBuf>::new();
+        for root in candidate_roots {
+            if !roots.iter().any(|existing| root.starts_with(existing)) {
+                roots.push(root);
+            }
+        }
+        let mut pending = roots
+            .into_iter()
+            .map(|directory| (directory, 0_usize))
+            .collect::<Vec<_>>();
+        let mut entries_seen = 0_usize;
+        let mut pins = BTreeMap::new();
+        while let Some((directory, depth)) = pending.pop() {
+            if depth > AUTONOMOUS_LIFECYCLE_GENERATION_AUDIT_MAX_DEPTH {
+                return Err(Self::invalid_lane_artifact_error(
+                    directory,
+                    "canonical replica carrier-pin inventory exceeds its directory-depth bound",
+                ));
+            }
+            let directory_entries = match std::fs::read_dir(&directory) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == ErrorKind::NotFound => continue,
+                Err(error) => return Err(Error::IO(error, directory)),
+            };
+            for directory_entry in directory_entries {
+                let directory_entry =
+                    directory_entry.map_err(|error| Error::IO(error, directory.clone()))?;
+                entries_seen = entries_seen.checked_add(1).ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        directory.clone(),
+                        "canonical replica carrier-pin inventory count overflows",
+                    )
+                })?;
+                if entries_seen > AUTONOMOUS_LIFECYCLE_GENERATION_AUDIT_MAX_ENTRIES {
+                    return Err(Self::invalid_lane_artifact_error(
+                        directory,
+                        "canonical replica carrier-pin inventory exceeds its hard entry bound",
+                    ));
+                }
+                let path = directory_entry.path();
+                let file_type = directory_entry
+                    .file_type()
+                    .map_err(|error| Error::IO(error, path.clone()))?;
+                if file_type.is_symlink() {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "canonical replica carrier-pin inventory encountered a symlink",
+                    ));
+                }
+                if file_type.is_dir() {
+                    pending.push((path, depth.saturating_add(1)));
+                    continue;
+                }
+                let Some(name) = path.file_name().and_then(std::ffi::OsStr::to_str) else {
+                    continue;
+                };
+                let coordinates = Self::autonomous_lifecycle_terminal_outcome_coordinates(name);
+                if coordinates.is_none() {
+                    if name.starts_with(AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_PREFIX) {
+                        return Err(Self::invalid_lane_artifact_error(
+                            path,
+                            "canonical replica carrier-pin inventory found a malformed terminal outcome path",
+                        ));
+                    }
+                    continue;
+                }
+                if !file_type.is_file() {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "canonical replica carrier-pin outcome is not a regular file",
+                    ));
+                }
+                let parent = path.parent().ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        path.clone(),
+                        "canonical replica carrier-pin outcome has no parent",
+                    )
+                })?;
+                let bytes = Self::read_regular_sidecar_bytes_for(
+                    store_root,
+                    &path,
+                    parent,
+                    AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES,
+                )?
+                .ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        path.clone(),
+                        "canonical replica carrier-pin outcome disappeared during inventory",
+                    )
+                })?;
+                let outcome = Self::decode_autonomous_lifecycle_terminal_outcome(&path, &bytes)?;
+                if !matches!(
+                    outcome.basis(),
+                    AutonomousLifecycleTerminalOutcomeBasisV1::CanonicalReplica { .. }
+                ) {
+                    continue;
+                }
+                let (lane_block_height, proposal_height) =
+                    coordinates.expect("terminal coordinates were checked above");
+                if outcome.binding().lane_block_height != lane_block_height
+                    || outcome.binding().proposal_height != proposal_height
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "canonical replica carrier-pin outcome changed its path identity",
+                    ));
+                }
+                let AutonomousLifecycleTerminalOutcomeSourceV1::CanonicalCarrier {
+                    carrier_block_height,
+                    carrier_block_hash,
+                    ..
+                } = outcome.source()
+                else {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "canonical replica carrier-pin outcome has a noncanonical source",
+                    ));
+                };
+                if pins
+                    .insert(carrier_block_height, carrier_block_hash)
+                    .is_some_and(|existing| existing != carrier_block_hash)
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "canonical replica terminal outcomes conflict on a carrier height",
+                    ));
+                }
+            }
+        }
+        Ok(pins)
+    }
+
     fn active_autonomous_lifecycle_attempt_inventory_for_process_record(
         &self,
         process_record: &AutonomousLifecycleProcessGenerationRecordV1,
@@ -483,10 +652,10 @@ impl Kura {
                 "autonomous lifecycle inventory contains an orphan local cursor",
             ));
         }
-        if terminal_outcomes
-            .keys()
-            .any(|identity| !attempts.contains_key(identity) || !cursors.contains_key(identity))
-        {
+        if terminal_outcomes.iter().any(|(identity, (_, outcome))| {
+            outcome.basis() == AutonomousLifecycleTerminalOutcomeBasisV1::OwnedLifecycle
+                && (!attempts.contains_key(identity) || !cursors.contains_key(identity))
+        }) {
             return Err(Self::invalid_lane_artifact_error(
                 directory,
                 "autonomous lifecycle inventory contains an orphan terminal outcome",
@@ -521,6 +690,44 @@ impl Kura {
                 "autonomous payload attempt lacks its exact lifecycle cursor or signed payload-durable bootstrap",
             ));
         }
+        for (identity, (path, outcome)) in &terminal_outcomes {
+            if !matches!(
+                outcome.basis(),
+                AutonomousLifecycleTerminalOutcomeBasisV1::CanonicalReplica { .. }
+            ) {
+                continue;
+            }
+            if attempts.contains_key(identity)
+                || cursors.contains_key(identity)
+                || bootstrap_stages.contains_key(identity)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    path.clone(),
+                    "canonical replica terminal outcome overlaps owned lifecycle custody",
+                ));
+            }
+            self.validate_canonical_replica_terminal_outcome_locked(&entry, outcome)?;
+            if outcome.is_complete() {
+                continue;
+            }
+            let group = outcome.binding().reservation_group_binding();
+            if planner_covered.get(&group.reservation_group_hash) == Some(&group) {
+                if !consumed_planner_covered.insert(group.reservation_group_hash) {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path.clone(),
+                        "planner-covered canonical replica Pending group aliases another outcome",
+                    ));
+                }
+            } else {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::WouldBlock,
+                        "canonical replica Pending terminal outcome must be reconciled before lifecycle attempt inventory",
+                    ),
+                    path.clone(),
+                ));
+            }
+        }
         let mut inventory = Vec::new();
         inventory.try_reserve_exact(attempts.len())?;
         for (identity, executable_payload) in attempts {
@@ -533,6 +740,12 @@ impl Kura {
                     })?;
             }
             if let Some((path, outcome)) = terminal_outcomes.remove(&identity) {
+                if outcome.basis() != AutonomousLifecycleTerminalOutcomeBasisV1::OwnedLifecycle {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "canonical replica terminal outcome aliases an owned lifecycle attempt",
+                    ));
+                }
                 outcome
                     .validate_for_payload(&executable_payload)
                     .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
@@ -731,7 +944,7 @@ impl Kura {
                 "autonomous lifecycle terminal outcome exceeds its hard byte limit",
             ));
         }
-        let outcome = norito::decode_canonical::<AutonomousLifecycleTerminalOutcomeV1>(bytes)
+        let outcome = AutonomousLifecycleTerminalOutcomeV1::decode_framed_unvalidated(bytes)
             .map_err(|error| match error {
                 norito::Error::NonCanonicalEncoding => Self::invalid_lane_artifact_error(
                     path.to_path_buf(),
@@ -766,6 +979,210 @@ impl Kura {
             ));
         }
         Ok(outcome)
+    }
+    /// Collect exact active pair heights referenced by Pending or Complete
+    /// terminal outcomes without reading either dependency pair.
+    ///
+    /// This structural pass must run before crash-temp recovery: the temp may
+    /// already contain a compacted pair, and promoting it is legal only after
+    /// proving that it retained every independently durable outcome reference.
+    /// The caller holds the full prune/canonical/geometry/sidecar lock corridor.
+    fn active_autonomous_terminal_evidence_references_locked(
+        &self,
+        entry: &LaneConfigEntry,
+    ) -> Result<AutonomousTerminalEvidenceReferences> {
+        let directory = Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root));
+        let directory_entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                return Ok(AutonomousTerminalEvidenceReferences::default());
+            }
+            Err(error) => return Err(Error::IO(error, directory)),
+        };
+        let (active_incarnation, activation_height) = self.active_lane_incarnation_marker(entry)?;
+        let mut references = AutonomousTerminalEvidenceReferences::default();
+        let mut entries_seen = 0_usize;
+        let mut bytes_seen = 0_u64;
+        for directory_entry in directory_entries {
+            let directory_entry =
+                directory_entry.map_err(|error| Error::IO(error, directory.clone()))?;
+            entries_seen = entries_seen.checked_add(1).ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    directory.clone(),
+                    "terminal evidence reference inventory count overflows",
+                )
+            })?;
+            if entries_seen > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES {
+                return Err(Self::invalid_lane_artifact_error(
+                    directory,
+                    "terminal evidence reference inventory exceeds its hard entry bound",
+                ));
+            }
+            let path = directory_entry.path();
+            let name = directory_entry.file_name().into_string().map_err(|_| {
+                Self::invalid_lane_artifact_error(
+                    path.clone(),
+                    "terminal evidence reference inventory found a non-UTF-8 artifact",
+                )
+            })?;
+            let Some((lane_block_height, proposal_height)) =
+                Self::autonomous_lifecycle_terminal_outcome_coordinates(&name)
+            else {
+                if name.starts_with(AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_PREFIX) {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "terminal evidence reference inventory found a malformed outcome path",
+                    ));
+                }
+                continue;
+            };
+            let bytes = self
+                .read_regular_sidecar_bytes(
+                    &path,
+                    &directory,
+                    AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES,
+                )?
+                .ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        path.clone(),
+                        "terminal outcome disappeared during evidence reference inventory",
+                    )
+                })?;
+            bytes_seen = bytes_seen
+                .checked_add(u64::try_from(bytes.len())?)
+                .ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        directory.clone(),
+                        "terminal evidence reference inventory bytes overflow",
+                    )
+                })?;
+            if bytes_seen > AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES as u64 {
+                return Err(Self::invalid_lane_artifact_error(
+                    directory,
+                    "terminal evidence reference inventory exceeds its aggregate byte bound",
+                ));
+            }
+            let outcome = Self::decode_autonomous_lifecycle_terminal_outcome(&path, &bytes)?;
+            let binding = outcome.binding();
+            if binding.lane_id != entry.lane_id
+                || binding.dataspace_id != entry.dataspace_id
+                || binding.lane_incarnation != active_incarnation
+                || binding.proposal_height <= activation_height
+                || binding.lane_block_height != lane_block_height
+                || binding.proposal_height != proposal_height
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "terminal evidence reference targets stale or mismatched lane geometry",
+                ));
+            }
+            if matches!(
+                outcome.source(),
+                AutonomousLifecycleTerminalOutcomeSourceV1::CanonicalCarrier { .. }
+            ) {
+                references.receipt_heights.insert(lane_block_height);
+            }
+            if matches!(
+                outcome.basis(),
+                AutonomousLifecycleTerminalOutcomeBasisV1::CanonicalReplica { .. }
+            ) {
+                references.replica_heights.insert(lane_block_height);
+            }
+        }
+        Ok(references)
+    }
+
+    /// Authenticate every structurally collected dependency after crash-temp
+    /// recovery and before any pair can be compacted.
+    fn validate_active_autonomous_terminal_evidence_references_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        expected: &AutonomousTerminalEvidenceReferences,
+    ) -> Result<()> {
+        let observed = self.active_autonomous_terminal_evidence_references_locked(entry)?;
+        if &observed != expected {
+            return Err(Self::invalid_lane_artifact_error(
+                Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root)),
+                "terminal evidence references changed during crash-temp recovery",
+            ));
+        }
+        let directory = Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root));
+        let directory_entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == ErrorKind::NotFound && expected == &observed => {
+                return Ok(());
+            }
+            Err(error) => return Err(Error::IO(error, directory)),
+        };
+        for directory_entry in directory_entries {
+            let directory_entry =
+                directory_entry.map_err(|error| Error::IO(error, directory.clone()))?;
+            let path = directory_entry.path();
+            let Some(name) = path.file_name().and_then(std::ffi::OsStr::to_str) else {
+                continue;
+            };
+            if Self::autonomous_lifecycle_terminal_outcome_coordinates(name).is_none() {
+                continue;
+            }
+            let bytes = self
+                .read_regular_sidecar_bytes(
+                    &path,
+                    &directory,
+                    AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES,
+                )?
+                .ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        path.clone(),
+                        "terminal outcome disappeared during dependency authentication",
+                    )
+                })?;
+            let outcome = Self::decode_autonomous_lifecycle_terminal_outcome(&path, &bytes)?;
+            match outcome.basis() {
+                AutonomousLifecycleTerminalOutcomeBasisV1::CanonicalReplica { .. } => {
+                    if self.local_peer_id.get().is_some() {
+                        self.validate_canonical_replica_terminal_outcome_locked(entry, &outcome)?;
+                    } else {
+                        self.validate_canonical_replica_terminal_outcome_on_startup_locked(
+                            entry, &outcome,
+                        )?;
+                    }
+                }
+                AutonomousLifecycleTerminalOutcomeBasisV1::OwnedLifecycle
+                    if matches!(
+                        outcome.source(),
+                        AutonomousLifecycleTerminalOutcomeSourceV1::CanonicalCarrier { .. }
+                    ) =>
+                {
+                    let binding = outcome.binding();
+                    let record = self
+                        .read_autonomous_lane_block_attempt_record_locked(
+                            entry,
+                            binding.lane_id,
+                            binding.lane_block_height,
+                            binding.proposal_height,
+                            binding.network_id,
+                            binding.epoch,
+                            None,
+                        )?
+                        .ok_or_else(|| {
+                            Self::invalid_lane_artifact_error(
+                                path.clone(),
+                                "owned terminal evidence lost its exact lifecycle attempt",
+                            )
+                        })?;
+                    let payload = &record.artifact.executable_payload;
+                    outcome.validate_for_payload(payload).map_err(|message| {
+                        Self::invalid_lane_artifact_error(path.clone(), message)
+                    })?;
+                    self.autonomous_lifecycle_terminal_source_matches_canonical_carrier_locked(
+                        payload,
+                        outcome.source(),
+                    )?;
+                }
+                AutonomousLifecycleTerminalOutcomeBasisV1::OwnedLifecycle => {}
+            }
+        }
+        Ok(())
     }
     fn validate_autonomous_lifecycle_terminal_outcome_budget(
         related_files: usize,
@@ -845,6 +1262,62 @@ impl Kura {
         source.validate_structure()?;
         Ok(source)
     }
+    /// Require the exact canonical global carrier body while establishing or
+    /// revalidating non-owning replica terminal custody.
+    ///
+    /// Finality, merge-log, receipt, and lane-replica records authenticate
+    /// their own projections, but none alone proves that the complete global
+    /// carrier body remains locally available. Pending and Complete replica
+    /// outcomes therefore keep this body inline or in the exact DA sidecar;
+    /// RemoteOnly storage fails closed until authenticated rehydration.
+    fn require_exact_local_canonical_replica_carrier_body_locked(
+        &self,
+        source: AutonomousLifecycleTerminalOutcomeSourceV1,
+    ) -> Result<()> {
+        let AutonomousLifecycleTerminalOutcomeSourceV1::CanonicalCarrier {
+            merge_epoch_id,
+            merge_entry_hash,
+            carrier_block_height,
+            carrier_block_hash,
+            ..
+        } = source
+        else {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "canonical replica terminal custody has a noncanonical source",
+            ));
+        };
+        let height = usize::try_from(carrier_block_height)
+            .ok()
+            .and_then(NonZeroUsize::new)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "canonical replica terminal carrier height is not representable",
+                )
+            })?;
+        let block = self
+            .get_block_without_merge_sidecar(height)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "canonical replica terminal outcome requires its exact local carrier body",
+                )
+            })?;
+        if block.header().height().get() != carrier_block_height
+            || block.hash() != carrier_block_hash
+            || Self::block_merge_reference(&block).is_none_or(|reference| {
+                reference.entry_hash != merge_entry_hash || reference.epoch_id != merge_epoch_id
+            })
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "canonical replica terminal carrier body changed its source binding",
+            ));
+        }
+        Ok(())
+    }
+
     fn autonomous_lifecycle_terminal_source_matches_canonical_carrier_locked(
         &self,
         payload: &LaneExecutablePayloadV1,
@@ -1407,11 +1880,12 @@ impl Kura {
         }
         let cursor =
             self.read_autonomous_lifecycle_cursor_for_terminal_outcome_locked(entry, payload)?;
-        let pending =
-            AutonomousLifecycleTerminalOutcomeV1::pending(cursor.binding().clone(), source)
-                .map_err(|message| {
-                    Self::invalid_lane_artifact_error(self.store_root.clone(), message)
-                })?;
+        let pending = AutonomousLifecycleTerminalOutcomeV1::pending(
+            cursor.binding().clone(),
+            AutonomousLifecycleTerminalOutcomeBasisV1::OwnedLifecycle,
+            source,
+        )
+        .map_err(|message| Self::invalid_lane_artifact_error(self.store_root.clone(), message))?;
         let path = Self::autonomous_lifecycle_terminal_outcome_path_for_entry(
             entry,
             &self.store_root,
@@ -1431,7 +1905,10 @@ impl Kura {
         )?;
         if let Some(bytes) = current_bytes.as_deref() {
             let current = Self::decode_autonomous_lifecycle_terminal_outcome(&path, bytes)?;
-            if current.binding() != pending.binding() || current.source() != source {
+            if current.binding() != pending.binding()
+                || current.basis() != AutonomousLifecycleTerminalOutcomeBasisV1::OwnedLifecycle
+                || current.source() != source
+            {
                 return Err(Self::invalid_lane_artifact_error(
                     path,
                     "autonomous lifecycle terminal outcome conflicts with its durable pending source",
@@ -1463,6 +1940,706 @@ impl Kura {
             pending_bytes: Some(bytes),
         })
     }
+
+    /// Prepare a canonical terminal outcome for a node which is explicitly
+    /// outside the historical lane committee.
+    ///
+    /// The producer-derived binding is only a stable state-projection witness;
+    /// it does not create an attempt, cursor, Queue reservation, or retirement
+    /// authority. The separate basis binds the exact fully revalidated replica
+    /// bytes so this record can never be confused with owned lifecycle custody.
+    fn prepare_canonical_replica_terminal_outcome_pending_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        payload: &LaneExecutablePayloadV1,
+        source: AutonomousLifecycleTerminalOutcomeSourceV1,
+    ) -> Result<AutonomousLifecycleTerminalPendingPublicationPlan> {
+        let descriptor = &payload.origin_proposal.descriptor;
+        let local_peer = self.local_peer_id.get().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "canonical replica terminal outcome requires a bound local peer identity",
+            )
+        })?;
+        if descriptor
+            .validator_set
+            .iter()
+            .any(|validator| validator == local_peer)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "committee validator cannot substitute canonical replica custody for its lifecycle attempt",
+            ));
+        }
+        if self
+            .read_autonomous_lane_block_attempt_record_locked(
+                entry,
+                descriptor.lane_id,
+                descriptor.lane_block_height,
+                descriptor.proposal_height,
+                payload.network_id,
+                payload.epoch,
+                None,
+            )?
+            .is_some()
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "canonical replica terminal outcome overlaps private lifecycle custody",
+            ));
+        }
+        for (path, label) in [
+            (
+                Self::autonomous_lifecycle_bootstrap_path_for_entry(
+                    entry,
+                    &self.store_root,
+                    descriptor.lane_block_height,
+                    descriptor.proposal_height,
+                ),
+                "bootstrap",
+            ),
+            (
+                Self::autonomous_lifecycle_cursor_path_for_entry(
+                    entry,
+                    &self.store_root,
+                    descriptor.lane_block_height,
+                    descriptor.proposal_height,
+                ),
+                "cursor",
+            ),
+        ] {
+            let parent = path.parent().ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    path.clone(),
+                    "canonical replica lifecycle sidecar has no parent directory",
+                )
+            })?;
+            if self.regular_sidecar_metadata(&path, parent)?.is_some() {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    format!(
+                        "canonical replica terminal outcome overlaps a private lifecycle {label}"
+                    ),
+                ));
+            }
+        }
+        let replica = self
+            .canonical_autonomous_lane_replica_record_locked(
+                entry,
+                descriptor.lane_block_height,
+                Some(payload.network_id),
+                Some(payload.epoch),
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "canonical replica terminal outcome lacks its exact durable replica",
+                )
+            })?;
+        if replica.bundle.executable_payload() != payload {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "canonical replica terminal outcome payload changed",
+            ));
+        }
+        self.require_exact_local_canonical_replica_carrier_body_locked(source)?;
+        self.autonomous_lifecycle_terminal_source_matches_canonical_carrier_locked(
+            payload, source,
+        )?;
+        let reservation_group =
+            lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())
+                .map_err(|message| {
+                    Self::invalid_lane_artifact_error(self.store_root.clone(), message)
+                })?;
+        let (_, finality, _) = self
+            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+                replica.carrier_height,
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "canonical replica terminal outcome lost its carrier finality",
+                )
+            })?;
+        if HashOf::new(&finality) != replica.carrier_finality_hash {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "canonical replica terminal outcome finality changed",
+            ));
+        }
+        let binding = AutonomousLifecycleAttemptBindingV1::from_payload(
+            finality.height_context.id(),
+            descriptor.lane_block_height,
+            payload,
+            reservation_group,
+            &payload.producer,
+        )
+        .map_err(|message| Self::invalid_lane_artifact_error(self.store_root.clone(), message))?;
+        let pending = AutonomousLifecycleTerminalOutcomeV1::pending(
+            binding,
+            AutonomousLifecycleTerminalOutcomeBasisV1::CanonicalReplica {
+                replica_hash: replica.replica_hash()?,
+            },
+            source,
+        )
+        .map_err(|message| Self::invalid_lane_artifact_error(self.store_root.clone(), message))?;
+        let path = Self::autonomous_lifecycle_terminal_outcome_path_for_entry(
+            entry,
+            &self.store_root,
+            descriptor.lane_block_height,
+            descriptor.proposal_height,
+        );
+        let parent = path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                path.clone(),
+                "canonical replica terminal outcome path has no parent directory",
+            )
+        })?;
+        let current_bytes = self.read_regular_sidecar_bytes(
+            &path,
+            parent,
+            AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES,
+        )?;
+        if let Some(bytes) = current_bytes.as_deref() {
+            let current = Self::decode_autonomous_lifecycle_terminal_outcome(&path, bytes)?;
+            if current.binding() != pending.binding()
+                || current.basis() != pending.basis()
+                || current.source() != source
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "canonical replica terminal outcome conflicts with its durable source basis",
+                ));
+            }
+            current
+                .validate_for_payload(payload)
+                .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
+            return Ok(AutonomousLifecycleTerminalPendingPublicationPlan {
+                entry: entry.clone(),
+                identity: (descriptor.lane_block_height, descriptor.proposal_height),
+                path,
+                outcome: current,
+                pending_bytes: None,
+            });
+        }
+        let bytes = pending.encode_framed().map_err(Error::NoritoFrame)?;
+        if bytes.is_empty() || bytes.len() > AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES {
+            return Err(Self::invalid_lane_artifact_error(
+                path,
+                "canonical replica Pending terminal outcome exceeds its hard byte limit",
+            ));
+        }
+        Ok(AutonomousLifecycleTerminalPendingPublicationPlan {
+            entry: entry.clone(),
+            identity: (descriptor.lane_block_height, descriptor.proposal_height),
+            path,
+            outcome: pending,
+            pending_bytes: Some(bytes),
+        })
+    }
+
+    /// Revalidate an explicit canonical-replica outcome without consulting or
+    /// manufacturing private lifecycle custody.
+    ///
+    /// The caller holds the prune, canonical-chain, geometry, and sidecar
+    /// guards. Successful validation returns the exact authenticated payload
+    /// recovered from the replica.
+    fn validate_canonical_replica_terminal_outcome_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        outcome: &AutonomousLifecycleTerminalOutcomeV1,
+    ) -> Result<LaneExecutablePayloadV1> {
+        let local_peer = self.local_peer_id.get().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "canonical replica terminal validation requires a bound local peer identity",
+            )
+        })?;
+        self.validate_canonical_replica_terminal_outcome_for_local_peer_locked(
+            entry,
+            outcome,
+            Some(local_peer),
+        )
+    }
+
+    /// Revalidate startup replica state before the immutable process identity
+    /// has been bound. All durable evidence is authenticated here; the
+    /// committee-membership predicate remains deferred to the contextual
+    /// validator above, which every recovery or completion path must use.
+    fn validate_canonical_replica_terminal_outcome_on_startup_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        outcome: &AutonomousLifecycleTerminalOutcomeV1,
+    ) -> Result<LaneExecutablePayloadV1> {
+        self.validate_canonical_replica_terminal_outcome_for_local_peer_locked(entry, outcome, None)
+    }
+
+    fn validate_canonical_replica_terminal_outcome_for_local_peer_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        outcome: &AutonomousLifecycleTerminalOutcomeV1,
+        local_peer: Option<&PeerId>,
+    ) -> Result<LaneExecutablePayloadV1> {
+        let AutonomousLifecycleTerminalOutcomeBasisV1::CanonicalReplica { replica_hash } =
+            outcome.basis()
+        else {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "canonical replica validation received an owned lifecycle outcome",
+            ));
+        };
+        self.require_exact_local_canonical_replica_carrier_body_locked(outcome.source())?;
+        let binding = outcome.binding();
+        let replica = self
+            .canonical_autonomous_lane_replica_record_locked(
+                entry,
+                binding.lane_block_height,
+                Some(binding.network_id),
+                Some(binding.epoch),
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "canonical replica terminal outcome lost its exact durable replica",
+                )
+            })?;
+        if replica.replica_hash()? != replica_hash {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "canonical replica terminal outcome changed its exact replica hash",
+            ));
+        }
+        let payload = replica.bundle.executable_payload().clone();
+        let descriptor = &payload.origin_proposal.descriptor;
+        if local_peer.is_some_and(|local_peer| {
+            descriptor
+                .validator_set
+                .iter()
+                .any(|validator| validator == local_peer)
+        }) {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "committee validator cannot validate canonical replica basis as local custody",
+            ));
+        }
+        if self
+            .read_autonomous_lane_block_attempt_record_locked(
+                entry,
+                descriptor.lane_id,
+                descriptor.lane_block_height,
+                descriptor.proposal_height,
+                payload.network_id,
+                payload.epoch,
+                None,
+            )?
+            .is_some()
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "canonical replica terminal outcome overlaps private lifecycle custody",
+            ));
+        }
+        for path in [
+            Self::autonomous_lifecycle_bootstrap_path_for_entry(
+                entry,
+                &self.store_root,
+                descriptor.lane_block_height,
+                descriptor.proposal_height,
+            ),
+            Self::autonomous_lifecycle_cursor_path_for_entry(
+                entry,
+                &self.store_root,
+                descriptor.lane_block_height,
+                descriptor.proposal_height,
+            ),
+        ] {
+            let parent = path.parent().ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    path.clone(),
+                    "canonical replica lifecycle sidecar has no parent directory",
+                )
+            })?;
+            if self.regular_sidecar_metadata(&path, parent)?.is_some() {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "canonical replica terminal outcome overlaps private lifecycle custody",
+                ));
+            }
+        }
+        let (_, finality, _) = self
+            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+                replica.carrier_height,
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "canonical replica terminal outcome lost its carrier finality",
+                )
+            })?;
+        if HashOf::new(&finality) != replica.carrier_finality_hash {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "canonical replica terminal outcome changed its carrier finality",
+            ));
+        }
+        let reservation_group =
+            lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())
+                .map_err(|message| {
+                    Self::invalid_lane_artifact_error(self.store_root.clone(), message)
+                })?;
+        let expected_binding = AutonomousLifecycleAttemptBindingV1::from_payload(
+            finality.height_context.id(),
+            descriptor.lane_block_height,
+            &payload,
+            reservation_group,
+            &payload.producer,
+        )
+        .map_err(|message| Self::invalid_lane_artifact_error(self.store_root.clone(), message))?;
+        if binding != &expected_binding {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "canonical replica terminal outcome changed its producer-derived logical binding",
+            ));
+        }
+        outcome.validate_for_payload(&payload).map_err(|message| {
+            Self::invalid_lane_artifact_error(self.store_root.clone(), message)
+        })?;
+        self.autonomous_lifecycle_terminal_source_matches_canonical_carrier_locked(
+            &payload,
+            outcome.source(),
+        )?;
+        Ok(payload)
+    }
+
+    /// Path-scoped canonical-replica validation used for retired lane archives.
+    /// The caller separately proves that no attempt/cursor/bootstrap shares the
+    /// identity in the selected namespace.
+    fn validate_canonical_replica_terminal_outcome_from_paths_locked(
+        &self,
+        lane_id: LaneId,
+        outcome: &AutonomousLifecycleTerminalOutcomeV1,
+        replica_data_path: &Path,
+        replica_index_path: &Path,
+        receipt_data_path: &Path,
+        receipt_index_path: &Path,
+    ) -> Result<LaneExecutablePayloadV1> {
+        self.validate_canonical_replica_terminal_outcome_from_paths_for_local_peer_locked(
+            lane_id,
+            outcome,
+            replica_data_path,
+            replica_index_path,
+            receipt_data_path,
+            receipt_index_path,
+            self.local_peer_id.get(),
+        )
+    }
+
+    fn validate_canonical_replica_terminal_outcome_from_paths_for_local_peer_locked(
+        &self,
+        lane_id: LaneId,
+        outcome: &AutonomousLifecycleTerminalOutcomeV1,
+        replica_data_path: &Path,
+        replica_index_path: &Path,
+        receipt_data_path: &Path,
+        receipt_index_path: &Path,
+        local_peer: Option<&PeerId>,
+    ) -> Result<LaneExecutablePayloadV1> {
+        let AutonomousLifecycleTerminalOutcomeBasisV1::CanonicalReplica { replica_hash } =
+            outcome.basis()
+        else {
+            return Err(Self::invalid_lane_artifact_error(
+                replica_data_path.to_path_buf(),
+                "archived canonical replica validation received an owned lifecycle outcome",
+            ));
+        };
+        self.require_exact_local_canonical_replica_carrier_body_locked(outcome.source())?;
+        let binding = outcome.binding();
+        let replica = self
+            .canonical_autonomous_lane_replica_record_from_paths_locked(
+                lane_id,
+                binding.lane_block_height,
+                replica_data_path,
+                replica_index_path,
+                Some(binding.network_id),
+                Some(binding.epoch),
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    replica_data_path.to_path_buf(),
+                    "canonical replica terminal outcome lost its path-scoped replica",
+                )
+            })?;
+        if replica.replica_hash()? != replica_hash {
+            return Err(Self::invalid_lane_artifact_error(
+                replica_data_path.to_path_buf(),
+                "canonical replica terminal outcome changed its path-scoped replica hash",
+            ));
+        }
+        let payload = replica.bundle.executable_payload().clone();
+        let descriptor = &payload.origin_proposal.descriptor;
+        if local_peer.is_some_and(|local_peer| {
+            descriptor
+                .validator_set
+                .iter()
+                .any(|validator| validator == local_peer)
+        }) {
+            return Err(Self::invalid_lane_artifact_error(
+                replica_data_path.to_path_buf(),
+                "committee validator cannot validate archived canonical replica basis",
+            ));
+        }
+        let (_, finality, _) = self
+            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+                replica.carrier_height,
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    replica_data_path.to_path_buf(),
+                    "canonical replica terminal outcome lost its carrier finality",
+                )
+            })?;
+        if HashOf::new(&finality) != replica.carrier_finality_hash {
+            return Err(Self::invalid_lane_artifact_error(
+                replica_data_path.to_path_buf(),
+                "canonical replica terminal outcome changed its carrier finality",
+            ));
+        }
+        let reservation_group =
+            lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())
+                .map_err(|message| {
+                    Self::invalid_lane_artifact_error(replica_data_path.to_path_buf(), message)
+                })?;
+        let expected_binding = AutonomousLifecycleAttemptBindingV1::from_payload(
+            finality.height_context.id(),
+            descriptor.lane_block_height,
+            &payload,
+            reservation_group,
+            &payload.producer,
+        )
+        .map_err(|message| {
+            Self::invalid_lane_artifact_error(replica_data_path.to_path_buf(), message)
+        })?;
+        if binding != &expected_binding {
+            return Err(Self::invalid_lane_artifact_error(
+                replica_data_path.to_path_buf(),
+                "canonical replica terminal outcome changed its producer-derived logical binding",
+            ));
+        }
+        outcome.validate_for_payload(&payload).map_err(|message| {
+            Self::invalid_lane_artifact_error(replica_data_path.to_path_buf(), message)
+        })?;
+        self.autonomous_lifecycle_terminal_source_matches_canonical_carrier_from_receipt_paths_locked(
+            &payload,
+            outcome.source(),
+            receipt_data_path,
+            receipt_index_path,
+        )?;
+        Ok(payload)
+    }
+
+    /// Audit every retained replica-backed terminal outcome against the peer
+    /// identity that is about to become immutable process context.
+    ///
+    /// Strict Kura construction cannot perform the committee-membership check
+    /// because `irohad` binds its transport identity only after Kura opens. The
+    /// constructor still authenticates the complete durable source; this pass
+    /// closes the remaining contextual gap across both active and archived
+    /// namespaces before `bind_local_peer_id` installs the identity.
+    fn audit_canonical_replica_terminal_outcomes_for_local_peer(
+        &self,
+        local_peer: &PeerId,
+    ) -> Result<()> {
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let active_entries = self
+            .lane_storage_entries
+            .lock()
+            .values()
+            .cloned()
+            .map(|entry| {
+                (
+                    Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root)),
+                    entry,
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let mut pending = vec![
+            (self.store_root.join("blocks"), 0_usize, false),
+            (
+                self.store_root.join("retired").join("blocks"),
+                0_usize,
+                true,
+            ),
+            (
+                self.store_root.join("retired").join("lane_geometry"),
+                0_usize,
+                true,
+            ),
+        ];
+        let mut entries_seen = 0_usize;
+        while let Some((directory, depth, archived)) = pending.pop() {
+            if depth > AUTONOMOUS_LIFECYCLE_GENERATION_AUDIT_MAX_DEPTH {
+                return Err(Self::invalid_lane_artifact_error(
+                    directory,
+                    "peer-bound canonical replica audit exceeds its directory-depth bound",
+                ));
+            }
+            let directory_entries = match std::fs::read_dir(&directory) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == ErrorKind::NotFound => continue,
+                Err(error) => return Err(Error::IO(error, directory)),
+            };
+            for directory_entry in directory_entries {
+                let directory_entry =
+                    directory_entry.map_err(|error| Error::IO(error, directory.clone()))?;
+                entries_seen = entries_seen.checked_add(1).ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        directory.clone(),
+                        "peer-bound canonical replica audit entry count overflows",
+                    )
+                })?;
+                if entries_seen > AUTONOMOUS_LIFECYCLE_GENERATION_AUDIT_MAX_ENTRIES {
+                    return Err(Self::invalid_lane_artifact_error(
+                        directory,
+                        "peer-bound canonical replica audit exceeds its hard entry bound",
+                    ));
+                }
+                let path = directory_entry.path();
+                let file_type = directory_entry
+                    .file_type()
+                    .map_err(|error| Error::IO(error, path.clone()))?;
+                if file_type.is_symlink() {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "peer-bound canonical replica audit encountered a symlink",
+                    ));
+                }
+                if file_type.is_dir() {
+                    pending.push((path, depth.saturating_add(1), archived));
+                    continue;
+                }
+                let Some(name) = path.file_name().and_then(std::ffi::OsStr::to_str) else {
+                    continue;
+                };
+                let coordinates = Self::autonomous_lifecycle_terminal_outcome_coordinates(name);
+                if coordinates.is_none() {
+                    if name.starts_with(AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_PREFIX) {
+                        return Err(Self::invalid_lane_artifact_error(
+                            path,
+                            "peer-bound canonical replica audit found a malformed terminal outcome path",
+                        ));
+                    }
+                    continue;
+                }
+                if !file_type.is_file() {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "peer-bound canonical replica terminal outcome is not a regular file",
+                    ));
+                }
+                let parent = path.parent().ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        path.clone(),
+                        "peer-bound canonical replica terminal outcome has no parent",
+                    )
+                })?;
+                let bytes = self
+                    .read_regular_sidecar_bytes(
+                        &path,
+                        parent,
+                        AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES,
+                    )?
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            path.clone(),
+                            "peer-bound canonical replica terminal outcome disappeared during audit",
+                        )
+                    })?;
+                let outcome = Self::decode_autonomous_lifecycle_terminal_outcome(&path, &bytes)?;
+                if !matches!(
+                    outcome.basis(),
+                    AutonomousLifecycleTerminalOutcomeBasisV1::CanonicalReplica { .. }
+                ) {
+                    continue;
+                }
+                let (lane_block_height, proposal_height) =
+                    coordinates.expect("terminal coordinates were checked above");
+                let binding = outcome.binding();
+                if binding.lane_block_height != lane_block_height
+                    || binding.proposal_height != proposal_height
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "peer-bound canonical replica terminal outcome changed its path identity",
+                    ));
+                }
+                if !archived {
+                    let entry = active_entries.get(parent).ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            path.clone(),
+                            "active canonical replica terminal outcome is outside configured lane geometry",
+                        )
+                    })?;
+                    if path
+                        != Self::autonomous_lifecycle_terminal_outcome_path_for_entry(
+                            entry,
+                            &self.store_root,
+                            lane_block_height,
+                            proposal_height,
+                        )
+                    {
+                        return Err(Self::invalid_lane_artifact_error(
+                            path,
+                            "active canonical replica terminal outcome is outside its exact route namespace",
+                        ));
+                    }
+                    self.validate_canonical_replica_terminal_outcome_for_local_peer_locked(
+                        entry,
+                        &outcome,
+                        Some(local_peer),
+                    )?;
+                    continue;
+                }
+
+                // Archived validation is path-scoped because the active catalog
+                // may already name a successor incarnation. Replica custody is
+                // still required to be disjoint from every private lifecycle
+                // artifact for the same exact attempt identity.
+                for custody_path in [
+                    parent.join(format!(
+                        "{AUTONOMOUS_LANE_BLOCK_ATTEMPT_PREFIX}_{lane_block_height:020}_{proposal_height:020}.norito"
+                    )),
+                    parent.join(format!(
+                        "{AUTONOMOUS_LIFECYCLE_CURSOR_PREFIX}_{lane_block_height:020}_{proposal_height:020}.norito"
+                    )),
+                    parent.join(format!(
+                        "{AUTONOMOUS_LIFECYCLE_BOOTSTRAP_PREFIX}_{lane_block_height:020}_{proposal_height:020}.norito"
+                    )),
+                ] {
+                    if self.regular_sidecar_metadata(&custody_path, parent)?.is_some() {
+                        return Err(Self::invalid_lane_artifact_error(
+                            custody_path,
+                            "archived canonical replica terminal outcome overlaps private lifecycle custody",
+                        ));
+                    }
+                }
+                self.validate_canonical_replica_terminal_outcome_from_paths_for_local_peer_locked(
+                    binding.lane_id,
+                    &outcome,
+                    &parent.join(CANONICAL_AUTONOMOUS_LANE_REPLICAS_DATA_FILE),
+                    &parent.join(CANONICAL_AUTONOMOUS_LANE_REPLICAS_INDEX_FILE),
+                    &parent.join(LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE),
+                    &parent.join(LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE),
+                    Some(local_peer),
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     /// Validate the complete terminal Pending write set, including every lane
     /// namespace reservation and the exact configured Kura disk peak, before
     /// the first file is materialized.
@@ -1474,6 +2651,8 @@ impl Kura {
         let mut inventories = BTreeMap::<PathBuf, AutonomousLaneAttemptInventoryBudget>::new();
         let mut pending_paths = BTreeSet::new();
         let mut additional_disk_bytes = 0_u64;
+        let mut additional_unreserved_stable_bytes = 0_u64;
+        let mut additional_replica_incomplete_identities = 0_usize;
         let mut maximum_atomic_bytes = 0_u64;
         for plan in plans {
             let directory = Self::lane_artifact_dir(&plan.entry.blocks_dir(&self.store_root));
@@ -1496,32 +2675,114 @@ impl Kura {
             let inventory = inventories
                 .get_mut(&directory)
                 .expect("lane inventory was inserted above");
-            if !inventory.has_reserved_terminal_outcome(plan.identity) {
+            let next_len = u64::try_from(bytes.len())?;
+            match plan.outcome.basis() {
+                AutonomousLifecycleTerminalOutcomeBasisV1::OwnedLifecycle => {
+                    if !inventory.has_reserved_terminal_outcome(plan.identity) {
+                        return Err(Self::invalid_lane_artifact_error(
+                            plan.path.clone(),
+                            "owned lifecycle Pending publication lacks its admitted terminal-outcome reservation",
+                        ));
+                    }
+                    Self::validate_autonomous_lifecycle_terminal_outcome_budget(
+                        inventory.conceptual_files,
+                        inventory.conceptual_bytes,
+                        0,
+                        next_len,
+                        false,
+                    )
+                    .map_err(|message| {
+                        Self::invalid_lane_artifact_error(plan.path.clone(), message)
+                    })?;
+                    inventory.conceptual_bytes = inventory
+                        .conceptual_bytes
+                        .checked_sub(AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES as u64)
+                        .and_then(|bytes| bytes.checked_add(next_len))
+                        .ok_or_else(|| {
+                            Self::invalid_lane_artifact_error(
+                                plan.path.clone(),
+                                "owned lifecycle Pending reservation consumption overflows",
+                            )
+                        })?;
+                }
+                AutonomousLifecycleTerminalOutcomeBasisV1::CanonicalReplica { .. } => {
+                    if inventory.lifecycle_identities.contains(&plan.identity)
+                        || inventory
+                            .terminal_outcome_identities
+                            .contains(&plan.identity)
+                    {
+                        return Err(Self::invalid_lane_artifact_error(
+                            plan.path.clone(),
+                            "canonical replica Pending publication overlaps lifecycle custody or an existing outcome",
+                        ));
+                    }
+                    let next_files =
+                        inventory.conceptual_files.checked_add(1).ok_or_else(|| {
+                            Self::invalid_lane_artifact_error(
+                                plan.path.clone(),
+                                "canonical replica Pending namespace accounting overflows",
+                            )
+                        })?;
+                    let next_bytes = inventory
+                        .conceptual_bytes
+                        .checked_add(next_len)
+                        .ok_or_else(|| {
+                            Self::invalid_lane_artifact_error(
+                                plan.path.clone(),
+                                "canonical replica Pending byte accounting overflows",
+                            )
+                        })?;
+                    if next_files > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES
+                        || next_files.saturating_add(1)
+                            > MAX_AUTONOMOUS_LIFECYCLE_CURSOR_CAS_PEAK_FILES
+                        || next_bytes > AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES as u64
+                        || next_bytes.saturating_add(next_len)
+                            > AUTONOMOUS_LIFECYCLE_CURSOR_CAS_PEAK_BYTES as u64
+                    {
+                        return Err(Self::invalid_lane_artifact_error(
+                            plan.path.clone(),
+                            "canonical replica Pending publication exceeds its stable or atomic namespace budget",
+                        ));
+                    }
+                    inventory.conceptual_files = next_files;
+                    inventory.conceptual_bytes = next_bytes;
+                    additional_unreserved_stable_bytes = additional_unreserved_stable_bytes
+                        .checked_add(next_len)
+                        .ok_or_else(|| {
+                            Self::invalid_lane_artifact_error(
+                                plan.path.clone(),
+                                "canonical replica Pending stable-byte accounting overflows",
+                            )
+                        })?;
+                    additional_replica_incomplete_identities =
+                        additional_replica_incomplete_identities
+                            .checked_add(1)
+                            .ok_or_else(|| {
+                                Self::invalid_lane_artifact_error(
+                                    plan.path.clone(),
+                                    "canonical replica Pending identity accounting overflows",
+                                )
+                            })?;
+                }
+            }
+            if !inventory.terminal_outcome_identities.insert(plan.identity) {
                 return Err(Self::invalid_lane_artifact_error(
                     plan.path.clone(),
-                    "autonomous lifecycle Pending publication lacks its admitted terminal-outcome reservation",
+                    "autonomous lifecycle Pending publication aliases an existing terminal identity",
                 ));
             }
-            let next_len = u64::try_from(bytes.len())?;
-            Self::validate_autonomous_lifecycle_terminal_outcome_budget(
-                inventory.conceptual_files,
-                inventory.conceptual_bytes,
-                0,
-                next_len,
-                false,
-            )
-            .map_err(|message| Self::invalid_lane_artifact_error(plan.path.clone(), message))?;
-            inventory.terminal_outcome_identities.insert(plan.identity);
-            inventory.conceptual_bytes = inventory
-                .conceptual_bytes
-                .checked_sub(AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES as u64)
-                .and_then(|bytes| bytes.checked_add(next_len))
-                .ok_or_else(|| {
-                    Self::invalid_lane_artifact_error(
-                        plan.path.clone(),
-                        "autonomous lifecycle Pending reservation consumption overflows",
-                    )
-                })?;
+            if inventory.conceptual_bytes > AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES as u64 {
+                return Err(Self::invalid_lane_artifact_error(
+                    plan.path.clone(),
+                    "autonomous lifecycle Pending publication exceeds its aggregate byte budget",
+                ));
+            }
+            if inventory.conceptual_files > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES {
+                return Err(Self::invalid_lane_artifact_error(
+                    plan.path.clone(),
+                    "autonomous lifecycle Pending publication exceeds its namespace file budget",
+                ));
+            }
             additional_disk_bytes =
                 additional_disk_bytes.checked_add(next_len).ok_or_else(|| {
                     Self::invalid_lane_artifact_error(
@@ -1531,11 +2792,11 @@ impl Kura {
                 })?;
             maximum_atomic_bytes = maximum_atomic_bytes.max(next_len);
         }
-        self.validate_configured_autonomous_mutation_disk_peak_locked(
+        self.validate_configured_autonomous_terminal_batch_disk_peak_locked(
             pending_canonical_bytes,
+            additional_unreserved_stable_bytes,
             maximum_atomic_bytes,
-            false,
-            true,
+            additional_replica_incomplete_identities,
             &self.store_root,
         )?;
         if additional_disk_bytes != 0 {
@@ -1913,12 +3174,29 @@ impl Kura {
                     "canonical lifecycle source-outcome receipt changed during full-set validation",
                 ));
             }
-            let publication_plan = self
-                .prepare_autonomous_lifecycle_terminal_outcome_pending_locked(
+            let local_peer = self.local_peer_id.get().ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "canonical lifecycle source-outcome set requires a bound local peer identity",
+                )
+            })?;
+            let canonical_replica = !descriptor
+                .validator_set
+                .iter()
+                .any(|validator| validator == local_peer);
+            let publication_plan = if canonical_replica {
+                self.prepare_canonical_replica_terminal_outcome_pending_locked(
                     &lane_entry,
                     payload,
                     source,
-                )?;
+                )?
+            } else {
+                self.prepare_autonomous_lifecycle_terminal_outcome_pending_locked(
+                    &lane_entry,
+                    payload,
+                    source,
+                )?
+            };
             let outcome = &publication_plan.outcome;
             outcome.validate_for_payload(payload).map_err(|message| {
                 Self::invalid_lane_artifact_error(self.store_root.clone(), message)
@@ -1929,15 +3207,33 @@ impl Kura {
                     "canonical lifecycle source-outcome member changed its exact source",
                 ));
             }
-            let cursor = self.read_autonomous_lifecycle_cursor_for_terminal_outcome_locked(
-                &lane_entry,
-                payload,
-            )?;
-            if cursor.binding() != outcome.binding() {
-                return Err(Self::invalid_lane_artifact_error(
-                    self.store_root.clone(),
-                    "canonical lifecycle source-outcome member changed its signed cursor binding",
-                ));
+            if canonical_replica {
+                if !matches!(
+                    outcome.basis(),
+                    AutonomousLifecycleTerminalOutcomeBasisV1::CanonicalReplica { .. }
+                ) {
+                    return Err(Self::invalid_lane_artifact_error(
+                        self.store_root.clone(),
+                        "canonical lifecycle replica member changed its explicit source basis",
+                    ));
+                }
+            } else {
+                if outcome.basis() != AutonomousLifecycleTerminalOutcomeBasisV1::OwnedLifecycle {
+                    return Err(Self::invalid_lane_artifact_error(
+                        self.store_root.clone(),
+                        "owned canonical lifecycle member changed its explicit source basis",
+                    ));
+                }
+                let cursor = self.read_autonomous_lifecycle_cursor_for_terminal_outcome_locked(
+                    &lane_entry,
+                    payload,
+                )?;
+                if cursor.binding() != outcome.binding() {
+                    return Err(Self::invalid_lane_artifact_error(
+                        self.store_root.clone(),
+                        "canonical lifecycle source-outcome member changed its signed cursor binding",
+                    ));
+                }
             }
             let reservation_group = outcome.binding().reservation_group_binding();
             if lane_queue_reservation_group_binding_from_ordered_keys(
@@ -2342,68 +3638,89 @@ impl Kura {
                     "expected autonomous lifecycle terminal outcome changed its exact binding",
                 ));
             }
-            let record = self
-                .read_autonomous_lane_block_attempt_record_locked(
-                    &entry,
-                    identity.lane_id,
-                    identity.lane_block_height,
-                    identity.proposal_height,
-                    binding.network_id,
-                    binding.epoch,
-                    None,
-                )?
-                .ok_or_else(|| {
-                    Self::invalid_lane_artifact_error(
-                        path.clone(),
-                        "expected autonomous lifecycle terminal outcome lost its payload attempt",
-                    )
-                })?;
-            let payload = &record.artifact.executable_payload;
-            if payload.reservation_keys.as_slice() != expected.ordered_keys() {
-                return Err(Self::invalid_lane_artifact_error(
-                    path,
-                    "expected autonomous lifecycle terminal outcome changed its ordered reservation bytes",
-                ));
-            }
-            outcome
-                .validate_for_payload(payload)
-                .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
-            let cursor =
-                self.read_autonomous_lifecycle_cursor_for_terminal_outcome_locked(&entry, payload)?;
-            if cursor.binding() != binding {
-                return Err(Self::invalid_lane_artifact_error(
-                    path,
-                    "expected autonomous lifecycle terminal outcome changed its signed cursor binding",
-                ));
-            }
-            let source_kind = match outcome.source() {
-                source @ AutonomousLifecycleTerminalOutcomeSourceV1::CanonicalCarrier { .. } => {
-                    self.autonomous_lifecycle_terminal_source_matches_canonical_carrier_locked(
-                        payload, source,
-                    )?;
+            let source_kind = match outcome.basis() {
+                AutonomousLifecycleTerminalOutcomeBasisV1::CanonicalReplica { .. } => {
+                    let payload =
+                        self.validate_canonical_replica_terminal_outcome_locked(&entry, &outcome)?;
+                    if payload.reservation_keys.as_slice() != expected.ordered_keys() {
+                        return Err(Self::invalid_lane_artifact_error(
+                            path,
+                            "expected canonical replica outcome changed its ordered reservation bytes",
+                        ));
+                    }
                     AutonomousLifecycleTerminalOutcomeSourceKind::CanonicalCarrier
                 }
-                source @ AutonomousLifecycleTerminalOutcomeSourceV1::RetiredRelease { .. } => {
-                    self.autonomous_lifecycle_terminal_source_matches_release_locked(
-                        Some(pending_canonical_bytes),
-                        &entry,
-                        payload,
-                        record.retirement.as_ref(),
-                        source,
-                    )?;
-                    AutonomousLifecycleTerminalOutcomeSourceKind::RetiredRelease
-                }
-                source @ AutonomousLifecycleTerminalOutcomeSourceV1::RetiredReplicaQueueDisposition {
-                    ..
-                } => {
-                    self.autonomous_lifecycle_terminal_source_matches_replica_queue_disposition_locked(
-                        Some(pending_canonical_bytes),
-                        &entry,
-                        payload,
-                        record.retirement.as_ref(),
-                        source,
-                    )?;
-                    AutonomousLifecycleTerminalOutcomeSourceKind::RetiredReplicaQueueDisposition
+                AutonomousLifecycleTerminalOutcomeBasisV1::OwnedLifecycle => {
+                    let record = self
+                        .read_autonomous_lane_block_attempt_record_locked(
+                            &entry,
+                            identity.lane_id,
+                            identity.lane_block_height,
+                            identity.proposal_height,
+                            binding.network_id,
+                            binding.epoch,
+                            None,
+                        )?
+                        .ok_or_else(|| {
+                            Self::invalid_lane_artifact_error(
+                                path.clone(),
+                                "expected owned lifecycle terminal outcome lost its payload attempt",
+                            )
+                        })?;
+                    let payload = &record.artifact.executable_payload;
+                    if payload.reservation_keys.as_slice() != expected.ordered_keys() {
+                        return Err(Self::invalid_lane_artifact_error(
+                            path,
+                            "expected owned lifecycle terminal outcome changed its ordered reservation bytes",
+                        ));
+                    }
+                    outcome.validate_for_payload(payload).map_err(|message| {
+                        Self::invalid_lane_artifact_error(path.clone(), message)
+                    })?;
+                    let cursor = self
+                        .read_autonomous_lifecycle_cursor_for_terminal_outcome_locked(
+                            &entry, payload,
+                        )?;
+                    if cursor.binding() != binding {
+                        return Err(Self::invalid_lane_artifact_error(
+                            path,
+                            "expected owned lifecycle terminal outcome changed its signed cursor binding",
+                        ));
+                    }
+                    match outcome.source() {
+                        source @ AutonomousLifecycleTerminalOutcomeSourceV1::CanonicalCarrier {
+                            ..
+                        } => {
+                            self.autonomous_lifecycle_terminal_source_matches_canonical_carrier_locked(
+                                payload, source,
+                            )?;
+                            AutonomousLifecycleTerminalOutcomeSourceKind::CanonicalCarrier
+                        }
+                        source @ AutonomousLifecycleTerminalOutcomeSourceV1::RetiredRelease {
+                            ..
+                        } => {
+                            self.autonomous_lifecycle_terminal_source_matches_release_locked(
+                                Some(pending_canonical_bytes),
+                                &entry,
+                                payload,
+                                record.retirement.as_ref(),
+                                source,
+                            )?;
+                            AutonomousLifecycleTerminalOutcomeSourceKind::RetiredRelease
+                        }
+                        source @ AutonomousLifecycleTerminalOutcomeSourceV1::RetiredReplicaQueueDisposition {
+                            ..
+                        } => {
+                            self.autonomous_lifecycle_terminal_source_matches_replica_queue_disposition_locked(
+                                Some(pending_canonical_bytes),
+                                &entry,
+                                payload,
+                                record.retirement.as_ref(),
+                                source,
+                            )?;
+                            AutonomousLifecycleTerminalOutcomeSourceKind::RetiredReplicaQueueDisposition
+                        }
+                    }
                 }
             };
             let stage = if outcome.is_complete() {
@@ -2815,6 +4132,54 @@ impl Kura {
                         "autonomous lifecycle terminal inventory targets stale lane geometry",
                     ));
                 }
+                if matches!(
+                    outcome.basis(),
+                    AutonomousLifecycleTerminalOutcomeBasisV1::CanonicalReplica { .. }
+                ) {
+                    let payload =
+                        self.validate_canonical_replica_terminal_outcome_locked(&entry, &outcome)?;
+                    let group = binding.reservation_group_binding();
+                    if lane_queue_reservation_group_binding_from_ordered_keys(
+                        payload.reservation_keys.iter(),
+                    )
+                    .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?
+                        != group
+                        || observed_groups
+                            .insert(group.reservation_group_hash, (group, path.clone()))
+                            .is_some()
+                    {
+                        return Err(Self::invalid_lane_artifact_error(
+                            path.clone(),
+                            "canonical replica terminal inventory changed or duplicated its reservation group",
+                        ));
+                    }
+                    let AutonomousLifecycleTerminalOutcomeSourceV1::CanonicalCarrier {
+                        merge_entry_hash,
+                        ..
+                    } = outcome.source()
+                    else {
+                        return Err(Self::invalid_lane_artifact_error(
+                            path,
+                            "canonical replica terminal inventory has a noncanonical source",
+                        ));
+                    };
+                    let observed = canonical_entries
+                        .entry(merge_entry_hash)
+                        .or_insert_with(|| (path.clone(), 0_usize));
+                    observed.1 = observed.1.checked_add(1).ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            path,
+                            "canonical replica terminal carrier member count overflows",
+                        )
+                    })?;
+                    continue;
+                }
+                if outcome.basis() != AutonomousLifecycleTerminalOutcomeBasisV1::OwnedLifecycle {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "autonomous lifecycle terminal inventory has an unsupported source basis",
+                    ));
+                }
                 let record = self
                     .read_autonomous_lane_block_attempt_record_locked(
                         &entry,
@@ -3157,47 +4522,61 @@ impl Kura {
                 "autonomous lifecycle terminal Queue evidence names another source outcome",
             ));
         }
-        let record = self
-            .read_autonomous_lane_block_attempt_record_locked(
-                &entry,
-                identity.lane_id,
-                identity.lane_block_height,
-                identity.proposal_height,
-                binding.network_id,
-                binding.epoch,
-                None,
-            )?
-            .ok_or_else(|| {
-                Self::invalid_lane_artifact_error(
-                    path.clone(),
-                    "autonomous lifecycle terminal completion lost its exact payload attempt",
-                )
-            })?;
-        let payload = &record.artifact.executable_payload;
-        current
-            .validate_for_payload(payload)
-            .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
-        let cursor =
-            self.read_autonomous_lifecycle_cursor_for_terminal_outcome_locked(&entry, payload)?;
-        if cursor.binding() != binding {
-            return Err(Self::invalid_lane_artifact_error(
-                path,
-                "autonomous lifecycle terminal completion cursor binding changed",
-            ));
-        }
-        if canonical {
-            self.autonomous_lifecycle_terminal_source_matches_canonical_carrier_locked(
-                payload,
-                current.source(),
-            )?;
-        } else {
-            self.autonomous_lifecycle_terminal_source_matches_release_locked(
-                Some(pending_canonical_bytes),
-                &entry,
-                payload,
-                record.retirement.as_ref(),
-                current.source(),
-            )?;
+        match current.basis() {
+            AutonomousLifecycleTerminalOutcomeBasisV1::CanonicalReplica { .. } => {
+                if !canonical {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "canonical replica terminal outcome cannot authorize release completion",
+                    ));
+                }
+                self.validate_canonical_replica_terminal_outcome_locked(&entry, &current)?;
+            }
+            AutonomousLifecycleTerminalOutcomeBasisV1::OwnedLifecycle => {
+                let record = self
+                    .read_autonomous_lane_block_attempt_record_locked(
+                        &entry,
+                        identity.lane_id,
+                        identity.lane_block_height,
+                        identity.proposal_height,
+                        binding.network_id,
+                        binding.epoch,
+                        None,
+                    )?
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            path.clone(),
+                            "owned lifecycle terminal completion lost its exact payload attempt",
+                        )
+                    })?;
+                let payload = &record.artifact.executable_payload;
+                current
+                    .validate_for_payload(payload)
+                    .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
+                let cursor = self.read_autonomous_lifecycle_cursor_for_terminal_outcome_locked(
+                    &entry, payload,
+                )?;
+                if cursor.binding() != binding {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "owned lifecycle terminal completion cursor binding changed",
+                    ));
+                }
+                if canonical {
+                    self.autonomous_lifecycle_terminal_source_matches_canonical_carrier_locked(
+                        payload,
+                        current.source(),
+                    )?;
+                } else {
+                    self.autonomous_lifecycle_terminal_source_matches_release_locked(
+                        Some(pending_canonical_bytes),
+                        &entry,
+                        payload,
+                        record.retirement.as_ref(),
+                        current.source(),
+                    )?;
+                }
+            }
         }
         if let Some(existing) = current
             .terminal_projection()
@@ -3579,10 +4958,23 @@ impl Kura {
                     (pointer.proposal_height == identity.1).then_some(record)
                 })
             });
+            if matches!(
+                outcome.basis(),
+                AutonomousLifecycleTerminalOutcomeBasisV1::CanonicalReplica { .. }
+            ) {
+                if record.is_some() || cursors.contains_key(identity) {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path.clone(),
+                        "canonical replica startup outcome overlaps owned lifecycle custody",
+                    ));
+                }
+                self.validate_canonical_replica_terminal_outcome_on_startup_locked(entry, outcome)?;
+                continue;
+            }
             let record = record.ok_or_else(|| {
                 Self::invalid_lane_artifact_error(
                     path.clone(),
-                    "autonomous lifecycle terminal outcome is orphaned from its payload attempt",
+                    "owned lifecycle terminal outcome is orphaned from its payload attempt",
                 )
             })?;
             let payload = &record.artifact.executable_payload;

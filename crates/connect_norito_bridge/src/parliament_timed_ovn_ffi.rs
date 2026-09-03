@@ -1054,7 +1054,6 @@ mod tests {
                     .map(|(index, validator)| {
                         iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                             &[0xA0_u8.wrapping_add(u8::try_from(index).expect("small fixture roster")); 32],
-                            network_id,
                             0,
                             validator.validator.clone(),
                         )
@@ -1105,8 +1104,7 @@ mod tests {
                 quorum,
                 roster: roster.clone(),
                 kagemusha_mint_finality_epoch_id,
-                kagemusha_mint_finality_epoch_roster: kagemusha_mint_finality_epoch_roster
-                    .clone(),
+                kagemusha_mint_finality_epoch_roster: kagemusha_mint_finality_epoch_roster.clone(),
                 nexus_amx_context_hash: Hash::new(b"Parliament casting proof test nexus"),
                 execution_policy_hash: Hash::new(b"Parliament casting proof test policy"),
                 da_layout: DataAvailabilityLayout {

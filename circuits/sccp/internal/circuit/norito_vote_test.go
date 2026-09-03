@@ -167,7 +167,7 @@ func genericVoteFixtureAssignment(t *testing.T, variant int) *canonicalVoteFixtu
 	if variant&1 != 0 {
 		execution.HasKagemushaTopUpRoot = 1
 		execution.KagemushaTopUpCount = 1_000
-		set32(&execution.KagemushaTopUpRoot, nativeIrohaHash([]byte("generic Kagemusha top-up root")))
+		set32(&execution.KagemushaTopUpRoot, nativeIrohaHash([]byte("generic KAGEMUSHA top-up root")))
 		count := make([]byte, 4)
 		binary.LittleEndian.PutUint32(count, 1_000)
 		ordinary := u8Array32(execution.OrdinaryWritesRoot)

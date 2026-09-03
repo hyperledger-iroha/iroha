@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { build as buildWithEsbuild } from "esbuild";
 
 import * as packageExports from "../dist/index.js";
+import * as packageKagemushaExports from "../dist/kagemusha.js";
 import * as packageTransactionExports from "../dist/transaction.js";
 import * as packageCryptoExports from "../dist/public/crypto.js";
 import { NexusAppClient as PackageNexusAppClient } from "../dist/nexusApp.js";
@@ -378,6 +379,7 @@ test("package publishes the exact general-purpose subpath inventory", () => {
     "./crypto",
     "./instruction-builders",
     "./ivm-artifact",
+    "./kagemusha",
     "./kotodama-compiler",
     "./nexus-app",
     "./norito",
@@ -391,6 +393,18 @@ test("package publishes the exact general-purpose subpath inventory", () => {
     "./torii-browser",
     "./transaction-codec",
   ]);
+});
+
+test("package publishes KAGEMUSHA through one unversioned browser-safe subpath", () => {
+  assert.deepEqual(packageJson.exports["./kagemusha"], {
+    browser: "./dist/kagemusha.js",
+    import: "./dist/kagemusha.js",
+    types: "./kagemusha.d.ts",
+  });
+  assert.equal(packageExports.Kagemusha, packageKagemushaExports.Kagemusha);
+  assert.equal(packageExports.Kagemusha.wireVersion, 1);
+  assert.equal(Object.hasOwn(packageExports, ["Kagemusha", "V1"].join("")), false);
+  assert.equal(Object.hasOwn(packageJson.exports, ["./kagemusha", "-v1"].join("")), false);
 });
 
 test("package publishes the typed Sumeragi parser through its lazy subpath", () => {

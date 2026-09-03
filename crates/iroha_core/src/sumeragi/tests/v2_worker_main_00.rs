@@ -193,13 +193,14 @@ fn authenticated_serve_request(
             proposal_round: round,
             phase,
             subject,
-            execution_commitment: wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-                Hash::new(b"Serve fixture parent state"),
-                Hash::new(b"Serve fixture post state"),
-                Hash::new(b"Serve fixture ordinary writes"),
-                1,
-                Hash::new(b"Serve fixture executed block"),
-            ),
+            execution_commitment:
+                wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                    Hash::new(b"Serve fixture parent state"),
+                    Hash::new(b"Serve fixture post state"),
+                    Hash::new(b"Serve fixture ordinary writes"),
+                    1,
+                    Hash::new(b"Serve fixture executed block"),
+                ),
             signers: (0..super::super::network_topology::commit_quorum_from_len(
                 context.roster.len(),
             ))
@@ -794,7 +795,6 @@ fn fixture_kagemusha_mint_finality_roster(
             ];
             crate::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                 &seed,
-                network_id,
                 epoch,
                 validator.validator.clone(),
             )

@@ -5525,8 +5525,8 @@ fn validate_kagemusha_readiness(capability: Option<&Value>) -> Result<(), String
     let capability = capability
         .cloned()
         .ok_or_else(|| "/v1/kagemusha/readiness returned no JSON body".to_owned())?;
-    let capability: iroha_torii_shared::kagemusha_api::KagemushaReadinessV1 = json::from_value(capability)
-        .map_err(|error| {
+    let capability: iroha_torii_shared::kagemusha_api::KagemushaReadinessV1 =
+        json::from_value(capability).map_err(|error| {
             format!("/v1/kagemusha/readiness is not exact KagemushaReadinessV1 JSON: {error}")
         })?;
     if capability.kagemusha_handoff_capability
@@ -5538,7 +5538,7 @@ fn validate_kagemusha_readiness(capability: Option<&Value>) -> Result<(), String
         );
     }
     if capability.wire_version != iroha::data_model::kagemusha::KAGEMUSHA_WIRE_VERSION_V1 {
-        return Err("/v1/kagemusha/readiness does not advertise Kagemusha wire V1".to_owned());
+        return Err("/v1/kagemusha/readiness does not advertise KAGEMUSHA wire V1".to_owned());
     }
     if capability.device_lifecycle_version
         != iroha::data_model::kagemusha::KAGEMUSHA_DEVICE_LIFECYCLE_VERSION_V1
@@ -5546,7 +5546,7 @@ fn validate_kagemusha_readiness(capability: Option<&Value>) -> Result<(), String
         return Err("/v1/kagemusha/readiness does not require secure-device lifecycle V1".to_owned());
     }
     if !capability.ready {
-        return Err("/v1/kagemusha/readiness reports Kagemusha V1 unavailable".to_owned());
+        return Err("/v1/kagemusha/readiness reports KAGEMUSHA V1 unavailable".to_owned());
     }
     Ok(())
 }

@@ -1068,6 +1068,7 @@ const IROHA_TEST_SKIP_BUILD_ENV: &str = "IROHA_TEST_SKIP_BUILD";
 const IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV: &str = "IROHA_RELEASE_SOURCE_MANIFEST_SHA256";
 const IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV: &str = "IROHA_RELEASE_PREBUILT_MANIFEST_SHA256";
 const IROHA_RELEASE_CARGO_LOCK_SHA256_ENV: &str = "IROHA_RELEASE_CARGO_LOCK_SHA256";
+const IROHA_RELEASE_ARTIFACT_ROOT_ENV: &str = "IROHA_RELEASE_ARTIFACT_ROOT";
 const IROHA_TEST_TARGET_SUBDIR: &str = "iroha-test-network";
 const SUMERAGI_V2_RELEASE_TARGET_SUBDIR: &str = "sumeragi-v2-release";
 const SUMERAGI_V2_RELEASE_PROGRAMS_SUBDIR: &str = "programs";
@@ -1178,6 +1179,59 @@ fn exact_env_value(key: &str) -> color_eyre::Result<Option<String>> {
         Err(std::env::VarError::NotPresent) => Ok(None),
         Err(std::env::VarError::NotUnicode(_)) => Err(eyre!("{key} must contain valid Unicode")),
     }
+}
+#[cfg(unix)]
+fn authenticate_release_artifact_root(repo: &Path, raw: &str) -> color_eyre::Result<PathBuf> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let configured = PathBuf::from(raw);
+    if !configured.is_absolute() {
+        return Err(eyre!(
+            "release binary resolution requires an absolute {IROHA_RELEASE_ARTIFACT_ROOT_ENV}"
+        ));
+    }
+    let metadata = fs::symlink_metadata(&configured).wrap_err_with(|| {
+        eyre!(
+            "failed to inspect release artifact root {}",
+            configured.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(eyre!(
+            "{IROHA_RELEASE_ARTIFACT_ROOT_ENV} must name a real directory, not a symlink"
+        ));
+    }
+    if metadata.uid() != nix::unistd::geteuid().as_raw() || metadata.mode() & 0o7777 != 0o700 {
+        return Err(eyre!(
+            "{IROHA_RELEASE_ARTIFACT_ROOT_ENV} must be an effective-user-owned private directory with exact mode 0700"
+        ));
+    }
+    let canonical = configured.canonicalize().wrap_err_with(|| {
+        eyre!(
+            "failed to canonicalize release artifact root {}",
+            configured.display()
+        )
+    })?;
+    if canonical != configured {
+        return Err(eyre!(
+            "{IROHA_RELEASE_ARTIFACT_ROOT_ENV} must be absolute, normalized, and contain no symlinked components"
+        ));
+    }
+    let canonical_repo = repo
+        .canonicalize()
+        .wrap_err("failed to canonicalize repository root for release artifact isolation")?;
+    if canonical.starts_with(&canonical_repo) || canonical_repo.starts_with(&canonical) {
+        return Err(eyre!(
+            "{IROHA_RELEASE_ARTIFACT_ROOT_ENV} must not overlap repository source"
+        ));
+    }
+    Ok(canonical)
+}
+#[cfg(not(unix))]
+fn authenticate_release_artifact_root(_repo: &Path, _raw: &str) -> color_eyre::Result<PathBuf> {
+    Err(eyre!(
+        "release artifact root authentication requires Unix ownership and mode semantics"
+    ))
 }
 #[cfg(unix)]
 fn validate_published_mode_and_links(
@@ -1583,8 +1637,11 @@ fn release_program_contract(repo: &Path) -> color_eyre::Result<Option<ReleasePro
             "release binary resolution requires an absolute {IROHA_TEST_TARGET_DIR_ENV}"
         ));
     }
-    let expected_programs_root = repo
-        .join("target")
+    let artifact_root_raw = exact_env_value(IROHA_RELEASE_ARTIFACT_ROOT_ENV)?.ok_or_else(|| {
+        eyre!("release binary resolution requires inherited {IROHA_RELEASE_ARTIFACT_ROOT_ENV}")
+    })?;
+    let artifact_root = authenticate_release_artifact_root(repo, &artifact_root_raw)?;
+    let expected_programs_root = artifact_root
         .join(SUMERAGI_V2_RELEASE_TARGET_SUBDIR)
         .join(&source_manifest_sha256)
         .join(SUMERAGI_V2_RELEASE_PROGRAMS_SUBDIR);
@@ -1629,6 +1686,11 @@ fn release_program_contract(repo: &Path) -> color_eyre::Result<Option<ReleasePro
                 expected_programs_root.display()
             )
         })?;
+    if canonical_expected_programs_root != expected_programs_root {
+        return Err(eyre!(
+            "manifest-addressed release programs root must contain no symlinked or non-canonical components"
+        ));
+    }
     if canonical_target_dir.parent() != Some(canonical_expected_programs_root.as_path()) {
         return Err(eyre!(
             "{IROHA_TEST_TARGET_DIR_ENV} resolves outside the manifest-addressed release target"
@@ -3149,6 +3211,8 @@ async fn shutdown_peers_for_drop(peers: Vec<NetworkPeer>) {
 #[derive(Debug, Clone)]
 struct ConsensusBootstrapProfile {
     params: ConsensusGenesisParams,
+    kagemusha_mint_finality:
+        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1,
     mode_tag: &'static str,
     bls_domain: &'static str,
     chain_id: ChainId,
@@ -6358,7 +6422,8 @@ fn consensus_handshake_parameter(consensus_profile: &ConsensusBootstrapProfile) 
         block_cadence_ms: consensus_profile.params.block_cadence_ms,
         wire_protocol_version: consensus_profile.wire_protocol_version,
         consensus_fingerprint: ConsensusFingerprint::new(consensus_profile.fingerprint()),
-        sumeragi_v2: consensus_profile.params.v2_context,
+        sumeragi_v2: consensus_profile.params.v2_context.clone(),
+        kagemusha_mint_finality: consensus_profile.kagemusha_mint_finality.clone(),
     };
     metadata
         .validate()
@@ -7707,18 +7772,27 @@ impl NetworkBuilder {
             consensus_mode_tag = NPOS_TAG;
             consensus_bls_domain = NPOS_BLS_DOMAIN;
         }
-        let provisional_v2_context =
-            iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(
+        let provisional_metadata = parameter_state
+            .custom()
+            .get(&consensus_metadata::handshake_meta_id())
+            .and_then(|parameter| {
+                norito::json::from_str::<ConsensusHandshakeMetadata>(parameter.payload().get()).ok()
+            })
+            .expect(
+                "test-network genesis must carry explicitly provisioned signed Sumeragi v2 context parameters",
             );
+        let provisional_v2_context = provisional_metadata.sumeragi_v2;
+        let provisional_kagemusha_mint_finality = provisional_metadata.kagemusha_mint_finality;
         let provisional_params =
             iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
                 consensus_mode,
                 &parameter_state,
-                provisional_v2_context,
+                provisional_v2_context.clone(),
             )
             .expect("test-network genesis parameters must form a canonical carrier");
         let provisional_profile = ConsensusBootstrapProfile {
             params: provisional_params,
+            kagemusha_mint_finality: provisional_kagemusha_mint_finality.clone(),
             mode_tag: consensus_mode_tag,
             bls_domain: consensus_bls_domain,
             chain_id: consensus_chain_id.clone(),
@@ -7763,6 +7837,7 @@ impl NetworkBuilder {
             .expect("bound test-network genesis parameters must form a canonical carrier");
         let consensus_profile = ConsensusBootstrapProfile {
             params: consensus_params,
+            kagemusha_mint_finality: provisional_kagemusha_mint_finality,
             mode_tag: consensus_mode_tag,
             bls_domain: consensus_bls_domain,
             chain_id: consensus_chain_id.clone(),

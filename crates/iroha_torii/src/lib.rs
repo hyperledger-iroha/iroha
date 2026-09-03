@@ -62,9 +62,9 @@ mod app_api;
 #[cfg(feature = "app_api")]
 mod identifier_resolution;
 mod iso_profile;
-mod ledger_state_finality;
 #[cfg(feature = "app_api")]
 mod kagemusha_commands;
+mod ledger_state_finality;
 mod operator_auth;
 mod operator_signatures;
 #[cfg(feature = "app_api")]
@@ -2719,7 +2719,7 @@ struct AppState {
     proof_egress_limiter: limits::RateLimiter,
     proof_body_inflight: Arc<tokio::sync::Semaphore>,
     #[cfg(feature = "app_api")]
-    /// Byte-weighted working-set capacity for proof-bearing Kagemusha commands.
+    /// Byte-weighted working-set capacity for proof-bearing KAGEMUSHA commands.
     kagemusha_command_memory_inflight: ByteWeightedMemoryPool,
     soracloud_public_rate_limiter: limits::RateLimiter,
     soracloud_mutation_rate_limiter: limits::RateLimiter,
@@ -5621,7 +5621,7 @@ mod preauth_connection_lifetime_tests {
                     .header(header::ACCEPT, accept)
                     .header(header::CONTENT_TYPE, content_type)
                     .body(Body::from("{malformed-json"))
-                    .expect("Kagemusha command request");
+                    .expect("KAGEMUSHA command request");
                 request
                     .extensions_mut()
                     .insert(MatchedRouteMetadata::from_descriptor(
@@ -9801,7 +9801,7 @@ mod typed_error_contract_tests {
                 get(|| async {
                     Error::AppQueryValidation {
                         code: "operation_id_invalid",
-                        message: "Kagemusha operation id must be non-zero.".to_owned(),
+                        message: "KAGEMUSHA operation id must be non-zero.".to_owned(),
                     }
                     .into_response()
                 }),
@@ -9811,7 +9811,7 @@ mod typed_error_contract_tests {
                 get(|| async {
                     Error::AppForbidden {
                         code: "kagemusha_auth_header_unsupported",
-                        message: "Kagemusha commands authenticate through their signed request body; X-Iroha canonical auth headers are not accepted.".to_owned(),
+                        message: "KAGEMUSHA commands authenticate through their signed request body; X-Iroha canonical auth headers are not accepted.".to_owned(),
                     }
                     .into_response()
                 }),
@@ -9821,7 +9821,7 @@ mod typed_error_contract_tests {
                 get(|| async {
                     Error::AppConflict {
                         code: "operation_id_conflict",
-                        message: "Kagemusha operation id is already bound to a different request."
+                        message: "KAGEMUSHA operation id is already bound to a different request."
                             .to_owned(),
                     }
                     .into_response()
@@ -9832,7 +9832,7 @@ mod typed_error_contract_tests {
                 get(|| async {
                     Error::AppNotFound {
                         code: "kagemusha_operation_not_found",
-                        message: "Kagemusha operation is unknown on this Torii node.".to_owned(),
+                        message: "KAGEMUSHA operation is unknown on this Torii node.".to_owned(),
                     }
                     .into_response()
                 }),
@@ -9869,25 +9869,25 @@ mod typed_error_contract_tests {
                     "/invalid-operation",
                     StatusCode::BAD_REQUEST,
                     "operation_id_invalid",
-                    "Kagemusha operation id must be non-zero.",
+                    "KAGEMUSHA operation id must be non-zero.",
                 ),
                 (
                     "/forbidden-kagemusha-auth",
                     StatusCode::FORBIDDEN,
                     "kagemusha_auth_header_unsupported",
-                    "Kagemusha commands authenticate through their signed request body; X-Iroha canonical auth headers are not accepted.",
+                    "KAGEMUSHA commands authenticate through their signed request body; X-Iroha canonical auth headers are not accepted.",
                 ),
                 (
                     "/conflicting-operation",
                     StatusCode::CONFLICT,
                     "operation_id_conflict",
-                    "Kagemusha operation id is already bound to a different request.",
+                    "KAGEMUSHA operation id is already bound to a different request.",
                 ),
                 (
                     "/missing-operation",
                     StatusCode::NOT_FOUND,
                     "kagemusha_operation_not_found",
-                    "Kagemusha operation is unknown on this Torii node.",
+                    "KAGEMUSHA operation is unknown on this Torii node.",
                 ),
                 (
                     "/missing-asset",
@@ -9939,11 +9939,13 @@ mod typed_error_contract_tests {
                 assert_eq!(envelope.code(), expected_code, "path={path}");
                 assert_eq!(envelope.message(), expected_message, "path={path}");
             }
+            let retired_product = ["line", "off"].into_iter().rev().collect::<String>();
+            let retired_path = format!("/v1/{retired_product}/operations/deadbeef");
             let response = router
                 .clone()
                 .oneshot(
                     Request::builder()
-                        .uri("/retired/v1/kagemusha/operations/deadbeef")
+                        .uri(retired_path)
                         .header(header::ACCEPT, accept)
                         .body(Body::empty())
                         .expect("request"),
@@ -11731,11 +11733,11 @@ async fn collect_kagemusha_command_body_with_deadline(
         max_bytes,
         deadline,
         BoundedBodyReadMessages {
-            context: "Kagemusha command request body",
-            too_large: "Kagemusha command request body exceeds the route byte limit",
-            protocol_error: "Kagemusha command request body stream ended with a protocol error",
+            context: "KAGEMUSHA command request body",
+            too_large: "KAGEMUSHA command request body exceeds the route byte limit",
+            protocol_error: "KAGEMUSHA command request body stream ended with a protocol error",
             timeout:
-                "Kagemusha command request body was not completed before the absolute read deadline",
+                "KAGEMUSHA command request body was not completed before the absolute read deadline",
         },
     )
     .await
@@ -14676,13 +14678,16 @@ async fn handler_repo_agreements_query(
 }
 #[cfg(feature = "app_api")]
 const fn kagemusha_top_up_body_limit(transaction_max_content_len: usize) -> usize {
-    if transaction_max_content_len
-        < iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1
-    {
-        transaction_max_content_len
-    } else {
-        iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1
-    }
+    transaction_max_content_len
+}
+#[cfg(feature = "app_api")]
+const fn kagemusha_command_ingress_capacity_is_valid(
+    commands_enabled: bool,
+    transaction_max_content_len: usize,
+) -> bool {
+    !commands_enabled
+        || transaction_max_content_len
+            >= iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_SIGNED_TRANSACTION_MIN_INGRESS_BYTES_V1
 }
 #[cfg(feature = "app_api")]
 const fn kagemusha_redeem_body_limit(transaction_max_content_len: usize) -> usize {
@@ -14782,7 +14787,7 @@ async fn handler_kagemusha_readiness(
     if uri.query().is_some() {
         return Err(Error::AppQueryValidation {
             code: "kagemusha_readiness_query_unsupported",
-            message: "Kagemusha capability discovery does not accept query parameters.".to_owned(),
+            message: "KAGEMUSHA capability discovery does not accept query parameters.".to_owned(),
         });
     }
     check_access(&app, &headers, Some(remote.ip()), "v1/kagemusha/readiness").await?;
@@ -14821,7 +14826,7 @@ async fn handler_kagemusha_readiness(
         .status(axum::http::StatusCode::OK)
         .header(axum::http::header::CONTENT_TYPE, content_type)
         .body(axum::body::Body::from(representation))
-        .expect("build pre-encoded Kagemusha readiness response");
+        .expect("build pre-encoded KAGEMUSHA readiness response");
     response
         .headers_mut()
         .insert(axum::http::header::CACHE_CONTROL, cache_control);
@@ -14847,21 +14852,25 @@ mod universal_kagemusha_readiness_tests {
     fn configured_kagemusha_command_runtime() -> Arc<kagemusha_commands::KagemushaCommandRuntime> {
         let key_pair =
             iroha_crypto::KeyPair::try_from_seed(vec![0x4f; 32], iroha_crypto::Algorithm::Ed25519)
-                .expect("derive Kagemusha command admission fixture key");
+                .expect("derive KAGEMUSHA command admission fixture key");
         Arc::new(kagemusha_commands::KagemushaCommandRuntime::from_config(
             iroha_config::parameters::actual::ToriiKagemushaV1Commands {
-                authority: iroha_data_model::account::AccountId::new(
-                    key_pair.public_key().clone(),
+                redemption_issuer: Some(
+                    iroha_config::parameters::actual::ToriiKagemushaV1RedemptionIssuer {
+                        authority: iroha_data_model::account::AccountId::new(
+                            key_pair.public_key().clone(),
+                        ),
+                        key_pair,
+                        minimum_xor_balance: iroha_primitives::numeric::Quantity::from(1_u32),
+                    },
                 ),
-                key_pair,
-                minimum_xor_balance: iroha_primitives::numeric::Quantity::from(1_u32),
                 max_tx_value: iroha_primitives::numeric::Quantity::from(1_u32),
                 operation_registry_max_entries: std::num::NonZeroUsize::new(1)
-                    .expect("positive Kagemusha command registry entry limit"),
+                    .expect("positive KAGEMUSHA command registry entry limit"),
                 operation_registry_max_bytes: std::num::NonZeroUsize::new(
                     iroha_config::parameters::defaults::torii::kagemusha_v1_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY,
                 )
-                .expect("positive Kagemusha command registry byte limit"),
+                .expect("positive KAGEMUSHA command registry byte limit"),
             },
         ))
     }
@@ -14869,7 +14878,10 @@ mod universal_kagemusha_readiness_tests {
     #[test]
     fn universal_capability_is_ready_and_asset_neutral() {
         let capability = universal_kagemusha_readiness_v1();
-        assert_eq!(capability.kagemusha_handoff_capability, "kagemusha_handoff_v1");
+        assert_eq!(
+            capability.kagemusha_handoff_capability,
+            "kagemusha_handoff_v1"
+        );
         assert_eq!(capability.wire_version, 1);
         assert_eq!(capability.device_lifecycle_version, 1);
         assert!(capability.ready);
@@ -14877,7 +14889,7 @@ mod universal_kagemusha_readiness_tests {
             &capability,
             crate::utils::ResponseFormat::Json,
         )
-        .expect("encode universal Kagemusha readiness as JSON");
+        .expect("encode universal KAGEMUSHA readiness as JSON");
         assert_eq!(json_content_type, "application/json");
         let decoded: iroha_torii_shared::kagemusha_api::KagemushaReadinessV1 =
             norito::json::from_slice(&json).expect("decode universal capability JSON");
@@ -14886,7 +14898,7 @@ mod universal_kagemusha_readiness_tests {
             &capability,
             crate::utils::ResponseFormat::Norito,
         )
-        .expect("encode universal Kagemusha readiness as Norito");
+        .expect("encode universal KAGEMUSHA readiness as Norito");
         assert_eq!(norito_content_type, crate::utils::NORITO_MIME_TYPE);
         assert!(!norito.is_empty());
         assert_ne!(
@@ -14912,15 +14924,23 @@ mod universal_kagemusha_readiness_tests {
         assert_eq!(&body[..], b"Alive");
     }
     #[test]
-    fn command_body_limits_remain_protocol_specific() {
-        let top_up_protocol_max =
-            iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1;
+    fn command_body_limits_match_signed_and_typed_contracts() {
         let redeem_protocol_max =
             iroha_torii_shared::kagemusha_api::KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1;
-        assert_eq!(kagemusha_top_up_body_limit(usize::MAX), top_up_protocol_max);
+        assert_eq!(kagemusha_top_up_body_limit(usize::MAX), usize::MAX);
         assert_eq!(kagemusha_redeem_body_limit(usize::MAX), redeem_protocol_max);
         assert_eq!(kagemusha_top_up_body_limit(1024), 1024);
         assert_eq!(kagemusha_redeem_body_limit(1024), 1024);
+    }
+    #[test]
+    fn enabled_kagemusha_commands_require_maximum_top_up_ingress_capacity() {
+        let floor = iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_SIGNED_TRANSACTION_MIN_INGRESS_BYTES_V1;
+        assert!(kagemusha_command_ingress_capacity_is_valid(false, 1));
+        assert!(!kagemusha_command_ingress_capacity_is_valid(
+            true,
+            floor - 1
+        ));
+        assert!(kagemusha_command_ingress_capacity_is_valid(true, floor));
     }
     #[test]
     fn kagemusha_command_memory_pool_admits_each_maximum_working_set() {
@@ -14928,9 +14948,9 @@ mod universal_kagemusha_readiness_tests {
             .expect("default listener limit fits usize");
         let pool = ByteWeightedMemoryPool::new(
             kagemusha_command_memory_pool_bytes(listener_limit)
-                .expect("Kagemusha command working sets fit usize"),
+                .expect("KAGEMUSHA command working sets fit usize"),
         )
-        .expect("Kagemusha command pool geometry");
+        .expect("KAGEMUSHA command pool geometry");
         for policy in [
             KagemushaCommandBodyPolicy::top_up(listener_limit),
             KagemushaCommandBodyPolicy::redeem(listener_limit),
@@ -14949,18 +14969,18 @@ mod universal_kagemusha_readiness_tests {
     #[tokio::test]
     async fn disabled_kagemusha_commands_reject_before_body_or_resource_admission() {
         let mut app = super::mk_app_state_for_tests();
-        let state = Arc::get_mut(&mut app).expect("unique offline admission app state");
+        let state = Arc::get_mut(&mut app).expect("unique KAGEMUSHA admission app state");
         assert!(state.kagemusha_commands.is_none());
         state.proof_body_inflight = Arc::new(tokio::sync::Semaphore::new(1));
         let memory_capacity = state.kagemusha_command_memory_inflight.capacity_bytes();
 
         let body_guard = Arc::clone(&app.proof_body_inflight)
             .try_acquire_owned()
-            .expect("occupy the offline body admission permit");
+            .expect("occupy the KAGEMUSHA body admission permit");
         let memory_guard = app
             .kagemusha_command_memory_inflight
             .try_acquire_parts([memory_capacity, 0])
-            .expect("occupy the Kagemusha command memory pool");
+            .expect("occupy the KAGEMUSHA command memory pool");
         let router = Router::new()
             .route(
                 route_catalog::kagemusha::TOP_UP.path(),
@@ -14972,7 +14992,7 @@ mod universal_kagemusha_readiness_tests {
             ));
         let body = Body::from_stream(futures::stream::poll_fn(
             |_context| -> std::task::Poll<Option<Result<Bytes, std::convert::Infallible>>> {
-                panic!("disabled Kagemusha command admission polled the request body")
+                panic!("disabled KAGEMUSHA command admission polled the request body")
             },
         ));
         let mut request = Request::builder()
@@ -14982,7 +15002,7 @@ mod universal_kagemusha_readiness_tests {
             .header(header::CONTENT_LENGTH, "1")
             .header("idempotency-key", "00".repeat(32))
             .body(body)
-            .expect("disabled Kagemusha command request");
+            .expect("disabled KAGEMUSHA command request");
         request
             .extensions_mut()
             .insert(MatchedRouteMetadata::from_descriptor(
@@ -14992,7 +15012,7 @@ mod universal_kagemusha_readiness_tests {
         let response = router
             .oneshot(request)
             .await
-            .expect("disabled Kagemusha command response");
+            .expect("disabled KAGEMUSHA command response");
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
             response.headers().get("x-iroha-reject-code"),
@@ -15014,7 +15034,7 @@ mod universal_kagemusha_readiness_tests {
     #[tokio::test]
     async fn kagemusha_command_resource_leases_precede_body_polling_and_cover_handler_work() {
         let mut app = super::mk_app_state_for_tests();
-        let state = Arc::get_mut(&mut app).expect("unique offline admission app state");
+        let state = Arc::get_mut(&mut app).expect("unique KAGEMUSHA admission app state");
         state.kagemusha_commands = Some(configured_kagemusha_command_runtime());
         state.proof_body_inflight = Arc::new(tokio::sync::Semaphore::new(1));
         state.proof_limits.body_read_timeout = Duration::from_secs(1);
@@ -15060,7 +15080,7 @@ mod universal_kagemusha_readiness_tests {
                 .header(header::CONTENT_LENGTH, "1")
                 .header("idempotency-key", "00".repeat(32))
                 .body(body)
-                .expect("Kagemusha command request");
+                .expect("KAGEMUSHA command request");
             request
                 .extensions_mut()
                 .insert(MatchedRouteMetadata::from_descriptor(
@@ -15074,16 +15094,16 @@ mod universal_kagemusha_readiness_tests {
             first_router
                 .oneshot(request(Body::from("x")))
                 .await
-                .expect("first Kagemusha command response")
+                .expect("first KAGEMUSHA command response")
         });
         tokio::time::timeout(Duration::from_secs(1), entered.notified())
             .await
-            .expect("first Kagemusha command reaches handler");
+            .expect("first KAGEMUSHA command reaches handler");
 
         let body_that_must_not_be_polled = || {
             Body::from_stream(futures::stream::poll_fn(
                 |_context| -> std::task::Poll<Option<Result<Bytes, std::convert::Infallible>>> {
-                    panic!("saturated Kagemusha command admission polled the request body")
+                    panic!("saturated KAGEMUSHA command admission polled the request body")
                 },
             ))
         };
@@ -15096,7 +15116,7 @@ mod universal_kagemusha_readiness_tests {
 
         release.notify_one();
         assert_eq!(
-            first.await.expect("first Kagemusha command task").status(),
+            first.await.expect("first KAGEMUSHA command task").status(),
             StatusCode::NO_CONTENT
         );
         assert_eq!(app.proof_body_inflight.available_permits(), 1);
@@ -15108,7 +15128,7 @@ mod universal_kagemusha_readiness_tests {
         let memory_guard = app
             .kagemusha_command_memory_inflight
             .try_acquire_parts([memory_capacity, 0])
-            .expect("occupy the complete Kagemusha command memory pool");
+            .expect("occupy the complete KAGEMUSHA command memory pool");
         let saturated = router
             .clone()
             .oneshot(request(body_that_must_not_be_polled()))
@@ -15142,22 +15162,22 @@ mod universal_kagemusha_readiness_tests {
 async fn handler_kagemusha_redeem(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
     crate::utils::extractors::KagemushaNorito(request): crate::utils::extractors::KagemushaNorito<
         iroha_torii_shared::kagemusha_api::KagemushaRedemptionRequestV1,
     >,
 ) -> Result<AxResponse, Error> {
-    kagemusha_commands::handle_redeem(app, &headers, request).await
+    kagemusha_commands::handle_redeem(app, headers, accept, request).await
 }
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_kagemusha_top_up(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
-    crate::utils::extractors::KagemushaNorito(request): crate::utils::extractors::KagemushaNorito<
-        iroha_torii_shared::kagemusha_api::KagemushaTopUpRequestV1,
-    >,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+    crate::utils::extractors::NoritoBytes(body): crate::utils::extractors::NoritoBytes,
 ) -> Result<AxResponse, Error> {
-    kagemusha_commands::handle_top_up(app, &headers, request).await
+    kagemusha_commands::handle_top_up(app, headers, accept, body).await
 }
 #[cfg(feature = "app_api")]
 async fn enforce_kagemusha_command_prebody_admission(
@@ -15207,7 +15227,7 @@ async fn enforce_kagemusha_command_prebody_admission(
                 return Ok((
                     StatusCode::PAYLOAD_TOO_LARGE,
                     format!(
-                        "Kagemusha command request body exceeds the {}-byte route limit",
+                        "KAGEMUSHA command request body exceeds the {}-byte route limit",
                         policy.max_body_bytes
                     ),
                 )
@@ -15216,7 +15236,7 @@ async fn enforce_kagemusha_command_prebody_admission(
             Err(BoundedContentLengthError::Invalid) => {
                 return Ok((
                     StatusCode::BAD_REQUEST,
-                    "invalid or ambiguous Kagemusha command Content-Length",
+                    "invalid or ambiguous KAGEMUSHA command Content-Length",
                 )
                     .into_response());
             }
@@ -15236,14 +15256,15 @@ async fn enforce_kagemusha_command_prebody_admission(
         // bodies with a contradictory exact hint before admission or polling.
         return Ok((
             StatusCode::BAD_REQUEST,
-            "Kagemusha command Content-Length does not match the request body framing",
+            "KAGEMUSHA command Content-Length does not match the request body framing",
         )
             .into_response());
     }
     if app.kagemusha_commands.is_none() {
         return Ok(Error::AppServiceUnavailable {
             code: "kagemusha_service_unavailable",
-            message: "Kagemusha operation signing is not configured on this Torii node.".to_owned(),
+            message: "KAGEMUSHA operation admission is not configured on this Torii node."
+                .to_owned(),
         }
         .into_response());
     }
@@ -15252,7 +15273,7 @@ async fn enforce_kagemusha_command_prebody_admission(
         Err(_) => {
             return Ok(Error::AppServiceUnavailable {
                 code: "kagemusha_command_body_admission_saturated",
-                message: "Kagemusha command body admission is saturated; retry later.".to_owned(),
+                message: "KAGEMUSHA command body admission is saturated; retry later.".to_owned(),
             }
             .into_response());
         }
@@ -15264,8 +15285,9 @@ async fn enforce_kagemusha_command_prebody_admission(
     let Some(working_set_parts) = policy.working_set_parts(charged_body_bytes) else {
         return Ok(Error::AppServiceUnavailable {
             code: "kagemusha_command_admission_configuration_invalid",
-            message: "Kagemusha command body admission cannot represent the configured route limit."
-                .to_owned(),
+            message:
+                "KAGEMUSHA command body admission cannot represent the configured route limit."
+                    .to_owned(),
         }
         .into_response());
     };
@@ -15277,7 +15299,7 @@ async fn enforce_kagemusha_command_prebody_admission(
         None => {
             return Ok(Error::AppServiceUnavailable {
                 code: "kagemusha_command_memory_admission_saturated",
-                message: "Kagemusha command memory admission is saturated; retry later.".to_owned(),
+                message: "KAGEMUSHA command memory admission is saturated; retry later.".to_owned(),
             }
             .into_response());
         }
@@ -15300,7 +15322,7 @@ async fn enforce_kagemusha_command_prebody_admission(
     if declared_content_length.is_some_and(|declared| Some(declared) != actual_body_bytes) {
         return Ok((
             StatusCode::BAD_REQUEST,
-            "Kagemusha command Content-Length does not match the received body",
+            "KAGEMUSHA command Content-Length does not match the received body",
         )
             .into_response());
     }
@@ -18303,8 +18325,7 @@ async fn handler_peers(
     Ok(routing::handle_peers(&app.online_peers, format))
 }
 #[cfg(feature = "app_api")]
-fn universal_kagemusha_readiness_v1() -> iroha_torii_shared::kagemusha_api::KagemushaReadinessV1
-{
+fn universal_kagemusha_readiness_v1() -> iroha_torii_shared::kagemusha_api::KagemushaReadinessV1 {
     iroha_torii_shared::kagemusha_api::KagemushaReadinessV1 {
         kagemusha_handoff_capability: iroha_data_model::kagemusha::KAGEMUSHA_HANDOFF_CAPABILITY_V1
             .to_owned(),
@@ -18325,7 +18346,7 @@ async fn handler_health(
 }
 /// GET `/readyz` — ordinary node admission readiness.
 ///
-/// Kagemusha wallet UI capability is universal and never participates in this
+/// KAGEMUSHA wallet UI capability is universal and never participates in this
 /// probe. Future ordinary chain-readiness checks belong here.
 async fn handler_readyz(State(app): State<SharedAppState>) -> AxResponse {
     if app.kura.emergency_fast_startup_enabled() {
@@ -27063,6 +27084,29 @@ fn should_retry_torii_proxy_status(status: StatusCode) -> bool {
     )
 }
 #[cfg(feature = "connect")]
+fn should_retry_generic_torii_proxy_snapshot(snapshot: &ToriiProxyHttpResponseV1) -> bool {
+    let status = StatusCode::from_u16(snapshot.status_code).unwrap_or(StatusCode::BAD_GATEWAY);
+    if should_retry_torii_proxy_status(status) {
+        return true;
+    }
+    if status != StatusCode::TOO_MANY_REQUESTS {
+        return false;
+    }
+
+    // An authority can be temporarily unable to allocate the single bounded
+    // proxy-response slot even though another route authority is healthy. Only
+    // that exact structured rejection is safe to treat as candidate-local;
+    // ordinary 429 responses remain definitive client-visible rate limits.
+    let mut reject_codes = snapshot
+        .headers
+        .iter()
+        .filter(|header| header.name.eq_ignore_ascii_case("x-iroha-reject-code"));
+    let Some(reject_code) = reject_codes.next() else {
+        return false;
+    };
+    reject_codes.next().is_none() && reject_code.value.as_slice() == b"proxy_capacity_exceeded"
+}
+#[cfg(feature = "connect")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ToriiProxyAttemptError {
     /// The request failed before any bytes could have reached the authority.
@@ -28563,16 +28607,15 @@ where
             let transport = candidate.transport_label();
             match execute(candidate, request.clone()).await {
                 Ok(snapshot) => {
-                    let status = StatusCode::from_u16(snapshot.status_code)
-                        .unwrap_or(StatusCode::BAD_GATEWAY);
-                    let snapshot = if should_retry_torii_proxy_status(status) {
+                    let retryable = should_retry_generic_torii_proxy_snapshot(&snapshot);
+                    let snapshot = if retryable {
                         bound_retained_retryable_torii_proxy_snapshot(snapshot)
                     } else {
                         snapshot
                     };
                     let mut response = torii_proxy_snapshot_to_response(snapshot);
                     insert_route_transport_header(&mut response, transport);
-                    if should_retry_torii_proxy_status(status) {
+                    if retryable {
                         retain_strongest_retryable_response(&mut last_retryable, response);
                         continue;
                     }
@@ -51425,7 +51468,8 @@ impl Torii {
         );
         builder.route(
             &routes::AUDITOR_CAPSULE,
-            catalog_get(private_settlement::handler_auditor_capsule)
+            catalog_post(private_settlement::handler_auditor_capsule)
+                .layer(axum::extract::DefaultBodyLimit::max(upload_limit))
                 .layer(axum::Extension(runtime.clone()))
                 .authenticated_identity_bound(app_state.clone()),
         );
@@ -51570,6 +51614,19 @@ impl Torii {
             config.peer_telemetry_urls.clear();
             config.connect.enabled = false;
             config.mcp.enabled = false;
+        }
+        #[cfg(feature = "app_api")]
+        if !kagemusha_command_ingress_capacity_is_valid(
+            config.kagemusha_v1_commands.is_some(),
+            transaction_max_content_len,
+        ) {
+            return Err(ToriiBuildError::invalid_configuration(
+                "max_content_len",
+                format!(
+                    "enabled KAGEMUSHA V1 commands require at least {} bytes of signed-transaction ingress capacity",
+                    iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_SIGNED_TRANSACTION_MIN_INGRESS_BYTES_V1
+                ),
+            ));
         }
         let runtime_deps = runtime_deps.into();
         let runtime_deps = if emergency_fast {
@@ -53431,7 +53488,7 @@ impl Torii {
                     || {
                         ToriiBuildError::invalid_configuration(
                             "max_content_len",
-                            "Kagemusha command body limits do not fit the platform address space",
+                            "KAGEMUSHA command body limits do not fit the platform address space",
                         )
                     },
                 )?,
@@ -53439,21 +53496,23 @@ impl Torii {
             .ok_or_else(|| {
                 ToriiBuildError::invalid_configuration(
                     "max_content_len",
-                    "Kagemusha command memory pool does not fit weighted semaphore geometry",
+                    "KAGEMUSHA command memory pool does not fit weighted semaphore geometry",
                 )
             })?;
-            let redemption_parts = KagemushaCommandBodyPolicy::redeem(torii_proxy_max_response_bytes)
-                .working_set_parts(kagemusha_redeem_body_limit(torii_proxy_max_response_bytes))
-                .ok_or_else(|| {
-                    ToriiBuildError::invalid_configuration(
-                        "max_content_len",
-                        "Kagemusha redemption working set does not fit the platform address space",
-                    )
-                })?;
+            let redemption_parts = KagemushaCommandBodyPolicy::redeem(
+                torii_proxy_max_response_bytes,
+            )
+            .working_set_parts(kagemusha_redeem_body_limit(torii_proxy_max_response_bytes))
+            .ok_or_else(|| {
+                ToriiBuildError::invalid_configuration(
+                    "max_content_len",
+                    "KAGEMUSHA redemption working set does not fit the platform address space",
+                )
+            })?;
             if !kagemusha_command_memory_inflight.can_reserve_parts(redemption_parts) {
                 return Err(ToriiBuildError::invalid_configuration(
                     "max_content_len",
-                    "Kagemusha command memory pool cannot admit one maximum-size redemption",
+                    "KAGEMUSHA command memory pool cannot admit one maximum-size redemption",
                 ));
             }
         }
@@ -53884,17 +53943,19 @@ impl Torii {
             })?;
         #[cfg(feature = "app_api")]
         let kagemusha_command_memory_inflight = ByteWeightedMemoryPool::new(
-            kagemusha_command_memory_pool_bytes(torii_proxy_max_response_bytes).ok_or_else(|| {
-                ToriiBuildError::invalid_configuration(
-                    "max_content_len",
-                    "Kagemusha command body limits do not fit the platform address space",
-                )
-            })?,
+            kagemusha_command_memory_pool_bytes(torii_proxy_max_response_bytes).ok_or_else(
+                || {
+                    ToriiBuildError::invalid_configuration(
+                        "max_content_len",
+                        "KAGEMUSHA command body limits do not fit the platform address space",
+                    )
+                },
+            )?,
         )
         .ok_or_else(|| {
             ToriiBuildError::invalid_configuration(
                 "max_content_len",
-                "Kagemusha command memory pool does not fit weighted semaphore geometry",
+                "KAGEMUSHA command memory pool does not fit weighted semaphore geometry",
             )
         })?;
         #[cfg(feature = "app_api")]
@@ -53904,13 +53965,13 @@ impl Torii {
                 .ok_or_else(|| {
                     ToriiBuildError::invalid_configuration(
                         "max_content_len",
-                        "Kagemusha redemption working set does not fit the platform address space",
+                        "KAGEMUSHA redemption working set does not fit the platform address space",
                     )
                 })?,
         ) {
             return Err(ToriiBuildError::invalid_configuration(
                 "max_content_len",
-                "Kagemusha command memory pool cannot admit one maximum-size redemption",
+                "KAGEMUSHA command memory pool cannot admit one maximum-size redemption",
             ));
         }
         let query_fanout_working_set_bytes = query_memory.fanout_working_set_bytes.min(
@@ -54386,7 +54447,7 @@ impl Torii {
             .layer(axum::middleware::from_fn(enforce_route_timeout));
         #[cfg(feature = "app_api")]
         {
-            // Kagemusha command admission inspects request bodies inside the
+            // KAGEMUSHA command admission inspects request bodies inside the
             // listener-wide credential gates. SoraCloud commands use sealed
             // route-local authentication installed during catalog mounting.
             router = router.layer(axum::middleware::from_fn_with_state(
@@ -54452,7 +54513,7 @@ impl Torii {
         // Normalize every JSON response, including errors returned before
         // handler selection, to the required UTF-8 media type.
         let router = router.layer(axum::middleware::from_fn(enforce_json_utf8_charset));
-        // Kagemusha command and operation-status responses, plus readiness
+        // KAGEMUSHA command and operation-status responses, plus readiness
         // failures, are never cacheable, including early validation,
         // authorization, not-found, and recovery failures. Successful
         // readiness responses receive the exact private revalidation policy

@@ -2177,10 +2177,10 @@ pub mod torii {
     /// Maximum proof request payload size (bytes).
     pub const PROOF_MAX_BODY_BYTES: Bytes = Bytes(8 * 1024 * 1024); // 8 MiB
     /// Maximum proof-bearing request bodies buffered concurrently before handler admission.
-    /// This includes SCCP submissions and Kagemusha V1 top-up/redemption commands.
+    /// This includes SCCP submissions and KAGEMUSHA V1 top-up/redemption commands.
     pub const PROOF_BODY_MAX_INFLIGHT: NonZeroUsize = nonzero!(8usize);
     /// Absolute deadline for reading one admitted proof-bearing request body.
-    /// This includes SCCP submissions and Kagemusha V1 top-up/redemption commands.
+    /// This includes SCCP submissions and KAGEMUSHA V1 top-up/redemption commands.
     pub const PROOF_BODY_READ_TIMEOUT_MS: u64 = 15_000;
     /// Steady-state egress budget for proof responses (bytes/sec). None disables.
     pub const PROOF_EGRESS_BYTES_PER_SEC: Option<u64> = Some(8 * 1024 * 1024); // 8 MiB/s
@@ -2526,7 +2526,7 @@ pub mod torii {
         /// Whether verified finalized global-beacon seeds are mixed into faucet challenges.
         pub const POW_BEACON_SEED_ENABLED: bool = false;
     }
-    /// Kagemusha V1 command-submission defaults.
+    /// KAGEMUSHA V1 command-submission defaults.
     pub mod kagemusha_v1_commands {
         use iroha_primitives::numeric::Quantity;
         /// Maximum authorized value for one offline transaction.

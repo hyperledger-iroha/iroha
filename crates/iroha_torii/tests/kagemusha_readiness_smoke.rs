@@ -1,4 +1,4 @@
-//! Router smoke tests for the first-release Kagemusha API.
+//! Router smoke tests for the first-release KAGEMUSHA API.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "app_api")]
 use axum::body::{Body, Bytes};
@@ -38,10 +38,10 @@ fn tracked_oversized_body(limit: u64) -> (Body, Arc<AtomicUsize>) {
 }
 #[tokio::test]
 async fn kagemusha_router_exposes_only_the_final_first_release_contract() {
-    const OFFLINE_COMMAND_BODY_LIMIT: u64 = 2_200_000;
+    const KAGEMUSHA_COMMAND_BODY_LIMIT: u64 = 2_200_000;
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = mk_minimal_root_cfg();
-    cfg.torii.max_content_len = OFFLINE_COMMAND_BODY_LIMIT.into();
+    cfg.torii.max_content_len = KAGEMUSHA_COMMAND_BODY_LIMIT.into();
     let torii = fixtures::StandardToriiHarness::new(&cfg, World::default());
     let app = torii.router();
     let readiness = fixtures::request(
@@ -61,10 +61,13 @@ async fn kagemusha_router_exposes_only_the_final_first_release_contract() {
         Some(&HeaderValue::from_static("application/json; charset=utf-8"))
     );
     let readiness_body =
-        fixtures::response_body(readiness, "collect universal Kagemusha readiness").await;
+        fixtures::response_body(readiness, "collect universal KAGEMUSHA readiness").await;
     let capability: iroha_torii_shared::kagemusha_api::KagemushaReadinessV1 =
-        norito::json::from_slice(&readiness_body).expect("decode universal Kagemusha readiness");
-    assert_eq!(capability.kagemusha_handoff_capability, "kagemusha_handoff_v1");
+        norito::json::from_slice(&readiness_body).expect("decode universal KAGEMUSHA readiness");
+    assert_eq!(
+        capability.kagemusha_handoff_capability,
+        "kagemusha_handoff_v1"
+    );
     assert_eq!(capability.wire_version, 1);
     assert_eq!(capability.device_lifecycle_version, 1);
     assert!(capability.ready);
@@ -108,7 +111,7 @@ async fn kagemusha_router_exposes_only_the_final_first_release_contract() {
                 "kagemusha_auth_header_unsupported",
             ),
         ] {
-            let (body, body_polls) = tracked_oversized_body(OFFLINE_COMMAND_BODY_LIMIT);
+            let (body, body_polls) = tracked_oversized_body(KAGEMUSHA_COMMAND_BODY_LIMIT);
             let mut request = Request::builder()
                 .method(Method::POST)
                 .uri(path)
@@ -305,7 +308,7 @@ async fn kagemusha_router_exposes_only_the_final_first_release_contract() {
         }
     }
     for path in ["/v1/kagemusha/top-up", "/v1/kagemusha/redeem"] {
-        let oversized_len = usize::try_from(OFFLINE_COMMAND_BODY_LIMIT)
+        let oversized_len = usize::try_from(KAGEMUSHA_COMMAND_BODY_LIMIT)
             .expect("test limit fits usize")
             .checked_add(1)
             .expect("test limit can be incremented");
@@ -336,7 +339,7 @@ async fn kagemusha_router_exposes_only_the_final_first_release_contract() {
             );
             assert!(
                 response.headers().get("x-iroha-reject-code").is_none(),
-                "Kagemusha 415 is a transport-media rejection, not an exact application rejection: path={path}"
+                "KAGEMUSHA 415 is a transport-media rejection, not an exact application rejection: path={path}"
             );
             let body = fixtures::response_body(response, "collect content-type rejection").await;
             let error: iroha_torii_shared::ErrorEnvelope =
@@ -354,8 +357,10 @@ async fn kagemusha_router_exposes_only_the_final_first_release_contract() {
                 .extension(connect_info())
                 .body(Body::from(vec![
                     b' ';
-                    usize::try_from(OFFLINE_COMMAND_BODY_LIMIT)
-                        .expect("test limit fits usize")
+                    usize::try_from(
+                        KAGEMUSHA_COMMAND_BODY_LIMIT
+                    )
+                    .expect("test limit fits usize")
                 ]))
                 .expect("large request within the configured limit"),
         )
@@ -374,8 +379,10 @@ async fn kagemusha_router_exposes_only_the_final_first_release_contract() {
         let body_chunks = futures::stream::iter([
             Ok::<_, Infallible>(Bytes::from(vec![
                 b' ';
-                usize::try_from(OFFLINE_COMMAND_BODY_LIMIT)
-                    .expect("test limit fits usize")
+                usize::try_from(
+                    KAGEMUSHA_COMMAND_BODY_LIMIT
+                )
+                .expect("test limit fits usize")
             ])),
             Ok(Bytes::from_static(b" ")),
         ]);
@@ -403,7 +410,7 @@ async fn kagemusha_router_exposes_only_the_final_first_release_contract() {
                 .headers()
                 .get("x-iroha-reject-code")
                 .is_none(),
-            "Kagemusha 413 is a body-extractor rejection, not an exact application rejection: path={path}"
+            "KAGEMUSHA 413 is a body-extractor rejection, not an exact application rejection: path={path}"
         );
         let body =
             fixtures::response_body(above_configured_limit, "collect over-limit response").await;

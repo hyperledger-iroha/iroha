@@ -2677,6 +2677,7 @@ where
             let mut profiles: Vec<String> = Vec::new();
             let mut kagami: Option<PathBuf> = None;
             let mut nexus_xor_asset_definition_id: Option<String> = None;
+            let mut kagemusha_mint_finality_parameters_dir: Option<PathBuf> = None;
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
                 match arg.as_str() {
@@ -2707,6 +2708,16 @@ where
                         };
                         nexus_xor_asset_definition_id = Some(asset_definition_id);
                     }
+                    "--kagemusha-mint-finality-parameters-dir" => {
+                        let Some(path) = pending.next() else {
+                            return Err(
+                                "expected path after --kagemusha-mint-finality-parameters-dir"
+                                    .into(),
+                            );
+                        };
+                        kagemusha_mint_finality_parameters_dir =
+                            Some(normalize_path(Path::new(&path))?);
+                    }
                     flag => {
                         return Err(format!("unknown flag for kagami-profiles: {flag}").into());
                     }
@@ -2715,12 +2726,15 @@ where
             let output = output
                 .map(Ok)
                 .unwrap_or_else(|| normalize_path(Path::new("defaults/kagami")))?;
+            let kagemusha_mint_finality_parameters_dir = kagemusha_mint_finality_parameters_dir
+                .ok_or("kagami-profiles requires --kagemusha-mint-finality-parameters-dir <DIR>")?;
             Ok(CommandKind::KagamiProfiles {
                 options: kagami_profiles::KagamiProfileOptions {
                     output,
                     profiles,
                     kagami_override: kagami,
                     nexus_xor_asset_definition_id,
+                    kagemusha_mint_finality_parameters_dir,
                 },
             })
         }
@@ -11944,6 +11958,15 @@ mod openapi_tests {
                 .to_string()
                 .contains("empty/stub specifications are forbidden")
         );
+    }
+    #[test]
+    fn current_router_document_satisfies_release_validation() {
+        let bytes = require_release_router_openapi(try_generate_router_openapi())
+            .expect("the current Torii router must satisfy release OpenAPI validation");
+        let spec = norito::json::from_slice::<Value>(&bytes)
+            .expect("validated router OpenAPI remains canonical JSON");
+        openapi_validation::validate_release_openapi_spec(&spec)
+            .expect("the canonicalized router document remains release-valid");
     }
     #[test]
     fn router_generation_canonicalizes_json_without_losing_exact_integers() {

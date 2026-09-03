@@ -22,6 +22,7 @@ mod client_configs;
 mod codec;
 mod crypto;
 mod genesis;
+mod kagemusha;
 mod kura;
 /// Helpers for generating a multi-peer localnet (configs, scripts, genesis).
 pub mod localnet;
@@ -146,6 +147,8 @@ enum Command {
     Docker(swarm::Args),
     /// Generate cryptographic key pairs and optional validator Proofs-of-Possession
     Keys(Box<crypto::Args>),
+    /// Authenticate one complete KAGEMUSHA V1 release and its deployment evidence
+    Kagemusha(kagemusha::Args),
     /// Commands related to genesis
     #[clap(subcommand)]
     Genesis(genesis::Args),
@@ -191,6 +194,7 @@ impl<T: Write> RunArgs<T> for Command {
             Localnet(args) => args.run(writer),
             Docker(args) => args.run(writer),
             Keys(args) => args.run(writer),
+            Kagemusha(args) => args.run(writer),
             Genesis(args) => args.run(writer),
             PrivacyBootstrap(args) => args.run(writer),
             Verify(args) => args.run(writer),
@@ -239,7 +243,7 @@ mod tests {
         assert!(
             parse(
                 "kagami privacy-bootstrap validate-taira-nevo-review-v1 \
-                 --unsigned-genesis ./unsigned-genesis.json \
+                 --unsigned-genesis ./unsigned-genesis.template.json \
                  --review ./review.json"
             )
             .is_ok()
@@ -252,11 +256,11 @@ mod tests {
                  --broker-public-export ./broker-public.json \
                  --plan-template ./privacy-plan.staging.json \
                  --config-template ./config.staging.toml \
-                 --genesis-template ./genesis.staging.json \
+                 --genesis-template ./genesis.staging.template.json \
                  --nevo-review ./review.json \
                  --plan-output ./privacy-plan.release.json \
                  --config-output ./config.release.toml \
-                 --genesis-output ./genesis.release.json \
+                 --genesis-output ./genesis.release.template.json \
                  --broker-public-output ./broker-public.verified.json"
             )
             .is_ok()
@@ -274,7 +278,7 @@ mod tests {
         assert!(
             parse(
                 "kagami privacy-bootstrap validate-taira-nevo-review-v1 \
-                 --unsigned-genesis ./unsigned-genesis.json"
+                 --unsigned-genesis ./unsigned-genesis.template.json"
             )
             .is_err(),
             "NEVO validation without the review manifest must remain unavailable"
@@ -290,6 +294,60 @@ mod tests {
         assert!(
             parse("kagami privacy-bootstrap emit --output ./legacy.json").is_err(),
             "the first release has no compatibility command aliases"
+        );
+    }
+    #[test]
+    fn kagemusha_accepts_only_the_exact_release_authentication_contract() {
+        let exact = "kagami kagemusha authenticate-release-v1 \
+                     --manifest ./release.norito \
+                     --validation-receipt ./receipt.norito \
+                     --authority-policy ./policy.norito \
+                     --attestation ./attestation.norito \
+                     --recursive-profile ./recursive-profile.json \
+                     --artifact-root ./artifacts \
+                     --authority-review-projection ./authority-review.json \
+                     --authority-review-projection-sha256 \
+                     0000000000000000000000000000000000000000000000000000000000000000 \
+                     --native-artifact-manifest ./c-jni.manifest.json \
+                     --native-artifact-manifest-sha256 \
+                     1111111111111111111111111111111111111111111111111111111111111111 \
+                     --native-artifact ./libconnect_norito_bridge.so";
+        assert!(parse(exact).is_ok());
+        assert!(
+            parse(
+                "kagami kagemusha authenticate-release-v1 \
+                 --manifest ./release.norito \
+                 --validation-receipt ./receipt.norito \
+                 --authority-policy ./policy.norito \
+                 --attestation ./attestation.norito"
+            )
+            .is_err(),
+            "release identity alone cannot authenticate deployable artifacts"
+        );
+        assert!(
+            parse(
+                "kagami kagemusha authenticate-release \
+                 --manifest ./release.norito \
+                 --validation-receipt ./receipt.norito \
+                 --authority-policy ./policy.norito \
+                 --attestation ./attestation.norito"
+            )
+            .is_err(),
+            "the first release has no unversioned compatibility alias"
+        );
+        let retired = [
+            "kagami kagemusha verify-release-",
+            "v4 --manifest ./release.norito",
+        ]
+        .concat();
+        assert!(
+            parse(&retired).is_err(),
+            "the pre-release verifier command must remain deleted"
+        );
+        let with_abi_selector = format!("{exact} --abi-version 1");
+        assert!(
+            parse(&with_abi_selector).is_err(),
+            "the sole release format has no caller-selected ABI field"
         );
     }
     #[test]

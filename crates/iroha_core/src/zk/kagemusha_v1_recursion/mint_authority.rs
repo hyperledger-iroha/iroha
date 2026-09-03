@@ -46,9 +46,8 @@ use super::{
         DeferredLoader, DeferredScalar, KagemushaDeferredParentOutputV1, accumulator_limb_count,
         bind_accumulator_limbs, constrain_reciprocal_audit_plan_v1, deferred_field_chips_v1,
         deferred_loader_v1, finalize_deferred_audit_plan_v1,
-        load_and_constrain_parent_protocol_if_v1, load_native_accumulator,
-        kagemusha_protocol_structure_digest_v1, select_accumulator_v1, verify_fold,
-        verify_ordinary_proof_v1,
+        kagemusha_protocol_structure_digest_v1, load_and_constrain_parent_protocol_if_v1,
+        load_native_accumulator, select_accumulator_v1, verify_fold, verify_ordinary_proof_v1,
     },
     mint_helper::{
         KagemushaMintAuthorityStepV1, KagemushaMintCertificateJobsV1,
@@ -84,14 +83,20 @@ pub struct KagemushaMintAuthorityCheckpointV1 {
     pub release_id: DigestV1,
     /// Release-pinned genesis roster identifier.
     pub genesis_roster_id: DigestV1,
-    /// Canonical binding of both proof transcripts, audits, and histories.
+    /// SHA commitment to the inner paired authority metadata, proved in outer cells 20..21.
+    ///
+    /// Its inner audit/history inputs differ from the transported outer metadata. Shape
+    /// validation cannot recompute this commitment; both outer proofs must authenticate it.
     pub proof_binding_digest: DigestV1,
     /// Constant-size paired recursive proof.
     pub proof: KagemushaPairedProofV1,
 }
 
 impl KagemushaMintAuthorityCheckpointV1 {
-    /// Validate all non-cryptographic public bindings.
+    /// Validate non-cryptographic public bindings and canonical outer histories.
+    ///
+    /// The nonzero inner pair commitment is not authority by itself. The native verifier must
+    /// verify both compact outer proofs and terminally decide their complete histories.
     pub fn validate_shape(&self) -> Result<(), String> {
         if !matches!(
             self.step,
@@ -120,37 +125,10 @@ impl KagemushaMintAuthorityCheckpointV1 {
         {
             return Err("mint-authority checkpoint public binding is invalid".to_owned());
         }
-        let eq_history: &[u8; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1] = self
-            .proof
-            .eq_history
-            .as_slice()
-            .try_into()
-            .map_err(|_| "mint-authority Eq checkpoint history has wrong size".to_owned())?;
-        let ep_history: &[u8; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1] = self
-            .proof
-            .ep_history
-            .as_slice()
-            .try_into()
-            .map_err(|_| "mint-authority Ep checkpoint history has wrong size".to_owned())?;
-        let expected = KagemushaMintAuthorityPairBindingV1 {
-            step: self.step,
-            semantic_digest,
-            amount: self.statement.amount,
-            certificate_binding: self.certificate_binding,
-            authority_head: self.authority_head,
-            release_id: self.release_id,
-            genesis_roster_id: self.genesis_roster_id,
-            eq_protocol_digest: self.proof.eq_protocol_digest,
-            ep_protocol_digest: self.proof.ep_protocol_digest,
-            eq_deferred_audit: self.proof.eq_deferred_audit,
-            ep_deferred_audit: self.proof.ep_deferred_audit,
-            eq_history,
-            ep_history,
-        }
-        .canonical_digest();
-        if expected != self.proof_binding_digest {
-            return Err("mint-authority checkpoint paired binding differs".to_owned());
-        }
+        super::KagemushaEqAccumulatorV1::try_from_bytes(&self.proof.eq_history)
+            .map_err(|error| format!("invalid mint-authority Eq checkpoint history: {error}"))?;
+        super::KagemushaEpAccumulatorV1::try_from_bytes(&self.proof.ep_history)
+            .map_err(|error| format!("invalid mint-authority Ep checkpoint history: {error}"))?;
         Ok(())
     }
 }
@@ -181,13 +159,13 @@ pub(super) mod public_instance {
     pub const GENESIS_LO: usize = 10;
     /// High limb of the release-pinned genesis roster identifier.
     pub const GENESIS_HI: usize = 11;
-    /// Low limb of the Eq helper protocol identity.
+    /// Low limb of the Eq compact outer checkpoint protocol identity.
     pub const EQ_PROTOCOL_LO: usize = 12;
-    /// High limb of the Eq helper protocol identity.
+    /// High limb of the Eq compact outer checkpoint protocol identity.
     pub const EQ_PROTOCOL_HI: usize = 13;
-    /// Low limb of the Ep helper protocol identity.
+    /// Low limb of the Ep compact outer checkpoint protocol identity.
     pub const EP_PROTOCOL_LO: usize = 14;
-    /// High limb of the Ep helper protocol identity.
+    /// High limb of the Ep compact outer checkpoint protocol identity.
     pub const EP_PROTOCOL_HI: usize = 15;
     /// Low limb of the Eq scalar-verifier equation audit.
     pub const EQ_AUDIT_LO: usize = 16;
@@ -197,9 +175,9 @@ pub(super) mod public_instance {
     pub const EP_AUDIT_LO: usize = 18;
     /// High limb of the Ep scalar-verifier equation audit.
     pub const EP_AUDIT_HI: usize = 19;
-    /// Low limb of the canonical binding of both complete helper parities.
+    /// Low limb of the proven inner paired authority commitment.
     pub const PAIR_BINDING_LO: usize = 20;
-    /// High limb of the canonical binding of both complete helper parities.
+    /// High limb of the proven inner paired authority commitment.
     pub const PAIR_BINDING_HI: usize = 21;
     /// First limb of the complete carried IPA history.
     pub const HISTORY_START: usize = 22;
@@ -209,10 +187,11 @@ pub(super) mod public_instance {
 pub(super) const KAGEMUSHA_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1: usize =
     public_instance::HISTORY_START + accumulator_limb_count();
 
-/// Canonical public material shared by both halves of one mint-authority proof.
+/// Canonical inner public material shared by both halves of one mint-authority proof.
 ///
 /// The digest includes both complete history accumulators. A state proof therefore cannot splice
-/// an Eq helper from one certificate/authority chain with an Ep helper from another.
+/// an Eq helper from one certificate/authority chain with an Ep helper from another. The compact
+/// outer decider preserves the proved digest, not these inner audit/history inputs.
 #[derive(Clone, Copy, Debug)]
 pub struct KagemushaMintAuthorityPairBindingV1<'a> {
     /// Explicit helper branch.
@@ -951,5 +930,52 @@ mod tests {
         assert_eq!(public_instance::PAIR_BINDING_LO, 20);
         assert_eq!(public_instance::HISTORY_START, 22);
         assert_eq!(KAGEMUSHA_MINT_AUTHORITY_PUBLIC_INSTANCE_COUNT_V1, 56);
+    }
+
+    #[test]
+    fn compact_checkpoint_shape_preserves_inner_commitment_without_authorizing_it() {
+        let credit = super::super::tests::compact_mint_credit_fixture();
+        let mut checkpoint = KagemushaMintAuthorityCheckpointV1 {
+            step: KagemushaMintAuthorityStepV1::Bootstrap,
+            release_id: credit.statement.lifecycle.release_id,
+            statement: credit.statement,
+            certificate_binding: credit.finality_certificate_binding,
+            authority_head: credit.finality_authority_head,
+            genesis_roster_id: credit.finality_genesis_roster_id,
+            proof_binding_digest: credit.finality_proof_binding_digest,
+            proof: credit.proof,
+        };
+        // These are deliberately opaque mock proof bytes. Passing shape does not verify them.
+        checkpoint
+            .validate_shape()
+            .expect("compact bootstrap framing");
+        checkpoint.step = KagemushaMintAuthorityStepV1::Rotate;
+        checkpoint.proof_binding_digest = [0xB1; 32];
+        checkpoint
+            .validate_shape()
+            .expect("nonzero inner commitment remains opaque to shape");
+        for index in 0..10 {
+            let mut changed = checkpoint.clone();
+            match index {
+                0 => changed.step = KagemushaMintAuthorityStepV1::FinalizedMint,
+                1 => changed.proof_binding_digest = [0; 32],
+                2 => changed.certificate_binding = [0xB2; 32],
+                3 => changed.authority_head = [0xB3; 32],
+                4 => changed.release_id = [0xB4; 32],
+                5 => changed.genesis_roster_id = [0; 32],
+                6 => changed.proof.eq_history[0..32].fill(0xFF),
+                7 => changed.proof.ep_history[0..32].fill(0xFF),
+                8 => {
+                    changed.proof.eq_history.pop();
+                }
+                _ => {
+                    changed.proof.ep_history.push(0);
+                }
+            }
+            assert!(
+                changed.validate_shape().is_err(),
+                "invalid checkpoint case {index}"
+            );
+        }
     }
 }

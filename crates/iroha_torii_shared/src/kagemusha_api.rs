@@ -1,9 +1,9 @@
-//! Public Torii DTO boundary for Kagemusha V1.
+//! Public Torii DTO boundary for KAGEMUSHA V1.
 //!
-//! Kagemusha V1 peer-handoff and chain-operation types are defined once in
+//! KAGEMUSHA V1 peer-handoff and chain-operation types are defined once in
 //! `iroha_data_model` and re-exported here without transport wrappers. Every
 //! binary ingress helper installs a byte ceiling before canonical Norito
-//! decoding. Applied Kagemusha V1 results additionally require a
+//! decoding. Applied KAGEMUSHA V1 results additionally require a
 //! caller-pinned consensus context; an untrusted response can never select the
 //! trust root used to validate its own finality proof.
 //!
@@ -11,20 +11,26 @@
 //! intent/receipt with the durable local finality-and-mint outbox. This DTO
 //! boundary does not imply a post-finality mutation of world state.
 
-use iroha_data_model::{NetworkId, block::consensus_v2::HeightContextId};
+use iroha_data_model::{
+    NetworkId,
+    block::consensus_v2::HeightContextId,
+    isi::kagemusha_v1::TopUpKagemushaV1,
+    transaction::{Executable, SignedTransaction, TransactionAdmissionIntent},
+};
 pub use iroha_data_model::{
     isi::kagemusha_v1::{
         KAGEMUSHA_CHAIN_VERSION_V1, KAGEMUSHA_REDEMPTION_REQUEST_SCHEMA_NAME_V1,
         KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_NAME_V1, KagemushaFinalityTrustAnchorV1,
-        KagemushaIsiValidationErrorV1, KagemushaOperationFinalityV1,
-        KagemushaOperationKindV1, KagemushaOperationLookupV1,
-        KagemushaOperationRejectionCodeV1, KagemushaOperationRejectionV1,
-        KagemushaOperationResultV1, KagemushaOperationStateV1, KagemushaOperationStatusV1,
-        KagemushaRedemptionRequestV1, KagemushaRedemptionResultV1, KagemushaReserveReceiptV1,
-        KagemushaReserveReceiptWitnessV1, KagemushaTopUpRequestV1, KagemushaTopUpResultV1,
+        KagemushaIsiValidationErrorV1, KagemushaOperationFinalityV1, KagemushaOperationKindV1,
+        KagemushaOperationLookupV1, KagemushaOperationRejectionCodeV1,
+        KagemushaOperationRejectionV1, KagemushaOperationResultV1, KagemushaOperationStateV1,
+        KagemushaOperationStatusV1, KagemushaRedemptionRequestV1, KagemushaRedemptionResultV1,
+        KagemushaReserveReceiptV1, KagemushaReserveReceiptWitnessV1, KagemushaTopUpRequestV1,
+        KagemushaTopUpResultV1,
     },
     kagemusha::{
-        KAGEMUSHA_ACKNOWLEDGEMENT_MAX_BYTES_V1, KAGEMUSHA_DEVICE_LIFECYCLE_VERSION_V1,
+        KAGEMUSHA_ACKNOWLEDGEMENT_MAX_BYTES_V1, KAGEMUSHA_COMPLETE_EXCHANGE_MAX_BYTES_V1,
+        KAGEMUSHA_COMPLETE_TEXT_EXCHANGE_MAX_BYTES_V1, KAGEMUSHA_DEVICE_LIFECYCLE_VERSION_V1,
         KAGEMUSHA_HANDOFF_CAPABILITY_V1, KAGEMUSHA_MINT_CREDIT_MAX_BYTES_V1,
         KAGEMUSHA_PAYMENT_MAX_BYTES_V1, KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1,
         KAGEMUSHA_REDEMPTION_VOUCHER_MAX_BYTES_V1, KAGEMUSHA_WIRE_VERSION_V1,
@@ -35,24 +41,35 @@ pub use iroha_data_model::{
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 
 /// Stable schema name for the four-field readiness response.
-pub const KAGEMUSHA_READINESS_SCHEMA_NAME_V1: &str =
-    "iroha.torii.v1.kagemusha.readiness.response";
+pub const KAGEMUSHA_READINESS_SCHEMA_NAME_V1: &str = "iroha.torii.v1.kagemusha.readiness.response";
 /// Stable schema name for an operation lookup selector.
 pub const KAGEMUSHA_OPERATION_LOOKUP_SCHEMA_NAME_V1: &str =
     "iroha.torii.v1.kagemusha.operation.lookup";
 /// Stable schema name for a pollable operation response.
 pub const KAGEMUSHA_OPERATION_STATUS_SCHEMA_NAME_V1: &str =
     "iroha.torii.v1.kagemusha.operation.status";
-/// Canonical relative route prefix for one Kagemusha V1 operation resource.
+/// Stable schema name for the payer-signed top-up transaction submitted to Torii.
+pub const KAGEMUSHA_TOP_UP_SIGNED_TRANSACTION_SCHEMA_NAME_V1: &str =
+    "iroha.torii.v1.kagemusha.top_up.signed_transaction";
+/// Canonical relative route prefix for one KAGEMUSHA V1 operation resource.
 pub const KAGEMUSHA_OPERATION_STATUS_ROUTE_PREFIX_V1: &str = "/v1/kagemusha/operations/";
 
 /// Maximum canonical readiness response bytes.
 pub const KAGEMUSHA_READINESS_MAX_BYTES_V1: usize = 4 * 1024;
-/// Maximum canonical top-up request bytes.
+/// Maximum canonical embedded top-up request bytes.
 ///
-/// The request carries fixed metadata and at most one bounded encrypted credit
-/// opening. This resource ceiling is independent of payment history.
-pub const KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1: usize = 4 * 1024;
+/// The fixed-shape ceiling includes the complete hardware credential,
+/// encrypted credit opening, and both maximum-size proof parities in
+/// `KagemushaMintAuthorizationV1`. It is independent of payment history. The
+/// HTTP body is a versioned [`SignedTransaction`] and therefore uses Torii's
+/// normal signed-transaction ingress limit rather than this inner-request cap.
+pub const KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1: usize = 16 * 1024;
+/// Minimum Torii signed-transaction ingress capacity when KAGEMUSHA commands are enabled.
+///
+/// This provisioning floor leaves a full 16 KiB of framing headroom around a
+/// maximum-shape embedded top-up request. It is not a protocol maximum; nodes
+/// may configure a larger ordinary transaction ingress limit.
+pub const KAGEMUSHA_TOP_UP_SIGNED_TRANSACTION_MIN_INGRESS_BYTES_V1: usize = 32 * 1024;
 /// Maximum canonical redemption request bytes.
 ///
 /// This includes one constant-size redemption voucher and request framing. It
@@ -63,7 +80,7 @@ pub const KAGEMUSHA_OPERATION_LOOKUP_MAX_BYTES_V1: usize = 128;
 /// Maximum canonical operation-status response bytes.
 ///
 /// The bound covers the consensus roster certificate and one fixed-depth
-/// ordinary-write witness. Neither component grows with cash handoff history.
+/// ordinary-write witness. Neither component grows with KAGEMUSHA handoff history.
 pub const KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V1: usize = 4 * 1024 * 1024;
 /// Maximum JSON operation-status response bytes.
 ///
@@ -78,13 +95,16 @@ pub const KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1: usize = 16 * 1024 * 1024
 #[norito(schema_name = "iroha.torii.v1.kagemusha.readiness.response")]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaReadinessV1 {
-    /// Exact irreversible peer-cash handoff contract.
+    /// Exact irreversible KAGEMUSHA peer-handoff contract.
     pub kagemusha_handoff_capability: String,
-    /// Canonical Kagemusha wire version accepted by the node.
+    /// Canonical KAGEMUSHA wire version accepted by the node.
     pub wire_version: u16,
     /// Exact secure-device lifecycle contract required by the node.
     pub device_lifecycle_version: u16,
-    /// Whether this node is ready to serve the V1 lifecycle.
+    /// Whether this build serves the universal V1 codec and route contract.
+    ///
+    /// This is protocol-surface discovery, not proof-release, hardware-profile,
+    /// asset, reserve, or device admission. Those checks remain operation-local.
     pub ready: bool,
 }
 
@@ -191,12 +211,12 @@ impl UnverifiedKagemushaOperationStatusV1 {
 impl KagemushaReadinessV1 {
     /// Validate the closed four-field capability contract.
     ///
-    /// `ready` may be false while local service is unavailable, but the
-    /// advertised protocol identity must always be exact.
+    /// The advertised protocol identity must always be exact. `ready` reports
+    /// only this universal codec/route surface and grants no monetary authority.
     ///
     /// # Errors
     ///
-    /// Returns an error if this is not the sole Kagemusha V1 capability.
+    /// Returns an error if this is not the sole KAGEMUSHA V1 capability.
     pub fn validate(&self) -> Result<(), KagemushaApiErrorV1> {
         if self.kagemusha_handoff_capability != KAGEMUSHA_HANDOFF_CAPABILITY_V1
             || self.wire_version != KAGEMUSHA_WIRE_VERSION_V1
@@ -210,7 +230,7 @@ impl KagemushaReadinessV1 {
     }
 }
 
-/// Failure at the bounded public Torii Kagemusha V1 boundary.
+/// Failure at the bounded public Torii KAGEMUSHA V1 boundary.
 #[derive(Debug)]
 pub enum KagemushaApiErrorV1 {
     /// Canonical Norito encoding or decoding failed.
@@ -230,31 +250,52 @@ pub enum KagemushaApiErrorV1 {
     },
     /// A readiness response advertised a different protocol contract.
     InvalidReadiness,
+    /// The payer-signed top-up transaction targets a different network.
+    TopUpTransactionWrongNetwork,
+    /// The payer-signed top-up transaction signature is invalid.
+    TopUpTransactionSignatureInvalid,
+    /// The top-up transaction does not contain exactly one native top-up instruction.
+    TopUpTransactionShapeInvalid,
+    /// The signed transaction authority is not the embedded top-up payer.
+    TopUpTransactionAuthorityMismatch,
+    /// The signed transaction does not require globally certified queue-plan admission.
+    TopUpTransactionAdmissionIntentInvalid,
 }
 
 impl core::fmt::Display for KagemushaApiErrorV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Codec(error) => {
-                write!(formatter, "canonical Kagemusha V1 codec failed: {error}")
+                write!(formatter, "canonical KAGEMUSHA V1 codec failed: {error}")
             }
-            Self::Json(error) => write!(formatter, "Kagemusha V1 JSON decode failed: {error}"),
+            Self::Json(error) => write!(formatter, "KAGEMUSHA V1 JSON decode failed: {error}"),
             Self::Wire(error) => {
-                write!(formatter, "Kagemusha V1 wire validation failed: {error}")
+                write!(formatter, "KAGEMUSHA V1 wire validation failed: {error}")
             }
             Self::Chain(error) => {
-                write!(
-                    formatter,
-                    "Kagemusha V1 chain validation failed: {error}"
-                )
+                write!(formatter, "KAGEMUSHA V1 chain validation failed: {error}")
             }
             Self::EncodedSizeExceeded { actual, max } => write!(
                 formatter,
-                "Kagemusha V1 encoded size {actual} exceeds limit {max}"
+                "KAGEMUSHA V1 encoded size {actual} exceeds limit {max}"
             ),
             Self::InvalidReadiness => {
-                formatter.write_str("invalid Kagemusha V1 readiness capability")
+                formatter.write_str("invalid KAGEMUSHA V1 readiness capability")
             }
+            Self::TopUpTransactionWrongNetwork => {
+                formatter.write_str("KAGEMUSHA V1 top-up transaction targets a different network")
+            }
+            Self::TopUpTransactionSignatureInvalid => formatter
+                .write_str("KAGEMUSHA V1 top-up transaction signature or authority is invalid"),
+            Self::TopUpTransactionShapeInvalid => formatter.write_str(
+                "KAGEMUSHA V1 top-up transaction must contain exactly one native top-up instruction",
+            ),
+            Self::TopUpTransactionAuthorityMismatch => formatter.write_str(
+                "KAGEMUSHA V1 top-up transaction authority must equal its embedded payer",
+            ),
+            Self::TopUpTransactionAdmissionIntentInvalid => formatter.write_str(
+                "KAGEMUSHA V1 top-up transaction must bind QueuePlanSynced admission",
+            ),
         }
     }
 }
@@ -290,24 +331,76 @@ where
         .map_err(KagemushaApiErrorV1::Codec)
 }
 
+/// Validate and borrow the request from one payer-signed top-up transaction.
+///
+/// The transaction and embedded request must both target `expected_network`,
+/// carry a valid signature, contain exactly one native [`TopUpKagemushaV1`]
+/// instruction, name the transaction authority as the request payer, and signature-bind
+/// [`TransactionAdmissionIntent::QueuePlanSynced`]. These checks make the
+/// normal transaction signature the sole online debit authorization and force
+/// the globally certified durable admission path; Torii does not rebuild or
+/// re-sign the transaction.
+///
+/// # Errors
+///
+/// Returns an error for a wrong network, invalid signature, any executable
+/// other than one native top-up instruction, an invalid embedded request, or
+/// an authority/payer mismatch, or ordinary queue admission.
+pub fn validate_kagemusha_top_up_signed_transaction_v1<'a>(
+    expected_network: &NetworkId,
+    transaction: &'a SignedTransaction,
+) -> Result<&'a KagemushaTopUpRequestV1, KagemushaApiErrorV1> {
+    if transaction.network_id() != Some(expected_network) {
+        return Err(KagemushaApiErrorV1::TopUpTransactionWrongNetwork);
+    }
+    transaction
+        .verify_signature()
+        .map_err(|_| KagemushaApiErrorV1::TopUpTransactionSignatureInvalid)?;
+    if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
+        return Err(KagemushaApiErrorV1::TopUpTransactionAdmissionIntentInvalid);
+    }
+    let Executable::Instructions(instructions) = transaction.instructions() else {
+        return Err(KagemushaApiErrorV1::TopUpTransactionShapeInvalid);
+    };
+    if instructions.len() != 1 {
+        return Err(KagemushaApiErrorV1::TopUpTransactionShapeInvalid);
+    }
+    let instruction = instructions[0]
+        .as_any()
+        .downcast_ref::<TopUpKagemushaV1>()
+        .ok_or(KagemushaApiErrorV1::TopUpTransactionShapeInvalid)?;
+    instruction.validate_shape()?;
+    let request = instruction.request();
+    if &request.network_id != expected_network {
+        return Err(KagemushaApiErrorV1::TopUpTransactionWrongNetwork);
+    }
+    let request_bytes = norito::encode_canonical(request).map_err(KagemushaApiErrorV1::Codec)?;
+    ensure_size(request_bytes.len(), KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1)?;
+    if transaction.authority() != &request.payer {
+        return Err(KagemushaApiErrorV1::TopUpTransactionAuthorityMismatch);
+    }
+    Ok(request)
+}
+
 /// Decode one exact first-release wallet payment request.
 ///
 /// # Errors
 ///
 /// Returns an error when the body is oversized, malformed, non-canonical, or
-/// does not carry the exact Kagemusha V1 contract.
+/// does not carry the exact KAGEMUSHA V1 contract.
 pub fn decode_kagemusha_payment_request_v1(
     bytes: &[u8],
 ) -> Result<KagemushaPaymentRequestV1, KagemushaValidationErrorV1> {
     KagemushaPaymentRequestV1::decode_canonical_exact(bytes)
 }
 
-/// Decode one exact payment against the caller-retained request.
+/// Decode one exact payment against its caller-retained request.
 ///
 /// # Errors
 ///
 /// Returns an error when the body is oversized, malformed, non-canonical, or
-/// is not bound to `request` under the exact Kagemusha V1 contract.
+/// is not bound to the exact request and commit certificate.
+/// This boundary checks the post-commit proof shape without granting proof authority.
 pub fn decode_kagemusha_payment_v1(
     bytes: &[u8],
     request: &KagemushaPaymentRequestV1,
@@ -315,18 +408,37 @@ pub fn decode_kagemusha_payment_v1(
     KagemushaPaymentV1::decode_canonical_shape_exact_against(bytes, request)
 }
 
-/// Decode one exact acknowledgement against its complete retained session.
+/// Decode message 3 against the exact request and committed payment.
 ///
 /// # Errors
 ///
 /// Returns an error when the body is oversized, malformed, non-canonical, or
-/// is not bound to `request` and `payment` under Kagemusha V1.
+/// is not bound to `request` and `payment` under KAGEMUSHA V1.
 pub fn decode_kagemusha_acknowledgement_v1(
     bytes: &[u8],
     request: &KagemushaPaymentRequestV1,
     payment: &KagemushaPaymentV1,
 ) -> Result<KagemushaAcknowledgementV1, KagemushaValidationErrorV1> {
     KagemushaAcknowledgementV1::decode_canonical_shape_exact_against(bytes, request, payment)
+}
+
+/// Validate the complete ordered request/payment/acknowledgement exchange.
+///
+/// # Errors
+///
+/// Returns an error for any malformed message, cross-message substitution, or
+/// raw/text size overrun. This performs shape and binding validation only; it
+/// does not grant proof or monetary authority.
+pub fn validate_kagemusha_complete_exchange_v1(
+    request: &KagemushaPaymentRequestV1,
+    payment: &KagemushaPaymentV1,
+    acknowledgement: &KagemushaAcknowledgementV1,
+) -> Result<usize, KagemushaValidationErrorV1> {
+    iroha_data_model::kagemusha::validate_kagemusha_complete_exchange_shape_v1(
+        request,
+        payment,
+        acknowledgement,
+    )
 }
 
 /// Decode one exact top-up intent under its history-independent resource cap.

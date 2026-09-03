@@ -2505,8 +2505,9 @@ fn exercise_nonproducer_retired_attempt_startup(
     );
     assert!(terminal_path.is_file());
     let terminal_bytes = std::fs::read(&terminal_path).expect("read Complete replica outcome");
-    let terminal: crate::kura::AutonomousLifecycleTerminalOutcomeV1 =
-        norito::decode_canonical(&terminal_bytes).expect("decode Complete replica outcome");
+    let terminal =
+        crate::kura::AutonomousLifecycleTerminalOutcomeV1::decode_framed(&terminal_bytes)
+            .expect("decode Complete replica outcome");
     let terminal_debug = format!("{terminal:?}");
     assert!(terminal_debug.contains("RetiredReplicaQueueDisposition"));
     assert!(terminal_debug.contains("Complete"));

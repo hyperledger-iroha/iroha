@@ -150,25 +150,34 @@ EXPECTED_REQUIRED_SYMBOLS = [
     "connect_norito_validation_fee_hijiri_quote_request_v1",
     "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
     "connect_norito_private_settlement_committee_proof_response_verify_v1",
-    "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
+    "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
     "connect_norito_private_settlement_audit_approval_response_verify_v1",
     "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
     "connect_norito_kagemusha_v1_payment_request_validate",
     "connect_norito_kagemusha_v1_payment_validate",
     "connect_norito_kagemusha_v1_acknowledgement_validate",
+    "connect_norito_kagemusha_v1_complete_exchange_validate",
+    "connect_norito_kagemusha_v1_mint_authorization_validate",
     "connect_norito_kagemusha_v1_mint_credit_validate",
+    "connect_norito_kagemusha_v1_mint_credit_against_authorization_validate",
     "connect_norito_kagemusha_v1_redemption_voucher_validate",
     "connect_norito_kagemusha_v1_payment_request_text_validate",
     "connect_norito_kagemusha_v1_payment_text_validate",
     "connect_norito_kagemusha_v1_acknowledgement_text_validate",
+    "connect_norito_kagemusha_v1_complete_exchange_text_validate",
+    "connect_norito_kagemusha_v1_mint_authorization_text_validate",
     "connect_norito_kagemusha_v1_mint_credit_text_validate",
+    "connect_norito_kagemusha_v1_mint_credit_against_authorization_text_validate",
     "connect_norito_kagemusha_v1_redemption_voucher_text_validate",
+    "connect_norito_kagemusha_device_mint_stage_command_v1_validate",
+    "connect_norito_kagemusha_device_mint_stage_result_v1_validate",
     "connect_norito_kagemusha_device_capabilities_v1",
     "connect_norito_kagemusha_device_execute_v1",
 ]
 EXPECTED_FORBIDDEN_SYMBOLS = [
     "connect_norito_get_chain_discriminant",
     "connect_norito_set_chain_discriminant",
+    "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
     "iroha_privacy_capabilities_v1",
     "iroha_privacy_validate_capabilities_v1",
     "iroha_privacy_proof_request_v1",
@@ -681,7 +690,12 @@ def validate(
     expected_link_target: str,
     swift_loader: Path | None = None,
     verify_repository_provenance: bool = False,
+    allow_dirty_source: bool = False,
 ) -> dict[str, object]:
+    if allow_dirty_source and not verify_repository_provenance:
+        raise ValidationError(
+            "dirty-source allowance requires repository provenance verification"
+        )
     root = root.resolve(strict=True)
     if xcframework.is_symlink() or not xcframework.is_dir():
         raise ValidationError("XCFramework root is not a non-symbolic directory")
@@ -820,6 +834,8 @@ def validate(
         _validate_swift_pins(root, swift_loader, hashes)
     if verify_repository_provenance:
         _validate_repository_provenance(root, payload)
+        if payload["source_tree_dirty"] and not allow_dirty_source:
+            raise ValidationError("release artifact must be built from a clean source tree")
     return payload
 
 
@@ -831,6 +847,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest-link", required=True, type=Path)
     parser.add_argument("--expected-link-target", required=True)
     parser.add_argument("--swift-loader", type=Path)
+    parser.add_argument("--verify-repository-provenance", action="store_true")
+    parser.add_argument("--allow-dirty-source", action="store_true")
     return parser
 
 
@@ -844,6 +862,8 @@ def main() -> int:
             manifest_link=arguments.manifest_link,
             expected_link_target=arguments.expected_link_target,
             swift_loader=arguments.swift_loader,
+            verify_repository_provenance=arguments.verify_repository_provenance,
+            allow_dirty_source=arguments.allow_dirty_source,
         )
     except (OSError, UnicodeError, ValidationError) as error:
         print(f"[-] {error}", file=sys.stderr)

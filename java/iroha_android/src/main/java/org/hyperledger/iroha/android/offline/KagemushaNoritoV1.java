@@ -6,12 +6,19 @@ package org.hyperledger.iroha.android.offline;
 import java.math.BigInteger;
 import java.util.Objects;
 import org.hyperledger.iroha.sdk.core.model.NetworkId;
+import org.hyperledger.iroha.sdk.offline.KagemushaAcceptanceIntentV1;
+import org.hyperledger.iroha.sdk.offline.KagemushaAcceptanceTicketV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaAcknowledgementV1;
+import org.hyperledger.iroha.sdk.offline.KagemushaAccountIdV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaAggregateStateCommitmentV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaAssetDefinitionIdV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaAssetIncarnationV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaCreditOpeningV1;
+import org.hyperledger.iroha.sdk.offline.KagemushaCommitCertificateV1;
+import org.hyperledger.iroha.sdk.offline.KagemushaCommitEvidenceV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaDevicePublicKeyV1;
+import org.hyperledger.iroha.sdk.offline.KagemushaDeviceMintStageCommandV1;
+import org.hyperledger.iroha.sdk.offline.KagemushaDeviceMintStageResultV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaEncryptedCreditAadV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaEncryptedCreditEnvelopeV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaHardwareCredentialV1;
@@ -24,21 +31,38 @@ import org.hyperledger.iroha.sdk.offline.KagemushaMintCreditStatementV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaMintCreditV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaPastaStateCommitmentV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaPaymentRequestV1;
+import org.hyperledger.iroha.sdk.offline.KagemushaPaymentRequestModeV1;
+import org.hyperledger.iroha.sdk.offline.KagemushaPaymentOutputV1;
+import org.hyperledger.iroha.sdk.offline.KagemushaPaymentProofV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaPaymentV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaPeerCreditContextV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaRedemptionStatementV1;
+import org.hyperledger.iroha.sdk.offline.KagemushaRedemptionProofV1;
+import org.hyperledger.iroha.sdk.offline.KagemushaRedemptionRequestV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaRedemptionVoucherV1;
-import org.hyperledger.iroha.sdk.offline.KagemushaTransferStatementV1;
+import org.hyperledger.iroha.sdk.offline.KagemushaTopUpRequestV1;
 import org.hyperledger.iroha.sdk.offline.KagemushaX25519PublicKeyV1;
 
 /**
- * Java mirror of the sole Kagemusha V1 canonical shape codec.
+ * Java mirror of the sole KAGEMUSHA V1 canonical shape codec.
  *
- * <p>Only the request, payment, and acknowledgement are peer-exchange messages. These methods
- * validate framing and cross-field bindings only; monetary authority remains in the shared native
- * core and qualified device service.
+ * <p>The peer exchange is exactly request, acceptance intent, acceptance ticket,
+ * payment, and acknowledgement. These methods validate framing and cross-field bindings only;
+ * monetary authority remains in the shared native core and qualified device service.
  */
 public final class KagemushaNoritoV1 {
+  /** Maximum canonical bytes for the request embedded in {@code TopUpKagemushaV1}. */
+  public static final int MAXIMUM_TOP_UP_REQUEST_BYTES =
+      org.hyperledger.iroha.sdk.offline.KagemushaNoritoV1.MAXIMUM_TOP_UP_REQUEST_BYTES;
+
+  /** Maximum canonical bytes in secure-device operation 21's public command body. */
+  public static final int MAXIMUM_DEVICE_MINT_STAGE_COMMAND_BYTES =
+      org.hyperledger.iroha.sdk.offline.KagemushaNoritoV1.MAXIMUM_DEVICE_MINT_STAGE_COMMAND_BYTES;
+
+  /** Maximum canonical bytes in secure-device operation 21's fixed public result. */
+  public static final int MAXIMUM_DEVICE_MINT_STAGE_RESULT_BYTES =
+      org.hyperledger.iroha.sdk.offline.KagemushaNoritoV1.MAXIMUM_DEVICE_MINT_STAGE_RESULT_BYTES;
+
   private KagemushaNoritoV1() {}
 
   public static byte[] encodeAggregateStateShape(
@@ -84,6 +108,94 @@ public final class KagemushaNoritoV1 {
     return core().decodePaymentRequestTextShapeExact(Objects.requireNonNull(text, "text"));
   }
 
+  public static byte[] encodeAcceptanceIntentShape(final KagemushaAcceptanceIntentV1 value) {
+    return core().encodeAcceptanceIntentShape(Objects.requireNonNull(value, "value"));
+  }
+
+  public static KagemushaAcceptanceIntentV1 decodeAcceptanceIntentShapeExact(
+      final byte[] bytes) {
+    return core().decodeAcceptanceIntentShapeExact(copy(bytes));
+  }
+
+  public static byte[] encodeAcceptanceIntentShape(
+      final KagemushaAcceptanceIntentV1 value,
+      final KagemushaPaymentRequestV1 request) {
+    return core().encodeAcceptanceIntentShape(
+        Objects.requireNonNull(value, "value"), Objects.requireNonNull(request, "request"));
+  }
+
+  public static KagemushaAcceptanceIntentV1 decodeAcceptanceIntentShapeExact(
+      final byte[] bytes, final KagemushaPaymentRequestV1 request) {
+    return core().decodeAcceptanceIntentShapeExact(
+        copy(bytes), Objects.requireNonNull(request, "request"));
+  }
+
+  public static String encodeAcceptanceIntentTextShape(
+      final KagemushaAcceptanceIntentV1 value,
+      final KagemushaPaymentRequestV1 request) {
+    return core().encodeAcceptanceIntentTextShape(
+        Objects.requireNonNull(value, "value"), Objects.requireNonNull(request, "request"));
+  }
+
+  public static byte[] encodeAcceptanceTicketShape(
+      final KagemushaAcceptanceTicketV1 value,
+      final KagemushaPaymentRequestV1 request,
+      final KagemushaAcceptanceIntentV1 intent) {
+    return core().encodeAcceptanceTicketShape(
+        Objects.requireNonNull(value, "value"),
+        Objects.requireNonNull(request, "request"),
+        Objects.requireNonNull(intent, "intent"));
+  }
+
+  public static KagemushaAcceptanceTicketV1 decodeAcceptanceTicketShapeExact(
+      final byte[] bytes,
+      final KagemushaPaymentRequestV1 request,
+      final KagemushaAcceptanceIntentV1 intent) {
+    return core().decodeAcceptanceTicketShapeExact(
+        copy(bytes),
+        Objects.requireNonNull(request, "request"),
+        Objects.requireNonNull(intent, "intent"));
+  }
+
+  public static String encodeAcceptanceTicketTextShape(
+      final KagemushaAcceptanceTicketV1 value,
+      final KagemushaPaymentRequestV1 request,
+      final KagemushaAcceptanceIntentV1 intent) {
+    return core().encodeAcceptanceTicketTextShape(
+        Objects.requireNonNull(value, "value"),
+        Objects.requireNonNull(request, "request"),
+        Objects.requireNonNull(intent, "intent"));
+  }
+
+  public static byte[] encodeCommitCertificateShape(final KagemushaCommitCertificateV1 value) {
+    return core().encodeCommitCertificateShape(Objects.requireNonNull(value, "value"));
+  }
+
+  public static KagemushaCommitCertificateV1 decodeCommitCertificateShapeExact(
+      final byte[] bytes) {
+    return core().decodeCommitCertificateShapeExact(copy(bytes));
+  }
+
+  /** Encodes the bounded post-commit payment proof without granting monetary authority. */
+  public static byte[] encodePaymentProofShape(final KagemushaPaymentProofV1 value) {
+    return core().encodePaymentProofShape(Objects.requireNonNull(value, "value"));
+  }
+
+  /** Decodes the exact post-commit payment proof without cryptographic verification. */
+  public static KagemushaPaymentProofV1 decodePaymentProofShapeExact(final byte[] bytes) {
+    return core().decodePaymentProofShapeExact(copy(bytes));
+  }
+
+  /** Encodes the bounded post-commit redemption proof without granting monetary authority. */
+  public static byte[] encodeRedemptionProofShape(final KagemushaRedemptionProofV1 value) {
+    return core().encodeRedemptionProofShape(Objects.requireNonNull(value, "value"));
+  }
+
+  /** Decodes the exact post-commit redemption proof without cryptographic verification. */
+  public static KagemushaRedemptionProofV1 decodeRedemptionProofShapeExact(final byte[] bytes) {
+    return core().decodeRedemptionProofShapeExact(copy(bytes));
+  }
+
   public static byte[] encodePeerCreditContextShape(final KagemushaPeerCreditContextV1 value) {
     return core().encodePeerCreditContextShape(Objects.requireNonNull(value, "value"));
   }
@@ -94,11 +206,15 @@ public final class KagemushaNoritoV1 {
   }
 
   public static KagemushaPeerCreditContextV1 peerCreditContextShape(
-      final KagemushaTransferStatementV1 statement,
-      final KagemushaPaymentRequestV1 request) {
+      final KagemushaPaymentRequestV1 request,
+      final KagemushaAcceptanceIntentV1 intent,
+      final KagemushaAcceptanceTicketV1 ticket,
+      final KagemushaPaymentOutputV1 output) {
     return core().peerCreditContextShape(
-        Objects.requireNonNull(statement, "statement"),
-        Objects.requireNonNull(request, "request"));
+        Objects.requireNonNull(request, "request"),
+        Objects.requireNonNull(intent, "intent"),
+        Objects.requireNonNull(ticket, "ticket"),
+        Objects.requireNonNull(output, "output"));
   }
 
   public static byte[] peerCreditContextDigestShape(final KagemushaPeerCreditContextV1 value) {
@@ -106,11 +222,15 @@ public final class KagemushaNoritoV1 {
   }
 
   public static KagemushaEncryptedCreditAadV1 encryptedCreditAadForPeerShape(
-      final KagemushaTransferStatementV1 statement,
-      final KagemushaPaymentRequestV1 request) {
+      final KagemushaPaymentOutputV1 output,
+      final KagemushaPaymentRequestV1 request,
+      final KagemushaAcceptanceIntentV1 intent,
+      final KagemushaAcceptanceTicketV1 ticket) {
     return core().encryptedCreditAadForPeerShape(
-        Objects.requireNonNull(statement, "statement"),
-        Objects.requireNonNull(request, "request"));
+        Objects.requireNonNull(output, "output"),
+        Objects.requireNonNull(request, "request"),
+        Objects.requireNonNull(intent, "intent"),
+        Objects.requireNonNull(ticket, "ticket"));
   }
 
   public static KagemushaEncryptedCreditAadV1 encryptedCreditAadForMintShape(
@@ -119,66 +239,107 @@ public final class KagemushaNoritoV1 {
   }
 
   public static byte[] encodePaymentShape(
-      final KagemushaPaymentV1 value, final KagemushaPaymentRequestV1 request) {
+      final KagemushaPaymentV1 value,
+      final KagemushaPaymentRequestV1 request,
+      final KagemushaAcceptanceIntentV1 intent,
+      final KagemushaAcceptanceTicketV1 ticket) {
     return core().encodePaymentShape(
-        Objects.requireNonNull(value, "value"), Objects.requireNonNull(request, "request"));
+        Objects.requireNonNull(value, "value"),
+        Objects.requireNonNull(request, "request"),
+        Objects.requireNonNull(intent, "intent"),
+        Objects.requireNonNull(ticket, "ticket"));
   }
 
   public static KagemushaPaymentV1 decodePaymentShapeExact(
-      final byte[] bytes, final KagemushaPaymentRequestV1 request) {
-    return core().decodePaymentShapeExact(copy(bytes), Objects.requireNonNull(request, "request"));
+      final byte[] bytes,
+      final KagemushaPaymentRequestV1 request,
+      final KagemushaAcceptanceIntentV1 intent,
+      final KagemushaAcceptanceTicketV1 ticket) {
+    return core().decodePaymentShapeExact(
+        copy(bytes),
+        Objects.requireNonNull(request, "request"),
+        Objects.requireNonNull(intent, "intent"),
+        Objects.requireNonNull(ticket, "ticket"));
   }
 
   public static String encodePaymentTextShape(
-      final KagemushaPaymentV1 value, final KagemushaPaymentRequestV1 request) {
+      final KagemushaPaymentV1 value,
+      final KagemushaPaymentRequestV1 request,
+      final KagemushaAcceptanceIntentV1 intent,
+      final KagemushaAcceptanceTicketV1 ticket) {
     return core().encodePaymentTextShape(
-        Objects.requireNonNull(value, "value"), Objects.requireNonNull(request, "request"));
+        Objects.requireNonNull(value, "value"),
+        Objects.requireNonNull(request, "request"),
+        Objects.requireNonNull(intent, "intent"),
+        Objects.requireNonNull(ticket, "ticket"));
   }
 
   public static KagemushaPaymentV1 decodePaymentTextShapeExact(
-      final String text, final KagemushaPaymentRequestV1 request) {
+      final String text,
+      final KagemushaPaymentRequestV1 request,
+      final KagemushaAcceptanceIntentV1 intent,
+      final KagemushaAcceptanceTicketV1 ticket) {
     return core().decodePaymentTextShapeExact(
-        Objects.requireNonNull(text, "text"), Objects.requireNonNull(request, "request"));
+        Objects.requireNonNull(text, "text"),
+        Objects.requireNonNull(request, "request"),
+        Objects.requireNonNull(intent, "intent"),
+        Objects.requireNonNull(ticket, "ticket"));
   }
 
   public static byte[] encodeAcknowledgementShape(
       final KagemushaAcknowledgementV1 value,
       final KagemushaPaymentRequestV1 request,
-      final KagemushaPaymentV1 payment) {
+      final KagemushaPaymentV1 payment,
+      final KagemushaAcceptanceIntentV1 intent,
+      final KagemushaAcceptanceTicketV1 ticket) {
     return core().encodeAcknowledgementShape(
         Objects.requireNonNull(value, "value"),
         Objects.requireNonNull(request, "request"),
-        Objects.requireNonNull(payment, "payment"));
+        Objects.requireNonNull(payment, "payment"),
+        Objects.requireNonNull(intent, "intent"),
+        Objects.requireNonNull(ticket, "ticket"));
   }
 
   public static KagemushaAcknowledgementV1 decodeAcknowledgementShapeExact(
       final byte[] bytes,
       final KagemushaPaymentRequestV1 request,
-      final KagemushaPaymentV1 payment) {
+      final KagemushaPaymentV1 payment,
+      final KagemushaAcceptanceIntentV1 intent,
+      final KagemushaAcceptanceTicketV1 ticket) {
     return core().decodeAcknowledgementShapeExact(
         copy(bytes),
         Objects.requireNonNull(request, "request"),
-        Objects.requireNonNull(payment, "payment"));
+        Objects.requireNonNull(payment, "payment"),
+        Objects.requireNonNull(intent, "intent"),
+        Objects.requireNonNull(ticket, "ticket"));
   }
 
   public static String encodeAcknowledgementTextShape(
       final KagemushaAcknowledgementV1 value,
       final KagemushaPaymentRequestV1 request,
-      final KagemushaPaymentV1 payment) {
+      final KagemushaPaymentV1 payment,
+      final KagemushaAcceptanceIntentV1 intent,
+      final KagemushaAcceptanceTicketV1 ticket) {
     return core().encodeAcknowledgementTextShape(
         Objects.requireNonNull(value, "value"),
         Objects.requireNonNull(request, "request"),
-        Objects.requireNonNull(payment, "payment"));
+        Objects.requireNonNull(payment, "payment"),
+        Objects.requireNonNull(intent, "intent"),
+        Objects.requireNonNull(ticket, "ticket"));
   }
 
   public static KagemushaAcknowledgementV1 decodeAcknowledgementTextShapeExact(
       final String text,
       final KagemushaPaymentRequestV1 request,
-      final KagemushaPaymentV1 payment) {
+      final KagemushaPaymentV1 payment,
+      final KagemushaAcceptanceIntentV1 intent,
+      final KagemushaAcceptanceTicketV1 ticket) {
     return core().decodeAcknowledgementTextShapeExact(
         Objects.requireNonNull(text, "text"),
         Objects.requireNonNull(request, "request"),
-        Objects.requireNonNull(payment, "payment"));
+        Objects.requireNonNull(payment, "payment"),
+        Objects.requireNonNull(intent, "intent"),
+        Objects.requireNonNull(ticket, "ticket"));
   }
 
   public static byte[] encodeMintAuthorizationShape(final KagemushaMintAuthorizationV1 value) {
@@ -228,6 +389,44 @@ public final class KagemushaNoritoV1 {
     return core().decodeMintCreditTextShapeExact(Objects.requireNonNull(text, "text"));
   }
 
+  /** Encodes a bounded operation-21 body after checking both nested public archives. */
+  public static byte[] encodeDeviceMintStageCommandShape(
+      final KagemushaDeviceMintStageCommandV1 value) {
+    return core().encodeDeviceMintStageCommandShape(Objects.requireNonNull(value, "value"));
+  }
+
+  /** Builds and encodes a bounded operation-21 body from exact nested archives. */
+  public static byte[] encodeDeviceMintStageCommandShape(
+      final byte[] canonicalAuthorization, final byte[] canonicalMintCredit) {
+    return core().encodeDeviceMintStageCommandShape(
+        copy(canonicalAuthorization), copy(canonicalMintCredit));
+  }
+
+  /** Decodes an exact operation-21 body without granting staging authority. */
+  public static KagemushaDeviceMintStageCommandV1 decodeDeviceMintStageCommandShapeExact(
+      final byte[] bytes) {
+    return core().decodeDeviceMintStageCommandShapeExact(copy(bytes));
+  }
+
+  /** Encodes the fixed public operation-21 result. */
+  public static byte[] encodeDeviceMintStageResultShape(
+      final KagemushaDeviceMintStageResultV1 value) {
+    return core().encodeDeviceMintStageResultShape(Objects.requireNonNull(value, "value"));
+  }
+
+  /** Decodes an exact public operation-21 result. */
+  public static KagemushaDeviceMintStageResultV1 decodeDeviceMintStageResultShapeExact(
+      final byte[] bytes) {
+    return core().decodeDeviceMintStageResultShapeExact(copy(bytes));
+  }
+
+  /** Decodes and binds a public operation-21 result to its exact command. */
+  public static KagemushaDeviceMintStageResultV1 decodeDeviceMintStageResultShapeExact(
+      final byte[] bytes, final KagemushaDeviceMintStageCommandV1 command) {
+    return core().decodeDeviceMintStageResultShapeExact(
+        copy(bytes), Objects.requireNonNull(command, "command"));
+  }
+
   public static byte[] encodeRedemptionVoucherShape(final KagemushaRedemptionVoucherV1 value) {
     return core().encodeRedemptionVoucherShape(Objects.requireNonNull(value, "value"));
   }
@@ -245,6 +444,30 @@ public final class KagemushaNoritoV1 {
   public static KagemushaRedemptionVoucherV1 decodeRedemptionVoucherTextShapeExact(
       final String text) {
     return core().decodeRedemptionVoucherTextShapeExact(Objects.requireNonNull(text, "text"));
+  }
+
+  public static byte[] encodeTopUpRequestShape(final KagemushaTopUpRequestV1 value) {
+    return core().encodeTopUpRequestShape(Objects.requireNonNull(value, "value"));
+  }
+
+  public static KagemushaTopUpRequestV1 decodeTopUpRequestShapeExact(final byte[] bytes) {
+    return core().decodeTopUpRequestShapeExact(copy(bytes));
+  }
+
+  /** Encodes the concrete registered payload for one native {@code TopUpKagemushaV1}. */
+  public static byte[] encodeTopUpInstructionPayloadShape(
+      final KagemushaTopUpRequestV1 value) {
+    return core().encodeTopUpInstructionPayloadShape(Objects.requireNonNull(value, "value"));
+  }
+
+  public static byte[] encodeRedemptionRequestShape(
+      final KagemushaRedemptionRequestV1 value) {
+    return core().encodeRedemptionRequestShape(Objects.requireNonNull(value, "value"));
+  }
+
+  public static KagemushaRedemptionRequestV1 decodeRedemptionRequestShapeExact(
+      final byte[] bytes) {
+    return core().decodeRedemptionRequestShapeExact(copy(bytes));
   }
 
   public static byte[] encodeCreditOpeningShape(final KagemushaCreditOpeningV1 value) {
@@ -314,26 +537,125 @@ public final class KagemushaNoritoV1 {
     return core().paymentRequestDigest(Objects.requireNonNull(value, "value"));
   }
 
+  /** Encodes the canonical framed asset identity used by the request transcript. */
+  public static byte[] assetIdentityCanonicalShape(final KagemushaAssetDefinitionIdV1 value) {
+    return core().assetIdentityCanonicalShape(Objects.requireNonNull(value, "value"));
+  }
+
+  /** Encodes the canonical framed account identity used by the request transcript. */
+  public static byte[] accountIdentityCanonicalShape(final KagemushaAccountIdV1 value) {
+    return core().accountIdentityCanonicalShape(Objects.requireNonNull(value, "value"));
+  }
+
+  public static byte[] paymentRequestModeDigestShape(
+      final KagemushaPaymentRequestModeV1 value) {
+    return core().paymentRequestModeDigestShape(Objects.requireNonNull(value, "value"));
+  }
+
+  public static byte[] acceptanceIntentDigestShape(
+      final KagemushaAcceptanceIntentV1 value, final KagemushaPaymentRequestV1 request) {
+    return core().acceptanceIntentDigestShape(
+        Objects.requireNonNull(value, "value"), Objects.requireNonNull(request, "request"));
+  }
+
+  public static byte[] acceptanceTicketDigestShape(
+      final KagemushaAcceptanceTicketV1 value,
+      final KagemushaPaymentRequestV1 request,
+      final KagemushaAcceptanceIntentV1 intent) {
+    return core().acceptanceTicketDigestShape(
+        Objects.requireNonNull(value, "value"),
+        Objects.requireNonNull(request, "request"),
+        Objects.requireNonNull(intent, "intent"));
+  }
+
+  public static byte[] peerCreditOpeningCommitmentShape(
+      final byte[] requestDigest,
+      final org.hyperledger.iroha.sdk.offline.KagemushaX25519PublicKeyV1 recipientOneTimeKey,
+      final BigInteger amount,
+      final byte[] creditCommitmentOpening,
+      final byte[] recipientBindingOpening,
+      final byte[] recoveryNonce) {
+    return core()
+        .peerCreditOpeningCommitmentShape(
+            Objects.requireNonNull(requestDigest, "requestDigest"),
+            Objects.requireNonNull(recipientOneTimeKey, "recipientOneTimeKey"),
+            Objects.requireNonNull(amount, "amount"),
+            Objects.requireNonNull(creditCommitmentOpening, "creditCommitmentOpening"),
+            Objects.requireNonNull(recipientBindingOpening, "recipientBindingOpening"),
+            Objects.requireNonNull(recoveryNonce, "recoveryNonce"));
+  }
+
   public static byte[] lifecycleDigestShape(final KagemushaLifecycleBindingV1 value) {
     return core().lifecycleDigestShape(Objects.requireNonNull(value, "value"));
+  }
+
+  public static byte[] expectedCommitCertificateIdShape(
+      final KagemushaCommitCertificateV1 value) {
+    return core().expectedCommitCertificateIdShape(Objects.requireNonNull(value, "value"));
+  }
+
+  public static byte[] commitCertificateDigestShape(
+      final KagemushaCommitCertificateV1 value,
+      final KagemushaLifecycleBindingV1 lifecycle,
+      final KagemushaCommitEvidenceV1 commitEvidence,
+      final byte[] transitionNullifier) {
+    return core().commitCertificateDigestShape(
+        Objects.requireNonNull(value, "value"),
+        Objects.requireNonNull(lifecycle, "lifecycle"),
+        Objects.requireNonNull(commitEvidence, "commitEvidence"),
+        copy(transitionNullifier));
   }
 
   public static byte[] ciphertextDigestShape(final byte[] bytes) {
     return core().ciphertextDigestShape(copy(bytes));
   }
 
-  public static byte[] expectedPeerCreditIdShape(final KagemushaTransferStatementV1 value) {
-    return core().expectedPeerCreditIdShape(Objects.requireNonNull(value, "value"));
+  public static byte[] preparedTransferDigestShape(
+      final KagemushaPaymentRequestV1 request,
+      final KagemushaAcceptanceIntentV1 intent,
+      final KagemushaAcceptanceTicketV1 ticket,
+      final byte[] transitionNullifier,
+      final byte[] ciphertextCommitment) {
+    return core().preparedTransferDigestShape(
+        Objects.requireNonNull(request, "request"),
+        Objects.requireNonNull(intent, "intent"),
+        Objects.requireNonNull(ticket, "ticket"),
+        copy(transitionNullifier),
+        copy(ciphertextCommitment));
   }
 
-  public static byte[] transferStatementDigestShape(final KagemushaTransferStatementV1 value) {
-    return core().transferStatementDigestShape(Objects.requireNonNull(value, "value"));
+  public static byte[] expectedPeerCreditIdShape(
+      final KagemushaPaymentOutputV1 output,
+      final KagemushaPaymentRequestV1 request,
+      final KagemushaAcceptanceIntentV1 intent) {
+    return core().expectedPeerCreditIdShape(
+        Objects.requireNonNull(output, "output"),
+        Objects.requireNonNull(request, "request"),
+        Objects.requireNonNull(intent, "intent"));
+  }
+
+  /** Returns the fixed output digest without granting monetary authority. */
+  public static byte[] paymentOutputDigestShape(final KagemushaPaymentOutputV1 value) {
+    return core().paymentOutputDigestShape(Objects.requireNonNull(value, "value"));
+  }
+
+  /** Returns the acyclic payment-body digest committed by sender hardware. */
+  public static byte[] paymentBodyDigestShape(
+      final KagemushaPaymentOutputV1 output, final byte[] encryptedCredit) {
+    return core().paymentBodyDigestShape(
+        Objects.requireNonNull(output, "output"), copy(encryptedCredit));
   }
 
   public static byte[] paymentDigestShape(
-      final KagemushaPaymentV1 value, final KagemushaPaymentRequestV1 request) {
+      final KagemushaPaymentV1 value,
+      final KagemushaPaymentRequestV1 request,
+      final KagemushaAcceptanceIntentV1 intent,
+      final KagemushaAcceptanceTicketV1 ticket) {
     return core().paymentDigestShape(
-        Objects.requireNonNull(value, "value"), Objects.requireNonNull(request, "request"));
+        Objects.requireNonNull(value, "value"),
+        Objects.requireNonNull(request, "request"),
+        Objects.requireNonNull(intent, "intent"),
+        Objects.requireNonNull(ticket, "ticket"));
   }
 
   public static byte[] mintAuthorizationContextDigestShape(
@@ -366,12 +688,16 @@ public final class KagemushaNoritoV1 {
     return core().redemptionStatementDigestShape(Objects.requireNonNull(value, "value"));
   }
 
-  public static int validateTerminalDeliveryShape(
+  public static int validateCompleteExchangeShape(
       final KagemushaPaymentRequestV1 request,
+      final KagemushaAcceptanceIntentV1 intent,
+      final KagemushaAcceptanceTicketV1 ticket,
       final KagemushaPaymentV1 payment,
       final KagemushaAcknowledgementV1 acknowledgement) {
-    return core().validateTerminalDeliveryShape(
+    return core().validateCompleteExchangeShape(
         Objects.requireNonNull(request, "request"),
+        Objects.requireNonNull(intent, "intent"),
+        Objects.requireNonNull(ticket, "ticket"),
         Objects.requireNonNull(payment, "payment"),
         Objects.requireNonNull(acknowledgement, "acknowledgement"));
   }

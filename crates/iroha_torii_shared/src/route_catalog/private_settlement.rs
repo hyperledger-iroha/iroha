@@ -43,10 +43,10 @@ const fn account_post(id: &'static str, path: &'static str) -> RouteDescriptor {
     .with_cors_options(true)
 }
 
-const fn auditor_get(id: &'static str, path: &'static str) -> RouteDescriptor {
+const fn auditor_read_post(id: &'static str, path: &'static str) -> RouteDescriptor {
     RouteDescriptor::new(
         id,
-        HttpMethod::Get,
+        HttpMethod::Post,
         path,
         ApiSurface::Public,
         Listener::Torii,
@@ -165,7 +165,7 @@ pub const COMMITTEE_PROOF: RouteDescriptor = validator_get(
     "/v1/nexus/private-settlements/legs/{payload_digest}/committee-proof",
 );
 /// Fetch one padded encrypted audit capsule as an authorized local auditor.
-pub const AUDITOR_CAPSULE: RouteDescriptor = auditor_get(
+pub const AUDITOR_CAPSULE: RouteDescriptor = auditor_read_post(
     "private_settlement.auditor.capsule",
     "/v1/nexus/private-settlements/legs/{payload_digest}/audit-capsule",
 );
@@ -174,7 +174,8 @@ pub const AUDITOR_APPROVAL: RouteDescriptor = auditor_post(
     "private_settlement.auditor.approval",
     "/v1/nexus/private-settlements/legs/{payload_digest}/audit-approvals",
 );
-/// Submit a complete finalization or abort carrier as its public sponsor.
+/// Submit a complete Prepare-lock registration, finalization, or abort carrier
+/// as its public sponsor.
 pub const BUNDLE_SUBMIT: RouteDescriptor = account_post(
     "private_settlement.bundle.submit",
     "/v1/nexus/private-settlements/bundles",

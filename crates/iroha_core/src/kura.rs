@@ -129,9 +129,8 @@ use iroha_data_model::{
         decode_framed_signed_block,
     },
     isi::kagemusha_v1::{
-        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaFinalityTrustAnchorV1,
-        KagemushaOperationFinalityV1, KagemushaOperationKindV1,
-        KagemushaReserveReceiptWitnessV1, KagemushaTopUpResultV1,
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaFinalityTrustAnchorV1, KagemushaOperationFinalityV1,
+        KagemushaOperationKindV1, KagemushaReserveReceiptWitnessV1, KagemushaTopUpResultV1,
     },
     kaigi::KaigiId,
     merge::{
@@ -375,6 +374,10 @@ const LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE: &str = "execution_inputs.norito";
 const LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE: &str = "execution_inputs.index";
 const AUTONOMOUS_LANE_MERGE_BUNDLES_DATA_FILE: &str = "merge_source_bundles_v1.norito";
 const AUTONOMOUS_LANE_MERGE_BUNDLES_INDEX_FILE: &str = "merge_source_bundles_v1.index";
+const CANONICAL_AUTONOMOUS_LANE_REPLICAS_DATA_FILE: &str =
+    "canonical_autonomous_replicas_v1.norito";
+const CANONICAL_AUTONOMOUS_LANE_REPLICAS_INDEX_FILE: &str =
+    "canonical_autonomous_replicas_v1.index";
 const LANE_READY_EXECUTION_INPUT_AUTHORIZATION_DOMAIN_V1: &[u8] =
     b"iroha:kura:lane-ready-execution-input-authorization:v1\0";
 const LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE: &str = "execution_preflights.norito";
@@ -2716,6 +2719,12 @@ impl Kura {
             Self::reject_retired_pipeline_artifacts(&blocks_root)?;
             Self::reject_retired_rollback_intents(&blocks_root)?;
         }
+        let canonical_replica_terminal_carrier_pins =
+            if config.init_mode == InitMode::Strict && !provisional_open {
+                Self::canonical_replica_terminal_carrier_pins_for_store(&store_root, &blocks_root)?
+            } else {
+                BTreeMap::new()
+            };
         let merge_cache_capacity =
             sanitize_merge_cache_capacity(config.merge_ledger_cache_capacity);
         if let Some(preflight) = configured_primary_preflight.as_mut() {
@@ -2790,7 +2799,9 @@ impl Kura {
                     durable_height_bound = height;
                 }
                 InitMode::Strict => {
-                    block_store.recover_canonical_storage_stages()?;
+                    block_store.recover_canonical_storage_stages_with_carrier_pins(
+                        &canonical_replica_terminal_carrier_pins,
+                    )?;
                     if journal_resolved_primary {
                         block_store.require_existing_journal_bound_canonical_files()?;
                     }
@@ -2885,6 +2896,7 @@ impl Kura {
             provisional_snapshot_bootstrap
                 .as_ref()
                 .map(|bootstrap| bootstrap.hash_only_prefix_height),
+            &canonical_replica_terminal_carrier_pins,
         )?;
         if let Some(preflight) = configured_primary_preflight.as_mut() {
             Self::reverify_configured_primary_blocks_open(preflight, &blocks_root, true)?;
@@ -3190,6 +3202,7 @@ impl Kura {
                 kura.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;
                 kura.recover_retained_block_rewrite_stage_on_startup(&blocks_root)?;
                 kura.recover_lane_block_execution_input_pairs_on_startup()?;
+                kura.recover_canonical_autonomous_lane_replica_pairs_on_startup()?;
                 kura.reconcile_historical_autonomous_recovery_atomic_temps_on_startup()?;
                 let verified_finality = kura.validate_v2_finality_inventory_on_startup(true)?;
                 kura.install_v2_startup_finality_verification_inventory(verified_finality);
@@ -5506,6 +5519,7 @@ impl Kura {
         }
         self.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;
         self.recover_lane_block_execution_input_pairs_on_startup()?;
+        self.recover_canonical_autonomous_lane_replica_pairs_on_startup()?;
         self.reconcile_historical_autonomous_recovery_atomic_temps_on_startup()?;
         self.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;
         self.rebuild_certified_bundle_capacity_reservations_on_startup()?;
@@ -5589,6 +5603,7 @@ impl Kura {
         }
         self.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;
         self.recover_lane_block_execution_input_pairs_on_startup()?;
+        self.recover_canonical_autonomous_lane_replica_pairs_on_startup()?;
         self.reconcile_historical_autonomous_recovery_atomic_temps_on_startup()?;
         self.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;
         self.rebuild_certified_bundle_capacity_reservations_on_startup()?;
@@ -7486,6 +7501,74 @@ impl Kura {
             file,
             metadata,
         })
+    }
+    /// Return whether a progress pair's immediate directory is durably absent
+    /// beneath an unchanged canonical parent.
+    ///
+    /// Non-owning validators legitimately have no committee-private lane
+    /// artifact directory. Read-only consumers must interpret that cold-start
+    /// state as an empty namespace without weakening the no-follow checks used
+    /// once the namespace exists. A missing, replaced, symlinked, or mutated
+    /// parent remains an error.
+    fn bound_progress_sidecar_directory_is_absent(
+        &self,
+        data_path: &Path,
+        index_path: &Path,
+    ) -> Result<bool> {
+        let sidecar_dir = data_path.parent().ok_or_else(|| {
+            Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "progress sidecar data path has no parent",
+                ),
+                data_path.to_path_buf(),
+            )
+        })?;
+        if index_path.parent() != Some(sidecar_dir) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "progress sidecar files do not share one parent directory",
+                ),
+                index_path.to_path_buf(),
+            ));
+        }
+        let parent = sidecar_dir.parent().ok_or_else(|| {
+            Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "progress sidecar directory has no parent",
+                ),
+                sidecar_dir.to_path_buf(),
+            )
+        })?;
+        let bound_parent = Self::open_bound_progress_directory(&self.store_root, parent)?;
+        let observed = Self::canonical_sidecar_directory_for(&self.store_root, sidecar_dir)?;
+        let opened_parent = secure_file_metadata::from_file(&bound_parent.file)
+            .map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+        let (current_parent_path, current_parent) =
+            Self::canonical_sidecar_directory_for(&self.store_root, parent)?.ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "progress sidecar parent disappeared while attesting an empty namespace",
+                    ),
+                    parent.to_path_buf(),
+                )
+            })?;
+        if current_parent_path != bound_parent.canonical_path
+            || !Self::sidecar_directory_metadata_unchanged(&bound_parent.metadata, &opened_parent)
+            || !Self::sidecar_directory_metadata_unchanged(&bound_parent.metadata, &current_parent)
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "progress sidecar parent changed while attesting an empty namespace",
+                ),
+                parent.to_path_buf(),
+            ));
+        }
+        Ok(observed.is_none())
     }
     fn open_bound_progress_child_directory(
         store_root: &Path,
@@ -12225,6 +12308,7 @@ impl Kura {
         mode: InitMode,
         v2_finality_floor: Option<u64>,
         provisional_hash_only_prefix: Option<usize>,
+        canonical_replica_terminal_carrier_pins: &BTreeMap<u64, HashOf<BlockHeader>>,
     ) -> Result<ChainValidation> {
         let block_index_count: usize = block_store
             .read_durable_index_count()?
@@ -12245,9 +12329,12 @@ impl Kura {
                     );
                     Kura::init_fast_mode(block_store, block_index_count, v2_finality_floor)
                 }
-                InitMode::Strict => {
-                    Kura::init_canonical_chain(block_store, block_index_count, v2_finality_floor)
-                }
+                InitMode::Strict => Kura::init_canonical_chain(
+                    block_store,
+                    block_index_count,
+                    v2_finality_floor,
+                    canonical_replica_terminal_carrier_pins,
+                ),
             }?
         };
         if chain_validation.truncated {
@@ -12414,6 +12501,7 @@ impl Kura {
         block_store: &mut BlockStore,
         block_index_count: usize,
         v2_finality_floor: Option<u64>,
+        canonical_replica_terminal_carrier_pins: &BTreeMap<u64, HashOf<BlockHeader>>,
     ) -> Result<ChainValidation, Error> {
         let mut block_indices = vec![BlockIndex::default(); block_index_count];
         block_store.read_block_indices(0, &mut block_indices)?;
@@ -12460,6 +12548,7 @@ impl Kura {
             expected_hashes.as_deref(),
             0,
             v2_finality_floor,
+            canonical_replica_terminal_carrier_pins,
         )?;
         if !hash_journal_is_exact || validation.truncated || validation.hash_mismatch {
             Self::rewrite_validated_block_hashes(
@@ -12477,8 +12566,22 @@ impl Kura {
         expected_hashes: Option<&[HashOf<BlockHeader>]>,
         mut hash_only_prefix: usize,
         v2_finality_floor: Option<u64>,
+        canonical_replica_terminal_carrier_pins: &BTreeMap<u64, HashOf<BlockHeader>>,
     ) -> Result<ChainValidation, Error> {
         let hashes_count = block_store.read_hashes_count()?;
+        let durable_height_bound = u64::try_from(block_indices.len())?;
+        if canonical_replica_terminal_carrier_pins
+            .keys()
+            .any(|height| *height == 0 || *height > durable_height_bound)
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "canonical replica terminal carrier pin is outside the durable block journal",
+                ),
+                block_store.path_to_blockchain.clone(),
+            ));
+        }
         let verified_snapshot_tail = block_store
             .validated_verified_snapshot_tail(u64::try_from(block_indices.len())?, hashes_count)?;
         if let Some(marker) = verified_snapshot_tail.as_ref()
@@ -12501,7 +12604,34 @@ impl Kura {
         let mut hash_mismatch = false;
         for (idx, block) in block_indices.iter().enumerate() {
             let height = idx.saturating_add(1) as u64;
+            let required_carrier_hash = canonical_replica_terminal_carrier_pins
+                .get(&height)
+                .copied();
+            if let Some(required_carrier_hash) = required_carrier_hash {
+                let expected_carrier_hash = expected_hashes
+                    .and_then(|hashes| hashes.get(idx))
+                    .copied()
+                    .ok_or(Error::HashesFileHeightMismatch)?;
+                if expected_carrier_hash != required_carrier_hash {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "canonical replica terminal carrier pin conflicts with the durable hash journal",
+                        ),
+                        block_store.da_block_path(height),
+                    ));
+                }
+            }
             if idx < hash_only_prefix {
+                if required_carrier_hash.is_some() {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "canonical replica terminal carrier cannot be hash-only",
+                        ),
+                        block_store.da_block_path(height),
+                    ));
+                }
                 let expected = expected_hashes
                     .and_then(|hashes| hashes.get(idx))
                     .copied()
@@ -12523,6 +12653,15 @@ impl Kura {
                     position >= marker_start && position < marker.snapshot_height
                 })
             {
+                if required_carrier_hash.is_some() {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "canonical replica terminal carrier has no complete local body",
+                        ),
+                        block_store.da_block_path(height),
+                    ));
+                }
                 let expected = expected_hashes
                     .and_then(|hashes| hashes.get(idx))
                     .copied()
@@ -12538,6 +12677,15 @@ impl Kura {
                 continue;
             }
             if block.length == 0 {
+                if required_carrier_hash.is_some() {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "canonical replica terminal carrier has a zero-length block entry",
+                        ),
+                        block_store.da_block_path(height),
+                    ));
+                }
                 truncated = Some(true);
                 error!(
                     length = block.length,
@@ -12547,6 +12695,15 @@ impl Kura {
                 break;
             }
             if block.length > STRICT_INIT_MAX_BLOCK_BYTES {
+                if required_carrier_hash.is_some() {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "canonical replica terminal carrier exceeds the strict block-size limit",
+                        ),
+                        block_store.da_block_path(height),
+                    ));
+                }
                 truncated = Some(true);
                 error!(
                     length = block.length,
@@ -12572,6 +12729,15 @@ impl Kura {
                     }
                 };
                 let Some(payload) = payload else {
+                    if required_carrier_hash.is_some() {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::NotFound,
+                                "canonical replica terminal carrier DA body is missing",
+                            ),
+                            block_store.da_block_path(height),
+                        ));
+                    }
                     debug!(
                         block_index = idx,
                         height,
@@ -12588,6 +12754,15 @@ impl Kura {
                     if u64::try_from(payload.len())? != block.length
                         || Hash::new(&payload) != retained_wire_hash
                     {
+                        if required_carrier_hash.is_some() {
+                            return Err(Error::IO(
+                                std::io::Error::new(
+                                    ErrorKind::InvalidData,
+                                    "canonical replica terminal carrier DA body differs from signed finality",
+                                ),
+                                block_store.da_block_path(height),
+                            ));
+                        }
                         warn!(
                             block_index = idx,
                             height,
@@ -12611,6 +12786,15 @@ impl Kura {
                             let expected = expected_evicted_hash;
                             let actual = decoded_block.hash();
                             if actual != expected {
+                                if required_carrier_hash.is_some() {
+                                    return Err(Error::IO(
+                                        std::io::Error::new(
+                                            ErrorKind::InvalidData,
+                                            "canonical replica terminal carrier DA body has the wrong block hash",
+                                        ),
+                                        block_store.da_block_path(height),
+                                    ));
+                                }
                                 warn!(
                                     expected = %expected,
                                     actual = %actual,
@@ -12634,6 +12818,17 @@ impl Kura {
                     }
                     Err(error) => {
                         let expected = expected_evicted_hash;
+                        if required_carrier_hash.is_some() {
+                            return Err(Error::IO(
+                                std::io::Error::new(
+                                    ErrorKind::InvalidData,
+                                    format!(
+                                        "canonical replica terminal carrier DA body is malformed: {error}"
+                                    ),
+                                ),
+                                block_store.da_block_path(height),
+                            ));
+                        }
                         warn!(
                             ?error,
                             block_index = idx,
@@ -12663,6 +12858,15 @@ impl Kura {
                             data_len: data_file_len,
                         })?;
                 if end > data_file_len {
+                    if required_carrier_hash.is_some() {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::InvalidData,
+                                "canonical replica terminal carrier points past the canonical data file",
+                            ),
+                            block_store.path_to_blockchain.clone(),
+                        ));
+                    }
                     truncated = Some(true);
                     error!(
                         start = block.start,
@@ -12682,6 +12886,17 @@ impl Kura {
                     Ok(()) => match decode_framed_signed_block(&block_data_buffer) {
                         Ok(decoded_block) => decoded_block,
                         Err(error) => {
+                            if required_carrier_hash.is_some() {
+                                return Err(Error::IO(
+                                    std::io::Error::new(
+                                        ErrorKind::InvalidData,
+                                        format!(
+                                            "canonical replica terminal carrier inline body is malformed: {error}"
+                                        ),
+                                    ),
+                                    block_store.path_to_blockchain.clone(),
+                                ));
+                            }
                             truncated = Some(true);
                             error!(
                                 ?error,
@@ -12692,6 +12907,20 @@ impl Kura {
                         }
                     },
                     Err(error) => {
+                        if required_carrier_hash.is_some() {
+                            let Error::IO(source, _) = error else {
+                                return Err(error);
+                            };
+                            return Err(Error::IO(
+                                std::io::Error::new(
+                                    source.kind(),
+                                    format!(
+                                        "failed to read canonical replica terminal carrier inline body: {source}"
+                                    ),
+                                ),
+                                block_store.path_to_blockchain.clone(),
+                            ));
+                        }
                         truncated = Some(true);
                         error!(
                             ?error,
@@ -12715,6 +12944,15 @@ impl Kura {
             let decoded_block_hash = decoded_block.hash();
             if let Some(expected) = expected_hashes.and_then(|hashes| hashes.get(idx)).copied() {
                 if expected != decoded_block_hash {
+                    if required_carrier_hash.is_some() {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::InvalidData,
+                                "canonical replica terminal carrier inline body has the wrong block hash",
+                            ),
+                            block_store.path_to_blockchain.clone(),
+                        ));
+                    }
                     Self::ensure_startup_rewrite_respects_v2_finality(v2_finality_floor, height)?;
                     hash_mismatch = true;
                     warn!(
@@ -12730,6 +12968,19 @@ impl Kura {
         }
         let truncated = truncated.unwrap_or(false);
         let validated_height = block_hashes.len() as u64;
+        if truncated
+            && canonical_replica_terminal_carrier_pins
+                .keys()
+                .any(|height| *height > validated_height)
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "canonical chain corruption precedes a pinned canonical replica terminal carrier",
+                ),
+                block_store.path_to_blockchain.clone(),
+            ));
+        }
         if truncated {
             Self::ensure_startup_rewrite_respects_v2_finality(
                 v2_finality_floor,
@@ -16133,9 +16384,7 @@ impl Kura {
         let staged_path = self.kagemusha_finality_staging_path(artifact.height);
         if let Some((existing, _)) = self.decode_kagemusha_finality_sidecar(&final_path)? {
             Self::validate_kagemusha_finality_sidecar(&existing, artifact)?;
-            if let Some((staged, identity)) =
-                self.decode_staged_kagemusha_finality(&staged_path)?
-            {
+            if let Some((staged, identity)) = self.decode_staged_kagemusha_finality(&staged_path)? {
                 Self::validate_staged_kagemusha_finality(&staged, artifact)?;
                 self.remove_exact_staged_kagemusha_finality(&staged_path, &identity)?;
             }
@@ -16175,8 +16424,7 @@ impl Kura {
             sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
         }
         if !self.write_atomic_synced_noclobber(&final_path, &bytes)? {
-            let Some((existing, _)) = self.decode_kagemusha_finality_sidecar(&final_path)?
-            else {
+            let Some((existing, _)) = self.decode_kagemusha_finality_sidecar(&final_path)? else {
                 return Err(Error::KagemushaFinalitySidecar(
                     "final Kagemusha V1 sidecar disappeared during publication".to_owned(),
                 ));
@@ -16249,14 +16497,12 @@ impl Kura {
                         "failed to reconstruct the canonical Kagemusha V1 top-up leaves: {error}"
                     ))
                 })?;
-            let tree = crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityTreeV1::new(
-                leaves,
-            )
-            .map_err(|error| {
-                Error::KagemushaFinalitySidecar(format!(
-                    "failed to reconstruct the canonical Kagemusha V1 top-up tree: {error}"
-                ))
-            })?;
+            let tree = crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityTreeV1::new(leaves)
+                .map_err(|error| {
+                    Error::KagemushaFinalitySidecar(format!(
+                        "failed to reconstruct the canonical Kagemusha V1 top-up tree: {error}"
+                    ))
+                })?;
             if tree.leaf_count()
                 != artifact
                     .commit_qc
@@ -16311,10 +16557,7 @@ impl Kura {
     }
 
     /// Return the canonically ordered top-up operation identifiers finalized at one height.
-    pub(crate) fn kagemusha_top_up_operation_ids_v1(
-        &self,
-        height: u64,
-    ) -> Result<Vec<[u8; 32]>> {
+    pub(crate) fn kagemusha_top_up_operation_ids_v1(&self, height: u64) -> Result<Vec<[u8; 32]>> {
         let Some(artifact) = self.v2_finality_artifact(height)? else {
             return Err(Error::KagemushaFinalitySidecar(
                 "top-up inventory has no durable finality artifact".to_owned(),
@@ -16422,8 +16665,7 @@ impl Kura {
             };
         }
         if !self.write_atomic_synced_noclobber(&path, &bytes)? {
-            let Some((existing, _)) =
-                self.decode_kagemusha_mint_authority_checkpoint_v1(&path)?
+            let Some((existing, _)) = self.decode_kagemusha_mint_authority_checkpoint_v1(&path)?
             else {
                 return Err(Error::KagemushaMintOutbox(
                     "mint-authority checkpoint disappeared during publication".to_owned(),
@@ -16596,8 +16838,7 @@ impl Kura {
                 ));
             }
         }
-        let Some((persisted, identity)) = self.decode_kagemusha_mint_outbox_entry_v1(&path)?
-        else {
+        let Some((persisted, identity)) = self.decode_kagemusha_mint_outbox_entry_v1(&path)? else {
             return Err(Error::KagemushaMintOutbox(
                 "mint outbox entry disappeared after publication".to_owned(),
             ));
@@ -18587,6 +18828,22 @@ impl Kura {
         self.store_block_durable(&block, merge_entry.as_ref())?;
         self.note_committed_lane_status_change();
         Ok(())
+    }
+    /// Read the exact canonical framed block bytes persisted at `height`.
+    #[cfg(test)]
+    pub(crate) fn canonical_block_wire_bytes_for_testing(
+        &self,
+        height: NonZeroUsize,
+    ) -> Result<Vec<u8>> {
+        let mut block_store = self.block_store.lock();
+        let index_position = u64::try_from(height.get().saturating_sub(1))?;
+        let index = block_store.read_block_index(index_position)?;
+        if index.is_evicted() {
+            return block_store.read_da_block_bytes(u64::try_from(height.get())?, index.length);
+        }
+        let mut bytes = vec![0_u8; usize::try_from(index.length)?];
+        block_store.read_block_data(index.start, &mut bytes)?;
+        Ok(bytes)
     }
     /// Store a block durably in Kura and persist the merge-ledger entry sealing it.
     ///
@@ -22426,6 +22683,7 @@ impl BlockStoreCommitMarker {
     }
 }
 include!("kura/pipeline_and_lane_artifacts.rs");
+include!("kura/canonical_autonomous_replica.rs");
 impl Kura {
     fn now_unix_secs() -> u64 {
         SystemTime::now()
@@ -25200,6 +25458,9 @@ impl Kura {
             Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
         let _sidecar_guard = self.sidecar_lock.lock();
         self.ensure_prune_recovery_not_required()?;
+        if self.bound_progress_sidecar_directory_is_absent(&data_path, &index_path)? {
+            return Ok(None);
+        }
         let frontier_read = self.read_latest_certified_lane_block_frontier_locked(&entry, false)?;
         let Some(frontier_read) = frontier_read else {
             let namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
@@ -25326,6 +25587,9 @@ impl Kura {
             Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
         let _sidecar_guard = self.sidecar_lock.lock();
         self.ensure_prune_recovery_not_required()?;
+        if self.bound_progress_sidecar_directory_is_absent(&data_path, &index_path)? {
+            return Ok(None);
+        }
         let namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
         self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(
             &namespace,
@@ -27189,7 +27453,11 @@ impl Kura {
             || context.network_id != payload.network_id
             || locked_round.context_id != context.id()
             || locked_round.height != context.height
-            || locked_round.view != hint.proposal_view
+            // The same immutable carrier may be reproposed and certified in
+            // a later view without rewriting its signed header. The custody
+            // evidence binds both values, so only a lock older than the
+            // header-origin hint is invalid here.
+            || locked_round.view < hint.proposal_view
             || locked_subject.block_hash != hint.proposal_block_hash
             || locked_subject
                 .payload_hash
@@ -27526,7 +27794,32 @@ impl Kura {
                     payload.epoch,
                 )
                 .is_ok_and(|promoted| promoted == *payload);
-        if !exact && !promotable {
+        let rebindable = !exact
+            && existing_payload
+                .origin_proposal
+                .payload_block_hint
+                .is_some()
+            && payload.origin_proposal.payload_block_hint.is_some()
+            && existing_payload
+                .rebind_global_hint_exact(
+                    payload
+                        .origin_proposal
+                        .payload_block_hint
+                        .expect("checked present"),
+                    payload.network_id,
+                    payload.epoch,
+                )
+                .is_ok_and(|rebound| rebound == *payload);
+        let rebind_authorized = Self::autonomous_payload_custody_source_authorizes_hint_rebind(
+            authorization.custody.source,
+        );
+        if rebindable && !rebind_authorized {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "autonomous carrier-hint rebind lacks protected or canonical custody",
+            ));
+        }
+        if !exact && !promotable && !rebindable {
             return Err(Self::invalid_lane_artifact_error(
                 self.store_root.clone(),
                 "authenticated payload custody conflicts with the current durable lane slot",
@@ -27702,7 +27995,11 @@ impl Kura {
         )?;
         let payload_record_matches = payload_record.as_ref().is_none_or(|record| {
             record.artifact.executable_payload == *payload
-                || Self::autonomous_lifecycle_bootstrap_is_strict_hint_promotion(record, payload)
+                || Self::autonomous_lifecycle_bootstrap_is_authorized_hint_update(
+                    record,
+                    payload,
+                    bootstrap.body.custody.source,
+                )
         });
         if !payload_record_matches {
             return Err(Self::invalid_lane_artifact_error(
@@ -27755,24 +28052,38 @@ impl Kura {
             )),
         }
     }
-    fn autonomous_lifecycle_bootstrap_is_strict_hint_promotion(
+    fn autonomous_payload_custody_source_authorizes_hint_rebind(
+        source: AutonomousLifecyclePayloadCustodySourceV1,
+    ) -> bool {
+        matches!(
+            source,
+            AutonomousLifecyclePayloadCustodySourceV1::ProtectedCarrierReceive
+                | AutonomousLifecyclePayloadCustodySourceV1::CanonicalCarrierRepair
+                | AutonomousLifecyclePayloadCustodySourceV1::CanonicalHistoricalRecoveryRecord
+        )
+    }
+    fn autonomous_lifecycle_bootstrap_is_authorized_hint_update(
         record: &AutonomousLaneBlockDurableRecord,
         payload: &LaneExecutablePayloadV1,
+        custody_source: AutonomousLifecyclePayloadCustodySourceV1,
     ) -> bool {
         let durable = &record.artifact.executable_payload;
-        record.retirement.is_none()
-            && durable.origin_proposal.payload_block_hint.is_none()
-            && payload.origin_proposal.payload_block_hint.is_some()
-            && durable
-                .attach_global_hint_exact(
-                    payload
-                        .origin_proposal
-                        .payload_block_hint
-                        .expect("checked present"),
-                    payload.network_id,
-                    payload.epoch,
-                )
-                .is_ok_and(|promoted| promoted == *payload)
+        let Some(hint) = payload.origin_proposal.payload_block_hint else {
+            return false;
+        };
+        if record.retirement.is_some()
+            || custody_source == AutonomousLifecyclePayloadCustodySourceV1::ProducerQueue
+        {
+            return false;
+        }
+        let updated = if durable.origin_proposal.payload_block_hint.is_none() {
+            durable.attach_global_hint_exact(hint, payload.network_id, payload.epoch)
+        } else if Self::autonomous_payload_custody_source_authorizes_hint_rebind(custody_source) {
+            durable.rebind_global_hint_exact(hint, payload.network_id, payload.epoch)
+        } else {
+            return false;
+        };
+        updated.is_ok_and(|updated| updated == *payload)
     }
     fn autonomous_lifecycle_bootstrap_authority_locked(
         &self,
@@ -28268,13 +28579,13 @@ impl Kura {
             .regular_sidecar_metadata(&cursor_path, parent)?
             .is_some();
         // A producer first persists hint-free Queue custody because the global
-        // carrier does not exist yet. Once that exact payload is protected by
-        // a live lock, a signed non-Queue bootstrap may promote only the
-        // advisory carrier hint while retaining the same current-generation
-        // Live cursor. Persisting the bootstrap makes this promotion
-        // restartable; every other replay around existing payload/cursor state
-        // remains forbidden.
-        let live_carrier_hint_promotion = if payload_custody && attempt_exists && cursor_exists {
+        // carrier does not exist yet. A protected or canonical higher-view
+        // carrier may also replace an earlier advisory hint for the exact same
+        // payload. The signed non-Queue bootstrap makes either update
+        // restartable while retaining the current-generation Live cursor;
+        // every other replay around existing payload/cursor state remains
+        // forbidden.
+        let live_carrier_hint_update = if payload_custody && attempt_exists && cursor_exists {
             let current = self.read_autonomous_lane_block_attempt_record_locked(
                 &entry,
                 descriptor.lane_id,
@@ -28284,19 +28595,20 @@ impl Kura {
                 executable_payload.epoch,
                 Some(pending_canonical_bytes),
             )?;
-            let strict_hint_promotion = current.as_ref().is_some_and(|record| {
-                Self::autonomous_lifecycle_bootstrap_is_strict_hint_promotion(
+            let authorized_hint_update = current.as_ref().is_some_and(|record| {
+                Self::autonomous_lifecycle_bootstrap_is_authorized_hint_update(
                     record,
                     executable_payload,
+                    bootstrap.body.custody.source,
                 )
             });
-            strict_hint_promotion
+            authorized_hint_update
                 && self.classify_autonomous_lifecycle_bootstrap_locked(&entry, &bootstrap)?
                     == AutonomousLifecycleBootstrapRecoveryStage::LiveDurable
         } else {
             false
         };
-        if (attempt_exists || cursor_exists) && !live_carrier_hint_promotion {
+        if (attempt_exists || cursor_exists) && !live_carrier_hint_update {
             return Err(Self::invalid_lane_artifact_error(
                 path,
                 "autonomous lifecycle bootstrap cannot be replayed around existing payload or cursor state",
@@ -30032,17 +30344,32 @@ impl Kura {
                             "autonomous lane proposal-height attempt already contains conflicting bytes",
                         ));
                     };
-                    let promoted_payload = existing_artifact
-                        .executable_payload
-                        .attach_global_hint_exact(hint, expected_network_id, expected_epoch)
-                        .map_err(|error| {
-                            Self::invalid_lane_artifact_error(
-                                artifact_path.clone(),
-                                format!(
-                                    "autonomous lane attempt cannot be promoted to the carrier hint: {error}"
-                                ),
-                            )
-                        })?;
+                    let existing_payload = &existing_artifact.executable_payload;
+                    let promoted_payload = if existing_payload
+                        .origin_proposal
+                        .payload_block_hint
+                        .is_none()
+                    {
+                        existing_payload.attach_global_hint_exact(
+                            hint,
+                            expected_network_id,
+                            expected_epoch,
+                        )
+                    } else {
+                        existing_payload.rebind_global_hint_exact(
+                            hint,
+                            expected_network_id,
+                            expected_epoch,
+                        )
+                    }
+                    .map_err(|error| {
+                        Self::invalid_lane_artifact_error(
+                            artifact_path.clone(),
+                            format!(
+                                "autonomous lane attempt cannot adopt the protected carrier hint: {error}"
+                            ),
+                        )
+                    })?;
                     let mut promoted_artifact = existing_artifact;
                     promoted_artifact.executable_payload = promoted_payload;
                     if promoted_artifact != *artifact {
@@ -32105,26 +32432,40 @@ impl Kura {
                 return Ok(LaneBlockAuxiliaryPersistenceOutcome::Persisted);
             }
             if existing_record.retirement.is_none()
-                && existing_payload
+                && let Some(hint) = payload.origin_proposal.payload_block_hint
+                && (existing_payload
                     .origin_proposal
                     .payload_block_hint
                     .is_none()
-                && let Some(hint) = payload.origin_proposal.payload_block_hint
+                    || mode.authorizes_global_hint_rebind())
             {
-                let promoted = existing_payload
-                    .attach_global_hint_exact(hint, expected_network_id, expected_epoch)
-                    .map_err(|error| {
-                        Self::invalid_lane_artifact_error(
-                            attempt_path.clone(),
-                            format!(
-                                "autonomous lane carrier-hint promotion is not byte exact: {error}"
-                            ),
-                        )
-                    })?;
+                let promoted = if existing_payload
+                    .origin_proposal
+                    .payload_block_hint
+                    .is_none()
+                {
+                    existing_payload.attach_global_hint_exact(
+                        hint,
+                        expected_network_id,
+                        expected_epoch,
+                    )
+                } else {
+                    existing_payload.rebind_global_hint_exact(
+                        hint,
+                        expected_network_id,
+                        expected_epoch,
+                    )
+                }
+                .map_err(|error| {
+                    Self::invalid_lane_artifact_error(
+                        attempt_path.clone(),
+                        format!("autonomous lane carrier-hint update is not byte exact: {error}"),
+                    )
+                })?;
                 if promoted != *payload {
                     return Err(Self::invalid_lane_artifact_error(
                         attempt_path,
-                        "autonomous lane carrier-hint promotion changed authenticated payload bytes",
+                        "autonomous lane carrier-hint update changed authenticated payload bytes",
                     ));
                 }
                 let state = AutonomousLaneBlockViewState::from_artifact(&existing_record.artifact);
@@ -33826,14 +34167,14 @@ impl Kura {
                                 == bootstrap.body.executable_payload
                     })
                 });
-                let payload_promotable = bootstrap.body.custody.source
-                    != AutonomousLifecyclePayloadCustodySourceV1::ProducerQueue
-                    && attempts.get(&identity.0).is_some_and(|attempts_at_height| {
+                let payload_promotable =
+                    attempts.get(&identity.0).is_some_and(|attempts_at_height| {
                         attempts_at_height.iter().any(|(pointer, record)| {
                             pointer.proposal_height == identity.1
-                                && Self::autonomous_lifecycle_bootstrap_is_strict_hint_promotion(
+                                && Self::autonomous_lifecycle_bootstrap_is_authorized_hint_update(
                                     record,
                                     &bootstrap.body.executable_payload,
+                                    bootstrap.body.custody.source,
                                 )
                         })
                     });
@@ -41077,11 +41418,19 @@ impl BlockStore {
     /// may change that marker, so the two stages must never be observed in the opposite
     /// order after a crash.
     fn recover_canonical_storage_stages(&mut self) -> Result<()> {
+        self.recover_canonical_storage_stages_with_carrier_pins(&BTreeMap::new())
+    }
+    fn recover_canonical_storage_stages_with_carrier_pins(
+        &mut self,
+        canonical_replica_terminal_carrier_pins: &BTreeMap<u64, HashOf<BlockHeader>>,
+    ) -> Result<()> {
         if self.path_to_blockchain.as_os_str().is_empty() {
             return Ok(());
         }
         self.recover_eviction_compaction_stage()?;
-        self.recover_da_block_rewrite_stage()
+        self.recover_da_block_rewrite_stage_with_carrier_pins(
+            canonical_replica_terminal_carrier_pins,
+        )
     }
     fn read_da_block_bytes(&self, height: u64, expected_len: u64) -> Result<Vec<u8>> {
         self.ensure_da_blocks_dir()?;
@@ -41754,7 +42103,54 @@ impl BlockStore {
         }
         Ok(())
     }
+    fn validate_da_block_rewrite_selection_for_carrier_pins(
+        &self,
+        stage: &DaBlockRewriteStageV1,
+        selected_marker: &BlockStoreCommitMarker,
+        selected_suffix: &[DaBlockRewriteImageV1],
+        canonical_replica_terminal_carrier_pins: &BTreeMap<u64, HashOf<BlockHeader>>,
+    ) -> Result<()> {
+        if canonical_replica_terminal_carrier_pins.is_empty() {
+            return Ok(());
+        }
+        let replacement_start = stage
+            .replacement
+            .first()
+            .expect("validated DA rewrite stage has a nonempty replacement")
+            .height;
+        for (&height, &required_hash) in canonical_replica_terminal_carrier_pins {
+            if height > selected_marker.count {
+                return Err(self.invalid_da_block_rewrite_stage(
+                    "selected DA rewrite state truncates a pinned canonical replica terminal carrier",
+                ));
+            }
+            if height < replacement_start {
+                continue;
+            }
+            let offset = usize::try_from(height.saturating_sub(replacement_start))?;
+            let Some(image) = selected_suffix.get(offset) else {
+                return Err(self.invalid_da_block_rewrite_stage(
+                    "selected DA rewrite state omits a pinned canonical replica terminal carrier",
+                ));
+            };
+            if image.height != height
+                || image.block_hash != required_hash
+                || image.body.as_ref().is_none_or(Vec::is_empty)
+            {
+                return Err(self.invalid_da_block_rewrite_stage(
+                    "selected DA rewrite state changes or body-strips a pinned canonical replica terminal carrier",
+                ));
+            }
+        }
+        Ok(())
+    }
     fn recover_da_block_rewrite_stage(&mut self) -> Result<()> {
+        self.recover_da_block_rewrite_stage_with_carrier_pins(&BTreeMap::new())
+    }
+    fn recover_da_block_rewrite_stage_with_carrier_pins(
+        &mut self,
+        canonical_replica_terminal_carrier_pins: &BTreeMap<u64, HashOf<BlockHeader>>,
+    ) -> Result<()> {
         let Some(stage) = self.read_da_block_rewrite_stage()? else {
             return Ok(());
         };
@@ -41774,8 +42170,20 @@ impl BlockStore {
             )
         })?;
         if marker == stage.old_marker {
+            self.validate_da_block_rewrite_selection_for_carrier_pins(
+                &stage,
+                &stage.old_marker,
+                &stage.old_suffix,
+                canonical_replica_terminal_carrier_pins,
+            )?;
             self.restore_old_da_block_rewrite_stage(&stage)?;
         } else if marker == stage.new_marker {
+            self.validate_da_block_rewrite_selection_for_carrier_pins(
+                &stage,
+                &stage.new_marker,
+                &stage.replacement,
+                canonical_replica_terminal_carrier_pins,
+            )?;
             self.promote_new_da_block_rewrite_stage(&stage)?;
             self.commit_marker_count = stage.new_marker.count;
             self.commit_marker_pending = None;
@@ -44533,6 +44941,7 @@ pub(crate) mod tests {
     include!("kura/tests/07j_certified_bundle_capacity_tests.rs");
     include!("kura/tests/07k_historical_atomic_temp_recovery_tests.rs");
     include!("kura/tests/07l_pending_canonical_capacity_tests.rs");
+    include!("kura/tests/07m_canonical_autonomous_replica_tests.rs");
     include!("kura/tests/08_lane_receipts_and_artifacts.rs");
     include!("kura/tests/08a_certified_lane_block_read_tests.rs");
     include!("kura/tests/08b_lane_history_compaction_capacity_tests.rs");

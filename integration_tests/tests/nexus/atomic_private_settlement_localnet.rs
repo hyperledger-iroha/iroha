@@ -4,6 +4,8 @@
 //! The ignored test deliberately uses the production wallet prover, encrypted
 //! auditor capsule, Torii restricted-DA routes, and node-held BLS committee
 //! keys.  There is no fixture proof, hand-made vote, or QC verification bypass.
+//! The primary N=3 topology settles one public participant dataspace and two
+//! restricted participant dataspaces in the same confidential atomic bundle.
 //! The included release-harness entrypoint parameterizes the same production
 //! workflow across N=2,3,4,8,16 and publishes only measured process evidence.
 
@@ -13,8 +15,9 @@ use integration_tests::sandbox;
 use iroha::{
     client::{
         BorrowedKeyPairIdentityRequestSignerV1, Client, PrivateSettlementAuditApprovalRequestV1,
-        PrivateSettlementBundleReceiptResponseV1, PrivateSettlementBundleSubmitRequestV1,
-        PrivateSettlementLegUploadRequestV1, PrivateSettlementLifecycleDtoV1,
+        PrivateSettlementAuditorCapsuleRequestV1, PrivateSettlementBundleReceiptResponseV1,
+        PrivateSettlementBundleSubmitRequestV1, PrivateSettlementLegUploadRequestV1,
+        PrivateSettlementLifecycleDtoV1,
     },
     data_model::{
         Level,
@@ -28,7 +31,7 @@ use iroha::{
         },
         domain::{Domain, DomainId},
         isi::{
-            Grant, InstructionBox, Log, Mint, Register,
+            Grant, GrantBox, InstructionBox, Log, Mint, Register,
             privacy::RegisterPrivacyProtocolActivationV1,
             private_settlement::{
                 ActivatePrivateSettlementPoolV1, FinalizeAtomicPrivateSettlementV1,
@@ -42,7 +45,7 @@ use iroha::{
         metadata::Metadata,
         nexus::{
             ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, AtomicPrivateSettlementV1, DataSpaceId, LaneId,
-            PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1, PrivateSettlementAuditAadV1,
+            LaneVisibility, PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1, PrivateSettlementAuditAadV1,
             PrivateSettlementAuditEncryptionOpeningV1, PrivateSettlementAuditNoteOpeningV1,
             PrivateSettlementAuditOutputRoleV1, PrivateSettlementAuditOutputV1,
             PrivateSettlementAuditPayerAuthorizationBodyV1,
@@ -65,11 +68,14 @@ use iroha::{
         privacy::{
             PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1, PrivacyCommitmentV1,
             PrivacyEncryptedOutputV1, PrivacyEncryptionKeyV1, PrivacyNullifierV1, PrivacyPoolIdV1,
-            PrivacyProposedLifecycleV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
-            PrivacyRecipientIdV1, PrivacyRootV1,
+            PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
+            PrivacyProtocolLifecycleV1, PrivacyRecipientIdV1, PrivacyRootV1,
         },
         query::block::prelude::FindBlocks,
-        transaction::{FeePaymentIntent, SignedTransaction, TransactionEntrypoint},
+        transaction::{
+            FeeChargeKind, FeeChargeLimit, FeePaymentIntent, SignedTransaction,
+            TransactionEntrypoint,
+        },
     },
 };
 use iroha_core::{
@@ -114,13 +120,19 @@ use std::{
 use toml::{Table, Value as TomlValue};
 
 const PARTICIPANT_COUNT: usize = 3;
+const PRIMARY_PUBLIC_PARTICIPANT_ORDINAL: usize = 0;
 const VALIDATORS_PER_LANE: usize = 4;
+const REAL_PROCESS_VALIDATOR_WORKER_THREADS: u64 = 4;
 const GLOBAL_LANE_ID: u32 = 0;
 const VALIDATOR_STAKE: u64 = 2_000;
+const PRIVACY_GENESIS_PROPOSAL_HEIGHT: u64 = 1;
 const PRIVATE_SETTLEMENT_ACTIVATION_HEIGHT: u64 = 2;
 const MAX_EXPIRY_BLOCKS: u64 = 4_096;
 const SIDECAR_RETENTION_BLOCKS: u64 = 4_096;
 const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1024 * 1024 * 1024;
+const NEXUS_FEE_SEED_BALANCE: u64 = 10_000;
+const NEXUS_FEE_SIGNED_MAXIMUM: u64 = 1;
+const NEXUS_FEE_PER_PRIVATE_SETTLEMENT_CARRIER: &str = "0.001";
 const TRANSPARENT_CONTROL_SEED_BALANCE: u64 = 10_000;
 const TRANSPARENT_CONTROL_OUTPUT_BASELINE: u64 = 1;
 const TEST_STACK_BYTES: usize = 64 * 1024 * 1024;
@@ -158,12 +170,66 @@ impl TopologyShape {
         start..start + VALIDATORS_PER_LANE
     }
 
+    fn participant_visibility(self, ordinal: usize) -> LaneVisibility {
+        assert!(
+            ordinal < self.participants,
+            "participant ordinal is in range"
+        );
+        if ordinal == PRIMARY_PUBLIC_PARTICIPANT_ORDINAL {
+            LaneVisibility::Public
+        } else {
+            LaneVisibility::Restricted
+        }
+    }
+
+    fn participant_visibility_profile(self) -> Vec<LaneVisibility> {
+        (0..self.participants)
+            .map(|ordinal| self.participant_visibility(ordinal))
+            .collect()
+    }
+
+    fn p2p_validator_counts_by_visibility(self) -> (usize, usize) {
+        let participant_visibilities = self.participant_visibility_profile();
+        let public_lanes = 1 + participant_visibilities
+            .iter()
+            .filter(|visibility| **visibility == LaneVisibility::Public)
+            .count();
+        let restricted_lanes = participant_visibilities
+            .iter()
+            .filter(|visibility| **visibility == LaneVisibility::Restricted)
+            .count();
+        (
+            public_lanes * VALIDATORS_PER_LANE,
+            restricted_lanes * VALIDATORS_PER_LANE,
+        )
+    }
+
     fn validate(self) -> Result<()> {
         ensure!(
             matches!(self.participants, 2 | 3 | 4 | 8 | 16),
             "real-process release matrix supports N=2,3,4,8,16"
         );
         Ok(())
+    }
+}
+
+fn participant_dataspace_alias(ordinal: usize) -> String {
+    let number = ordinal + 1;
+    if ordinal == PRIMARY_PUBLIC_PARTICIPANT_ORDINAL {
+        format!("public-{number}")
+    } else {
+        format!("private-{number}")
+    }
+}
+
+fn participant_lane_alias(ordinal: usize) -> String {
+    format!("lane-{}", participant_dataspace_alias(ordinal))
+}
+
+const fn visibility_config_value(visibility: LaneVisibility) -> &'static str {
+    match visibility {
+        LaneVisibility::Public => "public",
+        LaneVisibility::Restricted => "restricted",
     }
 }
 
@@ -201,8 +267,62 @@ const LEAKAGE_ACCOUNT_RIGHT_I105: &str = "sorauﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰ�
 const LEAKAGE_ASSET_LEFT: &str = "4Zust3cNxfvUrJRuFjSMmNXho9rF";
 const LEAKAGE_ASSET_RIGHT: &str = "7fnqfbvxnCke21nA2Zy1C3KktDdi";
 
-fn no_fee() -> FeePaymentIntent {
-    FeePaymentIntent::authority(Vec::new(), None)
+fn nexus_fee_asset_definition_id() -> AssetDefinitionId {
+    AssetDefinitionId::derive_from_components(
+        DomainId::try_new("universal", "universal").expect("Nexus fee domain"),
+        "xor".parse().expect("Nexus fee asset name"),
+    )
+}
+
+fn bounded_nexus_fee() -> FeePaymentIntent {
+    FeePaymentIntent::authority(
+        vec![FeeChargeLimit::new(
+            FeeChargeKind::Nexus,
+            nexus_fee_asset_definition_id(),
+            Quantity::from(NEXUS_FEE_SIGNED_MAXIMUM),
+        )],
+        None,
+    )
+}
+
+fn sponsor_nexus_fee_balance(client: &Client) -> Result<Quantity> {
+    let asset = client.query_single(FindAssetById::new(AssetId::new(
+        nexus_fee_asset_definition_id(),
+        ALICE_ID.clone(),
+    )))?;
+    Ok(asset.value().clone())
+}
+
+fn ensure_exact_private_settlement_carrier_fee(
+    before: &Quantity,
+    after: &Quantity,
+    context: &str,
+) -> Result<()> {
+    let expected: Quantity = NEXUS_FEE_PER_PRIVATE_SETTLEMENT_CARRIER
+        .parse()
+        .expect("canonical private-settlement carrier fee");
+    let charged = before
+        .checked_sub(after)
+        .wrap_err_with(|| format!("compute {context} Nexus fee"))?;
+    ensure!(
+        charged == expected,
+        "{context} charged {charged}, expected exactly {expected}"
+    );
+    Ok(())
+}
+
+fn genesis_private_note_activation() -> PrivacyProtocolActivationRecordV1 {
+    let activate_at_height = PRIVACY_GENESIS_PROPOSAL_HEIGHT
+        .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
+        .expect("privacy activation height fits u64");
+    compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
+        .expect("compiled IVM private-note profile")
+        .activation_record(PrivacyProtocolLifecycleV1::Proposed(
+            PrivacyProposedLifecycleV1 {
+                proposed_at_height: PRIVACY_GENESIS_PROPOSAL_HEIGHT,
+                activate_at_height,
+            },
+        ))
 }
 
 fn hash(seed: u8) -> Hash {
@@ -239,7 +359,7 @@ fn cbdc_asset_definition_id(ordinal: usize) -> AssetDefinitionId {
 fn transparent_control_domain_id(ordinal: usize) -> DomainId {
     DomainId::try_new(
         format!("control{}", ordinal + 1),
-        format!("private-{}", ordinal + 1),
+        participant_dataspace_alias(ordinal),
     )
     .expect("transparent-control domain")
 }
@@ -279,6 +399,10 @@ fn genesis_post_topology(shape: TopologyShape, topology: &[PeerId]) -> Vec<Vec<I
     let stake_definition = stake_asset_definition_id();
     let mut universal = vec![
         Register::domain(Domain::new(
+            DomainId::try_new("universal", "universal").expect("Nexus fee domain"),
+        ))
+        .into(),
+        Register::domain(Domain::new(
             DomainId::try_new("nexus", "universal").expect("nexus domain"),
         ))
         .into(),
@@ -292,6 +416,18 @@ fn genesis_post_topology(shape: TopologyShape, topology: &[PeerId]) -> Vec<Vec<I
             AssetBalancePolicy::Global,
             None,
         ))
+        .into(),
+        Register::asset_definition(AssetDefinition::numeric(
+            nexus_fee_asset_definition_id(),
+            "xor".to_owned(),
+            AssetBalancePolicy::Global,
+            None,
+        ))
+        .into(),
+        Mint::asset_quantity(
+            NEXUS_FEE_SEED_BALANCE,
+            AssetId::new(nexus_fee_asset_definition_id(), ALICE_ID.clone()),
+        )
         .into(),
         Grant::account_permission(Permission::from(CanEnactGovernance), ALICE_ID.clone()).into(),
     ];
@@ -318,6 +454,13 @@ fn genesis_post_topology(shape: TopologyShape, topology: &[PeerId]) -> Vec<Vec<I
             .into(),
         );
     }
+    // Keep the grant and governed registration in one genesis transaction.
+    // Genesis pre-exec evaluates its transactions independently, so a grant in
+    // an earlier transaction is not an authorization source for a later one.
+    // Instruction order inside this transaction makes the grant visible before
+    // the profile is registered at canonical height one.
+    universal
+        .push(RegisterPrivacyProtocolActivationV1::new(genesis_private_note_activation()).into());
     let mut transactions = vec![universal];
     for ordinal in 0..shape.participants {
         let control_domain = transparent_control_domain_id(ordinal);
@@ -333,6 +476,24 @@ fn genesis_post_topology(shape: TopologyShape, topology: &[PeerId]) -> Vec<Vec<I
             Register::account(Account::new(transparent_control_account_id(ordinal))).into(),
         ]);
     }
+    // Nexus fees are globally scoped even when the business instruction is
+    // routed to a restricted dataspace. Fund every authority that signs a
+    // transparent control transaction in one universal transaction after the
+    // corresponding accounts have been registered.
+    transactions.push(
+        (0..shape.participants)
+            .map(|ordinal| {
+                Mint::asset_quantity(
+                    NEXUS_FEE_SEED_BALANCE,
+                    AssetId::new(
+                        nexus_fee_asset_definition_id(),
+                        transparent_control_account_id(ordinal),
+                    ),
+                )
+                .into()
+            })
+            .collect(),
+    );
     // Keep each restricted balance mutation in its authoritative dataspace.
     for asset_ordinal in 0..shape.participants {
         let mut mints = Vec::new();
@@ -402,16 +563,14 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
     let stake_escrow = ALICE_ID
         .canonical_i105()
         .expect("canonical staking escrow account");
+    let validator_worker_threads = i64::try_from(REAL_PROCESS_VALIDATOR_WORKER_THREADS)
+        .expect("validator worker width fits i64");
     NetworkBuilder::new()
         .with_base_seed("atomic-private-settlement-n3-real-process-v1")
         .with_peers(shape.peer_count())
-        // Sixteen independent daemons share the release-test host.  A 50 ms
-        // cadence derives a 500 ms view deadline and 100 ms retransmission
-        // interval, so startup traffic can saturate consensus ingress before
-        // the height-one leader claims the staged genesis proposal.  Keep this
-        // correctness smoke on the production-like cadence used by the other
-        // real-process integration suites; phase latency is measured by the
-        // dedicated benchmark profiles below.
+        // Keep every release profile, including the correctness-only N=3
+        // smoke, on a production-like signed cadence. The smoke deliberately
+        // pays the mandatory 300-height governance notice in full.
         .with_block_cadence(Duration::from_secs(4))
         .with_peer_startup_timeout(Duration::from_secs(20 * 60))
         .with_npos_consensus()
@@ -435,7 +594,7 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
                         TomlValue::String(if lane == 0 {
                             "lane-global".to_owned()
                         } else {
-                            format!("lane-private-{lane}")
+                            participant_lane_alias(lane - 1)
                         }),
                     );
                     table.insert(
@@ -443,12 +602,19 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
                         TomlValue::String(if lane == 0 {
                             "universal".to_owned()
                         } else {
-                            format!("private-{lane}")
+                            participant_dataspace_alias(lane - 1)
                         }),
                     );
                     table.insert(
                         "visibility".into(),
-                        TomlValue::String(if lane == 0 { "public" } else { "restricted" }.into()),
+                        TomlValue::String(
+                            if lane == 0 {
+                                "public"
+                            } else {
+                                visibility_config_value(shape.participant_visibility(lane - 1))
+                            }
+                            .to_owned(),
+                        ),
                     );
                     table.insert("metadata".into(), TomlValue::Table(Table::new()));
                     TomlValue::Table(table)
@@ -462,7 +628,7 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
                         TomlValue::String(if dataspace == 0 {
                             "universal".to_owned()
                         } else {
-                            format!("private-{dataspace}")
+                            participant_dataspace_alias(dataspace - 1)
                         }),
                     );
                     table.insert("id".into(), TomlValue::Integer(dataspace as i64));
@@ -494,7 +660,7 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
                     );
                     rule.insert(
                         "dataspace".into(),
-                        TomlValue::String(format!("private-{}", ordinal + 1)),
+                        TomlValue::String(participant_dataspace_alias(ordinal)),
                     );
                     rule.insert("matcher".into(), TomlValue::Table(matcher));
                     TomlValue::Table(rule)
@@ -508,6 +674,19 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
             );
             routing.insert("rules".into(), TomlValue::Array(routing_rules));
             layer
+                .write(
+                    ["concurrency", "scheduler_min_threads"],
+                    validator_worker_threads,
+                )
+                .write(
+                    ["concurrency", "scheduler_max_threads"],
+                    validator_worker_threads,
+                )
+                .write(
+                    ["concurrency", "rayon_global_threads"],
+                    validator_worker_threads,
+                )
+                .write(["pipeline", "workers"], validator_worker_threads)
                 .write(["nexus", "lane_count"], shape.lane_count() as i64)
                 .write(
                     ["nexus", "storage", "local_budget_bytes"],
@@ -516,6 +695,17 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
                 .write(["nexus", "lane_catalog"], TomlValue::Array(lanes))
                 .write(["nexus", "dataspace_catalog"], TomlValue::Array(dataspaces))
                 .write(["nexus", "routing_policy"], TomlValue::Table(routing))
+                .write(
+                    ["nexus", "fees", "fee_asset_id"],
+                    nexus_fee_asset_definition_id().to_string(),
+                )
+                .write(["nexus", "fees", "base_fee"], "0")
+                .write(["nexus", "fees", "per_byte_fee"], "0")
+                .write(
+                    ["nexus", "fees", "per_instruction_fee"],
+                    NEXUS_FEE_PER_PRIVATE_SETTLEMENT_CARRIER,
+                )
+                .write(["nexus", "fees", "per_gas_unit_fee"], "0")
                 .write(
                     ["nexus", "staking", "public_validator_mode"],
                     "stake_elected",
@@ -623,6 +813,15 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
         })
 }
 
+fn n3_smoke_builder(shape: TopologyShape) -> NetworkBuilder {
+    // Keep the production-like four-second cadence so a release host running
+    // sixteen independent validators has enough time to validate and relay the
+    // mandatory DA payload before the view deadline. This release-only smoke
+    // deliberately pays the full 300-height privacy-governance notice instead
+    // of weakening the consensus rule or using a test-only activation path.
+    localnet_builder(shape)
+}
+
 fn routes_from_network(
     network: &Network,
     shape: TopologyShape,
@@ -631,6 +830,22 @@ fn routes_from_network(
     status
         .validate()
         .wrap_err("validate lane lifecycle status")?;
+    for ordinal in 0..shape.participants {
+        let lane_id = LaneId::new(u32::try_from(ordinal + 1).expect("lane fits u32"));
+        let configured = status
+            .lanes
+            .iter()
+            .find(|lane| lane.id == lane_id)
+            .ok_or_else(|| eyre!("participant lane {} is absent", ordinal + 1))?;
+        let expected = shape.participant_visibility(ordinal);
+        ensure!(
+            configured.visibility == expected,
+            "participant lane {} visibility is {}, expected {}",
+            ordinal + 1,
+            configured.visibility.as_str(),
+            expected.as_str()
+        );
+    }
     (1..=shape.participants)
         .map(|lane| {
             let lane_id = LaneId::new(u32::try_from(lane).expect("lane fits u32"));
@@ -702,30 +917,11 @@ fn committees_from_network(
 }
 
 fn activate_ivm_private_note(client: &Client) -> Result<u64> {
-    let current = client.get_privacy_capabilities()?.committed_height;
-    let proposed_at = current
-        .checked_add(1)
-        .ok_or_else(|| eyre!("height overflow"))?;
-    let activate_at = proposed_at
-        .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
-        .ok_or_else(|| eyre!("activation height overflow"))?;
-    let activation = compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)?
-        .activation_record(PrivacyProtocolLifecycleV1::Proposed(
-            PrivacyProposedLifecycleV1 {
-                proposed_at_height: proposed_at,
-                activate_at_height: activate_at,
-            },
-        ));
-    let transaction = client.build_transaction(
-        [InstructionBox::from(
-            RegisterPrivacyProtocolActivationV1::new(activation),
-        )],
-        no_fee(),
-        Metadata::default(),
-    );
-    client
-        .submit_transaction_blocking(&transaction)
-        .wrap_err("register governed IVM private-note activation")?;
+    let expected = genesis_private_note_activation();
+    let mut ticks = 0_u64;
+    let tick_limit = PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1
+        .checked_add(16)
+        .expect("privacy activation tick limit fits u64");
     loop {
         let capability = client.get_privacy_capabilities()?;
         let row = capability
@@ -733,17 +929,51 @@ fn activate_ivm_private_note(client: &Client) -> Result<u64> {
             .iter()
             .find(|row| row.protocol_id == PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
             .ok_or_else(|| eyre!("IVM private-note capability row is absent"))?;
-        if matches!(
-            row.activation,
-            Some(activation)
-                if matches!(activation.lifecycle, PrivacyProtocolLifecycleV1::Active(_))
-        ) {
-            ensure!(
-                row.is_network_available(),
-                "active IVM profile is not network-available"
-            );
-            return Ok(capability.committed_height);
+        let activation = row
+            .activation
+            .ok_or_else(|| eyre!("governed IVM private-note activation is absent"))?;
+        let mut expected_at_lifecycle = expected;
+        expected_at_lifecycle.lifecycle = activation.lifecycle;
+        ensure!(
+            activation == expected_at_lifecycle,
+            "governed IVM private-note activation bindings differ from genesis"
+        );
+        match activation.lifecycle {
+            PrivacyProtocolLifecycleV1::Active(active) => {
+                ensure!(
+                    active.proposed_at_height == PRIVACY_GENESIS_PROPOSAL_HEIGHT
+                        && active.activated_at_height
+                            == PRIVACY_GENESIS_PROPOSAL_HEIGHT
+                                + PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1
+                        && active.state_since_height == active.activated_at_height,
+                    "governed IVM private-note activation history differs from genesis schedule"
+                );
+                ensure!(
+                    row.is_network_available(),
+                    "active IVM profile is not network-available"
+                );
+                return Ok(capability.committed_height);
+            }
+            PrivacyProtocolLifecycleV1::Proposed(proposed) => {
+                ensure!(
+                    proposed
+                        == match expected.lifecycle {
+                            PrivacyProtocolLifecycleV1::Proposed(expected) => expected,
+                            _ => unreachable!("genesis activation is proposed"),
+                        },
+                    "governed IVM private-note proposal schedule differs from genesis"
+                );
+            }
+            PrivacyProtocolLifecycleV1::Suspended(_) | PrivacyProtocolLifecycleV1::Retired(_) => {
+                return Err(eyre!(
+                    "governed IVM private-note activation became unavailable before the smoke"
+                ));
+            }
         }
+        ensure!(
+            ticks < tick_limit,
+            "governed IVM private-note activation did not promote within {tick_limit} blocks"
+        );
         let tick = client.build_transaction(
             [InstructionBox::from(Log::new(
                 Level::INFO,
@@ -752,10 +982,11 @@ fn activate_ivm_private_note(client: &Client) -> Result<u64> {
                     capability.committed_height
                 ),
             ))],
-            no_fee(),
+            bounded_nexus_fee(),
             Metadata::default(),
         );
         client.submit_transaction_blocking(&tick)?;
+        ticks += 1;
     }
 }
 
@@ -1024,7 +1255,7 @@ fn proof_manifest(
         authority_context_height,
         expiry_height,
         sponsor: ALICE_ID.clone(),
-        public_fee_intent: no_fee(),
+        public_fee_intent: bounded_nexus_fee(),
         fee_intent_digest: hash(0xA1),
         reimbursement_terms_commitment: hash(0xA2),
         reimbursement_leg_ordinal: 0,
@@ -1107,7 +1338,9 @@ fn prepare_leg_with_private_data_and_rngs(
         pool_id: governed.governance.body.pool_id,
         asset_binding_commitment: governed.governance.body.asset_binding_commitment,
         old_root: PrivacyRootV1::new(bytes(0x20 + ordinal as u8)),
+        new_root: PrivacyRootV1::new(bytes(0x24 + ordinal as u8)),
         old_epoch: 1,
+        new_epoch: 2,
         nullifiers: vec![
             PrivacyNullifierV1::new(bytes(0x30 + ordinal as u8 * 2)),
             PrivacyNullifierV1::new(bytes(0x31 + ordinal as u8 * 2)),
@@ -1295,15 +1528,22 @@ fn prepare_leg_with_private_data_and_rngs(
     )?;
     statement.audit_capsule_digest = capsule.digest()?;
     let bootstrap = plan_atomic_private_settlement_bootstrap_v1(
-        &statement,
+        statement.pool_id,
         [
             plaintext.inputs[0].commitment,
             plaintext.inputs[1].commitment,
         ],
+        statement
+            .output_commitments
+            .as_slice()
+            .try_into()
+            .map_err(|_| eyre!("private settlement output commitment shape changed"))?,
         input_secrets,
     )?;
     statement.old_root = bootstrap.old_root;
-    let new_root = bootstrap.new_root;
+    statement.new_root = bootstrap.new_root;
+    statement.old_epoch = bootstrap.old_epoch;
+    statement.new_epoch = bootstrap.new_epoch;
     let initial_commitments = bootstrap.initial_commitments;
     statement.validate()?;
     let wallet_id = format!("atomic-private-settlement-release-leg-{ordinal}");
@@ -1331,7 +1571,7 @@ fn prepare_leg_with_private_data_and_rngs(
         owner_material.iter().all(|byte| *byte == 0),
         "owner bundle was not wiped"
     );
-    let prepared = complete_atomic_private_settlement_prepared_leg_v1(prepared, new_root)?;
+    let prepared = complete_atomic_private_settlement_prepared_leg_v1(prepared)?;
     Ok(PreparedLeg {
         governed,
         prepared,
@@ -1432,8 +1672,17 @@ fn run_n3_real_process_smoke() -> Result<()> {
         shape.peer_count() == 16,
         "N=3 requires 4 global + 12 participant validators"
     );
+    ensure!(
+        shape.participant_visibility_profile()
+            == [
+                LaneVisibility::Public,
+                LaneVisibility::Restricted,
+                LaneVisibility::Restricted,
+            ],
+        "primary N=3 must mix one public and two restricted participant dataspaces"
+    );
     let context = "atomic_private_settlement_n3_real_process_smoke";
-    let started = sandbox::start_network_blocking_or_skip(localnet_builder(shape), context)?;
+    let started = sandbox::start_network_blocking_or_skip(n3_smoke_builder(shape), context)?;
     let Some((network, _runtime)) = sandbox::enforce_network_start_requirement(started, context)?
     else {
         return Ok(());
@@ -1445,7 +1694,7 @@ fn run_n3_real_process_smoke() -> Result<()> {
     let routes = routes_from_network(&network, shape)?;
     ensure!(
         routes.len() == 3,
-        "exactly three private dataspaces are required"
+        "exactly three mixed-visibility participant dataspaces are required"
     );
     let committees = committees_from_network(&network, shape, &routes)?;
     let governed = governed_legs(&routes, authority_context_height, expiry_height)?;
@@ -1473,10 +1722,10 @@ fn run_n3_real_process_smoke() -> Result<()> {
         })
         .collect::<Result<Vec<_>, _>>()?;
     let activation_transaction =
-        sponsor.build_transaction_from_items(activations, no_fee(), Metadata::default());
+        sponsor.build_transaction_from_items(activations, bounded_nexus_fee(), Metadata::default());
     sponsor
         .submit_transaction_blocking(&activation_transaction)
-        .wrap_err("activate all three governed private pools at the bound context height")?;
+        .wrap_err("activate all three governed confidential pools at the bound context height")?;
     ensure!(
         sponsor.get_privacy_capabilities()?.committed_height == authority_context_height,
         "pool activation did not land at the manifest authority context"
@@ -1520,10 +1769,14 @@ fn run_n3_real_process_smoke() -> Result<()> {
     for (ordinal, (leg, committee)) in prepared.iter().zip(&committees).enumerate() {
         let auditor_transport_signer =
             BorrowedKeyPairIdentityRequestSignerV1::new(&leg.governed.auditor_signing);
+        let capsule_request = PrivateSettlementAuditorCapsuleRequestV1 {
+            audit_policy: leg.governed.policy.clone(),
+        };
         let fetched = sponsor.private_settlement_auditor_capsule_quorum_for_authority_v1(
             &committee.endpoints,
             &materials[ordinal].committee_authority,
             final_manifest.legs[ordinal].payload_digest,
+            &capsule_request,
             &auditor_transport_signer,
         )?;
         ensure!(
@@ -1556,7 +1809,10 @@ fn run_n3_real_process_smoke() -> Result<()> {
             &materials[ordinal].committee_authority,
             final_manifest.legs[ordinal].payload_digest,
             &auditor_transport_signer,
-            &PrivateSettlementAuditApprovalRequestV1 { approval },
+            &PrivateSettlementAuditApprovalRequestV1 {
+                audit_policy: capsule_request.audit_policy,
+                approval,
+            },
         )?;
         ensure!(
             response.lifecycle == PrivateSettlementLifecycleDtoV1::Audited,
@@ -1584,7 +1840,24 @@ fn run_n3_real_process_smoke() -> Result<()> {
         &deltas,
     )?;
     assert_no_partial_visibility(&network, final_manifest.bundle_id, "prepared")?;
-    let commits = sponsor.commit_private_settlement_bundle_v1(&endpoint_matrix, &barrier)?;
+    let fee_before_registration = sponsor_nexus_fee_balance(&sponsor)?;
+    sponsor.register_private_settlement_prepare_and_wait_v1(
+        &barrier,
+        u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
+            .expect("V1 carrier ceiling fits u64"),
+        iroha::client::TransactionWaitOptions {
+            timeout: FINALITY_TIMEOUT,
+            poll_interval: POLL_INTERVAL,
+        },
+    )?;
+    let fee_after_registration = sponsor_nexus_fee_balance(&sponsor)?;
+    ensure_exact_private_settlement_carrier_fee(
+        &fee_before_registration,
+        &fee_after_registration,
+        "Prepare registration",
+    )?;
+    let commits =
+        sponsor.recover_or_commit_private_settlement_bundle_v1(&endpoint_matrix, &barrier)?;
     assert_no_partial_visibility(&network, final_manifest.bundle_id, "commit-certified")?;
 
     let request = sponsor.build_private_settlement_finalization_request_v1(
@@ -1593,8 +1866,15 @@ fn run_n3_real_process_smoke() -> Result<()> {
         u64::try_from(PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1)
             .expect("V1 carrier ceiling fits u64"),
     )?;
+    let fee_before_finalization = sponsor_nexus_fee_balance(&sponsor)?;
     sponsor.submit_private_settlement_bundle_v1(&request)?;
     let receipt = wait_for_identical_receipt(&network, final_manifest.bundle_id)?;
+    let fee_after_finalization = sponsor_nexus_fee_balance(&sponsor)?;
+    ensure_exact_private_settlement_carrier_fee(
+        &fee_before_finalization,
+        &fee_after_finalization,
+        "financial finalization",
+    )?;
     ensure!(
         receipt.legs.len() == PARTICIPANT_COUNT,
         "receipt does not contain exactly three legs"
@@ -1621,6 +1901,10 @@ fn run_n3_real_process_smoke() -> Result<()> {
         "replaying the exact finalized carrier was accepted"
     );
     ensure!(
+        sponsor_nexus_fee_balance(&sponsor)? == fee_after_finalization,
+        "rejected finalization replay charged a third carrier fee"
+    );
+    ensure!(
         wait_for_identical_receipt(&network, final_manifest.bundle_id)? == receipt,
         "replay changed the terminal receipt"
     );
@@ -1642,6 +1926,132 @@ fn atomic_private_settlement_n3_real_process_smoke() -> Result<()> {
 }
 
 #[test]
+fn release_fee_intent_is_bounded_and_uses_canonical_nexus_xor() {
+    let intent = bounded_nexus_fee();
+    intent.validate().expect("release fee intent is canonical");
+    let [limit] = intent.charge_limits() else {
+        panic!("release fee intent must contain exactly one Nexus charge limit");
+    };
+    assert_eq!(limit.kind(), FeeChargeKind::Nexus);
+    assert_eq!(
+        limit.asset_definition_id(),
+        &nexus_fee_asset_definition_id()
+    );
+    assert_eq!(
+        limit.max_amount(),
+        &Quantity::from(NEXUS_FEE_SIGNED_MAXIMUM)
+    );
+}
+
+#[test]
+fn release_sources_do_not_construct_fee_free_non_genesis_transactions() {
+    let forbidden_constructor = ["FeePaymentIntent::authority(", "Vec::new(), None)"].concat();
+    let retired_helper = ["no_", "fee()"].concat();
+    for (name, source) in [
+        (
+            "localnet",
+            include_str!("atomic_private_settlement_localnet.rs"),
+        ),
+        (
+            "release harness",
+            include_str!("atomic_private_settlement_real_process_harness.rs"),
+        ),
+    ] {
+        assert!(
+            !source.contains(&forbidden_constructor),
+            "{name} constructs a fee-free non-genesis intent"
+        );
+        assert!(
+            !source.contains(&retired_helper),
+            "{name} calls the retired fee-free helper"
+        );
+    }
+    let client_source = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../crates/iroha/src/client/private_settlement.rs"
+    ));
+    assert!(
+        client_source.contains("expected_manifest.public_fee_intent.clone(),"),
+        "Prepare registration must carry the manifest's bounded public fee intent"
+    );
+}
+
+#[test]
+fn genesis_ivm_private_note_activation_is_exact() {
+    let shape = TopologyShape::new(PARTICIPANT_COUNT);
+    let topology = (0..shape.peer_count())
+        .map(|index| PeerId::new(validator_authority_keypair(index).public_key().clone()))
+        .collect::<Vec<_>>();
+    let transactions = genesis_post_topology(shape, &topology);
+    let governance_permission = Permission::from(CanEnactGovernance);
+    let (governance_transaction, governance_instruction) = transactions
+        .iter()
+        .enumerate()
+        .find_map(|(transaction_index, transaction)| {
+            transaction
+                .iter()
+                .position(|instruction| {
+                    matches!(
+                        instruction.as_any().downcast_ref::<GrantBox>(),
+                        Some(GrantBox::Permission(grant))
+                            if grant.destination == ALICE_ID.clone()
+                                && grant.object == governance_permission
+                    )
+                })
+                .map(|instruction_index| (transaction_index, instruction_index))
+        })
+        .expect("genesis grants the proposal authority governance permission");
+    let activations = transactions
+        .iter()
+        .enumerate()
+        .flat_map(|(transaction_index, transaction)| {
+            transaction
+                .iter()
+                .enumerate()
+                .filter_map(move |(instruction_index, instruction)| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<RegisterPrivacyProtocolActivationV1>()
+                        .map(|registration| (transaction_index, instruction_index, registration))
+                })
+        })
+        .collect::<Vec<_>>();
+    let [(activation_transaction, activation_instruction, registration)] = activations.as_slice()
+    else {
+        panic!(
+            "genesis must contain exactly one IVM private-note activation, found {}",
+            activations.len()
+        );
+    };
+    assert_eq!(
+        *activation_transaction, governance_transaction,
+        "genesis grant and governed activation must be one atomic transaction"
+    );
+    assert!(
+        *activation_instruction > governance_instruction,
+        "governed activation must follow its permission grant"
+    );
+    assert_eq!(registration.activation, genesis_private_note_activation());
+    assert_eq!(
+        registration.activation.lifecycle,
+        PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
+            proposed_at_height: PRIVACY_GENESIS_PROPOSAL_HEIGHT,
+            activate_at_height: PRIVACY_GENESIS_PROPOSAL_HEIGHT
+                + PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
+        })
+    );
+}
+
+#[test]
+fn n3_correctness_smoke_retains_the_release_network_cadence() {
+    let builder = n3_smoke_builder(TopologyShape::new(PARTICIPANT_COUNT));
+    assert_eq!(
+        builder.configured_block_cadence(),
+        Some(Duration::from_secs(4))
+    );
+}
+
+#[test]
 fn n3_topology_has_one_global_and_three_disjoint_four_validator_committees() {
     let shape = TopologyShape::new(3);
     assert_eq!(shape.lane_count(), 4);
@@ -1650,6 +2060,23 @@ fn n3_topology_has_one_global_and_three_disjoint_four_validator_committees() {
     assert_eq!(shape.validator_range(1), 4..8);
     assert_eq!(shape.validator_range(2), 8..12);
     assert_eq!(shape.validator_range(3), 12..16);
+}
+
+#[test]
+fn n3_primary_topology_mixes_public_and_permissioned_participant_dataspaces() {
+    let shape = TopologyShape::new(PARTICIPANT_COUNT);
+    assert_eq!(
+        shape.participant_visibility_profile(),
+        [
+            LaneVisibility::Public,
+            LaneVisibility::Restricted,
+            LaneVisibility::Restricted,
+        ]
+    );
+    assert_eq!(participant_dataspace_alias(0), "public-1");
+    assert_eq!(participant_dataspace_alias(1), "private-2");
+    assert_eq!(participant_dataspace_alias(2), "private-3");
+    assert_eq!(shape.p2p_validator_counts_by_visibility(), (8, 8));
 }
 
 #[test]

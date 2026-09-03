@@ -148,6 +148,9 @@ impl_direct_instruction_box!(crate::isi::privacy::RevokePrivacyZkX509CrlV1);
 impl_direct_instruction_box!(crate::isi::privacy::SubmitPrivacyProofV1);
 impl_direct_instruction_box!(crate::isi::private_settlement::ActivatePrivateSettlementPoolV1);
 impl_direct_instruction_box!(crate::isi::private_settlement::RotatePrivateSettlementPoolPolicyV1);
+impl_direct_instruction_box!(
+    crate::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1
+);
 impl_direct_instruction_box!(crate::isi::private_settlement::AbortAtomicPrivateSettlementV1);
 impl_direct_instruction_box!(crate::isi::private_settlement::FinalizeAtomicPrivateSettlementV1);
 impl_direct_instruction_box!(crate::isi::bridge::SubmitBridgeProof);
@@ -1822,6 +1825,8 @@ pub mod defi;
 pub mod escrow;
 /// Hidden-function-backed identifier policy instructions.
 pub mod identifier;
+/// Clean-slate pooled-reserve KAGEMUSHA V1 instructions and operation records.
+pub mod kagemusha_v1;
 /// Kaigi collaboration instructions.
 pub mod kaigi;
 /// Mint and burn instruction variants and helpers.
@@ -1830,8 +1835,6 @@ pub mod mint_burn;
 pub mod musubi;
 /// Nexus lane governance instructions.
 pub mod nexus;
-/// Clean-slate pooled-reserve Kagemusha V1 instructions and operation records.
-pub mod kagemusha_v1;
 /// Oracle feed registration and aggregation instructions.
 pub mod oracle;
 /// First-release privacy governance and proof-admission instructions.
@@ -1882,11 +1885,11 @@ pub use confidential::*;
 pub use contract_alias::*;
 pub use defi::*;
 pub use identifier::*;
+pub use kagemusha_v1::*;
 pub use kaigi::*;
 pub use ministry::*;
 pub use mint_burn::*;
 pub use nexus::*;
-pub use kagemusha_v1::*;
 pub use oracle::*;
 pub use privacy::*;
 pub use ram_lfe::*;

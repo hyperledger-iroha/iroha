@@ -580,7 +580,7 @@ def copy_async_source_fidelity_fixture(
         Path("scripts/run_sumeragi_v2_release_gates.sh"),
         Path("scripts/verify_sumeragi_v2.sh"),
         Path("configs/soranexus/taira/config.toml"),
-        Path("configs/soranexus/taira/genesis.json"),
+        Path("configs/soranexus/taira/genesis.template.json"),
     ):
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)

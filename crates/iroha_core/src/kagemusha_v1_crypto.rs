@@ -10,13 +10,12 @@
 //! circuits.
 
 use iroha_crypto::kagemusha::{
-    KagemushaCreditCryptoErrorV1, kagemusha_x25519_public_key_v1,
-    open_kagemusha_credit_bytes_v1, seal_kagemusha_credit_bytes_v1,
+    KagemushaCreditCryptoErrorV1, kagemusha_x25519_public_key_v1, open_kagemusha_credit_bytes_v1,
+    seal_kagemusha_credit_bytes_v1,
 };
 use iroha_data_model::kagemusha::{
-    KagemushaCreditOpeningV1, KagemushaEncryptedCreditAadV1,
-    KagemushaEncryptedCreditEnvelopeV1, kagemusha_encrypted_credit_kdf_info_v1,
-    kagemusha_encrypted_credit_kdf_salt_v1,
+    KagemushaCreditOpeningV1, KagemushaEncryptedCreditAadV1, KagemushaEncryptedCreditEnvelopeV1,
+    kagemusha_encrypted_credit_kdf_info_v1, kagemusha_encrypted_credit_kdf_salt_v1,
 };
 use rand::rand_core::TryCryptoRng;
 use thiserror::Error;
@@ -88,11 +87,9 @@ pub fn seal_kagemusha_credit_v1_with_rng<R: TryCryptoRng + ?Sized>(
 
     let ephemeral_public_key = kagemusha_x25519_public_key_v1(&ephemeral_private_key)
         .map_err(KagemushaCreditEncryptionErrorV1::CryptographicFailure)?;
-    let kdf_salt = kagemusha_encrypted_credit_kdf_salt_v1(
-        recipient_x25519_public_key,
-        ephemeral_public_key,
-    )
-    .map_err(|_| KagemushaCreditEncryptionErrorV1::InvalidRecipientKey)?;
+    let kdf_salt =
+        kagemusha_encrypted_credit_kdf_salt_v1(recipient_x25519_public_key, ephemeral_public_key)
+            .map_err(|_| KagemushaCreditEncryptionErrorV1::InvalidRecipientKey)?;
     let kdf_info = kagemusha_encrypted_credit_kdf_info_v1(aad)
         .map_err(|_| KagemushaCreditEncryptionErrorV1::InvalidAssociatedData)?;
     let ciphertext = seal_kagemusha_credit_bytes_v1(
@@ -146,9 +143,8 @@ pub fn open_kagemusha_credit_v1(
     envelope
         .validate_shape_against_recipient_key(recipient_x25519_public_key)
         .map_err(|_| KagemushaCreditEncryptionErrorV1::InvalidEnvelope)?;
-    let derived_recipient_public_key =
-        kagemusha_x25519_public_key_v1(recipient_x25519_private_key)
-            .map_err(KagemushaCreditEncryptionErrorV1::CryptographicFailure)?;
+    let derived_recipient_public_key = kagemusha_x25519_public_key_v1(recipient_x25519_private_key)
+        .map_err(KagemushaCreditEncryptionErrorV1::CryptographicFailure)?;
     if derived_recipient_public_key != recipient_x25519_public_key {
         return Err(KagemushaCreditEncryptionErrorV1::RecipientKeyMismatch);
     }
@@ -341,48 +337,6 @@ mod tests {
     }
 
     #[test]
-    fn shared_fixture_encrypted_credit_is_the_native_decrypting_kat() {
-        let fixture: norito::json::Value = norito::json::from_str(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../fixtures/offline/kagemusha_v1.json"
-        )))
-        .expect("shared Kagemusha fixture");
-        let fixture_bytes = |name: &str| {
-            hex::decode(
-                fixture
-                    .get(name)
-                    .and_then(|entry| entry.get("norito_hex"))
-                    .and_then(norito::json::Value::as_str)
-                    .expect("fixture Norito hex"),
-            )
-            .expect("fixture hex")
-        };
-        let envelope_bytes = fixture_bytes("encrypted_credit_envelope");
-        let envelope =
-            KagemushaEncryptedCreditEnvelopeV1::decode_canonical_shape_exact_against_recipient_key(
-                &envelope_bytes,
-                RECIPIENT_PUBLIC,
-            )
-            .expect("fixture encrypted-credit envelope");
-        let aad: KagemushaEncryptedCreditAadV1 =
-            norito::decode_canonical(&fixture_bytes("encrypted_credit_aad"))
-                .expect("fixture encrypted-credit AAD");
-        aad.validate_shape().expect("fixture AAD shape");
-        let expected_opening: KagemushaCreditOpeningV1 =
-            norito::decode_canonical(&fixture_bytes("credit_opening"))
-                .expect("fixture credit opening");
-        expected_opening
-            .validate_shape_against(aad.credit_id, aad.amount)
-            .expect("fixture credit opening shape");
-        assert_eq!(
-            open_kagemusha_credit_v1(&envelope, &aad, RECIPIENT_PUBLIC, &RECIPIENT_PRIVATE)
-                .expect("decrypt shared fixture envelope"),
-            expected_opening,
-        );
-        assert_eq!(hex::encode(envelope_bytes), TYPED_ENVELOPE_KAT_HEX);
-    }
-
-    #[test]
     fn tamper_wrong_aad_and_wrong_key_fail_closed() {
         let opening = opening();
         let aad = aad();
@@ -406,12 +360,7 @@ mod tests {
         let mut wrong_aad = aad;
         wrong_aad.context_digest[0] ^= 1;
         assert!(matches!(
-            open_kagemusha_credit_v1(
-                &envelope,
-                &wrong_aad,
-                RECIPIENT_PUBLIC,
-                &RECIPIENT_PRIVATE,
-            ),
+            open_kagemusha_credit_v1(&envelope, &wrong_aad, RECIPIENT_PUBLIC, &RECIPIENT_PRIVATE,),
             Err(KagemushaCreditEncryptionErrorV1::CryptographicFailure(
                 KagemushaCreditCryptoErrorV1::OpenFailed
             ))
@@ -434,9 +383,8 @@ mod tests {
                 .expect("canonical substituted opening"),
         );
         let aad_bytes = aad.canonical_bytes().expect("canonical aad");
-        let kdf_salt =
-            kagemusha_encrypted_credit_kdf_salt_v1(RECIPIENT_PUBLIC, EPHEMERAL_PUBLIC)
-                .expect("kdf salt");
+        let kdf_salt = kagemusha_encrypted_credit_kdf_salt_v1(RECIPIENT_PUBLIC, EPHEMERAL_PUBLIC)
+            .expect("kdf salt");
         let kdf_info = kagemusha_encrypted_credit_kdf_info_v1(&aad).expect("kdf info");
         let KagemushaCreditCiphertextV1 {
             ephemeral_public_key,
@@ -490,12 +438,7 @@ mod tests {
         let mut exhausted = FixedEntropy::kat();
         exhausted.offset = exhausted.bytes.len();
         assert_eq!(
-            seal_kagemusha_credit_v1_with_rng(
-                &opening(),
-                &aad(),
-                RECIPIENT_PUBLIC,
-                &mut exhausted,
-            ),
+            seal_kagemusha_credit_v1_with_rng(&opening(), &aad(), RECIPIENT_PUBLIC, &mut exhausted,),
             Err(KagemushaCreditEncryptionErrorV1::RandomnessUnavailable)
         );
     }

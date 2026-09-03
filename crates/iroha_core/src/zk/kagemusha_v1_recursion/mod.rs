@@ -10,6 +10,8 @@
 mod accumulation;
 mod artifacts;
 #[cfg(feature = "zk-halo2-ipa")]
+mod canonical_preimage;
+#[cfg(feature = "zk-halo2-ipa")]
 mod composite;
 #[cfg(feature = "zk-halo2-ipa")]
 mod deferred_parent;
@@ -21,10 +23,17 @@ mod mint_authority;
 mod mint_authorization;
 mod mint_finality;
 #[cfg(feature = "zk-halo2-ipa")]
+mod mint_hash_claim_fold;
+#[cfg(feature = "zk-halo2-ipa")]
+mod mint_hash_shard;
+#[cfg(feature = "zk-halo2-ipa")]
 mod mint_helper;
+#[cfg(feature = "zk-halo2-ipa")]
+mod mint_transport_decider;
 mod native_backend;
 mod relation;
 mod state_relation;
+mod terminal_authorization;
 mod transport_decider;
 
 #[cfg(all(test, feature = "zk-halo2-ipa"))]
@@ -45,38 +54,53 @@ pub use artifacts::{
     KagemushaArtifactKindV1, KagemushaAuthenticatedArtifactSetV1, KagemushaCircuitFamilyV1,
     KagemushaDirectoryArtifactResolverV1, KagemushaMemoryArtifactResolverV1,
 };
-#[cfg(feature = "zk-halo2-ipa")]
-pub use generation::{
-    KagemushaGeneratedMintAuthorityArtifactsV1,
-    KagemushaGeneratedMintAuthorityProofV1, KagemushaGeneratedMintAuthorizationArtifactsV1,
-    KagemushaGeneratedMintAuthorizationProofV1, KagemushaGeneratedRecursiveStateArtifactsV1,
-    KagemushaGeneratedRecursiveStateProofV1,
-    KagemushaLoadedEpMintAuthorityArtifactsV1, KagemushaLoadedEpMintAuthorizationArtifactsV1,
-    KagemushaLoadedEpRecursiveStateArtifactsV1,
-    KagemushaLoadedEqMintAuthorityArtifactsV1, KagemushaLoadedEqMintAuthorizationArtifactsV1,
-    KagemushaLoadedEqRecursiveStateArtifactsV1, KagemushaMintAuthorityGenerationWitnessV1,
-    KagemushaMintAuthorizationGenerationWitnessV1, KagemushaRecursiveIncomingEpGenerationWitnessV1,
-    KagemushaRecursiveIncomingEqGenerationWitnessV1,
-    KagemushaRecursiveStateGenerationWitnessV1,
-    KagemushaRotateVerifierBridgeGenerationWitnessV1,
-    generate_kagemusha_mint_authority_artifacts_v1,
-    generate_kagemusha_mint_authorization_artifacts_v1,
-    generate_kagemusha_recursive_state_artifacts_v1,
-    load_kagemusha_ep_mint_authority_artifacts_v1,
-    load_kagemusha_ep_mint_authorization_artifacts_v1,
-    load_kagemusha_ep_recursive_state_artifacts_v1,
-    load_kagemusha_eq_mint_authority_artifacts_v1,
-    load_kagemusha_eq_mint_authorization_artifacts_v1,
-    load_kagemusha_eq_recursive_state_artifacts_v1,
-    prove_kagemusha_finalized_mint_from_checkpoint_v1,
-    prove_kagemusha_mint_authority_bootstrap_v1,
-    prove_kagemusha_mint_authority_rotation_from_checkpoint_v1,
-    prove_kagemusha_mint_authority_v1, prove_kagemusha_mint_authorization_v1,
-    prove_kagemusha_recursive_state_v1,
-};
 pub use generation::{
     KAGEMUSHA_OPERATION_RELATION_SCHEMA_ID_V1, KagemushaArtifactGenerationErrorV1,
     KagemushaGeneratedOperationArtifactsV1,
+};
+#[cfg(feature = "zk-halo2-ipa")]
+pub use generation::{
+    KAGEMUSHA_TERMINAL_AUTHORIZATION_ENABLED_PROFILE_SLOTS_V1,
+    KagemushaCommitEvidenceOpeningGenerationV1, KagemushaCommitWrapperEpGenerationWitnessV1,
+    KagemushaCommitWrapperEqGenerationWitnessV1, KagemushaCommitWrapperGenerationWitnessV1,
+    KagemushaGeneratedCommitWrapperArtifactsV1, KagemushaGeneratedCommitWrapperProofV1,
+    KagemushaGeneratedMintAuthorityArtifactsV1, KagemushaGeneratedMintAuthorityProofV1,
+    KagemushaGeneratedMintAuthorizationArtifactsV1, KagemushaGeneratedMintAuthorizationProofV1,
+    KagemushaGeneratedPaymentProofV1, KagemushaGeneratedRecursiveStateArtifactsV1,
+    KagemushaGeneratedRecursiveStateProofV1, KagemushaGeneratedRedemptionProofV1,
+    KagemushaGeneratedTerminalAuthorizationArtifactsV1,
+    KagemushaGeneratedTerminalAuthorizationProofV1, KagemushaLoadedEpCommitWrapperArtifactsV1,
+    KagemushaLoadedEpMintAuthorityArtifactsV1, KagemushaLoadedEpMintAuthorizationArtifactsV1,
+    KagemushaLoadedEpRecursiveStateArtifactsV1, KagemushaLoadedEpTerminalAuthorizationArtifactsV1,
+    KagemushaLoadedEqCommitWrapperArtifactsV1, KagemushaLoadedEqMintAuthorityArtifactsV1,
+    KagemushaLoadedEqMintAuthorizationArtifactsV1, KagemushaLoadedEqRecursiveStateArtifactsV1,
+    KagemushaLoadedEqTerminalAuthorizationArtifactsV1, KagemushaMintAuthorityGenerationWitnessV1,
+    KagemushaMintAuthorizationGenerationWitnessV1, KagemushaRecursiveIncomingEpGenerationWitnessV1,
+    KagemushaRecursiveIncomingEqGenerationWitnessV1, KagemushaRecursiveStateGenerationWitnessV1,
+    KagemushaTerminalAuthorizationEpGenerationWitnessV1,
+    KagemushaTerminalAuthorizationEqGenerationWitnessV1,
+    KagemushaTerminalAuthorizationGenerationWitnessV1,
+    KagemushaTerminalAuthorizationPrivateGenerationWitnessV1,
+    KagemushaTerminalAuthorizationTerminalGenerationPublicV1,
+    KagemushaTerminalSendGenerationWitnessV1, generate_kagemusha_commit_wrapper_artifacts_v1,
+    generate_kagemusha_mint_authority_artifacts_v1,
+    generate_kagemusha_mint_authorization_artifacts_v1,
+    generate_kagemusha_recursive_state_artifacts_v1,
+    generate_kagemusha_terminal_authorization_artifacts_v1,
+    kagemusha_terminal_authorization_enabled_profile_table_v1,
+    load_kagemusha_ep_commit_wrapper_artifacts_v1, load_kagemusha_ep_mint_authority_artifacts_v1,
+    load_kagemusha_ep_mint_authorization_artifacts_v1,
+    load_kagemusha_ep_recursive_state_artifacts_v1,
+    load_kagemusha_ep_terminal_authorization_artifacts_v1,
+    load_kagemusha_eq_commit_wrapper_artifacts_v1, load_kagemusha_eq_mint_authority_artifacts_v1,
+    load_kagemusha_eq_mint_authorization_artifacts_v1,
+    load_kagemusha_eq_recursive_state_artifacts_v1,
+    load_kagemusha_eq_terminal_authorization_artifacts_v1, prove_kagemusha_commit_wrapper_v1,
+    prove_kagemusha_finalized_mint_from_checkpoint_v1, prove_kagemusha_mint_authority_bootstrap_v1,
+    prove_kagemusha_mint_authority_rotation_from_checkpoint_v1, prove_kagemusha_mint_authority_v1,
+    prove_kagemusha_mint_authorization_v1, prove_kagemusha_payment_v1,
+    prove_kagemusha_recursive_state_v1, prove_kagemusha_redemption_v1,
+    prove_kagemusha_terminal_authorization_v1,
 };
 pub use guard_bundle::{
     KAGEMUSHA_HARDWARE_POLICY_TREE_DEPTH_V1, KagemushaGuardBundleRelationWitnessV1,
@@ -84,26 +108,18 @@ pub use guard_bundle::{
     KagemushaPlatformCredentialStatementV1,
 };
 #[cfg(feature = "zk-halo2-ipa")]
-pub use mint_authority::{
-    KagemushaMintAuthorityCheckpointV1, KagemushaMintAuthorityPairBindingV1,
-};
+pub use mint_authority::{KagemushaMintAuthorityCheckpointV1, KagemushaMintAuthorityPairBindingV1};
 #[cfg(feature = "zk-halo2-ipa")]
 pub use mint_authorization::KagemushaMintAuthorizationRelationWitnessV1;
-#[cfg(feature = "zk-halo2-ipa")]
-pub(crate) use mint_authorization::{
-    MINT_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1, KagemushaMintAuthorizationEpCircuitV1,
-    KagemushaMintAuthorizationEqCircuitV1, KagemushaMintAuthorizationRecursiveWitnessV1,
-    build_kagemusha_mint_authorization_pair_v1, mint_authorization_public_instances_v1,
-};
 pub use mint_finality::{
     KagemushaMintFinalityErrorV1, KagemushaMintFinalityLocalAuthorityV1,
     KagemushaMintFinalitySignerV1, KagemushaMintFinalityTreeV1,
-    build_kagemusha_mint_finality_seal_message_v1,
-    decode_kagemusha_mint_finality_seal_bundle_v1,
-    decode_kagemusha_mint_finality_seal_share_v1,
-    derive_kagemusha_mint_finality_validator_keys_v1, kagemusha_mint_finality_empty_root_v1,
-    kagemusha_top_up_leaf_from_receipt_v1, sign_kagemusha_mint_finality_seal_v1,
-    validate_kagemusha_mint_finality_epoch_v1, verify_kagemusha_mint_finality_seal_bundle_v1,
+    build_kagemusha_mint_finality_seal_message_v1, decode_kagemusha_mint_finality_seal_bundle_v1,
+    decode_kagemusha_mint_finality_seal_share_v1, derive_kagemusha_mint_finality_validator_keys_v1,
+    kagemusha_mint_finality_empty_root_v1, kagemusha_top_up_leaf_from_receipt_v1,
+    sign_kagemusha_mint_finality_seal_v1, validate_kagemusha_mint_finality_epoch_v1,
+    validate_kagemusha_mint_finality_genesis_parameter_keys_v1,
+    validate_kagemusha_mint_finality_roster_keys_v1, verify_kagemusha_mint_finality_seal_bundle_v1,
     verify_kagemusha_mint_finality_seal_share_v1, verify_kagemusha_top_up_membership_v1,
 };
 #[cfg(feature = "zk-halo2-ipa")]
@@ -116,26 +132,43 @@ pub use relation::{
     KagemushaOperationRelationWitnessV1,
 };
 pub use state_relation::{
-    KagemushaStateRelationCircuitV1, KagemushaStateRelationPublicInputsV1,
-    KagemushaStateRelationWitnessV1, public_instance as kagemusha_state_public_instance_v1,
+    KagemushaReceiveFoldSlotV1, KagemushaStateRelationCircuitV1,
+    KagemushaStateRelationPublicInputsV1, KagemushaStateRelationWitnessV1,
+    public_instance as kagemusha_state_public_instance_v1,
+};
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) use terminal_authorization::{
+    KagemushaCommitWrapperEpCircuitV1, KagemushaCommitWrapperEqCircuitV1,
+    KagemushaCommitWrapperWitnessV1, KagemushaTerminalAuthorizationEpCircuitV1,
+    KagemushaTerminalAuthorizationEpWitnessV1, KagemushaTerminalAuthorizationEqCircuitV1,
+    KagemushaTerminalAuthorizationEqWitnessV1, KagemushaTerminalAuthorizationWitnessV1,
+    TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1, build_kagemusha_commit_wrapper_pair_v1,
+    build_kagemusha_terminal_authorization_pair_v1,
+    public_instance as kagemusha_terminal_authorization_public_instance_v1,
+};
+pub(crate) use terminal_authorization::{
+    KagemushaTerminalAuthorizationPrivateTransitionV1,
+    KagemushaTerminalAuthorizationPublicInputsV1, TERMINAL_AUTHORIZATION_ENABLED_PROFILE_SLOTS_V1,
+    canonical_precommit_binding_digest_v1, canonical_terminal_send_output_binding_v1,
+    kagemusha_candidate_envelope_digest_v1,
 };
 
 use iroha_data_model::isi::KagemushaRedemptionRequestV1;
-use iroha_data_model::nexus::AxtAssetIncarnationV1;
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_ASSET_SCALE_MAX_V1, KAGEMUSHA_HELPER_PROVING_KEY_MAX_BYTES_V1,
-    KAGEMUSHA_VERIFYING_KEY_MAX_BYTES_V1, KAGEMUSHA_WIRE_VERSION_V1,
-    KagemushaArtifactBindingV1, KagemushaArtifactRoleV1, KagemushaAuthenticatedReleaseV1,
-    KagemushaLifecycleBindingV1, KagemushaMintCreditStatementV1, KagemushaMintCreditV1,
-    KagemushaOperationKindV1, KagemushaPairedProofV1, KagemushaPastaStateCommitmentV1,
-    KagemushaQualifiedHelperCircuitV1, KagemushaRedemptionStatementV1,
-    KagemushaTransferStatementV1, kagemusha_asset_identity_digest_v1,
-    kagemusha_liability_pool_id_v1, kagemusha_pasta_state_commitment_v1,
+    KAGEMUSHA_VERIFYING_KEY_MAX_BYTES_V1, KAGEMUSHA_WIRE_VERSION_V1, KagemushaArtifactBindingV1,
+    KagemushaArtifactRoleV1, KagemushaAuthenticatedReleaseV1, KagemushaLifecycleBindingV1,
+    KagemushaMintCreditStatementV1, KagemushaMintCreditV1, KagemushaOperationKindV1,
+    KagemushaPairedProofV1, KagemushaPastaStateCommitmentV1, KagemushaPaymentRequestV1,
+    KagemushaPaymentV1, KagemushaQualifiedHelperCircuitV1, KagemushaQualifiedRelationV1,
+    KagemushaRedemptionProofV1, KagemushaRedemptionStatementV1, kagemusha_asset_identity_digest_v1,
+    kagemusha_ciphertext_digest_v1, kagemusha_liability_pool_id_v1,
 };
 pub use iroha_data_model::kagemusha::{
     KAGEMUSHA_CURRENT_PROOFS_MAX_BYTES_V1, KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1,
     KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1, KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1,
 };
+use iroha_data_model::nexus::AxtAssetIncarnationV1;
 use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
@@ -164,7 +197,6 @@ pub const KAGEMUSHA_IPA_FOLD_PROOF_BYTES_V1: usize =
 pub const KAGEMUSHA_REPLAY_PATH_DEPTH_V1: usize = 256;
 
 const GUARD_STATEMENT_DIGEST_DOMAIN: &[u8] = b"iroha:kagemusha:v1:normalized-guard-statement\0";
-const HELPER_PROTOCOL_POSEIDON_DOMAIN_V1: u64 = u64::from_le_bytes(*b"ochelp_1");
 
 /// Exact authenticated release roles required by the paired finalized-mint helper.
 pub const KAGEMUSHA_MINT_FINALITY_ARTIFACT_ROLES_V1: [KagemushaArtifactRoleV1; 4] = [
@@ -192,12 +224,11 @@ pub enum KagemushaOperationV1 {
     MintFold,
     /// Subtract value and emit one receiver-bound credit.
     SendSplit,
-    /// Consume one staged credit and update the exact replay root.
+    /// Consume exactly one staged credit and update the replay root.
     ReceiveFold,
     /// Subtract value and emit one terminal redemption voucher.
     RedeemSplit,
-    /// Carry the complete balance and replay root to the next hardware epoch, optionally
-    /// installing a governed successor verifier suite in the same transition.
+    /// Carry the complete balance and replay root to the next hardware epoch.
     Rotate,
 }
 
@@ -251,16 +282,19 @@ pub struct KagemushaGuardContextV1 {
     pub liability_pool_id: DigestV1,
     /// Digest of the exact released lifecycle candidate context.
     pub lifecycle_binding_digest: DigestV1,
-    /// Digest of request, ticket, capacity reservation, and prepared authorization.
+    /// Digest of the exact request, receiver binding, encrypted output, and durable outbox intent.
     pub precommit_binding_digest: DigestV1,
-    /// One-use sender authorization successor for a no-commit closure, otherwise zero.
+    /// Digest of the terminal hardware commit, exact candidate, and recovery record.
     ///
-    /// The successor is private to the Guard relation. Only its unlinkable cancellation
-    /// nullifier is exposed by the final CommitWrapper proof.
+    /// Prepared candidates use zero. Terminal send and redemption guards use the nonzero binding
+    /// recomputed by `TerminalAuthorization`.
+    pub terminal_commit_binding_digest: DigestV1,
+    /// Digest of the private one-use sender authorization.
+    ///
+    /// This is nonzero only for a terminal send or the private no-commit cancellation successor.
     pub sender_one_time_authorization_digest: DigestV1,
-    /// Governed old-suite to new-suite authorization for `Rotate` when verifier identities
-    /// change; canonical zero for ordinary same-suite rotation and every other operation.
-    pub rotate_verifier_authorization_digest: DigestV1,
+    /// Digest of the single received credit, nonzero only for `ReceiveFold`.
+    pub receive_credit_binding_digest: DigestV1,
     /// Digest of the hardware-sealed transition intent and canonical inputs.
     pub transition_intent_digest: DigestV1,
     /// Digest of the operation-specific effect for bootstrap, or the exact Core effect for a
@@ -293,15 +327,17 @@ impl KagemushaGuardContextV1 {
             return Err(KagemushaRecursionErrorV1::InvalidGuardContext);
         }
 
-        let is_no_commit_closure = operation == KagemushaOperationV1::SendSplit && amount == 0;
+        let is_receive = operation == KagemushaOperationV1::ReceiveFold;
         let uses_outbox = matches!(
             operation,
             KagemushaOperationV1::SendSplit | KagemushaOperationV1::RedeemSplit
         );
-        if (operation != KagemushaOperationV1::Rotate
-            && self.rotate_verifier_authorization_digest != [0; 32])
-            || is_no_commit_closure != (self.sender_one_time_authorization_digest != [0; 32])
+        if is_receive != (self.receive_credit_binding_digest != [0; 32])
             || uses_outbox != (self.precommit_binding_digest != [0; 32])
+            || matches!(
+                operation,
+                KagemushaOperationV1::Bootstrap | KagemushaOperationV1::Rotate
+            ) != (amount == 0)
         {
             return Err(KagemushaRecursionErrorV1::InvalidGuardContext);
         }
@@ -369,16 +405,19 @@ pub struct KagemushaNormalizedGuardStatementV1 {
     pub successor_vk_digest: DigestV1,
     /// Selected fixed-shape operation.
     pub operation: KagemushaOperationV1,
-    /// Exact monetary amount authorized by hardware; zero only for bootstrap, rotation, suite
-    /// upgrade, or the private sender-authorization cancellation branch.
+    /// Exact monetary amount authorized by hardware; zero for bootstrap and rotate.
     pub amount: u128,
-    /// Receiver-bound credit identity, nonzero only for peer send/receive operations.
+    /// Receiver-bound credit identity, nonzero only for `SendSplit`.
     pub peer_credit_id: DigestV1,
-    /// Receiver lane carried by the peer credit, nonzero only for peer send/receive operations.
+    /// Receiver lane carried by the peer credit, nonzero only for `SendSplit`.
     pub peer_recipient_lane_id: DigestV1,
     /// Exact paired mint-helper proof binding, nonzero only for `MintFold`.
     pub mint_finality_proof_binding_digest: DigestV1,
-    /// Authenticated proof-release identifier.
+    /// Authenticated proof release consumed by the predecessor state.
+    ///
+    /// This is zero only for `Bootstrap`; otherwise it equals `release_id`.
+    pub predecessor_release_id: DigestV1,
+    /// Authenticated proof release installed for the successor state.
     pub release_id: DigestV1,
     /// Exact raw `NetworkId::as_bytes()` value; it is not rehashed.
     pub network_id: DigestV1,
@@ -436,20 +475,18 @@ pub struct KagemushaNormalizedGuardStatementV1 {
     pub journal_revision_after: u128,
     /// Digest of the exact released lifecycle candidate context.
     pub lifecycle_binding_digest: DigestV1,
-    /// Digest of the precommit request, ticket, and capacity reservation.
+    /// Digest of the exact request, receiver binding, encrypted output, and durable outbox intent.
     pub precommit_binding_digest: DigestV1,
-    /// Digest of the terminal hardware commit, canonical envelope, and durable recovery record.
+    /// Digest binding the terminal hardware commit, exact candidate, and recovery record.
     ///
-    /// Candidate statements use the canonical all-zero value. A terminal `SendSplit` or
-    /// `RedeemSplit` Guard statement sets this to the nonzero binding recomputed by the wrapper.
+    /// This is zero for prepared state transitions and nonzero only for terminal wrapper guards.
     pub terminal_commit_binding_digest: DigestV1,
-    /// Digest of the private one-use sender authorization proven by terminal hardware.
+    /// Digest of the private one-use sender authorization.
     ///
-    /// This is nonzero for a terminal `SendSplit` and for the private no-commit cancellation
-    /// successor; candidates and every other operation use the canonical all-zero value.
+    /// This is nonzero only for a terminal send or its private no-commit cancellation successor.
     pub sender_one_time_authorization_digest: DigestV1,
-    /// Governed verifier bridge authorization for `Rotate` when its suite changes.
-    pub rotate_verifier_authorization_digest: DigestV1,
+    /// Binding of the single received credit, nonzero only for `ReceiveFold`.
+    pub receive_credit_binding_digest: DigestV1,
     /// Digest of the hardware-sealed transition intent.
     pub transition_intent_digest: DigestV1,
     /// Digest of the operation-specific transition effect.
@@ -463,7 +500,7 @@ pub struct KagemushaNormalizedGuardStatementV1 {
 }
 
 impl KagemushaNormalizedGuardStatementV1 {
-    /// Whether this is the hardware cancellation branch for a sender authorization.
+    /// Whether this is the private hardware cancellation branch for a sender authorization.
     #[must_use]
     pub(crate) fn is_no_commit_closure(&self) -> bool {
         self.operation == KagemushaOperationV1::SendSplit && self.amount == 0
@@ -484,8 +521,6 @@ impl KagemushaNormalizedGuardStatementV1 {
             return Err(KagemushaRecursionErrorV1::UnsupportedVersion);
         }
         let operation = KagemushaOperationV1::from(proof.kind);
-        let is_no_commit_closure =
-            operation == KagemushaOperationV1::SendSplit && proof.amount == 0;
         let (network_id, asset_id, liability_pool_id) =
             normalized_lane_bindings(&proof.lane, proof.asset_incarnation)?;
         if proof.protocol_version != KAGEMUSHA_WIRE_VERSION_V1
@@ -505,15 +540,12 @@ impl KagemushaNormalizedGuardStatementV1 {
             || proof.precommit_binding_digest != context.precommit_binding_digest
             || proof.predecessor_commitment == [0; 32]
             || proof.successor_commitment == [0; 32]
-            || is_no_commit_closure != (proof.predecessor_commitment == proof.successor_commitment)
+            || proof.predecessor_commitment == proof.successor_commitment
             || proof.predecessor_state_nonce_commitment == [0; 32]
             || proof.successor_state_nonce_commitment == [0; 32]
-            || is_no_commit_closure
-                != (proof.predecessor_state_nonce_commitment
-                    == proof.successor_state_nonce_commitment)
+            || proof.predecessor_state_nonce_commitment == proof.successor_state_nonce_commitment
             || proof.effect_digest == [0; 32]
-            || (operation == KagemushaOperationV1::Rotate || is_no_commit_closure)
-                != (proof.amount == 0)
+            || (operation == KagemushaOperationV1::Rotate) != (proof.amount == 0)
             || (operation == KagemushaOperationV1::MintFold)
                 != (proof.mint_finality_semantic_digest != [0; 32])
             || (operation == KagemushaOperationV1::MintFold)
@@ -521,8 +553,12 @@ impl KagemushaNormalizedGuardStatementV1 {
         {
             return Err(KagemushaRecursionErrorV1::InvalidTransitionStatement);
         }
-        let is_peer = (operation == KagemushaOperationV1::SendSplit && !is_no_commit_closure)
-            || operation == KagemushaOperationV1::ReceiveFold;
+        if proof.predecessor_release_id == [0; 32]
+            || proof.predecessor_release_id != proof.release_id
+        {
+            return Err(KagemushaRecursionErrorV1::InvalidTransitionStatement);
+        }
+        let is_peer = operation == KagemushaOperationV1::SendSplit;
         if is_peer != (proof.peer_credit_id != [0; 32])
             || is_peer != (proof.peer_recipient_lane_id != [0; 32])
         {
@@ -535,27 +571,16 @@ impl KagemushaNormalizedGuardStatementV1 {
         if uses_outbox != (proof.precommit_binding_digest != [0; 32]) {
             return Err(KagemushaRecursionErrorV1::InvalidTransitionStatement);
         }
-        let suite_changed = proof.predecessor_suite_id != proof.successor_suite_id;
-        let vk_changed = proof.predecessor_vk_digest != proof.successor_vk_digest;
-        let verifier_changed = suite_changed && vk_changed;
-        if suite_changed != vk_changed
-            || verifier_changed
-                != (proof.rotate_verifier_authorization_digest != [0; 32])
-            || proof.rotate_verifier_authorization_digest
-                != context.rotate_verifier_authorization_digest
-            || (operation != KagemushaOperationV1::Rotate && verifier_changed)
+        let is_receive = operation == KagemushaOperationV1::ReceiveFold;
+        if is_receive != (proof.receive_credit_binding_digest != [0; 32])
+            || proof.receive_credit_binding_digest != context.receive_credit_binding_digest
+            || proof.predecessor_suite_id != proof.successor_suite_id
+            || proof.predecessor_vk_digest != proof.successor_vk_digest
         {
             return Err(KagemushaRecursionErrorV1::InvalidTransitionStatement);
         }
         let exact_successor = if operation == KagemushaOperationV1::Rotate {
             proof.successor_sequence == 0 && proof.journal_revision_after == 0
-        } else if is_no_commit_closure {
-            proof.successor_sequence == proof.predecessor_sequence
-                && proof.journal_revision_after
-                    == proof
-                        .journal_revision_before
-                        .checked_add(1)
-                        .ok_or(KagemushaRecursionErrorV1::JournalOverflow)?
         } else {
             proof.successor_sequence
                 == proof
@@ -612,6 +637,7 @@ impl KagemushaNormalizedGuardStatementV1 {
             peer_credit_id: proof.peer_credit_id,
             peer_recipient_lane_id: proof.peer_recipient_lane_id,
             mint_finality_proof_binding_digest: proof.mint_finality_proof_binding_digest,
+            predecessor_release_id: proof.predecessor_release_id,
             release_id: proof.release_id,
             network_id,
             asset_id,
@@ -642,8 +668,8 @@ impl KagemushaNormalizedGuardStatementV1 {
             lifecycle_binding_digest: proof.lifecycle_binding_digest,
             precommit_binding_digest: proof.precommit_binding_digest,
             terminal_commit_binding_digest: [0; 32],
-            sender_one_time_authorization_digest: context.sender_one_time_authorization_digest,
-            rotate_verifier_authorization_digest: proof.rotate_verifier_authorization_digest,
+            sender_one_time_authorization_digest: [0; 32],
+            receive_credit_binding_digest: proof.receive_credit_binding_digest,
             transition_intent_digest: context.transition_intent_digest,
             transition_effect_digest: proof.effect_digest,
             recovery_record_digest: context.recovery_record_digest,
@@ -686,9 +712,9 @@ impl KagemushaNormalizedGuardStatementV1 {
             || hardware.journal_revision_before != proof.journal_revision_before
             || hardware.journal_revision_after != proof.journal_revision_after
             || hardware.state_transition_digest
-                != proof.digest().map_err(|error| {
-                    KagemushaRecursionErrorV1::StateStatement(error.to_string())
-                })?
+                != proof
+                    .digest()
+                    .map_err(|error| KagemushaRecursionErrorV1::StateStatement(error.to_string()))?
             || hardware.normalized_guard_statement_digest != self.canonical_digest()?
         {
             return Err(KagemushaRecursionErrorV1::StateHardwareMismatch);
@@ -760,6 +786,7 @@ impl KagemushaNormalizedGuardStatementV1 {
             peer_credit_id: [0; 32],
             peer_recipient_lane_id: [0; 32],
             mint_finality_proof_binding_digest: [0; 32],
+            predecessor_release_id: [0; 32],
             release_id: context.release_id,
             network_id,
             asset_id,
@@ -789,7 +816,7 @@ impl KagemushaNormalizedGuardStatementV1 {
             precommit_binding_digest: context.precommit_binding_digest,
             terminal_commit_binding_digest: [0; 32],
             sender_one_time_authorization_digest: [0; 32],
-            rotate_verifier_authorization_digest: [0; 32],
+            receive_credit_binding_digest: [0; 32],
             transition_intent_digest: context.transition_intent_digest,
             transition_effect_digest: context.transition_effect_digest,
             recovery_record_digest: context.recovery_record_digest,
@@ -807,50 +834,6 @@ impl KagemushaNormalizedGuardStatementV1 {
     pub fn canonical_digest(&self) -> Result<DigestV1, KagemushaRecursionErrorV1> {
         self.validate_shape()?;
         Ok(guard_bundle::normalized_guard_statement_digest_v1(self))
-    }
-
-    /// Check an exact typed payment statement against every overlapping normalized guard field.
-    ///
-    /// This is a prover/local-state preflight. The recursive circuit must enforce the same
-    /// equalities; a successful host comparison is not monetary authority.
-    ///
-    /// # Errors
-    ///
-    /// Rejects an invalid wire statement or any release, network, asset, scale, pool, lane,
-    /// epoch, key, policy, sequence, commitment, trusted-time, or guard-digest substitution.
-    pub fn validate_transfer_binding(
-        &self,
-        statement: &KagemushaTransferStatementV1,
-    ) -> Result<(), KagemushaRecursionErrorV1> {
-        statement
-            .validate()
-            .map_err(|error| KagemushaRecursionErrorV1::TransportBinding(error.to_string()))?;
-        let lifecycle = &statement.lifecycle;
-        let asset_id = kagemusha_asset_identity_digest_v1(&lifecycle.asset)
-            .map_err(|error| KagemushaRecursionErrorV1::TransportBinding(error.to_string()))?;
-        if self.operation != KagemushaOperationV1::SendSplit
-            || statement.amount != self.amount
-            || statement.version != self.version
-            || lifecycle.operation_kind != KagemushaOperationKindV1::SendSplit
-            || lifecycle.credit_id != self.peer_credit_id
-            || lifecycle.release_id != self.release_id
-            || lifecycle.network_id.as_bytes() != &self.network_id
-            || asset_id != self.asset_id
-            || lifecycle.asset_incarnation != self.asset_incarnation
-            || lifecycle.scale != self.asset_scale
-            || lifecycle.liability_pool_id != self.liability_pool_id
-            || lifecycle.hardware_profile_id != self.hardware_profile_id
-            || lifecycle.policy_epoch != self.policy_epoch
-            || lifecycle.suite_id != self.successor_suite_id
-            || lifecycle.vk_digest != self.successor_vk_digest
-            || lifecycle
-                .canonical_digest()
-                .map_err(|error| KagemushaRecursionErrorV1::TransportBinding(error.to_string()))?
-                != self.lifecycle_binding_digest
-        {
-            return Err(KagemushaRecursionErrorV1::PublicBindingMismatch);
-        }
-        Ok(())
     }
 
     /// Check an exact typed redemption statement against every overlapping normalized guard field.
@@ -926,6 +909,12 @@ impl KagemushaNormalizedGuardStatementV1 {
             return Err(KagemushaRecursionErrorV1::InvalidTransitionStatement);
         }
         let is_no_commit_closure = self.is_no_commit_closure();
+        let is_bootstrap = self.operation == KagemushaOperationV1::Bootstrap;
+        if is_bootstrap != (self.predecessor_release_id == [0; 32])
+            || (!is_bootstrap && self.predecessor_release_id != self.release_id)
+        {
+            return Err(KagemushaRecursionErrorV1::InvalidTransitionStatement);
+        }
         if !is_no_commit_closure
             && matches!(
                 self.operation,
@@ -934,31 +923,23 @@ impl KagemushaNormalizedGuardStatementV1 {
         {
             return Err(KagemushaRecursionErrorV1::InvalidTransitionStatement);
         }
-        let is_peer = (self.operation == KagemushaOperationV1::SendSplit
-            && !is_no_commit_closure)
-            || self.operation == KagemushaOperationV1::ReceiveFold;
+        let is_peer = self.operation == KagemushaOperationV1::SendSplit && !is_no_commit_closure;
         if is_peer != (self.peer_credit_id != [0; 32])
             || is_peer != (self.peer_recipient_lane_id != [0; 32])
         {
             return Err(KagemushaRecursionErrorV1::InvalidTransitionStatement);
         }
+        let is_receive = self.operation == KagemushaOperationV1::ReceiveFold;
         let uses_outbox = matches!(
             self.operation,
             KagemushaOperationV1::SendSplit | KagemushaOperationV1::RedeemSplit
         );
         let is_terminal = self.terminal_commit_binding_digest != [0; 32];
         let has_sender_authorization = self.sender_one_time_authorization_digest != [0; 32];
-        let suite_changed = self.predecessor_suite_id != self.successor_suite_id;
-        let vk_changed = self.predecessor_vk_digest != self.successor_vk_digest;
-        let verifier_changed = suite_changed && vk_changed;
-        let invalid_verifier_transition = if self.operation == KagemushaOperationV1::Bootstrap {
-            self.rotate_verifier_authorization_digest != [0; 32]
-        } else {
-            suite_changed != vk_changed
-                || verifier_changed != (self.rotate_verifier_authorization_digest != [0; 32])
-                || (self.operation != KagemushaOperationV1::Rotate && verifier_changed)
-        };
-        if invalid_verifier_transition
+        if is_receive != (self.receive_credit_binding_digest != [0; 32])
+            || (!is_bootstrap
+                && (self.predecessor_suite_id != self.successor_suite_id
+                    || self.predecessor_vk_digest != self.successor_vk_digest))
             || uses_outbox != (self.precommit_binding_digest != [0; 32])
             || (is_terminal && !uses_outbox)
             || has_sender_authorization
@@ -973,7 +954,7 @@ impl KagemushaNormalizedGuardStatementV1 {
         {
             return Err(KagemushaRecursionErrorV1::InvalidTransitionStatement);
         }
-        if self.operation == KagemushaOperationV1::Bootstrap {
+        if is_bootstrap {
             if self.predecessor_state_commitment != [0; 32]
                 || self.predecessor_state_nonce_commitment != [0; 32]
                 || self.predecessor_logical_sequence != 0
@@ -1063,35 +1044,29 @@ impl KagemushaNormalizedGuardStatementV1 {
     }
 }
 
-/// Public outputs authenticated directly by the paired recursive state proof.
+/// Unlinkable public outputs exposed by the final terminal-authorization parities.
 ///
-/// The two Pasta commitment components are opaque hiding commitments. They let a verifier
-/// reconstruct the exact state-circuit public instances without learning balances, replay roots,
-/// device keys, epochs, logical sequence numbers, or journal positions.
+/// Aggregate state heads, stable lane and credential identities, logical sequence, hardware
+/// epoch, and journal position are intentionally absent. They remain private witnesses in the
+/// prepared transition and terminal hardware-commit relations.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KagemushaRecursivePublicOutputV1 {
     /// Complete authenticated lifecycle projection.
     pub lifecycle: KagemushaLifecycleBindingV1,
     /// Digest of the exact public payment, redemption, or internal transition statement.
     pub semantic_digest: DigestV1,
+    /// Digest of the durably persisted prepared candidate.
+    pub candidate_envelope_digest: DigestV1,
+    /// Digest of the hardware terminal commit certificate.
+    pub commit_certificate_digest: DigestV1,
     /// Proof-derived transition or terminal nullifier.
     pub transition_nullifier: DigestV1,
-    /// Paired predecessor aggregate-state commitment.
-    pub sender_before_commitment: KagemushaPastaStateCommitmentV1,
-    /// Paired exact successor aggregate-state commitment.
-    pub sender_after_commitment: KagemushaPastaStateCommitmentV1,
     /// Exact receiver request digest for `SendSplit`, otherwise zero.
     pub request_digest: DigestV1,
-    /// Stable receiver lane for `SendSplit`, otherwise zero.
-    pub recipient_lane_id: DigestV1,
-    /// Request-scoped receiver encryption key for `SendSplit`, otherwise zero.
-    pub recipient_encryption_key: DigestV1,
+    /// Exact receiver hardware binding for `SendSplit`, otherwise zero.
+    pub receiver_binding_digest: DigestV1,
     /// Amount-bound encrypted-credit commitment for `SendSplit`, otherwise zero.
     pub ciphertext_commitment: DigestV1,
-    /// Literal trusted hardware commit time.
-    pub committed_at_ms: u64,
-    /// Commitment to the normalized exact-next hardware transition.
-    pub hardware_transition_commitment: DigestV1,
     /// Monetary amount changed by the operation.
     pub amount: u128,
     /// Operation-specific terminal output binding. A send commits the receiver credit and lane;
@@ -1106,86 +1081,33 @@ impl KagemushaRecursivePublicOutputV1 {
     ///
     /// Rejects malformed lifecycle data, zero authority bindings, operation-specific field
     /// substitution, or noncanonical zero padding.
-    fn new(
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
         lifecycle: KagemushaLifecycleBindingV1,
         semantic_digest: DigestV1,
+        candidate_envelope_digest: DigestV1,
+        commit_certificate_digest: DigestV1,
         transition_nullifier: DigestV1,
-        sender_before_commitment: KagemushaPastaStateCommitmentV1,
-        sender_after_commitment: KagemushaPastaStateCommitmentV1,
         request_digest: DigestV1,
-        recipient_lane_id: DigestV1,
-        recipient_encryption_key: DigestV1,
+        receiver_binding_digest: DigestV1,
         ciphertext_commitment: DigestV1,
-        committed_at_ms: u64,
-        hardware_transition_commitment: DigestV1,
         amount: u128,
         terminal_output_binding: DigestV1,
     ) -> Result<Self, KagemushaRecursionErrorV1> {
         let output = Self {
             lifecycle,
             semantic_digest,
+            candidate_envelope_digest,
+            commit_certificate_digest,
             transition_nullifier,
-            sender_before_commitment,
-            sender_after_commitment,
             request_digest,
-            recipient_lane_id,
-            recipient_encryption_key,
+            receiver_binding_digest,
             ciphertext_commitment,
-            committed_at_ms,
-            hardware_transition_commitment,
             amount,
             terminal_output_binding,
         };
         output.validate()?;
         Ok(output)
-    }
-
-    /// Reconstruct the public proof output from one canonical peer payment statement.
-    pub fn from_transfer_statement(
-        statement: &KagemushaTransferStatementV1,
-    ) -> Result<Self, KagemushaRecursionErrorV1> {
-        let semantic_digest = statement
-            .canonical_digest()
-            .map_err(|error| KagemushaRecursionErrorV1::TransportBinding(error.to_string()))?;
-        Self::new(
-            statement.lifecycle.clone(),
-            semantic_digest,
-            statement.transition_nullifier,
-            statement.sender_before_commitment,
-            statement.sender_after_commitment,
-            statement.request_digest,
-            statement.recipient_lane_id,
-            statement.recipient_encryption_key,
-            statement.ciphertext_commitment,
-            statement.committed_at_ms,
-            statement.hardware_transition_commitment,
-            statement.amount,
-            statement.lifecycle.credit_id,
-        )
-    }
-
-    /// Reconstruct the public proof output from one canonical redemption statement.
-    pub fn from_redemption_statement(
-        statement: &KagemushaRedemptionStatementV1,
-    ) -> Result<Self, KagemushaRecursionErrorV1> {
-        let semantic_digest = statement
-            .canonical_digest()
-            .map_err(|error| KagemushaRecursionErrorV1::RedemptionBinding(error.to_string()))?;
-        Self::new(
-            statement.lifecycle.clone(),
-            semantic_digest,
-            statement.terminal_nullifier,
-            statement.sender_before_commitment,
-            statement.sender_after_commitment,
-            [0; 32],
-            [0; 32],
-            [0; 32],
-            [0; 32],
-            statement.committed_at_ms,
-            statement.hardware_transition_commitment,
-            statement.amount,
-            statement.redemption_commitment,
-        )
     }
 
     /// Return the selected fixed-shape operation.
@@ -1200,40 +1122,34 @@ impl KagemushaRecursivePublicOutputV1 {
             .map_err(|error| KagemushaRecursionErrorV1::WireProof(error.to_string()))?;
         if [
             self.semantic_digest,
+            self.candidate_envelope_digest,
+            self.commit_certificate_digest,
             self.transition_nullifier,
-            self.hardware_transition_commitment,
-            self.terminal_output_binding,
         ]
         .into_iter()
         .any(|digest| digest == [0; 32])
-            || self.sender_before_commitment.is_zero()
-            || self.sender_after_commitment.is_zero()
-            || self.sender_before_commitment == self.sender_after_commitment
-            || self.amount == 0
-            || self.committed_at_ms == 0
+            || self.candidate_envelope_digest == self.commit_certificate_digest
         {
             return Err(KagemushaRecursionErrorV1::InvalidPublicOutput);
         }
         let payment_bindings = [
             self.request_digest,
-            self.recipient_lane_id,
-            self.recipient_encryption_key,
+            self.receiver_binding_digest,
             self.ciphertext_commitment,
         ];
         match self.operation() {
             KagemushaOperationV1::SendSplit => {
-                if payment_bindings.into_iter().any(|digest| digest == [0; 32])
-                    || self.lifecycle.request_id == [0; 32]
-                    || self.lifecycle.credit_id != self.terminal_output_binding
+                if self.amount == 0
+                    || payment_bindings.into_iter().any(|digest| digest == [0; 32])
+                    || self.terminal_output_binding == [0; 32]
                 {
                     return Err(KagemushaRecursionErrorV1::InvalidPublicOutput);
                 }
             }
             KagemushaOperationV1::RedeemSplit => {
-                if payment_bindings.into_iter().any(|digest| digest != [0; 32])
-                    || self.lifecycle.request_id != [0; 32]
-                    || self.lifecycle.credit_id != [0; 32]
-                    || self.lifecycle.ciphertext_digest != [0; 32]
+                if self.amount == 0
+                    || payment_bindings.into_iter().any(|digest| digest != [0; 32])
+                    || self.terminal_output_binding == [0; 32]
                 {
                     return Err(KagemushaRecursionErrorV1::InvalidPublicOutput);
                 }
@@ -1250,112 +1166,61 @@ impl KagemushaRecursivePublicOutputV1 {
 }
 
 const INCOMING_PROOF_BINDING_DOMAIN_V1: &[u8] =
-    b"iroha:kagemusha:v1:incoming-paired-proof-binding";
-const TERMINAL_PRECOMMIT_BINDING_DOMAIN_V1: &[u8] =
-    b"iroha:kagemusha:v1:terminal-precommit-binding";
+    b"iroha:kagemusha:v1:incoming-terminal-authorization-binding";
 
-impl KagemushaRecursivePublicOutputV1 {
-    pub(crate) fn precommit_binding_digest(
-        &self,
-    ) -> Result<DigestV1, KagemushaRecursionErrorV1> {
-        self.validate()?;
-        let lifecycle_digest = self
-            .lifecycle
-            .canonical_digest()
-            .map_err(|error| KagemushaRecursionErrorV1::TransportBinding(error.to_string()))?;
-        let mut hasher = Sha256::new();
-        hasher.update(TERMINAL_PRECOMMIT_BINDING_DOMAIN_V1);
-
-        hasher.update([0]);
-        for digest in [
-            lifecycle_digest,
-            self.semantic_digest,
-            self.transition_nullifier,
-            self.request_digest,
-            self.recipient_lane_id,
-            self.recipient_encryption_key,
-            self.ciphertext_commitment,
-            self.hardware_transition_commitment,
-            self.terminal_output_binding,
-        ] {
-            hasher.update(digest);
-        }
-        hasher.update(self.amount.to_le_bytes());
-        hasher.update(self.committed_at_ms.to_le_bytes());
-        Ok(hasher.finalize().into())
-    }
-}
-/// Bind an accepted sender proof before inserting its credit in a receive fold.
+/// Hash the exact proof-independent claims shared by terminal authorization and receive staging.
 ///
-/// The digest contains the opaque state commitments, semantic statement, and complete paired
-/// proof transcript. It remains constant-size regardless of sender history.
-///
-/// # Errors
-///
-/// Rejects a non-send output or common public-projection substitution.
-pub fn kagemusha_incoming_proof_binding_digest_v1(
-    output: &KagemushaRecursivePublicOutputV1,
-    proof: &KagemushaPairedProofV1,
-) -> Result<DigestV1, KagemushaRecursionErrorV1> {
-    output.validate()?;
-    if output.operation() != KagemushaOperationV1::SendSplit
-        || proof.version != KAGEMUSHA_WIRE_VERSION_V1
-        || proof.semantic_digest != output.semantic_digest
-        || proof.eq_protocol_digest == [0; 32]
-        || proof.ep_protocol_digest == [0; 32]
-        || proof.eq_protocol_digest == proof.ep_protocol_digest
-        || proof.guard_eq_credential_audit == [0; 32]
-        || proof.guard_ep_credential_audit == [0; 32]
-        || proof.guard_eq_credential_audit == proof.guard_ep_credential_audit
-        || proof.eq_deferred_audit == [0; 32]
-        || proof.ep_deferred_audit == [0; 32]
-        || proof.eq_deferred_audit == proof.ep_deferred_audit
-        || proof.eq_proof.is_empty()
-        || proof.ep_proof.is_empty()
-        || proof.eq_proof.len() > KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1
-        || proof.ep_proof.len() > KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1
-        || proof.eq_proof.len() + proof.ep_proof.len() > KAGEMUSHA_CURRENT_PROOFS_MAX_BYTES_V1
-        || proof.eq_history.len() != KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1
-        || proof.ep_history.len() != KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1
-        || crate::zk::kagemusha_v1_poseidon::decode::<halo2_proofs::halo2curves::pasta::Fp>(
-            proof.eq_deferred_audit,
-        )
-        .is_none()
-        || crate::zk::kagemusha_v1_poseidon::decode::<halo2_proofs::halo2curves::pasta::Fq>(
-            proof.ep_deferred_audit,
-        )
-        .is_none()
-    {
-        return Err(KagemushaRecursionErrorV1::PublicBindingMismatch);
-    }
-    let lifecycle_digest = output
-        .lifecycle
-        .canonical_digest()
-        .map_err(|error| KagemushaRecursionErrorV1::WireProof(error.to_string()))?;
+/// The order is request, receiver, sender-state pair, output, ciphertext, candidate, certificate.
+/// Candidate and certificate are already committed before this digest is constructed. Neither
+/// this digest nor the terminal output binding may feed back into those precommit transcripts.
+/// This field-only helper grants no proof authority; callers must authenticate every input.
+pub(crate) fn canonical_incoming_payment_claims_binding_v1(digests: [DigestV1; 7]) -> DigestV1 {
     let mut hasher = Sha256::new();
     hasher.update(INCOMING_PROOF_BINDING_DOMAIN_V1);
     hasher.update([0]);
-    for digest in [
-        lifecycle_digest,
-        output.semantic_digest,
-        output.sender_before_commitment.eq,
-        output.sender_before_commitment.ep,
-        output.sender_after_commitment.eq,
-        output.sender_after_commitment.ep,
-        output.lifecycle.credit_id,
-        output.recipient_lane_id,
-        output.hardware_transition_commitment,
-        proof.eq_protocol_digest,
-        proof.ep_protocol_digest,
-        proof.guard_eq_credential_audit,
-        proof.guard_ep_credential_audit,
-        proof.eq_deferred_audit,
-        proof.ep_deferred_audit,
-    ] {
+    for digest in digests {
         hasher.update(digest);
     }
-    hasher.update(output.amount.to_le_bytes());
-    Ok(hasher.finalize().into())
+    hasher.finalize().into()
+}
+
+/// Bind the exact accepted payment body and post-commit proof claims before a receive fold.
+///
+/// Proof bytes may be randomized, but both parities must authenticate the same candidate,
+/// certificate, request, sender state transition, output, and encrypted credit.
+///
+/// # Errors
+///
+/// Rejects any malformed or substituted request or payment.
+pub fn kagemusha_incoming_proof_binding_digest_v1(
+    request: &KagemushaPaymentRequestV1,
+    payment: &KagemushaPaymentV1,
+) -> Result<DigestV1, KagemushaRecursionErrorV1> {
+    payment
+        .validate_shape_against(request)
+        .map_err(|error| KagemushaRecursionErrorV1::WireProof(error.to_string()))?;
+    let request_digest = request
+        .canonical_digest()
+        .map_err(|error| KagemushaRecursionErrorV1::WireProof(error.to_string()))?;
+    let output_digest = payment
+        .output
+        .canonical_digest_against(request)
+        .map_err(|error| KagemushaRecursionErrorV1::WireProof(error.to_string()))?;
+    let mut state_pair_hasher = Sha256::new();
+    state_pair_hasher.update(b"iroha:kagemusha:v1:incoming-sender-state-pair");
+    state_pair_hasher.update([0]);
+    state_pair_hasher.update(payment.output.sender_before_commitment);
+    state_pair_hasher.update(payment.output.sender_after_commitment);
+    let state_pair_digest = state_pair_hasher.finalize().into();
+    Ok(canonical_incoming_payment_claims_binding_v1([
+        request_digest,
+        request.hardware_credential.credential_id,
+        state_pair_digest,
+        output_digest,
+        kagemusha_ciphertext_digest_v1(&payment.encrypted_credit),
+        payment.proof.candidate_envelope_digest,
+        payment.proof.commit_certificate_digest,
+    ]))
 }
 
 /// Exact four-role artifact set for the paired finalized-mint helper.
@@ -1428,10 +1293,22 @@ pub struct KagemushaRecursionArtifactsV1 {
     pub eq_protocol_digest: DigestV1,
     /// Exact Ep circuit and compiled-protocol digest.
     pub ep_protocol_digest: DigestV1,
+    /// Exact Eq terminal `TerminalAuthorization` compiled-protocol digest.
+    pub terminal_authorization_eq_protocol_digest: DigestV1,
+    /// Exact Ep terminal `TerminalAuthorization` compiled-protocol digest.
+    pub terminal_authorization_ep_protocol_digest: DigestV1,
+    /// Exact Eq compact post-commit `CommitWrapper` compiled-protocol digest.
+    pub commit_wrapper_eq_protocol_digest: DigestV1,
+    /// Exact Ep compact post-commit `CommitWrapper` compiled-protocol digest.
+    pub commit_wrapper_ep_protocol_digest: DigestV1,
     /// Exact authenticated Eq mint-authorization compiled-protocol digest.
     pub mint_authorization_eq_protocol_digest: DigestV1,
     /// Exact authenticated Ep mint-authorization compiled-protocol digest.
     pub mint_authorization_ep_protocol_digest: DigestV1,
+    /// Exact authenticated Eq compact finalized-mint compiled-protocol digest.
+    pub mint_finality_eq_protocol_digest: DigestV1,
+    /// Exact authenticated Ep compact finalized-mint compiled-protocol digest.
+    pub mint_finality_ep_protocol_digest: DigestV1,
     /// Exact authenticated Eq normalized `GuardBundle` compiled-protocol digest.
     pub guard_bundle_eq_protocol_digest: DigestV1,
     /// Exact authenticated Ep normalized `GuardBundle` compiled-protocol digest.
@@ -1440,6 +1317,14 @@ pub struct KagemushaRecursionArtifactsV1 {
     pub guard_bundle_verifying_key_eq: KagemushaArtifactBindingV1,
     /// Exact Ep normalized `GuardBundle` verifying-key binding.
     pub guard_bundle_verifying_key_ep: KagemushaArtifactBindingV1,
+    /// Exact Eq terminal `TerminalAuthorization` verifying-key binding.
+    pub terminal_authorization_verifying_key_eq: KagemushaArtifactBindingV1,
+    /// Exact Ep terminal `TerminalAuthorization` verifying-key binding.
+    pub terminal_authorization_verifying_key_ep: KagemushaArtifactBindingV1,
+    /// Exact Eq post-commit wrapper verifying-key binding.
+    pub commit_wrapper_verifying_key_eq: KagemushaArtifactBindingV1,
+    /// Exact Ep post-commit wrapper verifying-key binding.
+    pub commit_wrapper_verifying_key_ep: KagemushaArtifactBindingV1,
     /// Four distinct finalized-mint helper artifact roles.
     pub mint_finality: KagemushaMintFinalityArtifactsV1,
     /// Digest of the complete authenticated release manifest.
@@ -1458,22 +1343,45 @@ impl KagemushaRecursionArtifactsV1 {
         let mint_authorization = release
             .helper_protocol(KagemushaQualifiedHelperCircuitV1::MintAuthorization)
             .expect("authenticated Kagemusha release has every helper protocol");
+        let mint_finality = release
+            .helper_protocol(KagemushaQualifiedHelperCircuitV1::MintCredit)
+            .expect("authenticated Kagemusha release has every helper protocol");
         let guard_bundle = release
             .helper_protocol(KagemushaQualifiedHelperCircuitV1::GuardBundle)
             .expect("authenticated Kagemusha release has every helper protocol");
+        let (terminal_authorization_eq_protocol_digest, terminal_authorization_ep_protocol_digest) =
+            release.qualified_relation_protocol_digests(
+                KagemushaQualifiedRelationV1::TerminalAuthorization,
+            );
+        let (commit_wrapper_eq_protocol_digest, commit_wrapper_ep_protocol_digest) = release
+            .qualified_relation_protocol_digests(KagemushaQualifiedRelationV1::CommitWrapper);
         Self {
             release_id: release.release_id(),
             profile_digest: release.profile_digest(),
             eq_protocol_digest: release.eq_protocol_digest(),
             ep_protocol_digest: release.ep_protocol_digest(),
+            terminal_authorization_eq_protocol_digest,
+            terminal_authorization_ep_protocol_digest,
+            commit_wrapper_eq_protocol_digest,
+            commit_wrapper_ep_protocol_digest,
             mint_authorization_eq_protocol_digest: mint_authorization.eq_protocol_digest,
             mint_authorization_ep_protocol_digest: mint_authorization.ep_protocol_digest,
+            mint_finality_eq_protocol_digest: mint_finality.eq_protocol_digest,
+            mint_finality_ep_protocol_digest: mint_finality.ep_protocol_digest,
             guard_bundle_eq_protocol_digest: guard_bundle.eq_protocol_digest,
             guard_bundle_ep_protocol_digest: guard_bundle.ep_protocol_digest,
             guard_bundle_verifying_key_eq: release
                 .artifact(KagemushaArtifactRoleV1::GuardBundleVkEq),
             guard_bundle_verifying_key_ep: release
                 .artifact(KagemushaArtifactRoleV1::GuardBundleVkEp),
+            terminal_authorization_verifying_key_eq: release
+                .artifact(KagemushaArtifactRoleV1::TerminalAuthorizationVkEq),
+            terminal_authorization_verifying_key_ep: release
+                .artifact(KagemushaArtifactRoleV1::TerminalAuthorizationVkEp),
+            commit_wrapper_verifying_key_eq: release
+                .artifact(KagemushaArtifactRoleV1::CommitWrapperVkEq),
+            commit_wrapper_verifying_key_ep: release
+                .artifact(KagemushaArtifactRoleV1::CommitWrapperVkEp),
             mint_finality: KagemushaMintFinalityArtifactsV1::from_authenticated_release(release),
             artifact_manifest_digest: release.manifest_digest(),
             canonical_empty_effect_digest,
@@ -1492,15 +1400,53 @@ impl KagemushaRecursionArtifactsV1 {
                 KagemushaArtifactRoleV1::GuardBundleVkEp,
             ),
         ];
+        let wrapper_bindings = [
+            (
+                self.terminal_authorization_verifying_key_eq,
+                KagemushaArtifactRoleV1::TerminalAuthorizationVkEq,
+            ),
+            (
+                self.terminal_authorization_verifying_key_ep,
+                KagemushaArtifactRoleV1::TerminalAuthorizationVkEp,
+            ),
+        ];
+        let authorization_bindings = [
+            (
+                self.commit_wrapper_verifying_key_eq,
+                KagemushaArtifactRoleV1::CommitWrapperVkEq,
+            ),
+            (
+                self.commit_wrapper_verifying_key_ep,
+                KagemushaArtifactRoleV1::CommitWrapperVkEp,
+            ),
+        ];
+        let dedicated_verifier_bindings = [
+            self.guard_bundle_verifying_key_eq,
+            self.guard_bundle_verifying_key_ep,
+            self.terminal_authorization_verifying_key_eq,
+            self.terminal_authorization_verifying_key_ep,
+            self.commit_wrapper_verifying_key_eq,
+            self.commit_wrapper_verifying_key_ep,
+        ];
         if self.release_id == [0; 32]
             || self.profile_digest == [0; 32]
             || self.eq_protocol_digest == [0; 32]
             || self.ep_protocol_digest == [0; 32]
             || self.eq_protocol_digest == self.ep_protocol_digest
+            || self.terminal_authorization_eq_protocol_digest == [0; 32]
+            || self.terminal_authorization_ep_protocol_digest == [0; 32]
+            || self.terminal_authorization_eq_protocol_digest
+                == self.terminal_authorization_ep_protocol_digest
+            || self.commit_wrapper_eq_protocol_digest == [0; 32]
+            || self.commit_wrapper_ep_protocol_digest == [0; 32]
+            || self.commit_wrapper_eq_protocol_digest == self.commit_wrapper_ep_protocol_digest
             || self.mint_authorization_eq_protocol_digest == [0; 32]
             || self.mint_authorization_ep_protocol_digest == [0; 32]
             || self.mint_authorization_eq_protocol_digest
                 == self.mint_authorization_ep_protocol_digest
+            || self.mint_finality_eq_protocol_digest == [0; 32]
+            || self.mint_finality_ep_protocol_digest == [0; 32]
+            || self.mint_finality_eq_protocol_digest == self.mint_finality_ep_protocol_digest
             || self.guard_bundle_eq_protocol_digest == [0; 32]
             || self.guard_bundle_ep_protocol_digest == [0; 32]
             || self.guard_bundle_eq_protocol_digest == self.guard_bundle_ep_protocol_digest
@@ -1513,11 +1459,35 @@ impl KagemushaRecursionArtifactsV1 {
             )
             .is_none()
             || crate::zk::kagemusha_v1_poseidon::decode::<halo2_proofs::halo2curves::pasta::Fp>(
+                self.terminal_authorization_eq_protocol_digest,
+            )
+            .is_none()
+            || crate::zk::kagemusha_v1_poseidon::decode::<halo2_proofs::halo2curves::pasta::Fq>(
+                self.terminal_authorization_ep_protocol_digest,
+            )
+            .is_none()
+            || crate::zk::kagemusha_v1_poseidon::decode::<halo2_proofs::halo2curves::pasta::Fp>(
+                self.commit_wrapper_eq_protocol_digest,
+            )
+            .is_none()
+            || crate::zk::kagemusha_v1_poseidon::decode::<halo2_proofs::halo2curves::pasta::Fq>(
+                self.commit_wrapper_ep_protocol_digest,
+            )
+            .is_none()
+            || crate::zk::kagemusha_v1_poseidon::decode::<halo2_proofs::halo2curves::pasta::Fp>(
                 self.mint_authorization_eq_protocol_digest,
             )
             .is_none()
             || crate::zk::kagemusha_v1_poseidon::decode::<halo2_proofs::halo2curves::pasta::Fq>(
                 self.mint_authorization_ep_protocol_digest,
+            )
+            .is_none()
+            || crate::zk::kagemusha_v1_poseidon::decode::<halo2_proofs::halo2curves::pasta::Fp>(
+                self.mint_finality_eq_protocol_digest,
+            )
+            .is_none()
+            || crate::zk::kagemusha_v1_poseidon::decode::<halo2_proofs::halo2curves::pasta::Fq>(
+                self.mint_finality_ep_protocol_digest,
             )
             .is_none()
             || crate::zk::kagemusha_v1_poseidon::decode::<halo2_proofs::halo2curves::pasta::Fp>(
@@ -1536,12 +1506,36 @@ impl KagemushaRecursionArtifactsV1 {
                     || binding.byte_len == 0
                     || binding.byte_len > KAGEMUSHA_VERIFYING_KEY_MAX_BYTES_V1
             })
+            || wrapper_bindings.iter().any(|(binding, role)| {
+                binding.role != *role
+                    || binding.sha256 == [0; 32]
+                    || binding.byte_len == 0
+                    || binding.byte_len > KAGEMUSHA_VERIFYING_KEY_MAX_BYTES_V1
+            })
+            || authorization_bindings.iter().any(|(binding, role)| {
+                binding.role != *role
+                    || binding.sha256 == [0; 32]
+                    || binding.byte_len == 0
+                    || binding.byte_len > KAGEMUSHA_VERIFYING_KEY_MAX_BYTES_V1
+            })
+            || dedicated_verifier_bindings
+                .iter()
+                .enumerate()
+                .any(|(index, binding)| {
+                    dedicated_verifier_bindings[index + 1..]
+                        .iter()
+                        .any(|other| binding.sha256 == other.sha256)
+                })
         {
             return Err(KagemushaRecursionErrorV1::InvalidArtifacts);
         }
         let protocols = [
             self.eq_protocol_digest,
             self.ep_protocol_digest,
+            self.terminal_authorization_eq_protocol_digest,
+            self.terminal_authorization_ep_protocol_digest,
+            self.commit_wrapper_eq_protocol_digest,
+            self.commit_wrapper_ep_protocol_digest,
             self.mint_authorization_eq_protocol_digest,
             self.mint_authorization_ep_protocol_digest,
             self.guard_bundle_protocol_digest(KagemushaPastaParityV1::Eq)?,
@@ -1574,96 +1568,49 @@ impl KagemushaRecursionArtifactsV1 {
         })
     }
 
-    /// Derive the exact release-pinned finalized-mint helper protocol identity for one parity.
+    /// Return the exact release-pinned finalized-mint compiled-protocol identity for one parity.
     ///
-    /// The identity commits the compilation profile and the parity-specific
-    /// `MintCreditVkEq`/`MintCreditVkEp` artifact, so it cannot alias a state verifying key.
+    /// The authenticated `MintCredit` helper metadata carries the actual compiled outer
+    /// protocol identity. Artifact-byte authentication is separate: hashing a profile and VK
+    /// binding does not reproduce the identity constrained by the recursive verifier.
     ///
     /// # Errors
     ///
-    /// Returns an error only when canonical artifact binding encoding fails.
+    /// Returns an error only to preserve the common helper-protocol accessor shape.
     pub fn mint_finality_protocol_digest(
         self,
         parity: KagemushaPastaParityV1,
     ) -> Result<DigestV1, KagemushaRecursionErrorV1> {
-        let binding = match parity {
-            KagemushaPastaParityV1::Eq => self.mint_finality.verifying_key_eq,
-            KagemushaPastaParityV1::Ep => self.mint_finality.verifying_key_ep,
-        };
-        helper_protocol_digest(self.profile_digest, binding, parity)
+        Ok(match parity {
+            KagemushaPastaParityV1::Eq => self.mint_finality_eq_protocol_digest,
+            KagemushaPastaParityV1::Ep => self.mint_finality_ep_protocol_digest,
+        })
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
-struct HelperProtocolDigestPreimageV1 {
-    profile_digest: DigestV1,
-    verifying_key: KagemushaArtifactBindingV1,
-}
-
-fn helper_protocol_digest(
-    profile_digest: DigestV1,
-    verifying_key: KagemushaArtifactBindingV1,
-    parity: KagemushaPastaParityV1,
-) -> Result<DigestV1, KagemushaRecursionErrorV1> {
-    let encoded = norito::encode_canonical(&HelperProtocolDigestPreimageV1 {
-        profile_digest,
-        verifying_key,
-    })
-    .map_err(|error| KagemushaRecursionErrorV1::Codec(error.to_string()))?;
-    let length =
-        u128::try_from(encoded.len()).map_err(|_| KagemushaRecursionErrorV1::LengthOverflow)?;
-    let chunks = core::iter::once(length)
-        .chain(encoded.chunks(16).map(|chunk| {
-            let mut bytes = [0_u8; 16];
-            bytes[..chunk.len()].copy_from_slice(chunk);
-            u128::from_le_bytes(bytes)
-        }))
-        .collect::<Vec<_>>();
-    match parity {
-        KagemushaPastaParityV1::Eq => {
-            use halo2_proofs::halo2curves::pasta::Fp;
-            let elements = chunks
-                .into_iter()
-                .map(crate::zk::kagemusha_v1_poseidon::from_u128::<Fp>)
-                .collect::<Vec<_>>();
-            Ok(crate::zk::kagemusha_v1_poseidon::encode(
-                crate::zk::kagemusha_v1_poseidon::hash(
-                    HELPER_PROTOCOL_POSEIDON_DOMAIN_V1,
-                    &elements,
-                ),
-            ))
-        }
-        KagemushaPastaParityV1::Ep => {
-            use halo2_proofs::halo2curves::pasta::Fq;
-            let elements = chunks
-                .into_iter()
-                .map(crate::zk::kagemusha_v1_poseidon::from_u128::<Fq>)
-                .collect::<Vec<_>>();
-            Ok(crate::zk::kagemusha_v1_poseidon::encode(
-                crate::zk::kagemusha_v1_poseidon::hash(
-                    HELPER_PROTOCOL_POSEIDON_DOMAIN_V1,
-                    &elements,
-                ),
-            ))
-        }
-    }
-}
-
-/// Exact paired terminal state-proof request passed to the governed verifier backend.
+/// Exact one-parity final `TerminalAuthorization` request passed to the governed verifier backend.
 #[derive(Clone, Copy, Debug)]
-pub struct KagemushaTransitionProofVerificationRequestV1<'a> {
-    /// Verifier-reconstructed public transition output.
+pub struct KagemushaParityVerificationRequestV1<'a> {
+    /// Non-interchangeable Eq or Ep role.
+    pub parity: KagemushaPastaParityV1,
+    /// Release-pinned `TerminalAuthorization` circuit/protocol identity for this parity.
+    pub protocol_digest: DigestV1,
+    /// Unlinkable common public outputs expected from this parity.
     pub public_output: &'a KagemushaRecursivePublicOutputV1,
-    /// Direct paired recursive state proof and constant-size histories.
-    pub proof: &'a KagemushaPairedProofV1,
-    /// Release-pinned proof artifacts.
-    pub artifacts: KagemushaRecursionArtifactsV1,
+    /// Common Eq deferred-equation audit exposed by both wrapper parities.
+    pub eq_deferred_audit: DigestV1,
+    /// Common Ep deferred-equation audit exposed by both wrapper parities.
+    pub ep_deferred_audit: DigestV1,
+    /// Current augmented `TerminalAuthorization` proof body for this parity.
+    pub current_proof: &'a [u8],
+    /// Strictly decoded, canonical 544-byte delayed-history accumulator.
+    pub history_accumulator: &'a [u8; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
 }
 
 /// Exact paired precommit state-proof request passed to the authenticated native verifier.
 #[derive(Clone, Copy, Debug)]
 pub struct KagemushaStateProofVerificationRequestV1<'a> {
-    /// Verifier-reconstructed fixed 81-cell state relation projection.
+    /// Verifier-reconstructed fixed 85-cell state relation projection.
     pub public_inputs: &'a KagemushaStateRelationPublicInputsV1,
     /// Paired recursive state proof and constant-size histories.
     pub proof: &'a KagemushaPairedProofV1,
@@ -1701,15 +1648,24 @@ pub struct KagemushaMintFinalityHelperVerificationRequestV1<'a> {
 
 /// Governed recursive verification backend for both Pasta parities.
 ///
-/// Implementations must verify the paired state proof which recursively authenticates the
-/// normalized hardware guard, exact-next transition, balance arithmetic, replay root, and
-/// constant-size history. Host-side signature or certificate checks alone never grant monetary
-/// authority.
+/// Implementations must recursively verify the prepared state proof, normalized hardware guard,
+/// exact outbox reservation, and terminal commit certificate before deciding wrapper history.
+/// Host-side signature or certificate checks alone never grant monetary authority.
 pub trait KagemushaRecursiveVerifierV1 {
     /// Verify both release-pinned recursive state parities and decide their carried histories.
     fn verify_state_proof_and_decide(
         &self,
         request: &KagemushaStateProofVerificationRequestV1<'_>,
+    ) -> Result<(), String>;
+
+    /// Verify the final payment's paired post-commit proofs and decide both histories.
+    ///
+    /// The proof must authenticate the persisted candidate, qualified hardware commit, and exact
+    /// request, sender transition, encrypted credit, and payment output.
+    fn verify_payment_and_decide(
+        &self,
+        request: &KagemushaPaymentRequestV1,
+        payment: &KagemushaPaymentV1,
     ) -> Result<(), String>;
 
     /// Verify the distinct paired mint-credit/finality helper proof before constructing a
@@ -1723,10 +1679,11 @@ pub trait KagemushaRecursiveVerifierV1 {
         request: &KagemushaMintFinalityHelperVerificationRequestV1<'_>,
     ) -> Result<(), String>;
 
-    /// Verify a directly transported send or redemption state proof and decide both histories.
-    fn verify_transition_proof_and_decide(
+    /// Verify the final `TerminalAuthorization`, constrain its unlinkable public outputs, and terminally
+    /// decide its delayed-history accumulator.
+    fn verify_terminal_authorization_and_decide(
         &self,
-        request: &KagemushaTransitionProofVerificationRequestV1<'_>,
+        request: &KagemushaParityVerificationRequestV1<'_>,
     ) -> Result<(), String>;
 }
 
@@ -1743,6 +1700,14 @@ impl KagemushaRecursiveVerifierV1 for RejectAllKagemushaRecursiveVerifierV1 {
         Err("Kagemusha V1 recursive state verifier is unavailable".to_owned())
     }
 
+    fn verify_payment_and_decide(
+        &self,
+        _request: &KagemushaPaymentRequestV1,
+        _payment: &KagemushaPaymentV1,
+    ) -> Result<(), String> {
+        Err("Kagemusha V1 post-commit payment verifier is unavailable".to_owned())
+    }
+
     fn verify_mint_finality_helper(
         &self,
         _request: &KagemushaMintFinalityHelperVerificationRequestV1<'_>,
@@ -1750,11 +1715,11 @@ impl KagemushaRecursiveVerifierV1 for RejectAllKagemushaRecursiveVerifierV1 {
         Err("Kagemusha V1 recursive mint-finality verifier is unavailable".to_owned())
     }
 
-    fn verify_transition_proof_and_decide(
+    fn verify_terminal_authorization_and_decide(
         &self,
-        _request: &KagemushaTransitionProofVerificationRequestV1<'_>,
+        _request: &KagemushaParityVerificationRequestV1<'_>,
     ) -> Result<(), String> {
-        Err("Kagemusha V1 recursive transition verifier is unavailable".to_owned())
+        Err("Kagemusha V1 recursive terminal-authorization verifier is unavailable".to_owned())
     }
 }
 
@@ -1793,7 +1758,21 @@ impl VerifiedKagemushaRedemptionProofV1 {
             .validate_shape()
             .map_err(|error| KagemushaRecursionErrorV1::RedemptionBinding(error.to_string()))?;
         let statement = &request.voucher.statement;
-        let output = KagemushaRecursivePublicOutputV1::from_redemption_statement(statement)?;
+        let semantic_digest = statement
+            .canonical_digest()
+            .map_err(|error| KagemushaRecursionErrorV1::RedemptionBinding(error.to_string()))?;
+        let output = KagemushaRecursivePublicOutputV1::new(
+            statement.lifecycle.clone(),
+            semantic_digest,
+            request.voucher.proof.candidate_envelope_digest,
+            request.voucher.proof.commit_certificate_digest,
+            statement.terminal_nullifier,
+            [0; 32],
+            [0; 32],
+            [0; 32],
+            statement.amount,
+            statement.redemption_commitment,
+        )?;
         let request_digest = request
             .canonical_digest()
             .map_err(|error| KagemushaRecursionErrorV1::RedemptionBinding(error.to_string()))?;
@@ -1876,6 +1855,9 @@ impl VerifiedKagemushaMintFinalityHelperV1 {
 /// The helper statement is the canonical [`KagemushaMintCreditStatementV1`] digest. The helper
 /// circuits, not the aggregate-state circuit key, prove the certified reserve receipt and pinned
 /// block-finality relation which generated that mint statement.
+/// The inner pair commitment is preserved in the compact outer public column; it is not a hash
+/// of the outer histories or audits. Only the governed backend's proof and terminal-history
+/// verification authenticates this value.
 ///
 /// # Errors
 ///
@@ -1896,6 +1878,8 @@ pub fn verify_kagemusha_mint_finality_helper_v1<V: KagemushaRecursiveVerifierV1>
         || mint_credit.artifact_manifest_digest != artifacts.artifact_manifest_digest
         || eq_protocol_digest == artifacts.eq_protocol_digest
         || ep_protocol_digest == artifacts.ep_protocol_digest
+        || eq_protocol_digest != artifacts.mint_finality_eq_protocol_digest
+        || ep_protocol_digest != artifacts.mint_finality_ep_protocol_digest
         || eq_protocol_digest == [0; 32]
         || ep_protocol_digest == [0; 32]
         || eq_protocol_digest == ep_protocol_digest
@@ -1912,34 +1896,13 @@ pub fn verify_kagemusha_mint_finality_helper_v1<V: KagemushaRecursiveVerifierV1>
         .proof
         .validate_shape_for_semantic_digest(semantic_digest)
         .map_err(|error| KagemushaRecursionErrorV1::MintFinalityBinding(error.to_string()))?;
-    let eq_history = KagemushaEqAccumulatorV1::try_from_bytes(&mint_credit.proof.eq_history)?;
-    let ep_history = KagemushaEpAccumulatorV1::try_from_bytes(&mint_credit.proof.ep_history)?;
+    KagemushaEqAccumulatorV1::try_from_bytes(&mint_credit.proof.eq_history)?;
+    KagemushaEpAccumulatorV1::try_from_bytes(&mint_credit.proof.ep_history)?;
     if mint_credit.proof.guard_eq_credential_audit != mint_credit.finality_certificate_binding
         || mint_credit.proof.guard_ep_credential_audit != mint_credit.finality_authority_head
     {
         return Err(KagemushaRecursionErrorV1::MintFinalityBinding(
             "mint helper certificate or authority-head binding mismatch".to_owned(),
-        ));
-    }
-    let proof_binding_digest = mint_authority::KagemushaMintAuthorityPairBindingV1 {
-        step: KagemushaMintAuthorityStepV1::FinalizedMint,
-        semantic_digest,
-        amount: mint_credit.statement.amount,
-        certificate_binding: mint_credit.finality_certificate_binding,
-        authority_head: mint_credit.finality_authority_head,
-        release_id: mint_credit.statement.lifecycle.release_id,
-        genesis_roster_id: mint_credit.finality_genesis_roster_id,
-        eq_protocol_digest,
-        ep_protocol_digest,
-        eq_deferred_audit: mint_credit.proof.eq_deferred_audit,
-        ep_deferred_audit: mint_credit.proof.ep_deferred_audit,
-        eq_history: eq_history.as_bytes(),
-        ep_history: ep_history.as_bytes(),
-    }
-    .canonical_digest();
-    if proof_binding_digest != mint_credit.finality_proof_binding_digest {
-        return Err(KagemushaRecursionErrorV1::MintFinalityBinding(
-            "mint helper paired proof binding mismatch".to_owned(),
         ));
     }
     verifier
@@ -1958,7 +1921,7 @@ pub fn verify_kagemusha_mint_finality_helper_v1<V: KagemushaRecursiveVerifierV1>
         .map_err(KagemushaRecursionErrorV1::MintFinalityProofRejected)?;
     Ok(VerifiedKagemushaMintFinalityHelperV1 {
         semantic_digest,
-        proof_binding_digest,
+        proof_binding_digest: mint_credit.finality_proof_binding_digest,
     })
 }
 
@@ -1997,6 +1960,10 @@ pub fn verify_kagemusha_state_proof_v1<V: KagemushaRecursiveVerifierV1>(
             != artifacts.mint_finality_protocol_digest(KagemushaPastaParityV1::Eq)?
         || public_inputs.mint_ep_protocol_digest
             != artifacts.mint_finality_protocol_digest(KagemushaPastaParityV1::Ep)?
+        || public_inputs.commit_wrapper_eq_protocol_digest
+            != artifacts.commit_wrapper_eq_protocol_digest
+        || public_inputs.commit_wrapper_ep_protocol_digest
+            != artifacts.commit_wrapper_ep_protocol_digest
         || public_inputs.eq_protocol_digest != proof.eq_protocol_digest
         || public_inputs.ep_protocol_digest != proof.ep_protocol_digest
         || public_inputs.guard_eq_credential_audit != proof.guard_eq_credential_audit
@@ -2016,7 +1983,7 @@ pub fn verify_kagemusha_state_proof_v1<V: KagemushaRecursiveVerifierV1>(
         .map_err(KagemushaRecursionErrorV1::StateProofRejected)
 }
 
-/// Verify a directly transported V1 paired state proof against release-pinned artifacts.
+/// Verify a final V1 `CommitWrapper` pair against release-pinned artifacts and unlinkable outputs.
 ///
 /// # Errors
 ///
@@ -2026,15 +1993,19 @@ pub fn verify_kagemusha_recursive_proof_v1<V: KagemushaRecursiveVerifierV1>(
     verifier: &V,
     artifacts: KagemushaRecursionArtifactsV1,
     output: KagemushaRecursivePublicOutputV1,
-    proof: &KagemushaPairedProofV1,
+    proof: &KagemushaRedemptionProofV1,
 ) -> Result<VerifiedKagemushaRecursiveProofV1, KagemushaRecursionErrorV1> {
     artifacts.validate()?;
     output.validate()?;
     proof
-        .validate_shape_for_semantic_digest(output.semantic_digest)
+        .validate_shape_against(
+            output.semantic_digest,
+            output.candidate_envelope_digest,
+            output.commit_certificate_digest,
+        )
         .map_err(|error| KagemushaRecursionErrorV1::WireProof(error.to_string()))?;
-    if proof.eq_protocol_digest != artifacts.eq_protocol_digest
-        || proof.ep_protocol_digest != artifacts.ep_protocol_digest
+    if proof.eq_protocol_digest != artifacts.commit_wrapper_eq_protocol_digest
+        || proof.ep_protocol_digest != artifacts.commit_wrapper_ep_protocol_digest
         || crate::zk::kagemusha_v1_poseidon::decode::<halo2_proofs::halo2curves::pasta::Fp>(
             proof.eq_protocol_digest,
         )
@@ -2054,24 +2025,47 @@ pub fn verify_kagemusha_recursive_proof_v1<V: KagemushaRecursiveVerifierV1>(
     {
         return Err(KagemushaRecursionErrorV1::ArtifactSubstitution);
     }
-    KagemushaEqAccumulatorV1::try_from_bytes(&proof.eq_history)?;
-    KagemushaEpAccumulatorV1::try_from_bytes(&proof.ep_history)?;
-    verifier
-        .verify_transition_proof_and_decide(&KagemushaTransitionProofVerificationRequestV1 {
+    let eq_history = KagemushaEqAccumulatorV1::try_from_bytes(&proof.eq_history)?;
+    let ep_history = KagemushaEpAccumulatorV1::try_from_bytes(&proof.ep_history)?;
+    let requests = [
+        KagemushaParityVerificationRequestV1 {
+            parity: KagemushaPastaParityV1::Eq,
+            protocol_digest: artifacts.commit_wrapper_eq_protocol_digest,
             public_output: &output,
-            proof,
-            artifacts,
-        })
-        .map_err(KagemushaRecursionErrorV1::StateProofRejected)?;
+            eq_deferred_audit: proof.eq_deferred_audit,
+            ep_deferred_audit: proof.ep_deferred_audit,
+            current_proof: &proof.eq_proof,
+            history_accumulator: eq_history.as_bytes(),
+        },
+        KagemushaParityVerificationRequestV1 {
+            parity: KagemushaPastaParityV1::Ep,
+            protocol_digest: artifacts.commit_wrapper_ep_protocol_digest,
+            public_output: &output,
+            eq_deferred_audit: proof.eq_deferred_audit,
+            ep_deferred_audit: proof.ep_deferred_audit,
+            current_proof: &proof.ep_proof,
+            history_accumulator: ep_history.as_bytes(),
+        },
+    ];
+    for request in &requests {
+        verifier
+            .verify_terminal_authorization_and_decide(request)
+            .map_err(
+                |reason| KagemushaRecursionErrorV1::TransitionProofRejected {
+                    parity: request.parity,
+                    reason,
+                },
+            )?;
+    }
 
     Ok(VerifiedKagemushaRecursiveProofV1 { output })
 }
 
 /// Recursively verify and seal one exact chain-facing redemption request.
 ///
-/// Chain execution derives the statement digest and verifies the paired aggregate-state proof
-/// against the authenticated release. Private balances, replay paths, credentials, epochs, and
-/// journal records never enter the redemption transport.
+/// Chain execution derives the statement digest and verifies the final wrapper against the
+/// authenticated release. Private predecessor, successor, credential, lane, epoch, and journal
+/// witnesses never enter the redemption transport.
 ///
 /// The returned opaque capability owns the byte-exact request. Reserve admission should consume
 /// it with [`VerifiedKagemushaRedemptionProofV1::into_request`]; structural
@@ -2091,18 +2085,31 @@ pub fn verify_kagemusha_redemption_request_v1<V: KagemushaRecursiveVerifierV1>(
         .validate_shape()
         .map_err(|error| KagemushaRecursionErrorV1::RedemptionBinding(error.to_string()))?;
     let statement = &request.voucher.statement;
-    if statement.lifecycle.release_id != artifacts.release_id || statement.lifecycle.vk_digest == [0; 32] {
+    if statement.lifecycle.release_id != artifacts.release_id
+        || request.voucher.artifact_manifest_digest != artifacts.artifact_manifest_digest
+        || statement.lifecycle.vk_digest == [0; 32]
+    {
         return Err(KagemushaRecursionErrorV1::RedemptionBinding(
-            "release or verifier identity mismatch".to_owned(),
+            "release or artifact manifest identity mismatch".to_owned(),
         ));
     }
-    let output = KagemushaRecursivePublicOutputV1::from_redemption_statement(statement)?;
-    let recursive_proof = verify_kagemusha_recursive_proof_v1(
-        verifier,
-        artifacts,
-        output,
-        &request.voucher.proof,
+    let semantic_digest = statement
+        .canonical_digest()
+        .map_err(|error| KagemushaRecursionErrorV1::RedemptionBinding(error.to_string()))?;
+    let output = KagemushaRecursivePublicOutputV1::new(
+        statement.lifecycle.clone(),
+        semantic_digest,
+        request.voucher.proof.candidate_envelope_digest,
+        request.voucher.proof.commit_certificate_digest,
+        statement.terminal_nullifier,
+        [0; 32],
+        [0; 32],
+        [0; 32],
+        statement.amount,
+        statement.redemption_commitment,
     )?;
+    let recursive_proof =
+        verify_kagemusha_recursive_proof_v1(verifier, artifacts, output, &request.voucher.proof)?;
     let request_digest = request
         .canonical_digest()
         .map_err(|error| KagemushaRecursionErrorV1::RedemptionBinding(error.to_string()))?;
@@ -2130,8 +2137,7 @@ pub struct KagemushaReplayInsertWitnessV1 {
     /// Replay root committed by the produced aggregate state.
     pub successor_root: KagemushaPastaStateCommitmentV1,
     /// Exact 256 sibling hashes, ordered root-to-leaf.
-    pub siblings_root_to_leaf:
-        [KagemushaPastaStateCommitmentV1; KAGEMUSHA_REPLAY_PATH_DEPTH_V1],
+    pub siblings_root_to_leaf: [KagemushaPastaStateCommitmentV1; KAGEMUSHA_REPLAY_PATH_DEPTH_V1],
 }
 
 impl From<&ConsumedCreditInsertWitnessV1> for KagemushaReplayInsertWitnessV1 {

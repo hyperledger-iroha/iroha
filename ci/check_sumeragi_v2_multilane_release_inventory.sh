@@ -53,6 +53,7 @@ readonly autoscale_restart_qualified_test="nexus::autoscale_localnet::${autoscal
 readonly autoscale_drain_test="nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart"
 readonly autoscale_drain_qualified_test="nexus::autoscale_localnet::${autoscale_drain_test}"
 readonly native_test="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
+readonly bpng_native_bootstrap_test="alias_registry_bootstrap_network::bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansion"
 readonly native_grouped_pruning_marker="[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed"
 readonly canonical_production_test_count=867
 
@@ -193,6 +194,36 @@ require_exact_token \
 require_exact_token \
   "$release_runner" \
   "readonly multilane_native_amx_rotating_release_test=\"${native_test}\""
+require_exact_token \
+  "$release_runner" \
+  "readonly bpng_native_bootstrap_release_test=\"${bpng_native_bootstrap_test}\""
+require_exact_token \
+  "$release_runner" \
+  '      --test network_functional -- --list'
+require_exact_token \
+  "$release_runner" \
+  '      --test network_functional -- --list --ignored'
+require_exact_token \
+  "$release_runner" \
+  '      --test network_functional "$bpng_native_bootstrap_release_test" -- \'
+require_exact_token \
+  "$release_runner" \
+  '    export IROHA_TEST_SERIALIZE_NETWORKS=1'
+require_exact_token \
+  "$release_runner" \
+  '    export IROHA_TEST_NETWORK_START_ATTEMPTS=1'
+require_exact_token \
+  "$release_runner" \
+  '  run_cooperative_gate bpng-native-bootstrap-release \'
+require_exact_token \
+  "$release_runner" \
+  '    run_bpng_native_bootstrap_release_gate'
+require_exact_token \
+  "$release_runner" \
+  '  verify_release_identity "before native BPNG bootstrap release gate"'
+require_exact_token \
+  "$release_runner" \
+  '  verify_release_identity "after native BPNG bootstrap release gate"'
 require_exact_token \
   "$release_runner" \
   "readonly multilane_native_amx_grouped_pruning_marker=\"${native_grouped_pruning_marker}\""

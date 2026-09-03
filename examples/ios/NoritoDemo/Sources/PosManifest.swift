@@ -132,7 +132,7 @@ struct PosManifestStatus: Identifiable {
     let missing = required.subtracting(activeRoles)
     if missing.isEmpty {
       let remaining = manifest.validUntilMs.date.timeIntervalSince(now)
-      return DualStatus(healthy: true, label: "Kagemusha V1 trust roots for \(formatDuration(milliseconds: remaining * 1000))")
+      return DualStatus(healthy: true, label: "KAGEMUSHA V1 trust roots for \(formatDuration(milliseconds: remaining * 1000))")
     }
     return DualStatus(healthy: false, label: "missing \(missing.joined(separator: \", \"))")
   }

@@ -45,17 +45,20 @@ impl QrStreamFrameKind {
         }
     }
 }
-/// Payload kind tags embedded in the envelope.
+/// Payload kind tags embedded in the QR stream `IQ` envelope.
+///
+/// These `u16` tags mirror the canonical KAGEMUSHA V1 peer message order;
+/// they are distinct from the one-byte kind field in the inner `IPM1` message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum QrPayloadKind {
     /// No specific payload kind.
     Unspecified = 0,
-    /// Kagemusha V1 recipient payment request.
+    /// KAGEMUSHA V1 recipient payment request.
     KagemushaPaymentRequest = 1,
-    /// Kagemusha V1 payment.
+    /// KAGEMUSHA V1 payment.
     KagemushaPayment = 2,
-    /// Kagemusha V1 receiver acknowledgement.
+    /// KAGEMUSHA V1 receiver acknowledgement.
     KagemushaAcknowledgement = 3,
 }
 impl QrPayloadKind {
@@ -873,9 +876,9 @@ mod tests {
             .and_then(|v| v.as_str())
             .unwrap_or("unspecified");
         let payload_kind = match payload_kind {
-            "kagemusha_payment_request" => QrPayloadKind::KagemushaPaymentRequest,
-            "kagemusha_payment" => QrPayloadKind::KagemushaPayment,
-            "kagemusha_acknowledgement" => QrPayloadKind::KagemushaAcknowledgement,
+            "kagemusha_payment_request_v1" => QrPayloadKind::KagemushaPaymentRequest,
+            "kagemusha_payment_v1" => QrPayloadKind::KagemushaPayment,
+            "kagemusha_acknowledgement_v1" => QrPayloadKind::KagemushaAcknowledgement,
             _ => QrPayloadKind::Unspecified,
         };
         let envelope_hex = value
@@ -956,7 +959,21 @@ mod tests {
         assert_eq!(result, Some(fixture.payload));
     }
     #[test]
+    fn qr_payload_kind_tags_match_kagemusha_peer_protocol() {
+        let expected = [
+            (1, QrPayloadKind::KagemushaPaymentRequest),
+            (2, QrPayloadKind::KagemushaPayment),
+            (3, QrPayloadKind::KagemushaAcknowledgement),
+        ];
+        for (tag, kind) in expected {
+            assert_eq!(kind as u16, tag);
+            assert_eq!(QrPayloadKind::from_u16(tag), kind);
+        }
+    }
+    #[test]
     fn qr_payload_kind_unknown_maps_to_unspecified() {
+        assert_eq!(QrPayloadKind::from_u16(4), QrPayloadKind::Unspecified);
+        assert_eq!(QrPayloadKind::from_u16(5), QrPayloadKind::Unspecified);
         assert_eq!(QrPayloadKind::from_u16(999), QrPayloadKind::Unspecified);
     }
     #[test]

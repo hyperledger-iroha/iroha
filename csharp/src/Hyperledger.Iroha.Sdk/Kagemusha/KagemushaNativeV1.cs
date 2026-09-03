@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 namespace Hyperledger.Iroha.Kagemusha;
 
 /// <summary>
-/// Fail-closed bridge to the audited Rust Kagemusha V1 canonical-shape boundary.
+/// Fail-closed bridge to the audited Rust KAGEMUSHA V1 canonical-shape boundary.
 /// These checks do not authenticate signatures, credentials, proof releases, recursive proofs,
 /// or monetary authority. This type deliberately has no managed fallback.
 /// </summary>
@@ -18,6 +18,8 @@ public static class KagemushaNativeShapeV1
         "connect_norito_kagemusha_v1_payment_request_validate",
         "connect_norito_kagemusha_v1_payment_validate",
         "connect_norito_kagemusha_v1_acknowledgement_validate",
+        "connect_norito_kagemusha_v1_complete_exchange_validate",
+        "connect_norito_kagemusha_v1_complete_exchange_text_validate",
         "connect_norito_kagemusha_v1_mint_authorization_validate",
         "connect_norito_kagemusha_v1_mint_credit_validate",
         "connect_norito_kagemusha_v1_mint_credit_against_authorization_validate",
@@ -43,15 +45,17 @@ public static class KagemushaNativeShapeV1
 
     public static void ValidatePaymentRequestShape(ReadOnlySpan<byte> request)
     {
-        var first = Bounded(request, KagemushaV1.MaximumRequestBytes, nameof(request));
+        var first = Bounded(request, Kagemusha.MaximumRequestBytes, nameof(request));
         ValidateOne("payment request", first,
             NativeValidatePaymentRequestUnix, NativeValidatePaymentRequestWindows);
     }
 
-    public static void ValidatePaymentShape(ReadOnlySpan<byte> request, ReadOnlySpan<byte> payment)
+    public static void ValidatePaymentShape(
+        ReadOnlySpan<byte> request,
+        ReadOnlySpan<byte> payment)
     {
-        var first = Bounded(request, KagemushaV1.MaximumRequestBytes, nameof(request));
-        var second = Bounded(payment, KagemushaV1.MaximumPaymentBytes, nameof(payment));
+        var first = Bounded(request, Kagemusha.MaximumRequestBytes, nameof(request));
+        var second = Bounded(payment, Kagemusha.MaximumPaymentBytes, nameof(payment));
         ValidateTwo("payment", first, second,
             NativeValidatePaymentUnix, NativeValidatePaymentWindows);
     }
@@ -61,25 +65,33 @@ public static class KagemushaNativeShapeV1
         ReadOnlySpan<byte> payment,
         ReadOnlySpan<byte> acknowledgement)
     {
-        var first = Bounded(request, KagemushaV1.MaximumRequestBytes, nameof(request));
-        var second = Bounded(payment, KagemushaV1.MaximumPaymentBytes, nameof(payment));
-        var third = Bounded(acknowledgement,
-            KagemushaV1.MaximumAcknowledgementBytes, nameof(acknowledgement));
-        ValidateThree("acknowledgement", first, second, third,
+        var buffers = BoundedCompleteExchange(request, payment, acknowledgement);
+        ValidateThree("acknowledgement", buffers[0], buffers[1], buffers[2],
             NativeValidateAcknowledgementUnix, NativeValidateAcknowledgementWindows);
+    }
+
+    /// <summary>Validate the sole exact three-message handoff and its aggregate size contract.</summary>
+    public static void ValidateCompleteExchangeShape(
+        ReadOnlySpan<byte> request,
+        ReadOnlySpan<byte> payment,
+        ReadOnlySpan<byte> acknowledgement)
+    {
+        var buffers = BoundedCompleteExchange(request, payment, acknowledgement);
+        ValidateThree("complete exchange", buffers[0], buffers[1], buffers[2],
+            NativeValidateCompleteExchangeUnix, NativeValidateCompleteExchangeWindows);
     }
 
     public static void ValidateMintAuthorizationShape(ReadOnlySpan<byte> authorization)
     {
         var first = Bounded(authorization,
-            KagemushaV1.MaximumMintAuthorizationBytes, nameof(authorization));
+            Kagemusha.MaximumMintAuthorizationBytes, nameof(authorization));
         ValidateOne("mint authorization", first,
             NativeValidateMintAuthorizationUnix, NativeValidateMintAuthorizationWindows);
     }
 
     public static void ValidateMintCreditShape(ReadOnlySpan<byte> credit)
     {
-        var first = Bounded(credit, KagemushaV1.MaximumMintCreditBytes, nameof(credit));
+        var first = Bounded(credit, Kagemusha.MaximumMintCreditBytes, nameof(credit));
         ValidateOne("mint credit", first,
             NativeValidateMintCreditUnix, NativeValidateMintCreditWindows);
     }
@@ -89,8 +101,8 @@ public static class KagemushaNativeShapeV1
         ReadOnlySpan<byte> credit)
     {
         var first = Bounded(authorization,
-            KagemushaV1.MaximumMintAuthorizationBytes, nameof(authorization));
-        var second = Bounded(credit, KagemushaV1.MaximumMintCreditBytes, nameof(credit));
+            Kagemusha.MaximumMintAuthorizationBytes, nameof(authorization));
+        var second = Bounded(credit, Kagemusha.MaximumMintCreditBytes, nameof(credit));
         ValidateTwo("mint credit against authorization", first, second,
             NativeValidateMintCreditAgainstAuthorizationUnix,
             NativeValidateMintCreditAgainstAuthorizationWindows);
@@ -98,26 +110,72 @@ public static class KagemushaNativeShapeV1
 
     public static void ValidateRedemptionVoucherShape(ReadOnlySpan<byte> voucher)
     {
-        var first = Bounded(voucher, KagemushaV1.MaximumRedemptionVoucherBytes, nameof(voucher));
+        var first = Bounded(voucher, Kagemusha.MaximumRedemptionVoucherBytes, nameof(voucher));
         ValidateOne("redemption voucher", first,
             NativeValidateRedemptionVoucherUnix, NativeValidateRedemptionVoucherWindows);
     }
 
     public static void ValidatePaymentRequestTextShape(string request) =>
-        ValidatePaymentRequestShape(KagemushaV1.DecodeText(KagemushaV1.PayloadKind.PaymentRequest, request));
+        ValidatePaymentRequestShape(Kagemusha.DecodeText(Kagemusha.PayloadKind.PaymentRequest, request));
 
-    public static void ValidatePaymentTextShape(string request, string payment) =>
+    public static void ValidatePaymentTextShape(
+        string request,
+        string payment) =>
         ValidatePaymentShape(
-            KagemushaV1.DecodeText(KagemushaV1.PayloadKind.PaymentRequest, request),
-            KagemushaV1.DecodeText(KagemushaV1.PayloadKind.Payment, payment));
+            Kagemusha.DecodeText(Kagemusha.PayloadKind.PaymentRequest, request),
+            Kagemusha.DecodeText(Kagemusha.PayloadKind.Payment, payment));
 
     public static void ValidateAcknowledgementTextShape(
         string request,
         string payment,
         string acknowledgement) => ValidateAcknowledgementShape(
-            KagemushaV1.DecodeText(KagemushaV1.PayloadKind.PaymentRequest, request),
-            KagemushaV1.DecodeText(KagemushaV1.PayloadKind.Payment, payment),
-            KagemushaV1.DecodeText(KagemushaV1.PayloadKind.Acknowledgement, acknowledgement));
+            Kagemusha.DecodeText(Kagemusha.PayloadKind.PaymentRequest, request),
+            Kagemusha.DecodeText(Kagemusha.PayloadKind.Payment, payment),
+            Kagemusha.DecodeText(Kagemusha.PayloadKind.Acknowledgement, acknowledgement));
+
+    public static void ValidateCompleteExchangeTextShape(
+        string request,
+        string payment,
+        string acknowledgement)
+    {
+        RequireCompleteExchangeTextSize(request, payment, acknowledgement);
+        ValidateCompleteExchangeShape(
+            Kagemusha.DecodeText(Kagemusha.PayloadKind.PaymentRequest, request),
+            Kagemusha.DecodeText(Kagemusha.PayloadKind.Payment, payment),
+            Kagemusha.DecodeText(Kagemusha.PayloadKind.Acknowledgement, acknowledgement));
+    }
+
+    private static byte[][] BoundedCompleteExchange(
+        ReadOnlySpan<byte> request,
+        ReadOnlySpan<byte> payment,
+        ReadOnlySpan<byte> acknowledgement)
+    {
+        byte[][] buffers =
+        [
+            Bounded(request, Kagemusha.MaximumRequestBytes, nameof(request)),
+            Bounded(payment, Kagemusha.MaximumPaymentBytes, nameof(payment)),
+            Bounded(
+                acknowledgement,
+                Kagemusha.MaximumAcknowledgementBytes,
+                nameof(acknowledgement)),
+        ];
+        if (buffers.Sum(static value => value.Length) > Kagemusha.MaximumCompleteExchangeRawBytes)
+            throw new ArgumentException("KAGEMUSHA V1 complete three-message raw exchange is oversized.");
+        return buffers;
+    }
+
+    private static void RequireCompleteExchangeTextSize(
+        string request,
+        string payment,
+        string acknowledgement)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(payment);
+        ArgumentNullException.ThrowIfNull(acknowledgement);
+        if (checked(request.Length + payment.Length + acknowledgement.Length)
+            > Kagemusha.MaximumCompleteExchangeTextBytes)
+            throw new ArgumentException("KAGEMUSHA V1 complete three-message text exchange is oversized.");
+    }
 
     private static byte[] Bounded(ReadOnlySpan<byte> value, int maximum, string name)
     {
@@ -174,7 +232,7 @@ public static class KagemushaNativeShapeV1
     {
         if (status != 0)
             throw new InvalidDataException(
-                $"Native Kagemusha V1 {context} canonical-shape check failed closed (status {status}).");
+                $"Native KAGEMUSHA V1 {context} canonical-shape check failed closed (status {status}).");
     }
 
     private static void EnsureAvailable()
@@ -207,7 +265,7 @@ public static class KagemushaNativeShapeV1
     }
 
     private static InvalidOperationException Unavailable(Exception? inner = null) => new(
-        "ABI-23 connect_norito_bridge with Kagemusha V1 shape symbols is required; no managed fallback exists.",
+        "ABI-23 connect_norito_bridge with KAGEMUSHA V1 shape symbols is required; no managed fallback exists.",
         inner);
 
     private delegate int NativeOneUnix(byte[] first, UIntPtr firstLength);
@@ -230,18 +288,33 @@ public static class KagemushaNativeShapeV1
 
     [DllImport(LibraryName, EntryPoint = "connect_norito_kagemusha_v1_payment_validate", CallingConvention = CallingConvention.Cdecl)]
     private static extern int NativeValidatePaymentUnix(
-        [In] byte[] request, UIntPtr requestLength, [In] byte[] payment, UIntPtr paymentLength);
+        [In] byte[] request, UIntPtr requestLength,
+        [In] byte[] payment, UIntPtr paymentLength);
     [DllImport(LibraryName, EntryPoint = "connect_norito_kagemusha_v1_payment_validate", CallingConvention = CallingConvention.Cdecl)]
     private static extern int NativeValidatePaymentWindows(
-        [In] byte[] request, uint requestLength, [In] byte[] payment, uint paymentLength);
+        [In] byte[] request, uint requestLength,
+        [In] byte[] payment, uint paymentLength);
 
     [DllImport(LibraryName, EntryPoint = "connect_norito_kagemusha_v1_acknowledgement_validate", CallingConvention = CallingConvention.Cdecl)]
     private static extern int NativeValidateAcknowledgementUnix(
-        [In] byte[] request, UIntPtr requestLength, [In] byte[] payment, UIntPtr paymentLength,
+        [In] byte[] request, UIntPtr requestLength,
+        [In] byte[] payment, UIntPtr paymentLength,
         [In] byte[] acknowledgement, UIntPtr acknowledgementLength);
     [DllImport(LibraryName, EntryPoint = "connect_norito_kagemusha_v1_acknowledgement_validate", CallingConvention = CallingConvention.Cdecl)]
     private static extern int NativeValidateAcknowledgementWindows(
-        [In] byte[] request, uint requestLength, [In] byte[] payment, uint paymentLength,
+        [In] byte[] request, uint requestLength,
+        [In] byte[] payment, uint paymentLength,
+        [In] byte[] acknowledgement, uint acknowledgementLength);
+
+    [DllImport(LibraryName, EntryPoint = "connect_norito_kagemusha_v1_complete_exchange_validate", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int NativeValidateCompleteExchangeUnix(
+        [In] byte[] request, UIntPtr requestLength,
+        [In] byte[] payment, UIntPtr paymentLength,
+        [In] byte[] acknowledgement, UIntPtr acknowledgementLength);
+    [DllImport(LibraryName, EntryPoint = "connect_norito_kagemusha_v1_complete_exchange_validate", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int NativeValidateCompleteExchangeWindows(
+        [In] byte[] request, uint requestLength,
+        [In] byte[] payment, uint paymentLength,
         [In] byte[] acknowledgement, uint acknowledgementLength);
 
     [DllImport(LibraryName, EntryPoint = "connect_norito_kagemusha_v1_mint_authorization_validate", CallingConvention = CallingConvention.Cdecl)]

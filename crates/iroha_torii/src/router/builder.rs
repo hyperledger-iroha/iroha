@@ -1114,7 +1114,7 @@ mod tests {
             RouteCatalog::new(kagemusha::ROUTES),
             compiled_route_features(),
         )
-        .expect("Kagemusha catalog is valid");
+        .expect("KAGEMUSHA catalog is valid");
         builder.route(
             &kagemusha::READINESS,
             catalog_get(|| async { StatusCode::NO_CONTENT }),
@@ -1135,7 +1135,7 @@ mod tests {
         );
         let (router, manifest) = builder
             .finish()
-            .expect("app-api routes require and accept the complete Kagemusha family");
+            .expect("app-api routes require and accept the complete KAGEMUSHA family");
         assert_eq!(manifest.explicit_routes(), kagemusha::ROUTES);
         let response = router
             .oneshot(
@@ -1145,7 +1145,7 @@ mod tests {
                     .expect("request"),
             )
             .await
-            .expect("Kagemusha route response");
+            .expect("KAGEMUSHA route response");
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
         assert_eq!(
             RouteCatalog::new(kagemusha::ROUTES)

@@ -9122,8 +9122,7 @@ impl SignatureAggregator for BlsNormalSignatureAggregator {
             }
             if saw_raw && saw_kagemusha {
                 return Err(
-                    "cannot aggregate mixed raw and Kagemusha V1 Commit-vote signatures"
-                        .to_owned(),
+                    "cannot aggregate mixed raw and Kagemusha V1 Commit-vote signatures".to_owned(),
                 );
             }
             let aggregate = iroha_crypto::bls_normal_aggregate_signatures(&bls_signatures)
@@ -9142,14 +9141,13 @@ impl SignatureAggregator for BlsNormalSignatureAggregator {
                     "Kagemusha V1 Commit-vote seal shares bind different messages".to_owned(),
                 );
             }
-            let bundle =
-                iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalitySealBundleV1 {
-                    message: first.message,
-                    seals: kagemusha_shares
-                        .into_iter()
-                        .map(|share| share.seal)
-                        .collect(),
-                };
+            let bundle = iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalitySealBundleV1 {
+                message: first.message,
+                seals: kagemusha_shares
+                    .into_iter()
+                    .map(|share| share.seal)
+                    .collect(),
+            };
             bundle.validate().map_err(|error| error.to_string())?;
             wire::encode_kagemusha_consensus_signature_envelope_v1(
                 wire::KAGEMUSHA_COMMIT_QC_SIGNATURE_ENVELOPE_KIND_V1,

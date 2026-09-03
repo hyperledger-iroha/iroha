@@ -1783,28 +1783,72 @@ export class ToriiClient {
     } = await optionalModulePromise;
     requireKagemushaJsonContentTypeV1(
       this._getHeader(response, "content-type"),
-      "Kagemusha readiness response",
+      "KAGEMUSHA readiness response",
     );
     const payload = await this._readBoundedLosslessIntegerJson(
       response,
       KAGEMUSHA_READINESS_JSON_MAX_BYTES_V1,
-      "Kagemusha readiness response",
+      "KAGEMUSHA readiness response",
       { signal },
     );
     return normalizeKagemushaReadinessV1(payload);
   }
 
-  /** Submit one canonical Kagemusha V1 top-up intent. */
-  async submitKagemushaTopUp(request, options = {}) {
-    return this._submitKagemushaOperationV1("/v1/kagemusha/top-up", "top_up", request, options);
+  /** Submit one payer-signed canonical KAGEMUSHA V1 top-up transaction. */
+  async submitKagemushaTopUp(signedTransaction, operationId, options = {}) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "submitKagemushaTopUp",
+    );
+    assertSupportedOptionKeys(rest, new Set([]), "submitKagemushaTopUp options");
+    if (typeof operationId === "string") {
+      throw new TypeError(
+        "submitKagemushaTopUp operationId must be exact nonzero 32-byte binary data",
+      );
+    }
+    const optional = await loadToriiOptionalModule();
+    const operationIdHex = optional.kagemushaOperationIdHexV1(operationId);
+    if (
+      !ArrayBuffer.isView(signedTransaction) &&
+      !(signedTransaction instanceof ArrayBuffer)
+    ) {
+      throw new TypeError(
+        "submitKagemushaTopUp signedTransaction must be exact binary data",
+      );
+    }
+    const body = encodeCanonicalVersionedSignedTransactionV1(
+      toBuffer(signedTransaction),
+      this._nativeRuntime,
+    );
+    return this._submitKagemushaOperationBodyV1(
+      "/v1/kagemusha/top-up",
+      "top_up",
+      body,
+      operationIdHex,
+      signal,
+      optional,
+    );
   }
 
-  /** Submit one canonical Kagemusha V1 full or partial redemption intent. */
+  /** Submit one canonical KAGEMUSHA V1 full or partial redemption intent. */
   async submitKagemushaRedemption(request, options = {}) {
-    return this._submitKagemushaOperationV1("/v1/kagemusha/redeem", "redemption", request, options);
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "submitKagemushaRedemption",
+    );
+    assertSupportedOptionKeys(rest, new Set([]), "submitKagemushaRedemption options");
+    const optional = await loadToriiOptionalModule();
+    return this._submitKagemushaOperationBodyV1(
+      "/v1/kagemusha/redeem",
+      "redemption",
+      optional.Kagemusha.encodeRedemptionRequest(request),
+      optional.kagemushaOperationIdHexV1(request.operationId),
+      signal,
+      optional,
+    );
   }
 
-  /** Read one Kagemusha V1 operation without exposing an unverified monetary result. */
+  /** Read one KAGEMUSHA V1 operation without exposing an unverified monetary result. */
   async getKagemushaOperation(operationId, options = {}) {
     const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(options, "getKagemushaOperation");
     assertSupportedOptionKeys(rest, new Set([]), "getKagemushaOperation options");
@@ -1816,28 +1860,28 @@ export class ToriiClient {
       redirect: "error",
     });
     await this._expectStatus(response, [200]);
-    optional.requireKagemushaJsonContentTypeV1(this._getHeader(response, "content-type"), "Kagemusha operation response");
+    optional.requireKagemushaJsonContentTypeV1(this._getHeader(response, "content-type"), "KAGEMUSHA operation response");
     const payload = await this._readBoundedLosslessIntegerJson(
       response,
       KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
-      "Kagemusha operation response",
+      "KAGEMUSHA operation response",
       { signal },
     );
     const status = optional.normalizeUnverifiedKagemushaOperationStatusV1(payload);
     if (optional.kagemushaOperationIdHexV1(status.operationId) !== operationIdHex) {
-      throw new TypeError("Kagemusha operation response ID does not match the requested resource");
+      throw new TypeError("KAGEMUSHA operation response ID does not match the requested resource");
     }
     return status;
   }
 
-  async _submitKagemushaOperationV1(path, kind, request, options) {
-    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(options, "submitKagemushaOperation");
-    assertSupportedOptionKeys(rest, new Set([]), "submitKagemushaOperation options");
-    const optional = await loadToriiOptionalModule();
-    const requestBody = kind === "top_up"
-      ? optional.KagemushaV1.encodeTopUpRequest(request)
-      : optional.KagemushaV1.encodeRedemptionRequest(request);
-    const operationIdHex = optional.kagemushaOperationIdHexV1(request.operationId);
+  async _submitKagemushaOperationBodyV1(
+    path,
+    kind,
+    requestBody,
+    operationIdHex,
+    signal,
+    optional,
+  ) {
     const response = await this._request("POST", path, {
       headers: {
         "Content-Type": APPLICATION_NORITO,
@@ -1850,17 +1894,24 @@ export class ToriiClient {
       disableRetries: true,
     });
     await this._expectStatus(response, [200, 202]);
-    optional.requireKagemushaJsonContentTypeV1(this._getHeader(response, "content-type"), "Kagemusha operation response");
+    optional.requireKagemushaJsonContentTypeV1(this._getHeader(response, "content-type"), "KAGEMUSHA operation response");
     const payload = await this._readBoundedLosslessIntegerJson(
       response,
       KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
-      "Kagemusha operation response",
+      "KAGEMUSHA operation response",
       { signal },
     );
     const status = optional.normalizeUnverifiedKagemushaOperationStatusV1(payload);
     if (optional.kagemushaOperationIdHexV1(status.operationId) !== operationIdHex || status.kind !== kind) {
-      throw new TypeError("Kagemusha operation response does not match the submitted request");
+      throw new TypeError("KAGEMUSHA operation response does not match the submitted request");
     }
+    optional.requireKagemushaSubmissionResponseV1({
+      statusCode: responseStatusWithoutUserGetter(response),
+      location: this._getHeader(response, "location"),
+      retryAfter: this._getHeader(response, "retry-after"),
+      operationIdHex,
+      operationState: status.state,
+    });
     return status;
   }
   /**

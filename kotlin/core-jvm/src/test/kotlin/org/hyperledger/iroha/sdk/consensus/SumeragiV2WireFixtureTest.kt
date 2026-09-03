@@ -546,7 +546,7 @@ class SumeragiV2WireFixtureTest {
     }
 
     @Test
-    fun `execution commitments enforce canonical Kagemusha top-up bindings`() {
+    fun `execution commitments enforce canonical KAGEMUSHA top-up bindings`() {
         val responseMessage = fixtureRows().single {
             it.kind == "message" && it.name == "commit_certificate_response"
         }

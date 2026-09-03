@@ -260,7 +260,7 @@ fn bridge_finality_v2_schemas_are_exact_closed_and_bounded() {
     assert_eq!(wire_len.get("minimum").and_then(Value::as_u64), Some(1));
     let topups = contract_property(&schemas, "SumeragiV2ExecutionCommitment", "kagemusha_top_up_count");
     assert_eq!(topups.get("minimum").and_then(Value::as_u64), Some(0));
-    assert!(topups.get("maximum").is_none(), "block bytes, not a special Kagemusha count cap, bound top-ups");
+    assert!(topups.get("maximum").is_none(), "block bytes, not a special KAGEMUSHA count cap, bound top-ups");
     let execution = contract_schema(&schemas, "SumeragiV2ExecutionCommitment");
     assert_eq!(execution.get("oneOf").and_then(Value::as_array).map(Vec::len), Some(2));
     assert_eq!(contract_property(&schemas, "SumeragiV2ExecutionCommitment", "native_amx_application_manifest_version").get("const").and_then(Value::as_u64), Some(u64::from(iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION)));

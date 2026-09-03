@@ -7530,6 +7530,19 @@ fn parse_world(
         PrivateSettlementOutputKeyV1,
         PrivateSettlementOutputRecordV1,
     > = take_required(&mut map, "private_settlement_outputs")?;
+    let private_settlement_recipient_index = Storage::from_iter(
+        crate::private_settlement::global_state::rebuild_private_settlement_recipient_index_v1(
+            &private_settlement_outputs.view(),
+        )
+        .map_err(|error| json::Error::InvalidField {
+            field: "world.private_settlement_outputs".to_owned(),
+            message: error.to_string(),
+        })?,
+    );
+    let private_settlement_staged_locks: Storage<
+        PrivateSettlementStagedLockKeyV1,
+        PrivateSettlementStagedLockRecordV1,
+    > = take_required(&mut map, "private_settlement_staged_locks")?;
     let private_settlement_receipts: Storage<
         Hash,
         iroha_data_model::nexus::PrivateSettlementReceiptV1,
@@ -7544,6 +7557,8 @@ fn parse_world(
         &private_settlement_roots.view(),
         &private_settlement_nullifiers.view(),
         &private_settlement_outputs.view(),
+        &private_settlement_recipient_index.view(),
+        &private_settlement_staged_locks.view(),
         &private_settlement_receipts.view(),
         &private_settlement_aborts.view(),
     )
@@ -7940,6 +7955,8 @@ fn parse_world(
         private_settlement_roots,
         private_settlement_nullifiers,
         private_settlement_outputs,
+        private_settlement_recipient_index,
+        private_settlement_staged_locks,
         private_settlement_receipts,
         private_settlement_aborts,
         privacy_pgc_accounts,
@@ -9109,7 +9126,6 @@ mod decode_tests {
         ChunkerProfileHandle, ManifestAliasBinding, ManifestRootCid,
         ProviderIngestCompletionSignerPolicyV1, ProviderIngestFinalizedAnchorV1,
     };
-
     #[test]
     fn restored_proposal_status_must_match_latest_attempt_exactly() {
         use iroha_data_model::governance::types::GovernanceAttemptStatusV1 as Attempt;
@@ -10143,7 +10159,7 @@ mod decode_tests {
     }
 
     #[test]
-    fn private_settlement_finalized_snapshot_roundtrip_restores_all_seven_maps() {
+    fn private_settlement_finalized_snapshot_roundtrip_restores_all_eight_maps() {
         let world = crate::private_settlement::global_state::tests::finalized_world_fixture();
         let receipt = {
             let receipts = world.private_settlement_receipts.view();
@@ -10177,6 +10193,8 @@ mod decode_tests {
         assert_eq!(restored.private_settlement_roots.view().len(), 4);
         assert_eq!(restored.private_settlement_nullifiers.view().len(), 4);
         assert_eq!(restored.private_settlement_outputs.view().len(), 6);
+        assert_eq!(restored.private_settlement_recipient_index.view().len(), 6);
+        assert_eq!(restored.private_settlement_staged_locks.view().len(), 0);
         assert_eq!(restored.private_settlement_receipts.view().len(), 1);
         assert_eq!(restored.private_settlement_aborts.view().len(), 1);
         assert_eq!(
@@ -10196,7 +10214,94 @@ mod decode_tests {
             encoded,
             "canonical restart must preserve every public settlement byte"
         );
+        assert!(
+            !encoded.contains("private_settlement_recipient_index"),
+            "the deterministically rebuilt recipient index must not alter snapshot schema"
+        );
     }
+
+    #[test]
+    fn private_settlement_prepared_snapshot_roundtrip_restores_exact_lock_rows() {
+        let world = crate::private_settlement::global_state::tests::prepared_world_fixture();
+        let (bundle_id, barrier, row_count) = {
+            let locks = world.private_settlement_staged_locks.view();
+            let (bundle_id, barrier) = locks
+                .iter()
+                .find_map(|(key, record)| match (key, record) {
+                    (
+                        PrivateSettlementStagedLockKeyV1::Bundle(bundle_id),
+                        PrivateSettlementStagedLockRecordV1::Bundle { barrier, .. },
+                    ) => Some((*bundle_id, barrier.clone())),
+                    _ => None,
+                })
+                .expect("prepared fixture bundle lock");
+            (bundle_id, barrier, locks.len())
+        };
+        let encoded = json::to_json(&world).expect("serialize prepared settlement World");
+        let ivm = IVM::new(0);
+        let restored = parse_world(
+            SnapshotJsonMap::parse(&encoded, "world").expect("parse prepared settlement World"),
+            &IvmSeed {
+                ivm: &ivm,
+                _marker: PhantomData,
+            },
+        )
+        .expect("restore prepared settlement lock map");
+        assert_eq!(
+            restored.private_settlement_staged_locks.view().len(),
+            row_count
+        );
+        assert_eq!(
+            restored
+                .view()
+                .private_settlement_prepare_barrier_v1(&bundle_id),
+            Some(&barrier)
+        );
+        assert_eq!(
+            json::to_json(&restored).expect("re-encode prepared settlement World"),
+            encoded,
+            "prepared restart must preserve every staged-lock byte"
+        );
+    }
+
+    #[test]
+    fn private_settlement_snapshot_rejects_recipient_reuse_before_index_rebuild() {
+        let mut world = crate::private_settlement::global_state::tests::finalized_world_fixture();
+        let (first_recipient, second_key, mut second_record) = {
+            let outputs = world.private_settlement_outputs.view();
+            let mut entries = outputs.iter();
+            let (_, first) = entries.next().expect("first finalized output");
+            let (second_key, second) = entries.next().expect("second finalized output");
+            (
+                first.encrypted_output.recipient,
+                *second_key,
+                second.clone(),
+            )
+        };
+        second_record.encrypted_output.recipient = first_recipient;
+        world
+            .private_settlement_outputs
+            .insert(second_key, second_record);
+        let encoded = json::to_json(&world).expect("serialize adversarial settlement World");
+        let ivm = IVM::new(0);
+        let error = match parse_world(
+            SnapshotJsonMap::parse(&encoded, "world").expect("parse adversarial World"),
+            &IvmSeed {
+                ivm: &ivm,
+                _marker: PhantomData,
+            },
+        ) {
+            Ok(_) => panic!("duplicate recipient output must fail before rebuilding the index"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("private-settlement state conflict"),
+            "unexpected duplicate-recipient restore error: {error}"
+        );
+    }
+
     #[test]
     fn first_release_world_decoder_requires_every_canonical_field() {
         let encoded = json::to_json(&World::default()).expect("serialize default World");

@@ -1,181 +1,137 @@
-# Kagemusha V1 formal model
+# KAGEMUSHA V1 formal model
 
-`KagemushaV1.tla` is the finite-state safety oracle for the revised,
-clean-slate aggregate recursive-balance protocol. It intentionally models one
-asset and one pooled reserve. No state or message contains cumulative hops,
-ancestry, origins, receipts, fan-in, transition history, or proof depth.
+`KagemushaV1.tla` is the finite-state safety oracle for the clean-slate
+KAGEMUSHA aggregate-balance protocol. It models one asset, one pooled reserve,
+and exactly three peer messages: `PaymentRequestV1`, `PaymentV1`, and
+`AcknowledgementV1`.
 
-## What the model covers
+The protocol has no hop, note, origin, ancestry, fan-in, receipt-count,
+transition-count, or proof-depth field. Each device lane holds one hidden
+aggregate balance, one replay accumulator root, a hardware epoch, a logical
+sequence, a hardware counter, a nonce, and a public state commitment. Public
+payments and proofs have a fixed shape independent of the length of the state
+history.
 
-- **Qualified hardware admission.** `HardwareQualified` and
-  `NoSoftwareFallback` abstract successful online verification and governance
-  issuance of `HardwareCredentialV1`. Exact-next predecessor locks,
-  one-successor consumption, rollback-resistant sequence/epoch state, durable
-  candidates, reserved retry outboxes, and recoverable terminal commit states
-  model the safety-relevant hardware contract. These assumptions do not claim
-  that TLC can qualify a real secure element.
-- **Recoverable send and redemption.** Both operations move through
-  `Prepared`, `Candidate`, `HardwareCommitted`, `WrapperGenerated`,
-  `Installed`, `Exposed`, and explicit `Recovery` states. Prepare seals the
-  private predecessor, inputs, and randomness. Candidate persistence happens
-  before the monetary hardware commit. Crashes at wrapper generation,
-  canonical installation, and exposure resume the same candidate-bound
-  artifact; they cannot spend the predecessor again or create another
-  successor.
-- **Intent, exact ticket, then payment.** Before ticket issuance, the sender
-  creates one unique `AcceptanceIntent` containing one exact positive amount
-  and a freshly randomized commitment to the private sender opening. A
-  separate proof-bearing `AcceptanceIntentAuthorization` then binds the intent
-  to the sender profile, suite, policy epoch, and release. This gate uses the
-  sender authorization profile, not the receiver ticket profile. Only an
-  authorized intent can receive a ticket. The ticket binds that intent digest
-  and exactly the same amount; payment cannot choose a value from an interval.
-  Its candidate privately opens the committed sender and binds the exact
-  predecessor. The logical exchange is request, intent, sender authorization,
-  exact signed ticket, payment, then acknowledgement.
-- **Pre-debit mint authorization.** `TopUp` requires a verified
-  `MintAuthorization` before it can debit online value. Its exact statement
-  binds recipient account, typed asset incarnation, amount/context,
-  randomized recipient-credential commitment, ID-independent credit
-  commitment, recipient KEM, and release-pinned profile/suite/policy fields.
-  The recursive mint-helper binding carries the same authorization digest and
-  exact credit commitment. Derived credit IDs and ciphertext fields are absent
-  from the authorization preimage, preserving an acyclic pre-ID construction.
-- **Exact reusable requests and atomic capacity.** Every request commits one
-  exact positive amount. Each distinct valid sender intent against that request
-  may receive its own one-use, capacity-backed ticket for exactly that amount;
-  there is no invoice-level amount, payment-count, or request-use ledger.
-  Ticket issuance reserves receiver bytes atomically. Send and redemption
-  preparation also reserve sender outbox bytes. Staging atomically exchanges
-  ticket bytes for staged-inbox bytes. Folding or acknowledgement frees the
-  corresponding physical slot without weakening one-use ticket evidence.
-- **No expiry reclaim.** Observing ticket expiry changes only evidence. It
-  cannot release capacity. A separate
-  authenticated no-commit recovery first enters `RecoveryPending`, preserving
-  both reservations, and may close only while the bound predecessor remains
-  unconsumed and no terminal payment commit exists. Only that closure releases
-  physical capacity; the intent/ticket identity remains permanently closed.
-  Relocation alone has no reclaim transition.
-- **Fixed-shape receive folding.** Every `FoldReceive` consumes exactly one
-  staged credit, proves replay nonmembership against the current root, and
-  installs one exact successor. Wallets drain arbitrary backlogs by repeating
-  this constant-shape transition. The real implementation may store
-  sparse-tree nodes externally while hardware retains the root.
-- **Lifecycle behavior.** Verifier rotation moves the previous active suite to
-  `Retained`; it is never silently discarded. Hardware profile suspension
-  stops new admission and uncommitted hardware commits, but does not gate
-  post-commit recovery, receiver staging/ACK, or online application of a
-  committed redemption. Captured policy epochs remain attached to prepared
-  artifacts across later policy rotation.
-- **Binding and structural privacy.** Candidate, terminal-certificate, and
-  canonical-envelope records bind network/protocol, suite and verifier-key
-  digest, asset identity/incarnation/scale, hardware profile and policy epoch,
-  credential expiry, lane and hardware epoch, operation/request/ticket/credit
-  IDs, and ciphertext digest. The exact public projection contains only the
-  intent commitment, exact intent-bound ticket, ciphertext commitment, opaque
-  terminal commit evidence, proof, and certificate fields. Raw sender,
-  predecessor, deadline/time, lease, counter, lane, hardware epoch, and
-  successor state are private witnesses. ACK durability is abstracted by an
-  opaque credit-ID evidence set; no private ACK epoch, sequence, or time enters
-  the public payment projection.
-- **Self-free terminal construction.** The model fixes the canonical terminal
-  body field order, constructs the body without any certificate ID, hashes that
-  exact body, and only then derives the terminal certificate ID from the body
-  digest. The canonical envelope embeds that resulting certificate.
-- **Global value accounting.** Top-ups move online value into one pooled
-  reserve; live aggregate balances, in-flight credits, and pending redemption
-  vouchers exactly equal that reserve. Applying a terminal-nullifier-protected
-  redemption moves value back online.
+## Modelled protocol
 
-Private intent openings and predecessor records are specification ghosts used
-to check commitment opening and exact-next consumption. They are not public
-`PaymentV1` fields. Public candidates, commit evidence, ACK evidence, and
-canonical envelopes are represented by opaque IDs.
+- `Bootstrap` creates the hardware-bound zero state.
+- `TopUp` atomically moves online value into the pooled reserve and produces a
+  unique, finalized, device-bound mint credit. `MintFold` absorbs that credit
+  into the aggregate state.
+- `SendSplit` consumes the exact current hardware state, subtracts one positive
+  request amount, and always installs a sender successor. A full spend therefore
+  leaves a valid zero-balance successor. The committed amount immediately
+  becomes an irrevocable receiver-bound credit. Proof generation, canonical
+  envelope persistence, and exposure follow the hardware commit; crash recovery
+  retains the committed state and exact outbox bytes.
+- Receiver staging atomically stores the exact canonical payment and its
+  rollback-resistant acknowledgement. Redelivery of the same bytes returns the
+  same acknowledgement. Different bytes under the same credit ID enter only the
+  rejection evidence set.
+- `ReceiveFold` adds one staged credit to the aggregate balance after replay
+  nonmembership, then updates the replay root. Repeating this fixed-shape step
+  drains an arbitrarily large backlog. No amount or count is charged to a
+  request, and no request state is consumed. The sample data deliberately maps
+  two distinct credits to the same request and accepts both.
+- `RedeemSplit` creates a full or partial terminal voucher and a successor
+  state. Application consumes that unique voucher, debits the reserve, and
+  credits the online account atomically.
+- `Rotate` consumes the exact current head and carries the entire balance and
+  replay root into the next hardware epoch without an online checkpoint. The
+  logical sequence and nonce advance while the epoch-local hardware counter
+  restarts.
 
-## Checked invariants
+Every monetary device transition is prepared against one exact head. Commit
+consumes that head once and records exactly one successor. A stale preparation
+cannot commit after another transition advances the lane. Monetary authority
+requires a hardware transition certificate and a recursively verified
+`GuardBundle`; a host-side certificate alone cannot reach a transportable
+payment.
 
-The TLC configuration is configured to check:
+The request binds network, asset, exact positive amount, recipient account and
+lane, recipient encryption key, hardware policy, request ID, and validity
+window. It deliberately contains no receiver balance head or state commitment.
+The validity window is checked only at the sender's trusted hardware commit.
+After that commit, proof recovery, exposure, receiver staging, duplicate
+delivery, folding, and acknowledgement remain valid after expiry.
 
-- reserve, offline-liability, and total-value conservation;
-- durable ACK/inbox relationships and one-use replay/nullifier state;
-- unique intent-to-ticket binding, exact positive ticket/payment amounts, and
-  sender-commitment opening before terminal commit;
-- proof-bearing sender-authority release/profile/suite/policy binding before
-  ticket issue, independently of the receiver profile;
-- pre-debit mint authorization, exact recursive credit-commitment binding, and
-  absence of derived IDs/ciphertext from the authorization preimage;
-- self-free terminal body-to-digest-to-certificate-ID construction;
-- deadline checks only at sender hardware commit;
-- exact reusable request amounts, distinct one-use intent/ticket pairs, and no
-  invoice-level payment-count admission ceiling;
-- expiry observation never reclaiming capacity state, plus
-  authenticated no-commit recovery preserving both until distinct closure;
-- receiver inbox and combined sender outbox byte-reservation bounds;
-- conservation-derived value-foldability of every staged exact-amount credit;
-- singular receive-fold shape with no count-based admission limit;
-- rejection state for a different envelope digest presented with the same
-  credit and acceptance-ticket IDs;
-- uniqueness of exact-next predecessors across committed operations;
-- recovery of hardware-committed sends/redemptions from durable candidates;
-- unconditional stageability/acknowledgeability after sender commit;
-- canonical envelopes only after hardware commit;
-- complete lifecycle bindings, byte-identical artifact identity across every
-  post-commit recovery phase, and the exact public-transcript field boundary;
-- qualified, no-fallback hardware admission; and
-- exactly one active suite while older suites remain retained.
+## Conservation and availability checks
 
-`CommittedPaymentsRemainReceivable` is a safety formulation of the key money
-availability guarantee. An exact-ticket hardware-committed payment is either
-recoverable from its durable candidate, immediately stageable using its
-still-locked ticket, or already durably staged and acknowledged. It deliberately
-does not depend on current free bytes, ticket expiry, current suite, profile
-suspension, or current policy epoch. Expiry cannot send a terminal payment into
-no-commit recovery.
-Once staged, pooled-reserve conservation proves that the credit can enter an
-ordered singleton fold without an amount overflow.
+The model checks:
 
-## Exploration bounds and scope
+- `reserve = total top-ups - total redemptions`;
+- the reserve equals device balances plus finalized mint credits, in-flight peer
+  credits, and unapplied redemption vouchers;
+- online value plus the reserve remains constant;
+- exact-next, one-successor hardware transitions and preparation binding;
+- exact request/receiver binding and commit-time validity;
+- recursively verified hardware authority before exposure;
+- durable staging before acknowledgement, byte-identical duplicate replies,
+  and rejection of conflicting credit bytes;
+- replay nonmembership and monotonic replay-root updates;
+- fold eligibility without request-use or receipt-count admission state;
+- immediate usability of the sender successor regardless of an outstanding
+  retry outbox;
+- finalized mint admission, full and partial redemption, unique terminal
+  vouchers, and reserve-underflow prevention;
+- complete balance/replay preservation across offline hardware rotation; and
+- append-only transition, replay, conflict, duplicate, and acknowledgement
+  evidence plus stable post-commit envelopes.
 
-Every finite constant in `KagemushaV1.cfg`—devices, intent/ticket/credit IDs,
-amounts, byte
-capacities, counters, and epochs—exists only to make TLC exploration finite.
-The four configured intent/ticket/credit pairs all target the same exact
-request, so the sample run explores independent valid payments against one
-request and repeated singular folds. More pairs can be supplied through an
-alternate configuration to explore a larger concurrent or sequential set.
-Their finite count, the configured capacities, and every other TLC constant
-exist only to bound state exploration; none is a protocol limit or an
-authorization rule, and none may be copied into admission logic.
+The finite replay-root value used by TLC is the mathematical set represented by
+the sparse Merkle root. Production public state carries only the constant-size
+root; the exact local replay index may grow with received credits.
 
-The growing evidence sets are specification ghosts for checking prior
-transitions, not protocol history fields. The production design requires
-authenticated compaction/replay accumulators with aggregate commitments and
-constant-size roots, so released physical slots do not require cumulative
-public history. The current in-memory implementation still retains several
-exact maps; durable compaction, restart, paging, and physical-exhaustion
-qualification therefore remain open. Physical storage, fixed integer widths,
-and runtime remain engineering constraints rather than cumulative money-usage
-rules.
+## Proof-gate traces
 
-This is a safety model, not a randomness proof or a proof of cryptographic
-soundness, transcript unlinkability, circuit size, envelope bytes, fairness,
-eventual network delivery, hardware durability, or thermal performance. TLC
-treats the sampled sender commitment and cryptographic evidence as abstract
-opaque values. Real circuits and qualified-hardware acceptance evidence remain
-separate release gates.
+`KagemushaV1ProofGates.tla` provides deterministic positive payment and
+redemption traces. They cover two distinct payments against one request,
+delivery after request expiry, crash/recovery, exact duplicate delivery,
+conflicting delivery rejection, two receive folds, partial redemption, offline
+rotation, a final full redemption, and a zero-balance successor.
 
-Run SANY and TLC against the exact model revision before treating it as release
-evidence. A prior bounded exploration was stopped after more than 90 million
-generated states; that partial run is neither an invariant result nor release
-evidence for this revision.
+The following mutations must produce counterexamples to the named safety
+boundary:
 
-Run from this directory with a local TLA+ installation:
+1. `nonrecursive-payment` — transport authority without recursive guard
+   verification.
+2. `fork` — a second successor from a consumed hardware head.
+3. `ack-before-stage` — acknowledgement before durable staging.
+4. `conflict-accepted` — accepting different bytes under an existing credit ID.
+5. `replay` — folding a credit already present in the replay root.
+6. `expired-commit` — hardware commit outside the request window.
+7. `reserve-accounting` — online redemption credit without reserve debit.
+8. `rotation-loss` — hardware epoch rotation that drops aggregate state.
+
+The repository test runner supplies `Mutation`, replaces `Spec` with
+`HarnessSpec`, retains the complete invariant/property list, and adds
+`HarnessCompletion`. If `TLA2TOOLS_JAR` is not configured, checker-dependent
+tests skip explicitly; source-level hard-cut checks still run.
+
+## Exploration bounds are not protocol limits
+
+Every constant in `KagemushaV1.cfg` exists solely to keep TLC's state graph
+finite: devices, identifiers, amounts, time, epochs, logical sequences, and
+hardware counters. None may be copied into production admission logic. Larger
+alternate configurations extend exploration coverage; they do not extend or
+change the protocol.
+
+This model is a safety abstraction. It does not prove circuit soundness,
+attestation security, cryptographic privacy, sparse-tree implementation,
+canonical Norito bytes, proof/envelope size, physical durability, liveness,
+thermal behavior, or throughput. Those remain independent release gates.
+
+With the checksum-pinned TLA+ jar installed, run:
 
 ```sh
-tlc2.TLC -config KagemushaV1.cfg KagemushaV1.tla
+cd formal/kagemusha_v1
+java -Xmx768m -XX:+UseParallelGC -cp /absolute/path/to/tla2tools.jar \
+  tlc2.TLC -simulate num=500 -depth 80 -seed 923 -workers 1 \
+  -config KagemushaV1.cfg KagemushaV1.tla
 ```
 
-For release evidence, retain the TLA+/TLC version, configuration, state count,
-search depth, invariant results, and source digest. Increase exploration bounds
-through alternate configuration files; never reinterpret those bounds as
-protocol limits.
+For release evidence, retain the checker version, configuration, source
+digests, search strategy, seed, generated/distinct state counts, depth, and
+every invariant/property result. A bounded or partial run is never evidence of
+unbounded execution; history independence comes from the protocol state and
+proof shape, not the size of a TLC configuration.

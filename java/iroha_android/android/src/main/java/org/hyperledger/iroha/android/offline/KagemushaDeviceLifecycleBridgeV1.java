@@ -7,10 +7,10 @@ import java.util.Arrays;
 import java.util.Objects;
 
 /**
- * Java Android facade for the exact Kagemusha V1 secure-device lifecycle bridge.
+ * Java Android facade for the exact KAGEMUSHA V1 secure-device lifecycle bridge.
  *
- * <p>The canonical implementation lives in the default Kotlin Android SDK. This facade preserves
- * the Java migration surface without adding a second codec or backend. Missing native secure
+ * <p>The canonical implementation lives in the default Kotlin Android SDK. This facade exposes
+ * the same contract without adding a second codec or backend. Missing native secure
  * multi-credit-inbox/journal/outbox support is a normal {@link Availability#ONLINE_ONLY} result;
  * no KeyMint-only or software implementation is accepted as a fallback.
  */
@@ -29,9 +29,9 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
    */
   public enum Operation {
     READ_ACTIVE_HARDWARE_CREDENTIAL,
-    PREPARE_ACCEPTANCE_INTENT_AUTHORIZATION,
-    RECOVER_ACCEPTANCE_INTENT_AUTHORIZATION,
-    VERIFY_AUTHORIZATION_RESERVE_INBOX_AND_ISSUE_ACCEPTANCE_TICKET,
+    PREPARE_ACCEPTANCE_INTENT,
+    RECOVER_ACCEPTANCE_INTENT,
+    VALIDATE_INTENT_RESERVE_INBOX_AND_ISSUE_ACCEPTANCE_TICKET,
     RECOVER_ACCEPTANCE_TICKET,
     STAGE_INBOUND_PAYMENT,
     RECOVER_STAGED_INBOUND_PAYMENT,
@@ -39,9 +39,9 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
     PREPARE_EXACT_NEXT_TRANSITION,
     RECOVER_PREPARED_TRANSITION,
     ABANDON_UNCOMMITTED_PREPARED_TRANSITION,
-    COMMIT_VERIFIED_CANDIDATE,
-    RECOVER_TERMINAL_COMMIT_CERTIFICATE,
-    INSTALL_FINAL_COMMIT_WRAPPER,
+    COMMIT_VERIFIED_CANDIDATE_AND_SIGN_TERMINAL,
+    RECOVER_TERMINAL_OUTCOME,
+    INSTALL_TERMINAL_ENVELOPE,
     RECOVER_INSTALLED_ENVELOPE_OR_STATE_PROOF,
     SIGN_RECEIVE_ACKNOWLEDGEMENT,
     RELEASE_OUTBOX_ENTRY,
@@ -49,9 +49,12 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
     PREPARE_MINT_AUTHORIZATION,
     RECOVER_MINT_AUTHORIZATION,
     VERIFY_AUTHORIZATION_AND_STAGE_MINT_CREDIT,
-    FOLD_RECEIVE,
+    FOLD_RECEIVE_BATCH,
     READ_PENDING_CREDIT_WATERMARK,
     ROTATE_HARDWARE_EPOCH,
+    BOOTSTRAP_AGGREGATE_STATE,
+    RECOVER_WALLET_SNAPSHOT,
+    CREATE_SIGNED_PAYMENT_REQUEST,
   }
 
   /** Exact secure-backend capabilities shared with the Kotlin bridge. */
@@ -69,7 +72,7 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
     ATOMIC_VERIFIED_CANDIDATE_COMMIT(1 << 10),
     RECOVERABLE_TERMINAL_COMMIT_CERTIFICATE(1 << 11),
     TRUSTED_TIME_OR_LEASE(1 << 12),
-    KAGEMUSHA_HARDWARE_EPOCH_ROTATION(1 << 13),
+    OFFLINE_HARDWARE_EPOCH_ROTATION(1 << 13),
     ROLLBACK_SAFE_COUNTER_ROLLOVER(1 << 14),
     NO_SOFTWARE_FALLBACK(1 << 15);
 
@@ -118,6 +121,10 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
 
     public byte[] attestationDigest() {
       return attestationDigest.clone();
+    }
+
+    public byte[] qualificationReportDigest() {
+      return attestationDigest();
     }
   }
 
@@ -182,7 +189,7 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
     return source == null ? null : new Capabilities(source);
   }
 
-  /** Execute one bounded canonical Kagemusha V1 command through the qualifying backend. */
+  /** Execute one bounded canonical KAGEMUSHA V1 command through the qualifying backend. */
   public Result execute(
       final Operation operation,
       final byte[] requestId,
@@ -201,6 +208,35 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
     } finally {
       Arrays.fill(requestIdCopy, (byte) 0);
       Arrays.fill(commandCopy, (byte) 0);
+    }
+  }
+
+  /** Execute with the operation-1 bootstrapped response key required for operations 2 through 27. */
+  public Result executeAuthenticated(
+      final Operation operation,
+      final byte[] requestId,
+      final byte[] canonicalCommand,
+      final byte[] acceptedDevicePublicKey) {
+    final Operation requiredOperation = Objects.requireNonNull(operation, "operation");
+    final byte[] requestIdCopy = Objects.requireNonNull(requestId, "requestId").clone();
+    final byte[] commandCopy =
+        Objects.requireNonNull(canonicalCommand, "canonicalCommand").clone();
+    final byte[] publicKeyCopy =
+        acceptedDevicePublicKey == null ? null : acceptedDevicePublicKey.clone();
+    try {
+      return new Result(
+          delegate.executeAuthenticated(
+              org.hyperledger.iroha.sdk.offline.KagemushaDeviceLifecycleBridgeV1.Operation
+                  .valueOf(requiredOperation.name()),
+              requestIdCopy,
+              commandCopy,
+              publicKeyCopy));
+    } finally {
+      Arrays.fill(requestIdCopy, (byte) 0);
+      Arrays.fill(commandCopy, (byte) 0);
+      if (publicKeyCopy != null) {
+        Arrays.fill(publicKeyCopy, (byte) 0);
+      }
     }
   }
 }

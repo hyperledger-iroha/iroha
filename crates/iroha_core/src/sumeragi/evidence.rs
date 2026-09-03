@@ -1308,9 +1308,7 @@ mod tests {
     use crate::state::{State, World};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
-        IntoKeyValue, NetworkId, Registrable,
-        account::Account,
-        asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionId, AssetId},
+        NetworkId,
         block::BlockHeader,
         parameter::{Parameter, Parameters, system::SumeragiNposParameters},
         peer::PeerId,
@@ -1359,18 +1357,27 @@ mod tests {
         params.set_parameter(Parameter::Custom(npos.into_custom_parameter()));
         let mut world = World::default();
         world.parameters = Cell::new(params);
-        test_state_for_v2_fixture_with_world(fixture, world)
+        let mut state = new_test_state_for_v2_fixture_with_world(fixture, world);
+        super::super::penalties::configure_penalty_staking_state_for_tests(&mut state);
+        install_v2_finality_for_fixture(&state, fixture);
+        state
     }
-    fn test_state_for_v2_fixture_with_world(fixture: &V2EvidenceFixture, world: World) -> State {
+    fn new_test_state_for_v2_fixture_with_world(
+        fixture: &V2EvidenceFixture,
+        world: World,
+    ) -> State {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new_with_chain_and_network_id_for_testing(
+        State::new_with_chain_and_network_id_for_testing(
             world,
             kura,
             query,
             ChainId::from("sumeragi-v2-evidence-display-name"),
             fixture.context.network_id,
-        );
+        )
+    }
+    fn test_state_for_v2_fixture_with_world(fixture: &V2EvidenceFixture, world: World) -> State {
+        let state = new_test_state_for_v2_fixture_with_world(fixture, world);
         install_v2_finality_for_fixture(&state, fixture);
         state
     }
@@ -1802,116 +1809,21 @@ mod tests {
         records.commit();
         key
     }
-    fn v2_penalty_staking_ids() -> (AssetDefinitionId, AccountId, AccountId) {
-        let escrow = AccountId::new(
-            KeyPair::try_from_seed(vec![0xC6; 32], Algorithm::Ed25519)
-                .expect("deterministic v2 evidence escrow")
-                .public_key()
-                .clone(),
+    fn add_v2_penalty_validator(state: &State, peer: &PeerId) {
+        super::super::penalties::seed_penalty_validator_for_tests(
+            state,
+            iroha_data_model::nexus::LaneId::SINGLE,
+            peer,
+            iroha_primitives::numeric::Quantity::from(100_u64),
         );
-        let slash_sink = AccountId::new(
-            KeyPair::try_from_seed(vec![0xC7; 32], Algorithm::Ed25519)
-                .expect("deterministic v2 evidence slash sink")
-                .public_key()
-                .clone(),
-        );
-        let asset_definition = AssetDefinitionId::derive_from_components(
-            iroha_data_model::domain::DomainId::try_new("evidence", "universal")
-                .expect("v2 evidence staking domain"),
-            "stake".parse().expect("v2 evidence staking asset name"),
-        );
-        (asset_definition, escrow, slash_sink)
-    }
-    fn add_v2_penalty_validator(state: &mut State, peer: &PeerId) {
-        let validator = iroha_data_model::account::AccountId::new(peer.public_key().clone());
-        let (asset_definition, escrow, slash_sink) = v2_penalty_staking_ids();
-        let stake = iroha_primitives::numeric::Quantity::from(100_u64);
-        let registration_header = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-            b"v2 evidence penalty asset registration",
-        ));
-        let incarnation = iroha_data_model::nexus::AxtAssetIncarnationV1::derive(
-            state.network_id_ref(),
-            &asset_definition,
-            &registration_header,
-            &Hash::new(b"v2 evidence penalty asset registration execution"),
-            0,
-        );
-        {
-            let staking = &mut state.nexus.get_mut().staking;
-            staking.stake_asset_id = asset_definition.to_string();
-            staking.stake_escrow_account_id = escrow.to_string();
-            staking.slash_sink_account_id = slash_sink.to_string();
-        }
-        let mut world_block = state.world.block();
-        {
-            let mut transaction = world_block.transaction_without_telemetry(
-                iroha_config::parameters::actual::LaneConfig::default(),
-                0,
-            );
-            for account_id in [&escrow, &slash_sink, &validator] {
-                let (_, account) = Account::new(account_id.clone())
-                    .build(account_id)
-                    .into_key_value();
-                transaction.accounts.insert(account_id.clone(), account);
-            }
-            let mut definition = AssetDefinition::numeric(
-                asset_definition.clone(),
-                "v2 evidence penalty custody".to_owned(),
-                AssetBalancePolicy::Global,
-                None,
-            )
-            .build(&escrow);
-            definition.total_quantity = stake.clone();
-            transaction.insert_asset_definition_entry(asset_definition.clone(), definition);
-            transaction
-                .axt_asset_incarnations
-                .insert(asset_definition.clone(), incarnation);
-            transaction
-                .asset_or_insert_exact(&AssetId::new(asset_definition, escrow), stake.clone())
-                .expect("install indexed v2 evidence penalty custody");
-            let record = iroha_data_model::nexus::PublicLaneValidatorRecord {
-                lane_id: iroha_data_model::nexus::LaneId::SINGLE,
-                validator: validator.clone(),
-                peer_id: peer.clone(),
-                stake_account: validator.clone(),
-                total_stake: stake.clone(),
-                self_stake: stake.clone(),
-                metadata: iroha_data_model::metadata::Metadata::default(),
-                status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
-                activation_height: 1,
-                deactivation_height: None,
-                last_reward_epoch: None,
-            };
-            transaction.public_lane_validators.insert(
-                (iroha_data_model::nexus::LaneId::SINGLE, validator.clone()),
-                record,
-            );
-            let share = iroha_data_model::nexus::PublicLaneStakeShare {
-                lane_id: iroha_data_model::nexus::LaneId::SINGLE,
-                validator: validator.clone(),
-                staker: validator.clone(),
-                bonded: stake,
-                pending_unbonds: BTreeMap::new(),
-                metadata: iroha_data_model::metadata::Metadata::default(),
-            };
-            transaction.public_lane_stake_shares.insert(
-                (
-                    iroha_data_model::nexus::LaneId::SINGLE,
-                    validator.clone(),
-                    validator,
-                ),
-                share,
-            );
-            transaction.apply();
-        }
-        world_block.commit();
     }
     #[test]
     fn malformed_validator_tenure_cannot_escape_pending_evidence_lien() {
         let fixture = V2EvidenceFixture::new();
         let mut state = test_state_for_v2_fixture(&fixture);
+        super::super::penalties::configure_penalty_staking_state_for_tests(&mut state);
         let offender = fixture.context.roster[1].validator.clone();
-        add_v2_penalty_validator(&mut state, &offender);
+        add_v2_penalty_validator(&state, &offender);
         let evidence = canonical_v2_phase_vote_evidence(&fixture, 0x41, 0x42);
         let evidence_key = v2_evidence_admission_key(&evidence);
         let mut evidence_records = state.world.consensus_evidence.block();
@@ -2169,7 +2081,7 @@ mod tests {
     #[test]
     fn local_retention_rejects_evidence_beyond_the_active_height() {
         let fixture = V2EvidenceFixture::for_height(2);
-        let state = test_state_for_v2_fixture(&fixture);
+        let state = new_test_state_for_v2_fixture_with_world(&fixture, World::default());
         let evidence = canonical_v2_phase_vote_evidence(&fixture, 0x75, 0x76);
 
         assert_eq!(

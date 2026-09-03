@@ -106,6 +106,71 @@ function compactHashSignedTransactionFixture() {
   ).signedTransaction;
 }
 
+test("ToriiBrowserClient preserves payer-signed KAGEMUSHA top-up bytes", async () => {
+  const operationId = Buffer.alloc(32, 0x42);
+  const signedTransaction = compactHashSignedTransactionFixture();
+  let captured = null;
+  const client = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async (url, init) => {
+      captured = { url: String(url), init };
+      return jsonResponse(
+        {
+          version: 1,
+          operation_id: [...operationId],
+          kind: { kind: "top_up", value: null },
+          state: { state: "pending", value: null },
+          result: null,
+          rejection: null,
+        },
+        {
+          status: 202,
+          headers: {
+            location: `/v1/kagemusha/operations/${operationId.toString("hex")}`,
+            "retry-after": "1",
+          },
+        },
+      );
+    },
+  });
+
+  const status = await client.submitKagemushaTopUp(
+    signedTransaction,
+    operationId,
+  );
+
+  assert.equal(captured?.url, "https://torii.example/v1/kagemusha/top-up");
+  assert.equal(captured?.init?.method, "POST");
+  assert.equal(captured?.init?.redirect, "error");
+  assert.equal(captured?.init?.headers["Content-Type"], "application/x-norito");
+  assert.equal(captured?.init?.headers["Idempotency-Key"], operationId.toString("hex"));
+  assert.deepEqual(Buffer.from(captured?.init?.body), signedTransaction);
+  assert.equal(status.kind, "top_up");
+  assert.equal(status.state, "pending");
+
+  assert.throws(
+    () => client.submitKagemushaTopUp(signedTransaction, operationId.toString("hex")),
+    /operationId must be exact nonzero 32-byte binary data/u,
+  );
+
+  const missingHeaders = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async () => jsonResponse(
+      {
+        version: 1,
+        operation_id: [...operationId],
+        kind: { kind: "top_up", value: null },
+        state: { state: "pending", value: null },
+        result: null,
+        rejection: null,
+      },
+      { status: 202 },
+    ),
+  });
+  await assert.rejects(
+    () => missingHeaders.submitKagemushaTopUp(signedTransaction, operationId),
+    /Location/u,
+  );
+});
+
 function blockProofResponseFixture() {
   const u64 = (value) => {
     const bytes = Buffer.alloc(8);

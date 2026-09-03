@@ -49,9 +49,10 @@ fn java_native_private_settlement_committee_proof_response_verify_v1(
     })
 }
 
-fn java_native_private_settlement_auditor_capsule_response_verify_v1(
+fn java_native_private_settlement_auditor_capsule_response_verify_with_request_v1(
     env: &mut jni::JNIEnv<'_>,
     response_json: jni::objects::JByteArray<'_>,
+    request_json: jni::objects::JByteArray<'_>,
     expected_network_id: jni::objects::JByteArray<'_>,
     requested_payload_digest: jni::objects::JByteArray<'_>,
     auditor_public_key_utf8: jni::objects::JByteArray<'_>,
@@ -61,18 +62,26 @@ fn java_native_private_settlement_auditor_capsule_response_verify_v1(
         &response_json,
         CONNECT_NORITO_PRIVATE_SETTLEMENT_RESPONSE_MAX_BYTES_V1,
     );
+    let request = read_java_private_settlement_bytes(
+        env,
+        &request_json,
+        CONNECT_NORITO_PRIVATE_SETTLEMENT_REQUEST_MAX_BYTES_V1,
+    );
     let network = read_java_private_settlement_bytes(env, &expected_network_id, 32);
     let payload = read_java_private_settlement_bytes(env, &requested_payload_digest, 32);
     let auditor_key = read_java_private_settlement_bytes(env, &auditor_public_key_utf8, 1024);
     java_private_settlement_status(|| {
         let response = response?;
+        let request = request?;
         let network = network?;
         let payload = payload?;
         let auditor_key = auditor_key?;
         Some(unsafe {
-            connect_norito_private_settlement_auditor_capsule_response_verify_v1(
+            connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1(
                 response.as_ptr(),
                 response.len() as libc::c_ulong,
+                request.as_ptr(),
+                request.len() as libc::c_ulong,
                 network.as_ptr(),
                 network.len() as libc::c_ulong,
                 payload.as_ptr(),
@@ -155,20 +164,23 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AtomicPrivat
         requested_payload_digest,
     )
 }
-android: fn Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseV1();
+android: fn Java_org_hyperledger_iroha_android_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseWithRequestV1();
 sdk:
+#[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseV1(
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_AtomicPrivateSettlementNativeResponseVerifierV1_nativeVerifyAuditorCapsuleResponseWithRequestV1(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
     response_json: jni::objects::JByteArray<'_>,
+    request_json: jni::objects::JByteArray<'_>,
     expected_network_id: jni::objects::JByteArray<'_>,
     requested_payload_digest: jni::objects::JByteArray<'_>,
     auditor_public_key_utf8: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jint {
-    java_native_private_settlement_auditor_capsule_response_verify_v1(
+    java_native_private_settlement_auditor_capsule_response_verify_with_request_v1(
         &mut env,
         response_json,
+        request_json,
         expected_network_id,
         requested_payload_digest,
         auditor_public_key_utf8,

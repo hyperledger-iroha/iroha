@@ -37,6 +37,7 @@ tungstenite = { workspace = true }
 futures-util = { version = "0.3.31" }
 anyhow = "1.0.103"
 hex = { workspace = true }
+iroha_data_model = { workspace = true, default-features = false, features = ["governance", "json", "test-fixtures"] }
 
 [features]
 default = []

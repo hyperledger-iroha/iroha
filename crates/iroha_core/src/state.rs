@@ -8,8 +8,10 @@ use crate::private_settlement::{
         PrivateSettlementGlobalStateOutcomeV1, PrivateSettlementNullifierKeyV1,
         PrivateSettlementOutputKeyV1, PrivateSettlementOutputRecordV1, PrivateSettlementPoolKeyV1,
         PrivateSettlementRootKeyV1, PrivateSettlementRootProvenanceV1,
-        plan_private_settlement_abort_v1, plan_private_settlement_pool_bootstrap_v1,
-        plan_private_settlement_pool_rotation_v1, plan_private_settlement_receipt_v1,
+        PrivateSettlementStagedLockKeyV1, PrivateSettlementStagedLockRecordV1,
+        expired_private_settlement_staged_lock_keys_v1, plan_private_settlement_abort_v1,
+        plan_private_settlement_pool_bootstrap_v1, plan_private_settlement_pool_rotation_v1,
+        plan_private_settlement_prepare_locks_v1, plan_private_settlement_receipt_v1,
         validate_private_settlement_persisted_state_v1,
     },
     protocol::validate_private_settlement_committee_authority_v1,
@@ -1258,6 +1260,8 @@ macro_rules! with_world_overlay_fields {
             private_settlement_roots,
             private_settlement_nullifiers,
             private_settlement_outputs,
+            private_settlement_recipient_index,
+            private_settlement_staged_locks,
             private_settlement_receipts,
             private_settlement_aborts,
             ]
@@ -4593,6 +4597,15 @@ pub struct World {
     /// Fixed-shape encrypted private-settlement outputs.
     pub(crate) private_settlement_outputs:
         Storage<PrivateSettlementOutputKeyV1, PrivateSettlementOutputRecordV1>,
+    /// Derived global index enforcing one-time recipient/view keys across settlements.
+    #[norito(skip)]
+    pub(crate) private_settlement_recipient_index: Storage<
+        iroha_data_model::privacy::PrivacyRecipientIdV1,
+        PrivateSettlementFinalizationReferenceV1,
+    >,
+    /// Globally replicated complete-bundle and resource Prepare locks.
+    pub(crate) private_settlement_staged_locks:
+        Storage<PrivateSettlementStagedLockKeyV1, PrivateSettlementStagedLockRecordV1>,
     /// Public finalized private-settlement receipts keyed by opaque bundle id.
     pub(crate) private_settlement_receipts:
         Storage<Hash, iroha_data_model::nexus::PrivateSettlementReceiptV1>,
@@ -4877,11 +4890,10 @@ pub struct World {
     pub(crate) repo_agreements_by_custodian: Storage<AccountId, BTreeSet<RepoAgreementId>>,
     /// Successful settlement receipts keyed by their one-shot identifier.
     pub(crate) settlement_receipts: Storage<SettlementId, SettlementReceipt>,
-    /// Pooled Kagemusha V1 reserve totals keyed by network and asset.
+    /// Pooled KAGEMUSHA V1 reserve totals keyed by network, asset, and exact incarnation.
     pub(crate) kagemusha_reserve_pools: Storage<[u8; 32], KagemushaReservePoolV1>,
     /// Idempotent Kagemusha V1 operation records keyed by operation id.
-    pub(crate) kagemusha_reserve_operations:
-        Storage<[u8; 32], KagemushaReserveOperationRecordV1>,
+    pub(crate) kagemusha_reserve_operations: Storage<[u8; 32], KagemushaReserveOperationRecordV1>,
     /// One-to-one index from mint credit id to top-up operation id.
     pub(crate) kagemusha_mint_credit_operations: Storage<[u8; 32], [u8; 32]>,
     /// One-to-one index from issuance commitment to top-up operation id.
@@ -5341,6 +5353,16 @@ pub struct WorldBlock<'world> {
     /// Encrypted private-settlement outputs.
     pub(crate) private_settlement_outputs:
         StorageBlock<'world, PrivateSettlementOutputKeyV1, PrivateSettlementOutputRecordV1>,
+    /// Derived one-time private-settlement recipient index.
+    #[norito(skip)]
+    pub(crate) private_settlement_recipient_index: StorageBlock<
+        'world,
+        iroha_data_model::privacy::PrivacyRecipientIdV1,
+        PrivateSettlementFinalizationReferenceV1,
+    >,
+    /// Globally replicated complete-bundle and resource Prepare locks.
+    pub(crate) private_settlement_staged_locks:
+        StorageBlock<'world, PrivateSettlementStagedLockKeyV1, PrivateSettlementStagedLockRecordV1>,
     /// Public finalized private-settlement receipts.
     pub(crate) private_settlement_receipts:
         StorageBlock<'world, Hash, iroha_data_model::nexus::PrivateSettlementReceiptV1>,
@@ -5943,6 +5965,10 @@ impl WorldBlock<'_> {
             PrivateSettlementNullifier
         );
         collect_reverts!(self.private_settlement_outputs, PrivateSettlementOutput);
+        collect_reverts!(
+            self.private_settlement_staged_locks,
+            PrivateSettlementStagedLock
+        );
         collect_reverts!(self.private_settlement_receipts, PrivateSettlementReceipt);
         collect_reverts!(self.private_settlement_aborts, PrivateSettlementAbort);
         collect_reverts!(self.privacy_pgc_accounts, PrivacyPgcAccount);
@@ -5981,10 +6007,7 @@ impl WorldBlock<'_> {
         collect_reverts!(self.global_beacon_latest_pulse, GlobalBeaconLatestPulse);
         collect_reverts!(self.global_beacon_pulses, GlobalBeaconPulse);
         collect_reverts!(self.kagemusha_reserve_pools, KagemushaReservePool);
-        collect_reverts!(
-            self.kagemusha_reserve_operations,
-            KagemushaReserveOperation
-        );
+        collect_reverts!(self.kagemusha_reserve_operations, KagemushaReserveOperation);
         collect_reverts!(
             self.kagemusha_mint_credit_operations,
             KagemushaMintCreditOperation
@@ -6066,6 +6089,10 @@ impl WorldBlock<'_> {
             PrivateSettlementNullifier
         );
         collect_payload!(self.private_settlement_outputs, PrivateSettlementOutput);
+        collect_payload!(
+            self.private_settlement_staged_locks,
+            PrivateSettlementStagedLock
+        );
         collect_payload!(self.private_settlement_receipts, PrivateSettlementReceipt);
         collect_payload!(self.private_settlement_aborts, PrivateSettlementAbort);
         collect_payload!(self.privacy_pgc_accounts, PrivacyPgcAccount);
@@ -6104,10 +6131,7 @@ impl WorldBlock<'_> {
         collect_payload!(self.global_beacon_latest_pulse, GlobalBeaconLatestPulse);
         collect_payload!(self.global_beacon_pulses, GlobalBeaconPulse);
         collect_payload!(self.kagemusha_reserve_pools, KagemushaReservePool);
-        collect_payload!(
-            self.kagemusha_reserve_operations,
-            KagemushaReserveOperation
-        );
+        collect_payload!(self.kagemusha_reserve_operations, KagemushaReserveOperation);
         collect_payload!(
             self.kagemusha_mint_credit_operations,
             KagemushaMintCreditOperation
@@ -6274,6 +6298,8 @@ impl WorldBlock<'_> {
             private_settlement_roots,
             private_settlement_nullifiers,
             private_settlement_outputs,
+            private_settlement_recipient_index,
+            private_settlement_staged_locks,
             private_settlement_receipts,
             private_settlement_aborts,
             privacy_pgc_accounts,
@@ -6785,6 +6811,20 @@ pub struct WorldTransaction<'block, 'world> {
         'world,
         PrivateSettlementOutputKeyV1,
         PrivateSettlementOutputRecordV1,
+    >,
+    /// Derived one-time private-settlement recipient index.
+    pub(crate) private_settlement_recipient_index: StorageTransaction<
+        'block,
+        'world,
+        iroha_data_model::privacy::PrivacyRecipientIdV1,
+        PrivateSettlementFinalizationReferenceV1,
+    >,
+    /// Globally replicated complete-bundle and resource Prepare locks.
+    pub(crate) private_settlement_staged_locks: StorageTransaction<
+        'block,
+        'world,
+        PrivateSettlementStagedLockKeyV1,
+        PrivateSettlementStagedLockRecordV1,
     >,
     /// Public finalized private-settlement receipts.
     pub(crate) private_settlement_receipts: StorageTransaction<
@@ -8944,6 +8984,15 @@ pub struct WorldView<'world> {
     /// Encrypted private-settlement output view.
     pub(crate) private_settlement_outputs:
         StorageView<'world, PrivateSettlementOutputKeyV1, PrivateSettlementOutputRecordV1>,
+    /// Derived one-time private-settlement recipient index view.
+    pub(crate) private_settlement_recipient_index: StorageView<
+        'world,
+        iroha_data_model::privacy::PrivacyRecipientIdV1,
+        PrivateSettlementFinalizationReferenceV1,
+    >,
+    /// Globally replicated complete-bundle and resource Prepare-lock view.
+    pub(crate) private_settlement_staged_locks:
+        StorageView<'world, PrivateSettlementStagedLockKeyV1, PrivateSettlementStagedLockRecordV1>,
     /// Public finalized private-settlement receipt view.
     pub(crate) private_settlement_receipts:
         StorageView<'world, Hash, iroha_data_model::nexus::PrivateSettlementReceiptV1>,
@@ -9358,7 +9407,7 @@ pub struct PrivateSettlementLedgerMapCountsV1 {
 }
 
 /// Evidence-only commitment to every globally replicated private-settlement
-/// map and its exact public count vector.
+/// financial/terminal map and its exact public count vector.
 ///
 /// The digest is intended only for test-network atomicity observations. It is
 /// not a production privacy API and is unavailable unless the dedicated
@@ -9372,9 +9421,39 @@ pub struct PrivateSettlementLedgerEvidenceV1 {
     pub counts: PrivateSettlementLedgerMapCountsV1,
 }
 
+/// Evidence-only commitment to the globally replicated all-Prepare lock map.
+///
+/// This is intentionally separate from [`PrivateSettlementLedgerEvidenceV1`]:
+/// registering a Prepare barrier changes control-plane state but must not look
+/// like a partially applied financial settlement.
+#[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrivateSettlementReplicatedStagedLockEvidenceV1 {
+    /// Domain-separated commitment to the canonical staged-lock map and count.
+    pub commitment: Hash,
+    /// Bundle and opaque resource-index rows in the replicated lock map.
+    pub count: u64,
+}
+
 #[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
 const PRIVATE_SETTLEMENT_LEDGER_EVIDENCE_DOMAIN_V1: &[u8] =
     b"iroha:test-network:private-settlement:ledger-evidence:v1\0";
+
+#[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
+const PRIVATE_SETTLEMENT_REPLICATED_STAGED_LOCK_EVIDENCE_DOMAIN_V1: &[u8] =
+    b"iroha:test-network:private-settlement:replicated-staged-lock-evidence:v1\0";
+
+#[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
+fn private_settlement_replicated_staged_lock_commitment_v1(
+    canonical_map: &[u8],
+    count: u64,
+) -> Hash {
+    Hash::new_from_chunks(&[
+        PRIVATE_SETTLEMENT_REPLICATED_STAGED_LOCK_EVIDENCE_DOMAIN_V1,
+        &count.to_le_bytes(),
+        canonical_map,
+    ])
+}
 
 #[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
 fn private_settlement_ledger_evidence_commitment_v1(
@@ -9406,8 +9485,8 @@ fn private_settlement_ledger_evidence_commitment_v1(
 }
 
 impl WorldView<'_> {
-    /// Commit every globally replicated private-settlement map for a
-    /// test-network atomicity observation.
+    /// Commit every globally replicated private-settlement financial/terminal
+    /// map for a test-network atomicity observation.
     ///
     /// # Errors
     ///
@@ -9497,6 +9576,34 @@ impl WorldView<'_> {
         Ok(PrivateSettlementLedgerEvidenceV1 { commitment, counts })
     }
 
+    /// Commit the globally replicated all-Prepare lock map for a test-network
+    /// atomicity observation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error only if canonical Norito encoding fails. Shipping
+    /// builds do not compile this method.
+    #[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
+    pub fn private_settlement_replicated_staged_lock_evidence_v1(
+        &self,
+    ) -> Result<PrivateSettlementReplicatedStagedLockEvidenceV1, norito::Error> {
+        let staged_locks: Vec<_> = self
+            .private_settlement_staged_locks
+            .iter()
+            .map(|(key, value)| (*key, value.clone()))
+            .collect();
+        let canonical_map = norito::encode_canonical(&staged_locks)?;
+        let count = u64::try_from(staged_locks.len())
+            .expect("private-settlement replicated staged-lock map length fits u64");
+        Ok(PrivateSettlementReplicatedStagedLockEvidenceV1 {
+            commitment: private_settlement_replicated_staged_lock_commitment_v1(
+                &canonical_map,
+                count,
+            ),
+            count,
+        })
+    }
+
     /// Read one public private-settlement receipt by opaque bundle id.
     #[must_use]
     pub fn private_settlement_receipt_v1(
@@ -9513,6 +9620,21 @@ impl WorldView<'_> {
         bundle_id: &Hash,
     ) -> Option<&iroha_data_model::nexus::PrivateSettlementAbortReceiptV1> {
         self.private_settlement_aborts.get(bundle_id)
+    }
+
+    /// Read the exact public all-Prepare barrier currently registered for a bundle.
+    #[must_use]
+    pub fn private_settlement_prepare_barrier_v1(
+        &self,
+        bundle_id: &Hash,
+    ) -> Option<&iroha_data_model::nexus::PrivateSettlementPrepareBarrierV1> {
+        match self
+            .private_settlement_staged_locks
+            .get(&PrivateSettlementStagedLockKeyV1::Bundle(*bundle_id))?
+        {
+            PrivateSettlementStagedLockRecordV1::Bundle { barrier, .. } => Some(barrier),
+            PrivateSettlementStagedLockRecordV1::Resource { .. } => None,
+        }
     }
 
     /// Read only the opaque pool epoch and current root.
@@ -9560,8 +9682,8 @@ mod private_settlement_ledger_evidence_tests {
             nullifiers: 4,
             commitments: 5,
             encrypted_outputs: 5,
-            replay_markers: 7,
-            receipts: 6,
+            replay_markers: 8,
+            receipts: 7,
             abort_markers: 1,
         }
     }
@@ -9617,6 +9739,19 @@ mod private_settlement_ledger_evidence_tests {
                 "count field {index} was not bound"
             );
         }
+    }
+
+    #[test]
+    fn replicated_staged_lock_commitment_is_separate_and_binds_map_and_count() {
+        let empty = private_settlement_replicated_staged_lock_commitment_v1(&[0], 0);
+        assert_ne!(
+            empty,
+            private_settlement_replicated_staged_lock_commitment_v1(&[1], 0)
+        );
+        assert_ne!(
+            empty,
+            private_settlement_replicated_staged_lock_commitment_v1(&[0], 1)
+        );
     }
 }
 
@@ -21757,6 +21892,8 @@ impl<'world> WorldBlock<'world> {
             private_settlement_roots,
             private_settlement_nullifiers,
             private_settlement_outputs,
+            private_settlement_recipient_index,
+            private_settlement_staged_locks,
             private_settlement_receipts,
             private_settlement_aborts,
             privacy_pgc_accounts,
@@ -21932,6 +22069,8 @@ impl<'world> WorldBlock<'world> {
         private_settlement_roots.commit();
         private_settlement_nullifiers.commit();
         private_settlement_outputs.commit();
+        private_settlement_recipient_index.commit();
+        private_settlement_staged_locks.commit();
         private_settlement_receipts.commit();
         private_settlement_aborts.commit();
         privacy_pgc_accounts.commit();
@@ -24430,6 +24569,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             private_settlement_roots,
             private_settlement_nullifiers,
             private_settlement_outputs,
+            private_settlement_recipient_index,
+            private_settlement_staged_locks,
             private_settlement_receipts,
             private_settlement_aborts,
             privacy_pgc_accounts,
@@ -24616,6 +24757,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         private_settlement_roots.apply();
         private_settlement_nullifiers.apply();
         private_settlement_outputs.apply();
+        private_settlement_recipient_index.apply();
+        private_settlement_staged_locks.apply();
         private_settlement_receipts.apply();
         private_settlement_aborts.apply();
         privacy_pgc_accounts.apply();
@@ -27384,6 +27527,8 @@ impl State {
             &world.private_settlement_roots.view(),
             &world.private_settlement_nullifiers.view(),
             &world.private_settlement_outputs.view(),
+            &world.private_settlement_recipient_index.view(),
+            &world.private_settlement_staged_locks.view(),
             &world.private_settlement_receipts.view(),
             &world.private_settlement_aborts.view(),
         )
@@ -28712,6 +28857,31 @@ impl State {
         sb.activate_due_public_lane_validators(current_epoch);
         // Height-trigger: open/close referenda at scheduled heights
         let now_h = sb._curr_block.height().get();
+        if sb
+            .world
+            .private_settlement_staged_locks
+            .iter()
+            .any(|(key, record)| {
+                matches!(
+                    (key, record),
+                    (
+                        PrivateSettlementStagedLockKeyV1::Bundle(bundle_id),
+                        PrivateSettlementStagedLockRecordV1::Bundle { barrier, .. },
+                    ) if bundle_id == &barrier.manifest.bundle_id
+                        && barrier.manifest.expiry_height < now_h
+                )
+            })
+        {
+            let mut expiry = sb.transaction();
+            expiry
+                .reconcile_expired_private_settlement_staged_locks_v1()
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "persisted private-settlement staged locks are invalid at block-start height {now_h}: {error}"
+                    )
+                });
+            expiry.apply();
+        }
         if let Some((enact_at_height, attempts)) =
             sb.world.parliament_certified_enactments.iter().next()
             && *enact_at_height < now_h
@@ -30308,9 +30478,7 @@ impl State {
                 gov: self.gov.clone(),
                 content: self.content.clone(),
                 settlement: self.settlement.clone(),
-                kagemusha_v1_runtime_verifier: Arc::clone(
-                    &self.kagemusha_v1_runtime_verifier,
-                ),
+                kagemusha_v1_runtime_verifier: Arc::clone(&self.kagemusha_v1_runtime_verifier),
                 settlement_engine: self.settlement_engine.clone(),
                 chain_id: self.chain_id.clone(),
                 network_id: self.network_id,
@@ -32684,6 +32852,74 @@ impl State {
         state_block.stage_merge_execution_nexus_fee_settlement(&executions)?;
         Ok(executions)
     }
+    /// Resolve one execution-capable autonomous source without conflating a
+    /// canonical global replica with lane-committee lifecycle custody.
+    ///
+    /// Committee members retain the existing certified/input/bundle corridor.
+    /// A global validator outside that committee may instead use the separate
+    /// canonical-replica namespace, whose Kura reader rederives the record from
+    /// exact verified global finality. The committed epoch schedule is checked
+    /// after the replica reveals its certified proposal height.
+    fn durable_autonomous_merge_source_for_lane_slot(
+        &self,
+        world: &impl WorldReadOnly,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        frozen_mode: ConsensusMode,
+    ) -> Result<Option<crate::kura::DurableAutonomousLaneMergeSource>, String> {
+        if let Some(certified) = self
+            .kura
+            .read_certified_lane_block_artifact(lane_id, lane_block_height)
+        {
+            let expected_epoch = crate::sumeragi::epoch_for_height_from_world(
+                world,
+                certified.proposal.descriptor.proposal_height,
+                frozen_mode,
+            )
+            .map_err(|error| error.to_string())?;
+            let source = self
+                .kura
+                .durable_autonomous_lane_merge_source(
+                    lane_id,
+                    lane_block_height,
+                    self.network_id,
+                    expected_epoch,
+                )
+                .map_err(str::to_owned)?;
+            if source.bundle.certified != certified {
+                return Err(
+                    "durable autonomous merge source changed during exact slot selection"
+                        .to_owned(),
+                );
+            }
+            return Ok(Some(source));
+        }
+        let Some(source) = self
+            .kura
+            .durable_canonical_autonomous_lane_replica_for_network(
+                lane_id,
+                lane_block_height,
+                self.network_id,
+            )
+            .map_err(|error| error.to_string())?
+        else {
+            return Ok(None);
+        };
+        let payload = source.bundle.executable_payload();
+        let expected_epoch = crate::sumeragi::epoch_for_height_from_world(
+            world,
+            source.bundle.certified.proposal.descriptor.proposal_height,
+            frozen_mode,
+        )
+        .map_err(|error| error.to_string())?;
+        if payload.network_id != self.network_id || payload.epoch != expected_epoch {
+            return Err(
+                "canonical autonomous replica differs from the committed network or epoch"
+                    .to_owned(),
+            );
+        }
+        Ok(Some(source))
+    }
     #[cfg(test)]
     fn canonical_merge_execution_sources(
         &self,
@@ -32706,7 +32942,6 @@ impl State {
         if nexus.lane_catalog.lanes().len() > MAX_ACTIVE_EXECUTION_LANES {
             return None;
         }
-        let network_id = self.network_id;
         let world = self.world.view();
         let mut sources = Vec::new();
         for lane in nexus.lane_catalog.lanes() {
@@ -32728,25 +32963,43 @@ impl State {
                 }
             };
             let expected_height = frontier.0.checked_add(1)?;
-            let certified = self
-                .kura
-                .read_certified_lane_block_artifact(lane.id, expected_height)
-                .filter(|artifact| {
-                    let descriptor = &artifact.proposal.descriptor;
-                    descriptor.lane_id == lane.id
-                        && descriptor.dataspace_id == lane.dataspace_id
-                        && descriptor.lane_incarnation == incarnation
-                        && lifecycle.lane_route_and_incarnation_matches(
-                            lane.id,
-                            lane.dataspace_id,
-                            descriptor.proposal_height,
-                            descriptor.lane_incarnation,
-                        )
-                });
-            let Some(certified) = certified else {
-                continue;
+            let durable_source = match self.durable_autonomous_merge_source_for_lane_slot(
+                &world,
+                lane.id,
+                expected_height,
+                frozen_mode,
+            ) {
+                Ok(Some(source)) => source,
+                Ok(None) => continue,
+                Err(message) => {
+                    warn!(
+                        lane = %lane.id.as_u32(),
+                        lane_block_height = expected_height,
+                        message,
+                        "certified lane block is missing its complete durable merge source"
+                    );
+                    return None;
+                }
             };
+            let certified = &durable_source.bundle.certified;
             let descriptor = &certified.proposal.descriptor;
+            if descriptor.lane_id != lane.id
+                || descriptor.dataspace_id != lane.dataspace_id
+                || descriptor.lane_incarnation != incarnation
+                || !lifecycle.lane_route_and_incarnation_matches(
+                    lane.id,
+                    lane.dataspace_id,
+                    descriptor.proposal_height,
+                    descriptor.lane_incarnation,
+                )
+            {
+                warn!(
+                    lane = %lane.id.as_u32(),
+                    lane_block_height = expected_height,
+                    "durable autonomous source differs from the active lane generation"
+                );
+                return None;
+            }
             if let Err(err) =
                 Self::validate_merge_execution_predecessor_against_frontier(&world, descriptor)
             {
@@ -32780,47 +33033,6 @@ impl State {
                 );
                 return None;
             }
-            let expected_epoch = match crate::sumeragi::epoch_for_height_from_world(
-                &world,
-                descriptor.proposal_height,
-                frozen_mode,
-            ) {
-                Ok(epoch) => epoch,
-                Err(error) => {
-                    warn!(
-                        lane = %lane.id.as_u32(),
-                        lane_block_height = expected_height,
-                        %error,
-                        "deferring merge source selection because the committed epoch schedule is invalid"
-                    );
-                    return None;
-                }
-            };
-            let durable_source = match self.kura.durable_autonomous_lane_merge_source(
-                lane.id,
-                expected_height,
-                network_id,
-                expected_epoch,
-            ) {
-                Ok(source) if source.bundle.certified == certified => source,
-                Ok(_) => {
-                    warn!(
-                        lane = %lane.id.as_u32(),
-                        lane_block_height = expected_height,
-                        "durable autonomous merge source changed during certified source selection"
-                    );
-                    return None;
-                }
-                Err(message) => {
-                    warn!(
-                        lane = %lane.id.as_u32(),
-                        lane_block_height = expected_height,
-                        message,
-                        "certified lane block is missing its complete durable merge source"
-                    );
-                    return None;
-                }
-            };
             sources.push(MergeExecutionSource::from_durable(durable_source));
         }
         sources
@@ -32841,7 +33053,6 @@ impl State {
         let consensus = self.merge_consensus_snapshot();
         let lifecycle = &consensus.lifecycle;
         let nexus = &lifecycle.nexus;
-        let network_id = self.network_id;
         let world = self.world.view();
         for lane in nexus.lane_catalog.lanes() {
             let Some(incarnation) = lifecycle.incarnations.get(&lane.id).copied() else {
@@ -32858,49 +33069,35 @@ impl State {
             let Some(expected_height) = frontier.0.checked_add(1) else {
                 return false;
             };
-            let certified = self
-                .kura
-                .read_certified_lane_block_artifact(lane.id, expected_height)
-                .filter(|artifact| {
-                    let descriptor = &artifact.proposal.descriptor;
-                    descriptor.lane_id == lane.id
-                        && descriptor.dataspace_id == lane.dataspace_id
-                        && descriptor.lane_incarnation == incarnation
-                        && descriptor.lane_block_height == expected_height
-                        && lifecycle.lane_route_and_incarnation_matches(
-                            lane.id,
-                            lane.dataspace_id,
-                            descriptor.proposal_height,
-                            descriptor.lane_incarnation,
-                        )
-                        && Self::validate_merge_execution_predecessor_against_frontier(
-                            &world, descriptor,
-                        )
-                        .is_ok()
-                });
-            let Some(certified) = certified else {
+            let source = match self.durable_autonomous_merge_source_for_lane_slot(
+                &world,
+                lane.id,
+                expected_height,
+                frozen_mode,
+            ) {
+                Ok(source) => source,
+                Err(_) => return false,
+            };
+            let Some(source) = source else {
                 continue;
             };
-            let expected_epoch = crate::sumeragi::epoch_for_height_from_world(
-                &world,
-                certified.proposal.descriptor.proposal_height,
-                frozen_mode,
-            );
-            let Ok(expected_epoch) = expected_epoch else {
-                return false;
-            };
-            let ready = self
-                .kura
-                .durable_autonomous_lane_merge_source(
+            let descriptor = &source.bundle.certified.proposal.descriptor;
+            if descriptor.lane_id == lane.id
+                && descriptor.dataspace_id == lane.dataspace_id
+                && descriptor.lane_incarnation == incarnation
+                && descriptor.lane_block_height == expected_height
+                && lifecycle.lane_route_and_incarnation_matches(
                     lane.id,
-                    expected_height,
-                    network_id,
-                    expected_epoch,
+                    lane.dataspace_id,
+                    descriptor.proposal_height,
+                    descriptor.lane_incarnation,
                 )
-                .is_ok_and(|source| source.bundle.certified == certified);
-            if ready {
+                && Self::validate_merge_execution_predecessor_against_frontier(&world, descriptor)
+                    .is_ok()
+            {
                 return true;
             }
+            return false;
         }
         false
     }
@@ -33033,7 +33230,6 @@ impl State {
             );
             return None;
         }
-        let network_id = self.network_id;
         let world = self.world.view();
         let mut sources = Vec::new();
         for lane in nexus.lane_catalog.lanes() {
@@ -33055,25 +33251,43 @@ impl State {
                 }
             };
             let expected_height = frontier.0.checked_add(1)?;
-            let certified = self
-                .kura
-                .read_certified_lane_block_artifact(lane.id, expected_height)
-                .filter(|artifact| {
-                    let descriptor = &artifact.proposal.descriptor;
-                    descriptor.lane_id == lane.id
-                        && descriptor.dataspace_id == lane.dataspace_id
-                        && descriptor.lane_incarnation == incarnation
-                        && lifecycle.lane_route_and_incarnation_matches(
-                            lane.id,
-                            lane.dataspace_id,
-                            descriptor.proposal_height,
-                            descriptor.lane_incarnation,
-                        )
-                });
-            let Some(certified) = certified else {
-                continue;
+            let durable_source = match self.durable_autonomous_merge_source_for_lane_slot(
+                &world,
+                lane.id,
+                expected_height,
+                frozen_mode,
+            ) {
+                Ok(Some(source)) => source,
+                Ok(None) => continue,
+                Err(message) => {
+                    warn!(
+                        lane = %lane.id.as_u32(),
+                        lane_block_height = expected_height,
+                        message,
+                        "certified lane block is missing its complete durable merge source"
+                    );
+                    return None;
+                }
             };
+            let certified = &durable_source.bundle.certified;
             let descriptor = &certified.proposal.descriptor;
+            if descriptor.lane_id != lane.id
+                || descriptor.dataspace_id != lane.dataspace_id
+                || descriptor.lane_incarnation != incarnation
+                || !lifecycle.lane_route_and_incarnation_matches(
+                    lane.id,
+                    lane.dataspace_id,
+                    descriptor.proposal_height,
+                    descriptor.lane_incarnation,
+                )
+            {
+                warn!(
+                    lane = %lane.id.as_u32(),
+                    lane_block_height = expected_height,
+                    "durable autonomous source differs from the active lane generation"
+                );
+                return None;
+            }
             if let Err(err) =
                 Self::validate_merge_execution_predecessor_against_frontier(&world, descriptor)
             {
@@ -33107,47 +33321,6 @@ impl State {
                 );
                 return None;
             }
-            let expected_epoch = match crate::sumeragi::epoch_for_height_from_world(
-                &world,
-                descriptor.proposal_height,
-                frozen_mode,
-            ) {
-                Ok(epoch) => epoch,
-                Err(error) => {
-                    warn!(
-                        lane = %lane.id.as_u32(),
-                        lane_block_height = expected_height,
-                        %error,
-                        "deferring merge batch construction because the committed epoch schedule is invalid"
-                    );
-                    return None;
-                }
-            };
-            let durable_source = match self.kura.durable_autonomous_lane_merge_source(
-                lane.id,
-                expected_height,
-                network_id,
-                expected_epoch,
-            ) {
-                Ok(source) if source.bundle.certified == certified => source,
-                Ok(_) => {
-                    warn!(
-                        lane = %lane.id.as_u32(),
-                        lane_block_height = expected_height,
-                        "durable autonomous merge source changed during batch construction"
-                    );
-                    return None;
-                }
-                Err(message) => {
-                    warn!(
-                        lane = %lane.id.as_u32(),
-                        lane_block_height = expected_height,
-                        message,
-                        "certified lane block is missing its complete durable merge source"
-                    );
-                    return None;
-                }
-            };
             sources.push(MergeExecutionSource::from_durable(durable_source));
         }
         if sources.is_empty() {
@@ -35036,6 +35209,7 @@ impl State {
             }
             remaining_native_evidence_scan =
                 remaining_native_evidence_scan.saturating_sub(certified.len());
+            let mut durable_sources = Vec::new();
             for artifact in certified {
                 let descriptor = &artifact.proposal.descriptor;
                 let Some(expected_epoch) = artifact
@@ -35071,6 +35245,60 @@ impl State {
                         continue;
                     }
                 };
+                durable_sources.push(source);
+            }
+            let replica_request = remaining_native_evidence_scan
+                .saturating_add(1)
+                .min(crate::kura::MAX_CANONICAL_AUTONOMOUS_LANE_REPLICA_MATCH_RESULTS);
+            let replicas = self
+                .kura
+                .latest_canonical_autonomous_lane_replicas_matching(
+                    lane_id,
+                    replica_request,
+                    |source| {
+                        let descriptor = &source.bundle.certified.proposal.descriptor;
+                        descriptor.dataspace_id == dataspace_id
+                            && descriptor.lane_incarnation == incarnation
+                            && lifecycle.lane_route_and_incarnation_matches(
+                                lane_id,
+                                dataspace_id,
+                                descriptor.proposal_height,
+                                descriptor.lane_incarnation,
+                            )
+                    },
+                )
+                .map_err(MergeLedgerCommitError::Persistence)?;
+            if replicas.len() == replica_request
+                && replica_request < remaining_native_evidence_scan.saturating_add(1)
+            {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "canonical autonomous replica Native AMX diagnostics saturated the passive per-lane scan bound of {replica_request}",
+                )));
+            }
+            if replicas.len() > remaining_native_evidence_scan {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "canonical autonomous replica Native AMX diagnostics exceed the hard evidence-scan cap of {SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX}",
+                )));
+            }
+            remaining_native_evidence_scan =
+                remaining_native_evidence_scan.saturating_sub(replicas.len());
+            durable_sources.extend(replicas);
+            let mut source_hashes_by_slot = BTreeMap::new();
+            for source in durable_sources {
+                let artifact = &source.bundle.certified;
+                let descriptor = &artifact.proposal.descriptor;
+                let expected_epoch = source.bundle.executable_payload().epoch;
+                let slot = (descriptor.lane_id, descriptor.lane_block_height);
+                if let Some(existing) = source_hashes_by_slot.insert(slot, source.bundle_hash) {
+                    if existing == source.bundle_hash {
+                        continue;
+                    }
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "private and canonical-replica Native AMX evidence conflict for lane {} height {}",
+                        descriptor.lane_id.as_u32(),
+                        descriptor.lane_block_height,
+                    )));
+                }
                 if pending_native_source_hashes.contains(&source.bundle_hash) {
                     continue;
                 }
@@ -35717,6 +35945,78 @@ impl State {
                     insert(incoming);
                 }
             }
+            let replica_limit = per_route_limit
+                .min(crate::kura::MAX_CANONICAL_AUTONOMOUS_LANE_REPLICA_MATCH_RESULTS);
+            let replicas = self
+                .kura
+                .latest_canonical_autonomous_lane_replicas_matching(
+                    lane_id,
+                    replica_limit,
+                    |source| {
+                        let descriptor = &source.bundle.certified.proposal.descriptor;
+                        descriptor.dataspace_id == dataspace_id
+                            && descriptor.lane_incarnation == incarnation
+                            && lifecycle.lane_route_and_incarnation_matches(
+                                lane_id,
+                                dataspace_id,
+                                descriptor.proposal_height,
+                                descriptor.lane_incarnation,
+                            )
+                    },
+                )
+                .wrap_err("failed to read canonical autonomous replica diagnostics")?;
+            if replicas.len() == replica_limit && replica_limit < per_route_limit {
+                return Err(eyre!(
+                    "canonical autonomous replica diagnostics saturated the passive per-lane scan bound of {replica_limit}"
+                ));
+            }
+            for source in replicas {
+                let bundle = &source.bundle;
+                let payload = bundle.executable_payload();
+                let frozen_mode = frozen_mode.ok_or_else(|| {
+                    eyre!(
+                        "autonomous diagnostics lack a signed consensus mode at committed height {authority_height}"
+                    )
+                })?;
+                let expected_epoch = crate::sumeragi::epoch_for_height_from_world(
+                    &authority.world,
+                    bundle.certified.proposal.descriptor.proposal_height,
+                    frozen_mode,
+                )
+                .map_err(|error| {
+                    eyre!(
+                        "cannot resolve canonical-replica diagnostic epoch at proposal height {}: {error}",
+                        bundle.certified.proposal.descriptor.proposal_height
+                    )
+                })?;
+                if payload.network_id != network_id || payload.epoch != expected_epoch {
+                    return Err(eyre!(
+                        "canonical autonomous replica diagnostics differ from the committed network or epoch"
+                    ));
+                }
+                let mut incoming =
+                    AutonomousLaneDiagnosticEvidence::from_proposal_and_reservations(
+                        &bundle.certified.proposal,
+                        &payload.reservation_keys,
+                    )
+                    .wrap_err(
+                        "canonical autonomous replica has invalid reservation diagnostics identity",
+                    )?;
+                incoming.payload_durable = true;
+                incoming.availability_certified =
+                    bundle.autonomous.availability_certificate.is_some();
+                incoming.lane_certified = true;
+                incoming.bundle_durable = true;
+                incoming.row.executable_payload_hash = Some(payload.payload_hash);
+                incoming.row.source_bundle_hash = Some(source.bundle_hash);
+                if payload.reservation_keys.len() != payload.entrypoints.len()
+                    || incoming.row.transaction_count
+                        != u64::try_from(payload.entrypoints.len()).unwrap_or(u64::MAX)
+                {
+                    incoming.conflict = true;
+                }
+                insert(incoming);
+            }
         }
         let pending_entries = self
             .kura
@@ -35767,18 +36067,38 @@ impl State {
                 incoming.lane_certified = true;
                 incoming.merge_candidate = !committed;
                 incoming.globally_committed = committed;
-                incoming.bundle_durable = self
+                let descriptor = &execution.proposal.descriptor;
+                let durable_source = if self
                     .kura
-                    .durable_autonomous_lane_merge_source(
-                        execution.proposal.descriptor.lane_id,
-                        execution.proposal.descriptor.lane_block_height,
-                        execution.autonomous_network_id,
-                        execution.autonomous_epoch,
+                    .read_certified_lane_block_artifact(
+                        descriptor.lane_id,
+                        descriptor.lane_block_height,
                     )
-                    .is_ok_and(|source| {
-                        source.bundle_hash == execution.source_bundle_hash
-                            && source.source_bundle == execution.source_bundle
-                    });
+                    .is_some()
+                {
+                    self.kura
+                        .durable_autonomous_lane_merge_source(
+                            descriptor.lane_id,
+                            descriptor.lane_block_height,
+                            execution.autonomous_network_id,
+                            execution.autonomous_epoch,
+                        )
+                        .ok()
+                } else {
+                    self.kura
+                        .durable_canonical_autonomous_lane_replica(
+                            descriptor.lane_id,
+                            descriptor.lane_block_height,
+                            execution.autonomous_network_id,
+                            execution.autonomous_epoch,
+                        )
+                        .ok()
+                        .flatten()
+                };
+                incoming.bundle_durable = durable_source.is_some_and(|source| {
+                    source.bundle_hash == execution.source_bundle_hash
+                        && source.source_bundle == execution.source_bundle
+                });
                 let source_bundle_revalidates =
                     match crate::kura::Kura::decode_autonomous_lane_merge_bundle(
                         &execution.source_bundle,
@@ -45827,8 +46147,7 @@ fn kagemusha_mint_finality_next_epoch_parameter_from_parameters(
 ) -> Option<KagemushaMintFinalityNextEpochParameterV1> {
     let id = KagemushaMintFinalityNextEpochParameterV1::parameter_id();
     let custom = params.custom().get(&id)?;
-    if let Some(parsed) = KagemushaMintFinalityNextEpochParameterV1::from_custom_parameter(custom)
-    {
+    if let Some(parsed) = KagemushaMintFinalityNextEpochParameterV1::from_custom_parameter(custom) {
         return Some(parsed);
     }
     let payload = custom.payload();
@@ -54406,6 +54725,181 @@ mod soracloud_sequence_watermark_state_tests {
         );
     }
 }
+#[cfg(test)]
+mod public_lane_slash_observability_staging_tests {
+    use super::*;
+    use crate::{kura::Kura, query::store::LiveQueryStore};
+    use iroha_data_model::{block::BlockHeader, nexus::PublicLaneValidatorStatus};
+    use nonzero_ext::nonzero;
+
+    fn test_state() -> State {
+        State::with_telemetry(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            StateTelemetry::new(
+                std::sync::Arc::new(crate::telemetry::Metrics::default()),
+                true,
+            ),
+        )
+    }
+
+    #[test]
+    fn accepted_transaction_moves_slash_observability_to_the_block_boundary() {
+        let state = test_state();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let lane_id = LaneId::new(71);
+        let slash_id = Hash::new("block-boundary-slash");
+        {
+            let mut transaction = block.transaction();
+            transaction.stage_public_lane_slash_observability(
+                lane_id,
+                PublicLaneValidatorStatus::Active,
+                PublicLaneValidatorStatus::Slashed(slash_id),
+                Quantity::from(5_u64),
+                Quantity::from(2_u64),
+            );
+            assert_eq!(transaction.pending_public_lane_slash_observability.len(), 1);
+            transaction.apply();
+        }
+
+        assert_eq!(block.pending_public_lane_slash_observability.len(), 1);
+        let observation = &block.pending_public_lane_slash_observability[0];
+        assert_eq!(observation.lane_id, lane_id);
+        #[cfg(feature = "telemetry")]
+        {
+            assert_eq!(
+                observation.previous_status,
+                PublicLaneValidatorStatus::Active
+            );
+            assert_eq!(
+                observation.slashed_status,
+                PublicLaneValidatorStatus::Slashed(slash_id)
+            );
+        }
+        assert_eq!(observation.bonded_amount, Quantity::from(5_u64));
+        assert_eq!(observation.pending_unbond_amount, Quantity::from(2_u64));
+    }
+
+    #[test]
+    fn dropped_transaction_discards_slash_observability() {
+        let state = test_state();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        {
+            let mut transaction = block.transaction();
+            transaction.stage_public_lane_slash_observability(
+                LaneId::new(72),
+                PublicLaneValidatorStatus::Active,
+                PublicLaneValidatorStatus::Slashed(Hash::new("discarded-slash")),
+                Quantity::from(3_u64),
+                Quantity::from(1_u64),
+            );
+        }
+
+        assert!(block.pending_public_lane_slash_observability.is_empty());
+    }
+
+    #[test]
+    fn consensus_effects_apply_only_world_and_block_observability() {
+        let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+        let state = test_state();
+        #[cfg(feature = "telemetry")]
+        {
+            state.telemetry.set_block_gas_used(17);
+            state
+                .telemetry
+                .add_block_fee_amount(&Quantity::from(11_u64));
+        }
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.consensus_effects_probe_block(header);
+        let lane_id = LaneId::new(73);
+        let status_before = crate::sumeragi::status::lane_scoped_status_fingerprint_for_tests();
+
+        {
+            let mut transaction = block.consensus_effects_transaction();
+            #[cfg(feature = "telemetry")]
+            assert!(transaction.world.telemetry.is_none());
+            *transaction
+                .world
+                .governance_last_unlock_sweep_height
+                .get_mut() = 9;
+            transaction.last_tx_gas_used = 101;
+            transaction.stage_nexus_fee_event(crate::sumeragi::status::NexusFeeEvent::Charged {
+                payer_kind: crate::sumeragi::status::NexusFeePayer::Payer,
+                payer_id: "scratch-payer".to_owned(),
+                amount: Quantity::from(1_u64),
+                asset_id: "scratch#fee".to_owned(),
+            });
+            #[cfg(feature = "telemetry")]
+            transaction.stage_block_fee_amount(Quantity::from(4_u64));
+            transaction.stage_public_lane_slash_observability(
+                lane_id,
+                PublicLaneValidatorStatus::Active,
+                PublicLaneValidatorStatus::Slashed(Hash::new("scratch-only slash")),
+                Quantity::from(7_u64),
+                Quantity::from(2_u64),
+            );
+            transaction.apply_consensus_effects();
+        }
+
+        {
+            let mut transaction = block.consensus_effects_transaction();
+            assert_eq!(
+                *transaction.world.governance_last_unlock_sweep_height, 9,
+                "a later consensus-effect transaction must observe earlier scratch writes"
+            );
+            *transaction
+                .world
+                .governance_last_unlock_sweep_height
+                .get_mut() = 10;
+            transaction.apply_consensus_effects();
+        }
+        assert_eq!(*block.world.governance_last_unlock_sweep_height, 10);
+        assert_eq!(block.committed_fragments, 0);
+        assert_eq!(block.pending_public_lane_slash_observability.len(), 1);
+        let observation = &block.pending_public_lane_slash_observability[0];
+        assert_eq!(observation.lane_id, lane_id);
+        assert_eq!(observation.bonded_amount, Quantity::from(7_u64));
+        assert_eq!(observation.pending_unbond_amount, Quantity::from(2_u64));
+        assert!(
+            crate::sumeragi::status::nexus_staking_snapshot()
+                .lanes
+                .iter()
+                .all(|lane| lane.lane_id != lane_id)
+        );
+        assert_eq!(
+            crate::sumeragi::status::nexus_fee_snapshot().charged_total,
+            0
+        );
+        assert_eq!(
+            crate::sumeragi::status::lane_scoped_status_fingerprint_for_tests(),
+            status_before,
+            "consensus-effect probes must not publish process-global status"
+        );
+        #[cfg(feature = "telemetry")]
+        {
+            let metrics = block.telemetry.metrics_ref();
+            assert_eq!(metrics.block_gas_used.get(), 17);
+            assert_eq!(metrics.block_fee_total_units.get(), 11);
+            assert_eq!(metrics.block_fee_total_scale.get(), 0);
+            assert_eq!(
+                metrics
+                    .nexus_public_lane_slash_total
+                    .with_label_values(&["73"])
+                    .get(),
+                0
+            );
+        }
+
+        drop(block);
+        let live_world = state.world.view();
+        assert_eq!(*live_world.governance_last_unlock_sweep_height, 0);
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+    }
+}
 #[cfg(all(test, feature = "telemetry"))]
 mod parliament_commit_telemetry_tests {
     use super::*;
@@ -59441,6 +59935,22 @@ impl StateTransaction<'_, '_> {
         let current_height = self.block_height();
         self.ensure_private_settlement_feature_active_v1(current_height)?;
         self.ensure_private_settlement_route_active_v1(replacement.route)?;
+        let replacement_key =
+            PrivateSettlementPoolKeyV1::new(replacement.route, replacement.pool_id)?;
+        if self
+            .world
+            .private_settlement_staged_locks
+            .iter()
+            .any(|(key, _)| {
+                matches!(
+                    key,
+                    PrivateSettlementStagedLockKeyV1::PoolHead { pool, .. }
+                        if *pool == replacement_key
+                )
+            })
+        {
+            return Err(PrivateSettlementGlobalStateErrorV1::Conflict);
+        }
         let plan = plan_private_settlement_pool_rotation_v1(
             &self.world.private_settlement_governance,
             &self.world.private_settlement_pools,
@@ -59458,6 +59968,79 @@ impl StateTransaction<'_, '_> {
         self.world
             .private_settlement_pools
             .insert(plan.key, plan.pool);
+        Ok(PrivateSettlementGlobalStateOutcomeV1::Applied)
+    }
+    /// Register one complete all-Prepare barrier as durable global control locks.
+    pub(crate) fn apply_private_settlement_prepare_locks_v1(
+        &mut self,
+        barrier: iroha_data_model::nexus::PrivateSettlementPrepareBarrierV1,
+    ) -> core::result::Result<
+        PrivateSettlementGlobalStateOutcomeV1,
+        PrivateSettlementGlobalStateErrorV1,
+    > {
+        let current_height = self.block_height();
+        self.ensure_private_settlement_feature_active_v1(
+            barrier.manifest.authority_context_height,
+        )?;
+        if barrier.manifest.network_id != self.network_id {
+            return Err(PrivateSettlementGlobalStateErrorV1::Network);
+        }
+        let participant_count = u16::try_from(barrier.manifest.legs.len())
+            .map_err(|_| PrivateSettlementGlobalStateErrorV1::Bounds)?;
+        let expiry_span = barrier
+            .manifest
+            .expiry_height
+            .checked_sub(barrier.manifest.authority_context_height)
+            .ok_or(PrivateSettlementGlobalStateErrorV1::Bounds)?;
+        let carrier = iroha_data_model::isi::InstructionBox::from(
+            iroha_data_model::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1::new(
+                barrier.clone(),
+            ),
+        );
+        let carrier_bytes = norito::encode_canonical(&carrier)
+            .map_err(|_| PrivateSettlementGlobalStateErrorV1::Encoding)?
+            .len();
+        if participant_count > self.nexus.atomic_private_settlement.max_participants.get()
+            || expiry_span > self.nexus.atomic_private_settlement.max_expiry_blocks.get()
+            || u64::try_from(carrier_bytes).unwrap_or(u64::MAX)
+                > self.nexus.atomic_private_settlement.max_carrier_bytes.get()
+        {
+            return Err(PrivateSettlementGlobalStateErrorV1::Bounds);
+        }
+        for (index, leg) in barrier.manifest.legs.iter().enumerate() {
+            self.ensure_private_settlement_route_active_v1(leg.route)?;
+            let authority = barrier
+                .authority_catalog
+                .authority_for_leg(&barrier.manifest, index)
+                .map_err(|_| PrivateSettlementGlobalStateErrorV1::PrepareBarrier)?;
+            validate_private_settlement_committee_authority_v1(
+                self,
+                barrier.manifest.authority_context_height,
+                &authority,
+            )
+            .map_err(|_| PrivateSettlementGlobalStateErrorV1::PrepareBarrier)?;
+        }
+        let plan = plan_private_settlement_prepare_locks_v1(
+            &self.world.private_settlement_governance,
+            &self.world.private_settlement_pools,
+            &self.world.private_settlement_roots,
+            &self.world.private_settlement_nullifiers,
+            &self.world.private_settlement_outputs,
+            &self.world.private_settlement_recipient_index,
+            &self.world.private_settlement_staged_locks,
+            &self.world.private_settlement_receipts,
+            &self.world.private_settlement_aborts,
+            &barrier,
+            current_height,
+        )?;
+        let Some(plan) = plan else {
+            return Ok(PrivateSettlementGlobalStateOutcomeV1::Idempotent);
+        };
+        for (key, record) in plan.records {
+            self.world
+                .private_settlement_staged_locks
+                .insert(key, record);
+        }
         Ok(PrivateSettlementGlobalStateOutcomeV1::Applied)
     }
     /// Atomically stage every certified leg and the public receipt in this transaction.
@@ -59495,12 +60078,16 @@ impl StateTransaction<'_, '_> {
         receipt
             .validate_shape()
             .map_err(|_| PrivateSettlementGlobalStateErrorV1::Receipt)?;
-        for (leg, authority) in receipt.manifest.legs.iter().zip(&receipt.authority_catalog) {
+        for (index, leg) in receipt.manifest.legs.iter().enumerate() {
             self.ensure_private_settlement_route_active_v1(leg.route)?;
+            let authority = receipt
+                .authority_catalog
+                .authority_for_leg(&receipt.manifest, index)
+                .map_err(|_| PrivateSettlementGlobalStateErrorV1::Receipt)?;
             validate_private_settlement_committee_authority_v1(
                 self,
                 receipt.manifest.authority_context_height,
-                authority,
+                &authority,
             )
             .map_err(|_| PrivateSettlementGlobalStateErrorV1::Receipt)?;
         }
@@ -59510,6 +60097,8 @@ impl StateTransaction<'_, '_> {
             &self.world.private_settlement_roots,
             &self.world.private_settlement_nullifiers,
             &self.world.private_settlement_outputs,
+            &self.world.private_settlement_recipient_index,
+            &self.world.private_settlement_staged_locks,
             &self.world.private_settlement_receipts,
             &self.world.private_settlement_aborts,
             &receipt,
@@ -59521,7 +60110,7 @@ impl StateTransaction<'_, '_> {
 
         // Every fallible check completed above. The remaining writes are an
         // infallible MV overlay update committed only by `StateTransaction::apply`.
-        for leg in plan {
+        for leg in plan.legs {
             self.world
                 .private_settlement_pools
                 .insert(leg.key, leg.next_pool);
@@ -59537,6 +60126,14 @@ impl StateTransaction<'_, '_> {
             for (key, output) in leg.outputs {
                 self.world.private_settlement_outputs.insert(key, output);
             }
+            for recipient in leg.recipients {
+                self.world
+                    .private_settlement_recipient_index
+                    .insert(recipient, leg.reference);
+            }
+        }
+        for key in plan.staged_lock_keys {
+            self.world.private_settlement_staged_locks.remove(key);
         }
         self.world
             .private_settlement_receipts
@@ -59556,18 +60153,34 @@ impl StateTransaction<'_, '_> {
         if receipt.network_id != self.network_id {
             return Err(PrivateSettlementGlobalStateErrorV1::Network);
         }
-        if !plan_private_settlement_abort_v1(
+        let staged_lock_keys = plan_private_settlement_abort_v1(
+            &self.world.private_settlement_staged_locks,
             &self.world.private_settlement_receipts,
             &self.world.private_settlement_aborts,
             &receipt,
             current_height,
-        )? {
-            return Ok(PrivateSettlementGlobalStateOutcomeV1::Idempotent);
+        )?;
+        for key in staged_lock_keys {
+            self.world.private_settlement_staged_locks.remove(key);
         }
         self.world
             .private_settlement_aborts
             .insert(receipt.bundle_id, receipt);
         Ok(PrivateSettlementGlobalStateOutcomeV1::Applied)
+    }
+    /// Deterministically release every staged bundle whose expiry precedes this block.
+    pub(crate) fn reconcile_expired_private_settlement_staged_locks_v1(
+        &mut self,
+    ) -> core::result::Result<usize, PrivateSettlementGlobalStateErrorV1> {
+        let keys = expired_private_settlement_staged_lock_keys_v1(
+            &self.world.private_settlement_staged_locks,
+            self.block_height(),
+        )?;
+        let removed = keys.len();
+        for key in keys {
+            self.world.private_settlement_staged_locks.remove(key);
+        }
+        Ok(removed)
     }
     /// Read one public receipt by opaque bundle id from this transaction overlay.
     #[must_use]
@@ -59584,6 +60197,21 @@ impl StateTransaction<'_, '_> {
         bundle_id: &Hash,
     ) -> Option<&iroha_data_model::nexus::PrivateSettlementAbortReceiptV1> {
         self.world.private_settlement_aborts.get(bundle_id)
+    }
+    /// Read the exact public all-Prepare barrier currently registered in this overlay.
+    #[must_use]
+    pub fn private_settlement_prepare_barrier_v1(
+        &self,
+        bundle_id: &Hash,
+    ) -> Option<&iroha_data_model::nexus::PrivateSettlementPrepareBarrierV1> {
+        match self
+            .world
+            .private_settlement_staged_locks
+            .get(&PrivateSettlementStagedLockKeyV1::Bundle(*bundle_id))?
+        {
+            PrivateSettlementStagedLockRecordV1::Bundle { barrier, .. } => Some(barrier),
+            PrivateSettlementStagedLockRecordV1::Resource { .. } => None,
+        }
     }
     /// Read only the opaque pool epoch and root from this transaction overlay.
     #[must_use]
@@ -62775,7 +63403,11 @@ pub(crate) struct SnapshotNexusRuntime {
     pub autoscale_sample_history: Vec<AutoscaleSampleRecord>,
 }
 impl SnapshotNexusRuntime {
-    /// Current snapshot layout version.
+    /// Current persisted-State compatibility generation.
+    ///
+    /// This version covers the complete manually serialized State JSON envelope, not only the
+    /// fields in [`SnapshotNexusRuntime`]. Any persisted State JSON shape change must advance it so
+    /// frozen predecessor hash bridges fail closed instead of normalizing an unreviewed schema.
     pub(crate) const VERSION: u8 = 3;
     /// Capture the stateful Nexus fields from a consistent state view.
     #[cfg(test)]

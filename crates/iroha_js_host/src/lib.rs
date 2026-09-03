@@ -292,41 +292,39 @@ const JS_MAX_SAFE_INTEGER_F64: f64 = 9_007_199_254_740_991.0;
 pub fn connect_norito_bridge_abi_version() -> u32 {
     PRIVACY_BRIDGE_ABI_VERSION_V1
 }
-/// Return the sole Kagemusha native contract revision.
+/// Return the sole KAGEMUSHA native contract revision.
 #[napi(js_name = "kagemushaV1NativeContractRevision")]
 pub fn kagemusha_v1_native_contract_revision() -> u32 {
     1
 }
-/// Fail-closed validation for exact Kagemusha V1 operation-status JSON.
+/// Fail-closed validation for exact KAGEMUSHA V1 operation-status JSON.
 ///
 /// Applied results are rejected here because terminal validation requires a
 /// caller-pinned finality trust anchor; this boundary validates only pending
 /// and rejected status envelopes.
 #[napi(js_name = "kagemushaV1OperationStatusJsonValidate")]
 pub fn kagemusha_v1_operation_status_json_validate(status_json: Uint8Array) -> napi::Result<()> {
-    use iroha::client::{
-        KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1, KagemushaOperationStatusV1,
-    };
+    use iroha::client::{KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1, KagemushaOperationStatusV1};
 
     let bytes = status_json.as_ref();
     if bytes.is_empty() || bytes.len() > KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1 {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
             format!(
-                "Kagemusha V1 operation-status JSON must contain 1..={KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1} bytes"
+                "KAGEMUSHA V1 operation-status JSON must contain 1..={KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1} bytes"
             ),
         ));
     }
     let status = json::from_slice::<KagemushaOperationStatusV1>(bytes).map_err(|error| {
         napi::Error::new(
             napi::Status::InvalidArg,
-            format!("invalid Kagemusha V1 operation-status JSON: {error}"),
+            format!("invalid KAGEMUSHA V1 operation-status JSON: {error}"),
         )
     })?;
     status.validate().map_err(|error| {
         napi::Error::new(
             napi::Status::InvalidArg,
-            format!("invalid Kagemusha V1 operation status: {error}"),
+            format!("invalid KAGEMUSHA V1 operation status: {error}"),
         )
     })
 }

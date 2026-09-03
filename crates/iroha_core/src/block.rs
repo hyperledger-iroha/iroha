@@ -9848,9 +9848,47 @@ pub(crate) mod valid {
                 }
             }
             let mut previous_order = None;
-            let mut seen_routes = BTreeSet::new();
-            let mut seen_slots = BTreeSet::new();
-            let mut seen_proposals = BTreeSet::new();
+            // Ordinary and autonomous anchors are two encodings of the same
+            // lane route/slot namespace. Seed the autonomous duplicate sets
+            // with every already-validated ordinary ownership so one carrier
+            // cannot smuggle both execution roles for a route or slot.
+            let mut seen_routes = bundle
+                .lane_payload_ownerships
+                .iter()
+                .map(|ownership| {
+                    (
+                        ownership.lane_id,
+                        ownership.dataspace_id,
+                        ownership.lane_incarnation,
+                    )
+                })
+                .collect::<BTreeSet<_>>();
+            let mut seen_slots = bundle
+                .lane_payload_ownerships
+                .iter()
+                .map(|ownership| {
+                    (
+                        ownership.lane_id,
+                        ownership.dataspace_id,
+                        ownership.lane_incarnation,
+                        ownership.lane_block_height,
+                        ownership.lane_block_view,
+                    )
+                })
+                .collect::<BTreeSet<_>>();
+            let mut seen_proposals = bundle
+                .lane_payload_ownerships
+                .iter()
+                .map(|ownership| {
+                    native_amx_coordinator_proposal_from_ownership(ownership)
+                        .map(|proposal| proposal.proposal_hash)
+                        .map_err(|error| {
+                            Self::execution_context_error(format!(
+                                "ordinary lane ownership cannot seed the shared proposal namespace: {error}"
+                            ))
+                        })
+                })
+                .collect::<Result<BTreeSet<_>, _>>()?;
             let mut seen_descriptors = BTreeSet::new();
             let mut seen_payloads = BTreeSet::new();
             let mut seen_reservations = BTreeSet::new();
@@ -16463,10 +16501,7 @@ pub(crate) mod valid {
             let mint_finality_epoch_id = mint_finality_roster
                 .finality_epoch_id()
                 .expect("cache fixture mint-finality roster is canonical");
-            let genesis_parameters = wire::SumeragiV2GenesisContextParameters::recommended(
-                mint_finality_roster.clone(),
-                None,
-            );
+            let genesis_parameters = wire::SumeragiV2GenesisContextParameters::recommended();
             let parent_context = wire::HeightContext {
                 network_id: state.network_id,
                 protocol_version: wire::PROTOCOL_VERSION,
@@ -17047,7 +17082,7 @@ pub(crate) mod valid {
             let validator_keys = core::iter::repeat_with(|| {
                 crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
             })
-            .take(2)
+            .take(4)
             .collect::<Vec<_>>();
             let topology = test_topology_with_keys(&validator_keys);
             let mut world = World::new();
@@ -17062,6 +17097,7 @@ pub(crate) mod valid {
                 );
             }
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_test_lane_manifests_for_keypairs(&state, &validator_keys);
             let leader = &validator_keys[0];
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
@@ -17296,7 +17332,7 @@ pub(crate) mod valid {
                 .as_ref()
                 .iter()
                 .position(|peer| peer != &payload.producer)
-                .expect("two-validator fixture has a global leader distinct from lane author");
+                .expect("four-validator fixture has a global leader distinct from lane author");
             context.view_zero_leader =
                 u32::try_from(global_leader_index).expect("fixture global leader index fits u32");
             let profile = ConsensusValidationProfile::SumeragiV2 {
@@ -17365,7 +17401,7 @@ pub(crate) mod valid {
         #[test]
         fn autonomous_anchor_predecessor_accepts_exact_hash_only_snapshot_artifact() {
             let (state, kura, topology, time_source, leader) = lane_payload_context_fixture();
-            let predecessor = signed_lane_payload_context_block(
+            let mut predecessor = signed_lane_payload_context_block(
                 &state,
                 &topology,
                 &leader,
@@ -17374,6 +17410,17 @@ pub(crate) mod valid {
                 1,
                 None,
             );
+            let predecessor_entrypoint_hashes = predecessor
+                .external_entrypoints_cloned()
+                .map(|entrypoint| entrypoint.hash())
+                .collect::<Vec<_>>();
+            predecessor
+                .set_transaction_results(
+                    Vec::new(),
+                    &predecessor_entrypoint_hashes,
+                    vec![Ok(DataTriggerSequence::default())],
+                )
+                .expect("attach the canonical predecessor result and AXT policy snapshot");
             let predecessor_descriptor_hash = predecessor
                 .execution_context()
                 .and_then(|bundle| bundle.lane_payload_ownerships.first())
@@ -17454,6 +17501,51 @@ pub(crate) mod valid {
                 BlockValidationError::ExecutionContextInvalid(message)
                     if message.contains("strict canonical")
             ));
+        }
+        #[test]
+        fn autonomous_anchor_admission_rejects_cross_kind_route_alias() {
+            let fixture = autonomous_anchor_fixture(None, 0);
+            let epoch = fixture
+                .profile
+                .v2_context()
+                .expect("fixture v2 context")
+                .epoch;
+            let payload = crate::lane_consensus::decode_autonomous_lane_payload_envelope(
+                &fixture.bundle.autonomous_lane_payloads[0],
+                fixture.state.network_id,
+                epoch,
+            )
+            .expect("fixture autonomous payload decodes");
+            let descriptor = &payload.origin_proposal.descriptor;
+            let ordinary = sample_lane_payload_ownership_for_context_at_slot(
+                descriptor.proposal_height,
+                fixture.block.header().view_change_index(),
+                descriptor.lane_id,
+                descriptor.dataspace_id,
+                descriptor.lane_incarnation,
+                descriptor
+                    .lane_block_height
+                    .checked_add(1)
+                    .expect("fixture lane height has a successor"),
+                0,
+                vec![0],
+                vec![Hash::new(b"cross-kind ordinary entrypoint")],
+                &descriptor.validator_set,
+            );
+            let mut bundle = fixture.bundle.clone();
+            bundle.lane_payload_ownerships.push(ordinary);
+            let error = validate_autonomous_anchor_fixture(&fixture, &fixture.block, &bundle)
+                .expect_err(
+                    "ordinary and autonomous anchors must not share one lane route even at different slots",
+                );
+            assert!(
+                matches!(
+                    &error,
+                BlockValidationError::ExecutionContextInvalid(message)
+                    if message.contains("duplicates a route, slot, proposal")
+                ),
+                "unexpected cross-kind route-alias error: {error:?}"
+            );
         }
         #[test]
         fn autonomous_anchor_admission_rejects_oversized_and_stale_artifacts() {
@@ -24411,7 +24503,9 @@ pub(crate) mod valid {
                 kura::Kura, query::store::LiveQueryStore, sumeragi::network_topology::Topology,
             };
             use iroha_data_model::{
-                block::consensus_v2::ConsensusMode,
+                block::consensus_v2::{
+                    ConsensusMode, SumeragiV2GenesisContextParameters, ValidatorPower,
+                },
                 parameter::{Parameter, system::SumeragiParameter},
                 peer::PeerId,
                 prelude::*,
@@ -24421,7 +24515,27 @@ pub(crate) mod valid {
             let chain_id = ChainId::from("00000000-0000-0000-0000-000000000001");
             let genesis_keypair = crate::block::checked_keypair();
             let genesis_account = AccountId::new(genesis_keypair.public_key().clone());
+            let mut mint_finality_roster = (0..4)
+                .map(|_| {
+                    let keypair = crate::block::checked_keypair_with_algorithm(
+                        iroha_crypto::Algorithm::BlsNormal,
+                    );
+                    ValidatorPower {
+                        validator: PeerId::new(keypair.public_key().clone()),
+                        power: 1,
+                    }
+                })
+                .collect::<Vec<_>>();
+            mint_finality_roster.sort_by(|left, right| left.validator.cmp(&right.validator));
             let manifest = GenesisBuilder::new_without_executor(chain_id.clone(), ".")
+                .with_sumeragi_v2_context_parameters(
+                    SumeragiV2GenesisContextParameters::recommended(),
+                )
+                .with_kagemusha_mint_finality_genesis_parameters(
+                    crate::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(
+                        &mint_finality_roster,
+                    ),
+                )
                 .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(100)))
                 .next_transaction()
                 .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333)))

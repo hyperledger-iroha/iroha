@@ -1,4 +1,4 @@
-//! Kagemusha V1 settlement configuration tests.
+//! KAGEMUSHA V1 settlement configuration tests.
 
 use super::*;
 

@@ -29,8 +29,8 @@ use iroha_data_model::{
         InstructionBox, Log, MintBox, RegisterBox, RemoveAssetKeyValue, RemoveKeyValueBox,
         RevokeBox, SetAssetKeyValue, SetKeyValueBox, SetParameter, TransferAssetBatch, TransferBox,
         UnregisterBox, Upgrade,
-        mint_burn::BurnBox,
         kagemusha_v1::{RedeemKagemushaV1, TopUpKagemushaV1},
+        mint_burn::BurnBox,
         runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
     },
     metadata::Metadata,
@@ -957,9 +957,7 @@ impl std::str::FromStr for ExplorerInstructionKind {
             "upgrade" => Ok(Self::Upgrade),
             "log" => Ok(Self::Log),
             "kagemushatopup" | "kagemusha_top_up" => Ok(Self::KagemushaTopUp),
-            "kagemusharedemption" | "kagemusha_redemption" => {
-                Ok(Self::KagemushaRedemption)
-            }
+            "kagemusharedemption" | "kagemusha_redemption" => Ok(Self::KagemushaRedemption),
             "custom" => Ok(Self::Custom),
             _ => Err(()),
         }
@@ -1186,9 +1184,7 @@ fn structured_instruction_payload(
         ExplorerInstructionKind::Upgrade => upgrade_payload(instruction),
         ExplorerInstructionKind::Log => log_payload(instruction),
         ExplorerInstructionKind::KagemushaTopUp => kagemusha_top_up_payload(instruction),
-        ExplorerInstructionKind::KagemushaRedemption => {
-            kagemusha_redemption_payload(instruction)
-        }
+        ExplorerInstructionKind::KagemushaRedemption => kagemusha_redemption_payload(instruction),
         ExplorerInstructionKind::Custom => custom_payload(instruction),
     }
     .unwrap_or_else(|| fallback_structured_payload(instruction))
@@ -1407,7 +1403,7 @@ fn kagemusha_redemption_payload(instruction: &InstructionBox) -> Option<Value> {
     );
     value.insert(
         "asset".to_string(),
-        json::to_value(&request.voucher.statement.asset).unwrap_or(Value::Null),
+        json::to_value(&request.voucher.statement.lifecycle.asset).unwrap_or(Value::Null),
     );
     value.insert(
         "amount_atomic_units".to_string(),
@@ -1415,7 +1411,7 @@ fn kagemusha_redemption_payload(instruction: &InstructionBox) -> Option<Value> {
     );
     value.insert(
         "asset_scale".to_string(),
-        Value::Number(u64::from(request.voucher.statement.scale).into()),
+        Value::Number(u64::from(request.voucher.statement.lifecycle.scale).into()),
     );
     value.insert(
         "operation_id".to_string(),
@@ -2700,25 +2696,25 @@ mod tests {
         assert_eq!(
             "KagemushaTopUp"
                 .parse::<ExplorerInstructionKind>()
-                .expect("Kagemusha V1 top-up kind"),
+                .expect("KAGEMUSHA V1 top-up kind"),
             ExplorerInstructionKind::KagemushaTopUp
         );
         assert_eq!(
             "kagemusha_top_up"
                 .parse::<ExplorerInstructionKind>()
-                .expect("Kagemusha V1 top-up kind"),
+                .expect("KAGEMUSHA V1 top-up kind"),
             ExplorerInstructionKind::KagemushaTopUp
         );
         assert_eq!(
             "KagemushaRedemption"
                 .parse::<ExplorerInstructionKind>()
-                .expect("Kagemusha V1 redemption kind"),
+                .expect("KAGEMUSHA V1 redemption kind"),
             ExplorerInstructionKind::KagemushaRedemption
         );
         assert_eq!(
             "kagemusha_redemption"
                 .parse::<ExplorerInstructionKind>()
-                .expect("Kagemusha V1 redemption kind"),
+                .expect("KAGEMUSHA V1 redemption kind"),
             ExplorerInstructionKind::KagemushaRedemption
         );
     }

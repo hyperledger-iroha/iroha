@@ -21,12 +21,24 @@ use halo2_proofs::{
     plonk::{Circuit, ConstraintSystem, Error as PlonkError},
 };
 use iroha_data_model::kagemusha::{
-    KAGEMUSHA_ASSET_SCALE_MAX_V1, KAGEMUSHA_HALO2_K_V1,
-    KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KagemushaCreditOpeningV1,
-    KagemushaEncryptedCreditEnvelopeV1, KagemushaHardwareCredentialV1,
-    KagemushaHardwareProfileV1, KagemushaMintAuthorizationStatementV1,
-    kagemusha_asset_identity_digest_v1, kagemusha_ciphertext_digest_v1,
+    KAGEMUSHA_ASSET_SCALE_MAX_V1, KAGEMUSHA_CREDIT_OPENING_CANONICAL_FIELD_RANGES_V1,
+    KAGEMUSHA_HALO2_K_V1, KAGEMUSHA_HARDWARE_CREDENTIAL_ID_PREIMAGE_BYTES_V1,
+    KAGEMUSHA_HARDWARE_CREDENTIAL_ID_PREIMAGE_FIELD_RANGES_V1,
+    KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_BYTES_V1,
+    KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_FIELD_RANGES_V1,
+    KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1,
+    KAGEMUSHA_MINT_CREDIT_OPENING_COMMITMENT_PREIMAGE_BYTES_V1,
+    KAGEMUSHA_MINT_CREDIT_OPENING_COMMITMENT_PREIMAGE_FIELD_RANGES_V1,
+    KAGEMUSHA_RECIPIENT_CREDENTIAL_COMMITMENT_PREIMAGE_BYTES_V1,
+    KAGEMUSHA_RECIPIENT_CREDENTIAL_COMMITMENT_PREIMAGE_FIELD_RANGES_V1, KagemushaCreditOpeningV1,
+    KagemushaEncryptedCreditEnvelopeV1, KagemushaHardwareCredentialV1, KagemushaHardwareProfileV1,
+    KagemushaMintAuthorizationStatementV1, kagemusha_asset_identity_digest_v1,
+    kagemusha_ciphertext_digest_v1, kagemusha_credit_opening_canonical_layout_v1,
+    kagemusha_hardware_credential_id_preimage_layout_v1,
+    kagemusha_hardware_profile_id_preimage_layout_v1,
+    kagemusha_mint_credit_opening_commitment_preimage_layout_v1,
     kagemusha_mint_credit_opening_commitment_v1,
+    kagemusha_recipient_credential_commitment_preimage_layout_v1,
     kagemusha_recipient_credential_commitment_v1,
 };
 use sha2::{Digest as _, Sha256};
@@ -35,18 +47,18 @@ use snark_verifier::{pcs::ipa::IpaSuccinctVerifyingKey, verifier::plonk::PlonkPr
 use super::{
     DigestV1, KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1, KagemushaEpAccumulatorV1,
     KagemushaEqAccumulatorV1, KagemushaPastaParityV1,
-    commit_wrapper::{
-        COMMIT_WRAPPER_ENABLED_PROFILE_SLOTS_V1, constrain_enabled_hardware_profile_membership_v1,
-    },
+    canonical_preimage::assemble_canonical_preimage_v1,
     deferred_parent::{
         DeferredAccumulator, accumulator_limb_count, bind_accumulator_limbs,
         constrain_reciprocal_tagged_audit_v1, deferred_field_chips_v1, deferred_loader_v1,
         finalize_tagged_deferred_audit_v1, ordinary_ipa_proof_profile_v1, verify_ordinary_proof_v1,
     },
     guard_bundle::{
-        AssignedCredentialV1, KagemushaPlatformCredentialStatementV1, assert_digest_nonzero,
-        assign_bytes, assign_credential_statement_v1, bind_equal_digest, constant_bytes,
-        device_authority_commitment_v1, digest_limbs_assigned, hash,
+        AssignedCredentialV1, KAGEMUSHA_ENABLED_HARDWARE_PROFILE_SLOTS_V1,
+        KagemushaPlatformCredentialStatementV1, assert_digest_nonzero, assign_bytes,
+        assign_credential_statement_v1, bind_equal_digest, constant_bytes,
+        constrain_enabled_hardware_profile_membership_v1, device_authority_commitment_v1,
+        digest_limbs_assigned, hash,
     },
 };
 use crate::zk::{
@@ -66,14 +78,8 @@ const MINT_CREDIT_OPENING_COMMITMENT_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:mint-credit-opening-commitment";
 const CIPHERTEXT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:ciphertext";
 const ACCOUNT_IDENTITY_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:account-identity";
-const HARDWARE_AUTHORIZATION_DOMAIN_V1: &[u8] =
-    b"iroha:kagemusha:v1:mint-hardware-authorization";
+const HARDWARE_AUTHORIZATION_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-hardware-authorization";
 const MINT_AUTHORIZATION_CREDENTIAL_EQUATION_TAG_V1: u32 = 5;
-
-const RECIPIENT_COMMITMENT_PREIMAGE_BYTES_V1: usize = 96;
-const CREDIT_COMMITMENT_PREIMAGE_BYTES_V1: usize = 246;
-const HARDWARE_CREDENTIAL_ID_PREIMAGE_BYTES_V1: usize = 323;
-const HARDWARE_PROFILE_ID_PREIMAGE_BYTES_V1: usize = 323;
 
 /// Non-history public cells in one mint-authorization parity.
 pub(crate) const MINT_AUTHORIZATION_PUBLIC_PREFIX_COUNT_V1: usize = 50;
@@ -216,10 +222,10 @@ impl KagemushaMintAuthorizationRelationWitnessV1 {
         {
             return Err("mint authorization public/private relation mismatch".to_owned());
         }
-        if canonical_hardware_credential_id_v1(credential) != credential.credential_id {
+        if canonical_hardware_credential_id_v1(credential)? != credential.credential_id {
             return Err("hardware credential canonical layout drift".to_owned());
         }
-        if canonical_hardware_profile_id_v1(&self.hardware_profile)
+        if canonical_hardware_profile_id_v1(&self.hardware_profile)?
             != self.hardware_profile.hardware_profile_id
         {
             return Err("hardware profile canonical layout drift".to_owned());
@@ -256,7 +262,7 @@ impl KagemushaMintAuthorizationRelationWitnessV1 {
 /// Complete paired credential-proof inputs for one mint authorization.
 pub(crate) struct KagemushaMintAuthorizationRecursiveWitnessV1<'a> {
     pub(crate) relation: KagemushaMintAuthorizationRelationWitnessV1,
-    pub(crate) enabled_hardware_profiles: [DigestV1; COMMIT_WRAPPER_ENABLED_PROFILE_SLOTS_V1],
+    pub(crate) enabled_hardware_profiles: [DigestV1; KAGEMUSHA_ENABLED_HARDWARE_PROFILE_SLOTS_V1],
     pub(crate) eq_credential_protocol: &'a PlonkProtocol<EqAffine>,
     pub(crate) eq_credential_proof: &'a [u8],
     pub(crate) eq_credential_history: &'a KagemushaEqAccumulatorV1,
@@ -464,7 +470,7 @@ fn build_scalar_half_v1<C>(
     succinct_vk: &IpaSuccinctVerifyingKey<C>,
     parity: KagemushaPastaParityV1,
     relation: &KagemushaMintAuthorizationRelationWitnessV1,
-    enabled_profiles: &[DigestV1; COMMIT_WRAPPER_ENABLED_PROFILE_SLOTS_V1],
+    enabled_profiles: &[DigestV1; KAGEMUSHA_ENABLED_HARDWARE_PROFILE_SLOTS_V1],
     credential_protocol: &PlonkProtocol<C>,
     credential_proof: &[u8],
     credential_history: &[u8; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
@@ -497,9 +503,7 @@ where
     }
     let mut builder = BaseCircuitBuilder::new(false)
         .use_k(usize::try_from(KAGEMUSHA_HALO2_K_V1).expect("k fits usize"))
-        .use_lookup_bits(
-            usize::try_from(KAGEMUSHA_HALO2_K_V1 - 1).expect("lookup bits fit usize"),
-        )
+        .use_lookup_bits(usize::try_from(KAGEMUSHA_HALO2_K_V1 - 1).expect("lookup bits fit usize"))
         .use_instance_columns(1);
     let mut sha_jobs = PastaSha256JobsV1::default();
     let assigned = constrain_relation_v1(
@@ -581,7 +585,7 @@ fn constrain_relation_v1<F: KagemushaPoseidonFieldV1>(
     builder: &mut BaseCircuitBuilder<F>,
     jobs: &mut PastaSha256JobsV1<F>,
     witness: &KagemushaMintAuthorizationRelationWitnessV1,
-    enabled_profiles: &[DigestV1; COMMIT_WRAPPER_ENABLED_PROFILE_SLOTS_V1],
+    enabled_profiles: &[DigestV1; KAGEMUSHA_ENABLED_HARDWARE_PROFILE_SLOTS_V1],
     hardware_authorization: DigestV1,
 ) -> Result<AssignedAuthorizationV1<F>, String> {
     witness.validate_shape()?;
@@ -722,17 +726,20 @@ fn constrain_relation_v1<F: KagemushaPoseidonFieldV1>(
     );
     assert_digest_nonzero(ctx, &range, &recipient_opening);
     assert_digest_nonzero(ctx, &range, &credit_opening);
+    let recipient_preimage = assemble_canonical_preimage_v1(
+        ctx,
+        &range,
+        &kagemusha_recipient_credential_commitment_preimage_layout_v1()
+            .map_err(|error| error.to_string())?,
+        &KAGEMUSHA_RECIPIENT_CREDENTIAL_COMMITMENT_PREIMAGE_FIELD_RANGES_V1,
+        &[&operation, &credential_id, &recipient_opening],
+    )?;
     let expected_recipient_commitment = hash_framed(
         ctx,
         jobs,
         RECIPIENT_CREDENTIAL_COMMITMENT_DOMAIN_V1,
-        RECIPIENT_COMMITMENT_PREIMAGE_BYTES_V1,
-        [
-            operation.to_vec(),
-            credential_id.to_vec(),
-            recipient_opening.to_vec(),
-        ]
-        .concat(),
+        KAGEMUSHA_RECIPIENT_CREDENTIAL_COMMITMENT_PREIMAGE_BYTES_V1,
+        recipient_preimage,
     )?;
     bind_equal_digest(
         ctx,
@@ -740,24 +747,31 @@ fn constrain_relation_v1<F: KagemushaPoseidonFieldV1>(
         &expected_recipient_commitment,
         &recipient_commitment,
     );
+    let credit_preimage = assemble_canonical_preimage_v1(
+        ctx,
+        &range,
+        &kagemusha_mint_credit_opening_commitment_preimage_layout_v1()
+            .map_err(|error| error.to_string())?,
+        &KAGEMUSHA_MINT_CREDIT_OPENING_COMMITMENT_PREIMAGE_FIELD_RANGES_V1,
+        &[
+            &version.bytes,
+            &network,
+            &asset,
+            &incarnation,
+            &scale.bytes,
+            &pool,
+            &amount.bytes,
+            &recipient,
+            &recipient_key,
+            &credit_opening,
+        ],
+    )?;
     let expected_credit_commitment = hash_framed(
         ctx,
         jobs,
         MINT_CREDIT_OPENING_COMMITMENT_DOMAIN_V1,
-        CREDIT_COMMITMENT_PREIMAGE_BYTES_V1,
-        [
-            version.bytes.clone(),
-            network.to_vec(),
-            asset.to_vec(),
-            incarnation.to_vec(),
-            scale.bytes.clone(),
-            pool.to_vec(),
-            amount.bytes.clone(),
-            recipient.to_vec(),
-            recipient_key.to_vec(),
-            credit_opening.to_vec(),
-        ]
-        .concat(),
+        KAGEMUSHA_MINT_CREDIT_OPENING_COMMITMENT_PREIMAGE_BYTES_V1,
+        credit_preimage,
     )?;
     bind_equal_digest(ctx, &range, &expected_credit_commitment, &credit_commitment);
 
@@ -780,19 +794,21 @@ fn constrain_relation_v1<F: KagemushaPoseidonFieldV1>(
     ctx.constrain_equal(&opening_amount.value, &amount.value);
     bind_equal_digest(ctx, &range, &opening_credit_id, &credit_id);
     assert_digest_nonzero(ctx, &range, &recovery_nonce);
-    let exact_opening_digest = hash(
+    let exact_opening = assemble_canonical_preimage_v1(
         ctx,
-        jobs,
-        [
-            opening_version.bytes,
-            opening_credit_id.to_vec(),
-            opening_amount.bytes,
-            credit_opening.to_vec(),
-            recipient_opening.to_vec(),
-            recovery_nonce.to_vec(),
-        ]
-        .concat(),
+        &range,
+        &kagemusha_credit_opening_canonical_layout_v1().map_err(|error| error.to_string())?,
+        &KAGEMUSHA_CREDIT_OPENING_CANONICAL_FIELD_RANGES_V1,
+        &[
+            &opening_version.bytes,
+            &opening_credit_id,
+            &opening_amount.bytes,
+            &credit_opening,
+            &recipient_opening,
+            &recovery_nonce,
+        ],
     )?;
+    let exact_opening_digest = hash(ctx, jobs, exact_opening)?;
     bind_equal_digest(ctx, &range, &exact_opening_digest, &opening_digest);
 
     let device_secret = assign_digest(ctx, &range, witness.device_authority_secret);
@@ -984,29 +1000,35 @@ fn bind_hardware_profile<F: KagemushaPoseidonFieldV1>(
     );
     let lifetime_valid = range.is_less_than(ctx, valid_from.value, expires.value, 64);
     gate.assert_is_const(ctx, &lifetime_valid, &F::ONE);
+    let preimage = assemble_canonical_preimage_v1(
+        ctx,
+        range,
+        &kagemusha_hardware_profile_id_preimage_layout_v1().map_err(|error| error.to_string())?,
+        &KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_FIELD_RANGES_V1,
+        &[
+            &version.bytes,
+            &protocol_version.bytes,
+            &provider,
+            &platform_class.bytes,
+            &product,
+            &firmware,
+            &enrollment,
+            &trust_roots,
+            &suite_commitment,
+            &policy_epoch.bytes,
+            &governance_key,
+            &capabilities.bytes,
+            &qualification,
+            &valid_from.bytes,
+            &expires.bytes,
+        ],
+    )?;
     let expected_profile = hash_framed(
         ctx,
         jobs,
         HARDWARE_PROFILE_ID_DOMAIN_V1,
-        HARDWARE_PROFILE_ID_PREIMAGE_BYTES_V1,
-        [
-            version.bytes,
-            protocol_version.bytes,
-            provider.to_vec(),
-            platform_class.bytes,
-            product.to_vec(),
-            firmware.to_vec(),
-            enrollment.to_vec(),
-            trust_roots.to_vec(),
-            suite_commitment.to_vec(),
-            policy_epoch.bytes.clone(),
-            governance_key,
-            capabilities.bytes,
-            qualification.to_vec(),
-            valid_from.bytes.clone(),
-            expires.bytes.clone(),
-        ]
-        .concat(),
+        KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_BYTES_V1,
+        preimage,
     )?;
     bind_equal_digest(ctx, range, &expected_profile, public_profile_id);
     Ok(AssignedHardwareProfileV1 {
@@ -1091,27 +1113,34 @@ fn bind_compact_credential<F: KagemushaPoseidonFieldV1>(
             &right.assigned().expect("platform credential key byte"),
         );
     }
+    let preimage = assemble_canonical_preimage_v1(
+        ctx,
+        range,
+        &kagemusha_hardware_credential_id_preimage_layout_v1()
+            .map_err(|error| error.to_string())?,
+        &KAGEMUSHA_HARDWARE_CREDENTIAL_ID_PREIMAGE_FIELD_RANGES_V1,
+        &[
+            &version.bytes,
+            &network,
+            &credential_profile,
+            &suite,
+            &firmware,
+            &policy_epoch.bytes,
+            &lane,
+            &epoch,
+            &generation.bytes,
+            &device_key,
+            &key_reference,
+            &issued.bytes,
+            &expires.bytes,
+        ],
+    )?;
     let expected_id = hash_framed(
         ctx,
         jobs,
         HARDWARE_CREDENTIAL_ID_DOMAIN_V1,
-        HARDWARE_CREDENTIAL_ID_PREIMAGE_BYTES_V1,
-        [
-            version.bytes,
-            network.to_vec(),
-            credential_profile.to_vec(),
-            suite.to_vec(),
-            firmware.to_vec(),
-            policy_epoch.bytes,
-            lane.to_vec(),
-            epoch.to_vec(),
-            generation.bytes,
-            device_key,
-            key_reference.to_vec(),
-            issued.bytes,
-            expires.bytes,
-        ]
-        .concat(),
+        KAGEMUSHA_HARDWARE_CREDENTIAL_ID_PREIMAGE_BYTES_V1,
+        preimage,
     )?;
     bind_equal_digest(ctx, range, &expected_id, public_credential_id);
     bind_equal_digest(
@@ -1136,7 +1165,7 @@ fn validate_audits(eq: DigestV1, ep: DigestV1) -> Result<(), String> {
 }
 
 fn validate_enabled_profiles(
-    profiles: &[DigestV1; COMMIT_WRAPPER_ENABLED_PROFILE_SLOTS_V1],
+    profiles: &[DigestV1; KAGEMUSHA_ENABLED_HARDWARE_PROFILE_SLOTS_V1],
 ) -> Result<(), String> {
     let mut previous = None;
     let mut padding = false;
@@ -1255,50 +1284,28 @@ fn account_identity_digest_v1(
     ))
 }
 
-fn canonical_hardware_credential_id_v1(credential: &KagemushaHardwareCredentialV1) -> DigestV1 {
-    let mut bytes = Vec::with_capacity(HARDWARE_CREDENTIAL_ID_PREIMAGE_BYTES_V1);
-    bytes.extend_from_slice(&credential.version.to_le_bytes());
-    bytes.extend_from_slice(credential.network_id.as_bytes());
-    bytes.extend_from_slice(&credential.hardware_profile_id);
-    bytes.extend_from_slice(&credential.suite_id);
-    bytes.extend_from_slice(&credential.firmware_policy_digest);
-    bytes.extend_from_slice(&credential.policy_epoch.to_le_bytes());
-    bytes.extend_from_slice(&credential.lane_commitment);
-    bytes.extend_from_slice(&credential.hardware_epoch_id);
-    bytes.extend_from_slice(&credential.hardware_epoch_generation.to_le_bytes());
-    bytes.extend_from_slice(credential.device_public_key.as_sec1_bytes());
-    bytes.extend_from_slice(&credential.device_key_reference);
-    bytes.extend_from_slice(&credential.issued_at_ms.to_le_bytes());
-    bytes.extend_from_slice(&credential.expires_at_ms.to_le_bytes());
-    assert_eq!(bytes.len(), HARDWARE_CREDENTIAL_ID_PREIMAGE_BYTES_V1);
-    digest_framed_native_v1(HARDWARE_CREDENTIAL_ID_DOMAIN_V1, &bytes)
+fn canonical_hardware_credential_id_v1(
+    credential: &KagemushaHardwareCredentialV1,
+) -> Result<DigestV1, String> {
+    let bytes = credential
+        .canonical_id_preimage_bytes()
+        .map_err(|error| error.to_string())?;
+    Ok(digest_framed_native_v1(
+        HARDWARE_CREDENTIAL_ID_DOMAIN_V1,
+        &bytes,
+    ))
 }
 
-fn canonical_hardware_profile_id_v1(profile: &KagemushaHardwareProfileV1) -> DigestV1 {
-    let mut bytes = Vec::with_capacity(HARDWARE_PROFILE_ID_PREIMAGE_BYTES_V1);
-    bytes.extend_from_slice(&profile.version.to_le_bytes());
-    bytes.extend_from_slice(&profile.protocol_version.to_le_bytes());
-    bytes.extend_from_slice(&profile.provider_id);
-    let platform_class = match profile.platform_class {
-        iroha_data_model::kagemusha::KagemushaHardwarePlatformClassV1::AndroidOemService => 0_u32,
-        iroha_data_model::kagemusha::KagemushaHardwarePlatformClassV1::AppleOemService => 1,
-        iroha_data_model::kagemusha::KagemushaHardwarePlatformClassV1::DedicatedSecureElement => 2,
-        iroha_data_model::kagemusha::KagemushaHardwarePlatformClassV1::OtherQualified => 3,
-    };
-    bytes.extend_from_slice(&platform_class.to_le_bytes());
-    bytes.extend_from_slice(&profile.product_class_digest);
-    bytes.extend_from_slice(&profile.firmware_policy_digest);
-    bytes.extend_from_slice(&profile.enrollment_attestation_verifier_digest);
-    bytes.extend_from_slice(&profile.attestation_trust_roots_digest);
-    bytes.extend_from_slice(&profile.allowed_suite_commitment);
-    bytes.extend_from_slice(&profile.policy_epoch.to_le_bytes());
-    bytes.extend_from_slice(profile.governance_credential_public_key.as_sec1_bytes());
-    bytes.extend_from_slice(&profile.capability_mask.to_le_bytes());
-    bytes.extend_from_slice(&profile.qualification_report_digest);
-    bytes.extend_from_slice(&profile.valid_from_ms.to_le_bytes());
-    bytes.extend_from_slice(&profile.expires_at_ms.to_le_bytes());
-    assert_eq!(bytes.len(), HARDWARE_PROFILE_ID_PREIMAGE_BYTES_V1);
-    digest_framed_native_v1(HARDWARE_PROFILE_ID_DOMAIN_V1, &bytes)
+fn canonical_hardware_profile_id_v1(
+    profile: &KagemushaHardwareProfileV1,
+) -> Result<DigestV1, String> {
+    let bytes = profile
+        .canonical_id_preimage_bytes()
+        .map_err(|error| error.to_string())?;
+    Ok(digest_framed_native_v1(
+        HARDWARE_PROFILE_ID_DOMAIN_V1,
+        &bytes,
+    ))
 }
 
 fn digest_framed_native_v1(domain: &[u8], bytes: &[u8]) -> DigestV1 {
@@ -1412,16 +1419,19 @@ pub(crate) fn mint_authorization_public_instances_v1<F: KagemushaPoseidonFieldV1
 }
 
 #[cfg(test)]
+#[path = "mint_authorization_canonical_tests.rs"]
+mod canonical_tests;
+
+#[cfg(test)]
 mod tests {
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
         NetworkId,
         block::BlockHeader,
         kagemusha::{
-            KAGEMUSHA_WIRE_VERSION_V1, KagemushaDevicePublicKeyV1,
-            KagemushaDeviceSignatureV1, KagemushaHardwareCredentialV1,
-            KagemushaHardwarePlatformClassV1, KagemushaHardwareProfileV1,
-            kagemusha_device_key_reference_v1,
+            KAGEMUSHA_WIRE_VERSION_V1, KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1,
+            KagemushaHardwareCredentialV1, KagemushaHardwarePlatformClassV1,
+            KagemushaHardwareProfileV1, kagemusha_device_key_reference_v1,
         },
     };
     use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
@@ -1470,7 +1480,7 @@ mod tests {
         .seal_hardware_profile_id()
         .expect("profile identity");
         assert_eq!(
-            canonical_hardware_profile_id_v1(&profile),
+            canonical_hardware_profile_id_v1(&profile).expect("profile preimage"),
             profile
                 .expected_hardware_profile_id()
                 .expect("canonical profile identity")
@@ -1502,7 +1512,7 @@ mod tests {
         .seal_credential_id()
         .expect("credential identity");
         assert_eq!(
-            canonical_hardware_credential_id_v1(&credential),
+            canonical_hardware_credential_id_v1(&credential).expect("credential preimage"),
             credential
                 .expected_credential_id()
                 .expect("canonical credential identity")

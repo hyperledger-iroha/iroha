@@ -1,19 +1,19 @@
 namespace Hyperledger.Iroha.Kagemusha;
 
-/// <summary>Hardware properties required together by every production Kagemusha V1 provider.</summary>
+/// <summary>Hardware properties required together by every production KAGEMUSHA V1 provider.</summary>
 public enum KagemushaHardwareCapabilityV1
 {
     ExactNextPredecessorConsumption,
     OneUseSuccessorAuthorization,
     RollbackResistantCounterAndJournal,
     SealedTransitionRecovery,
-    DurableInboxReservation,
+    RollbackResistantAcceptedCreditInbox,
     AuthenticatedInboundStaging,
     AuthoritativeReplayRootRecovery,
     SenderOutboxReservation,
     AuthenticatedDurableRetryOutbox,
     AtomicVerifiedCandidateCommit,
-    AtomicRecoverableTransitionCertificate,
+    RecoverableTerminalCommitCertificate,
     TrustedTimeOrLease,
     OfflineHardwareEpochRotation,
     RollbackSafeCounterRollover,
@@ -52,7 +52,7 @@ public sealed class KagemushaHardwareQualificationV1
     /// <summary>Reject a partial, old, expired, or software-backed provider.</summary>
     public void RequireProductionReady()
     {
-        if (ProtocolVersion != KagemushaV1.WireVersion
+        if (ProtocolVersion != Kagemusha.WireVersion
             || Profile.Version != ProtocolVersion
             || Profile.ProtocolVersion != ProtocolVersion
             || Credential.Version != ProtocolVersion
@@ -62,7 +62,7 @@ public sealed class KagemushaHardwareQualificationV1
             || Enum.GetValues<KagemushaHardwareCapabilityV1>().Any(value => !capabilities.Contains(value)))
         {
             throw new InvalidOperationException(
-                "Kagemusha V1 requires the complete qualified non-forking native hardware capability set.");
+                "KAGEMUSHA V1 requires the complete qualified non-forking native hardware capability set.");
         }
     }
 }
@@ -114,7 +114,7 @@ public sealed class KagemushaHardwarePaymentStageV1
         ReadOnlySpan<byte> creditId,
         ReadOnlySpan<byte> acknowledgement)
     {
-        if (acknowledgement.IsEmpty || acknowledgement.Length > KagemushaV1.MaximumAcknowledgementBytes)
+        if (acknowledgement.IsEmpty || acknowledgement.Length > Kagemusha.MaximumAcknowledgementBytes)
             throw new ArgumentOutOfRangeException(nameof(acknowledgement));
         Disposition = disposition;
         this.creditId = KagemushaModelValidation.Fixed32(creditId, nameof(creditId));
@@ -161,6 +161,33 @@ public sealed class KagemushaHardwareTerminalResultV1
     public byte[] AggregateState() => aggregateState.ToArray();
 }
 
+/// <summary>One exact-next transition that folds one durably staged credit.</summary>
+public sealed class KagemushaHardwareReceiveFoldV1
+{
+    private readonly byte[] aggregateState;
+
+    public KagemushaHardwareReceiveFoldV1(ReadOnlySpan<byte> aggregateState)
+    {
+        if (aggregateState.IsEmpty)
+            throw new ArgumentException("Native aggregate state cannot be empty.", nameof(aggregateState));
+        this.aggregateState = aggregateState.ToArray();
+    }
+
+    public byte[] AggregateState() => aggregateState.ToArray();
+}
+
+/// <summary>Public result of installing one received credit into the aggregate state.</summary>
+public sealed class KagemushaReceiveFoldResultV1
+{
+    public KagemushaReceiveFoldResultV1(KagemushaAggregateStateCommitmentV1 aggregateState)
+    {
+        ArgumentNullException.ThrowIfNull(aggregateState);
+        AggregateState = aggregateState;
+    }
+
+    public KagemushaAggregateStateCommitmentV1 AggregateState { get; }
+}
+
 public sealed class KagemushaStagedPaymentV1
 {
     private readonly byte[] canonicalAcknowledgement;
@@ -189,17 +216,41 @@ public interface IKagemushaNativeHardwareProviderV1
     KagemushaHardwareQualificationV1 Qualification();
     KagemushaHardwareRecoveryV1 Recover();
     byte[] BootstrapState();
-    byte[] CreatePaymentRequest(byte[] recipientAccount, UInt128 amount, ulong validityWindowMilliseconds);
-    KagemushaHardwarePaymentStageV1 StagePayment(byte[] canonicalRequest, byte[] canonicalPayment);
+    byte[] CreatePaymentRequest(
+        byte[] recipientAccount,
+        UInt128 amount,
+        ulong validityWindowMilliseconds);
+    /// <summary>
+    /// Durably stage one credit and recover the same ACK on retry. Native inbox counters are
+    /// independent of the monetary journal; staging must not advance <see cref="JournalRevision"/>.
+    /// </summary>
+    KagemushaHardwarePaymentStageV1 StagePayment(
+        byte[] canonicalRequest,
+        byte[] canonicalPayment);
+    /// <summary>Stage without folding the balance or advancing the monetary journal.</summary>
     KagemushaHardwareMintStageV1 StageMintCredit(byte[] canonicalAuthorization, byte[] canonicalMintCredit);
     UInt128 PendingCreditWatermark();
+    /// <summary>Return the monetary transition revision, never the independent inbox revision.</summary>
     UInt128 JournalRevision();
-    byte[]? FoldPendingCredit(UInt128 inboxSequenceInclusive);
+    KagemushaHardwareReceiveFoldV1? FoldReceiveCredit(UInt128 inboxSequenceInclusive);
+    /// <summary>
+    /// Fold only required credits, prepare and verify the candidate, commit exactly once, then
+    /// generate and persist the post-commit proof and payment. Unrelated inbox backlog remains.
+    /// </summary>
     KagemushaHardwareTerminalResultV1 CommitPayment(byte[] canonicalRequest);
     byte[]? RecoverPayment(byte[] creditId);
-    void RecordAcknowledgement(byte[] creditId, byte[] canonicalAcknowledgement);
+    void RecordAcknowledgement(
+        byte[] creditId,
+        byte[] canonicalRequest,
+        byte[] canonicalPayment,
+        byte[] canonicalAcknowledgement);
+    /// <summary>
+    /// Fold only credits needed for <paramref name="amount"/>, then atomically prepare, prove,
+    /// commit, and persist one redemption. Unrelated inbox backlog remains for background folding.
+    /// </summary>
     KagemushaHardwareTerminalResultV1 CommitRedemption(UInt128 amount, byte[] beneficiaryAccount);
     byte[]? RecoverRedemption(byte[] redemptionId);
+    /// <summary>Rotate the complete balance, replay root, and pending inbox without folding first.</summary>
     byte[] RotateHardwareEpoch();
 }
 
@@ -207,6 +258,7 @@ public interface IKagemushaNativeHardwareProviderV1
 public sealed class KagemushaWalletV1
 {
     private readonly object transitionLock = new();
+    private int waitingForegroundTransitions;
     private readonly IKagemushaNativeHardwareProviderV1 provider;
     private KagemushaHardwareQualificationV1 qualification;
     private KagemushaAggregateStateCommitmentV1 aggregateState;
@@ -243,10 +295,12 @@ public sealed class KagemushaWalletV1
     public static KagemushaWalletV1 Open(IKagemushaNativeHardwareProviderV1 provider)
     {
         ArgumentNullException.ThrowIfNull(provider);
-        var qualification = RequireQualified(provider.Qualification());
+        _ = RequireQualified(provider.Qualification());
         var recovery = provider.Recover();
+        // Recovery may complete a committed epoch rotation; bind its state to the recovered tuple.
+        var qualification = RequireQualified(provider.Qualification());
         var stateBytes = recovery.AggregateState() ?? provider.BootstrapState();
-        var state = KagemushaV1.DecodeAggregateState(stateBytes);
+        var state = Kagemusha.DecodeAggregateState(stateBytes);
         RequireStateQualification(state, qualification);
         if (provider.JournalRevision() != recovery.JournalRevision)
             throw new InvalidOperationException("Native recovery journal revision changed while opening the wallet.");
@@ -255,12 +309,13 @@ public sealed class KagemushaWalletV1
 
     public KagemushaHardwareRecoveryV1 Recover()
     {
-        lock (transitionLock)
+        using (EnterForegroundTransition())
         {
-            var nextQualification = RequireQualified(provider.Qualification());
+            _ = RequireQualified(provider.Qualification());
             var recovery = provider.Recover();
+            var nextQualification = RequireQualified(provider.Qualification());
             var stateBytes = recovery.AggregateState() ?? provider.BootstrapState();
-            var state = KagemushaV1.DecodeAggregateState(stateBytes);
+            var state = Kagemusha.DecodeAggregateState(stateBytes);
             RequireStateQualification(state, nextQualification);
             var revision = provider.JournalRevision();
             if (revision != recovery.JournalRevision)
@@ -269,7 +324,7 @@ public sealed class KagemushaWalletV1
             aggregateState = state;
             journalRevision = revision;
             return new KagemushaHardwareRecoveryV1(
-                KagemushaV1.EncodeAggregateState(state),
+                Kagemusha.EncodeAggregateState(state),
                 revision,
                 recovery.PendingCreditCount,
                 recovery.RetryOutboxCount);
@@ -282,13 +337,12 @@ public sealed class KagemushaWalletV1
         ulong validityWindowMilliseconds)
     {
         ArgumentNullException.ThrowIfNull(recipient);
-        if (amount == 0)
-            throw new ArgumentOutOfRangeException(nameof(amount));
-        if (validityWindowMilliseconds is 0 or > KagemushaV1.RequestMaximumTtlMilliseconds)
+        if (amount == 0) throw new ArgumentOutOfRangeException(nameof(amount));
+        if (validityWindowMilliseconds is 0 or > Kagemusha.RequestMaximumTtlMilliseconds)
             throw new ArgumentOutOfRangeException(nameof(validityWindowMilliseconds));
-        lock (transitionLock)
+        using (EnterForegroundTransition())
         {
-            var request = KagemushaV1.DecodePaymentRequest(provider.CreatePaymentRequest(
+            var request = Kagemusha.DecodePaymentRequest(provider.CreatePaymentRequest(
                 recipient.CanonicalPayload(), amount, validityWindowMilliseconds));
             if (!request.Recipient.Equals(recipient)
                 || request.Amount != amount
@@ -301,12 +355,12 @@ public sealed class KagemushaWalletV1
 
     public KagemushaPaymentV1 Send(KagemushaPaymentRequestV1 request)
     {
-        lock (transitionLock)
+        ArgumentNullException.ThrowIfNull(request);
+        using (EnterForegroundTransition())
         {
-            DrainPendingCreditsLocked();
-            var canonicalRequest = KagemushaV1.EncodePaymentRequest(request);
+            var canonicalRequest = Kagemusha.EncodePaymentRequest(request);
             var result = provider.CommitPayment(canonicalRequest);
-            var payment = KagemushaV1.DecodePayment(result.CanonicalEnvelope(), request);
+            var payment = Kagemusha.DecodePayment(result.CanonicalEnvelope(), request);
             InstallAuthoritativeState(result.AggregateState());
             return payment;
         }
@@ -316,19 +370,21 @@ public sealed class KagemushaWalletV1
         KagemushaPaymentRequestV1 request,
         KagemushaPaymentV1 payment)
     {
-        lock (transitionLock)
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(payment);
+        using (EnterForegroundTransition())
         {
-            var canonicalRequest = KagemushaV1.EncodePaymentRequest(request);
-            var canonicalPayment = KagemushaV1.EncodePayment(payment, request);
-            var before = journalRevision;
+            var canonicalRequest = Kagemusha.EncodePaymentRequest(request);
+            var canonicalPayment = Kagemusha.EncodePayment(payment, request);
+            var before = provider.JournalRevision();
             var staged = provider.StagePayment(canonicalRequest, canonicalPayment);
-            if (!staged.CreditId().AsSpan().SequenceEqual(payment.Statement.Lifecycle.CreditId.Span))
+            if (!staged.CreditId().AsSpan().SequenceEqual(payment.Output.CreditId.Span))
                 throw new InvalidOperationException("Native staging returned a different credit id.");
             var canonicalAcknowledgement = staged.Acknowledgement();
-            var acknowledgement = KagemushaV1.DecodeAcknowledgement(
+            var acknowledgement = Kagemusha.DecodeAcknowledgement(
                 canonicalAcknowledgement, request, payment);
             var after = provider.JournalRevision();
-            RequireJournalDisposition(before, after, staged.Disposition);
+            RequireStagingJournalUnchanged(before, after);
             journalRevision = after;
             return new KagemushaStagedPaymentV1(
                 staged.Disposition, acknowledgement, canonicalAcknowledgement);
@@ -339,41 +395,72 @@ public sealed class KagemushaWalletV1
         KagemushaMintAuthorizationV1 authorization,
         KagemushaMintCreditV1 mintCredit)
     {
-        lock (transitionLock)
+        using (EnterForegroundTransition())
         {
-            var canonicalAuthorization = KagemushaV1.EncodeMintAuthorization(authorization);
-            var canonicalCredit = KagemushaV1.EncodeMintCredit(mintCredit, authorization);
-            var before = journalRevision;
+            var canonicalAuthorization = Kagemusha.EncodeMintAuthorization(authorization);
+            var canonicalCredit = Kagemusha.EncodeMintCredit(mintCredit, authorization);
+            var before = provider.JournalRevision();
             var staged = provider.StageMintCredit(canonicalAuthorization, canonicalCredit);
             if (!staged.CreditId().AsSpan().SequenceEqual(mintCredit.Statement.Lifecycle.CreditId.Span))
                 throw new InvalidOperationException("Native mint staging returned a different credit id.");
             var after = provider.JournalRevision();
-            RequireJournalDisposition(before, after, staged.Disposition);
+            RequireStagingJournalUnchanged(before, after);
             journalRevision = after;
             return staged.Disposition;
         }
     }
 
-    public bool FoldPendingCredit()
+    /// <summary>Fold one durably staged credit, if one is pending.</summary>
+    public KagemushaReceiveFoldResultV1? FoldReceiveCredit()
     {
-        lock (transitionLock) return FoldAtWatermarkLocked(provider.PendingCreditWatermark());
+        using (EnterForegroundTransition()) return FoldAtWatermarkLocked(provider.PendingCreditWatermark());
     }
 
-    /// <summary>Drain one stable snapshot using repeated single-credit folds; no count cap is imposed.</summary>
+    /// <summary>
+    /// Drain one epoch-bound inbox snapshot, yielding to queued foreground work between credits.
+    /// If concurrent recovery or rotation changes the epoch, retry this operation with a new snapshot;
+    /// credits already folded remain installed and the old watermark is never reused.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The epoch changed; retry to capture a new snapshot.</exception>
     public UInt128 DrainPendingCredits()
     {
-        lock (transitionLock) return DrainPendingCreditsLocked();
+        byte[] epochId;
+        ulong epochGeneration;
+        UInt128 watermark;
+        lock (transitionLock)
+        {
+            YieldToForegroundLocked();
+            epochId = qualification.Credential.HardwareEpochId.ToArray();
+            epochGeneration = qualification.Credential.HardwareEpochGeneration;
+            watermark = provider.PendingCreditWatermark();
+        }
+        UInt128 total = 0;
+        while (true)
+        {
+            lock (transitionLock)
+            {
+                YieldToForegroundLocked();
+                if (qualification.Credential.HardwareEpochGeneration != epochGeneration
+                    || !qualification.Credential.HardwareEpochId.Span.SequenceEqual(epochId))
+                    throw new InvalidOperationException(
+                        "Hardware epoch changed during inbox drain; retry with a new snapshot.");
+                var fold = FoldAtWatermarkLocked(watermark);
+                if (fold is null) return total;
+                total = checked(total + 1);
+            }
+        }
     }
 
     public KagemushaPaymentV1? RecoverPayment(
         KagemushaPaymentRequestV1 request,
         ReadOnlySpan<byte> creditId)
     {
+        ArgumentNullException.ThrowIfNull(request);
         var expected = KagemushaModelValidation.Fixed32(creditId, nameof(creditId));
         var canonical = provider.RecoverPayment(expected);
         if (canonical is null) return null;
-        var payment = KagemushaV1.DecodePayment(canonical, request);
-        if (!payment.Statement.Lifecycle.CreditId.Span.SequenceEqual(expected))
+        var payment = Kagemusha.DecodePayment(canonical, request);
+        if (!payment.Output.CreditId.Span.SequenceEqual(expected))
             throw new InvalidOperationException("Recovered payment has a different credit id.");
         return payment;
     }
@@ -383,19 +470,29 @@ public sealed class KagemushaWalletV1
         KagemushaPaymentV1 payment,
         KagemushaAcknowledgementV1 acknowledgement)
     {
-        var canonical = KagemushaV1.EncodeAcknowledgement(acknowledgement, request, payment);
-        provider.RecordAcknowledgement(payment.Statement.Lifecycle.CreditId.ToArray(), canonical);
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(payment);
+        ArgumentNullException.ThrowIfNull(acknowledgement);
+        var canonicalRequest = Kagemusha.EncodePaymentRequest(request);
+        var canonicalPayment = Kagemusha.EncodePayment(payment, request);
+        var canonicalAcknowledgement = Kagemusha.EncodeAcknowledgement(
+            acknowledgement, request, payment);
+        _ = Kagemusha.ValidateCompleteExchange(request, payment, acknowledgement);
+        provider.RecordAcknowledgement(
+            payment.Output.CreditId.ToArray(),
+            canonicalRequest,
+            canonicalPayment,
+            canonicalAcknowledgement);
     }
 
     public KagemushaRedemptionVoucherV1 Redeem(UInt128 amount, KagemushaAccountIdV1 beneficiary)
     {
         if (amount == 0) throw new ArgumentOutOfRangeException(nameof(amount));
         ArgumentNullException.ThrowIfNull(beneficiary);
-        lock (transitionLock)
+        using (EnterForegroundTransition())
         {
-            DrainPendingCreditsLocked();
             var result = provider.CommitRedemption(amount, beneficiary.CanonicalPayload());
-            var voucher = KagemushaV1.DecodeRedemptionVoucher(result.CanonicalEnvelope());
+            var voucher = Kagemusha.DecodeRedemptionVoucher(result.CanonicalEnvelope());
             if (voucher.Statement.Amount != amount || !voucher.Statement.Beneficiary.Equals(beneficiary))
                 throw new InvalidOperationException("Native redemption output differs from the request.");
             InstallAuthoritativeState(result.AggregateState());
@@ -408,60 +505,132 @@ public sealed class KagemushaWalletV1
         var expected = KagemushaModelValidation.Fixed32(redemptionId, nameof(redemptionId));
         var canonical = provider.RecoverRedemption(expected);
         if (canonical is null) return null;
-        var voucher = KagemushaV1.DecodeRedemptionVoucher(canonical);
+        var voucher = Kagemusha.DecodeRedemptionVoucher(canonical);
         if (!voucher.Statement.RedemptionId.Span.SequenceEqual(expected))
             throw new InvalidOperationException("Recovered redemption has a different id.");
         return voucher;
     }
 
+    /// <summary>Rotate even when the old epoch's counters are saturated and credits remain pending.</summary>
     public KagemushaAggregateStateCommitmentV1 RotateHardwareEpoch()
     {
-        lock (transitionLock)
+        using (EnterForegroundTransition())
         {
-            DrainPendingCreditsLocked();
-            InstallAuthoritativeState(provider.RotateHardwareEpoch());
-            qualification = RequireQualified(provider.Qualification());
-            RequireStateQualification(aggregateState, qualification);
-            return aggregateState;
+            var previousState = aggregateState;
+            var previousCredential = qualification.Credential;
+            if (previousCredential.HardwareEpochGeneration == ulong.MaxValue)
+                throw new InvalidOperationException("Hardware epoch generation is exhausted.");
+
+            // Pending receipts must survive rotation: folding first would overflow the old
+            // epoch's journal or state sequence precisely when rollover is required.
+            var state = Kagemusha.DecodeAggregateState(provider.RotateHardwareEpoch());
+            var nextQualification = RequireQualified(provider.Qualification());
+            var credential = nextQualification.Credential;
+            var revision = provider.JournalRevision();
+            RequireSameAsset(previousState, state);
+            RequireStateQualification(state, nextQualification);
+            if (credential.NetworkId != previousCredential.NetworkId
+                || !credential.LaneCommitment.Span.SequenceEqual(previousCredential.LaneCommitment.Span)
+                || credential.HardwareEpochGeneration != previousCredential.HardwareEpochGeneration + 1
+                || credential.HardwareEpochId.Span.SequenceEqual(previousCredential.HardwareEpochId.Span)
+                || state.StateCommitment.Span.SequenceEqual(previousState.StateCommitment.Span)
+                || state.Sequence != 0
+                || revision != 0)
+                throw new InvalidOperationException("Hardware rotation did not return an exact next epoch with reset counters.");
+
+            // Publish the host cache only after every returned binding has been validated.
+            qualification = nextQualification;
+            aggregateState = state;
+            journalRevision = revision;
+            return state;
         }
     }
 
-    private UInt128 DrainPendingCreditsLocked()
-    {
-        var watermark = provider.PendingCreditWatermark();
-        UInt128 total = 0;
-        while (true)
-        {
-            if (!FoldAtWatermarkLocked(watermark)) return total;
-            total = checked(total + 1);
-        }
-    }
-
-    private bool FoldAtWatermarkLocked(UInt128 watermark)
+    private KagemushaReceiveFoldResultV1? FoldAtWatermarkLocked(UInt128 watermark)
     {
         var before = journalRevision;
-        var beforeCommitment = aggregateState.StateCommitment.ToArray();
-        var successor = provider.FoldPendingCredit(watermark);
-        if (successor is not null)
-        {
-            InstallAuthoritativeState(successor);
-            if (aggregateState.StateCommitment.Span.SequenceEqual(beforeCommitment))
-                throw new InvalidOperationException("A receive fold made no aggregate-state progress.");
-        }
+        var previousState = aggregateState;
+        var hardwareFold = provider.FoldReceiveCredit(watermark);
         var after = provider.JournalRevision();
-        var expected = successor is null ? before : checked(before + 1);
-        if (after != expected)
+        KagemushaAggregateStateCommitmentV1? successor = null;
+        if (hardwareFold is not null)
+        {
+            successor = Kagemusha.DecodeAggregateState(hardwareFold.AggregateState());
+            RequireSameAsset(previousState, successor);
+            RequireStateQualification(successor, qualification);
+            if (successor.StateCommitment.Span.SequenceEqual(previousState.StateCommitment.Span)
+                || previousState.Sequence == UInt128.MaxValue
+                || successor.Sequence != previousState.Sequence + 1)
+                throw new InvalidOperationException("A receive fold did not produce an exact next aggregate state.");
+        }
+        if (hardwareFold is null ? after != before : before == UInt128.MaxValue || after != before + 1)
             throw new InvalidOperationException("A receive fold did not consume exactly one journal revision.");
+
+        // No validation or provider call follows publication, and every reader holds this gate.
+        if (successor is not null) aggregateState = successor;
         journalRevision = after;
-        return successor is not null;
+        return hardwareFold is null
+            ? null
+            : new KagemushaReceiveFoldResultV1(aggregateState);
     }
 
     private void InstallAuthoritativeState(byte[] bytes)
     {
-        var state = KagemushaV1.DecodeAggregateState(bytes);
+        var state = Kagemusha.DecodeAggregateState(bytes);
         RequireSameAsset(aggregateState, state);
+        RequireStateQualification(state, qualification);
+        var revision = provider.JournalRevision();
         aggregateState = state;
-        journalRevision = provider.JournalRevision();
+        journalRevision = revision;
+    }
+
+    private ForegroundTransitionLease EnterForegroundTransition()
+    {
+        // Register before Monitor.Enter so a draining thread cannot repeatedly overtake this work.
+        Interlocked.Increment(ref waitingForegroundTransitions);
+        try { Monitor.Enter(transitionLock); }
+        catch
+        {
+            CancelQueuedForegroundTransition();
+            throw;
+        }
+        Interlocked.Decrement(ref waitingForegroundTransitions);
+        return new ForegroundTransitionLease(transitionLock);
+    }
+
+    private void CancelQueuedForegroundTransition()
+    {
+        // Deregister under the same gate as the drain's check-and-wait, then wake it. Removing
+        // a failed entrant outside this gate could leave the drain asleep without a lease to pulse.
+        while (true)
+        {
+            try { Monitor.Enter(transitionLock); break; }
+            catch (ThreadInterruptedException)
+            {
+                // Finish queue cleanup even if interrupted again; the original entry error wins.
+            }
+        }
+        try
+        {
+            Interlocked.Decrement(ref waitingForegroundTransitions);
+            Monitor.PulseAll(transitionLock);
+        }
+        finally { Monitor.Exit(transitionLock); }
+    }
+
+    private void YieldToForegroundLocked()
+    {
+        while (Volatile.Read(ref waitingForegroundTransitions) != 0)
+            Monitor.Wait(transitionLock);
+    }
+
+    private readonly struct ForegroundTransitionLease(object gate) : IDisposable
+    {
+        public void Dispose()
+        {
+            Monitor.PulseAll(gate);
+            Monitor.Exit(gate);
+        }
     }
 
     private static KagemushaHardwareQualificationV1 RequireQualified(
@@ -472,16 +641,12 @@ public sealed class KagemushaWalletV1
         return value;
     }
 
-    private static void RequireJournalDisposition(
-        UInt128 before,
-        UInt128 after,
-        KagemushaHardwareStageDispositionV1 disposition)
+    private static void RequireStagingJournalUnchanged(UInt128 before, UInt128 after)
     {
-        var expected = disposition == KagemushaHardwareStageDispositionV1.Staged
-            ? checked(before + 1)
-            : before;
-        if (after != expected)
-            throw new InvalidOperationException("Native staging returned an invalid journal revision.");
+        // Inbox exact-next/replay accounting is native-authoritative and separate from the
+        // monetary journal. Staging (including mint staging) is not a balance-fold transition.
+        if (after != before)
+            throw new InvalidOperationException("Native inbox staging changed the monetary journal revision.");
     }
 
     private static void RequireStateQualification(
@@ -490,6 +655,8 @@ public sealed class KagemushaWalletV1
     {
         if (!state.ReleaseId.Span.SequenceEqual(qualification.ReleaseId())
             || state.NetworkId != qualification.Credential.NetworkId
+            || !state.LaneId.Span.SequenceEqual(qualification.Credential.LaneCommitment.Span)
+            || !state.HardwareEpochId.Span.SequenceEqual(qualification.Credential.HardwareEpochId.Span)
             || !state.KeyReference.Span.SequenceEqual(qualification.Credential.DeviceKeyReference.Span)
             || !state.HardwarePolicyId.Span.SequenceEqual(qualification.Profile.HardwareProfileId.Span))
             throw new InvalidOperationException("Aggregate state does not match native qualification.");

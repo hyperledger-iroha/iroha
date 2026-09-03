@@ -623,8 +623,7 @@ pub mod isi {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let definition_id = asset_definition.id();
-        let derived =
-            kagemusha_reserve_account_id(state_transaction.network_id(), definition_id);
+        let derived = kagemusha_reserve_account_id(state_transaction.network_id(), definition_id);
         let reserve_account = match state_transaction
             .settlement
             .kagemusha
@@ -2425,11 +2424,7 @@ pub mod isi {
                     .into());
                 }
             }
-            for (_, operation) in state_transaction
-                .world
-                .kagemusha_reserve_operations
-                .iter()
-            {
+            for (_, operation) in state_transaction.world.kagemusha_reserve_operations.iter() {
                 let pool = operation.pool();
                 if pool.asset == asset_definition_id
                     && state_transaction

@@ -100,7 +100,7 @@ final class IrohaPeerQRV1Tests: XCTestCase {
         XCTAssertEqual(encoded[4], 1)
         XCTAssertEqual(encoded[5], 2)
         XCTAssertEqual(readUInt16BE(encoded, 6), 1)
-        XCTAssertEqual(encoded[8], 2)
+        XCTAssertEqual(encoded[8], IrohaPeerWireKindV1.payment.rawValue)
         XCTAssertEqual(encoded[9], 0)
         XCTAssertEqual(Data(encoded[10..<26]), message.streamID)
         XCTAssertEqual(readUInt16BE(encoded, 28), 3)

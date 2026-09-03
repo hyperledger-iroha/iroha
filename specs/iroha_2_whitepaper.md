@@ -123,7 +123,7 @@ The `iroha_data_model` crate defines all ledger objects, instructions, queries, 
 - **Consensus artifacts**—such as commit certificates and witness lists—reside in the data model and
   round-trip through golden tests to guarantee compatibility between `iroha_core`, Torii, and SDKs.
 - **Confidential registries and events** capture asset policies, verifier keys,
-  commitments, nullifiers, and authenticated transfer events. Kagemusha V1
+  commitments, nullifiers, and authenticated transfer events. KAGEMUSHA V1
   settles top-ups and redemptions against one consensus-accounted reserve per
   asset while peer transfers update only hardware-bound recursive aggregate
   state; V1 exposes no generic shield/transfer/unshield event family.

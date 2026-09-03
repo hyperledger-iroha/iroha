@@ -93,6 +93,8 @@ pub mod interlane;
 pub mod iso_bridge;
 /// Jurisdiction attestation/SDN enforcement helpers.
 pub mod jurisdiction;
+/// Qualified-provider encryption for Kagemusha V1 credit openings.
+pub mod kagemusha_v1_crypto;
 /// Kiso: storage primitives and data layout.
 pub mod kiso;
 /// Persistent block storage (Kura) backend.
@@ -112,8 +114,6 @@ pub mod native_amx;
 pub(crate) mod native_amx_fault_injection;
 /// Nexus helpers (UAID portfolio aggregation, etc.).
 pub mod nexus;
-/// Qualified-provider encryption for Kagemusha V1 credit openings.
-pub mod kagemusha_v1_crypto;
 /// Oracle host helpers (admission/aggregation plumbing).
 pub mod oracle;
 /// Panic hook suppression helpers shared across crates.

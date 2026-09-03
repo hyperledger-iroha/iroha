@@ -1,13 +1,17 @@
-//! Canonical Torii command surface for Kagemusha V1.
+//! Canonical Torii command surface for KAGEMUSHA V1.
 //!
-//! The public request and response values come directly from the data model.
-//! Torii validates one exact V1 request, binds its idempotency key to the
-//! canonical request digest, and submits the corresponding V1 instruction.
-//! No legacy request, status, finality, or compatibility decoding path is
-//! reachable from these routes.
+//! Top-up accepts one exact payer-signed transaction, while redemption accepts
+//! its exact V1 request for issuer submission. Both bind the idempotency key to
+//! the canonical request digest; top-up also binds the caller-signed
+//! payload/entrypoint hash. No legacy request, status, finality, or compatibility
+//! decoding path is reachable from these routes.
 
 use crate::{AppState, Error, SharedAppState, app_auth, routing};
-use axum::{http::HeaderMap, response::Response as AxResponse};
+use axum::{
+    body::Bytes,
+    http::{HeaderMap, StatusCode},
+    response::Response as AxResponse,
+};
 use iroha_config::parameters::actual;
 use iroha_core::{
     smartcontracts::isi::kagemusha::KagemushaReserveOperationRecordV1,
@@ -18,47 +22,49 @@ use iroha_data_model::{
     ValidationFail,
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
-    isi::{
-        InstructionBox,
-        kagemusha_v1::{RedeemKagemushaV1, TopUpKagemushaV1},
-    },
-    transaction::{SignedTransaction, TransactionBuilder},
+    isi::{InstructionBox, kagemusha_v1::RedeemKagemushaV1},
+    transaction::{SignedTransaction, TransactionAdmissionIntent, TransactionBuilder},
 };
 use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_torii_shared::kagemusha_api::{
-    KAGEMUSHA_CHAIN_VERSION_V1, KAGEMUSHA_OPERATION_STATUS_ROUTE_PREFIX_V1,
-    KagemushaOperationKindV1, KagemushaOperationRejectionCodeV1,
-    KagemushaOperationRejectionV1, KagemushaOperationResultV1, KagemushaOperationStateV1,
-    KagemushaOperationStatusV1, KagemushaRedemptionRequestV1, KagemushaRedemptionResultV1,
-    KagemushaTopUpRequestV1,
+    KAGEMUSHA_CHAIN_VERSION_V1, KAGEMUSHA_OPERATION_STATUS_ROUTE_PREFIX_V1, KagemushaApiErrorV1,
+    KagemushaOperationKindV1, KagemushaOperationRejectionCodeV1, KagemushaOperationRejectionV1,
+    KagemushaOperationResultV1, KagemushaOperationStateV1, KagemushaOperationStatusV1,
+    KagemushaRedemptionRequestV1, KagemushaRedemptionResultV1, KagemushaTopUpRequestV1,
+    validate_kagemusha_top_up_signed_transaction_v1,
 };
 use mv::storage::StorageReadOnly;
 use parking_lot::Mutex;
 use std::{collections::BTreeMap, num::NonZeroUsize, sync::Arc};
 
-const PATH_KAGEMUSHA_TOP_UP: &str = iroha_torii_shared::uri::KAGEMUSHA_TOP_UP;
-const PATH_KAGEMUSHA_REDEEM: &str = iroha_torii_shared::uri::KAGEMUSHA_REDEEM;
-
-// The configuration value predates the public V1 DTO cutover, but remains the
-// operator-selected bound for the same in-memory idempotency registry.
+// The operator-selected bound accounts for every in-memory idempotency reservation.
 const OPERATION_ACCOUNTED_BYTES: usize =
     iroha_config::parameters::defaults::torii::kagemusha_v1_commands::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY;
 
 #[derive(Debug, Clone)]
 pub(crate) struct KagemushaCommandRuntime {
+    redemption_issuer: Option<KagemushaRedemptionIssuer>,
+    max_tx_value: Quantity,
+    registry: Arc<Mutex<KagemushaOperationRegistry>>,
+}
+
+#[derive(Debug, Clone)]
+struct KagemushaRedemptionIssuer {
     authority: AccountId,
     key_pair: KeyPair,
     minimum_xor_balance: Quantity,
-    max_tx_value: Quantity,
-    registry: Arc<Mutex<KagemushaOperationRegistry>>,
 }
 
 impl KagemushaCommandRuntime {
     pub(crate) fn from_config(config: actual::ToriiKagemushaV1Commands) -> Self {
         Self {
-            authority: config.authority,
-            key_pair: config.key_pair,
-            minimum_xor_balance: config.minimum_xor_balance,
+            redemption_issuer: config
+                .redemption_issuer
+                .map(|issuer| KagemushaRedemptionIssuer {
+                    authority: issuer.authority,
+                    key_pair: issuer.key_pair,
+                    minimum_xor_balance: issuer.minimum_xor_balance,
+                }),
             max_tx_value: config.max_tx_value,
             registry: Arc::new(Mutex::new(KagemushaOperationRegistry::new(
                 config.operation_registry_max_entries,
@@ -67,6 +73,41 @@ impl KagemushaCommandRuntime {
         }
     }
 
+    fn claim(
+        self: &Arc<Self>,
+        binding: KagemushaOperationBinding,
+    ) -> Result<SubmissionClaim, Error> {
+        let mut registry = self.registry.lock();
+        match registry.entries.get(&binding.operation_id) {
+            Some(KagemushaOperationEntry::Reserved(existing)) => {
+                ensure_same_binding(existing, &binding)?;
+                return Ok(SubmissionClaim::InFlight(*existing));
+            }
+            Some(KagemushaOperationEntry::Admitted(existing)) => {
+                ensure_same_binding(&existing.binding, &binding)?;
+                return Ok(SubmissionClaim::Existing(existing.clone()));
+            }
+            None => {}
+        }
+        if !registry.has_capacity_for_new_operation() {
+            return Err(Error::AppServiceUnavailable {
+                code: "kagemusha_operation_capacity_exhausted",
+                message: "KAGEMUSHA V1 operation admission capacity is exhausted.".to_owned(),
+            });
+        }
+        registry.entries.insert(
+            binding.operation_id,
+            KagemushaOperationEntry::Reserved(binding),
+        );
+        Ok(SubmissionClaim::Reserved(SubmissionReservation {
+            runtime: Arc::clone(self),
+            binding,
+            active: true,
+        }))
+    }
+}
+
+impl KagemushaRedemptionIssuer {
     fn quote_and_sign_transaction(
         &self,
         app: &AppState,
@@ -82,40 +123,6 @@ impl KagemushaCommandRuntime {
             .try_sign(self.key_pair.private_key())
             .map_err(|source| kagemusha_transaction_signing_error(context, source))
     }
-
-    fn claim(self: &Arc<Self>, binding: KagemushaOperationBinding) -> Result<SubmissionClaim, Error> {
-        let mut registry = self.registry.lock();
-        match registry.entries.get(&binding.operation_id) {
-            Some(KagemushaOperationEntry::Reserved(existing)) => {
-                ensure_same_binding(existing, &binding)?;
-                return Err(Error::AppServiceUnavailable {
-                    code: "kagemusha_operation_in_flight",
-                    message: "The same Kagemusha V1 operation is already being submitted; retry its canonical status resource."
-                        .to_owned(),
-                });
-            }
-            Some(KagemushaOperationEntry::Admitted(existing)) => {
-                ensure_same_binding(&existing.binding, &binding)?;
-                return Ok(SubmissionClaim::Existing(existing.clone()));
-            }
-            None => {}
-        }
-        if !registry.has_capacity_for_new_operation() {
-            return Err(Error::AppServiceUnavailable {
-                code: "kagemusha_operation_capacity_exhausted",
-                message: "Kagemusha V1 operation admission capacity is exhausted.".to_owned(),
-            });
-        }
-        registry.entries.insert(
-            binding.operation_id,
-            KagemushaOperationEntry::Reserved(binding),
-        );
-        Ok(SubmissionClaim::Reserved(SubmissionReservation {
-            runtime: Arc::clone(self),
-            binding,
-            active: true,
-        }))
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,6 +130,7 @@ struct KagemushaOperationBinding {
     operation_id: [u8; 32],
     kind: KagemushaOperationKindV1,
     request_digest: [u8; 32],
+    top_up_transaction_hash: Option<HashOf<SignedTransaction>>,
 }
 
 #[derive(Debug, Clone)]
@@ -162,9 +170,27 @@ impl KagemushaOperationRegistry {
                 .saturating_mul(OPERATION_ACCOUNTED_BYTES)
                 <= self.max_accounted_bytes.get()
     }
+
+    fn remove_exact_consensus_admissions(
+        &mut self,
+        reconstructible: &[AdmittedKagemushaOperation],
+    ) {
+        for candidate in reconstructible {
+            let remove = self
+                .entries
+                .get(&candidate.binding.operation_id)
+                .is_some_and(|entry| {
+                    matches!(entry, KagemushaOperationEntry::Admitted(existing) if existing.binding == candidate.binding && existing.transaction_hash == candidate.transaction_hash)
+                });
+            if remove {
+                self.entries.remove(&candidate.binding.operation_id);
+            }
+        }
+    }
 }
 
 enum SubmissionClaim {
+    InFlight(KagemushaOperationBinding),
     Existing(AdmittedKagemushaOperation),
     Reserved(SubmissionReservation),
 }
@@ -195,9 +221,8 @@ impl SubmissionReservation {
             _ => {
                 return Err(Error::AppServiceUnavailable {
                     code: "kagemusha_operation_admission_inconsistent",
-                    message:
-                        "The accepted Kagemusha V1 operation lost its admission reservation."
-                            .to_owned(),
+                    message: "The accepted KAGEMUSHA V1 operation lost its admission reservation."
+                        .to_owned(),
                 });
             }
         }
@@ -230,64 +255,53 @@ impl Drop for SubmissionReservation {
 
 pub(crate) async fn handle_top_up(
     app: SharedAppState,
-    headers: &HeaderMap,
-    request: KagemushaTopUpRequestV1,
+    headers: HeaderMap,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+    body: Bytes,
 ) -> Result<AxResponse, Error> {
-    reject_x_iroha_auth_headers(headers)?;
-    require_idempotency_key(headers, request.operation_id)?;
-    request.validate().map_err(|source| {
-        validation_owned(
-            "kagemusha_top_up_invalid",
-            format!("Kagemusha V1 top-up request is invalid: {source}"),
-        )
-    })?;
-    validate_top_up_snapshot(&app, &request)?;
+    reject_x_iroha_auth_headers(&headers)?;
+    let transaction = decode_top_up_signed_transaction_v1(&body)?;
+    let request =
+        validate_top_up_signed_transaction(app.state.network_id_ref(), &transaction)?.clone();
+    require_idempotency_key(&headers, request.operation_id)?;
+    let runtime = require_command_runtime(&app)?;
+    let transaction_hash = transaction.hash();
     let binding = KagemushaOperationBinding {
         operation_id: request.operation_id,
         kind: KagemushaOperationKindV1::TopUp,
         request_digest: request.canonical_digest().map_err(|source| {
             validation_owned(
                 "kagemusha_top_up_invalid",
-                format!("Kagemusha V1 top-up digest is invalid: {source}"),
+                format!("KAGEMUSHA V1 top-up digest is invalid: {source}"),
             )
         })?,
+        top_up_transaction_hash: Some(transaction_hash),
     };
-    let issuer = require_configured_issuer(&app)?;
-    ensure_amount_within_policy(request.amount, request.scale, &issuer.max_tx_value)?;
     if let Some(existing) = admitted_operation_from_consensus(&app, binding.operation_id)? {
         ensure_same_binding(&existing.binding, &binding)?;
-        return operation_response_for_record(&app, &existing);
+        return operation_submission_response_for_record(&app, &existing);
     }
-    match issuer.claim(binding)? {
-        SubmissionClaim::Existing(record) => return operation_response_for_record(&app, &record),
+    compact_consensus_reconstructible_operations_if_needed(&app, &runtime)?;
+    match runtime.claim(binding)? {
+        SubmissionClaim::InFlight(binding) => {
+            return Ok(respond_with_operation_status(pending_status(binding), true));
+        }
+        SubmissionClaim::Existing(record) => {
+            return operation_submission_response_for_record(&app, &record);
+        }
         SubmissionClaim::Reserved(reservation) => {
-            ensure_kagemusha_command_authority_ready(&app, &issuer)?;
-            let instruction = TopUpKagemushaV1::new(request).map_err(|source| {
-                validation_owned(
-                    "kagemusha_top_up_invalid",
-                    format!("Kagemusha V1 top-up instruction is invalid: {source}"),
-                )
-            })?;
-            let transaction = TransactionBuilder::new(
-                *app.state.network_id_ref(),
-                issuer.authority.clone().into(),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_instructions([InstructionBox::from(instruction)]);
-            let signed = issuer.quote_and_sign_transaction(
-                &app,
+            validate_top_up_snapshot(&app, &request)?;
+            ensure_amount_within_policy(request.amount, request.scale, &runtime.max_tx_value)?;
+            let response = crate::submit_signed_transaction_for_ingress_strict_durable(
+                app,
+                headers,
+                accept,
                 transaction,
-                "kagemusha_v1_top_up_transaction",
-            )?;
-            let transaction_hash = signed.hash();
-            routing::handle_transaction_with_metrics(
-                app.queue.clone(),
-                app.state.clone(),
-                signed,
-                app.telemetry.clone(),
-                PATH_KAGEMUSHA_TOP_UP,
             )
             .await?;
+            if response.status() != StatusCode::ACCEPTED {
+                return Ok(response);
+            }
             let record = reservation.accept(transaction_hash)?;
             Ok(respond_with_operation_status(
                 pending_status(record.binding),
@@ -297,20 +311,66 @@ pub(crate) async fn handle_top_up(
     }
 }
 
-pub(crate) async fn handle_redeem(
-    app: SharedAppState,
-    headers: &HeaderMap,
-    request: KagemushaRedemptionRequestV1,
-) -> Result<AxResponse, Error> {
-    reject_x_iroha_auth_headers(headers)?;
-    require_idempotency_key(headers, request.operation_id)?;
-    request.validate().map_err(|source| {
+fn decode_top_up_signed_transaction_v1(body: &[u8]) -> Result<SignedTransaction, Error> {
+    let decode_limits = norito::canonical_decode_limits(body.len());
+    let transaction = norito::with_decode_limits_scope(decode_limits, || {
+        <SignedTransaction as iroha_version::codec::DecodeVersioned>::decode_all_versioned(body)
+    })
+    .map_err(|source| {
         validation_owned(
-            "kagemusha_redeem_invalid",
-            format!("Kagemusha V1 redemption request is invalid: {source}"),
+            "kagemusha_top_up_invalid",
+            format!("KAGEMUSHA V1 top-up signed transaction is invalid: {source}"),
         )
     })?;
-    validate_redemption_snapshot(&app, &request)?;
+    let canonical = <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(
+        &transaction,
+    );
+    if canonical.as_slice() != body {
+        return Err(validation(
+            "kagemusha_top_up_invalid",
+            "KAGEMUSHA V1 top-up requires the canonical versioned signed-transaction encoding.",
+        ));
+    }
+    Ok(transaction)
+}
+
+fn validate_top_up_signed_transaction<'a>(
+    expected_network: &iroha_data_model::NetworkId,
+    transaction: &'a SignedTransaction,
+) -> Result<&'a KagemushaTopUpRequestV1, Error> {
+    validate_kagemusha_top_up_signed_transaction_v1(expected_network, transaction).map_err(
+        |source| match source {
+            KagemushaApiErrorV1::TopUpTransactionWrongNetwork => validation(
+                "kagemusha_wrong_network",
+                "KAGEMUSHA V1 top-up signed transaction targets a different network.",
+            ),
+            source @ (KagemushaApiErrorV1::TopUpTransactionSignatureInvalid
+            | KagemushaApiErrorV1::TopUpTransactionAuthorityMismatch) => validation_owned(
+                "kagemusha_authorization_invalid",
+                format!("KAGEMUSHA V1 top-up debit authorization is invalid: {source}"),
+            ),
+            source => validation_owned(
+                "kagemusha_top_up_invalid",
+                format!("KAGEMUSHA V1 top-up signed transaction is invalid: {source}"),
+            ),
+        },
+    )
+}
+
+pub(crate) async fn handle_redeem(
+    app: SharedAppState,
+    headers: HeaderMap,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+    request: KagemushaRedemptionRequestV1,
+) -> Result<AxResponse, Error> {
+    reject_x_iroha_auth_headers(&headers)?;
+    require_idempotency_key(&headers, request.operation_id)?;
+    request.validate_shape().map_err(|source| {
+        validation_owned(
+            "kagemusha_redeem_invalid",
+            format!("KAGEMUSHA V1 redemption request is invalid: {source}"),
+        )
+    })?;
     let statement = &request.voucher.statement;
     let binding = KagemushaOperationBinding {
         operation_id: request.operation_id,
@@ -318,24 +378,46 @@ pub(crate) async fn handle_redeem(
         request_digest: request.canonical_digest().map_err(|source| {
             validation_owned(
                 "kagemusha_redeem_invalid",
-                format!("Kagemusha V1 redemption digest is invalid: {source}"),
+                format!("KAGEMUSHA V1 redemption digest is invalid: {source}"),
             )
         })?,
+        top_up_transaction_hash: None,
     };
-    let issuer = require_configured_issuer(&app)?;
-    ensure_amount_within_policy(statement.amount, statement.scale, &issuer.max_tx_value)?;
+    let runtime = require_command_runtime(&app)?;
     if let Some(existing) = admitted_operation_from_consensus(&app, binding.operation_id)? {
         ensure_same_binding(&existing.binding, &binding)?;
-        return operation_response_for_record(&app, &existing);
+        return operation_submission_response_for_record(&app, &existing);
     }
-    match issuer.claim(binding)? {
-        SubmissionClaim::Existing(record) => return operation_response_for_record(&app, &record),
+    compact_consensus_reconstructible_operations_if_needed(&app, &runtime)?;
+    match runtime.claim(binding)? {
+        SubmissionClaim::InFlight(binding) => {
+            return Ok(respond_with_operation_status(pending_status(binding), true));
+        }
+        SubmissionClaim::Existing(record) => {
+            return operation_submission_response_for_record(&app, &record);
+        }
         SubmissionClaim::Reserved(reservation) => {
-            ensure_kagemusha_command_authority_ready(&app, &issuer)?;
+            validate_redemption_snapshot(&app, &request)?;
+            ensure_amount_within_policy(
+                statement.amount,
+                statement.lifecycle.scale,
+                &runtime.max_tx_value,
+            )?;
+            let issuer =
+                runtime
+                    .redemption_issuer
+                    .as_ref()
+                    .ok_or_else(|| Error::AppServiceUnavailable {
+                        code: "kagemusha_redemption_issuer_unavailable",
+                        message:
+                            "KAGEMUSHA V1 redemption signing is not configured on this Torii node."
+                                .to_owned(),
+                    })?;
+            ensure_kagemusha_command_authority_ready(&app, issuer)?;
             let instruction = RedeemKagemushaV1::new(request).map_err(|source| {
                 validation_owned(
                     "kagemusha_redeem_invalid",
-                    format!("Kagemusha V1 redemption instruction is invalid: {source}"),
+                    format!("KAGEMUSHA V1 redemption instruction is invalid: {source}"),
                 )
             })?;
             let transaction = TransactionBuilder::new(
@@ -343,21 +425,21 @@ pub(crate) async fn handle_redeem(
                 issuer.authority.clone().into(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
-            .with_instructions([InstructionBox::from(instruction)]);
+            .with_instructions([InstructionBox::from(instruction)])
+            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
             let signed = issuer.quote_and_sign_transaction(
                 &app,
                 transaction,
                 "kagemusha_v1_redemption_transaction",
             )?;
             let transaction_hash = signed.hash();
-            routing::handle_transaction_with_metrics(
-                app.queue.clone(),
-                app.state.clone(),
-                signed,
-                app.telemetry.clone(),
-                PATH_KAGEMUSHA_REDEEM,
+            let response = crate::submit_signed_transaction_for_ingress_strict_durable(
+                app, headers, accept, signed,
             )
             .await?;
+            if response.status() != StatusCode::ACCEPTED {
+                return Ok(response);
+            }
             let record = reservation.accept(transaction_hash)?;
             Ok(respond_with_operation_status(
                 pending_status(record.binding),
@@ -372,18 +454,16 @@ pub(crate) fn handle_operation_status(
     operation_id: &str,
 ) -> Result<AxResponse, Error> {
     let operation_id = parse_operation_id(operation_id)?;
-    let issuer = require_configured_issuer(app)?;
+    let runtime = require_command_runtime(app)?;
     let local_record = {
-        let registry = issuer.registry.lock();
+        let registry = runtime.registry.lock();
         match registry.entries.get(&operation_id) {
             Some(KagemushaOperationEntry::Admitted(record)) => Some(record.clone()),
-            Some(KagemushaOperationEntry::Reserved(_)) => {
-                return Err(Error::AppServiceUnavailable {
-                    code: "kagemusha_operation_in_flight",
-                    message:
-                        "The Kagemusha V1 operation is still entering the transaction queue."
-                            .to_owned(),
-                });
+            Some(KagemushaOperationEntry::Reserved(binding)) => {
+                return Ok(respond_with_operation_status(
+                    pending_status(*binding),
+                    false,
+                ));
             }
             None => None,
         }
@@ -393,7 +473,7 @@ pub(crate) fn handle_operation_status(
         None => admitted_operation_from_consensus(app, operation_id)?.ok_or_else(|| {
             Error::AppNotFound {
                 code: "kagemusha_operation_not_found",
-                message: "The Kagemusha V1 operation is unknown on this Torii node.".to_owned(),
+                message: "The KAGEMUSHA V1 operation is unknown on this Torii node.".to_owned(),
             }
         })?,
     };
@@ -404,6 +484,26 @@ fn operation_response_for_record(
     app: &SharedAppState,
     record: &AdmittedKagemushaOperation,
 ) -> Result<AxResponse, Error> {
+    Ok(respond_with_operation_status(
+        operation_status_for_record(app, record)?,
+        false,
+    ))
+}
+
+fn operation_submission_response_for_record(
+    app: &SharedAppState,
+    record: &AdmittedKagemushaOperation,
+) -> Result<AxResponse, Error> {
+    Ok(respond_with_operation_status(
+        operation_status_for_record(app, record)?,
+        true,
+    ))
+}
+
+fn operation_status_for_record(
+    app: &SharedAppState,
+    record: &AdmittedKagemushaOperation,
+) -> Result<KagemushaOperationStatusV1, Error> {
     let status = match crate::pipeline_status_local_entry_checked(app, &record.transaction_hash)? {
         Some((entry, resolved_from)) => match entry.kind {
             crate::PipelineStatusKind::Applied if resolved_from != "state" => {
@@ -433,7 +533,7 @@ fn operation_response_for_record(
         },
         None => pending_status(record.binding),
     };
-    Ok(respond_with_operation_status(status, false))
+    Ok(status)
 }
 
 fn admitted_operation_from_consensus(
@@ -453,11 +553,15 @@ fn admitted_operation_from_consensus(
     };
     let (kind, request_digest) = match &operation {
         KagemushaReserveOperationRecordV1::TopUp(record) => {
-            record.issuance_intent.request.validate().map_err(|error| {
-                kagemusha_consensus_inconsistency(format!(
-                    "persisted top-up request is invalid: {error}"
-                ))
-            })?;
+            record
+                .issuance_intent
+                .request
+                .validate_shape()
+                .map_err(|error| {
+                    kagemusha_consensus_inconsistency(format!(
+                        "persisted top-up request is invalid: {error}"
+                    ))
+                })?;
             (
                 KagemushaOperationKindV1::TopUp,
                 record.issuance_intent.request_digest,
@@ -472,10 +576,7 @@ fn admitted_operation_from_consensus(
                         "persisted redemption request is invalid: {error}"
                     ))
                 })?;
-            (
-                KagemushaOperationKindV1::Redemption,
-                record.request_digest,
-            )
+            (KagemushaOperationKindV1::Redemption, record.request_digest)
         }
     };
     let receipt = operation.reserve_receipt();
@@ -491,14 +592,58 @@ fn admitted_operation_from_consensus(
             "persisted reserve operation identity is internally inconsistent",
         ));
     }
+    let transaction_hash =
+        HashOf::from_untyped_unchecked(Hash::prehashed(receipt.transaction_hash));
     Ok(Some(AdmittedKagemushaOperation {
         binding: KagemushaOperationBinding {
             operation_id,
             kind,
             request_digest,
+            top_up_transaction_hash: (kind == KagemushaOperationKindV1::TopUp)
+                .then_some(transaction_hash),
         },
-        transaction_hash: HashOf::from_untyped_unchecked(Hash::prehashed(receipt.transaction_hash)),
+        transaction_hash,
     }))
+}
+
+fn compact_consensus_reconstructible_operations_if_needed(
+    app: &SharedAppState,
+    runtime: &Arc<KagemushaCommandRuntime>,
+) -> Result<(), Error> {
+    let candidates = {
+        let registry = runtime.registry.lock();
+        if registry.has_capacity_for_new_operation() {
+            return Ok(());
+        }
+        registry
+            .entries
+            .values()
+            .filter_map(|entry| match entry {
+                KagemushaOperationEntry::Admitted(record) => Some(record.clone()),
+                KagemushaOperationEntry::Reserved(_) => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut reconstructible = Vec::new();
+    for local in candidates {
+        let Some(canonical) = admitted_operation_from_consensus(app, local.binding.operation_id)?
+        else {
+            continue;
+        };
+        if canonical.binding != local.binding
+            || canonical.transaction_hash != local.transaction_hash
+        {
+            return Err(kagemusha_consensus_inconsistency(
+                "local admitted operation differs from its durable consensus record",
+            ));
+        }
+        reconstructible.push(canonical);
+    }
+    runtime
+        .registry
+        .lock()
+        .remove_exact_consensus_admissions(&reconstructible);
+    Ok(())
 }
 
 fn applied_status_from_consensus(
@@ -516,13 +661,13 @@ fn applied_status_from_consensus(
     }
     .ok_or_else(|| {
         kagemusha_consensus_inconsistency(
-            "state-resolved transaction has no Kagemusha V1 reserve operation",
+            "state-resolved transaction has no KAGEMUSHA V1 reserve operation",
         )
     })?;
     let canonical = admitted_operation_from_consensus(app, admitted.binding.operation_id)?
         .ok_or_else(|| {
             kagemusha_consensus_inconsistency(
-                "persisted Kagemusha V1 reserve operation disappeared during lookup",
+                "persisted KAGEMUSHA V1 reserve operation disappeared during lookup",
             )
         })?;
     ensure_same_binding(&canonical.binding, &admitted.binding)?;
@@ -627,10 +772,10 @@ fn applied_status_from_consensus(
 }
 
 fn kagemusha_consensus_inconsistency(detail: impl std::fmt::Display) -> Error {
-    iroha_logger::error!(%detail, "Kagemusha V1 consensus projection is inconsistent");
+    iroha_logger::error!(%detail, "KAGEMUSHA V1 consensus projection is inconsistent");
     Error::AppServiceUnavailable {
         code: "kagemusha_operation_consensus_inconsistent",
-        message: "Canonical Kagemusha V1 operation evidence is unavailable or inconsistent."
+        message: "Canonical KAGEMUSHA V1 operation evidence is unavailable or inconsistent."
             .to_owned(),
     }
 }
@@ -717,11 +862,11 @@ fn respond_with_operation_status(
             "{KAGEMUSHA_OPERATION_STATUS_ROUTE_PREFIX_V1}{}",
             hex::encode(operation_id)
         );
-        if let Ok(value) = axum::http::HeaderValue::from_str(&location) {
-            response
-                .headers_mut()
-                .insert(axum::http::header::LOCATION, value);
-        }
+        let value = axum::http::HeaderValue::from_str(&location)
+            .expect("canonical KAGEMUSHA operation path is a valid header value");
+        response
+            .headers_mut()
+            .insert(axum::http::header::LOCATION, value);
     }
     response
 }
@@ -735,7 +880,7 @@ fn ensure_same_binding(
     }
     Err(Error::AppConflict {
         code: "operation_id_conflict",
-        message: "Kagemusha V1 operation id is already bound to a different canonical request."
+        message: "KAGEMUSHA V1 operation id is already bound to a different canonical request or top-up transaction payload."
             .to_owned(),
     })
 }
@@ -747,7 +892,7 @@ fn validate_top_up_snapshot(
     if request.network_id != *app.state.network_id_ref() {
         return Err(validation(
             "kagemusha_wrong_network",
-            "Kagemusha V1 top-up targets a different network.",
+            "KAGEMUSHA V1 top-up targets a different network.",
         ));
     }
     validate_live_asset_scale(app, &request.asset, request.scale)
@@ -758,13 +903,13 @@ fn validate_redemption_snapshot(
     request: &KagemushaRedemptionRequestV1,
 ) -> Result<(), Error> {
     let statement = &request.voucher.statement;
-    if statement.network_id != *app.state.network_id_ref() {
+    if statement.lifecycle.network_id != *app.state.network_id_ref() {
         return Err(validation(
             "kagemusha_wrong_network",
-            "Kagemusha V1 redemption targets a different network.",
+            "KAGEMUSHA V1 redemption targets a different network.",
         ));
     }
-    validate_live_asset_scale(app, &statement.asset, statement.scale)
+    validate_live_asset_scale(app, &statement.lifecycle.asset, statement.lifecycle.scale)
 }
 
 fn validate_live_asset_scale(
@@ -776,19 +921,19 @@ fn validate_live_asset_scale(
     let definition = state.world().asset_definition(asset).map_err(|_| {
         validation(
             "kagemusha_asset_not_found",
-            "Kagemusha V1 asset definition is not registered.",
+            "KAGEMUSHA V1 asset definition is not registered.",
         )
     })?;
     let live_scale = definition.spec().scale().ok_or_else(|| {
         validation(
             "kagemusha_asset_scale_invalid",
-            "Kagemusha V1 requires a fixed live asset scale.",
+            "KAGEMUSHA V1 requires a fixed live asset scale.",
         )
     })?;
     if requested_scale != live_scale {
         return Err(validation(
             "kagemusha_asset_scale_mismatch",
-            "Kagemusha V1 request scale differs from the live asset scale.",
+            "KAGEMUSHA V1 request scale differs from the live asset scale.",
         ));
     }
     Ok(())
@@ -802,37 +947,37 @@ fn ensure_amount_within_policy(
     let numeric = Numeric::try_new(atomic_units, scale).map_err(|source| {
         validation_owned(
             "kagemusha_amount_invalid",
-            format!("Kagemusha V1 amount is not canonical: {source}"),
+            format!("KAGEMUSHA V1 amount is not canonical: {source}"),
         )
     })?;
     let amount = Quantity::try_from_numeric(numeric).map_err(|source| {
         validation_owned(
             "kagemusha_amount_invalid",
-            format!("Kagemusha V1 amount is not a quantity: {source}"),
+            format!("KAGEMUSHA V1 amount is not a quantity: {source}"),
         )
     })?;
     if &amount > maximum {
         return Err(validation(
             "kagemusha_amount_exceeds_limit",
-            "Kagemusha V1 amount exceeds issuer policy.",
+            "KAGEMUSHA V1 amount exceeds issuer policy.",
         ));
     }
     Ok(())
 }
 
-fn require_configured_issuer(app: &AppState) -> Result<Arc<KagemushaCommandRuntime>, Error> {
+fn require_command_runtime(app: &AppState) -> Result<Arc<KagemushaCommandRuntime>, Error> {
     app.kagemusha_commands
         .clone()
         .ok_or_else(|| Error::AppServiceUnavailable {
             code: "kagemusha_service_unavailable",
-            message: "Kagemusha V1 operation signing is not configured on this Torii node."
+            message: "KAGEMUSHA V1 operation admission is not configured on this Torii node."
                 .to_owned(),
         })
 }
 
-pub(crate) fn ensure_kagemusha_command_authority_ready(
+fn ensure_kagemusha_command_authority_ready(
     app: &AppState,
-    issuer: &KagemushaCommandRuntime,
+    issuer: &KagemushaRedemptionIssuer,
 ) -> Result<(), Error> {
     let state = app.state.view();
     let fee_asset_selector = app.state.nexus_snapshot().fees.fee_asset_id;
@@ -844,9 +989,9 @@ pub(crate) fn ensure_kagemusha_command_authority_ready(
     )
 }
 
-pub(super) fn ensure_kagemusha_command_authority_ready_in_world(
+fn ensure_kagemusha_command_authority_ready_in_world(
     world: &impl WorldReadOnly,
-    issuer: &KagemushaCommandRuntime,
+    issuer: &KagemushaRedemptionIssuer,
     fee_asset_selector: &str,
     snapshot_time_ms: u64,
 ) -> Result<(), Error> {
@@ -858,7 +1003,7 @@ pub(super) fn ensure_kagemusha_command_authority_ready_in_world(
     {
         return Err(Error::AppServiceUnavailable {
             code: "kagemusha_command_authority_not_ready",
-            message: "Kagemusha V1 command authority is not registered with CanManageKagemushaReserve."
+            message: "KAGEMUSHA V1 command authority is not registered with CanManageKagemushaReserve."
                 .to_owned(),
         });
     }
@@ -868,11 +1013,11 @@ pub(super) fn ensure_kagemusha_command_authority_ready_in_world(
                 iroha_logger::error!(
                     ?error,
                     %fee_asset_selector,
-                    "Kagemusha V1 command fee asset could not be resolved"
+                    "KAGEMUSHA V1 command fee asset could not be resolved"
                 );
                 Error::AppServiceUnavailable {
                     code: "kagemusha_command_fee_asset_not_ready",
-                    message: "Kagemusha V1 command fee asset is not available.".to_owned(),
+                    message: "KAGEMUSHA V1 command fee asset is not available.".to_owned(),
                 }
             })?;
     let fee_asset = AssetId::new(fee_asset_definition, issuer.authority.clone());
@@ -883,8 +1028,9 @@ pub(super) fn ensure_kagemusha_command_authority_ready_in_world(
     if balance < issuer.minimum_xor_balance {
         return Err(Error::AppServiceUnavailable {
             code: "kagemusha_command_authority_unfunded",
-            message: "Kagemusha V1 command authority does not meet its configured minimum fee balance."
-                .to_owned(),
+            message:
+                "KAGEMUSHA V1 command authority does not meet its configured minimum fee balance."
+                    .to_owned(),
         });
     }
     Ok(())
@@ -900,14 +1046,14 @@ fn require_idempotency_key(headers: &HeaderMap, operation_id: [u8; 32]) -> Resul
     if operation_id == [0; 32] {
         return Err(Error::AppQueryValidation {
             code: "operation_id_invalid",
-            message: "Kagemusha V1 operation id must be non-zero.".to_owned(),
+            message: "KAGEMUSHA V1 operation id must be non-zero.".to_owned(),
         });
     }
     let expected = hex::encode(operation_id);
     if validated_idempotency_key(headers)? != expected {
         return Err(Error::AppConflict {
             code: "idempotency_key_conflict",
-            message: "Idempotency-Key does not match the Kagemusha V1 operation id.".to_owned(),
+            message: "Idempotency-Key does not match the KAGEMUSHA V1 operation id.".to_owned(),
         });
     }
     Ok(())
@@ -918,14 +1064,13 @@ fn validated_idempotency_key(headers: &HeaderMap) -> Result<&str, Error> {
     let Some(raw) = values.next() else {
         return Err(Error::AppQueryValidation {
             code: "idempotency_key_missing",
-            message: "Kagemusha V1 commands require one Idempotency-Key header.".to_owned(),
+            message: "KAGEMUSHA V1 commands require one Idempotency-Key header.".to_owned(),
         });
     };
     if values.next().is_some() {
         return Err(Error::AppQueryValidation {
             code: "idempotency_key_invalid",
-            message: "Kagemusha V1 commands require exactly one Idempotency-Key header."
-                .to_owned(),
+            message: "KAGEMUSHA V1 commands require exactly one Idempotency-Key header.".to_owned(),
         });
     }
     let actual = raw.to_str().map_err(|_| Error::AppQueryValidation {
@@ -953,19 +1098,19 @@ fn parse_operation_id(raw: &str) -> Result<[u8; 32], Error> {
         return Err(Error::AppQueryValidation {
             code: "operation_id_invalid",
             message:
-                "Kagemusha V1 operation id must be exactly 64 lowercase hexadecimal characters."
+                "KAGEMUSHA V1 operation id must be exactly 64 lowercase hexadecimal characters."
                     .to_owned(),
         });
     }
     let mut operation_id = [0_u8; 32];
     hex::decode_to_slice(raw, &mut operation_id).map_err(|_| Error::AppQueryValidation {
         code: "operation_id_invalid",
-        message: "Kagemusha V1 operation id is not valid hexadecimal.".to_owned(),
+        message: "KAGEMUSHA V1 operation id is not valid hexadecimal.".to_owned(),
     })?;
     if operation_id == [0; 32] {
         return Err(Error::AppQueryValidation {
             code: "operation_id_invalid",
-            message: "Kagemusha V1 operation id must be non-zero.".to_owned(),
+            message: "KAGEMUSHA V1 operation id must be non-zero.".to_owned(),
         });
     }
     Ok(operation_id)
@@ -975,9 +1120,9 @@ fn kagemusha_transaction_signing_error(
     context: &'static str,
     source: impl std::fmt::Display,
 ) -> Error {
-    iroha_logger::error!(%context, error = %source, "Kagemusha V1 signer failed");
+    iroha_logger::error!(%context, error = %source, "KAGEMUSHA V1 signer failed");
     Error::Query(ValidationFail::InternalError(
-        "Kagemusha V1 signer failed to sign the transaction.".to_owned(),
+        "KAGEMUSHA V1 signer failed to sign the transaction.".to_owned(),
     ))
 }
 
@@ -992,7 +1137,7 @@ fn reject_x_iroha_auth_headers(headers: &HeaderMap) -> Result<(), Error> {
         if headers.contains_key(name) {
             return Err(Error::AppForbidden {
                 code: "kagemusha_auth_header_unsupported",
-                message: "Kagemusha V1 commands are submitted by the configured Torii authority; X-Iroha account-auth headers are not accepted."
+                message: "KAGEMUSHA V1 command authorization is carried by its canonical protocol body; X-Iroha account-auth headers are not accepted."
                     .to_owned(),
             });
         }
@@ -1000,7 +1145,7 @@ fn reject_x_iroha_auth_headers(headers: &HeaderMap) -> Result<(), Error> {
     Ok(())
 }
 
-/// Validate body-independent Kagemusha V1 headers before payload decoding.
+/// Validate body-independent KAGEMUSHA V1 headers before payload decoding.
 pub(crate) fn validate_command_headers_before_body(headers: &HeaderMap) -> Result<(), Error> {
     reject_x_iroha_auth_headers(headers)?;
     validated_idempotency_key(headers).map(|_| ())
@@ -1017,6 +1162,8 @@ fn validation_owned(code: &'static str, message: String) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_data_model::{Level, block::BlockHeader, isi::Log, transaction::FeePaymentIntent};
+    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 
     #[test]
     fn operation_id_accepts_every_nonzero_32_byte_value() {
@@ -1042,11 +1189,210 @@ mod tests {
     }
 
     #[test]
+    fn signed_top_up_decoder_preserves_the_canonical_transaction_identity() {
+        let network_id = iroha_data_model::NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"top-up-signed-envelope")),
+        );
+        let transaction = TransactionBuilder::new(
+            network_id,
+            ALICE_ID.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "envelope fixture".to_owned())])
+        .try_sign(ALICE_KEYPAIR.private_key())
+        .expect("sign transaction fixture");
+        let bytes = <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(
+            &transaction,
+        );
+        let decoded =
+            decode_top_up_signed_transaction_v1(&bytes).expect("decode canonical transaction");
+        assert_eq!(decoded.hash(), transaction.hash());
+        assert_eq!(
+            <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(
+                &decoded
+            ),
+            bytes
+        );
+
+        let mut trailing = bytes;
+        trailing.push(0);
+        assert!(decode_top_up_signed_transaction_v1(&trailing).is_err());
+    }
+
+    #[test]
+    fn finalized_operations_do_not_permanently_exhaust_a_small_registry() {
+        let mut registry = KagemushaOperationRegistry::new(
+            NonZeroUsize::new(1).expect("positive entry capacity"),
+            NonZeroUsize::new(OPERATION_ACCOUNTED_BYTES).expect("positive byte capacity"),
+        );
+        for sequence in 1_u16..=1_024 {
+            assert!(registry.has_capacity_for_new_operation());
+            let mut operation_id = [0_u8; 32];
+            operation_id[..2].copy_from_slice(&sequence.to_be_bytes());
+            let record = AdmittedKagemushaOperation {
+                binding: KagemushaOperationBinding {
+                    operation_id,
+                    kind: KagemushaOperationKindV1::TopUp,
+                    request_digest: [u8::try_from(sequence % 251).expect("bounded tag"); 32],
+                    top_up_transaction_hash: Some(HashOf::from_untyped_unchecked(Hash::new(
+                        operation_id,
+                    ))),
+                },
+                transaction_hash: HashOf::from_untyped_unchecked(Hash::new(operation_id)),
+            };
+            registry.entries.insert(
+                operation_id,
+                KagemushaOperationEntry::Admitted(record.clone()),
+            );
+            assert!(!registry.has_capacity_for_new_operation());
+            registry.remove_exact_consensus_admissions(std::slice::from_ref(&record));
+            assert!(registry.entries.is_empty());
+        }
+    }
+
+    #[test]
+    fn compaction_never_removes_reserved_or_nonidentical_admissions() {
+        let mut registry = KagemushaOperationRegistry::new(
+            NonZeroUsize::new(2).expect("positive entry capacity"),
+            NonZeroUsize::new(OPERATION_ACCOUNTED_BYTES * 2).expect("positive byte capacity"),
+        );
+        let binding = KagemushaOperationBinding {
+            operation_id: [0x61; 32],
+            kind: KagemushaOperationKindV1::TopUp,
+            request_digest: [0x62; 32],
+            top_up_transaction_hash: Some(HashOf::from_untyped_unchecked(Hash::new([0x65]))),
+        };
+        let canonical = AdmittedKagemushaOperation {
+            binding,
+            transaction_hash: HashOf::from_untyped_unchecked(Hash::new([0x63])),
+        };
+        registry.entries.insert(
+            binding.operation_id,
+            KagemushaOperationEntry::Reserved(binding),
+        );
+        registry.remove_exact_consensus_admissions(std::slice::from_ref(&canonical));
+        assert!(matches!(
+            registry.entries.get(&binding.operation_id),
+            Some(KagemushaOperationEntry::Reserved(existing)) if existing == &binding
+        ));
+
+        let local = AdmittedKagemushaOperation {
+            transaction_hash: HashOf::from_untyped_unchecked(Hash::new([0x64])),
+            ..canonical.clone()
+        };
+        registry.entries.insert(
+            binding.operation_id,
+            KagemushaOperationEntry::Admitted(local.clone()),
+        );
+        registry.remove_exact_consensus_admissions(std::slice::from_ref(&canonical));
+        assert!(matches!(
+            registry.entries.get(&binding.operation_id),
+            Some(KagemushaOperationEntry::Admitted(existing)) if existing.transaction_hash == local.transaction_hash
+        ));
+    }
+
+    #[test]
+    fn failed_ingress_drops_the_in_flight_reservation() {
+        let binding = KagemushaOperationBinding {
+            operation_id: [0x71; 32],
+            kind: KagemushaOperationKindV1::TopUp,
+            request_digest: [0x72; 32],
+            top_up_transaction_hash: Some(HashOf::from_untyped_unchecked(Hash::new([0x73]))),
+        };
+        let runtime = Arc::new(KagemushaCommandRuntime {
+            redemption_issuer: None,
+            max_tx_value: Quantity::from(1_u32),
+            registry: Arc::new(Mutex::new(KagemushaOperationRegistry::new(
+                NonZeroUsize::new(1).expect("positive entry capacity"),
+                NonZeroUsize::new(OPERATION_ACCOUNTED_BYTES).expect("positive byte capacity"),
+            ))),
+        });
+        let SubmissionClaim::Reserved(reservation) = runtime
+            .claim(binding)
+            .expect("reserve operation for ingress")
+        else {
+            panic!("new operation must reserve capacity");
+        };
+        assert!(
+            runtime
+                .registry
+                .lock()
+                .entries
+                .contains_key(&binding.operation_id)
+        );
+        drop(reservation);
+        assert!(runtime.registry.lock().entries.is_empty());
+    }
+
+    #[test]
+    fn payer_signed_top_up_admission_does_not_require_a_redemption_signer() {
+        let runtime = Arc::new(KagemushaCommandRuntime {
+            redemption_issuer: None,
+            max_tx_value: Quantity::from(1_u32),
+            registry: Arc::new(Mutex::new(KagemushaOperationRegistry::new(
+                NonZeroUsize::new(1).expect("positive entry capacity"),
+                NonZeroUsize::new(OPERATION_ACCOUNTED_BYTES).expect("positive byte capacity"),
+            ))),
+        });
+        let binding = KagemushaOperationBinding {
+            operation_id: [0x74; 32],
+            kind: KagemushaOperationKindV1::TopUp,
+            request_digest: [0x75; 32],
+            top_up_transaction_hash: Some(HashOf::from_untyped_unchecked(Hash::new([0x76]))),
+        };
+        assert!(runtime.redemption_issuer.is_none());
+        assert!(matches!(
+            runtime.claim(binding),
+            Ok(SubmissionClaim::Reserved(_))
+        ));
+    }
+
+    #[test]
+    fn identical_concurrent_claim_returns_the_canonical_pending_binding() {
+        let runtime = Arc::new(KagemushaCommandRuntime {
+            redemption_issuer: None,
+            max_tx_value: Quantity::from(1_u32),
+            registry: Arc::new(Mutex::new(KagemushaOperationRegistry::new(
+                NonZeroUsize::new(1).expect("positive entry capacity"),
+                NonZeroUsize::new(OPERATION_ACCOUNTED_BYTES).expect("positive byte capacity"),
+            ))),
+        });
+        let binding = KagemushaOperationBinding {
+            operation_id: [0x77; 32],
+            kind: KagemushaOperationKindV1::TopUp,
+            request_digest: [0x78; 32],
+            top_up_transaction_hash: Some(HashOf::from_untyped_unchecked(Hash::new([0x79]))),
+        };
+        let SubmissionClaim::Reserved(reservation) = runtime
+            .claim(binding)
+            .expect("first claim reserves the operation")
+        else {
+            panic!("first claim must reserve capacity");
+        };
+
+        assert!(matches!(
+            runtime.claim(binding),
+            Ok(SubmissionClaim::InFlight(existing)) if existing == binding
+        ));
+        assert!(matches!(
+            runtime
+                .registry
+                .lock()
+                .entries
+                .get(&binding.operation_id),
+            Some(KagemushaOperationEntry::Reserved(existing)) if existing == &binding
+        ));
+
+        drop(reservation);
+    }
+
+    #[test]
     fn pending_and_rejected_statuses_validate_without_a_trust_anchor() {
         let binding = KagemushaOperationBinding {
             operation_id: [0x41; 32],
             kind: KagemushaOperationKindV1::TopUp,
             request_digest: [0x42; 32],
+            top_up_transaction_hash: Some(HashOf::from_untyped_unchecked(Hash::new([0x43]))),
         };
         pending_status(binding).validate().expect("pending status");
         rejected_status(
@@ -1059,11 +1405,80 @@ mod tests {
     }
 
     #[test]
+    fn submission_response_headers_follow_pending_and_terminal_state() {
+        let binding = KagemushaOperationBinding {
+            operation_id: [0x45; 32],
+            kind: KagemushaOperationKindV1::TopUp,
+            request_digest: [0x46; 32],
+            top_up_transaction_hash: Some(HashOf::from_untyped_unchecked(Hash::new([0x47]))),
+        };
+        let expected_location = format!(
+            "{KAGEMUSHA_OPERATION_STATUS_ROUTE_PREFIX_V1}{}",
+            hex::encode(binding.operation_id)
+        );
+
+        let pending = respond_with_operation_status(pending_status(binding), true);
+        assert_eq!(pending.status(), StatusCode::ACCEPTED);
+        assert_eq!(
+            pending
+                .headers()
+                .get(axum::http::header::LOCATION)
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_location.as_str())
+        );
+        assert_eq!(
+            pending
+                .headers()
+                .get(axum::http::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok()),
+            Some("1")
+        );
+
+        let pending_status_resource = respond_with_operation_status(pending_status(binding), false);
+        assert_eq!(pending_status_resource.status(), StatusCode::OK);
+        assert!(
+            !pending_status_resource
+                .headers()
+                .contains_key(axum::http::header::LOCATION)
+        );
+        assert_eq!(
+            pending_status_resource
+                .headers()
+                .get(axum::http::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok()),
+            Some("1")
+        );
+
+        let terminal = respond_with_operation_status(
+            rejected_status(
+                binding,
+                KagemushaOperationRejectionCodeV1::InvalidRequest,
+                "terminal replay",
+            ),
+            true,
+        );
+        assert_eq!(terminal.status(), StatusCode::OK);
+        assert_eq!(
+            terminal
+                .headers()
+                .get(axum::http::header::LOCATION)
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_location.as_str())
+        );
+        assert!(
+            !terminal
+                .headers()
+                .contains_key(axum::http::header::RETRY_AFTER)
+        );
+    }
+
+    #[test]
     fn one_operation_id_cannot_bind_two_requests() {
         let existing = KagemushaOperationBinding {
             operation_id: [0x51; 32],
             kind: KagemushaOperationKindV1::TopUp,
             request_digest: [0x52; 32],
+            top_up_transaction_hash: Some(HashOf::from_untyped_unchecked(Hash::new([0x53]))),
         };
         let conflicting = KagemushaOperationBinding {
             request_digest: [0x53; 32],
@@ -1071,5 +1486,39 @@ mod tests {
         };
         ensure_same_binding(&existing, &existing).expect("identical binding");
         assert!(ensure_same_binding(&existing, &conflicting).is_err());
+    }
+
+    #[test]
+    fn one_top_up_operation_id_cannot_bind_two_signed_transaction_payloads() {
+        let existing = KagemushaOperationBinding {
+            operation_id: [0x81; 32],
+            kind: KagemushaOperationKindV1::TopUp,
+            request_digest: [0x82; 32],
+            top_up_transaction_hash: Some(HashOf::from_untyped_unchecked(Hash::new([0x83]))),
+        };
+        let conflicting = KagemushaOperationBinding {
+            top_up_transaction_hash: Some(HashOf::from_untyped_unchecked(Hash::new([0x84]))),
+            ..existing
+        };
+        let runtime = Arc::new(KagemushaCommandRuntime {
+            redemption_issuer: None,
+            max_tx_value: Quantity::from(1_u32),
+            registry: Arc::new(Mutex::new(KagemushaOperationRegistry::new(
+                NonZeroUsize::new(1).expect("positive entry capacity"),
+                NonZeroUsize::new(OPERATION_ACCOUNTED_BYTES).expect("positive byte capacity"),
+            ))),
+        });
+        let SubmissionClaim::Reserved(reservation) = runtime
+            .claim(existing)
+            .expect("reserve first signed transaction payload")
+        else {
+            panic!("new operation must reserve capacity");
+        };
+
+        assert!(runtime.claim(conflicting).is_err());
+        reservation
+            .accept(existing.top_up_transaction_hash.expect("top-up hash"))
+            .expect("admit first signed transaction payload");
+        assert!(runtime.claim(conflicting).is_err());
     }
 }

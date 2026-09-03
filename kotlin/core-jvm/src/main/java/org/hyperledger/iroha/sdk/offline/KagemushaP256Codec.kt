@@ -7,7 +7,7 @@ import java.io.ByteArrayOutputStream
 import java.math.BigInteger
 
 /**
- * Canonical NIST P-256 boundary for the sole Kagemusha V1 device-authority profile.
+ * Canonical NIST P-256 boundary for the sole KAGEMUSHA V1 device-authority profile.
  *
  * Public keys are exactly uncompressed SEC1 (`04 || x || y`). Wire signatures are exactly
  * fixed-width `r || s` and must already use low-S form. Platform ECDSA APIs commonly return DER;
@@ -16,6 +16,7 @@ import java.math.BigInteger
 object KagemushaP256Codec {
     const val SCALAR_BYTES: Int = 32
     const val PUBLIC_KEY_BYTES: Int = 65
+    const val COMPRESSED_PUBLIC_KEY_BYTES: Int = 33
     const val RAW_SIGNATURE_BYTES: Int = 64
 
     private val FIELD_PRIME =
@@ -33,19 +34,42 @@ object KagemushaP256Codec {
     fun requireUncompressedPublicKey(sec1Bytes: ByteArray): ByteArray {
         val value = sec1Bytes.copyOf()
         require(value.size == PUBLIC_KEY_BYTES && value[0].toInt() == 0x04) {
-            "Kagemusha V1 device public key must be exactly 65-byte uncompressed P-256 SEC1"
+            "KAGEMUSHA V1 device public key must be exactly 65-byte uncompressed P-256 SEC1"
         }
         val x = BigInteger(1, value.copyOfRange(1, 33))
         val y = BigInteger(1, value.copyOfRange(33, 65))
         require(x < FIELD_PRIME && y < FIELD_PRIME) {
-            "Kagemusha V1 device public key coordinates exceed the P-256 field"
+            "KAGEMUSHA V1 device public key coordinates exceed the P-256 field"
         }
         val lhs = y.modPow(TWO, FIELD_PRIME)
         val rhs = x.modPow(THREE, FIELD_PRIME)
             .subtract(THREE.multiply(x))
             .add(CURVE_B)
             .mod(FIELD_PRIME)
-        require(lhs == rhs) { "Kagemusha V1 device public key is not a P-256 point" }
+        require(lhs == rhs) { "KAGEMUSHA V1 device public key is not a P-256 point" }
+        return value
+    }
+
+    /** Validate and defensively copy one canonical compressed P-256 public key. */
+    @JvmStatic
+    fun requireCompressedPublicKey(sec1Bytes: ByteArray): ByteArray {
+        val value = sec1Bytes.copyOf()
+        require(
+            value.size == COMPRESSED_PUBLIC_KEY_BYTES &&
+                (value[0].toInt() == 0x02 || value[0].toInt() == 0x03),
+        ) { "KAGEMUSHA V1 terminal verification key must be exactly 33-byte compressed P-256 SEC1" }
+        val x = BigInteger(1, value.copyOfRange(1, value.size))
+        require(x < FIELD_PRIME) {
+            "KAGEMUSHA V1 terminal verification key coordinate exceeds the P-256 field"
+        }
+        val rhs = x.modPow(THREE, FIELD_PRIME)
+            .subtract(THREE.multiply(x))
+            .add(CURVE_B)
+            .mod(FIELD_PRIME)
+        val y = rhs.modPow(FIELD_PRIME.add(BigInteger.ONE).shiftRight(2), FIELD_PRIME)
+        require(y.modPow(TWO, FIELD_PRIME) == rhs) {
+            "KAGEMUSHA V1 terminal verification key is not a P-256 point"
+        }
         return value
     }
 
@@ -54,13 +78,13 @@ object KagemushaP256Codec {
     fun requireRawLowSSignature(rawBytes: ByteArray): ByteArray {
         val value = rawBytes.copyOf()
         require(value.size == RAW_SIGNATURE_BYTES) {
-            "Kagemusha V1 device signature must be exactly 64-byte r||s"
+            "KAGEMUSHA V1 device signature must be exactly 64-byte r||s"
         }
         val r = BigInteger(1, value.copyOfRange(0, SCALAR_BYTES))
         val s = BigInteger(1, value.copyOfRange(SCALAR_BYTES, RAW_SIGNATURE_BYTES))
         requireScalar(r, "r")
         requireScalar(s, "s")
-        require(s <= HALF_ORDER) { "Kagemusha V1 device signature must use low-S form" }
+        require(s <= HALF_ORDER) { "KAGEMUSHA V1 device signature must use low-S form" }
         return value
     }
 
@@ -74,15 +98,15 @@ object KagemushaP256Codec {
     fun rawLowSFromStrictDer(derBytes: ByteArray): ByteArray {
         val der = derBytes.copyOf()
         require(der.size in 8..72 && unsigned(der[0]) == 0x30) {
-            "Kagemusha V1 ECDSA signature is not strict DER"
+            "KAGEMUSHA V1 ECDSA signature is not strict DER"
         }
         require(unsigned(der[1]) < 0x80 && unsigned(der[1]) == der.size - 2) {
-            "Kagemusha V1 ECDSA signature uses a non-canonical DER length"
+            "KAGEMUSHA V1 ECDSA signature uses a non-canonical DER length"
         }
         var cursor = 2
         val r = decodeInteger(der, cursor).also { cursor = it.second }.first
         val s = decodeInteger(der, cursor).also { cursor = it.second }.first
-        require(cursor == der.size) { "Kagemusha V1 ECDSA signature has trailing DER bytes" }
+        require(cursor == der.size) { "KAGEMUSHA V1 ECDSA signature has trailing DER bytes" }
         val lowS = if (s > HALF_ORDER) ORDER.subtract(s) else s
         return fixedScalar(r) + fixedScalar(lowS)
     }
@@ -109,24 +133,24 @@ object KagemushaP256Codec {
 
     private fun decodeInteger(bytes: ByteArray, start: Int): Pair<BigInteger, Int> {
         require(start + 2 <= bytes.size && unsigned(bytes[start]) == 0x02) {
-            "Kagemusha V1 ECDSA signature is missing a DER INTEGER"
+            "KAGEMUSHA V1 ECDSA signature is missing a DER INTEGER"
         }
         val length = unsigned(bytes[start + 1])
         require(length in 1..(SCALAR_BYTES + 1) && start + 2 + length <= bytes.size) {
-            "Kagemusha V1 ECDSA signature has an invalid DER INTEGER length"
+            "KAGEMUSHA V1 ECDSA signature has an invalid DER INTEGER length"
         }
         val encoded = bytes.copyOfRange(start + 2, start + 2 + length)
         require(unsigned(encoded[0]) < 0x80) {
-            "Kagemusha V1 ECDSA signature contains a negative DER INTEGER"
+            "KAGEMUSHA V1 ECDSA signature contains a negative DER INTEGER"
         }
         if (encoded.size > 1 && encoded[0].toInt() == 0) {
             require(unsigned(encoded[1]) >= 0x80) {
-                "Kagemusha V1 ECDSA signature contains non-minimal DER INTEGER padding"
+                "KAGEMUSHA V1 ECDSA signature contains non-minimal DER INTEGER padding"
             }
         }
         val scalarBytes = if (encoded.size == SCALAR_BYTES + 1) {
             require(encoded[0].toInt() == 0 && unsigned(encoded[1]) >= 0x80) {
-                "Kagemusha V1 ECDSA signature DER INTEGER exceeds P-256 width"
+                "KAGEMUSHA V1 ECDSA signature DER INTEGER exceeds P-256 width"
             }
             encoded.copyOfRange(1, encoded.size)
         } else {
@@ -139,7 +163,7 @@ object KagemushaP256Codec {
 
     private fun requireScalar(value: BigInteger, field: String) {
         require(value.signum() > 0 && value < ORDER) {
-            "Kagemusha V1 ECDSA $field scalar is outside the P-256 order"
+            "KAGEMUSHA V1 ECDSA $field scalar is outside the P-256 order"
         }
     }
 

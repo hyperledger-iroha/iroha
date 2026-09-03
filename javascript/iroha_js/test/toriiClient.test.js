@@ -223,6 +223,82 @@ function canonicalTransactionCodecNative(overrides = {}) {
   };
 }
 
+test("submitKagemushaTopUp posts the exact caller-signed bytes and binary idempotency key", async () => {
+  const operationId = Buffer.alloc(32, 0x41);
+  const signedTransaction = Buffer.from([0x01, 0xde, 0xad, 0xbe, 0xef]);
+  let captured = null;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (url, init) => {
+      captured = { url, init };
+      return createResponse({
+        status: 202,
+        jsonData: {
+          version: 1,
+          operation_id: [...operationId],
+          kind: { kind: "top_up", value: null },
+          state: { state: "pending", value: null },
+          result: null,
+          rejection: null,
+        },
+        headers: {
+          "content-type": "application/json",
+          location: `/v1/kagemusha/operations/${operationId.toString("hex")}`,
+          "retry-after": "1",
+        },
+      });
+    },
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
+  });
+
+  const status = await client.submitKagemushaTopUp(
+    signedTransaction,
+    operationId,
+  );
+
+  assert.equal(captured?.url, `${BASE_URL}/v1/kagemusha/top-up`);
+  assert.equal(captured?.init?.method, "POST");
+  assert.equal(captured?.init?.redirect, "error");
+  assert.equal(captured?.init?.headers["Content-Type"], "application/x-norito");
+  assert.equal(captured?.init?.headers["Idempotency-Key"], operationId.toString("hex"));
+  assert.deepEqual(captured?.init?.body, signedTransaction);
+  assert.equal(status.kind, "top_up");
+  assert.equal(status.state, "pending");
+
+  await assert.rejects(
+    () => client.submitKagemushaTopUp(signedTransaction, operationId.toString("hex")),
+    /operationId must be exact nonzero 32-byte binary data/u,
+  );
+});
+
+test("submitKagemushaTopUp rejects a terminal response carrying Retry-After", async () => {
+  const operationId = Buffer.alloc(32, 0x42);
+  const signedTransaction = Buffer.from([0x01, 0xca, 0xfe]);
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({
+      status: 200,
+      jsonData: {
+        version: 1,
+        operation_id: [...operationId],
+        kind: { kind: "top_up", value: null },
+        state: { state: "applied", value: null },
+        result: { opaque: true },
+        rejection: null,
+      },
+      headers: {
+        "content-type": "application/json",
+        location: `/v1/kagemusha/operations/${operationId.toString("hex")}`,
+        "retry-after": "1",
+      },
+    }),
+    [TORII_TEST_NATIVE_BINDING]: canonicalTransactionCodecNative(),
+  });
+
+  await assert.rejects(
+    () => client.submitKagemushaTopUp(signedTransaction, operationId),
+    /must not have Retry-After/u,
+  );
+});
+
 test("governance lossless JSON writer preserves raw u64 tokens", () => {
   const encoded = stringifyStrictLosslessIntegerJson(
     {

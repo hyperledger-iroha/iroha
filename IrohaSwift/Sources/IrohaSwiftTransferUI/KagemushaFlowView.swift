@@ -41,7 +41,7 @@ public enum IrohaKagemushaFlowAction: Equatable, Sendable {
     case setup
     /// Online, chain-final public-to-confidential issuance.
     case topUp
-    /// Irreversible sender-side peer cash handoff.
+    /// Irreversible sender-side KAGEMUSHA peer handoff.
     case send
     case receive
     /// Online, chain-final confidential-to-public redemption.
@@ -82,7 +82,7 @@ public struct IrohaKagemushaTransportPicker: View {
 
     private func subtitle(for kind: IrohaKagemushaTransportKind) -> String {
         switch kind {
-        case .qr: return "Show or scan a canonical ABI-21 payment stream."
+        case .qr: return "Show or scan a canonical ABI-23 KAGEMUSHA payment stream."
         case .nfc: return "Tap phones for an authenticated local handoff."
         case .nearby: return "Pair nearby phones with the matching picture."
         }
@@ -130,7 +130,7 @@ public struct IrohaKagemushaFlowView: View {
             }
 
             VStack(alignment: .leading, spacing: 3) {
-                Text("Kagemusha")
+                Text("KAGEMUSHA")
                     .font(.caption.weight(.medium))
                     .foregroundColor(theme.secondaryText)
                 Text("\(currencySymbol)\(state.spendableBalance)")
@@ -139,7 +139,7 @@ public struct IrohaKagemushaFlowView: View {
             }
 
             if state.phase == .setupRequired {
-                Button("Set up Kagemusha") { action(.setup) }
+                Button("Set up KAGEMUSHA") { action(.setup) }
                     .buttonStyle(.borderedProminent)
             } else if !isUnavailable {
                 HStack(spacing: 8) {
@@ -182,28 +182,28 @@ public struct IrohaKagemushaFlowView: View {
 
     private var statusTitle: String {
         switch state.phase {
-        case .setupRequired: return "Kagemusha setup"
-        case .ready: return "Kagemusha ready"
+        case .setupRequired: return "KAGEMUSHA setup"
+        case .ready: return "KAGEMUSHA ready"
         case .toppingUp: return "Finalizing top-up"
-        case .sendingCommitted: return "Kagemusha payment committed"
-        case .receiving: return "Receiving Kagemusha"
+        case .sendingCommitted: return "KAGEMUSHA payment committed"
+        case .receiving: return "Receiving KAGEMUSHA"
         case .redeeming: return "Finalizing redemption"
-        case .frozen: return "Kagemusha frozen"
-        case .unavailable: return "Kagemusha unavailable"
-        case .error: return "Kagemusha needs attention"
+        case .frozen: return "KAGEMUSHA frozen"
+        case .unavailable: return "KAGEMUSHA unavailable"
+        case .error: return "KAGEMUSHA needs attention"
         }
     }
 
     private var statusSubtitle: String {
         switch state.phase {
         case .setupRequired:
-            return "Create the governed device spend authority before receiving cash."
+            return "Create the governed device spend authority before receiving KAGEMUSHA."
         case .ready:
             return "Pay and receive without network connectivity using QR, NFC, or Nearby."
         case .toppingUp:
             return "Top-up completes only after online chain finality."
         case .sendingCommitted:
-            return "The sender consumed and signed this cash before transport; a receipt cannot roll it back."
+            return "The sender consumed and signed this KAGEMUSHA payment before transport; a receipt cannot roll it back."
         case .receiving:
             return "Verifying and durably storing the exact peer payment."
         case .redeeming:

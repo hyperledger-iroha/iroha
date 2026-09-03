@@ -1,5 +1,12 @@
-# Iroha Kagemusha Wallet SDK — consumer ProGuard/R8 rules
+# Iroha KAGEMUSHA Wallet SDK — consumer ProGuard/R8 rules
 #
-# This wrapper currently exposes the client Android SDK without adding classes
-# that require module-specific retention rules. The client/core artifacts carry
-# their own JNI, cryptography, and serialization rules transitively.
+# ServiceLoader resolves these provider names from META-INF/services. Preserve the generic
+# adapter and every qualified runtime-supplied native-Core coordinator factory constructor.
+-keep class org.hyperledger.iroha.sdk.offline.wallet.KagemushaAndroidAuthenticatedHardwareProviderFactoryV1 {
+    public <init>();
+}
+-keepnames interface org.hyperledger.iroha.sdk.offline.wallet.KagemushaAndroidHardwareProviderFactoryV1
+-keepnames interface org.hyperledger.iroha.sdk.offline.KagemushaNativeCoreCoordinatorFactoryV1
+-keep class * implements org.hyperledger.iroha.sdk.offline.KagemushaNativeCoreCoordinatorFactoryV1 {
+    public <init>();
+}

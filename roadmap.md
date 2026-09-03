@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-09-02
+Last updated: 2026-09-04
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -17,9 +17,49 @@ rotation and revocation, sealed-CAS durability where state is retained, failover
 and recovery evidence, and independent review.
 
 This provider-neutral policy covers ordinary node, client, and consensus
-signing. The optional Kagemusha monetary device service is deliberately
+signing. The optional KAGEMUSHA monetary device service is deliberately
 separate: offline spending requires a governed, qualified non-forking hardware
 profile and never permits software fallback.
+
+## Android native device integration
+
+- Complete same-source arm64-v8a/x86_64 native builds and actual device JNI
+  execution. Debug device builds can now explicitly include the sealed native
+  bridge with `irohaDebugNativeBridge=true`; JVM-only checks cannot establish
+  native linkage or hardware Offline qualification.
+- Complete canonical device payload/response schemas outside the now-integrated
+  receiver operations 4--8, then bind the dispatcher to a service that actually
+  owns authenticated Core release/proof state, trusted time, receiver keys and
+  the full non-forking journal/outbox contract. Provision the authorized Android
+  secure-element applet/OEM service and Apple secure-element credential, rebuild
+  the exact ABI-23 mobile artifacts, and pass physical power-loss, airplane-mode,
+  rollback, restore, rollover and byte-identical recovery qualification before
+  enabling Offline monetary actions. The current strict frame/receiver codecs
+  and Java Card journal tests are prerequisites, not device qualification.
+- Connect the now-validated Swift/Kotlin bootstrap and recovery ordering to the
+  qualified native service, then rebuild mobile artifacts from the settled
+  source. Sender intent, payment and redemption still need caller-persisted
+  operation identities, authenticated lookup after a lost native return, and
+  revision-consistent outbox discovery before complete customer flows can ship.
+
+## Additive SNS dataspace bootstrap qualification
+
+- Carry the passing focused height-bound alias-registry and owner-bound
+  bootstrap-grant tests into the settled release candidate. Preserve legacy
+  committed plans, nested routing (including the corrected settlement/multisig
+  height pre-walk), native quote/payment enforcement and static namespace
+  ownership checks; source-level passes are not deployment qualification.
+- Qualify preserved Kura/CommitQC cold replay after additive static dataspace
+  catalog expansion, then verify the coordinated four-validator activation and
+  additive lane lifecycle. The `alias_registry_bootstrap_network` scenario is
+  now wired into the authenticated sealed release child, where exact discovery,
+  non-ignored status and source-bound prebuilt binaries are mandatory, but it
+  still needs an actual clean signed release run for runtime qualification. Its
+  second Strict restart now commits and retains an exact linked BPNG successor;
+  the universal-history control and zero ordinary fees still do not qualify a
+  historical private-lane transition or production fees. Independent-World
+  replay tests are not substitutes for this release evidence; never reset
+  existing chain history to make additive bootstrap pass.
 
 ## Python SDK first-release follow-up
 
@@ -171,29 +211,43 @@ profile and never permits software fallback.
 
 ## Atomic private settlement release qualification
 
-- Release-candidate-qualify the implemented prepared-leg, audit, coordination,
-  restart-certificate recovery, carrier, status, and receipt APIs in Rust/CLI,
-  Kotlin, mirrored Java, Swift, Python, and JavaScript. Carrier admission uses
-  one exact non-terminal three-field acknowledgement in the Rust DTO and all
-  six maintained non-Rust clients, and the packaged OpenAPI source plus both
-  artifact mirrors agree on that shape. Swift's restricted routes now
-  preflight all three native response verifiers before dispatch, retain public
-  status/receipt access without them, strictly validate responder/approval
-  data, and preserve exact canonical `u128` JSON integers on macOS 12/iOS 15.
-  The fingerprint-bound dirty-source XCFramework and focused 14/14, 17/17, and
-  1/1 Swift passes recorded in `status.md` are local integration evidence only.
-  Repair the fail-closed current-source OpenAPI generator's ISO 20022
-  response-header reference, then regenerate, verify, and sign the stale
-  publication manifests from the settled candidate; the three mutable JSON
-  authorities are already byte-identical. Track all new Swift/Java/Kotlin
-  verifier sources in that candidate, rerun both reviewed SDK source-closure
-  suites, rebuild the privacy-production bridge from one clean settled
-  candidate, and run every complete SDK suite and clean-consumer/package check
-  from that same source while preserving opaque witness handles and plaintext
-  redaction.
+- Release-candidate-qualify the implemented prepared-leg, request-aware audit,
+  coordination, restart-certificate recovery, carrier, status, and receipt
+  APIs in Rust/CLI, Kotlin, mirrored Java, Swift, Python, and JavaScript. Rebuild
+  the privacy-production native bridge and XCFramework from one clean settled
+  candidate, then run every complete SDK suite, source-closure inventory, and
+  clean-consumer/package check from that same source. Regenerate the Torii
+  OpenAPI source into both byte-identical publication mirrors, bind clean
+  generator provenance, obtain the external manifest signature, and rerun the
+  immutable release-input verifier. Keep exact historical/current auditor
+  policy binding, stable-identity rotation reads, fail-closed old-policy
+  approvals, opaque witness handles, and plaintext redaction intact. Dirty-tree
+  checks and unsigned development manifests recorded in `status.md` are not
+  clean release evidence. Treat successor-root/epoch proof binding, three
+  globally one-time output-recipient identifiers per leg, deterministic
+  recipient-index reconstruction, the compact authority catalog, exact terminal
+  replay rejection, sponsor-authorized all-Prepare WSV registration before any
+  Commit vote, exact finalization/abort/expiry lock release, and the canonical
+  current 188-field world with eight APS maps as fixed consensus/recovery
+  contracts in every regenerated SDK and release artifact. Snapshot restore
+  must accept only that exact current schema, rebuild and cross-check the
+  recipient index from canonical encrypted outputs, and reject every other
+  field set. V1 has no pre-release snapshot bridge, retired-store decoder,
+  retired configuration-default reinsertion, dynamic current-World inference,
+  or APS-only hybrid hash normalization. The checked-in complete current-schema
+  State, World, and block-wire bytes, with their revision/SHA/schema-order
+  provenance and full WSV/Kura checkpoint-manifest continuity, are the required
+  release evidence.
 - Run real four-validator processes for every participating dataspace at
   N=2,3,4,8,16, with N=3 as the paper configuration and mandatory signed RS16
-  DA/RBC throughout. Exercise one validator unavailable per committee,
+  DA/RBC throughout. The implemented release topology now binds one public
+  participant dataspace followed by N-1 restricted participant dataspaces;
+  lane 0 remains the public global coordinator and is not a settlement leg.
+  For N=3, the capture contract consequently requires eight public and eight
+  restricted validator P2P ports. Requests, frozen configurations, runtime lane
+  discovery, and leakage manifests reject an omitted, reordered, substituted,
+  or all-restricted participant profile. Exercise one validator unavailable
+  per committee,
   coordinator/global restarts, acknowledged authenticated 5/10/20-percent
   message loss, phase-cut partitions, delayed delivery/healing, and crashes after every
   sidecar, staged-delta, QC, Kura, WSV, and receipt-publication boundary.
@@ -205,11 +259,25 @@ profile and never permits software fallback.
   participant routes. The real-process fault path now creates fresh bundles for
   the required route-loss/hold, validator/coordinator restart, persistence-cut,
   invalid-leg, replay, and continuous atomicity trials, and the leakage path
-  retains raw packet/source/peer-state inputs for independent replay. Compile
+  retains raw packet/source/peer-state inputs for independent replay. Every
+  post-registration fault trial and the leakage archive now carry an explicit
+  full-lock checkpoint: all validators must share one `1 + 9N` replicated lock,
+  global validators must have no committee-local locks, and all four validators
+  in each participant committee must share its exact six-row local leg lock.
+  Compile
   these paths from one settled candidate, execute the complete matrix and every
   hook, and archive the genuine controller acknowledgements instead of
   promoting the fixed N=3 smoke test, an unexecuted harness, or synthetic
   responses.
+  The retained current-source N=3 attempt is a failed diagnostic, not a release
+  result: all 16 processes converged through height 4, then stalled at height 5
+  under mandatory DA with `BodyUnavailable` and missing-finality recovery; the
+  activation transaction remained queued for 1,200 seconds and no settlement
+  transition executed. The source correction now unifies idle, active-Serve,
+  active-Producer, and finalization handling around the exhaustive recovered-
+  Broadcast census, with focused two-Broadcast and adversarial regressions.
+  Rerun the exact rebuilt 16-process N=3 binary before expanding the matrix or
+  reporting N=3 latency; the source-level correction is not network evidence.
   Continuously assert that no strict subset of legs becomes visible or
   spendable. Bind each raw run to the settled commit, the archived structured
   hardware description, and the exact N-specific configuration through the
@@ -246,25 +314,31 @@ profile and never permits software fallback.
   implemented; run `scripts/private_settlement_source_evidence.py` from the
   final clean checkout and archive its atomic output with the candidate. Qualify
   the governed `RotatePrivateSettlementPoolPolicyV1` boundary--including
-  pre-rotation receipt recovery/idempotence, same-activation-height pool-receipt
-  rejection, and fail-closed old-policy in-flight bundles--alongside auditor
-  custody-provider rotation, retired-key retention or capsule rewrapping, and
-  finality/restart reconciliation on every shipping host filesystem.
-- Complete the corrected full two-leg and three-leg paper-primary committee-
-  indexed TLC configurations on the settled candidate. After replacing the
-  erroneous bundle-global fault budgets with per-committee maps, the N=2
-  validator-focused path, four-leg clean path, and three-leg expiry/replay path
-  passed against the previously recorded module bytes. A later comment-only
-  clarification changed the current exact module digest; because the release
-  runner authenticates complete input bytes, rerun those tractable rows as well
-  as both full fault configurations. The runner/report/verifier now also bind
-  each configuration to its exact model, source-seal the evidence-producing
-  scripts, replay strict canonical transcripts, and record the Java runtime
-  identity; preserve those bindings in the final archive and have the
-  independent release review match the Java digest to the declared builder
-  environment. The earlier combined N=2 result is superseded, and no historical
-  focused result waives the frozen-input matrix required by the
-  release-evidence runner.
+  pre-rotation receipt recovery and byte-silent exact replay rejection,
+  same-activation-height pool-receipt
+  rejection, fail-closed old-policy approvals, stable-identity retained-capsule
+  access, newly added auditor denial, and old-policy in-flight bundles--alongside
+  auditor custody-provider rotation, exact retained-key selection or governed
+  capsule rewrapping, and finality/restart reconciliation on every shipping
+  host filesystem.
+- Repeat the complete formal matrix as one sealed report on the settled
+  candidate. Current-source mutable-checkout evidence passes all 13 selected
+  rows with their expected result contracts against indexed module SHA-256
+  `1b7abb9bb1cb17318c5576677072544f9875941ab9e5e58121cb89218bbecc02`.
+  The paper-primary full N=3 row generated 108,767,909 states, exhausted
+  11,826,294 distinct states at depth 42 with an empty queue and stderr, and
+  completed without error in 28m11s. The indexed model checks durability and
+  certificate quorum provenance as transition properties and its staged-loss
+  mutation produces the required action-property status 13. The runner,
+  report, shell contract, and DOI verifier distinguish that outcome from
+  invariant status 12. Preserve the source-sealed model/configuration/tooling
+  inputs, exact Java identity, seed/fingerprint/worker controls, stdout/stderr,
+  and mutation trace in the final archive. These development runs do not waive
+  the clean candidate, all count-model rows, complete ordered matrix, or
+  independent runtime review required by the release-evidence runner. These
+  split runs used Homebrew OpenJDK 21.0.12.1 and the checksum-pinned TLA+ tools
+  1.7.4 JAR, so the remaining gap is the clean settled-candidate report and its
+  archived runtime attestation, not local Java availability.
 - Obtain independent review of the AIR, dummy selectors, asset/capsule and
   reimbursement bindings, hybrid cryptography, auditor/QC domains, and the
   cross-dataspace state machine. Archive the exact commit, manifests, raw
@@ -973,109 +1047,73 @@ profile and never permits software fallback.
   review from the immutable release source. Focused security suites are green;
   they do not substitute for this release qualification.
 
-## Kagemusha V1 release completion
+## KAGEMUSHA V1 release completion
 
-- Seal the implemented hard cut across the specification, formal model, Core,
-  Torii, CLI, native bridge, SDKs, fixtures, and generated artifacts.
-  `KagemushaV1` and `kgm1:` must remain the only public protocol and text
-  transport; reject any reintroduction of legacy decoders, aliases, migrations,
-  note inventories, public state heads, or hop/input/origin/receipt/fan-in/
-  proof-depth/history admission caps.
-- Candidate-qualify the implemented hidden `u128` aggregate balance and fixed
-  paired-Pasta `Bootstrap`, `MintFold`, `SendSplit`, `ReceiveFold`,
-  `RedeemSplit`, `Rotate`, terminal-wrapper, and no-commit-closure relations.
-  Complete a positive authenticated verifier-changing `Rotate` lifecycle
-  regression before treating all six aggregate-state relations as end-to-end
-  complete. Define a
-  threshold-authenticated target-release bridge that binds the exact old/new
-  release, manifest, suite, verifying-key, protocol, profile, and policy
-  mapping; preserve every monetary, lane, device-key, replay-root, and hardware
-  epoch invariant across it. Retain authenticated old-suite verifiers across
-  snapshot/restore so delayed committed credits remain acceptable after an
-  ordinary upgrade.
-  Prove that each singular `ReceiveFold` has constant public/proof shape and
-  that arbitrarily many repeated folds preserve unrestricted later spending.
-  Finish the focused single-credit metering, near-capacity, replay, and
-  late-authorization atomicity gates, then qualify the real circuit. Resolve
-  every remaining native circuit failure without weakening lifecycle, Guard,
-  release/VK, replay, or private-state bindings.
-- Complete one immutable-candidate crash matrix for the recoverable
-  prepare/prove/hardware-commit/persist/expose protocol. Inject failure at every
-  journal, candidate, hardware commit, proof, successor, inbox, retained
-  receipt, outbox, transport, and acknowledgement boundary; demonstrate
-  byte-identical recovery, one successor, no balance burn, and no cancellation
-  of exposed credits. The two focused mock recovery selectors pass 1/1, but
-  they do not replace this immutable-candidate matrix.
-- Qualify exact durable-capacity accounting for the reusable, exact-amount
-  `PaymentRequestV1`. Distinct valid intents against the same request must each
-  receive an independent one-use ticket without a request-local count or amount
-  ledger; invoice deduplication remains outside the monetary protocol. Core now
-  enforces conservative complete-operation floors of 298,640 inbox
-  bytes and 90,274 implementation-local outbox bytes. Preserve those floors and
-  preserve the passing focused floor, precommit, and zero-headroom baselines
-  while obtaining immutable-candidate exhaustion evidence and completing
-  bounded sender-metadata compaction under long histories without introducing
-  a history-count limit. Preserve the exact prepared-projection `effect_digest`
-  binding, including commit evidence, throughout candidate qualification.
-  Cover maximum-size Guard bundles, collection-prefix thresholds, shuffled
-  concurrent tickets, delayed post-expiry delivery, duplicate delivery,
-  conflicting credit-ID reuse, folding, restart, and rotation. Exhaustion may
-  stop only new tickets or preparations; every already committed ticketed
-  payment must remain stageable, foldable, acknowledgeable, and spendable.
-- Qualify the hardware-only authority contract with governed
-  `HardwareProfileV1` and `HardwareCredentialV1` values: raw attestation,
-  exact-next consumption, one-use successor authority, rollback-resistant
-  journal/counter/inbox/outbox, trusted time or monotonic lease, atomic recovery,
-  epoch rotation, and counter rollover. Stock signing-only services remain
-  online-only, and no software fallback may enter the monetary path.
-  Preserve the source-aligned ABI baseline (`0x0000ffff`, operations `1..=24`,
-  statuses `0..=10`, fail-closed unknown values) while implementing exact
-  operation bodies and authenticators in the OEM/secure-element provider.
-  Stock C/JNI must remain unavailable until that provider and physical
-  crash/capacity/rollback qualification exist.
-- Candidate-qualify exactly one pooled reserve per `(network, asset
-  incarnation)` with finalized mint authorization, idempotent top-up and
-  redemption, unique terminal nullifiers, full and partial redemption,
-  zero-balance continuation, reserve-underflow and custody-burn rejection, and
-  restored-state solvency. Normal suite rotation must retain offline
-  verification or use an authenticated recursive upgrade; emergency suspension
-  must retain legitimate online redemption and recovery.
-- Preserve canonical fixture version 2 regenerated from Rust's corrected
-  fixed-width semantic transcripts at SHA-256
-  `e3cb07f567c75abb965ef460cd093228580b01a841a0cc65c535ef63bd894b7d`.
-  Focused Swift, Kotlin, mirrored Java, JavaScript, Python, and C# fixture
-  parity is green; finish the same byte-identical boundary through JNI,
-  animated QR, and NFC from one audited native core. Rebuild the Swift
-  XCFramework, run the full SDK matrix, preserve exact positive and adversarial
-  fixtures, and allow static QR only for messages proven to fit its
-  small-message policy.
-- Treat measured evidence from that immutable candidate as the release gate.
-  Record exact proof/raw/text bytes, circuit rows, verifying-key sizes,
-  prove/verify/handoff latency, peak RSS, energy, and sustained thermal folding.
-  The integrated 1,000-credit mock-verifier lifecycle baseline passes 1/1; it
-  remains software coverage and does not satisfy the immutable-candidate gate.
-  Pass 1,000 independently funded credits folded and spent as one payment, at
-  least 1,024 real recursive handoffs, real proofs at depths 8, 64, 1,024 and
-  beyond, the full adversarial matrix, a four-validator settlement corridor,
-  and physical airplane-mode, restart, power-loss, clock-rollback,
-  backup/restore, thermal, latency, memory, and throughput qualification for
-  every enabled hardware profile. Do not claim completion from model runs,
-  fixture roundtrips, or mock proofs.
-- Hold the published transport targets at no more than 6,528 bytes for paired
-  proofs, approximately 9,211/12,288 bytes for raw/text handoff, 16,384 bytes
-  for the raw five-message qualification exchange, and 18,171 bytes for the
-  composed absolute cap. If a candidate misses a target, revise the sole V1
-  design rather than adding an alternate protocol or history limit. The first
-  measured Eq platform-credential proof is an internal 20,128-byte proof with
-  exact transcript inventory `129 + 8 + 449 + 6 + 37 = 629` 32-byte items;
-  internal parsing must use its authenticated protocol-derived exact length,
-  not the 2,495-byte wire slot. Keep compile-time transport preflight for every
-  externally serialized proof role and replace the SHA/dense-MSM public carrier
-  with a narrow authenticated decider whose non-tail inventory satisfies
-  `W + T + E + Q <= 40` at `k=16` (2,495-byte parity slot), without raising the
-  authoritative 6,528-byte complete-proof limit. Re-run the real handoff gate
-  only after every transported role passes that structural preflight.
+The first-release target is one unbounded-history hardware aggregate balance and
+one three-message peer protocol. Backward compatibility is forbidden. Complete
+the following work before enabling KAGEMUSHA:
 
+- **Finish the three-message hard cut.** Keep only Request=1, Payment=2, and
+  Acknowledgement=3 across Core, Torii, native bridge, Rust fixtures, Swift,
+  Kotlin, mirrored Java, JavaScript, Python, C#, JNI, QR, and NFC. Delete every
+  request-mode, request-budget, acceptance-intent, acceptance-ticket,
+  precommit/no-commit, tag-4/tag-5, and five-message path rather than aliasing or
+  deprecating it. Distinct valid payments against one request must all stage;
+  only exact credit-ID duplicate/conflict semantics belong to the protocol.
+- **Close recursive mint authority.** Integrate the measured k=12 Table8
+  mint-hash shards into the ordered k=16 paired claim-fold. Equality-bind every
+  canonical leaf byte, typed plan/cursor, proof accumulator, MintAuthorization
+  statement, finalized ledger credit, recipient lane, lifecycle, replay ID, and
+  envelope commitment. The leaf proof must never authorize money without the
+  recursively verified claim-fold and normalized hardware guard.
+- **Complete fixed aggregate relations.** Ship Bootstrap, MintFold, SendSplit,
+  ReceiveFold, RedeemSplit, and Rotate as fixed-shape paired-Pasta transitions
+  over one private `u128` balance and replay root. Remove batch-count, hop,
+  ancestry, origin, note, fan-in, and proof-depth admission maxima. Preserve a
+  zero-balance successor for full spends and redemptions.
+- **Prove real long-history behavior.** Run at least 1,024 real recursive
+  handoffs and longer property histories. Complete the 1,000 independently
+  funded devices -> merchant receives/folds -> one 1,000-unit payment ->
+  recipient spend and full/partial redemption corridor. Measure and enforce
+  history-independent proof size and verifier work at depths 8, 64, 1,024, and
+  beyond; mocked-recursion models are supporting evidence only.
+- **Finish non-forking hardware persistence.** Implement exact-next
+  transitions/one-use successors, rollback-resistant journal and accepted-credit
+  inbox, trusted commit time, atomic recoverable certificates, authenticated
+  state/outbox, offline rotation/counter rollover, and no software fallback.
+  Stage intent and outbox capacity before the one hardware commit; recovery must
+  resume the same successor and reproduce every exposed byte. Host-only
+  signatures and stock signing services grant no offline monetary authority.
+- **Complete pooled settlement and routes.** Keep one reserve per asset,
+  idempotent finalized top-ups, atomic full/partial redemption, unique terminal
+  nullifiers, and reserve-underflow/concurrency protection. Peer transfers never
+  touch the reserve. Keep only `/v1/kagemusha/readiness`,
+  `/v1/kagemusha/top-up`, `/v1/kagemusha/redeem`, and operation status;
+  remove lifecycle, anchor, lineage, and per-top-up drawdown endpoints and reset
+  every pre-release wallet/fixture/genesis/WSV legacy state.
+- **Regenerate conformance artifacts.** Publish identical canonical Norito
+  fixtures and behavior across all SDKs and transports. Keep the paired proof at
+  or below 6,528 bytes and the complete raw/text exchange near
+  9,211/12,288 bytes without adding a history-dependent envelope.
+- **Exercise adversarial recovery.** Cover shuffled concurrent requests,
+  multiple distinct payments per request, delayed post-expiry delivery, exact
+  duplicate transport, conflicting credit reuse, stale state, forked successors,
+  rollback, counter reuse/skip, forged rotation, overflow, proof/output
+  substitution, top-up recovery, reserve underflow, duplicate/concurrent
+  redemption, zero-balance continuation, verifier rotation, and rollover.
+  Inject crashes at every journal, hardware commit, proof, state, inbox, outbox,
+  transport, and ACK boundary and prove value conservation plus byte-identical
+  recovery.
+- **Qualify release evidence.** Regenerate the final source/recovery inventory,
+  run focused and workspace Rust/SDK/lint/format gates from stable source, obtain
+  independent cryptographic review, and complete physical airplane-mode,
+  restart, power-loss, clock-rollback, backup/restore, thermal, latency, memory,
+  and throughput qualification for every enabled hardware profile.
+
+Current focused structural tests are useful iteration evidence, not release
+qualification. Do not mark this section complete until the real recursive,
+hardware, settlement, cross-SDK, crash-recovery, and physical-device gates all
+pass.
 ## MKHE and Figure 9 evidence-gated completion
 
 - Join the implemented 40-limb qPCS/FRI, private RLWE/source-statement,
@@ -2434,11 +2472,13 @@ The first-release in-flight persistence corridor has one canonical schema:
 `LaneExecutablePayloadV1` version 1, QueuePlan journal V1, and reservation
 journal V1, with contiguous zero-based tags. The formal/source-bound layout
 manifests, hashes, inventories, and immutable receipt must be regenerated from
-the final V1 candidate. The current structural checker is
-blocked by the separately owned Kura include-inventory mismatch between
-`02a_unauthenticated_preflight.rs` and
-`02a_fresh_single_lane_preflight.rs` across 74 bindings, so no green
-current-source structural or TLC/Apalache engine result is claimed.
+the final V1 candidate. The Kura include inventory now binds the exact ordered
+36-file production closure and 76-file production-plus-test closure, including
+`canonical_autonomous_replica.rs` and
+`07m_canonical_autonomous_replica_tests.rs`; the stale 74-binding test contract
+and obsolete `02a_unauthenticated_preflight.rs` name have been removed. No
+green current-source structural or TLC/Apalache engine result is claimed until
+the complete settled-candidate checks are rerun.
 
 The remaining work is evidence-driven and must stay in order:
 

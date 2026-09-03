@@ -257,7 +257,7 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
     ) throws {
         guard (kagemushaTopUpCount == 0) == (kagemushaTopUpRoot == nil) else {
             throw SumeragiV2WireError.invalid(
-                "execution commitment kagemusha top-up count and root presence disagree"
+                "execution commitment KAGEMUSHA top-up count and root presence disagree"
             )
         }
         if let kagemushaTopUpRoot {
@@ -268,7 +268,7 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
             )
             guard postStateRoot.bytes == expectedPostStateRoot else {
                 throw SumeragiV2WireError.invalid(
-                    "execution commitment post-state root does not match its kagemusha top-up projection"
+                    "execution commitment post-state root does not match its KAGEMUSHA top-up projection"
                 )
             }
         }
@@ -337,11 +337,11 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
                 reader.field("execution commitment ordinary writes")
             ),
             kagemushaTopUpRoot: sumeragiV2DecodeOption(
-                reader.field("execution commitment kagemusha top-up root"),
+                reader.field("execution commitment KAGEMUSHA top-up root"),
                 decode: SumeragiV2Hash.init
             ),
             kagemushaTopUpCount: sumeragiV2DecodeU32(
-                reader.field("execution commitment kagemusha top-up count")
+                reader.field("execution commitment KAGEMUSHA top-up count")
             ),
             nativeAmxApplicationManifestVersion: sumeragiV2DecodeU16(
                 reader.field("execution commitment Native AMX application-manifest version")

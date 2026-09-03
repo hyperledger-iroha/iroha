@@ -63,10 +63,16 @@ export const AtomicPrivateSettlementOperationV1 = Object.freeze({
     ["manifest", "audit_policy", "committee_authority", "payload"],
     32 * 1024 * 1024,
   ),
+  AUDITOR_CAPSULE: operation(
+    "/v1/nexus/private-settlements/legs/{payload_digest}/audit-capsule",
+    AtomicPrivateSettlementAuthV1.ROLE_IDENTITY,
+    ["audit_policy"],
+    1024 * 1024,
+  ),
   AUDIT_APPROVAL: operation(
     "/v1/nexus/private-settlements/legs/{payload_digest}/audit-approvals",
     AtomicPrivateSettlementAuthV1.ROLE_IDENTITY,
-    ["approval"],
+    ["audit_policy", "approval"],
     2 * 1024 * 1024,
   ),
   BUNDLE_SUBMIT: operation(
@@ -320,6 +326,7 @@ const RESPONSE_FIELDS = Object.freeze([
       "authoritative_height",
       "manifest",
       "audit_policy",
+      "access_audit_policy",
       "committee_authority",
       "statement",
       "delta",
@@ -401,8 +408,10 @@ function u64BigInt(value) {
 }
 
 function validateBlsNormalSignatureLiteral(value, context) {
-  // TODO: Verify the responder PoP and signature once the JavaScript SDK
-  // exports the typed Norito attestation preimages and BLS-Normal PoP boundary.
+  // This is only the allocation-bounded syntax preflight. Every restricted
+  // response is subsequently passed to the mandatory native verifier, which
+  // reconstructs the typed Norito preimage and verifies the roster PoP and
+  // BLS-Normal response signature before this client returns it.
   if (typeof value !== "string" || !/^[A-Za-z0-9+/]{128}$/u.test(value)) {
     throw new TypeError(`${context} must be exact standard base64 for 96 bytes`);
   }
@@ -416,6 +425,18 @@ function auditApprovalRequestContext(request) {
   const bytes = request.bytes();
   try {
     const parsed = strictObject(bytes, "prepared settlement audit approval");
+    exactFields(
+      parsed,
+      ["audit_policy", "approval"],
+      "prepared settlement audit approval",
+    );
+    if (
+      parsed.audit_policy === null
+      || typeof parsed.audit_policy !== "object"
+      || Array.isArray(parsed.audit_policy)
+    ) {
+      throw new TypeError("prepared settlement audit policy is invalid");
+    }
     const approval = parsed.approval;
     if (approval === null || typeof approval !== "object" || Array.isArray(approval)) {
       throw new TypeError("prepared settlement audit approval is invalid");
@@ -1049,6 +1070,7 @@ export class AtomicPrivateSettlementToriiClientV1 {
         } else if (kind === "capsule") {
           await verify(
             responseBytes,
+            body,
             identity.network.bytes,
             identity.value.bytes,
             identity.auditorSigningKey,
@@ -1241,8 +1263,39 @@ export class AtomicPrivateSettlementToriiClientV1 {
     return this.#roleGet(payloadDigest, options, "committee-proof", "settlement committee proof");
   }
 
-  async getAuditorCapsule(payloadDigest, options) {
-    return this.#roleGet(payloadDigest, options, "audit-capsule", "settlement auditor capsule");
+  async getAuditorCapsule(payloadDigest, request, options) {
+    if (!(request instanceof AtomicPrivateSettlementPreparedRequestV1)) {
+      throw new TypeError("settlement request must be native-prepared");
+    }
+    if (request.operation !== AtomicPrivateSettlementOperationV1.AUDITOR_CAPSULE) {
+      throw new TypeError("prepared settlement request is bound to another operation");
+    }
+    const normalized = requestOptions(
+      options,
+      new Set(["roleHeaderProvider", "signal"]),
+      "settlement auditor capsule",
+    );
+    const digest = identifier(payloadDigest);
+    const network = this.#requireAttestationNetwork("settlement auditor capsule");
+    const nativeVerifier = this.#nativeFunction(
+      "privateSettlementVerifyAuditorCapsuleResponseWithRequestV1",
+    );
+    const route = request.operation.path.replace("{payload_digest}", digest.pathComponent);
+    return this.#request(
+      "POST",
+      route,
+      request.bytes(),
+      requireProvider(normalized.roleHeaderProvider, "settlement auditor capsule"),
+      ROLE_HEADER_NAMES,
+      RESPONSE_RESTRICTED_MAX_BYTES,
+      {
+        value: digest,
+        network,
+        auditorKeyFromRoleHeader: true,
+        nativeVerification: { kind: "capsule", verify: nativeVerifier },
+        signal: normalized.signal,
+      },
+    );
   }
 
   async #roleGet(payloadDigest, options, suffix, context) {
@@ -1253,11 +1306,8 @@ export class AtomicPrivateSettlementToriiClientV1 {
     );
     const digest = identifier(payloadDigest);
     const network = this.#requireAttestationNetwork(context);
-    const capsule = suffix === "audit-capsule";
     const nativeVerifier = this.#nativeFunction(
-      capsule
-        ? "privateSettlementVerifyAuditorCapsuleResponseV1"
-        : "privateSettlementVerifyCommitteeProofResponseV1",
+      "privateSettlementVerifyCommitteeProofResponseV1",
     );
     const route = `/v1/nexus/private-settlements/legs/${digest.pathComponent}/${suffix}`;
     return this.#request(
@@ -1270,9 +1320,8 @@ export class AtomicPrivateSettlementToriiClientV1 {
       {
         value: digest,
         network,
-        auditorKeyFromRoleHeader: capsule,
         nativeVerification: {
-          kind: capsule ? "capsule" : "committee",
+          kind: "committee",
           verify: nativeVerifier,
         },
         signal: normalized.signal,

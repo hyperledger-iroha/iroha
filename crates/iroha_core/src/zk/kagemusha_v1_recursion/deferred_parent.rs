@@ -2,7 +2,7 @@
 //!
 //! These primitives are deliberately scalar-half only.  Every emitted symbolic curve equation
 //! must be consumed by the reciprocal parity's point-audit relation before a proof can carry
-//! monetary authority.  The production wrapper keeps this module private so an unconstrained
+//! monetary authority.  The production recursive relations keep this module private so an unconstrained
 //! scalar half can never be installed as an [`super::KagemushaRecursiveVerifierV1`].
 
 use std::{
@@ -18,9 +18,9 @@ use halo2_base::{
     QuantumCell::{Constant, Existing},
     gates::circuit::builder::BaseCircuitBuilder,
     gates::{GateInstructions as _, RangeInstructions as _},
-    utils::{BigPrimeField, CurveAffineExt},
+    utils::{BigPrimeField, CurveAffineExt, fe_to_biguint},
 };
-use halo2_ecc::fields::fp::FpChip;
+use halo2_ecc::fields::{FieldChip as _, fp::FpChip};
 use halo2_proofs::halo2curves::CurveAffine;
 use sha2::{Digest as _, Sha256};
 use snark_verifier::{
@@ -68,6 +68,20 @@ type DeferredTranscript<'chip, C, R> = PoseidonTranscript<
     KAGEMUSHA_IPA_POSEIDON_PARTIAL_ROUNDS_V1,
 >;
 
+#[path = "deferred_parent_proof_bytes.rs"]
+mod proof_bytes;
+#[cfg(test)]
+use proof_bytes::canonical_loaded_proof_bytes_v1;
+use proof_bytes::verify_ordinary_proof_and_stream_v1;
+pub(in crate::zk::kagemusha_v1_recursion) use proof_bytes::{
+    verify_ordinary_proof_with_canonical_bytes_at_k_v1,
+    verify_ordinary_proof_with_canonical_bytes_v1,
+};
+
+#[cfg(test)]
+#[path = "deferred_parent_proof_bytes_tests.rs"]
+mod proof_bytes_tests;
+
 const KAGEMUSHA_PROTOCOL_STRUCTURE_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:compiled-protocol-structure";
 const KAGEMUSHA_PROTOCOL_IDENTITY_DOMAIN_V1: &[u8] =
@@ -107,8 +121,25 @@ where
     C: CurveAffine,
     L: Loader<C>,
 {
+    ordinary_ipa_proof_profile_at_k_v1(protocol, KAGEMUSHA_RECURSION_IPA_K_V1 as usize)
+}
+
+/// Derive the exact canonical proof length for an authenticated internal helper domain.
+///
+/// Monetary state and history remain fixed at `k = 16`. This narrower parser exists only so a
+/// `k = 16` recursive relation can consume a release-pinned smaller helper proof without padding
+/// or accepting a second proof encoding.
+pub(super) fn ordinary_ipa_proof_profile_at_k_v1<C, L>(
+    protocol: &PlonkProtocol<C, L>,
+    expected_k: usize,
+) -> Result<KagemushaOrdinaryProofProfileV1, String>
+where
+    C: CurveAffine,
+    L: Loader<C>,
+{
     validate_ordinary_ipa_protocol_shape_v1(
         protocol.domain.k,
+        expected_k,
         protocol.num_witness.len(),
         protocol.num_challenge.len(),
         protocol.quotient.chunk_degree,
@@ -121,12 +152,17 @@ where
         .ok_or_else(|| "Kagemusha witness-commitment count overflowed".to_owned())?;
     let quotient_commitments = protocol.quotient.num_chunk();
     let evaluations = protocol.evaluations.len();
-    let mut rotations_by_polynomial = BTreeMap::<usize, BTreeSet<i32>>::new();
+    // The BGH19 parser groups queries by their evaluation-point shifts, not
+    // by the source `Rotation` integers.  Rotations that differ by the domain
+    // order therefore share one transcript evaluation (for example `-1` and
+    // `2^k - 1`).  Normalize modulo the authenticated domain order so this
+    // inventory exactly matches `query_sets` in snark-verifier.
+    let mut rotations_by_polynomial = BTreeMap::<usize, BTreeSet<i64>>::new();
     for query in &protocol.queries {
         rotations_by_polynomial
             .entry(query.poly)
             .or_default()
-            .insert(query.rotation.0);
+            .insert(canonical_rotation_v1(protocol.domain.k, query.rotation.0));
     }
     let bgh19_rotation_sets = rotations_by_polynomial
         .into_values()
@@ -134,6 +170,7 @@ where
         .collect::<BTreeSet<_>>()
         .len();
     ordinary_ipa_proof_profile_from_counts_v1(
+        expected_k,
         witness_commitments,
         quotient_commitments,
         evaluations,
@@ -141,29 +178,30 @@ where
     )
 }
 
+fn canonical_rotation_v1(domain_k: usize, rotation: i32) -> i64 {
+    i64::from(rotation).rem_euclid(1_i64 << domain_k)
+}
+
 fn validate_ordinary_ipa_protocol_shape_v1(
     domain_k: usize,
+    expected_k: usize,
     witness_phases: usize,
     challenge_phases: usize,
     quotient_chunk_degree: usize,
     query_count: usize,
 ) -> Result<(), String> {
-    if domain_k != KAGEMUSHA_RECURSION_IPA_K_V1 as usize {
+    if expected_k == 0 || domain_k != expected_k {
         return Err(format!(
-            "Kagemusha ordinary proof protocol uses k={}, expected k={KAGEMUSHA_RECURSION_IPA_K_V1}",
-            domain_k
+            "Kagemusha ordinary proof protocol uses k={domain_k}, expected k={expected_k}",
         ));
     }
     if witness_phases != challenge_phases {
         return Err(
-            "Kagemusha ordinary proof protocol has mismatched witness/challenge phases"
-                .to_owned(),
+            "Kagemusha ordinary proof protocol has mismatched witness/challenge phases".to_owned(),
         );
     }
     if quotient_chunk_degree == 0 {
-        return Err(
-            "Kagemusha ordinary proof protocol has zero quotient chunk degree".to_owned(),
-        );
+        return Err("Kagemusha ordinary proof protocol has zero quotient chunk degree".to_owned());
     }
     if query_count == 0 {
         return Err("Kagemusha ordinary proof protocol has no PCS queries".to_owned());
@@ -197,6 +235,7 @@ where
 }
 
 fn ordinary_ipa_proof_profile_from_counts_v1(
+    domain_k: usize,
     witness_commitments: usize,
     quotient_commitments: usize,
     evaluations: usize,
@@ -204,9 +243,8 @@ fn ordinary_ipa_proof_profile_from_counts_v1(
 ) -> Result<KagemushaOrdinaryProofProfileV1, String> {
     // BGH19 contributes F, one scalar per rotation set, and S. IPA then
     // contributes two points per round, c, blind, and the final basis point.
-    let opening_items = usize::try_from(KAGEMUSHA_RECURSION_IPA_K_V1)
-        .ok()
-        .and_then(|rounds| rounds.checked_mul(2))
+    let opening_items = domain_k
+        .checked_mul(2)
         .and_then(|items| items.checked_add(5))
         .ok_or_else(|| "Kagemusha IPA opening-item count overflowed".to_owned())?;
     let transcript_items = witness_commitments
@@ -686,6 +724,14 @@ where
     pub(super) audit: DeferredEquationWitness<C>,
     pub(super) equation_tags: Vec<u32>,
     pub(super) equation_selectors: Vec<bool>,
+    /// Canonical small values absorbed after the deferred-equation transcript.
+    ///
+    /// The transport decider uses this tail to bind the private inner-state
+    /// protocol and audit tuple into the outer audit.  The reciprocal parity
+    /// reassigns every value, equality-constrains it to its own inner proof,
+    /// and recomputes the same Poseidon digest.  Existing recursive relations
+    /// leave this empty and retain their original audit transcript.
+    pub(super) bound_u128_values: Vec<u128>,
     pub(super) audit_digest_limbs: [AssignedValue<C::ScalarExt>; 2],
 }
 
@@ -879,6 +925,7 @@ pub(super) fn constrain_parent_and_history_into_loader_v1<'chip, C>(
     witness: KagemushaDeferredParentWitnessV1<'_, C>,
     expected_predecessor_state: AssignedValue<C::ScalarExt>,
     expected_predecessor_outer: [AssignedValue<C::ScalarExt>; 2],
+    expected_acceptance_protocols: [[AssignedValue<C::ScalarExt>; 2]; 2],
     enabled: AssignedValue<C::ScalarExt>,
     loader: &DeferredLoader<'chip, C>,
 ) -> Result<DeferredAccumulator<'chip, C>, Error>
@@ -932,6 +979,34 @@ where
             .ctx_mut()
             .main()
             .constrain_equal(&parent.assigned(), &expected);
+    }
+    for (offset, expected) in [
+        (
+            public_instance::COMMIT_WRAPPER_EQ_PROTOCOL_LO,
+            expected_acceptance_protocols[0],
+        ),
+        (
+            public_instance::COMMIT_WRAPPER_EP_PROTOCOL_LO,
+            expected_acceptance_protocols[1],
+        ),
+    ] {
+        for (parent, expected) in parent_column
+            .get(offset..offset + 2)
+            .ok_or(Error::InvalidInstances)?
+            .iter()
+            .zip(expected)
+        {
+            let chip = loader.ecc_chip();
+            let mut ctx = loader.ctx_mut();
+            let difference = chip
+                .range()
+                .gate()
+                .sub(ctx.main(), *parent.assigned(), expected);
+            let selected = chip.range().gate().mul(ctx.main(), difference, enabled);
+            chip.range()
+                .gate()
+                .assert_is_const(ctx.main(), &selected, &C::ScalarExt::ZERO);
+        }
     }
     let parent_history_limbs = parent_column
         .get(super::state_relation::PUBLIC_INSTANCE_COUNT..)
@@ -1025,6 +1100,26 @@ where
     C::Base: BigPrimeField,
     C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
 {
+    finalize_tagged_deferred_audit_with_u128_binding_v1(builder, loader, equation_tag, &[])
+}
+
+/// Snapshot a tagged scalar-verifier audit and bind a fixed list of canonical
+/// `u128` values into the same field-native transcript.
+///
+/// This is deliberately not a host digest.  Every supplied cell is range
+/// checked and absorbed by the circuit Poseidon sponge; the reciprocal parity
+/// must provide the same values when it consumes the deferred equations.
+pub(super) fn finalize_tagged_deferred_audit_with_u128_binding_v1<C>(
+    builder: &mut BaseCircuitBuilder<C::ScalarExt>,
+    loader: DeferredLoader<'_, C>,
+    equation_tag: u32,
+    bound_values: &[AssignedValue<C::ScalarExt>],
+) -> Result<KagemushaDeferredParentOutputV1<C>, Error>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
+{
     if equation_tag == 0 {
         return Err(Error::InvalidInstances);
     }
@@ -1035,12 +1130,13 @@ where
             .map(|_| ctx.main().load_constant(C::ScalarExt::ONE))
             .collect::<Vec<_>>()
     };
-    finalize_deferred_audit_plan_v1(
+    finalize_deferred_audit_plan_with_u128_binding_v1(
         builder,
         loader,
         vec![equation_tag; equation_count],
         assigned_selectors,
         vec![true; equation_count],
+        bound_values,
     )
 }
 
@@ -1060,6 +1156,30 @@ where
     C::Base: BigPrimeField,
     C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
 {
+    finalize_deferred_audit_plan_with_u128_binding_v1(
+        builder,
+        loader,
+        equation_tags,
+        assigned_selectors,
+        equation_selectors,
+        &[],
+    )
+}
+
+/// Snapshot a mixed-role audit and bind the exact common `u128` public carrier.
+pub(super) fn finalize_deferred_audit_plan_with_u128_binding_v1<C>(
+    builder: &mut BaseCircuitBuilder<C::ScalarExt>,
+    loader: DeferredLoader<'_, C>,
+    equation_tags: Vec<u32>,
+    assigned_selectors: Vec<AssignedValue<C::ScalarExt>>,
+    equation_selectors: Vec<bool>,
+    bound_values: &[AssignedValue<C::ScalarExt>],
+) -> Result<KagemushaDeferredParentOutputV1<C>, Error>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+    C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
+{
     let equation_count = loader.ecc_chip().equation_count();
     if equation_count == 0
         || equation_tags.len() != equation_count
@@ -1069,24 +1189,46 @@ where
     {
         return Err(Error::InvalidInstances);
     }
-    let (audit, audit_digest_limbs) = {
+    let (audit, audit_digest_limbs, bound_u128_values) = {
         let chip = loader.ecc_chip();
         let mut ctx = loader.ctx_mut();
-        let elements = chip.assigned_equation_poseidon_elements_v1(
+        let mut elements = chip.assigned_equation_poseidon_elements_v1(
             &mut ctx,
             &equation_tags,
             &assigned_selectors,
         )?;
+        let mut bound_u128_values = Vec::with_capacity(bound_values.len());
+        if !bound_values.is_empty() {
+            elements.push(ctx.main().load_constant(C::ScalarExt::from(
+                KAGEMUSHA_DEFERRED_AUDIT_BOUND_VALUES_TAG_V1,
+            )));
+            elements.push(ctx.main().load_constant(C::ScalarExt::from(
+                u64::try_from(bound_values.len()).map_err(|_| Error::InvalidInstances)?,
+            )));
+            for value in bound_values {
+                chip.range().range_check(ctx.main(), *value, 128);
+                let integer = fe_to_biguint(value.value());
+                if integer.bits() > 128 {
+                    return Err(Error::InvalidInstances);
+                }
+                let digits = integer.to_u64_digits();
+                let low = u128::from(digits.first().copied().unwrap_or(0));
+                let high = u128::from(digits.get(1).copied().unwrap_or(0));
+                bound_u128_values.push(low | (high << 64));
+                elements.push(*value);
+            }
+        }
         drop(ctx);
         drop(chip);
         let digest = poseidon_digest_assigned(&loader, elements);
         let limbs = assigned_scalar_u128_limbs(&loader, digest);
-        (loader.ecc_chip().witness(), limbs)
+        (loader.ecc_chip().witness(), limbs, bound_u128_values)
     };
     let output = KagemushaDeferredParentOutputV1 {
         audit,
         equation_tags,
         equation_selectors,
+        bound_u128_values,
         audit_digest_limbs,
     };
     *builder.pool(0) = loader.take_ctx();
@@ -1094,6 +1236,7 @@ where
 }
 
 const KAGEMUSHA_PARENT_EQUATION_TAG_V1: u32 = 1;
+const KAGEMUSHA_DEFERRED_AUDIT_BOUND_VALUES_TAG_V1: u64 = u64::from_le_bytes(*b"kgmbnd_1");
 
 /// Constrain one scalar-verifier audit in the reciprocal Pasta parity.
 ///
@@ -1162,11 +1305,112 @@ where
     C::Base: BigPrimeField + halo2_base::utils::ScalarField + ff::WithSmallOrderMulGroup<3>,
     C::ScalarExt: BigPrimeField + ff::WithSmallOrderMulGroup<3>,
 {
+    constrain_reciprocal_audit_plan_with_u128_binding_v1(
+        builder,
+        witness,
+        equation_tags,
+        equation_selectors,
+        expected_audit_limbs,
+        &[],
+        &[],
+        ReciprocalMsmV1::Dense(dense_jobs),
+    )
+}
+
+/// Consume a deferred audit whose Poseidon transcript also binds a canonical
+/// list of `u128` values.
+///
+/// `local_values` are cells derived from the consuming parity's own private
+/// inner proof.  The values carried by `output` are reassigned, range checked,
+/// equality-constrained to those local cells, and then absorbed into the
+/// reciprocal audit transcript.  Consequently neither parity can substitute a
+/// different inner protocol/audit tuple while retaining the other's outer
+/// proof.
+pub(super) fn constrain_reciprocal_output_with_u128_binding_v1<C>(
+    builder: &mut BaseCircuitBuilder<C::Base>,
+    output: &KagemushaDeferredParentOutputV1<C>,
+    expected_audit_limbs: &[AssignedValue<C::Base>; 2],
+    local_values: &[AssignedValue<C::Base>],
+    dense_jobs: &mut PastaDenseMsmJobsV1<C>,
+) -> Result<(), String>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField + halo2_base::utils::ScalarField + ff::WithSmallOrderMulGroup<3>,
+    C::ScalarExt: BigPrimeField + ff::WithSmallOrderMulGroup<3>,
+{
+    constrain_reciprocal_audit_plan_with_u128_binding_v1(
+        builder,
+        &output.audit,
+        &output.equation_tags,
+        &output.equation_selectors,
+        expected_audit_limbs,
+        &output.bound_u128_values,
+        local_values,
+        ReciprocalMsmV1::Dense(dense_jobs),
+    )
+}
+
+/// Consume a bound deferred audit through the Base graph's serialized MSM.
+///
+/// This is the narrow transport-decider counterpart of
+/// [`constrain_reciprocal_output_with_u128_binding_v1`].  It preserves the
+/// identical equation, selector, digest, and local-value constraints while
+/// avoiding the dedicated dense machine's externally visible advice columns.
+pub(super) fn constrain_reciprocal_output_with_u128_binding_serialized_v1<C>(
+    builder: &mut BaseCircuitBuilder<C::Base>,
+    output: &KagemushaDeferredParentOutputV1<C>,
+    expected_audit_limbs: &[AssignedValue<C::Base>; 2],
+    local_values: &[AssignedValue<C::Base>],
+) -> Result<(), String>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField + halo2_base::utils::ScalarField + ff::WithSmallOrderMulGroup<3>,
+    C::ScalarExt: BigPrimeField + ff::WithSmallOrderMulGroup<3>,
+{
+    constrain_reciprocal_audit_plan_with_u128_binding_v1(
+        builder,
+        &output.audit,
+        &output.equation_tags,
+        &output.equation_selectors,
+        expected_audit_limbs,
+        &output.bound_u128_values,
+        local_values,
+        ReciprocalMsmV1::Serialized,
+    )
+}
+
+enum ReciprocalMsmV1<'a, C>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField,
+{
+    Dense(&'a mut PastaDenseMsmJobsV1<C>),
+    Serialized,
+}
+
+fn constrain_reciprocal_audit_plan_with_u128_binding_v1<C>(
+    builder: &mut BaseCircuitBuilder<C::Base>,
+    witness: &DeferredEquationWitness<C>,
+    equation_tags: &[u32],
+    equation_selectors: &[bool],
+    expected_audit_limbs: &[AssignedValue<C::Base>; 2],
+    bound_u128_values: &[u128],
+    local_values: &[AssignedValue<C::Base>],
+    msm: ReciprocalMsmV1<'_, C>,
+) -> Result<(), String>
+where
+    C: CurveAffineExt,
+    C::Base: BigPrimeField + halo2_base::utils::ScalarField + ff::WithSmallOrderMulGroup<3>,
+    C::ScalarExt: BigPrimeField + ff::WithSmallOrderMulGroup<3>,
+{
     if witness.equations.len() != equation_selectors.len() || witness.equations.is_empty() {
         return Err("Kagemusha reciprocal deferred-audit selector shape mismatch".to_owned());
     }
     if equation_tags.len() != witness.equations.len() || equation_tags.iter().any(|tag| *tag == 0) {
         return Err("Kagemusha reciprocal deferred-audit tag shape mismatch".to_owned());
+    }
+    if bound_u128_values.len() != local_values.len() {
+        return Err("Kagemusha reciprocal deferred-audit binding shape mismatch".to_owned());
     }
     let range = builder.range_chip();
     let base = FpChip::<C::Base, C::Base>::new(&range, LIMB_BITS, LIMBS);
@@ -1179,14 +1423,42 @@ where
         .map(|enabled| ctx.main().load_witness(C::Base::from(u64::from(enabled))))
         .collect::<Vec<_>>();
     let audit = chip.assign_deferred_equations_with_selectors(&mut ctx, witness, &selectors)?;
-    let (elements, _) =
+    let (mut elements, _) =
         chip.assigned_equation_poseidon_elements_v1(&mut ctx, &audit, equation_tags, &selectors)?;
+    if !bound_u128_values.is_empty() {
+        elements.push(scalar.load_constant(
+            ctx.main(),
+            C::ScalarExt::from(KAGEMUSHA_DEFERRED_AUDIT_BOUND_VALUES_TAG_V1),
+        ));
+        elements.push(
+            scalar.load_constant(
+                ctx.main(),
+                C::ScalarExt::from(
+                    u64::try_from(bound_u128_values.len())
+                        .map_err(|_| "Kagemusha deferred-audit binding is too long".to_owned())?,
+                ),
+            ),
+        );
+        for (value, local) in bound_u128_values.iter().copied().zip(local_values) {
+            range.range_check(ctx.main(), *local, 128);
+            let assigned = ctx.main().load_witness(C::Base::from_u128(value));
+            range.range_check(ctx.main(), assigned, 128);
+            ctx.main().constrain_equal(&assigned, local);
+            elements.push(chip.assigned_native_as_scalar_integer(&mut ctx, assigned, 128)?);
+        }
+    }
     let digest = constrain_reciprocal_poseidon_v1::<C>(&mut ctx, &base, &scalar, elements);
     let digest_limbs = chip.assigned_scalar_u128_limbs(&mut ctx, &digest);
     for (actual, expected) in digest_limbs.iter().zip(expected_audit_limbs) {
         ctx.main().constrain_equal(actual, expected);
     }
-    chip.constrain_deferred_equation_batch_v1(&mut ctx, &audit, &selectors, &digest, dense_jobs)?;
+    match msm {
+        ReciprocalMsmV1::Dense(dense_jobs) => chip.constrain_deferred_equation_batch_v1(
+            &mut ctx, &audit, &selectors, &digest, dense_jobs,
+        )?,
+        ReciprocalMsmV1::Serialized => chip
+            .constrain_deferred_equation_batch_generic_v1(&mut ctx, &audit, &selectors, &digest)?,
+    }
     *builder.pool(0) = ctx;
     Ok(())
 }
@@ -1333,49 +1605,10 @@ where
     C::Base: BigPrimeField,
     C::ScalarExt: BigPrimeField + halo2_base::utils::ScalarField,
 {
-    validate_zk_ipa_succinct_key_v1(succinct_vk, KagemushaIpaProofKindV1::Ordinary)?;
-    if succinct_vk.domain.k != protocol.domain.k
-        || succinct_vk.domain.k != KAGEMUSHA_RECURSION_IPA_K_V1 as usize
-    {
-        return Err(transcript_error(
-            "Kagemusha parent protocol requires the fixed zero-knowledge IPA key and domain",
-        ));
-    }
-    let expected_len = ordinary_ipa_proof_profile_v1(protocol)
-        .map_err(transcript_error)?
-        .byte_len;
-    if proof_bytes.len() != expected_len {
-        return Err(transcript_error(format!(
-            "Kagemusha parent proof has length {}, expected exactly {expected_len}",
-            proof_bytes.len()
-        )));
-    }
-    let (reader, position) = ExactReader::new(proof_bytes);
-    let mut transcript =
-        DeferredTranscript::new::<KAGEMUSHA_IPA_POSEIDON_SECURE_MDS_V1>(loader, reader);
-    let parsed = PlonkSuccinctVerifier::<IpaAs<C, Bgh19>>::read_proof(
-        succinct_vk,
-        protocol,
-        instances,
-        &mut transcript,
-    )?;
-    let mut accumulators = PlonkSuccinctVerifier::<IpaAs<C, Bgh19>>::verify(
-        succinct_vk,
-        protocol,
-        instances,
-        &parsed,
-    )?;
-    if position.get() != proof_bytes.len() {
-        return Err(transcript_error(
-            "Kagemusha parent proof has trailing bytes",
-        ));
-    }
-    if accumulators.len() != 1 {
-        return Err(Error::AssertionFailure(
-            "Kagemusha parent verifier did not emit one IPA accumulator".to_owned(),
-        ));
-    }
-    Ok(accumulators.remove(0))
+    Ok(
+        verify_ordinary_proof_and_stream_v1(loader, succinct_vk, protocol, instances, proof_bytes)?
+            .0,
+    )
 }
 
 /// Verify a fixed non-empty list of ordinary helper proofs through one identity-bound protocol.
@@ -1465,9 +1698,7 @@ where
         &parsed,
     )?;
     if position.get() != proof_bytes.len() {
-        return Err(transcript_error(
-            "Kagemusha BGH19 fold has trailing bytes",
-        ));
+        return Err(transcript_error("Kagemusha BGH19 fold has trailing bytes"));
     }
     Ok(accumulated)
 }
@@ -1515,7 +1746,7 @@ where
         &challenges,
         &accumulator.u.assigned(),
     )?;
-    // The shared loader's first two limbs are its legacy dynamic version/round tags. Kagemusha
+    // The generic loader's first two limbs are its dynamic version/round metadata. Kagemusha
     // fixes both in its authenticated profile, so its canonical public wire contains only the 34
     // scalar/point limbs.
     let encoded = encoded.get(2..).ok_or(Error::InvalidInstances)?;
@@ -1576,7 +1807,7 @@ mod tests {
 
     #[test]
     fn ordinary_ipa_profile_matches_measured_credential_transcript() {
-        let profile = ordinary_ipa_proof_profile_from_counts_v1(129, 8, 449, 6)
+        let profile = ordinary_ipa_proof_profile_from_counts_v1(16, 129, 8, 449, 6)
             .expect("bounded credential proof profile");
         assert_eq!(profile.opening_items, 37);
         assert_eq!(profile.byte_len, 20_128);
@@ -1584,18 +1815,28 @@ mod tests {
     }
 
     #[test]
+    fn bgh19_rotation_inventory_uses_domain_shifts() {
+        let k = KAGEMUSHA_RECURSION_IPA_K_V1 as usize;
+        assert_eq!(
+            canonical_rotation_v1(k, -1),
+            canonical_rotation_v1(k, 65_535)
+        );
+        assert_ne!(canonical_rotation_v1(k, -1), canonical_rotation_v1(k, 0));
+    }
+
+    #[test]
     fn ordinary_ipa_profile_rejects_count_overflow() {
-        assert!(ordinary_ipa_proof_profile_from_counts_v1(usize::MAX, 1, 0, 0).is_err());
+        assert!(ordinary_ipa_proof_profile_from_counts_v1(16, usize::MAX, 1, 0, 0).is_err());
     }
 
     #[test]
     fn ordinary_ipa_protocol_shape_rejects_panic_prone_inputs() {
         let k = KAGEMUSHA_RECURSION_IPA_K_V1 as usize;
-        assert!(validate_ordinary_ipa_protocol_shape_v1(k, 1, 1, 1, 1).is_ok());
-        assert!(validate_ordinary_ipa_protocol_shape_v1(k, 1, 1, 1, 0).is_err());
-        assert!(validate_ordinary_ipa_protocol_shape_v1(k, 1, 0, 1, 1).is_err());
-        assert!(validate_ordinary_ipa_protocol_shape_v1(k, 1, 1, 0, 1).is_err());
-        assert!(validate_ordinary_ipa_protocol_shape_v1(k + 1, 1, 1, 1, 1).is_err());
+        assert!(validate_ordinary_ipa_protocol_shape_v1(k, k, 1, 1, 1, 1).is_ok());
+        assert!(validate_ordinary_ipa_protocol_shape_v1(k, k, 1, 1, 1, 0).is_err());
+        assert!(validate_ordinary_ipa_protocol_shape_v1(k, k, 1, 0, 1, 1).is_err());
+        assert!(validate_ordinary_ipa_protocol_shape_v1(k, k, 1, 1, 0, 1).is_err());
+        assert!(validate_ordinary_ipa_protocol_shape_v1(k + 1, k, 1, 1, 1, 1).is_err());
     }
 
     #[test]

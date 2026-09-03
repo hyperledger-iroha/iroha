@@ -39,10 +39,16 @@
       "top_level_fields": ["manifest", "audit_policy", "committee_authority", "payload"]
     },
     {
+      "operation": "AUDITOR_CAPSULE",
+      "path": "/v1/nexus/private-settlements/legs/{payload_digest}/audit-capsule",
+      "auth": "ROLE_IDENTITY",
+      "top_level_fields": ["audit_policy"]
+    },
+    {
       "operation": "AUDIT_APPROVAL",
       "path": "/v1/nexus/private-settlements/legs/{payload_digest}/audit-approvals",
       "auth": "ROLE_IDENTITY",
-      "top_level_fields": ["approval"]
+      "top_level_fields": ["audit_policy", "approval"]
     },
     {
       "operation": "BUNDLE_SUBMIT",
@@ -138,6 +144,7 @@
       "authoritative_height": 105,
       "manifest": {},
       "audit_policy": {},
+      "access_audit_policy": {},
       "committee_authority": {},
       "statement": {},
       "delta": {},

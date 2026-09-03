@@ -13,10 +13,12 @@ MODE="${1:-}"
 
 SELF_TESTS=(
   --self-test-bad-abi
-  --self-test-missing-offline-header-symbol
-  --self-test-missing-offline-rust-symbol
-  --self-test-bad-offline-signature
-  --self-test-bad-offline-error-code
+  --self-test-missing-kagemusha-header-symbol
+  --self-test-missing-kagemusha-rust-symbol
+  --self-test-bad-kagemusha-signature
+  --self-test-bad-kagemusha-error-code
+  --self-test-missing-kagemusha-mint-stage-header-symbol
+  --self-test-bad-kagemusha-mint-stage-signature
   --self-test-missing-privacy-header-symbol
   --self-test-bad-privacy-signature
   --self-test-missing-privacy-rust-symbol
@@ -76,11 +78,10 @@ def require(pattern: str, text: str, label: str) -> None:
         raise SystemExit(f"[connect-norito-header] missing or invalid {label}")
 
 
-OFFLINE_EXPORTS = {
+KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_v1_payment_request_validate",
-    "connect_norito_kagemusha_v1_acceptance_intent_authorization_validate",
+    "connect_norito_kagemusha_v1_acceptance_intent_validate",
     "connect_norito_kagemusha_v1_acceptance_ticket_validate",
-    "connect_norito_kagemusha_v1_no_commit_closure_validate",
     "connect_norito_kagemusha_v1_payment_validate",
     "connect_norito_kagemusha_v1_acknowledgement_validate",
     "connect_norito_kagemusha_v1_complete_exchange_validate",
@@ -89,9 +90,8 @@ OFFLINE_EXPORTS = {
     "connect_norito_kagemusha_v1_mint_credit_against_authorization_validate",
     "connect_norito_kagemusha_v1_redemption_voucher_validate",
     "connect_norito_kagemusha_v1_payment_request_text_validate",
-    "connect_norito_kagemusha_v1_acceptance_intent_authorization_text_validate",
+    "connect_norito_kagemusha_v1_acceptance_intent_text_validate",
     "connect_norito_kagemusha_v1_acceptance_ticket_text_validate",
-    "connect_norito_kagemusha_v1_no_commit_closure_text_validate",
     "connect_norito_kagemusha_v1_payment_text_validate",
     "connect_norito_kagemusha_v1_acknowledgement_text_validate",
     "connect_norito_kagemusha_v1_complete_exchange_text_validate",
@@ -101,6 +101,8 @@ OFFLINE_EXPORTS = {
     "connect_norito_kagemusha_v1_redemption_voucher_text_validate",
     "connect_norito_kagemusha_device_capabilities_v1",
     "connect_norito_kagemusha_device_execute_v1",
+    "connect_norito_kagemusha_device_mint_stage_command_v1_validate",
+    "connect_norito_kagemusha_device_mint_stage_result_v1_validate",
 }
 PRIVACY_EXPORTS = {
     "iroha_privacy_compiled_profile_catalog_v1",
@@ -145,7 +147,7 @@ HIJIRI_EXPORTS = {
 }
 PRIVATE_SETTLEMENT_EXPORTS = {
     "connect_norito_private_settlement_committee_proof_response_verify_v1",
-    "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
+    "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
     "connect_norito_private_settlement_audit_approval_response_verify_v1",
 }
 TRANSACTION_SIGNER_BASE_EXPORTS = {
@@ -374,8 +376,8 @@ def c_parameter_names(name: str) -> list[str]:
     return parameter_names(match.group(1), False)
 
 
-exact("Rust Kagemusha", OFFLINE_EXPORTS, rust_exports("connect_norito_kagemusha_"))
-exact("C Kagemusha", OFFLINE_EXPORTS, header_exports("connect_norito_kagemusha_"))
+exact("Rust KAGEMUSHA", KAGEMUSHA_EXPORTS, rust_exports("connect_norito_kagemusha_"))
+exact("C KAGEMUSHA", KAGEMUSHA_EXPORTS, header_exports("connect_norito_kagemusha_"))
 exact("Rust privacy", PRIVACY_EXPORTS, rust_exports("iroha_privacy_"))
 exact("C privacy", PRIVACY_EXPORTS, header_exports("iroha_privacy_"))
 exact(
@@ -435,7 +437,7 @@ for name in sorted(rust_transaction_signers):
         raise SystemExit(f"C signer {name} fee/private-key argument ordering drift")
 
 require_signature_parity(
-    OFFLINE_EXPORTS
+    KAGEMUSHA_EXPORTS
     | PRIVACY_EXPORTS
     | SORAFS_REFERENCE_EXPORTS
     | DETACHED_EXPORTS
@@ -525,7 +527,7 @@ if umbrella.strip() != """// Umbrella header for NoritoBridge
 
 print(
     "[connect-norito-header] ABI 23 synchronized: "
-    f"{len(OFFLINE_EXPORTS)} Kagemusha, {len(PRIVACY_EXPORTS)} privacy, "
+    f"{len(KAGEMUSHA_EXPORTS)} KAGEMUSHA, {len(PRIVACY_EXPORTS)} privacy, "
     f"{len(SORAFS_REFERENCE_EXPORTS)} SoraFS, {len(DETACHED_EXPORTS)} detached, "
     f"{len(PARLIAMENT_EXPORTS)} Parliament, {len(HIJIRI_EXPORTS)} Hijiri, "
     f"{len(PRIVATE_SETTLEMENT_EXPORTS)} private-settlement, and "
@@ -654,25 +656,35 @@ if [[ "${MODE}" == --self-test-* ]]; then
         "#define CONNECT_NORITO_BRIDGE_ABI_VERSION 23" \
         "#define CONNECT_NORITO_BRIDGE_ABI_VERSION 22"
       ;;
-    --self-test-missing-offline-header-symbol)
+    --self-test-missing-kagemusha-header-symbol)
       replace_once "${tmp_header}" \
         "connect_norito_kagemusha_v1_payment_validate" \
         "removed_kagemusha_v1_payment_validate"
       ;;
-    --self-test-missing-offline-rust-symbol)
+    --self-test-missing-kagemusha-rust-symbol)
       replace_once "${tmp_rust}" \
         "connect_norito_kagemusha_v1_payment_validate" \
         "removed_kagemusha_v1_payment_validate"
       ;;
-    --self-test-bad-offline-signature)
+    --self-test-bad-kagemusha-signature)
       replace_regex_once "${tmp_header}" \
         '(connect_norito_kagemusha_v1_payment_validate\s*\([^;]*?)unsigned long payment_len' \
         '\g<1>uint32_t payment_len'
       ;;
-    --self-test-bad-offline-error-code)
+    --self-test-bad-kagemusha-error-code)
       replace_once "${tmp_header}" \
         "#define CONNECT_NORITO_ERR_KAGEMUSHA_V1 -311" \
         "#define CONNECT_NORITO_ERR_KAGEMUSHA_V1 -310"
+      ;;
+    --self-test-missing-kagemusha-mint-stage-header-symbol)
+      replace_once "${tmp_header}" \
+        "connect_norito_kagemusha_device_mint_stage_command_v1_validate" \
+        "removed_kagemusha_device_mint_stage_command_v1_validate"
+      ;;
+    --self-test-bad-kagemusha-mint-stage-signature)
+      replace_regex_once "${tmp_header}" \
+        '(connect_norito_kagemusha_device_mint_stage_result_v1_validate\s*\([^;]*?)unsigned long result_len' \
+        '\g<1>uint32_t result_len'
       ;;
     --self-test-missing-privacy-header-symbol)
       replace_once "${tmp_header}" \

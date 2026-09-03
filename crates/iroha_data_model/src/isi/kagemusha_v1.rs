@@ -1,4 +1,4 @@
-//! Chain-facing instructions and operation records for Kagemusha V1.
+//! Chain-facing instructions and operation records for KAGEMUSHA V1.
 //!
 //! Top-up settlement is deliberately split at the finality boundary. The
 //! accepted instruction fixes every issuance/output identifier and every byte
@@ -19,16 +19,16 @@ use crate::{
         HeightContextId, MAX_VALIDATORS_PER_HEIGHT, finality::V2FinalityArtifact,
         is_valid_committee_size,
     },
-    nexus::AxtAssetIncarnationV1,
     kagemusha::{
         KAGEMUSHA_ASSET_SCALE_MAX_V1, KAGEMUSHA_WIRE_VERSION_V1,
         KagemushaEncryptedCreditEnvelopeV1, KagemushaHardwareCredentialV1,
         KagemushaHardwareProfileV1, KagemushaMintAuthorizationContextV1,
         KagemushaMintAuthorizationStatementV1, KagemushaMintAuthorizationV1,
-        KagemushaMintCreditStatementV1, KagemushaMintCreditV1,
-        KagemushaPastaStateCommitmentV1, KagemushaRedemptionVoucherV1,
-        kagemusha_ciphertext_digest_v1, kagemusha_liability_pool_id_v1,
+        KagemushaMintCreditStatementV1, KagemushaMintCreditV1, KagemushaPastaStateCommitmentV1,
+        KagemushaRedemptionVoucherV1, kagemusha_ciphertext_digest_v1,
+        kagemusha_liability_pool_id_v1,
     },
+    nexus::AxtAssetIncarnationV1,
     peer::PeerId,
 };
 use iroha_crypto::Hash;
@@ -37,17 +37,16 @@ use norito::codec::{Decode, Encode};
 use sha2::{Digest as _, Sha256};
 use std::{string::String, vec::Vec};
 
-/// Sole chain-facing Kagemusha instruction and operation layout version.
+/// Sole chain-facing KAGEMUSHA instruction and operation layout version.
 pub const KAGEMUSHA_CHAIN_VERSION_V1: u16 = 1;
 /// Stable schema name for the canonical top-up request body.
-pub const KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_NAME_V1: &str =
-    "iroha.torii.v1.kagemusha.top_up.request";
+pub const KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_NAME_V1: &str = "iroha.torii.v1.kagemusha.top_up.request";
 /// Stable schema name for the canonical redemption request body.
 pub const KAGEMUSHA_REDEMPTION_REQUEST_SCHEMA_NAME_V1: &str =
     "iroha.torii.v1.kagemusha.redeem.request";
 /// Exact number of siblings in a proof against the ordinary-write sparse tree.
 pub const KAGEMUSHA_RESERVE_RECEIPT_WITNESS_SIBLINGS_V1: usize = 256;
-/// Reserved ordinary-write key tag for a finalized Kagemusha operation.
+/// Reserved ordinary-write key tag for a finalized KAGEMUSHA operation.
 pub const KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1: u8 = 0xD5;
 /// Exact tagged key length: one tag byte followed by the operation identifier.
 pub const KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_BYTES_V1: usize = 33;
@@ -62,14 +61,13 @@ const MINT_FINALITY_EPOCH_ROSTER_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:mint-finality-epoch-roster";
 const MINT_FINALITY_PEER_ID_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-finality-peer-id";
 /// Domain for the marked SHA-256 bridge from paired Poseidon roots to `ExecutionCommitment`.
-pub const KAGEMUSHA_MINT_FINALITY_ROOT_DOMAIN_V1: &[u8] =
-    b"iroha:kagemusha:v1:mint-finality-root";
+pub const KAGEMUSHA_MINT_FINALITY_ROOT_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:mint-finality-root";
 
 /// Largest exact `2f + 1` mint-finality seal set admitted by the consensus roster bound.
 pub const KAGEMUSHA_MINT_FINALITY_MAX_SEALS_V1: usize = (MAX_VALIDATORS_PER_HEIGHT * 2) / 3 + 1;
 /// Depth of the sparse block-local top-up commitment tree.
 ///
-/// The 32-bit index space removes any special Kagemusha admission maximum; ordinary bounded
+/// The 32-bit index space removes any special KAGEMUSHA admission maximum; ordinary bounded
 /// block bytes remain the practical throughput limit.
 pub const KAGEMUSHA_MINT_FINALITY_TREE_DEPTH_V1: usize = 32;
 
@@ -92,7 +90,101 @@ pub struct KagemushaMintFinalityValidatorKeysV1 {
     pub ep_proof_public_key: [u8; 32],
 }
 
-/// Exact epoch-scoped Kagemusha mint-finality authority.
+/// Network-independent epoch-scoped KAGEMUSHA mint-finality authority.
+///
+/// Signed genesis carries this template before the genesis block hash, and
+/// therefore the final [`NetworkId`], exists. Core binds the frozen network
+/// identity after genesis is staged and before constructing the first
+/// [`crate::block::consensus_v2::HeightContext`].
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct KagemushaMintFinalityEpochRosterTemplateV1 {
+    /// Sole first-release layout version.
+    pub version: u16,
+    /// Exact Sumeragi election epoch.
+    pub epoch: u64,
+    /// Strictly ordered exact `3f + 1` consensus/Pasta key roster.
+    pub validators: Vec<KagemushaMintFinalityValidatorKeysV1>,
+}
+
+impl KagemushaMintFinalityEpochRosterTemplateV1 {
+    /// Validate exact committee geometry, identity order, and key uniqueness.
+    ///
+    /// Canonical curve-point decoding is additionally performed by Core before
+    /// the roster is admitted for signing or verification.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a wrong version, invalid committee, repeated
+    /// identity or key, or a zero public-key encoding.
+    pub fn validate(&self) -> Result<(), KagemushaIsiValidationErrorV1> {
+        validate_mint_finality_roster_shape(
+            self.version,
+            &self.validators,
+            "mint_finality.epoch_roster_template",
+            "mint_finality.epoch_roster_template.keys",
+        )
+    }
+
+    /// Bind the final genesis-derived network identity to this signed template.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the template is valid and `network_id` is a
+    /// non-zero genesis identity.
+    pub fn bind_network_id(
+        &self,
+        network_id: NetworkId,
+    ) -> Result<KagemushaMintFinalityEpochRosterV1, KagemushaIsiValidationErrorV1> {
+        self.validate()?;
+        let roster = KagemushaMintFinalityEpochRosterV1 {
+            version: self.version,
+            network_id,
+            epoch: self.epoch,
+            validators: self.validators.clone(),
+        };
+        roster.validate()?;
+        Ok(roster)
+    }
+}
+
+/// Signed network-independent KAGEMUSHA mint-finality genesis authority.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct KagemushaMintFinalityGenesisParametersV1 {
+    /// Mandatory epoch-zero authority template.
+    pub epoch_roster: KagemushaMintFinalityEpochRosterTemplateV1,
+    /// Mandatory optionality for an epoch-one authority when height one is an
+    /// epoch-zero boundary.
+    #[norito(required)]
+    pub next_epoch_roster: Option<KagemushaMintFinalityEpochRosterTemplateV1>,
+}
+
+impl KagemushaMintFinalityGenesisParametersV1 {
+    /// Validate both templates and their exact genesis epoch assignments.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the current template is valid for epoch zero
+    /// and the optional successor template is valid for epoch one.
+    pub fn validate(&self) -> Result<(), KagemushaIsiValidationErrorV1> {
+        self.epoch_roster.validate()?;
+        if self.epoch_roster.epoch != 0 {
+            return Err(invalid("mint_finality.genesis.epoch_roster.epoch"));
+        }
+        if let Some(next) = &self.next_epoch_roster {
+            next.validate()?;
+            if next.epoch != 1 {
+                return Err(invalid("mint_finality.genesis.next_epoch_roster.epoch"));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Exact epoch-scoped KAGEMUSHA mint-finality authority.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
@@ -118,29 +210,15 @@ impl KagemushaMintFinalityEpochRosterV1 {
     /// Returns an error for a wrong version/network, invalid committee, repeated
     /// identity or key, or a zero public-key encoding.
     pub fn validate(&self) -> Result<(), KagemushaIsiValidationErrorV1> {
-        require_chain_version(self.version)?;
-        if self.network_id.as_bytes() == &[0; 32]
-            || !is_valid_committee_size(self.validators.len())
-            || self.validators.len() > MAX_VALIDATORS_PER_HEIGHT
-            || self
-                .validators
-                .windows(2)
-                .any(|pair| pair[0].validator >= pair[1].validator)
-        {
+        if self.network_id.as_bytes() == &[0; 32] {
             return Err(invalid("mint_finality.epoch_roster"));
         }
-        for (index, validator) in self.validators.iter().enumerate() {
-            if validator.eq_proof_public_key == [0; 32]
-                || validator.ep_proof_public_key == [0; 32]
-                || self.validators[..index].iter().any(|prior| {
-                    prior.eq_proof_public_key == validator.eq_proof_public_key
-                        || prior.ep_proof_public_key == validator.ep_proof_public_key
-                })
-            {
-                return Err(invalid("mint_finality.epoch_roster.keys"));
-            }
-        }
-        Ok(())
+        validate_mint_finality_roster_shape(
+            self.version,
+            &self.validators,
+            "mint_finality.epoch_roster",
+            "mint_finality.epoch_roster.keys",
+        )
     }
 
     /// Derive the authority identifier signed in every block-level seal.
@@ -221,38 +299,38 @@ pub fn kagemusha_mint_finality_root_v1(root: KagemushaPastaStateCommitmentV1) ->
     Hash::prehashed(hasher.finalize().into())
 }
 
-/// Structural failure at the Kagemusha V1 chain boundary.
+/// Structural failure at the KAGEMUSHA V1 chain boundary.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum KagemushaIsiValidationErrorV1 {
     /// A value used a version other than the sole first-release layout.
-    #[error("unsupported Kagemusha chain version {actual}")]
+    #[error("unsupported KAGEMUSHA chain version {actual}")]
     UnsupportedVersion {
         /// Encountered version.
         actual: u16,
     },
     /// A required public field was zero, inconsistent, or non-canonical.
-    #[error("invalid Kagemusha field `{field}`")]
+    #[error("invalid KAGEMUSHA field `{field}`")]
     InvalidField {
         /// Stable field label.
         field: &'static str,
     },
     /// A canonical wire object failed its own validation.
-    #[error("invalid Kagemusha wire object: {0}")]
+    #[error("invalid KAGEMUSHA wire object: {0}")]
     InvalidWire(String),
     /// Canonical Norito encoding needed for a commitment failed.
-    #[error("failed to encode canonical Kagemusha data: {0}")]
+    #[error("failed to encode canonical KAGEMUSHA data: {0}")]
     Encoding(String),
     /// Finality evidence or its reserve-receipt witness was invalid.
-    #[error("invalid Kagemusha finality evidence: {0}")]
+    #[error("invalid KAGEMUSHA finality evidence: {0}")]
     InvalidFinality(String),
     /// Checked reserve subtraction failed.
-    #[error("Kagemusha reserve totals underflow")]
+    #[error("KAGEMUSHA reserve totals underflow")]
     ReserveUnderflow,
     /// An operation status combined mutually exclusive fields.
-    #[error("invalid Kagemusha operation status shape")]
+    #[error("invalid KAGEMUSHA operation status shape")]
     InvalidStatus,
     /// A terminal result was inspected without an externally pinned consensus context.
-    #[error("Kagemusha terminal validation requires a caller-pinned finality context")]
+    #[error("KAGEMUSHA terminal validation requires a caller-pinned finality context")]
     MissingTrustAnchor,
 }
 
@@ -301,7 +379,7 @@ pub struct KagemushaTopUpRequestV1 {
     pub vk_digest: [u8; 32],
     /// Exact network whose reserve accepts the liability.
     pub network_id: NetworkId,
-    /// Asset debited online and represented by the resulting Kagemusha credit.
+    /// Asset debited online and represented by the resulting KAGEMUSHA credit.
     pub asset: AssetDefinitionId,
     /// Exact incarnation of the debited asset definition.
     ///
@@ -318,7 +396,7 @@ pub struct KagemushaTopUpRequestV1 {
     pub liability_pool_id: [u8; 32],
     /// Online account atomically debited by this operation.
     pub payer: AccountId,
-    /// Kagemusha account that owns the resulting device-bound mint credit.
+    /// KAGEMUSHA account that owns the resulting device-bound mint credit.
     pub recipient: AccountId,
     /// Complete compact credential authenticated by the mint helper.
     ///
@@ -479,6 +557,7 @@ impl KagemushaTopUpRequestV1 {
                 policy_epoch: self.hardware_credential.policy_epoch,
                 operation_kind: crate::kagemusha::KagemushaOperationKindV1::MintFold,
                 request_id: [0; 32],
+                receiver_lane_commitment: [0; 32],
                 credit_id,
                 ciphertext_digest: kagemusha_ciphertext_digest_v1(&self.encrypted_credit),
             },
@@ -534,12 +613,8 @@ impl KagemushaTopUpRequestV1 {
             return Err(invalid("top_up.hardware_credential.context"));
         }
         if self.liability_pool_id
-            != kagemusha_liability_pool_id_v1(
-                &self.network_id,
-                &self.asset,
-                self.asset_incarnation,
-            )
-            .map_err(wire_error)?
+            != kagemusha_liability_pool_id_v1(&self.network_id, &self.asset, self.asset_incarnation)
+                .map_err(wire_error)?
         {
             return Err(invalid("top_up.liability_pool_id"));
         }
@@ -565,9 +640,7 @@ impl KagemushaTopUpRequestV1 {
     /// # Errors
     ///
     /// Returns an error when the intent is structurally invalid or cannot be encoded canonically.
-    pub fn expected_issuance_commitment(
-        &self,
-    ) -> Result<[u8; 32], KagemushaIsiValidationErrorV1> {
+    pub fn expected_issuance_commitment(&self) -> Result<[u8; 32], KagemushaIsiValidationErrorV1> {
         self.validate_identity_base()?;
         digest_encoded(TOP_UP_ISSUANCE_DOMAIN_V1, &self.issuance_preimage()?)
     }
@@ -779,8 +852,8 @@ pub struct KagemushaRedemptionRequestV1 {
     /// Globally unique idempotency key chosen before submission.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub operation_id: [u8; 32],
-    /// Full or partial unlinkable terminal voucher, including its hardware
-    /// commit certificate and final wrapper proof.
+    /// Full or partial unlinkable terminal voucher, including its literal
+    /// trusted-hardware commit time and direct paired state proof.
     pub voucher: KagemushaRedemptionVoucherV1,
 }
 
@@ -798,7 +871,7 @@ impl Ord for KagemushaRedemptionRequestV1 {
 
 impl KagemushaRedemptionRequestV1 {
     /// Return the complete released lifecycle binding authenticated by the
-    /// terminal wrapper.
+    /// direct paired redemption proof.
     #[must_use]
     pub const fn lifecycle(&self) -> &crate::kagemusha::KagemushaLifecycleBindingV1 {
         &self.voucher.statement.lifecycle
@@ -811,11 +884,11 @@ impl KagemushaRedemptionRequestV1 {
         self.voucher.statement.terminal_nullifier
     }
 
-    /// Validate the operation identity and recursive-voucher shape.
+    /// Validate the operation identity and direct-proof voucher shape.
     ///
-    /// This does not cryptographically verify the wrapper proof or authenticate
-    /// its release. Monetary admission must use the release-pinned Core
-    /// verifier and its verified typestate.
+    /// This does not cryptographically verify the paired state proof or
+    /// authenticate its release. Monetary admission must use the release-pinned
+    /// Core verifier and its verified typestate.
     ///
     /// # Errors
     ///
@@ -929,12 +1002,8 @@ impl KagemushaReserveReceiptV1 {
             .validate()
             .map_err(|_| invalid("reserve_receipt.asset_incarnation"))?;
         if self.liability_pool_id
-            != kagemusha_liability_pool_id_v1(
-                &self.network_id,
-                &self.asset,
-                self.asset_incarnation,
-            )
-            .map_err(wire_error)?
+            != kagemusha_liability_pool_id_v1(&self.network_id, &self.asset, self.asset_incarnation)
+                .map_err(wire_error)?
         {
             return Err(invalid("reserve_receipt.liability_pool_id"));
         }
@@ -1082,7 +1151,7 @@ impl KagemushaReserveReceiptV1 {
     }
 }
 
-/// Circuit-native leaf committed by a finalized block for one Kagemusha V1 top-up.
+/// Circuit-native leaf committed by a finalized block for one KAGEMUSHA V1 top-up.
 ///
 /// The statement digest binds the complete receiver credit, while the receipt digest binds the
 /// exact consensus reserve mutation. The paired helper circuit exposes `statement_digest` and
@@ -1688,11 +1757,11 @@ pub struct KagemushaRedemptionResultV1 {
 }
 
 impl KagemushaRedemptionResultV1 {
-    /// Validate request, recursive voucher, terminal nullifier, and certified receipt binding.
+    /// Validate request, direct-proof voucher, terminal nullifier, and certified receipt binding.
     ///
-    /// The hardware commit instant and lease window remain private wrapper
-    /// witnesses. Their deadline predicate is authenticated by the release-pinned
-    /// proof rather than compared to the public ledger timestamp here.
+    /// The statement carries the literal trusted-hardware commit instant. This
+    /// shape check does not replace release-pinned verification of the direct
+    /// paired state proof performed by Core.
     ///
     /// # Errors
     ///
@@ -1993,10 +2062,7 @@ macro_rules! impl_kagemusha_instruction_decode_from_slice {
 }
 
 impl_kagemusha_instruction_decode_from_slice!(TopUpKagemushaV1, KagemushaTopUpRequestV1);
-impl_kagemusha_instruction_decode_from_slice!(
-    RedeemKagemushaV1,
-    KagemushaRedemptionRequestV1
-);
+impl_kagemusha_instruction_decode_from_slice!(RedeemKagemushaV1, KagemushaRedemptionRequestV1);
 
 impl TopUpKagemushaV1 {
     /// Canonical first-release instruction wire identifier.
@@ -2011,9 +2077,7 @@ impl TopUpKagemushaV1 {
     /// # Errors
     ///
     /// Returns an error when the intent is invalid.
-    pub fn new(
-        request: KagemushaTopUpRequestV1,
-    ) -> Result<Self, KagemushaIsiValidationErrorV1> {
+    pub fn new(request: KagemushaTopUpRequestV1) -> Result<Self, KagemushaIsiValidationErrorV1> {
         request.validate_shape()?;
         Ok(Self { request })
     }
@@ -2057,6 +2121,35 @@ impl RedeemKagemushaV1 {
 fn require_chain_version(version: u16) -> Result<(), KagemushaIsiValidationErrorV1> {
     if version != KAGEMUSHA_CHAIN_VERSION_V1 {
         return Err(KagemushaIsiValidationErrorV1::UnsupportedVersion { actual: version });
+    }
+    Ok(())
+}
+
+fn validate_mint_finality_roster_shape(
+    version: u16,
+    validators: &[KagemushaMintFinalityValidatorKeysV1],
+    roster_field: &'static str,
+    keys_field: &'static str,
+) -> Result<(), KagemushaIsiValidationErrorV1> {
+    require_chain_version(version)?;
+    if !is_valid_committee_size(validators.len())
+        || validators.len() > MAX_VALIDATORS_PER_HEIGHT
+        || validators
+            .windows(2)
+            .any(|pair| pair[0].validator >= pair[1].validator)
+    {
+        return Err(invalid(roster_field));
+    }
+    for (index, validator) in validators.iter().enumerate() {
+        if validator.eq_proof_public_key == [0; 32]
+            || validator.ep_proof_public_key == [0; 32]
+            || validators[..index].iter().any(|prior| {
+                prior.eq_proof_public_key == validator.eq_proof_public_key
+                    || prior.ep_proof_public_key == validator.ep_proof_public_key
+            })
+        {
+            return Err(invalid(keys_field));
+        }
     }
     Ok(())
 }
@@ -2108,13 +2201,12 @@ mod tests {
         block::BlockHeader,
         domain::DomainId,
         kagemusha::{
-            KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1,
-            KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1,
-            KAGEMUSHA_XCHACHA20POLY1305_NONCE_BYTES_V1,
-            KAGEMUSHA_XCHACHA20POLY1305_TAG_BYTES_V1, KagemushaDevicePublicKeyV1,
-            KagemushaDeviceSignatureV1, KagemushaHardwarePlatformClassV1,
-            KagemushaPairedProofV1, kagemusha_credit_opening_canonical_len_v1,
-            kagemusha_device_key_reference_v1, kagemusha_suite_commitment_v1,
+            KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1,
+            KAGEMUSHA_XCHACHA20POLY1305_NONCE_BYTES_V1, KAGEMUSHA_XCHACHA20POLY1305_TAG_BYTES_V1,
+            KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1,
+            KagemushaHardwarePlatformClassV1, KagemushaPairedProofV1,
+            kagemusha_credit_opening_canonical_len_v1, kagemusha_device_key_reference_v1,
+            kagemusha_suite_commitment_v1,
         },
     };
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
@@ -2124,6 +2216,112 @@ mod tests {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             b"kagemusha-v1-isi",
         )))
+    }
+
+    fn mint_finality_template(epoch: u64) -> KagemushaMintFinalityEpochRosterTemplateV1 {
+        let mut validators = (1_u8..=4)
+            .map(|seed| KagemushaMintFinalityValidatorKeysV1 {
+                validator: PeerId::new(
+                    KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519)
+                        .public_key()
+                        .clone(),
+                ),
+                eq_proof_public_key: [seed; 32],
+                ep_proof_public_key: [seed.saturating_add(16); 32],
+            })
+            .collect::<Vec<_>>();
+        validators.sort_by(|left, right| left.validator.cmp(&right.validator));
+        KagemushaMintFinalityEpochRosterTemplateV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            epoch,
+            validators,
+        }
+    }
+
+    #[test]
+    fn mint_finality_genesis_template_binds_only_after_network_identity_exists() {
+        let template = mint_finality_template(0);
+        template.validate().expect("valid networkless template");
+
+        let bound = template
+            .bind_network_id(network())
+            .expect("bind final network identity");
+        assert_eq!(bound.network_id, network());
+        assert_eq!(bound.epoch, template.epoch);
+        assert_eq!(bound.validators, template.validators);
+        assert_ne!(
+            bound.finality_epoch_id().expect("bound roster digest"),
+            [0; 32]
+        );
+    }
+
+    #[test]
+    fn mint_finality_genesis_templates_fail_closed() {
+        let valid = mint_finality_template(0);
+
+        let mut wrong_version = valid.clone();
+        wrong_version.version += 1;
+        assert!(wrong_version.validate().is_err());
+
+        let mut wrong_geometry = valid.clone();
+        wrong_geometry.validators.pop();
+        assert!(wrong_geometry.validate().is_err());
+
+        let mut unordered = valid.clone();
+        unordered.validators.swap(0, 1);
+        assert!(unordered.validate().is_err());
+
+        let mut repeated_key = valid.clone();
+        repeated_key.validators[1].eq_proof_public_key =
+            repeated_key.validators[0].eq_proof_public_key;
+        assert!(repeated_key.validate().is_err());
+
+        let mut zero_key = valid;
+        zero_key.validators[0].ep_proof_public_key = [0; 32];
+        assert!(zero_key.validate().is_err());
+    }
+
+    #[test]
+    fn mint_finality_genesis_parameters_require_epochs_zero_and_one() {
+        KagemushaMintFinalityGenesisParametersV1 {
+            epoch_roster: mint_finality_template(0),
+            next_epoch_roster: Some(mint_finality_template(1)),
+        }
+        .validate()
+        .expect("canonical genesis epochs");
+
+        assert!(
+            KagemushaMintFinalityGenesisParametersV1 {
+                epoch_roster: mint_finality_template(1),
+                next_epoch_roster: None,
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            KagemushaMintFinalityGenesisParametersV1 {
+                epoch_roster: mint_finality_template(0),
+                next_epoch_roster: Some(mint_finality_template(2)),
+            }
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn mint_finality_genesis_parameters_require_explicit_next_roster_option() {
+        let parameters = KagemushaMintFinalityGenesisParametersV1 {
+            epoch_roster: mint_finality_template(0),
+            next_epoch_roster: None,
+        };
+        let mut value = norito::json::to_value(&parameters).expect("serialize genesis authority");
+        value
+            .as_object_mut()
+            .expect("genesis authority object")
+            .remove("next_epoch_roster");
+        norito::json::value::from_value::<KagemushaMintFinalityGenesisParametersV1>(value)
+            .expect_err("optional successor field must still be explicit");
     }
 
     fn asset() -> AssetDefinitionId {
@@ -2191,9 +2389,7 @@ mod tests {
         .expect("hardware profile id")
     }
 
-    fn hardware_credential(
-        profile: &KagemushaHardwareProfileV1,
-    ) -> KagemushaHardwareCredentialV1 {
+    fn hardware_credential(profile: &KagemushaHardwareProfileV1) -> KagemushaHardwareCredentialV1 {
         let device_public_key = public_key(&signing_key(7));
         let governance_key = signing_key(0x31);
         let mut credential = KagemushaHardwareCredentialV1 {
@@ -2341,13 +2537,13 @@ mod tests {
             policy_epoch: 1,
             operation_kind: crate::kagemusha::KagemushaOperationKindV1::RedeemSplit,
             request_id: [0; 32],
-            acceptance_ticket_id: [0; 32],
+            receiver_lane_commitment: [0; 32],
             credit_id: [0; 32],
             ciphertext_digest: [0; 32],
         };
         let commit_evidence = crate::kagemusha::KagemushaCommitEvidenceV1::TrustedTime(
             crate::kagemusha::KagemushaTrustedCommitTimeV1 {
-                time_evidence_commitment: [0x13; 32],
+                time_evidence_commitment: [0x15; 32],
             },
         );
         let statement = crate::kagemusha::KagemushaRedemptionStatementV1 {
@@ -2362,73 +2558,74 @@ mod tests {
         }
         .seal_redemption_id()
         .expect("seal redemption identity");
-        let outbox_reservation = crate::kagemusha::KagemushaOutboxReservationV1 {
-            reservation_id: [0x15; 32],
+        let semantic_digest = statement
+            .canonical_digest()
+            .expect("redemption semantic digest");
+        let reservation = crate::kagemusha::KagemushaOutboxReservationV1 {
+            reservation_id: [0x16; 32],
             operation_kind: crate::kagemusha::KagemushaOperationKindV1::RedeemSplit,
             reserved_outbox_bytes: crate::kagemusha::KAGEMUSHA_REDEMPTION_OUTBOX_MIN_BYTES_V1,
             issued_at_ms: 8_000,
             expires_at_ms: 10_000,
         };
-        let unsealed_certificate = crate::kagemusha::KagemushaCommitCertificateV1 {
+        let terminal_body = crate::kagemusha::KagemushaHardwareTerminalBodyV1 {
             version: KAGEMUSHA_WIRE_VERSION_V1,
-            certificate_id: [0; 32],
-            candidate_envelope_digest: [0x16; 32],
+            candidate_envelope_digest: [0x17; 32],
             lifecycle_binding_digest: statement
                 .lifecycle
                 .canonical_digest()
-                .expect("lifecycle digest"),
+                .expect("redemption lifecycle digest"),
             transition_nullifier: statement.terminal_nullifier,
-            outbox_reservation_commitment: outbox_reservation
+            outbox_reservation_commitment: reservation
                 .canonical_commitment()
-                .expect("outbox reservation commitment"),
+                .expect("redemption outbox reservation"),
             commit_evidence,
             hardware_profile_id: statement.lifecycle.hardware_profile_id,
             policy_epoch: statement.lifecycle.policy_epoch,
+            private_successor_commitment: [0x18; 32],
+            private_journal_commitment: [0x19; 32],
+            private_recovery_commitment: [0x1A; 32],
+        };
+        let commit_certificate = crate::kagemusha::KagemushaCommitCertificateV1 {
+            version: KAGEMUSHA_WIRE_VERSION_V1,
+            certificate_id: [0; 32],
+            candidate_envelope_digest: terminal_body.candidate_envelope_digest,
+            lifecycle_binding_digest: terminal_body.lifecycle_binding_digest,
+            transition_nullifier: terminal_body.transition_nullifier,
+            outbox_reservation_commitment: terminal_body.outbox_reservation_commitment,
+            commit_evidence,
+            hardware_profile_id: terminal_body.hardware_profile_id,
+            policy_epoch: terminal_body.policy_epoch,
             hardware_terminal_commitment: [0; 32],
-        };
-        let terminal_body = crate::kagemusha::KagemushaHardwareTerminalBodyV1 {
-            version: unsealed_certificate.version,
-            candidate_envelope_digest: unsealed_certificate.candidate_envelope_digest,
-            lifecycle_binding_digest: unsealed_certificate.lifecycle_binding_digest,
-            transition_nullifier: unsealed_certificate.transition_nullifier,
-            outbox_reservation_commitment: unsealed_certificate.outbox_reservation_commitment,
-            commit_evidence: unsealed_certificate.commit_evidence,
-            hardware_profile_id: unsealed_certificate.hardware_profile_id,
-            policy_epoch: unsealed_certificate.policy_epoch,
-            private_successor_commitment: [0x17; 32],
-            private_journal_commitment: [0x18; 32],
-            private_recovery_commitment: [0x19; 32],
-        };
-        let commit_certificate = unsealed_certificate
-            .seal_with_terminal_body(&terminal_body)
-            .expect("seal commit certificate");
-        let semantic_digest = statement
-            .canonical_digest()
-            .expect("redemption semantic digest");
-        let commit_certificate_digest = digest_encoded(
-            b"iroha:kagemusha:v1:commit-certificate",
-            &commit_certificate,
-        )
-        .expect("commit certificate digest");
+        }
+        .seal_with_terminal_body(&terminal_body)
+        .expect("redemption commit certificate");
+        let commit_certificate_digest = commit_certificate
+            .canonical_digest_against(
+                &statement.lifecycle,
+                statement.commit_evidence,
+                statement.terminal_nullifier,
+            )
+            .expect("redemption commit certificate digest");
         let voucher = KagemushaRedemptionVoucherV1 {
             version: KAGEMUSHA_WIRE_VERSION_V1,
             statement,
-            proof: crate::kagemusha::KagemushaCommitWrapperProofV1 {
+            commit_certificate,
+            proof: crate::kagemusha::KagemushaRedemptionProofV1 {
                 version: KAGEMUSHA_WIRE_VERSION_V1,
-                eq_protocol_digest: [0x1A; 32],
-                ep_protocol_digest: [0x1B; 32],
+                eq_protocol_digest: [0x1B; 32],
+                ep_protocol_digest: [0x1C; 32],
                 semantic_digest,
-                candidate_envelope_digest: commit_certificate.candidate_envelope_digest,
+                candidate_envelope_digest: terminal_body.candidate_envelope_digest,
                 commit_certificate_digest,
-                eq_deferred_audit: [0x1C; 32],
-                ep_deferred_audit: [0x1D; 32],
+                eq_deferred_audit: [0x1D; 32],
+                ep_deferred_audit: [0x1E; 32],
                 eq_proof: vec![0xA1; 128],
                 ep_proof: vec![0xB2; 128],
                 eq_history: vec![0xC3; crate::kagemusha::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
                 ep_history: vec![0xD4; crate::kagemusha::KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
             },
-            commit_certificate,
-            artifact_manifest_digest: [8; 32],
+            artifact_manifest_digest: [7; 32],
         };
         KagemushaRedemptionRequestV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,
@@ -2774,7 +2971,7 @@ mod tests {
         let request = redemption_request();
         request
             .validate_shape()
-            .expect("valid wrapped redemption shape");
+            .expect("valid direct redemption shape");
         assert_eq!(
             request.lifecycle().operation_kind,
             crate::kagemusha::KagemushaOperationKindV1::RedeemSplit
@@ -2785,7 +2982,10 @@ mod tests {
         );
 
         let mut rebound = request;
-        rebound.voucher.commit_certificate.candidate_envelope_digest[0] ^= 1;
+        rebound
+            .voucher
+            .commit_certificate
+            .hardware_terminal_commitment[0] ^= 1;
         assert!(rebound.validate_shape().is_err());
     }
 
@@ -3026,13 +3226,10 @@ mod tests {
         let framed =
             norito::core::frame_bare_with_header_flags::<TopUpKagemushaV1>(&payload, flags)
                 .expect("frame top-up instruction");
-        let decoded = crate::isi::InstructionRegistry::decode(
-            &registry,
-            TopUpKagemushaV1::WIRE_ID,
-            &framed,
-        )
-        .expect("registered wire id")
-        .expect("decode instruction");
+        let decoded =
+            crate::isi::InstructionRegistry::decode(&registry, TopUpKagemushaV1::WIRE_ID, &framed)
+                .expect("registered wire id")
+                .expect("decode instruction");
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
 }

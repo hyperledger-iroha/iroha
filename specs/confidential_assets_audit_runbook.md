@@ -10,9 +10,9 @@ when validating confidential-asset flows. It complements the rotation playbook
 ## 1. Selective Disclosure & Audit Records
 
 - Confidential tree transitions do not have a public generic data-event or
-  event-filter wire. Kagemusha V1 top-up and redemption expose their
+  event-filter wire. KAGEMUSHA V1 top-up and redemption expose their
   authenticated pooled-reserve request and receipt records through the generic
-  offline operation-status surface, covered by the Kagemusha V1 tests in
+  KAGEMUSHA operation-status surface, covered by the KAGEMUSHA V1 tests in
   `crates/iroha_core/src/smartcontracts/isi/offline.rs`.
 - Torii exposes transparent native numeric-escrow lifecycle events through the
   standard SSE/WebSocket pipeline and `EscrowEventFilter`. The first-release
@@ -50,7 +50,7 @@ when validating confidential-asset flows. It complements the rotation playbook
 - For production rehearsals or emergency windows, operators attach evidence to
   `status.md` entries (e.g., the multi-lane rehearsal log) and include:
   `curl` proof of policy transitions, Grafana snapshots, and the relevant
-  protocol receipts so auditors can reconstruct Kagemusha V1
+  protocol receipts so auditors can reconstruct KAGEMUSHA V1
   top-up→redemption timelines. Transparent native numeric escrow is audited
   separately through its authenticated lifecycle events and records.
 

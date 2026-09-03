@@ -31,15 +31,23 @@ readonly INDEXED_POSITIVE_CONFIGS=(
   AtomicPrivateSettlementV1CommitteeFaults_4_clean.cfg
   AtomicPrivateSettlementV1CommitteeFaults_expiry.cfg
 )
-readonly NEGATIVE_CONFIGS=(
+readonly SAFETY_VIOLATION_CONFIGS=(
   AtomicPrivateSettlementV1_partial_apply_bug.cfg
   AtomicPrivateSettlementV1_commit_before_prepare_bug.cfg
   AtomicPrivateSettlementV1_drop_stage_on_crash_bug.cfg
 )
+readonly INDEXED_SAFETY_VIOLATION_CONFIGS=(
+  AtomicPrivateSettlementV1CommitteeFaults_commit_without_registration_bug.cfg
+)
+readonly INDEXED_ACTION_PROPERTY_VIOLATION_CONFIGS=(
+  AtomicPrivateSettlementV1CommitteeFaults_drop_stage_bug.cfg
+)
 readonly ALL_CONFIGS=(
   "${POSITIVE_CONFIGS[@]}"
   "${INDEXED_POSITIVE_CONFIGS[@]}"
-  "${NEGATIVE_CONFIGS[@]}"
+  "${SAFETY_VIOLATION_CONFIGS[@]}"
+  "${INDEXED_SAFETY_VIOLATION_CONFIGS[@]}"
+  "${INDEXED_ACTION_PROPERTY_VIOLATION_CONFIGS[@]}"
 )
 
 usage() {
@@ -82,7 +90,9 @@ hash_file() {
 
 configuration_model() {
   local config="$1"
-  if contains "$config" "${INDEXED_POSITIVE_CONFIGS[@]}"; then
+  if contains "$config" "${INDEXED_POSITIVE_CONFIGS[@]}" \
+    || contains "$config" "${INDEXED_SAFETY_VIOLATION_CONFIGS[@]}" \
+    || contains "$config" "${INDEXED_ACTION_PROPERTY_VIOLATION_CONFIGS[@]}"; then
     printf '%s\n' "$INDEXED_MODEL"
   else
     printf '%s\n' "$MODEL"
@@ -91,8 +101,11 @@ configuration_model() {
 
 configuration_outcome() {
   local config="$1"
-  if contains "$config" "${NEGATIVE_CONFIGS[@]}"; then
+  if contains "$config" "${SAFETY_VIOLATION_CONFIGS[@]}" \
+    || contains "$config" "${INDEXED_SAFETY_VIOLATION_CONFIGS[@]}"; then
     printf '%s\n' safety_violation
+  elif contains "$config" "${INDEXED_ACTION_PROPERTY_VIOLATION_CONFIGS[@]}"; then
+    printf '%s\n' action_property_violation
   else
     printf '%s\n' pass
   fi
@@ -371,27 +384,39 @@ for config in "${selected_configs[@]}"; do
     echo "${config}: TLC emitted separate stderr" >&2
     exit 1
   fi
-  if [[ "$expected" == pass ]]; then
-    sumeragi_v2_tlc_assert_fixed_success "$config" "$stdout_log" "$status"
-  else
-    primary_diagnostic_count="$(
-      grep -Ec "$SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN" "$stdout_log" || true
-    )"
-    if [[ "$status" -ne 12 ]]; then
-      cat "$stdout_log" >&2
-      echo "${config}: expected TLC invariant status 12, got ${status}" >&2
+  case "$expected" in
+    pass)
+      sumeragi_v2_tlc_assert_fixed_success "$config" "$stdout_log" "$status"
+      ;;
+    safety_violation)
+      primary_diagnostic_count="$(
+        grep -Ec "$SUMERAGI_V2_TLC_PRIMARY_DIAGNOSTIC_PATTERN" "$stdout_log" || true
+      )"
+      if [[ "$status" -ne 12 ]]; then
+        cat "$stdout_log" >&2
+        echo "${config}: expected TLC invariant status 12, got ${status}" >&2
+        exit 1
+      fi
+      sumeragi_v2_tlc_assert_nonzero_state_space "$config" "$stdout_log"
+      sumeragi_v2_tlc_assert_exact_line \
+        "$config" "$stdout_log" "Error: Invariant Safety is violated."
+      if [[ "$primary_diagnostic_count" != 1 ]]; then
+        cat "$stdout_log" >&2
+        echo "${config}: expected exactly one primary TLC diagnostic, got ${primary_diagnostic_count}" >&2
+        exit 1
+      fi
+      sumeragi_v2_tlc_assert_terminal "$config" "$stdout_log"
+      ;;
+    action_property_violation)
+      sumeragi_v2_tlc_assert_action_property_violation \
+        "$config" "$stdout_log" "$status" \
+        "Error: Action property APSDurabilityTemporal is violated."
+      ;;
+    *)
+      echo "${config}: unsupported expected outcome ${expected}" >&2
       exit 1
-    fi
-    sumeragi_v2_tlc_assert_nonzero_state_space "$config" "$stdout_log"
-    sumeragi_v2_tlc_assert_exact_line \
-      "$config" "$stdout_log" "Error: Invariant Safety is violated."
-    if [[ "$primary_diagnostic_count" != 1 ]]; then
-      cat "$stdout_log" >&2
-      echo "${config}: expected exactly one primary TLC diagnostic, got ${primary_diagnostic_count}" >&2
-      exit 1
-    fi
-    sumeragi_v2_tlc_assert_terminal "$config" "$stdout_log"
-  fi
+      ;;
+  esac
 done
 
 if [[ "$complete_matrix" == true ]]; then

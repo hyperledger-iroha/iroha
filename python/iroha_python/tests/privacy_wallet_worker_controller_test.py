@@ -465,7 +465,6 @@ def test_private_settlement_prove_accepts_only_public_norito_and_checks_exact_re
         "audit_policy_norito",
         "canonical_genesis_hash",
         "current_height",
-        "successor_root",
     }
     manifest = b"manifest\0norito"
     statement = b"statement\0norito"
@@ -489,7 +488,6 @@ def test_private_settlement_prove_accepts_only_public_norito_and_checks_exact_re
         audit_policy_norito=policy,
         canonical_genesis_hash=SETTLEMENT_GENESIS,
         current_height=41,
-        successor_root=b"\x71" * 32,
     )
     assert isinstance(result, worker.PrivateSettlementPreparedProofV1)
     assert result.statement_norito == statement
@@ -504,7 +502,7 @@ def test_private_settlement_prove_accepts_only_public_norito_and_checks_exact_re
     assert sequence == 1
     for public_object in (manifest, statement, capsule, policy):
         assert public_object in payload
-    assert payload.endswith(struct.pack(">Q", 41) + b"\x71" * 32)
+    assert payload.endswith(struct.pack(">Q", 41))
 
 
 def test_private_settlement_proof_substitution_terminates_the_session(
@@ -529,7 +527,6 @@ def test_private_settlement_proof_substitution_terminates_the_session(
             audit_policy_norito=b"policy\0norito",
             canonical_genesis_hash=SETTLEMENT_GENESIS,
             current_height=41,
-            successor_root=b"\x71" * 32,
         )
     assert client.closed
     assert process.killed
@@ -559,7 +556,6 @@ def test_private_settlement_empty_delta_terminates_the_session(
             audit_policy_norito=b"policy\0norito",
             canonical_genesis_hash=SETTLEMENT_GENESIS,
             current_height=41,
-            successor_root=b"\x71" * 32,
         )
     assert client.closed
     assert process.killed

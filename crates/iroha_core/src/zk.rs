@@ -63,7 +63,8 @@ pub(crate) mod pasta_ipa_recursion;
 /// Exact row-bounded SHA-256 used by the generic Pasta cycle loader.
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod pasta_sha256;
-pub(crate) mod pasta_sha256_table16;
+/// Base-only SHA-256 compression candidate for resource-qualified internal hash proofs.
+pub(crate) mod pasta_sha256_table8;
 /// Core-owned authenticated confidential-spool adapter for MKHE RNS-native sources.
 pub mod rns_native_source_v1;
 #[cfg(feature = "zk-preverify")]

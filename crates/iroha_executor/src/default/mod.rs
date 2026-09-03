@@ -80,6 +80,7 @@ use iroha_smart_contract::data_model::{
             ProposeSorafsProviderGovernance, ProposeValidationFeePayoutLifecycle,
             ProposeValidationFeePolicy, RegisterCitizen,
         },
+        kagemusha_v1::{RedeemKagemushaV1, TopUpKagemushaV1},
         nexus::{
             ActivateFeeSponsorProgramRevision, BeginCloseFeeSponsorProgram, CloseFeeSponsorProgram,
             CreateFeeSponsorProgram, EnrollFeeSponsorBeneficiary, FundFeeSponsorProgram,
@@ -87,7 +88,6 @@ use iroha_smart_contract::data_model::{
             RegisterVerifiedLaneRelay, StageFeeSponsorProgramRevision,
             UnenrollFeeSponsorBeneficiary, WithdrawFeeSponsorProgram,
         },
-        kagemusha_v1::{RedeemKagemushaV1, TopUpKagemushaV1},
         repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
         settlement::SettlementInstructionBox,
         smart_contract_code::{
@@ -1019,7 +1019,7 @@ impl InstructionDispatch for InstructionBox {
             execute!(executor, isi);
         }
         // Core owns recursive-proof validation and reserve accounting. Forward both native
-        // Kagemusha V1 settlement instructions so those consensus-critical checks run.
+        // KAGEMUSHA V1 settlement instructions so those consensus-critical checks run.
         if let Some(isi) = any.downcast_ref::<TopUpKagemushaV1>() {
             execute!(executor, isi);
         }

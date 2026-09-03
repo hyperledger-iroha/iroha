@@ -48,9 +48,9 @@ mod tests {
     ) -> RawGenesisTransaction {
         let builder =
             GenesisBuilder::new_without_executor(ChainId::from("npos-genesis"), PathBuf::from("."));
-        builder
-            .append_parameter(params)
+        super::super::complete_test_genesis_builder(builder.append_parameter(params))
             .build_raw()
+            .expect("complete NPoS parameter test genesis")
             .with_consensus_mode(consensus_mode)
     }
     #[test]
@@ -85,8 +85,9 @@ mod tests {
         );
         builder = builder.append_instruction(grant);
         let manifest = roundtrip_manifest(
-            &builder
+            &super::super::complete_test_genesis_builder(builder)
                 .build_raw()
+                .expect("complete unrelated-parameter test genesis")
                 .with_consensus_mode(SumeragiConsensusMode::Permissioned),
         );
         assert!(!has_npos_parameters(&manifest).expect("valid manifest"));

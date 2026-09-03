@@ -606,11 +606,11 @@ pub mod escrow {
         pub struct CanResolveEscrowDispute;
     }
 }
-/// Permission tokens covering Kagemusha settlement.
+/// Permission tokens covering KAGEMUSHA settlement.
 pub mod kagemusha {
     use super::*;
     permission! {
-        /// Permission to manage native Kagemusha reserve issuance and settlement.
+        /// Permission to manage native KAGEMUSHA reserve issuance and settlement.
         #[derive(Copy)]
         pub struct CanManageKagemushaReserve;
     }

@@ -1,6 +1,6 @@
-//! Pooled reserve accounting for clean-slate Kagemusha V1.
+//! Pooled reserve accounting for clean-slate KAGEMUSHA V1.
 //!
-//! One canonical `(network, asset)` pool records every top-up and redemption;
+//! One canonical `(network, asset, exact incarnation)` pool records every top-up and redemption;
 //! peer transfers never touch it.
 //! Top-up execution persists a deterministic issuance request and exact
 //! post-operation receipt before same-block finality exists. A later worker
@@ -15,16 +15,15 @@ use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId, AssetValue},
     isi::{
-        KagemushaFinalityTrustAnchorV1, KagemushaOperationKindV1,
-        KagemushaRedemptionRequestV1, KagemushaReserveReceiptV1, KagemushaTopUpRequestV1,
-        KagemushaTopUpResultV1,
+        KagemushaFinalityTrustAnchorV1, KagemushaOperationKindV1, KagemushaRedemptionRequestV1,
+        KagemushaReserveReceiptV1, KagemushaTopUpRequestV1, KagemushaTopUpResultV1,
+    },
+    kagemusha::{
+        KAGEMUSHA_ASSET_SCALE_MAX_V1, KAGEMUSHA_WIRE_VERSION_V1, KagemushaLifecycleBindingV1,
+        KagemushaMintCreditStatementV1, kagemusha_ciphertext_digest_v1,
+        kagemusha_liability_pool_id_v1,
     },
     nexus::AxtAssetIncarnationV1,
-    kagemusha::{
-        KAGEMUSHA_ASSET_SCALE_MAX_V1, KAGEMUSHA_WIRE_VERSION_V1,
-        KagemushaLifecycleBindingV1, KagemushaMintCreditStatementV1,
-        kagemusha_ciphertext_digest_v1, kagemusha_liability_pool_id_v1,
-    },
 };
 use iroha_primitives::numeric::{Numeric, Quantity};
 use norito::codec::{Decode, Encode};
@@ -88,9 +87,7 @@ pub enum KagemushaReserveErrorV1 {
         requested: u128,
     },
     /// Persisted reserve custody is smaller than the outstanding liability.
-    #[error(
-        "Kagemusha reserve custody is underfunded: liability {liability}, custody {custody}"
-    )]
+    #[error("Kagemusha reserve custody is underfunded: liability {liability}, custody {custody}")]
     ReserveCustodyUnderfunded {
         /// Aggregate outstanding liability for the custody account and asset.
         liability: Quantity,
@@ -170,7 +167,7 @@ pub enum KagemushaReserveErrorV1 {
     },
 }
 
-/// Canonical identity of the sole reserve for one network and asset.
+/// Canonical identity of the sole reserve for one network, asset, and exact incarnation.
 #[derive(
     Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, JsonDeserialize, JsonSerialize,
 )]
@@ -232,12 +229,9 @@ impl KagemushaReservePoolKeyV1 {
         self.asset_incarnation
             .validate()
             .map_err(|error| KagemushaReserveErrorV1::InvalidWire(error.to_string()))?;
-        let expected = kagemusha_liability_pool_id_v1(
-            &self.network_id,
-            &self.asset,
-            self.asset_incarnation,
-        )
-        .map_err(|error| KagemushaReserveErrorV1::Encoding(error.to_string()))?;
+        let expected =
+            kagemusha_liability_pool_id_v1(&self.network_id, &self.asset, self.asset_incarnation)
+                .map_err(|error| KagemushaReserveErrorV1::Encoding(error.to_string()))?;
         if self.liability_pool_id != expected {
             return Err(KagemushaReserveErrorV1::InvalidLiabilityPool);
         }
@@ -986,10 +980,7 @@ impl KagemushaReserveBookV1 {
 
     /// Look up one idempotent operation record.
     #[must_use]
-    pub fn operation(
-        &self,
-        operation_id: &[u8; 32],
-    ) -> Option<&KagemushaReserveOperationRecordV1> {
+    pub fn operation(&self, operation_id: &[u8; 32]) -> Option<&KagemushaReserveOperationRecordV1> {
         self.operations.get(operation_id)
     }
 
@@ -1168,9 +1159,7 @@ impl KagemushaReserveBookV1 {
                         .copied(),
                 };
                 if let Some(existing) = validate_top_up_commit_entries(&plan, read_set)? {
-                    return Ok(KagemushaReserveCommitOutcomeV1::AlreadyCommitted(
-                        existing,
-                    ));
+                    return Ok(KagemushaReserveCommitOutcomeV1::AlreadyCommitted(existing));
                 }
                 let record = KagemushaReserveOperationRecordV1::TopUp(plan.record.clone());
                 self.pools
@@ -1197,9 +1186,7 @@ impl KagemushaReserveBookV1 {
                         .copied(),
                 };
                 if let Some(existing) = validate_redemption_commit_entries(&plan, read_set)? {
-                    return Ok(KagemushaReserveCommitOutcomeV1::AlreadyCommitted(
-                        existing,
-                    ));
+                    return Ok(KagemushaReserveCommitOutcomeV1::AlreadyCommitted(existing));
                 }
                 let record = KagemushaReserveOperationRecordV1::Redemption(plan.record.clone());
                 self.pools
@@ -1438,11 +1425,10 @@ pub(crate) fn validate_persisted_reserve_custody_v1<'a>(
         if available == 0 {
             continue;
         }
-        let reserve_account =
-            crate::smartcontracts::isi::domain::isi::kagemusha_reserve_account_id(
-                &pool.key.network_id,
-                &pool.key.asset,
-            );
+        let reserve_account = crate::smartcontracts::isi::domain::isi::kagemusha_reserve_account_id(
+            &pool.key.network_id,
+            &pool.key.asset,
+        );
         let required = Quantity::try_from_numeric(Numeric::new(available, pool.scale))
             .map_err(|_| state_invariant("invalid_reserve_liability_quantity"))?;
         let entry = liabilities
@@ -1468,10 +1454,7 @@ pub(crate) fn validate_persisted_reserve_custody_v1<'a>(
     for (key, liability) in liabilities {
         let custody = custody.remove(&key).unwrap_or_default();
         if custody < liability {
-            return Err(KagemushaReserveErrorV1::ReserveCustodyUnderfunded {
-                liability,
-                custody,
-            });
+            return Err(KagemushaReserveErrorV1::ReserveCustodyUnderfunded { liability, custody });
         }
     }
     Ok(())
@@ -2026,7 +2009,7 @@ fn mint_statement_from_request(
             policy_epoch: request.hardware_credential.policy_epoch,
             operation_kind: iroha_data_model::kagemusha::KagemushaOperationKindV1::MintFold,
             request_id: [0; 32],
-            acceptance_ticket_id: [0; 32],
+            receiver_lane_commitment: [0; 32],
             credit_id: request.credit_id,
             ciphertext_digest: kagemusha_ciphertext_digest_v1(&request.encrypted_credit),
         },
@@ -2210,6 +2193,105 @@ fn state_invariant(reason: &'static str) -> KagemushaReserveErrorV1 {
     KagemushaReserveErrorV1::StateInvariant { reason }
 }
 
+/// Commit one fully shaped top-up for the cross-module aggregate-state acceptance test.
+///
+/// This test-only seam preserves the production admission boundary: it constructs the same
+/// opaque verified intent that the ISI produces after the caller, release, profile, and paired
+/// mint-authorization checks have been mocked by the unit test.
+#[cfg(test)]
+pub(crate) fn commit_top_up_for_aggregate_state_test(
+    book: &mut KagemushaReserveBookV1,
+    request: KagemushaTopUpRequestV1,
+    profile: iroha_data_model::kagemusha::KagemushaHardwareProfileV1,
+    transaction_hash: [u8; 32],
+    committed_at_ms: u64,
+) -> Result<KagemushaTopUpRecordV1, KagemushaReserveErrorV1> {
+    let authorization = VerifiedKagemushaTopUpAuthorizationV1 {
+        request_digest: request.canonical_digest().map_err(map_chain_value_error)?,
+        mint_authorization_digest: request
+            .mint_authorization
+            .as_ref()
+            .ok_or_else(|| state_invariant("top_up_missing_mint_authorization"))?
+            .canonical_digest()
+            .map_err(map_chain_value_error)?,
+        profile,
+    };
+    let verified =
+        VerifiedKagemushaTopUpIntentV1::after_admission_verification(request, authorization)?;
+    let context = KagemushaReserveCommitContextV1::after_block_context_verification(
+        transaction_hash,
+        committed_at_ms,
+    )?;
+    let plan = match book.plan_top_up(&verified, context)? {
+        KagemushaReservePlanOutcomeV1::Commit(plan) => plan,
+        KagemushaReservePlanOutcomeV1::AlreadyCommitted(
+            KagemushaReserveOperationRecordV1::TopUp(record),
+        ) => return Ok(record),
+        KagemushaReservePlanOutcomeV1::AlreadyCommitted(
+            KagemushaReserveOperationRecordV1::Redemption(_),
+        ) => return Err(state_invariant("top_up_test_operation_kind_mismatch")),
+    };
+    match book.commit(plan)? {
+        KagemushaReserveCommitOutcomeV1::Committed(KagemushaReserveOperationRecordV1::TopUp(
+            record,
+        ))
+        | KagemushaReserveCommitOutcomeV1::AlreadyCommitted(
+            KagemushaReserveOperationRecordV1::TopUp(record),
+        ) => Ok(record),
+        KagemushaReserveCommitOutcomeV1::Committed(
+            KagemushaReserveOperationRecordV1::Redemption(_),
+        )
+        | KagemushaReserveCommitOutcomeV1::AlreadyCommitted(
+            KagemushaReserveOperationRecordV1::Redemption(_),
+        ) => Err(state_invariant("top_up_test_operation_kind_mismatch")),
+    }
+}
+
+/// Commit one state-machine-produced voucher for the aggregate-state acceptance test.
+///
+/// The helper mocks only the paired recursive verifier capability which a unit test cannot
+/// obtain from physical proving hardware; request validation and reserve replay/accounting use
+/// the production paths unchanged.
+#[cfg(test)]
+pub(crate) fn commit_redemption_for_aggregate_state_test(
+    book: &mut KagemushaReserveBookV1,
+    request: KagemushaRedemptionRequestV1,
+    transaction_hash: [u8; 32],
+    committed_at_ms: u64,
+) -> Result<KagemushaRedemptionRecordV1, KagemushaReserveErrorV1> {
+    let verified_proof =
+        VerifiedKagemushaRedemptionProofV1::for_reserve_tests_after_mock_recursive_verification(
+            request,
+        )
+        .map_err(|error| KagemushaReserveErrorV1::InvalidWire(error.to_string()))?;
+    let verified = VerifiedKagemushaRedemptionV1::after_full_verification(verified_proof);
+    let context = KagemushaReserveCommitContextV1::after_block_context_verification(
+        transaction_hash,
+        committed_at_ms,
+    )?;
+    let plan = match book.plan_redemption(&verified, context)? {
+        KagemushaReservePlanOutcomeV1::Commit(plan) => plan,
+        KagemushaReservePlanOutcomeV1::AlreadyCommitted(
+            KagemushaReserveOperationRecordV1::Redemption(record),
+        ) => return Ok(record),
+        KagemushaReservePlanOutcomeV1::AlreadyCommitted(
+            KagemushaReserveOperationRecordV1::TopUp(_),
+        ) => return Err(state_invariant("redemption_test_operation_kind_mismatch")),
+    };
+    match book.commit(plan)? {
+        KagemushaReserveCommitOutcomeV1::Committed(
+            KagemushaReserveOperationRecordV1::Redemption(record),
+        )
+        | KagemushaReserveCommitOutcomeV1::AlreadyCommitted(
+            KagemushaReserveOperationRecordV1::Redemption(record),
+        ) => Ok(record),
+        KagemushaReserveCommitOutcomeV1::Committed(KagemushaReserveOperationRecordV1::TopUp(_))
+        | KagemushaReserveCommitOutcomeV1::AlreadyCommitted(
+            KagemushaReserveOperationRecordV1::TopUp(_),
+        ) => Err(state_invariant("redemption_test_operation_kind_mismatch")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2242,15 +2324,16 @@ mod tests {
             KagemushaTopUpMembershipWitnessV1, kagemusha_mint_finality_root_v1,
         },
         kagemusha::{
-            KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1,
-            KAGEMUSHA_REDEMPTION_OUTBOX_MIN_BYTES_V1, KAGEMUSHA_WIRE_VERSION_V1,
-            KagemushaCommitCertificateV1, KagemushaCommitEvidenceV1,
-            KagemushaCommitWrapperProofV1, KagemushaDevicePublicKeyV1,
-            KagemushaDeviceSignatureV1, KagemushaHardwareCredentialV1,
+            KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KAGEMUSHA_REDEMPTION_OUTBOX_MIN_BYTES_V1,
+            KAGEMUSHA_WIRE_VERSION_V1, KAGEMUSHA_XCHACHA20POLY1305_NONCE_BYTES_V1,
+            KAGEMUSHA_XCHACHA20POLY1305_TAG_BYTES_V1, KagemushaCommitCertificateV1,
+            KagemushaCommitEvidenceV1, KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1,
+            KagemushaEncryptedCreditEnvelopeV1, KagemushaHardwareCredentialV1,
             KagemushaHardwarePlatformClassV1, KagemushaHardwareProfileV1,
-            KagemushaLifecycleBindingV1, KagemushaMintCreditV1, KagemushaOutboxReservationV1,
-            KagemushaPairedProofV1, KagemushaRedemptionStatementV1,
-            KagemushaRedemptionVoucherV1, KagemushaTrustedCommitTimeV1,
+            KagemushaHardwareTerminalBodyV1, KagemushaLifecycleBindingV1, KagemushaMintCreditV1,
+            KagemushaOutboxReservationV1, KagemushaPairedProofV1, KagemushaRedemptionProofV1,
+            KagemushaRedemptionStatementV1, KagemushaRedemptionVoucherV1,
+            KagemushaTrustedCommitTimeV1, kagemusha_credit_opening_canonical_len_v1,
             kagemusha_device_key_reference_v1, kagemusha_suite_commitment_v1,
         },
         peer::PeerId,
@@ -2395,26 +2478,22 @@ mod tests {
     }
 
     fn paired_proof(semantic_digest: [u8; 32]) -> KagemushaPairedProofV1 {
-        let eq_history = KagemushaEqAccumulatorV1::from_native(&IpaAccumulator::<
-            EqAffine,
-            NativeLoader,
-        >::new(
-            (0..KAGEMUSHA_RECURSION_IPA_K_V1)
-                .map(|round| Fp::from(u64::from(round) + 1))
-                .collect(),
-            (Eq::generator() * Fp::from(97)).to_affine(),
-        ))
-        .expect("canonical Eq mint-authority history");
-        let ep_history = KagemushaEpAccumulatorV1::from_native(&IpaAccumulator::<
-            EpAffine,
-            NativeLoader,
-        >::new(
-            (0..KAGEMUSHA_RECURSION_IPA_K_V1)
-                .map(|round| Fq::from(u64::from(round) + 1))
-                .collect(),
-            (Ep::generator() * Fq::from(193)).to_affine(),
-        ))
-        .expect("canonical Ep mint-authority history");
+        let eq_history =
+            KagemushaEqAccumulatorV1::from_native(&IpaAccumulator::<EqAffine, NativeLoader>::new(
+                (0..KAGEMUSHA_RECURSION_IPA_K_V1)
+                    .map(|round| Fp::from(u64::from(round) + 1))
+                    .collect(),
+                (Eq::generator() * Fp::from(97)).to_affine(),
+            ))
+            .expect("canonical Eq mint-authority history");
+        let ep_history =
+            KagemushaEpAccumulatorV1::from_native(&IpaAccumulator::<EpAffine, NativeLoader>::new(
+                (0..KAGEMUSHA_RECURSION_IPA_K_V1)
+                    .map(|round| Fq::from(u64::from(round) + 1))
+                    .collect(),
+                (Ep::generator() * Fq::from(193)).to_affine(),
+            ))
+            .expect("canonical Ep mint-authority history");
         KagemushaPairedProofV1 {
             version: KAGEMUSHA_WIRE_VERSION_V1,
             eq_protocol_digest: [0x81; 32],
@@ -2431,18 +2510,22 @@ mod tests {
         }
     }
 
-    fn commit_certificate_digest(certificate: &KagemushaCommitCertificateV1) -> [u8; 32] {
-        let bytes = norito::encode_canonical(certificate).expect("canonical commit certificate");
-        let mut hasher = Sha256::new();
-        hasher.update(b"iroha:kagemusha:v1:commit-certificate");
-        hasher.update([0]);
-        hasher.update(
-            u64::try_from(bytes.len())
-                .expect("certificate length")
-                .to_le_bytes(),
-        );
-        hasher.update(bytes);
-        hasher.finalize().into()
+    fn encrypted_credit_fixture(recipient_one_time_key: [u8; 32], tag: u8) -> Vec<u8> {
+        let mut ephemeral_x25519_public_key = [0; 32];
+        ephemeral_x25519_public_key[0] = 9;
+        KagemushaEncryptedCreditEnvelopeV1 {
+            version: KAGEMUSHA_WIRE_VERSION_V1,
+            ephemeral_x25519_public_key,
+            nonce: [tag; KAGEMUSHA_XCHACHA20POLY1305_NONCE_BYTES_V1],
+            ciphertext_and_tag: vec![
+                tag;
+                kagemusha_credit_opening_canonical_len_v1()
+                    .expect("opening length")
+                    + KAGEMUSHA_XCHACHA20POLY1305_TAG_BYTES_V1
+            ],
+        }
+        .canonical_bytes_against_recipient_key(recipient_one_time_key)
+        .expect("canonical encrypted credit fixture")
     }
 
     fn top_up_request(
@@ -2455,6 +2538,7 @@ mod tests {
         let network_id = network();
         let asset = asset();
         let asset_incarnation = asset_incarnation(1);
+        let recipient_one_time_key = tagged_id(0x1A, device_nonce);
         let request = KagemushaTopUpRequestV1 {
             version: KAGEMUSHA_CHAIN_VERSION_V1,
             operation_id: tagged_id(0x11, operation_nonce),
@@ -2479,8 +2563,8 @@ mod tests {
             hardware_credential: hardware_credential(&profile, device_nonce),
             recipient_credential_commitment: tagged_id(0x13, device_nonce),
             credit_commitment: tagged_id(0x16, device_nonce),
-            recipient_one_time_key: tagged_id(0x1A, device_nonce),
-            encrypted_credit: tagged_id(0x17, device_nonce).to_vec(),
+            recipient_one_time_key,
+            encrypted_credit: encrypted_credit_fixture(recipient_one_time_key, 0x17),
             artifact_manifest_digest: tagged_id(0x18, device_nonce),
             mint_authorization: None,
         }
@@ -2565,7 +2649,7 @@ mod tests {
         let profile = hardware_profile();
         let commit_evidence =
             KagemushaCommitEvidenceV1::TrustedTime(KagemushaTrustedCommitTimeV1 {
-                time_evidence_commitment: tagged_id(0x40, nonce),
+                time_evidence_commitment: tagged_id(0x2B, nonce),
             });
         let statement = KagemushaRedemptionStatementV1 {
             version: KAGEMUSHA_WIRE_VERSION_V1,
@@ -2589,58 +2673,78 @@ mod tests {
                 policy_epoch: profile.policy_epoch,
                 operation_kind: iroha_data_model::kagemusha::KagemushaOperationKindV1::RedeemSplit,
                 request_id: [0; 32],
-                acceptance_ticket_id: [0; 32],
+                receiver_lane_commitment: [0; 32],
                 credit_id: [0; 32],
                 ciphertext_digest: [0; 32],
             },
             amount,
             beneficiary: account(0xC7),
             terminal_nullifier: tagged_id(0x25, nonce),
-            redemption_commitment: tagged_id(0x27, nonce),
+            redemption_commitment: tagged_id(0x2A, nonce),
             redemption_id: [0; 32],
             commit_evidence,
         }
         .seal_redemption_id()
         .expect("seal redemption statement");
         let semantic_digest = statement.canonical_digest().expect("redemption digest");
-        let commit_certificate = KagemushaCommitCertificateV1 {
+        let paired = paired_proof(semantic_digest);
+        let reservation = KagemushaOutboxReservationV1 {
+            reservation_id: tagged_id(0x2C, nonce),
+            operation_kind: iroha_data_model::kagemusha::KagemushaOperationKindV1::RedeemSplit,
+            reserved_outbox_bytes: KAGEMUSHA_REDEMPTION_OUTBOX_MIN_BYTES_V1,
+            issued_at_ms: 8_000 + nonce,
+            expires_at_ms: 10_000 + nonce,
+        };
+        let terminal_body = KagemushaHardwareTerminalBodyV1 {
             version: KAGEMUSHA_WIRE_VERSION_V1,
-            certificate_id: [0; 32],
-            candidate_envelope_digest: tagged_id(0x43, nonce),
+            candidate_envelope_digest: tagged_id(0x2D, nonce),
             lifecycle_binding_digest: statement
                 .lifecycle
                 .canonical_digest()
-                .expect("lifecycle digest"),
+                .expect("redemption lifecycle digest"),
             transition_nullifier: statement.terminal_nullifier,
-            outbox_reservation_commitment: KagemushaOutboxReservationV1 {
-                reservation_id: tagged_id(0x44, nonce),
-                operation_kind: iroha_data_model::kagemusha::KagemushaOperationKindV1::RedeemSplit,
-                reserved_outbox_bytes: KAGEMUSHA_REDEMPTION_OUTBOX_MIN_BYTES_V1,
-                issued_at_ms: 8_000,
-                expires_at_ms: 10_000,
-            }
-            .canonical_commitment()
-            .expect("outbox commitment"),
+            outbox_reservation_commitment: reservation
+                .canonical_commitment()
+                .expect("redemption reservation commitment"),
             commit_evidence,
             hardware_profile_id: statement.lifecycle.hardware_profile_id,
             policy_epoch: statement.lifecycle.policy_epoch,
-            hardware_terminal_commitment: tagged_id(0x45, nonce),
+            private_successor_commitment: tagged_id(0x2E, nonce),
+            private_journal_commitment: tagged_id(0x2F, nonce),
+            private_recovery_commitment: tagged_id(0x30, nonce),
+        };
+        let commit_certificate = KagemushaCommitCertificateV1 {
+            version: KAGEMUSHA_WIRE_VERSION_V1,
+            certificate_id: [0; 32],
+            candidate_envelope_digest: terminal_body.candidate_envelope_digest,
+            lifecycle_binding_digest: terminal_body.lifecycle_binding_digest,
+            transition_nullifier: terminal_body.transition_nullifier,
+            outbox_reservation_commitment: terminal_body.outbox_reservation_commitment,
+            commit_evidence,
+            hardware_profile_id: terminal_body.hardware_profile_id,
+            policy_epoch: terminal_body.policy_epoch,
+            hardware_terminal_commitment: [0; 32],
         }
-        .seal_certificate_id()
-        .expect("certificate id");
-        let certificate_digest = commit_certificate_digest(&commit_certificate);
-        let paired = paired_proof(semantic_digest);
+        .seal_with_terminal_body(&terminal_body)
+        .expect("seal redemption terminal certificate");
+        let commit_certificate_digest = commit_certificate
+            .canonical_digest_against(
+                &statement.lifecycle,
+                statement.commit_evidence,
+                statement.terminal_nullifier,
+            )
+            .expect("redemption commit certificate digest");
         KagemushaRedemptionVoucherV1 {
             version: KAGEMUSHA_WIRE_VERSION_V1,
             statement,
-            commit_certificate: commit_certificate.clone(),
-            proof: KagemushaCommitWrapperProofV1 {
+            commit_certificate,
+            proof: KagemushaRedemptionProofV1 {
                 version: KAGEMUSHA_WIRE_VERSION_V1,
                 eq_protocol_digest: paired.eq_protocol_digest,
                 ep_protocol_digest: paired.ep_protocol_digest,
                 semantic_digest,
-                candidate_envelope_digest: commit_certificate.candidate_envelope_digest,
-                commit_certificate_digest: certificate_digest,
+                candidate_envelope_digest: terminal_body.candidate_envelope_digest,
+                commit_certificate_digest,
                 eq_deferred_audit: paired.eq_deferred_audit,
                 ep_deferred_audit: paired.ep_deferred_audit,
                 eq_proof: paired.eq_proof,
@@ -2648,7 +2752,7 @@ mod tests {
                 eq_history: paired.eq_history,
                 ep_history: paired.ep_history,
             },
-            artifact_manifest_digest: tagged_id(0x28, nonce),
+            artifact_manifest_digest: tagged_id(0x32, nonce),
         }
     }
 
@@ -2703,9 +2807,7 @@ mod tests {
         );
         assert!(matches!(
             book.commit(plan).expect("commit top-up"),
-            KagemushaReserveCommitOutcomeV1::Committed(
-                KagemushaReserveOperationRecordV1::TopUp(_)
-            )
+            KagemushaReserveCommitOutcomeV1::Committed(KagemushaReserveOperationRecordV1::TopUp(_))
         ));
     }
 
@@ -2746,11 +2848,10 @@ mod tests {
             siblings: vec![Hash::new([nonce]); KAGEMUSHA_RESERVE_RECEIPT_WITNESS_SIBLINGS_V1],
         };
         let ordinary_writes_root = witness.reconstructed_root().expect("receipt root");
-        let top_up_leaf =
-            crate::zk::kagemusha_v1_recursion::kagemusha_top_up_leaf_from_receipt_v1(
-                &record.reserve_receipt,
-            )
-            .expect("top-up leaf");
+        let top_up_leaf = crate::zk::kagemusha_v1_recursion::kagemusha_top_up_leaf_from_receipt_v1(
+            &record.reserve_receipt,
+        )
+        .expect("top-up leaf");
         let top_up_membership_witness = KagemushaTopUpMembershipWitnessV1 {
             leaf: top_up_leaf,
             leaf_index: 0,
@@ -2858,11 +2959,8 @@ mod tests {
             height,
             view: 0,
         };
-        let post_state_root = ExecutionCommitment::kagemusha_post_state_root_v1(
-            1,
-            ordinary_writes_root,
-            top_up_root,
-        );
+        let post_state_root =
+            ExecutionCommitment::kagemusha_post_state_root_v1(1, ordinary_writes_root, top_up_root);
         let execution_commitment = ExecutionCommitment::new_without_merge_carrier(
             Hash::new([nonce, 5]),
             post_state_root,
@@ -3010,11 +3108,10 @@ mod tests {
             .pool(network(), asset(), asset_incarnation(1))
             .expect("pool lookup")
             .expect("funded pool");
-        let reserve_account =
-            crate::smartcontracts::isi::domain::isi::kagemusha_reserve_account_id(
-                &pool.key.network_id,
-                &pool.key.asset,
-            );
+        let reserve_account = crate::smartcontracts::isi::domain::isi::kagemusha_reserve_account_id(
+            &pool.key.network_id,
+            &pool.key.asset,
+        );
         let reserve_asset_id = AssetId::new(pool.key.asset.clone(), reserve_account);
         let underfunded_quantity =
             Quantity::try_from_numeric(Numeric::new(99_u128, pool.scale)).expect("quantity");
@@ -3601,9 +3698,9 @@ mod tests {
         )
         .expect("plan")
         {
-            KagemushaReservePlanOutcomeV1::Commit(KagemushaReserveMutationPlanV1::TopUp(
-                plan,
-            )) => plan,
+            KagemushaReservePlanOutcomeV1::Commit(KagemushaReserveMutationPlanV1::TopUp(plan)) => {
+                plan
+            }
             _ => panic!("new top-up plan"),
         };
         assert_eq!(plan.expected_pool_head(), None);

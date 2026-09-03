@@ -5,8 +5,7 @@ import java.util.Objects;
 import org.hyperledger.iroha.sdk.offline.IrohaPeerIsoDepLimitsV1;
 import org.hyperledger.iroha.sdk.offline.IrohaPeerIsoDepTransceiverV1;
 import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcLimitsV1;
-import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcDurableAdmissionHandlerV1;
-import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcDurableCommitHandlerV1;
+import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcDurableTransitionHandlerV1;
 import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcReceiverApduBridgeV1;
 import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcReceiverSessionV1;
 
@@ -25,16 +24,14 @@ public final class IrohaPeerAndroidNfcV1 {
   }
 
   /**
-   * Builds the serialized async HCE boundary. BEGIN and COMMIT return 9000 only
-   * after their callbacks return the exact durable admission or IDA1 record.
+   * Builds the serialized async HCE boundary. Every state-changing command returns 9000 only
+   * after its callback returns the exact durable five-message transition record.
    */
   public static IrohaPeerNfcReceiverApduBridgeV1 receiverBridge(
       final IrohaPeerNfcReceiverSessionV1 receiver,
-      final IrohaPeerNfcDurableAdmissionHandlerV1 durableAdmission,
-      final IrohaPeerNfcDurableCommitHandlerV1 durableCommit) {
+      final IrohaPeerNfcDurableTransitionHandlerV1 durableTransitions) {
     return new IrohaPeerNfcReceiverApduBridgeV1(
         Objects.requireNonNull(receiver, "receiver"),
-        Objects.requireNonNull(durableAdmission, "durableAdmission"),
-        Objects.requireNonNull(durableCommit, "durableCommit"));
+        Objects.requireNonNull(durableTransitions, "durableTransitions"));
   }
 }

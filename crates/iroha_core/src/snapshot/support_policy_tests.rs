@@ -41,7 +41,6 @@ use iroha_data_model::{
         AssetPermissionManifest, DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig,
         ManifestVersion, UniversalAccountId,
     },
-    parameter::{Parameter, system::SumeragiNposParameters},
     peer::PeerId,
     smart_contract::{ContractAddress, ContractAlias},
     transaction::TransactionBuilder,
@@ -317,8 +316,7 @@ fn signed_complete_wire_finality_for_snapshot_blocks(
             quorum: DualQuorum::from_roster(&roster).expect("snapshot-eviction fixture quorum"),
             roster: roster.clone(),
             kagemusha_mint_finality_epoch_id,
-            kagemusha_mint_finality_epoch_roster: kagemusha_mint_finality_epoch_roster
-                .clone(),
+            kagemusha_mint_finality_epoch_roster: kagemusha_mint_finality_epoch_roster.clone(),
             nexus_amx_context_hash: Hash::new(b"snapshot eviction nexus context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
@@ -1187,11 +1185,61 @@ async fn staged_snapshot_wsv_hash_injects_committed_event_buffer() {
             staged,
             CanonicalWsvOverrides {
                 committed_external_event_buf: Some(committed_event_buffer),
+                ..CanonicalWsvOverrides::default()
             },
         )
         .expect("hash staged snapshot with its committed event buffer"),
         Hash::new(canonical),
     );
+}
+
+#[tokio::test]
+async fn staged_snapshot_wsv_hash_commits_consensus_evidence() {
+    for evidence in [
+        None,
+        Some(canonical_snapshot_v2_phase_vote_evidence(
+            snapshot_test_network_id(),
+        )),
+    ] {
+        let state = State::new_with_chain_and_network_id_for_testing(
+            crate::state::World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            ChainId::from(TEST_CHAIN_ID),
+            snapshot_test_network_id(),
+        );
+        let header = BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero test height"),
+            None,
+            None,
+            None,
+            1_000,
+            0,
+        );
+        let mut state_block = state.block(header);
+        if let Some(evidence) = evidence {
+            let key = crate::sumeragi::evidence::evidence_key(&evidence);
+            state_block.world.consensus_evidence.insert(
+                key,
+                EvidenceRecord {
+                    evidence,
+                    recorded_at_height: 1,
+                    recorded_at_view: 0,
+                    recorded_at_ms: 1_000,
+                    penalty_status: EvidencePenaltyStatus::Pending,
+                },
+            );
+        }
+        let staged_hash = canonical_staged_state_snapshot_hash(&state_block);
+        state_block
+            .commit_world_overlay_for_testing()
+            .expect("commit consensus-evidence world overlay");
+        assert_eq!(
+            staged_hash,
+            canonical_state_snapshot_hash(&state),
+            "empty and populated consensus evidence must have identical staged and committed WSV projections",
+        );
+    }
 }
 
 #[tokio::test]

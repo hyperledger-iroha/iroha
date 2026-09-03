@@ -1,27 +1,30 @@
-//! Focused tests for the closed Torii Kagemusha V1 surface.
+//! Focused tests for the closed Torii KAGEMUSHA V1 surface.
 
 use super::*;
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{
-    NetworkId,
+    Level, NetworkId,
     account::AccountId,
     asset::AssetDefinitionId,
     block::{BlockHeader, consensus_v2::HeightContextId},
     domain::DomainId,
+    isi::{Log, kagemusha_v1::TopUpKagemushaV1},
     kagemusha::{
-        KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1, KagemushaDevicePublicKeyV1,
-        KagemushaDeviceSignatureV1, KagemushaInboxReceiptV1, KagemushaPairedProofV1,
-        KagemushaTransferStatementV1, kagemusha_device_key_reference_v1,
-        kagemusha_inbox_receipt_commitment_v1, kagemusha_liability_pool_id_v1,
+        KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1, KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1,
+        KAGEMUSHA_WIRE_VERSION_V1, KAGEMUSHA_XCHACHA20POLY1305_NONCE_BYTES_V1,
+        KAGEMUSHA_XCHACHA20POLY1305_TAG_BYTES_V1, KagemushaAcceptanceIntentV1,
+        KagemushaAcceptanceTicketV1, KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1,
+        KagemushaEncryptedCreditEnvelopeV1, KagemushaHardwareCredentialV1,
+        KagemushaMintAuthorizationV1, KagemushaPairedProofV1, KagemushaPaymentRequestModeV1,
+        KagemushaSingleExactV1, kagemusha_credit_opening_canonical_len_v1,
+        kagemusha_device_key_reference_v1, kagemusha_liability_pool_id_v1,
     },
+    nexus::AxtAssetIncarnationV1,
+    testing::kagemusha::KagemushaFixtureSignerV1,
+    transaction::{FeePaymentIntent, TransactionAdmissionIntent, TransactionBuilder},
 };
-const FIXTURE_PAYMENT_RECIPIENT: &str = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
-const FIXTURE_RECIPIENT_PUBLIC_KEY_HEX: &str = "041e18532fd4754c02f3041d9c75ceb33b83ffd81ac7ce4fe882ccb1c98bc5896ea46c311c4e2ff40dd96a3653e6e45445d32dfe486eced75c7a90c6a18881c0a3";
-const FIXTURE_SENDER_PUBLIC_KEY_HEX: &str = "047135fa4fd93a09dce98bbf681b4bfcf50e7c0d6354e62afb0bff2a3429617865ed4c1f02ddb9023ee56a557e515d6a9dc66c11f220960de594334df588776724";
+
 const FIXTURE_TOP_UP_PUBLIC_KEY_HEX: &str = "04209c317b637935dd3da1c54f63495dfb31f97d293df085710320595c9aacb83fdde4c69fc17a0c74c20cc692662f049892ba37a4ba47d2c70cd8a99986391f9b";
-const FIXTURE_REQUEST_SIGNATURE_03_HEX: &str = "b7227d60ba0e0c213843f4e854daa3c6f134e5d8b59af56540956e041ff3115a0d2a93926c3ad6ac55eb2034533dd4f4c691764f0fb8685a046ed1acd1268305";
-const FIXTURE_REQUEST_SIGNATURE_31_HEX: &str = "a69f5265eda0f2ccf64bca111bfcdd5582e0b51e61902d732ea9c36cd8ed461f78921df314b55dc8e0b9cbb2d4a795146d4b7239d81d4ddf8f29c523954a75a1";
-const FIXTURE_ACK_SIGNATURE_HEX: &str = "b872a2a3d4cdf82fb18ae83e67c47f30ac484abd9a53b91e67e7eb7af46b2ca473ae96eba663456a595b6b0506aa73b70111dc9eca2e4e318d40fa6109c13afd";
 
 fn network_id() -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
@@ -34,6 +37,11 @@ fn asset() -> AssetDefinitionId {
         DomainId::try_new("wonderland", "universal").expect("domain"),
         "xor".parse().expect("asset name"),
     )
+}
+
+fn asset_incarnation(seed: u8) -> AxtAssetIncarnationV1 {
+    AxtAssetIncarnationV1::try_from_bytes(*Hash::new([seed]).as_ref())
+        .expect("canonical asset incarnation")
 }
 
 fn account(seed: u8) -> AccountId {
@@ -51,186 +59,252 @@ fn fixture_public_key(encoded: &str) -> KagemushaDevicePublicKeyV1 {
     .expect("canonical fixed P-256 public key")
 }
 
-fn fixture_signature(encoded: &str) -> KagemushaDeviceSignatureV1 {
-    KagemushaDeviceSignatureV1::from_raw_bytes(
-        &hex::decode(encoded).expect("decode fixed P-256 signature"),
-    )
-    .expect("canonical low-S P-256 signature")
+fn signing_key(seed: u8) -> KagemushaFixtureSignerV1 {
+    KagemushaFixtureSignerV1::from_repeated_byte(seed)
 }
 
-fn payment_request_with_id(request_id: [u8; 32]) -> KagemushaPaymentRequestV1 {
-    let recipient_public_key = fixture_public_key(FIXTURE_RECIPIENT_PUBLIC_KEY_HEX);
+fn signing_device_public_key(key: &KagemushaFixtureSignerV1) -> KagemushaDevicePublicKeyV1 {
+    key.device_public_key()
+}
+
+fn sign_device(key: &KagemushaFixtureSignerV1, bytes: &[u8]) -> KagemushaDeviceSignatureV1 {
+    key.sign(bytes)
+}
+
+const fn suite_id() -> [u8; 32] {
+    [0x10; 32]
+}
+
+fn hardware_credential(
+    network_id: NetworkId,
+    lane_commitment: [u8; 32],
+    device_public_key: KagemushaDevicePublicKeyV1,
+    tag: u8,
+) -> KagemushaHardwareCredentialV1 {
+    let credential = KagemushaHardwareCredentialV1 {
+        version: KAGEMUSHA_WIRE_VERSION_V1,
+        credential_id: [0; 32],
+        network_id,
+        hardware_profile_id: [tag; 32],
+        suite_id: suite_id(),
+        firmware_policy_digest: [tag.wrapping_add(1); 32],
+        policy_epoch: 1,
+        lane_commitment,
+        hardware_epoch_id: [tag.wrapping_add(2); 32],
+        hardware_epoch_generation: 1,
+        device_public_key,
+        device_key_reference: kagemusha_device_key_reference_v1(&device_public_key),
+        issued_at_ms: 500,
+        expires_at_ms: 90_000,
+        governance_signature: sign_device(&signing_key(3), b"fixture governance credential"),
+    }
+    .seal_credential_id()
+    .expect("seal hardware credential identity");
+    credential
+        .validate_shape()
+        .expect("valid hardware credential shape");
+    credential
+}
+
+fn recipient_encryption_key(tag: u8) -> [u8; 32] {
+    let mut key = [0; 32];
+    key[0] = tag;
+    key
+}
+
+fn encrypted_credit(recipient_key: [u8; 32], tag: u8) -> Vec<u8> {
+    let mut ephemeral_x25519_public_key = [0; 32];
+    ephemeral_x25519_public_key[0] = tag.wrapping_add(1);
+    KagemushaEncryptedCreditEnvelopeV1 {
+        version: KAGEMUSHA_WIRE_VERSION_V1,
+        ephemeral_x25519_public_key,
+        nonce: [tag; KAGEMUSHA_XCHACHA20POLY1305_NONCE_BYTES_V1],
+        ciphertext_and_tag: vec![
+            tag;
+            kagemusha_credit_opening_canonical_len_v1()
+                .expect("credit opening length")
+                + KAGEMUSHA_XCHACHA20POLY1305_TAG_BYTES_V1
+        ],
+    }
+    .canonical_bytes_against_recipient_key(recipient_key)
+    .expect("canonical encrypted credit")
+}
+
+fn paired_proof(semantic_digest: [u8; 32], tag: u8) -> KagemushaPairedProofV1 {
+    KagemushaPairedProofV1 {
+        version: KAGEMUSHA_WIRE_VERSION_V1,
+        eq_protocol_digest: [tag; 32],
+        ep_protocol_digest: [tag.wrapping_add(1); 32],
+        semantic_digest,
+        guard_eq_credential_audit: [tag.wrapping_add(2); 32],
+        guard_ep_credential_audit: [tag.wrapping_add(3); 32],
+        eq_deferred_audit: [tag.wrapping_add(4); 32],
+        ep_deferred_audit: [tag.wrapping_add(5); 32],
+        eq_proof: vec![tag.wrapping_add(6); 128],
+        ep_proof: vec![tag.wrapping_add(7); 128],
+        eq_history: vec![tag.wrapping_add(8); KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+        ep_history: vec![tag.wrapping_add(9); KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+    }
+}
+
+fn unchecked_payment_request_with_id(request_id: [u8; 32]) -> KagemushaPaymentRequestV1 {
+    let receiver_key = signing_key(7);
+    let recipient_public_key = signing_device_public_key(&receiver_key);
     let network_id = network_id();
     let asset = asset();
-    assert!(
-        request_id == [3; 32] || request_id == [0x31; 32],
-        "unexpected fixed request identity"
-    );
-    let signature = match request_id[0] {
-        3 => fixture_signature(FIXTURE_REQUEST_SIGNATURE_03_HEX),
-        0x31 => fixture_signature(FIXTURE_REQUEST_SIGNATURE_31_HEX),
-        _ => unreachable!("request identity checked above"),
-    };
-    KagemushaPaymentRequestV1 {
+    let asset_incarnation = asset_incarnation(1);
+    let recipient_lane_id = [2; 32];
+    let mut request = KagemushaPaymentRequestV1 {
         version: KAGEMUSHA_WIRE_VERSION_V1,
         release_id: [1; 32],
         network_id,
-        liability_pool_id: kagemusha_liability_pool_id_v1(&network_id, &asset)
-            .expect("liability pool"),
-        asset,
+        asset: asset.clone(),
+        asset_incarnation,
         scale: 4,
-        amount: 12_345,
-        recipient: AccountId::parse_encoded(FIXTURE_PAYMENT_RECIPIENT)
-            .expect("canonical fixed payment recipient"),
-        recipient_lane_id: [2; 32],
-        recipient_key_reference: kagemusha_device_key_reference_v1(&recipient_public_key),
-        recipient_public_key,
-        recipient_hardware_policy_id: [4; 32],
+        liability_pool_id: kagemusha_liability_pool_id_v1(&network_id, &asset, asset_incarnation)
+            .expect("liability pool"),
+        recipient: account(0x32),
+        request_mode: KagemushaPaymentRequestModeV1::SingleExact(KagemushaSingleExactV1 {
+            amount: 12_345,
+        }),
+        hardware_credential: hardware_credential(
+            network_id,
+            recipient_lane_id,
+            recipient_public_key,
+            0x41,
+        ),
         request_id,
         issued_at_ms: 1_000,
         expires_at_ms: 61_000,
-        signature,
-    }
+        signature: sign_device(&receiver_key, b"request-placeholder"),
+    };
+    request.signature = sign_device(
+        &receiver_key,
+        &request
+            .canonical_signing_bytes()
+            .expect("request signing bytes"),
+    );
+    request
+}
+
+fn payment_request_with_id(request_id: [u8; 32]) -> KagemushaPaymentRequestV1 {
+    let request = unchecked_payment_request_with_id(request_id);
+    request.validate_shape().expect("valid payment request");
+    request
 }
 
 fn payment_request() -> KagemushaPaymentRequestV1 {
-    payment_request_with_id([3; 32])
+    decode_kagemusha_payment_request_v1(&fixture_message_bytes("payment_request"))
+        .expect("decode Rust-owned canonical payment request")
 }
 
-fn payment(request: &KagemushaPaymentRequestV1) -> KagemushaPaymentV1 {
-    let request_digest = request.canonical_digest().expect("request digest");
-    let sender_public_key = fixture_public_key(FIXTURE_SENDER_PUBLIC_KEY_HEX);
-    let statement = KagemushaTransferStatementV1 {
-        version: KAGEMUSHA_WIRE_VERSION_V1,
-        release_id: request.release_id,
-        network_id: request.network_id,
-        asset: request.asset.clone(),
-        scale: request.scale,
-        amount: request.amount,
-        liability_pool_id: request.liability_pool_id,
-        request_digest,
-        credit_id: [0; 32],
-        recipient_lane_id: request.recipient_lane_id,
-        recipient_key_reference: request.recipient_key_reference,
-        recipient_hardware_policy_id: request.recipient_hardware_policy_id,
-        sender_lane_id: [5; 32],
-        sender_hardware_epoch_id: [6; 32],
-        sender_key_reference: kagemusha_device_key_reference_v1(&sender_public_key),
-        sender_hardware_policy_id: [7; 32],
-        sender_before_sequence: 41,
-        sender_after_sequence: 42,
-        sender_before: iroha_data_model::kagemusha::kagemusha_pasta_state_commitment_v1(
-            iroha_data_model::kagemusha::KagemushaPastaStateCommitmentV1 {
-                eq: [5; 32],
-                ep: [6; 32],
-            },
-        ),
-        sender_after: iroha_data_model::kagemusha::kagemusha_pasta_state_commitment_v1(
-            iroha_data_model::kagemusha::KagemushaPastaStateCommitmentV1 {
-                eq: [7; 32],
-                ep: [8; 32],
-            },
-        ),
-        credit_commitment: [8; 32],
-        sender_committed_at_ms: request.issued_at_ms + 1,
-        transition_digest: [0; 32],
-    }
-    .seal_transition([0xD7; 32])
-    .expect("seal transition");
-    let semantic_digest = statement.canonical_digest().expect("statement digest");
-    KagemushaPaymentV1 {
-        version: KAGEMUSHA_WIRE_VERSION_V1,
-        request_digest,
-        statement,
-        proof: KagemushaPairedProofV1 {
-            version: KAGEMUSHA_WIRE_VERSION_V1,
-            eq_protocol_digest: [9; 32],
-            ep_protocol_digest: [10; 32],
-            semantic_digest,
-            guard_eq_credential_audit: [0x19; 32],
-            guard_ep_credential_audit: [0x1A; 32],
-            eq_deferred_audit: [0x13; 32],
-            ep_deferred_audit: [0x14; 32],
-            predecessor_state: iroha_data_model::kagemusha::KagemushaPastaStateCommitmentV1 {
-                eq: [5; 32],
-                ep: [6; 32],
-            },
-            successor_state: iroha_data_model::kagemusha::KagemushaPastaStateCommitmentV1 {
-                eq: [7; 32],
-                ep: [8; 32],
-            },
-            eq_proof: vec![0xA1; 128],
-            ep_proof: vec![0xB2; 128],
-            eq_history: vec![0xC3; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
-            ep_history: vec![0xD4; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
-        },
-        encrypted_credit: vec![0xE5; 128],
-        artifact_manifest_digest: [11; 32],
-    }
+fn fixture_message_bytes(name: &str) -> Vec<u8> {
+    let fixture: norito::json::Value =
+        norito::json::from_str(include_str!("../../../fixtures/offline/kagemusha_v1.json"))
+            .expect("Rust-owned canonical KAGEMUSHA fixture JSON");
+    let encoded = fixture
+        .get(name)
+        .and_then(|message| message.get("norito_hex"))
+        .and_then(norito::json::Value::as_str)
+        .expect("canonical fixture contains the exact current message kind");
+    hex::decode(encoded).expect("canonical fixture Norito bytes")
 }
 
-fn acknowledgement(
-    request: &KagemushaPaymentRequestV1,
-    payment: &KagemushaPaymentV1,
-) -> KagemushaAcknowledgementV1 {
-    let request_digest = request.canonical_digest().expect("request digest");
-    let payment_digest = payment
-        .canonical_digest_against(request)
-        .expect("payment digest");
-    let inbox_sequence = 73;
-    let staging_hardware_epoch_id = [0xA3; 32];
-    let inbox_receipt = KagemushaInboxReceiptV1 {
-        version: KAGEMUSHA_WIRE_VERSION_V1,
-        credit_id: payment.statement.credit_id,
-        staging_hardware_epoch_id,
-        inbox_sequence,
-        receipt_commitment: kagemusha_inbox_receipt_commitment_v1(
-            request.recipient_lane_id,
-            staging_hardware_epoch_id,
-            inbox_sequence,
-            payment.statement.credit_id,
-            payment_digest,
-        )
-        .expect("receipt commitment"),
-    };
-    KagemushaAcknowledgementV1 {
-        version: KAGEMUSHA_WIRE_VERSION_V1,
-        request_digest,
-        payment_digest,
-        inbox_receipt,
-        acknowledged_at_ms: request.expires_at_ms + 1,
-        signature: fixture_signature(FIXTURE_ACK_SIGNATURE_HEX),
-    }
+fn peer_fixture() -> (
+    KagemushaPaymentRequestV1,
+    KagemushaAcceptanceIntentV1,
+    KagemushaAcceptanceTicketV1,
+    KagemushaPaymentV1,
+    KagemushaAcknowledgementV1,
+) {
+    let request = payment_request();
+    let intent = decode_kagemusha_acceptance_intent_v1(
+        &fixture_message_bytes("acceptance_intent"),
+        &request,
+    )
+    .expect("decode Rust-owned compact acceptance intent");
+    let ticket = decode_kagemusha_acceptance_ticket_v1(
+        &fixture_message_bytes("acceptance_ticket"),
+        &request,
+        &intent,
+    )
+    .expect("decode Rust-owned one-use acceptance ticket");
+    let payment = decode_kagemusha_payment_v1(
+        &fixture_message_bytes("payment"),
+        &request,
+        &intent,
+        &ticket,
+    )
+    .expect("decode Rust-owned committed payment");
+    let acknowledgement = decode_kagemusha_acknowledgement_v1(
+        &fixture_message_bytes("acknowledgement"),
+        &request,
+        &intent,
+        &ticket,
+        &payment,
+    )
+    .expect("decode Rust-owned acknowledgement");
+    (request, intent, ticket, payment, acknowledgement)
 }
 
-fn top_up_request() -> KagemushaTopUpRequestV1 {
+fn top_up_request_for_network(network_id: NetworkId) -> KagemushaTopUpRequestV1 {
     let recipient_public_key = fixture_public_key(FIXTURE_TOP_UP_PUBLIC_KEY_HEX);
-    let network_id = network_id();
     let asset = asset();
-    KagemushaTopUpRequestV1 {
+    let asset_incarnation = asset_incarnation(1);
+    let recipient_lane_id = [0x23; 32];
+    let recipient_one_time_key = recipient_encryption_key(0x29);
+    let request = KagemushaTopUpRequestV1 {
         version: KAGEMUSHA_CHAIN_VERSION_V1,
         operation_id: [0x21; 32],
         issuance_commitment: [0; 32],
         credit_id: [0; 32],
         release_id: [0x22; 32],
+        suite_id: suite_id(),
+        vk_digest: [0x24; 32],
         network_id,
         asset: asset.clone(),
+        asset_incarnation,
         scale: 4,
         amount: 25_000,
-        liability_pool_id: kagemusha_liability_pool_id_v1(&network_id, &asset)
+        liability_pool_id: kagemusha_liability_pool_id_v1(&network_id, &asset, asset_incarnation)
             .expect("liability pool"),
         payer: account(0x31),
         recipient: account(0x32),
-        recipient_lane_id: [0x23; 32],
-        recipient_key_reference: kagemusha_device_key_reference_v1(&recipient_public_key),
-        recipient_public_key,
-        recipient_hardware_policy_id: [0x25; 32],
+        hardware_credential: hardware_credential(
+            network_id,
+            recipient_lane_id,
+            recipient_public_key,
+            0x71,
+        ),
+        recipient_credential_commitment: [0x25; 32],
         credit_commitment: [0x26; 32],
-        encrypted_credit: vec![0x27; 96],
+        recipient_one_time_key,
+        encrypted_credit: encrypted_credit(recipient_one_time_key, 0x27),
         artifact_manifest_digest: [0x28; 32],
+        mint_authorization: None,
     }
     .seal_identifiers()
-    .expect("seal top-up identifiers")
+    .expect("seal top-up identifiers");
+    let statement = request
+        .mint_authorization_statement()
+        .expect("mint authorization statement");
+    let proof = paired_proof(
+        statement
+            .canonical_digest()
+            .expect("mint authorization semantic digest"),
+        0x81,
+    );
+    request
+        .attach_mint_authorization(KagemushaMintAuthorizationV1 {
+            version: KAGEMUSHA_WIRE_VERSION_V1,
+            statement,
+            proof,
+        })
+        .expect("attach mint authorization")
+}
+
+fn top_up_request() -> KagemushaTopUpRequestV1 {
+    top_up_request_for_network(network_id())
 }
 
 fn trust_anchor() -> KagemushaFinalityTrustAnchorV1 {
@@ -244,58 +318,101 @@ fn trust_anchor() -> KagemushaFinalityTrustAnchorV1 {
 }
 
 #[test]
-fn peer_boundary_roundtrips_only_the_exact_context_bound_v1_session() {
-    let request = payment_request();
-    let payment = payment(&request);
-    let acknowledgement = acknowledgement(&request, &payment);
+fn peer_boundary_roundtrips_only_the_exact_context_bound_five_message_exchange() {
+    let (request, intent, ticket, payment, acknowledgement) = peer_fixture();
     let request_bytes = norito::encode_canonical(&request).expect("encode request");
+    let intent_bytes = norito::encode_canonical(&intent).expect("encode intent");
+    let ticket_bytes = norito::encode_canonical(&ticket).expect("encode ticket");
     let payment_bytes = norito::encode_canonical(&payment).expect("encode payment");
     let acknowledgement_bytes =
         norito::encode_canonical(&acknowledgement).expect("encode acknowledgement");
     let other_request = payment_request_with_id([0x31; 32]);
     assert!(request_bytes.len() <= KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1);
+    assert!(intent_bytes.len() <= KAGEMUSHA_ACCEPTANCE_INTENT_MAX_BYTES_V1);
+    assert!(ticket_bytes.len() <= KAGEMUSHA_ACCEPTANCE_TICKET_MAX_BYTES_V1);
     assert!(payment_bytes.len() <= KAGEMUSHA_PAYMENT_MAX_BYTES_V1);
     assert!(acknowledgement_bytes.len() <= KAGEMUSHA_ACKNOWLEDGEMENT_MAX_BYTES_V1);
-    let decoded_request = decode_kagemusha_payment_request_v1(&request_bytes)
-        .expect("decode exact payment request");
-    let decoded_payment = decode_kagemusha_payment_v1(&payment_bytes, &decoded_request)
-        .expect("decode exact payment");
-    let decoded_acknowledgement = decode_kagemusha_acknowledgement_v1(
-        &acknowledgement_bytes,
-        &decoded_request,
-        &decoded_payment,
-    )
-    .expect("decode exact acknowledgement");
-    assert_eq!(decoded_request, request);
-    assert_eq!(decoded_payment, payment);
-    assert_eq!(decoded_acknowledgement, acknowledgement);
+    for (name, bytes) in [
+        ("payment_request", &request_bytes),
+        ("acceptance_intent", &intent_bytes),
+        ("acceptance_ticket", &ticket_bytes),
+        ("payment", &payment_bytes),
+        ("acknowledgement", &acknowledgement_bytes),
+    ] {
+        assert_eq!(
+            *bytes,
+            fixture_message_bytes(name),
+            "canonical {name} bytes"
+        );
+    }
+    assert_eq!(
+        validate_kagemusha_complete_exchange_v1(
+            &request,
+            &intent,
+            &ticket,
+            &payment,
+            &acknowledgement,
+        )
+        .expect("validate complete exchange"),
+        request_bytes.len()
+            + intent_bytes.len()
+            + ticket_bytes.len()
+            + payment_bytes.len()
+            + acknowledgement_bytes.len(),
+    );
 
-    assert!(decode_kagemusha_payment_v1(&payment_bytes, &other_request).is_err());
+    assert!(decode_kagemusha_acceptance_intent_v1(&intent_bytes, &other_request).is_err());
+    assert!(decode_kagemusha_acceptance_ticket_v1(&ticket_bytes, &other_request, &intent).is_err());
+    assert!(decode_kagemusha_payment_v1(&payment_bytes, &other_request, &intent, &ticket).is_err());
     assert!(
-        decode_kagemusha_acknowledgement_v1(&acknowledgement_bytes, &other_request, &payment,)
-            .is_err()
+        decode_kagemusha_acknowledgement_v1(
+            &acknowledgement_bytes,
+            &other_request,
+            &intent,
+            &ticket,
+            &payment,
+        )
+        .is_err()
     );
 }
 
 #[test]
 fn peer_boundary_pre_caps_every_message_and_rejects_trailing_bytes() {
-    let request = payment_request();
-    let payment = payment(&request);
+    let (request, intent, ticket, payment, _) = peer_fixture();
     assert!(matches!(
-        decode_kagemusha_payment_request_v1(&vec![
-            0;
-            KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1 + 1
-        ]),
+        decode_kagemusha_payment_request_v1(&vec![0; KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1 + 1]),
         Err(KagemushaValidationErrorV1::EncodedSizeExceeded { .. })
     ));
     assert!(matches!(
-        decode_kagemusha_payment_v1(&vec![0; KAGEMUSHA_PAYMENT_MAX_BYTES_V1 + 1], &request,),
+        decode_kagemusha_acceptance_intent_v1(
+            &vec![0; KAGEMUSHA_ACCEPTANCE_INTENT_MAX_BYTES_V1 + 1],
+            &request,
+        ),
+        Err(KagemushaValidationErrorV1::EncodedSizeExceeded { .. })
+    ));
+    assert!(matches!(
+        decode_kagemusha_acceptance_ticket_v1(
+            &vec![0; KAGEMUSHA_ACCEPTANCE_TICKET_MAX_BYTES_V1 + 1],
+            &request,
+            &intent,
+        ),
+        Err(KagemushaValidationErrorV1::EncodedSizeExceeded { .. })
+    ));
+    assert!(matches!(
+        decode_kagemusha_payment_v1(
+            &vec![0; KAGEMUSHA_PAYMENT_MAX_BYTES_V1 + 1],
+            &request,
+            &intent,
+            &ticket,
+        ),
         Err(KagemushaValidationErrorV1::EncodedSizeExceeded { .. })
     ));
     assert!(matches!(
         decode_kagemusha_acknowledgement_v1(
             &vec![0; KAGEMUSHA_ACKNOWLEDGEMENT_MAX_BYTES_V1 + 1],
             &request,
+            &intent,
+            &ticket,
             &payment,
         ),
         Err(KagemushaValidationErrorV1::EncodedSizeExceeded { .. })
@@ -304,6 +421,87 @@ fn peer_boundary_pre_caps_every_message_and_rejects_trailing_bytes() {
     let mut encoded = norito::encode_canonical(&request).expect("encode request");
     encoded.push(0);
     assert!(decode_kagemusha_payment_request_v1(&encoded).is_err());
+    let mut encoded = fixture_message_bytes("acceptance_intent");
+    encoded.push(0);
+    assert!(decode_kagemusha_acceptance_intent_v1(&encoded, &request).is_err());
+    let mut encoded = fixture_message_bytes("acceptance_ticket");
+    encoded.push(0);
+    assert!(decode_kagemusha_acceptance_ticket_v1(&encoded, &request, &intent).is_err());
+    let mut encoded = fixture_message_bytes("payment");
+    encoded.push(0);
+    assert!(decode_kagemusha_payment_v1(&encoded, &request, &intent, &ticket).is_err());
+    let mut encoded = fixture_message_bytes("acknowledgement");
+    encoded.push(0);
+    assert!(
+        decode_kagemusha_acknowledgement_v1(&encoded, &request, &intent, &ticket, &payment)
+            .is_err()
+    );
+}
+
+#[test]
+fn peer_intent_is_unproved_and_ticket_owns_the_recipient_key() {
+    let (request, intent, ticket, _, _) = peer_fixture();
+    let json = norito::json::to_string(&intent).expect("encode compact intent JSON");
+    let value: norito::json::Value = norito::json::from_str(&json).expect("intent JSON");
+    let object = value.as_object().expect("intent object");
+    assert_eq!(object.len(), 5);
+    for field in [
+        "version",
+        "request_digest",
+        "intent_id",
+        "exact_amount",
+        "sender_one_time_commitment",
+    ] {
+        assert!(
+            object.contains_key(field),
+            "compact intent is missing {field}"
+        );
+    }
+    let mut substituted_ticket = ticket;
+    substituted_ticket.recipient_one_time_key = [0; 32];
+    let encoded = norito::encode_canonical(&substituted_ticket).expect("encode substituted ticket");
+    assert!(decode_kagemusha_acceptance_ticket_v1(&encoded, &request, &intent).is_err());
+
+    let replacement_key = recipient_encryption_key(0x29);
+    assert_ne!(replacement_key, ticket.recipient_one_time_key);
+    let envelope = encrypted_credit(replacement_key, 0x27);
+    KagemushaEncryptedCreditEnvelopeV1::decode_canonical_shape_exact_against_recipient_key(
+        &envelope,
+        replacement_key,
+    )
+    .expect("replacement recipient key passes X25519 shape validation");
+    let mut substituted_ticket = ticket;
+    substituted_ticket.recipient_one_time_key = replacement_key;
+    assert_eq!(substituted_ticket.signature, ticket.signature);
+    let encoded =
+        norito::encode_canonical(&substituted_ticket).expect("encode valid-key substitution");
+    assert!(matches!(
+        decode_kagemusha_acceptance_ticket_v1(&encoded, &request, &intent),
+        Err(KagemushaValidationErrorV1::InvalidField {
+            field: "device_signature",
+        })
+    ));
+}
+
+#[test]
+fn peer_payment_rejects_post_commit_proof_and_certificate_substitution() {
+    let (request, intent, ticket, payment, _) = peer_fixture();
+    assert_eq!(
+        payment.proof.commit_certificate_digest,
+        payment
+            .commit_certificate
+            .canonical_digest()
+            .expect("certificate digest"),
+    );
+    let mut substituted_payment = payment.clone();
+    substituted_payment.proof.commit_certificate_digest[0] ^= 1;
+    let encoded = norito::encode_canonical(&substituted_payment).expect("encode substituted proof");
+    assert!(decode_kagemusha_payment_v1(&encoded, &request, &intent, &ticket).is_err());
+    let mut substituted_payment = payment;
+    substituted_payment.commit_certificate.transition_nullifier[0] ^= 1;
+    let encoded =
+        norito::encode_canonical(&substituted_payment).expect("encode substituted certificate");
+    assert!(decode_kagemusha_payment_v1(&encoded, &request, &intent, &ticket).is_err());
 }
 
 #[test]
@@ -321,13 +519,14 @@ fn payment_request_has_no_receiver_balance_or_history_shape() {
         "input_count",
         "note_inventory",
         "recipient_hardware_epoch_id",
+        "recipient_one_time_key",
     ] {
         assert!(
             !json.contains(forbidden),
             "payment request exposed forbidden field `{forbidden}`"
         );
     }
-    assert!(json.contains("recipient_lane_id"));
+    assert!(json.contains("lane_commitment"));
     assert!(json.contains("request_id"));
 }
 
@@ -378,11 +577,199 @@ fn top_up_keeps_distinct_payer_and_recipient_and_decodes_exactly() {
     trailing.push(0);
     assert!(decode_kagemusha_top_up_request_v1(&trailing).is_err());
     assert!(matches!(
-        decode_kagemusha_top_up_request_v1(&vec![
-            0;
-            KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1 + 1
-        ]),
+        decode_kagemusha_top_up_request_v1(&vec![0; KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1 + 1]),
         Err(KagemushaApiErrorV1::EncodedSizeExceeded { .. })
+    ));
+}
+
+#[test]
+fn maximum_shape_top_up_request_fits_the_fixed_v1_ceiling() {
+    let mut request = top_up_request();
+    let proof = &mut request
+        .mint_authorization
+        .as_mut()
+        .expect("mint authorization")
+        .proof;
+    proof.eq_proof = vec![0x91; KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1];
+    proof.ep_proof = vec![0x92; KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1];
+    request.validate_shape().expect("maximum-shape top-up");
+
+    let encoded = norito::encode_canonical(&request).expect("encode maximum-shape top-up");
+    assert!(
+        encoded.len() > 4 * 1024,
+        "regression fixture must exceed the retired 4 KiB ceiling"
+    );
+    assert!(encoded.len() <= KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1);
+    assert_eq!(
+        decode_kagemusha_top_up_request_v1(&encoded).expect("decode maximum-shape top-up"),
+        request
+    );
+
+    let payer_key = KeyPair::from_seed(vec![0x31; 32], Algorithm::Ed25519);
+    let transaction = TransactionBuilder::new(
+        request.network_id,
+        request.payer.clone(),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([TopUpKagemushaV1::new(request).expect("maximum-shape instruction")])
+    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+    .try_sign(payer_key.private_key())
+    .expect("sign maximum-shape top-up");
+    let transaction_bytes = transaction
+        .encode_wire_v1()
+        .expect("encode maximum-shape signed transaction");
+    assert!(
+        transaction_bytes.len() <= KAGEMUSHA_TOP_UP_SIGNED_TRANSACTION_MIN_INGRESS_BYTES_V1,
+        "the enabled-route provisioning floor must admit the maximum V1 top-up shape"
+    );
+}
+
+#[test]
+fn payer_signed_top_up_transaction_enforces_exact_envelope_authority() {
+    let request = top_up_request();
+    let payer_key = KeyPair::from_seed(vec![0x31; 32], Algorithm::Ed25519);
+    assert_eq!(
+        request.payer,
+        AccountId::new(payer_key.public_key().clone())
+    );
+    let transaction = TransactionBuilder::new(
+        request.network_id,
+        request.payer.clone(),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([TopUpKagemushaV1::new(request.clone()).expect("top-up instruction")])
+    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+    .try_sign(payer_key.private_key())
+    .expect("payer-signed top-up");
+    assert_eq!(
+        validate_kagemusha_top_up_signed_transaction_v1(&request.network_id, &transaction)
+            .expect("valid payer-signed top-up"),
+        &request
+    );
+
+    let other_key = KeyPair::from_seed(vec![0x33; 32], Algorithm::Ed25519);
+    let wrong_authority = AccountId::new(other_key.public_key().clone());
+    let mismatched = TransactionBuilder::new(
+        request.network_id,
+        wrong_authority,
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([TopUpKagemushaV1::new(request.clone()).expect("top-up instruction")])
+    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+    .try_sign(other_key.private_key())
+    .expect("differently authorized transaction");
+    assert!(matches!(
+        validate_kagemusha_top_up_signed_transaction_v1(&request.network_id, &mismatched),
+        Err(KagemushaApiErrorV1::TopUpTransactionAuthorityMismatch)
+    ));
+}
+
+#[test]
+fn payer_signed_top_up_rejects_wrong_network_signature_and_instruction_count() {
+    let request = top_up_request();
+    let payer_key = KeyPair::from_seed(vec![0x31; 32], Algorithm::Ed25519);
+    let top_up = TopUpKagemushaV1::new(request.clone()).expect("top-up instruction");
+    let wrong_network =
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new([
+            0xA5,
+        ])));
+    let transaction = TransactionBuilder::new(
+        wrong_network,
+        request.payer.clone(),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([top_up.clone()])
+    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+    .try_sign(payer_key.private_key())
+    .expect("wrong-network top-up");
+    assert!(matches!(
+        validate_kagemusha_top_up_signed_transaction_v1(&request.network_id, &transaction),
+        Err(KagemushaApiErrorV1::TopUpTransactionWrongNetwork)
+    ));
+
+    let invalid_signature = TransactionBuilder::new(
+        request.network_id,
+        request.payer.clone(),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([top_up.clone()])
+    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+    .build_with_signature(Signature::from_bytes(&[]));
+    assert!(matches!(
+        validate_kagemusha_top_up_signed_transaction_v1(&request.network_id, &invalid_signature),
+        Err(KagemushaApiErrorV1::TopUpTransactionSignatureInvalid)
+    ));
+
+    let two_instructions = TransactionBuilder::new(
+        request.network_id,
+        request.payer.clone(),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([top_up.clone(), top_up])
+    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+    .try_sign(payer_key.private_key())
+    .expect("two-instruction transaction");
+    assert!(matches!(
+        validate_kagemusha_top_up_signed_transaction_v1(&request.network_id, &two_instructions),
+        Err(KagemushaApiErrorV1::TopUpTransactionShapeInvalid)
+    ));
+
+    let wrong_instruction = TransactionBuilder::new(
+        request.network_id,
+        request.payer.clone(),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, "not a top-up".to_owned())])
+    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+    .try_sign(payer_key.private_key())
+    .expect("wrong-instruction transaction");
+    assert!(matches!(
+        validate_kagemusha_top_up_signed_transaction_v1(&request.network_id, &wrong_instruction),
+        Err(KagemushaApiErrorV1::TopUpTransactionShapeInvalid)
+    ));
+}
+
+#[test]
+fn payer_signed_top_up_rejects_an_embedded_request_for_another_network() {
+    let expected_network = network_id();
+    let embedded_network =
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new([
+            0xA6,
+        ])));
+    let request = top_up_request_for_network(embedded_network);
+    let payer_key = KeyPair::from_seed(vec![0x31; 32], Algorithm::Ed25519);
+    let transaction = TransactionBuilder::new(
+        expected_network,
+        request.payer.clone(),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([TopUpKagemushaV1::new(request).expect("top-up instruction")])
+    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+    .try_sign(payer_key.private_key())
+    .expect("payer-signed top-up with a foreign embedded network");
+
+    assert!(matches!(
+        validate_kagemusha_top_up_signed_transaction_v1(&expected_network, &transaction),
+        Err(KagemushaApiErrorV1::TopUpTransactionWrongNetwork)
+    ));
+}
+
+#[test]
+fn payer_signed_top_up_rejects_ordinary_admission_intent() {
+    let request = top_up_request();
+    let payer_key = KeyPair::from_seed(vec![0x31; 32], Algorithm::Ed25519);
+    let transaction = TransactionBuilder::new(
+        request.network_id,
+        request.payer.clone(),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([TopUpKagemushaV1::new(request.clone()).expect("top-up instruction")])
+    .with_admission_intent(TransactionAdmissionIntent::Ordinary)
+    .try_sign(payer_key.private_key())
+    .expect("ordinary-admission top-up");
+    assert!(matches!(
+        validate_kagemusha_top_up_signed_transaction_v1(&request.network_id, &transaction),
+        Err(KagemushaApiErrorV1::TopUpTransactionAdmissionIntentInvalid)
     ));
 }
 
@@ -484,6 +871,10 @@ fn public_schema_names_are_clean_v1_names() {
         "iroha.torii.v1.kagemusha.redeem.request"
     );
     assert_eq!(
+        KAGEMUSHA_TOP_UP_SIGNED_TRANSACTION_SCHEMA_NAME_V1,
+        "iroha.torii.v1.kagemusha.top_up.signed_transaction"
+    );
+    assert_eq!(
         KAGEMUSHA_READINESS_SCHEMA_NAME_V1,
         "iroha.torii.v1.kagemusha.readiness.response"
     );
@@ -492,15 +883,16 @@ fn public_schema_names_are_clean_v1_names() {
 #[test]
 fn clean_kagemusha_v1_surface_contains_no_legacy_fallbacks() {
     let source = include_str!("kagemusha_api.rs");
-    let forbidden = [
-        ["Kage", "musha"].concat(),
+    let retired_prefix = ["line", "Off"].into_iter().rev().collect::<String>();
+    let forbidden = vec![
+        format!("{retired_prefix}Cash"),
         "receiver_lineage".to_owned(),
         "portable_offer".to_owned(),
         "provenance".to_owned(),
-        "OfflineTopUpRequest".to_owned(),
-        "OfflineRedeemRequest".to_owned(),
-        "OfflineOperationReference".to_owned(),
-        "OfflineOperationIdentity".to_owned(),
+        format!("{retired_prefix}TopUpRequest"),
+        format!("{retired_prefix}RedeemRequest"),
+        format!("{retired_prefix}OperationReference"),
+        format!("{retired_prefix}OperationIdentity"),
         "max_hops".to_owned(),
         "input_max".to_owned(),
         "proof_step".to_owned(),
@@ -511,7 +903,7 @@ fn clean_kagemusha_v1_surface_contains_no_legacy_fallbacks() {
     for retired in forbidden {
         assert!(
             !source.contains(&retired),
-            "clean Kagemusha V1 surface retained `{retired}`"
+            "clean KAGEMUSHA V1 surface retained `{retired}`"
         );
     }
     for required in [

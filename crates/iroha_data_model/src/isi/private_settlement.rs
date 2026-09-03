@@ -12,7 +12,7 @@ use crate::{
         ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, AtomicPrivateSettlementV1, DataSpaceId,
         PrivateSettlementAbortReasonV1, PrivateSettlementCommitBundleV1,
         PrivateSettlementPoolGovernanceLifecycleV1, PrivateSettlementPoolGovernanceV1,
-        PrivateSettlementRouteV1,
+        PrivateSettlementPrepareBarrierV1, PrivateSettlementRouteV1,
     },
     privacy::{PRIVACY_MAX_INITIAL_POOL_COMMITMENTS_V1, PrivacyCommitmentV1, PrivacyPoolIdV1},
 };
@@ -425,6 +425,34 @@ impl RotatePrivateSettlementPoolPolicyV1 {
 }
 
 isi! {
+    /// Register one complete all-Prepare barrier as globally replicated control locks.
+    ///
+    /// This sponsor-authorized control carrier runs before Commit voting. It
+    /// contains only the already-public manifest, opaque fixed-shape deltas,
+    /// compact authority catalog, and Prepare QCs. Execution reserves every
+    /// referenced pool head, nullifier, output commitment, and one-time
+    /// recipient until exact finalization, abort, or expiry reconciliation.
+    #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+    pub struct RegisterAtomicPrivateSettlementPrepareV1 {
+        /// Complete cryptographically certified all-Prepare barrier.
+        pub barrier: PrivateSettlementPrepareBarrierV1,
+    }
+}
+
+impl crate::seal::Instruction for RegisterAtomicPrivateSettlementPrepareV1 {}
+
+impl RegisterAtomicPrivateSettlementPrepareV1 {
+    /// Canonical first-release Norito instruction identifier.
+    pub const WIRE_ID: &'static str = "iroha.private_settlement.register_atomic_prepare.v1";
+
+    /// Construct one complete-bundle control-lock carrier.
+    #[must_use]
+    pub const fn new(barrier: PrivateSettlementPrepareBarrierV1) -> Self {
+        Self { barrier }
+    }
+}
+
+isi! {
     /// Publish one sponsor-authorized opaque abort or expiry marker.
     ///
     /// The complete public manifest binds the sponsor, network, expiry, and
@@ -595,6 +623,18 @@ mod tests {
         assert_eq!(
             registry.wire_id(core::any::type_name::<FinalizeAtomicPrivateSettlementV1>()),
             Some(FinalizeAtomicPrivateSettlementV1::WIRE_ID)
+        );
+    }
+
+    #[test]
+    fn prepare_registration_carrier_has_a_stable_registered_wire_id() {
+        let registry = crate::isi::registry::default();
+        assert!(registry.contains(RegisterAtomicPrivateSettlementPrepareV1::WIRE_ID));
+        assert_eq!(
+            registry.wire_id(core::any::type_name::<
+                RegisterAtomicPrivateSettlementPrepareV1,
+            >()),
+            Some(RegisterAtomicPrivateSettlementPrepareV1::WIRE_ID)
         );
     }
 

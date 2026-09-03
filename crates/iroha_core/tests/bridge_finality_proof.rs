@@ -75,7 +75,6 @@ fn fixture() -> Fixture {
                 ];
                 iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                     &seed,
-                    network_id,
                     0,
                     validator.validator.clone(),
                 )

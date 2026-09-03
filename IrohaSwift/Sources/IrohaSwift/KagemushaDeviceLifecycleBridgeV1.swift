@@ -5,49 +5,56 @@ import Foundation
   import Darwin
 #endif
 
-/// Failures from the exact Kagemusha V1 secure-device bridge contract.
+/// Failures from the exact KAGEMUSHA V1 secure-device bridge contract.
 public enum KagemushaDeviceLifecycleBridgeErrorV1: Error, Equatable {
   case onlineOnly
   case invalidContract(String)
   case executionFailed
 }
 
-/// Exact operations in Core's sealed Kagemusha V1 reservation, transition, and recovery flow.
+/// Exact operations in Core's sealed KAGEMUSHA V1 reservation, transition, and recovery flow.
 ///
 /// The service reserves bytes before accepting authority, prepares a deterministic candidate
 /// before consuming a predecessor, commits that candidate exactly once, and can recover every
 /// terminal certificate and installed envelope byte-identically.
 public enum KagemushaDeviceLifecycleOperationV1: UInt8, CaseIterable, Sendable {
   case readActiveHardwareCredential = 1
-  case stageInboundPayment = 2
-  case recoverStagedInboundPayment = 3
-  case recoverInboundInboxPage = 4
-  case prepareExactNextTransition = 5
-  case recoverPreparedTransition = 6
-  case abandonUncommittedPreparedTransition = 7
-  case commitVerifiedCandidate = 8
-  case recoverTerminalCommitCertificate = 9
-  case installFinalCommitWrapper = 10
-  case recoverInstalledEnvelopeOrStateProof = 11
-  case signReceiveAcknowledgement = 12
-  case releaseOutboxEntry = 13
-  case readTrustedTimeOrLease = 14
-  case prepareMintAuthorization = 15
-  case recoverMintAuthorization = 16
-  case verifyAuthorizationAndStageMintCredit = 17
-  case foldReceive = 18
-  case readPendingCreditWatermark = 19
-  case rotateHardwareEpoch = 20
+  case prepareAcceptanceIntent = 2
+  case recoverAcceptanceIntent = 3
+  case validateIntentReserveInboxAndIssueAcceptanceTicket = 4
+  case recoverAcceptanceTicket = 5
+  case stageInboundPayment = 6
+  case recoverStagedInboundPayment = 7
+  case recoverInboundInboxPage = 8
+  case prepareExactNextTransition = 9
+  case recoverPreparedTransition = 10
+  case abandonUncommittedPreparedTransition = 11
+  case commitVerifiedCandidateAndSignTerminal = 12
+  case recoverTerminalOutcome = 13
+  case installTerminalEnvelope = 14
+  case recoverInstalledEnvelopeOrStateProof = 15
+  case signReceiveAcknowledgement = 16
+  case releaseOutboxEntry = 17
+  case readTrustedTimeOrLease = 18
+  case prepareMintAuthorization = 19
+  case recoverMintAuthorization = 20
+  case verifyAuthorizationAndStageMintCredit = 21
+  case foldReceiveBatch = 22
+  case readPendingCreditWatermark = 23
+  case rotateHardwareEpoch = 24
+  case bootstrapAggregateState = 25
+  case recoverWalletSnapshot = 26
+  case createSignedPaymentRequest = 27
 }
 
-/// Exact secure-backend capabilities required by Kagemusha V1.
+/// Exact secure-backend capabilities required by KAGEMUSHA V1.
 public enum KagemushaDeviceLifecycleCapabilityV1: UInt32, CaseIterable, Sendable {
   case exactNextPredecessorConsumption = 0x0000_0001
   case oneUseSuccessorAuthorization = 0x0000_0002
   case rollbackResistantCounterAndJournal = 0x0000_0004
   case sealedTransitionRecovery = 0x0000_0008
-  case receiverBoundCreditCommit = 0x0000_0010
-  case rollbackResistantAcceptedCreditInbox = 0x0000_0020
+  case oneUseAcceptanceTickets = 0x0000_0010
+  case durableInboxReservation = 0x0000_0020
   case authenticatedInboundStaging = 0x0000_0040
   case authoritativeReplayRootRecovery = 0x0000_0080
   case senderOutboxReservation = 0x0000_0100
@@ -78,7 +85,10 @@ public enum KagemushaDeviceLifecycleStatusV1: UInt8, CaseIterable, Sendable {
 /// Accepted identity of the complete rollback-resistant secure backend.
 public struct KagemushaDeviceLifecycleCapabilitiesV1: Equatable, Sendable {
   public let hardwarePolicyID: Data
-  public let attestationDigest: Data
+  public let qualificationReportDigest: Data
+
+  /// Compatibility alias for the capability frame's qualification-report digest.
+  public var attestationDigest: Data { qualificationReportDigest }
 }
 
 /// Bounded response from the complete secure backend.
@@ -92,10 +102,38 @@ public struct KagemushaDeviceLifecycleResultV1: Equatable, Sendable {
 protocol KagemushaDeviceLifecycleEndpointV1 {
   func capabilities() throws -> Data
   func execute(_ command: Data) throws -> Data
+  func verifyResponseAuthenticator(
+    response: Data,
+    operation: KagemushaDeviceLifecycleOperationV1,
+    requestID: Data,
+    hardwarePolicyID: Data,
+    qualificationReportDigest: Data,
+    acceptedDevicePublicKey: Data?
+  ) -> Bool
+}
+
+extension KagemushaDeviceLifecycleEndpointV1 {
+  func verifyResponseAuthenticator(
+    response: Data,
+    operation: KagemushaDeviceLifecycleOperationV1,
+    requestID: Data,
+    hardwarePolicyID: Data,
+    qualificationReportDigest: Data,
+    acceptedDevicePublicKey: Data?
+  ) -> Bool {
+    KagemushaDeviceNativeResponseAuthenticatorVerifierV1.verify(
+      response: response,
+      operation: operation,
+      requestID: requestID,
+      hardwarePolicyID: hardwarePolicyID,
+      qualificationReportDigest: qualificationReportDigest,
+      acceptedDevicePublicKey: acceptedDevicePublicKey
+    )
+  }
 }
 
 ///
-/// Fail-closed iOS entry point for Kagemusha V1 device state.
+/// Fail-closed iOS entry point for KAGEMUSHA V1 device state.
 ///
 /// App Attest assertions authenticate online challenges, but do not expose a local atomic journal,
 /// authenticated multi-credit inbox, trusted clock, exact-next monetary counter, hardware-epoch
@@ -113,7 +151,7 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
   public static let protocolVersion: UInt16 = 1
   public static let maximumCommandPayloadBytes = 64 * 1024
   public static let maximumResponsePayloadBytes = 64 * 1024
-  public static let maximumAuthenticatorBytes = 8 * 1024
+  public static let maximumAuthenticatorBytes = 64
 
   public let availability: Availability
   public let acceptedCapabilities: KagemushaDeviceLifecycleCapabilitiesV1?
@@ -153,15 +191,53 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
 
   /// Execute one exact canonical Core V1 command through the qualifying native backend.
   ///
-  /// The native implementation must decode only the canonical Kagemusha V1 command for the
+  /// The native implementation must decode only the canonical KAGEMUSHA V1 command for the
   /// selected operation. Any non-V1 aggregate-state archive is invalid input.
+  @available(
+    *, deprecated,
+    message: "Use executeAuthenticated and supply the accepted operation-1 device key for operations 2 through 27"
+  )
   public func execute(
     operation: KagemushaDeviceLifecycleOperationV1,
     requestID: Data,
     canonicalCommand: Data
   ) throws -> KagemushaDeviceLifecycleResultV1 {
+    try executeAuthenticated(
+      operation: operation,
+      requestID: requestID,
+      canonicalCommand: canonicalCommand,
+      acceptedDevicePublicKey: nil
+    )
+  }
+
+  /// Execute and expose a success only after native verification of its complete response.
+  /// Operation 1 bootstraps the device key; operations 2 through 27 require that accepted key.
+  public func executeAuthenticated(
+    operation: KagemushaDeviceLifecycleOperationV1,
+    requestID: Data,
+    canonicalCommand: Data,
+    acceptedDevicePublicKey: Data?
+  ) throws -> KagemushaDeviceLifecycleResultV1 {
     guard let endpoint else {
       throw KagemushaDeviceLifecycleBridgeErrorV1.onlineOnly
+    }
+    let responseKey: Data?
+    if operation == .readActiveHardwareCredential {
+      guard acceptedDevicePublicKey == nil else {
+        throw KagemushaDeviceLifecycleBridgeErrorV1.invalidContract(
+          "operation 1 bootstraps its device public key")
+      }
+      responseKey = nil
+    } else {
+      guard let acceptedDevicePublicKey,
+        acceptedDevicePublicKey.count == 65,
+        acceptedDevicePublicKey.first == 4,
+        acceptedDevicePublicKey.dropFirst().contains(where: { $0 != 0 })
+      else {
+        throw KagemushaDeviceLifecycleBridgeErrorV1.invalidContract(
+          "operations 2 through 27 require the accepted 65-byte uncompressed SEC1 device key")
+      }
+      responseKey = Data(acceptedDevicePublicKey)
     }
     var command = try Codec.encodeCommand(
       operation: operation,
@@ -178,11 +254,27 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
     }
     let responseRange = response.startIndex..<response.endIndex
     defer { response.resetBytes(in: responseRange) }
-    return try Codec.decodeResponse(
+    let result = try Codec.decodeResponse(
       response,
       expectedOperation: operation,
       expectedRequestID: requestID
     )
+    if result.status == .success {
+      guard let acceptedCapabilities,
+        endpoint.verifyResponseAuthenticator(
+          response: response,
+          operation: operation,
+          requestID: requestID,
+          hardwarePolicyID: acceptedCapabilities.hardwarePolicyID,
+          qualificationReportDigest: acceptedCapabilities.qualificationReportDigest,
+          acceptedDevicePublicKey: responseKey
+        )
+      else {
+        throw KagemushaDeviceLifecycleBridgeErrorV1.invalidContract(
+          "KAGEMUSHA response authenticator verification failed")
+      }
+    }
+    return result
   }
 
   static func withEndpointForTests(
@@ -226,8 +318,8 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
       }
 
       static func create() -> NativeEndpoint? {
-        // TODO: ship these optional symbols only with an audited device service that provides
-        // the complete journal/counter/outbox contract; App Attest by itself is insufficient.
+        // Qualified product builds supply these symbols only through an audited device service
+        // with the complete journal/counter/outbox contract; App Attest alone is insufficient.
         let (handle, _) = NoritoBridgeLoader.openHandle()
         guard let handle,
           let capabilitiesSymbol = dlsym(
@@ -354,7 +446,7 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
       }
       return KagemushaDeviceLifecycleCapabilitiesV1(
         hardwarePolicyID: policy,
-        attestationDigest: attestation
+        qualificationReportDigest: attestation
       )
     }
 
@@ -437,10 +529,10 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
       }
       if status == .success {
         guard !payload.isEmpty,
-          !authenticator.isEmpty,
+          authenticator.count == maximumAuthenticatorBytes,
           authenticator.contains(where: { $0 != 0 })
         else {
-          throw invalid("successful response is unauthenticated")
+          throw invalid("successful response requires one exact 64-byte authenticator")
         }
       } else if !payload.isEmpty || !authenticator.isEmpty {
         throw invalid("failed response exposed bytes")
@@ -580,6 +672,64 @@ public final class KagemushaDeviceLifecycleBridgeV1 {
         return Int(value)
       }
     }
+  }
+}
+
+private enum KagemushaDeviceNativeResponseAuthenticatorVerifierV1 {
+  #if canImport(Darwin)
+    private typealias VerifyFn = @convention(c) (
+      UnsafePointer<UInt8>?, Int, UInt8,
+      UnsafePointer<UInt8>?, Int,
+      UnsafePointer<UInt8>?, Int,
+      UnsafePointer<UInt8>?, Int,
+      UnsafePointer<UInt8>?, Int
+    ) -> Int32
+
+    private static let function: VerifyFn? = {
+      let (handle, _) = NoritoBridgeLoader.openHandle()
+      guard let handle,
+        let symbol = dlsym(
+          handle,
+          "connect_norito_kagemusha_device_response_authenticator_v1_verify"
+        )
+      else { return nil }
+      return unsafeBitCast(symbol, to: VerifyFn.self)
+    }()
+  #endif
+
+  static func verify(
+    response: Data,
+    operation: KagemushaDeviceLifecycleOperationV1,
+    requestID: Data,
+    hardwarePolicyID: Data,
+    qualificationReportDigest: Data,
+    acceptedDevicePublicKey: Data?
+  ) -> Bool {
+    #if canImport(Darwin)
+      guard let function else { return false }
+      let key = acceptedDevicePublicKey ?? Data()
+      return response.withUnsafeBytes { responseRaw in
+        requestID.withUnsafeBytes { requestRaw in
+          hardwarePolicyID.withUnsafeBytes { policyRaw in
+            qualificationReportDigest.withUnsafeBytes { qualificationRaw in
+              key.withUnsafeBytes { keyRaw in
+                function(
+                  responseRaw.bindMemory(to: UInt8.self).baseAddress, response.count,
+                  operation.rawValue,
+                  requestRaw.bindMemory(to: UInt8.self).baseAddress, requestID.count,
+                  policyRaw.bindMemory(to: UInt8.self).baseAddress, hardwarePolicyID.count,
+                  qualificationRaw.bindMemory(to: UInt8.self).baseAddress,
+                  qualificationReportDigest.count,
+                  keyRaw.bindMemory(to: UInt8.self).baseAddress, key.count
+                ) == 0
+              }
+            }
+          }
+        }
+      }
+    #else
+      return false
+    #endif
   }
 }
 

@@ -1,14 +1,12 @@
 //! Deterministic, non-shipping Kagemusha V1 consensus fixtures.
 
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
     NetworkId,
-    block::{
-        BlockHeader,
-        consensus_v2::{SumeragiV2GenesisContextParameters, ValidatorPower},
+    block::consensus_v2::{SumeragiV2GenesisContextParameters, ValidatorPower},
+    isi::kagemusha_v1::{
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
+        KagemushaMintFinalityEpochRosterV1, KagemushaMintFinalityGenesisParametersV1,
     },
-    isi::kagemusha_v1::{KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1},
-    peer::PeerId,
 };
 
 /// Build real, canonically encoded paired-Pasta public keys aligned with `roster`.
@@ -21,12 +19,10 @@ pub(crate) fn mint_finality_roster(
         .iter()
         .enumerate()
         .map(|(index, validator)| {
-            let seed_byte = 0xA0_u8.wrapping_add(
-                u8::try_from(index).expect("test validator index fits in one byte"),
-            );
+            let seed_byte = 0xA0_u8
+                .wrapping_add(u8::try_from(index).expect("test validator index fits in one byte"));
             crate::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                 &[seed_byte; 32],
-                network_id,
                 epoch,
                 validator.validator.clone(),
             )
@@ -41,6 +37,46 @@ pub(crate) fn mint_finality_roster(
     };
     fixture.validate().expect("valid test mint-finality roster");
     fixture
+}
+
+/// Build a real networkless signed-genesis template aligned with `roster`.
+pub(crate) fn mint_finality_template(
+    epoch: u64,
+    roster: &[ValidatorPower],
+) -> KagemushaMintFinalityEpochRosterTemplateV1 {
+    let validators = roster
+        .iter()
+        .enumerate()
+        .map(|(index, validator)| {
+            let seed_byte = 0xA0_u8
+                .wrapping_add(u8::try_from(index).expect("test validator index fits in one byte"));
+            crate::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                &[seed_byte; 32],
+                epoch,
+                validator.validator.clone(),
+            )
+            .expect("derive deterministic paired-Pasta test validator keys")
+        })
+        .collect();
+    let template = KagemushaMintFinalityEpochRosterTemplateV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
+        epoch,
+        validators,
+    };
+    template
+        .validate()
+        .expect("valid test mint-finality roster template");
+    template
+}
+
+/// Build mandatory signed Kagemusha genesis parameters for a closed roster.
+pub(crate) fn mint_finality_genesis_parameters(
+    roster: &[ValidatorPower],
+) -> KagemushaMintFinalityGenesisParametersV1 {
+    KagemushaMintFinalityGenesisParametersV1 {
+        epoch_roster: mint_finality_template(0, roster),
+        next_epoch_roster: None,
+    }
 }
 
 /// Build the roster and its self-authenticating canonical identifier.
@@ -58,22 +94,5 @@ pub(crate) fn mint_finality_roster_and_id(
 
 /// Build a closed four-validator signed-genesis parameter fixture.
 pub(crate) fn genesis_context_parameters() -> SumeragiV2GenesisContextParameters {
-    let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
-        Hash::new(b"Kagemusha V1 Core test genesis"),
-    ));
-    let mut roster = (1_u8..=4)
-        .map(|seed| {
-            let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
-                .expect("derive deterministic consensus test key");
-            ValidatorPower {
-                validator: PeerId::new(key_pair.public_key().clone()),
-                power: 1,
-            }
-        })
-        .collect::<Vec<_>>();
-    roster.sort_by(|left, right| left.validator.cmp(&right.validator));
-    SumeragiV2GenesisContextParameters::recommended(
-        mint_finality_roster(network_id, 0, &roster),
-        None,
-    )
+    SumeragiV2GenesisContextParameters::recommended()
 }

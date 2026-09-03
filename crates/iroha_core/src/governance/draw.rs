@@ -123,6 +123,7 @@ fn derive_body_plan(
     for assignment_cap in minimum_cap..=maximum_cap {
         if let Some(plan) = try_derive_body_plan_with_cap(
             gov_cfg,
+            epoch,
             candidates,
             bodies,
             &rankings,
@@ -140,6 +141,7 @@ fn derive_body_plan(
 #[allow(clippy::too_many_arguments)]
 fn try_derive_body_plan_with_cap(
     gov_cfg: &Governance,
+    epoch: u64,
     candidates: &[AccountId],
     bodies: &[ParliamentBody],
     rankings: &BTreeMap<ParliamentBody, Vec<AccountId>>,

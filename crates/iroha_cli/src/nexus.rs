@@ -11,12 +11,12 @@ use iroha::data_model::nexus::{
 };
 use iroha_core::private_settlement::{
     PrivateSettlementAuditEvaluationV1, PrivateSettlementAuditPolicyEvaluatorV1,
-    SoftwarePrivateSettlementAuditorCredentialsV1,
+    SoftwarePrivateSettlementAuditorKeyringCredentialsV1,
 };
 use iroha_crypto::{Hash, KeyPair};
 use iroha_torii_shared::private_settlement_api::{
-    PrivateSettlementAuditApprovalRequestV1, PrivateSettlementBundleSubmitRequestV1,
-    PrivateSettlementLegUploadRequestV1,
+    PrivateSettlementAuditApprovalRequestV1, PrivateSettlementAuditorCapsuleRequestV1,
+    PrivateSettlementBundleSubmitRequestV1, PrivateSettlementLegUploadRequestV1,
 };
 use norito::json::{Map, Value};
 use std::{
@@ -29,6 +29,7 @@ use url::Url;
 
 use self::private_settlement_online_auditor::{
     PrivateSettlementAuditorBusinessPolicyV1, coordinate_private_settlement_online_auditor_v1,
+    load_private_settlement_audit_policy_v1,
     load_private_settlement_auditor_business_policy_v1, load_private_settlement_auditor_secret_v1,
     load_private_settlement_committee_authority_v1, load_private_settlement_pool_governance_v1,
 };
@@ -83,7 +84,7 @@ pub enum PrivateSettlementCommand {
     /// Fetch the restricted proof view as an exact committee identity
     CommitteeProof(PrivateSettlementDigestArgs),
     /// Fetch the encrypted capsule as an exact governed auditor identity
-    AuditCapsule(PrivateSettlementDigestArgs),
+    AuditCapsule(PrivateSettlementAuditCapsuleArgs),
     /// Submit one purpose-separated auditor approval
     AuditApproval(PrivateSettlementAuditApprovalArgs),
     /// Fetch, decrypt, decide, sign, and quorum-submit one auditor approval
@@ -182,6 +183,16 @@ pub struct PrivateSettlementDigestArgs {
 }
 
 #[derive(clap::Args, Debug)]
+pub struct PrivateSettlementAuditCapsuleArgs {
+    /// Exact leg payload digest.
+    #[arg(long)]
+    pub payload_digest: String,
+    /// Absolute owner-only current governed auditor-policy file.
+    #[arg(long, value_name = "PATH")]
+    pub audit_policy: PathBuf,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct PrivateSettlementAuditApprovalArgs {
     /// Exact leg payload digest.
     #[arg(long)]
@@ -227,9 +238,15 @@ pub struct PrivateSettlementAuditOnlineArgs {
     /// Absolute owner-only restricted Norito JSON pool-governance file.
     #[arg(long, value_name = "PATH")]
     pub pool_governance: PathBuf,
+    /// Absolute owner-only current governed auditor-policy file.
+    #[arg(long, value_name = "PATH")]
+    pub audit_policy: PathBuf,
     /// Absolute owner-only Norito JSON hybrid decryption-key file.
     #[arg(long, value_name = "PATH")]
     pub auditor_decryption_key_file: PathBuf,
+    /// Retired owner-only hybrid decryption-key file retained for audit; repeat as needed.
+    #[arg(long = "auditor-retired-decryption-key-file", value_name = "PATH")]
+    pub auditor_retired_decryption_key_files: Vec<PathBuf>,
     /// Absolute owner-only strict Norito JSON business-policy file.
     #[arg(long, value_name = "PATH")]
     pub business_policy: PathBuf,
@@ -393,8 +410,11 @@ fn private_settlement<C: RunContext>(
         PrivateSettlementCommand::AuditCapsule(args) => {
             let role_key = private_settlement_operator_key(context)?;
             let payload_digest = private_settlement_digest(&args.payload_digest, "payload digest")?;
+            let request = PrivateSettlementAuditorCapsuleRequestV1 {
+                audit_policy: load_private_settlement_audit_policy_v1(&args.audit_policy)?,
+            };
             context.print_data(
-                &client.private_settlement_auditor_capsule_v1(payload_digest, &role_key)?,
+                &client.private_settlement_auditor_capsule_v1(payload_digest, &request, &role_key)?,
             )
         }
         PrivateSettlementCommand::AuditApproval(args) => {
@@ -415,12 +435,25 @@ fn private_settlement<C: RunContext>(
                 load_private_settlement_committee_authority_v1(&args.committee_authority)?;
             let pool_governance =
                 load_private_settlement_pool_governance_v1(&args.pool_governance)?;
-            let decryption_secret =
-                load_private_settlement_auditor_secret_v1(&args.auditor_decryption_key_file)?;
+            let audit_policy = load_private_settlement_audit_policy_v1(&args.audit_policy)?;
+            let mut decryption_secrets = Vec::with_capacity(
+                1_usize.saturating_add(args.auditor_retired_decryption_key_files.len()),
+            );
+            decryption_secrets.push(load_private_settlement_auditor_secret_v1(
+                &args.auditor_decryption_key_file,
+            )?);
+            for retired_path in &args.auditor_retired_decryption_key_files {
+                decryption_secrets.push(load_private_settlement_auditor_secret_v1(retired_path)?);
+            }
             let business_policy =
                 load_private_settlement_auditor_business_policy_v1(&args.business_policy)?;
-            let credentials =
-                SoftwarePrivateSettlementAuditorCredentialsV1::new(&decryption_secret, &role_key);
+            let credentials = SoftwarePrivateSettlementAuditorKeyringCredentialsV1::new(
+                &decryption_secrets,
+                &role_key,
+            )
+            .map_err(|_| {
+                eyre!("private-settlement auditor decryption-key keyring is invalid")
+            })?;
             let request_signer = BorrowedKeyPairIdentityRequestSignerV1::new(&role_key);
             let evaluator = PrivateSettlementAuditDecisionPolicyV1 {
                 decision: args.decision,
@@ -431,6 +464,7 @@ fn private_settlement<C: RunContext>(
                 &args.committee_endpoints,
                 &committee_authority,
                 payload_digest,
+                &audit_policy,
                 &pool_governance,
                 &credentials,
                 &request_signer,
@@ -966,7 +1000,9 @@ mod tests {
             "committee_authority",
             "payload_digest",
             "pool_governance",
+            "audit_policy",
             "auditor_decryption_key_file",
+            "auditor_retired_decryption_key_files",
             "business_policy",
             "decision",
         ] {

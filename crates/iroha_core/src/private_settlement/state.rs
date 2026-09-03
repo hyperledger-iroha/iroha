@@ -6,16 +6,26 @@
 //! compact successor frontier needed for deterministic crash recovery and
 //! atomic global application.
 
-use crate::privacy_engines::{
-    atomic_private_settlement::{
-        atomic_private_settlement_program_id_v1, verify_atomic_private_settlement_v1,
-    },
-    proof_managed_accumulator::{
-        append_proof_managed_commitments_v1, build_proof_managed_frontier_v1,
-        validate_proof_managed_frontier_v1,
+use super::{
+    global_state::PrivateSettlementPoolKeyV1,
+    sidecar_store::{
+        PrivateSettlementAuditorSidecarViewV1, PrivateSettlementAuthenticatedAuditorViewV1,
+        PrivateSettlementFileSidecarStoreV1, PrivateSettlementSidecarStoreErrorV1,
     },
 };
-use iroha_crypto::Hash;
+use crate::{
+    privacy_engines::{
+        atomic_private_settlement::{
+            atomic_private_settlement_program_id_v1, verify_atomic_private_settlement_v1,
+        },
+        proof_managed_accumulator::{
+            append_proof_managed_commitments_v1, build_proof_managed_frontier_v1,
+            validate_proof_managed_frontier_v1,
+        },
+    },
+    state::StateView,
+};
+use iroha_crypto::{Hash, PublicKey};
 #[cfg(test)]
 use iroha_data_model::nexus::PrivateSettlementPoolGovernanceV1;
 use iroha_data_model::{
@@ -32,9 +42,10 @@ use iroha_data_model::{
         PrivacyPoolProgramNamespaceV1, PrivacyProtocolIdV1, PrivacyRootV1,
     },
 };
+use mv::storage::StorageReadOnly as _;
 use norito::codec::{Decode, Encode};
 use norito::derive::{JsonDeserialize, JsonSerialize};
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, convert::TryFrom as _};
 use thiserror::Error;
 
 const VERIFIED_LEG_DIGEST_DOMAIN_V1: &[u8] = b"iroha:nexus:private-settlement:verified-leg:v1\0";
@@ -262,6 +273,40 @@ impl PrivateSettlementPoolGovernanceProjectionV1 {
         current.lifecycle.is_active_at(height).then_some(current)
     }
 
+    /// Bind one complete restricted policy to the exact governance revision
+    /// effective at `height`.
+    ///
+    /// Unlike [`Self::validate_against_policy_at`], this also accepts a
+    /// superseded revision retained in the public lineage. It is used only for
+    /// authorized retention reads, where the historical sidecar policy must be
+    /// proven against the revision that governed its authority context while a
+    /// separately supplied current policy controls present-day access.
+    fn policy_revision_at(
+        &self,
+        policy: &PrivateSettlementAuditPolicyV1,
+        height: u64,
+    ) -> Result<PrivateSettlementPoolGovernanceRevisionV1, PrivateSettlementStateErrorV1> {
+        policy
+            .validate()
+            .map_err(|_| PrivateSettlementStateErrorV1::PoolGovernance)?;
+        let policy_digest = policy
+            .computed_policy_digest()
+            .map_err(|_| PrivateSettlementStateErrorV1::CanonicalEncoding)?;
+        let revision = self
+            .revision_at(height)
+            .ok_or(PrivateSettlementStateErrorV1::PoolGovernance)?;
+        if self.route.dataspace_id != policy.body.dataspace_id
+            || revision.audit_policy_digest != policy.policy_digest
+            || revision.audit_policy_digest != policy_digest
+            || revision.audit_key_epoch != policy.body.key_epoch
+            || revision.lifecycle.activation_height < policy.body.activation_height
+            || !policy.is_active_at(height)
+        {
+            return Err(PrivateSettlementStateErrorV1::PoolGovernance);
+        }
+        Ok(revision)
+    }
+
     /// Materialize a replacement while preserving the complete prior lineage.
     pub(crate) fn with_replacement(
         &self,
@@ -327,6 +372,113 @@ impl PrivateSettlementPoolGovernanceProjectionV1 {
         }
         Ok(())
     }
+}
+
+/// Authorize one retained capsule against an exact governance projection.
+pub(super) fn authorize_private_settlement_auditor_view_against_governance_v1(
+    governance: &PrivateSettlementPoolGovernanceProjectionV1,
+    network_id: &iroha_data_model::NetworkId,
+    access_policy: &PrivateSettlementAuditPolicyV1,
+    signing_key: &PublicKey,
+    authoritative_height: u64,
+    view: PrivateSettlementAuditorSidecarViewV1,
+) -> Result<PrivateSettlementAuthenticatedAuditorViewV1, PrivateSettlementSidecarStoreErrorV1> {
+    let unavailable = || PrivateSettlementSidecarStoreErrorV1::Unavailable;
+    if &view.manifest.network_id != network_id
+        || view.statement.network_id != *network_id
+        || governance.route != view.statement.route
+        || governance.pool_id != view.statement.pool_id
+    {
+        return Err(unavailable());
+    }
+    let historical_revision = governance
+        .policy_revision_at(&view.policy, view.manifest.authority_context_height)
+        .map_err(|_| unavailable())?;
+    let access_revision = governance
+        .policy_revision_at(access_policy, authoritative_height)
+        .map_err(|_| unavailable())?;
+    let same_revision = access_revision.lifecycle.governance_revision
+        == historical_revision.lifecycle.governance_revision
+        && access_policy == &view.policy;
+    let successor_revision = access_revision.lifecycle.governance_revision
+        > historical_revision.lifecycle.governance_revision
+        && access_policy.body.policy_id == view.policy.body.policy_id
+        && access_policy.body.revision > view.policy.body.revision
+        && access_policy.body.key_epoch > view.policy.body.key_epoch;
+    if !same_revision && !successor_revision {
+        return Err(unavailable());
+    }
+    let auditor = access_policy
+        .body
+        .auditors
+        .iter()
+        .find(|auditor| &auditor.signing_key == signing_key)
+        .ok_or_else(unavailable)?;
+    if view
+        .authority
+        .validators
+        .iter()
+        .any(|validator| validator.public_key() == signing_key)
+        || !view
+            .policy
+            .body
+            .auditors
+            .iter()
+            .any(|historical| historical.auditor_id == auditor.auditor_id)
+        || !view
+            .audit_capsule
+            .wrapped_deks
+            .iter()
+            .any(|wrapped| wrapped.auditor_id == auditor.auditor_id)
+    {
+        return Err(unavailable());
+    }
+    Ok(PrivateSettlementAuthenticatedAuditorViewV1 {
+        auditor_id: auditor.auditor_id.clone(),
+        access_policy: access_policy.clone(),
+        view,
+    })
+}
+
+/// Fetch one encrypted auditor capsule using only state-bound authorization.
+///
+/// The caller supplies the complete restricted policy as evidence, never as
+/// authority. This operation derives height and network from one committed
+/// [`StateView`], reads exactly one content-addressed sidecar, binds both its
+/// historical policy and the supplied current policy to the same WSV
+/// governance lineage, and maps the authenticated signing key to one stable
+/// auditor identity. Missing and unauthorized records intentionally share the
+/// same unavailable result.
+///
+/// # Errors
+///
+/// Returns unavailable for every authorization denial, or a redacted local
+/// sidecar corruption/backend error.
+pub fn fetch_private_settlement_auditor_view_v1(
+    state: &StateView<'_>,
+    store: &PrivateSettlementFileSidecarStoreV1,
+    digest: Hash,
+    access_policy: &PrivateSettlementAuditPolicyV1,
+    signing_key: &PublicKey,
+) -> Result<PrivateSettlementAuthenticatedAuditorViewV1, PrivateSettlementSidecarStoreErrorV1> {
+    let authoritative_height = u64::try_from(state.block_hashes.len())
+        .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Unavailable)?;
+    let view = store.auditor_material_v1(digest, authoritative_height)?;
+    let key = PrivateSettlementPoolKeyV1::new(view.statement.route, view.statement.pool_id)
+        .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Unavailable)?;
+    let governance = state
+        .world
+        .private_settlement_governance
+        .get(&key)
+        .ok_or(PrivateSettlementSidecarStoreErrorV1::Unavailable)?;
+    authorize_private_settlement_auditor_view_against_governance_v1(
+        governance,
+        &state.network_id,
+        access_policy,
+        signing_key,
+        authoritative_height,
+        view,
+    )
 }
 
 /// Persisted compact frontier for one explicitly governed settlement pool.
@@ -954,7 +1106,11 @@ where
     }
 
     let successor = pool_state.successor(&payload.statement.output_commitments)?;
-    if payload.delta.new_root != successor.root || payload.delta.new_epoch != successor.epoch {
+    if payload.statement.new_root != successor.root
+        || payload.statement.new_epoch != successor.epoch
+        || payload.delta.new_root != successor.root
+        || payload.delta.new_epoch != successor.epoch
+    {
         return Err(PrivateSettlementStateErrorV1::CallerSelectedSuccessor);
     }
     let manifest_digest = manifest

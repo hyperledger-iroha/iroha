@@ -7333,13 +7333,40 @@ mod tests {
                 power: 1,
             })
             .collect::<Vec<_>>();
+        let network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+            b"g13p historical roster genesis",
+        )));
+        let kagemusha_mint_finality_epoch_roster =
+            iroha::data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+                version: iroha::data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
+                network_id,
+                epoch: 7,
+                validators: roster
+                    .iter()
+                    .enumerate()
+                    .map(|(index, validator)| {
+                        iroha::data_model::isi::kagemusha_v1::KagemushaMintFinalityValidatorKeysV1 {
+                            validator: validator.validator.clone(),
+                            eq_proof_public_key: [u8::try_from(index + 1)
+                                .expect("small fixture roster");
+                                32],
+                            ep_proof_public_key: [u8::try_from(index + 17)
+                                .expect("small fixture roster");
+                                32],
+                        }
+                    })
+                    .collect(),
+            };
+        let kagemusha_mint_finality_epoch_id = kagemusha_mint_finality_epoch_roster
+            .finality_epoch_id()
+            .expect("valid KAGEMUSHA mint-finality fixture roster");
         HeightContext {
-            network_id: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
-                b"g13p historical roster genesis",
-            ))),
+            network_id,
             protocol_version: PROTOCOL_VERSION,
             height: 1,
             epoch: 7,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             epoch_end_height: 100,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Npos,

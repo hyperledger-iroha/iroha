@@ -211,7 +211,7 @@ test('syncOpenApi rejects an empty generated stub before tracked writes', async 
   await assert.rejects(() => access(join(versionsDir, 'current')));
 });
 
-test('syncOpenApi rejects duplicate spec members before tracked writes', async () => {
+test('syncOpenApi rejects duplicate generated spec members before tracked writes', async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), 'sync-openapi-duplicate-spec-'));
   const outputDir = join(tempRoot, 'static', 'openapi');
   const versionsDir = join(outputDir, 'versions');

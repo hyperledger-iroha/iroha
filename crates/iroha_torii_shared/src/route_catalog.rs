@@ -1173,21 +1173,21 @@ fn validate_feature_name(
         });
     }
 }
-/// Universal Kagemusha protocol route descriptors.
+/// Universal KAGEMUSHA protocol route descriptors.
 pub mod kagemusha {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
         RouteDescriptor, RouteEffect, RouteProjections,
     };
-    /// Fetch the node's universal Kagemusha readiness contract.
+    /// Fetch the node's universal KAGEMUSHA readiness contract.
     pub const READINESS_PATH: &str = "/v1/kagemusha/readiness";
-    /// Submit a signed Kagemusha top-up operation.
+    /// Submit a signed KAGEMUSHA top-up operation.
     pub const TOP_UP_PATH: &str = "/v1/kagemusha/top-up";
-    /// Submit a signed Kagemusha redemption operation.
+    /// Submit a signed KAGEMUSHA redemption operation.
     pub const REDEEM_PATH: &str = "/v1/kagemusha/redeem";
-    /// Fetch one Kagemusha operation by its canonical operation ID.
+    /// Fetch one KAGEMUSHA operation by its canonical operation ID.
     pub const OPERATION_PATH: &str = "/v1/kagemusha/operations/{operation_id}";
-    /// Descriptor for universal Kagemusha readiness discovery.
+    /// Descriptor for universal KAGEMUSHA readiness discovery.
     pub const READINESS: RouteDescriptor = RouteDescriptor::new(
         "kagemusha.readiness",
         HttpMethod::Get,
@@ -1200,7 +1200,7 @@ pub mod kagemusha {
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
-    /// Descriptor for Kagemusha top-up submission.
+    /// Descriptor for KAGEMUSHA top-up submission.
     pub const TOP_UP: RouteDescriptor = RouteDescriptor::new(
         "kagemusha.top_up",
         HttpMethod::Post,
@@ -1214,7 +1214,7 @@ pub mod kagemusha {
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
-    /// Descriptor for Kagemusha redemption submission.
+    /// Descriptor for KAGEMUSHA redemption submission.
     pub const REDEEM: RouteDescriptor = RouteDescriptor::new(
         "kagemusha.redeem",
         HttpMethod::Post,
@@ -1228,7 +1228,7 @@ pub mod kagemusha {
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
-    /// Descriptor for reading one Kagemusha operation.
+    /// Descriptor for reading one KAGEMUSHA operation.
     pub const OPERATION: RouteDescriptor = RouteDescriptor::new(
         "kagemusha.operation",
         HttpMethod::Get,
@@ -1241,7 +1241,7 @@ pub mod kagemusha {
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
-    /// Canonical first-release Kagemusha API catalog.
+    /// Canonical first-release KAGEMUSHA API catalog.
     pub const ROUTES: &[RouteDescriptor] = &[READINESS, TOP_UP, REDEEM, OPERATION];
 }
 /// Alias lookup, private evaluation, and recipient-resolution descriptors.

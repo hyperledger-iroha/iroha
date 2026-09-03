@@ -707,6 +707,7 @@ mod tests {
             Parameter,
             system::{SumeragiConsensusMode, SumeragiNposParameters},
         },
+        peer::PeerId,
     };
     use iroha_genesis::GenesisBuilder;
 
@@ -877,14 +878,21 @@ mod tests {
                 }
             })
             .collect::<Vec<_>>();
-        let reviewed = GenesisBuilder::new_without_executor(configs[0].common.chain.clone(), ".")
-            .append_parameter(Parameter::Custom(
-                SumeragiNposParameters::default().into_custom_parameter(),
-            ))
-            .build_raw()
-            .with_chain_discriminant(*configs[0].common.chain_discriminant.value())
-            .with_consensus_mode(SumeragiConsensusMode::Npos)
-            .with_consensus_meta();
+        let reviewed = super::super::complete_test_genesis_builder_for_peers(
+            GenesisBuilder::new_without_executor(configs[0].common.chain.clone(), ".")
+                .append_parameter(Parameter::Custom(
+                    SumeragiNposParameters::default().into_custom_parameter(),
+                )),
+            validator_bindings
+                .iter()
+                .map(|binding| PeerId::new(binding.public_key.clone()))
+                .collect(),
+        )
+        .build_raw()
+        .expect("complete prepared-bundle test genesis")
+        .with_chain_discriminant(*configs[0].common.chain_discriminant.value())
+        .with_consensus_mode(SumeragiConsensusMode::Npos)
+        .with_consensus_meta();
         let reviewed_bytes =
             norito::json::to_vec_pretty(&reviewed).expect("encode reviewed fixture manifest");
         let pre_sign_value = expected_pre_sign_value(&reviewed_bytes, &validator_bindings)

@@ -7,10 +7,10 @@ use std::io;
 use std::marker::PhantomData;
 use std::ops::{Add, Deref, DerefMut, Index, IndexMut, Mul, Range, RangeFrom, RangeFull, Sub};
 
-use crate::SerdeFormat;
 use crate::arithmetic::parallelize;
 use crate::helpers::SerdePrimeField;
 use crate::plonk::Assigned;
+use crate::SerdeFormat;
 
 #[cfg(feature = "multicore")]
 use crate::multicore::{
@@ -165,6 +165,59 @@ impl<F, B> Polynomial<F, B> {
 }
 
 impl<F: SerdePrimeField, B> Polynomial<F, B> {
+    /// Read exactly the configured number of canonical processed coefficients.
+    ///
+    /// The serialized length is checked before allocation. This deliberately
+    /// bypasses the legacy field reader, whose processed path unwraps I/O errors.
+    pub(crate) fn read_checked<R: io::Read>(
+        reader: &mut R,
+        format: SerdeFormat,
+        expected_len: usize,
+    ) -> io::Result<Self> {
+        if !matches!(format, SerdeFormat::Processed) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "checked polynomial reading requires Processed format",
+            ));
+        }
+        let mut encoded_len = [0_u8; 4];
+        reader.read_exact(&mut encoded_len)?;
+        let len = usize::try_from(u32::from_be_bytes(encoded_len)).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "polynomial length does not fit usize",
+            )
+        })?;
+        if len != expected_len {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "polynomial length does not match configured domain",
+            ));
+        }
+        let mut values = Vec::new();
+        values.try_reserve_exact(expected_len).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::OutOfMemory,
+                "cannot reserve polynomial coefficients",
+            )
+        })?;
+        for _ in 0..expected_len {
+            let mut repr = F::Repr::default();
+            reader.read_exact(repr.as_mut())?;
+            let value = Option::<F>::from(F::from_repr(repr)).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "noncanonical polynomial coefficient",
+                )
+            })?;
+            values.push(value);
+        }
+        Ok(Self {
+            values,
+            _marker: PhantomData,
+        })
+    }
+
     /// Reads polynomial from buffer using `SerdePrimeField::read`.
     pub(crate) fn read<R: io::Read>(reader: &mut R, format: SerdeFormat) -> Self {
         let mut poly_len = [0u8; 4];
@@ -208,6 +261,46 @@ impl<F: SerdePrimeField, B> Polynomial<F, B> {
         }
         Ok(())
     }
+}
+
+/// Read a polynomial vector with exact configured counts and per-polynomial lengths.
+pub(crate) fn read_polynomial_vec_checked<R: io::Read, F: SerdePrimeField, B>(
+    reader: &mut R,
+    format: SerdeFormat,
+    expected_count: usize,
+    expected_poly_len: usize,
+) -> io::Result<Vec<Polynomial<F, B>>> {
+    if !matches!(format, SerdeFormat::Processed) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "checked polynomial reading requires Processed format",
+        ));
+    }
+    let mut encoded_count = [0_u8; 4];
+    reader.read_exact(&mut encoded_count)?;
+    let count = usize::try_from(u32::from_be_bytes(encoded_count)).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "polynomial count does not fit usize",
+        )
+    })?;
+    if count != expected_count {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "polynomial vector count does not match configured columns",
+        ));
+    }
+    let mut polynomials = Vec::new();
+    polynomials.try_reserve_exact(expected_count).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::OutOfMemory,
+            "cannot reserve polynomial vector",
+        )
+    })?;
+    for _ in 0..expected_count {
+        polynomials.push(Polynomial::read_checked(reader, format, expected_poly_len)?);
+    }
+    Ok(polynomials)
 }
 
 /// Invert each polynomial in place for memory efficiency

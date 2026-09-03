@@ -1,7 +1,4 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use super::*;
 use axum::{
     Router,
     body::Body,
@@ -9,8 +6,11 @@ use axum::{
     routing::{delete, get},
 };
 use http_body_util::BodyExt as _;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 use tower::ServiceExt as _;
-use super::*;
 fn test_router(counter: Arc<AtomicUsize>) -> Router {
     Router::new()
         .route(

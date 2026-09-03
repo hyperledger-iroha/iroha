@@ -82,8 +82,8 @@ const PRIVATE_SETTLEMENT_OPERATION_CONTRACTS: [PrivateSettlementOperationContrac
     },
     PrivateSettlementOperationContract {
         path: "/v1/nexus/private-settlements/legs/{payload_digest}/audit-capsule",
-        method: "get",
-        request: None,
+        method: "post",
+        request: Some("#/components/schemas/PrivateSettlementAuditorCapsuleRequestV1"),
         success: "200",
         response: "#/components/schemas/PrivateSettlementAuditorCapsuleResponseV1",
         auth: PrivateSettlementAuthContract::Identity("governed_local_auditor"),
@@ -210,11 +210,13 @@ fn private_settlement_operations_are_typed_authenticated_and_redacted() {
         assert_eq!(operation["tags"][0].as_str(), Some("Nexus"));
         assert_eq!(
             operation["x-iroha-tool-effect"].as_str(),
-            Some(if contract.method == "get" {
-                "read"
-            } else {
-                "write"
-            })
+            Some(
+                if contract.method == "get" || contract.path.ends_with("/audit-capsule") {
+                    "read"
+                } else {
+                    "write"
+                }
+            )
         );
         match contract.request {
             Some(request) => {
@@ -494,6 +496,7 @@ fn private_settlement_top_level_v1_dtos_are_strict() {
                 "authoritative_height",
                 "manifest",
                 "audit_policy",
+                "access_audit_policy",
                 "committee_authority",
                 "statement",
                 "delta",
@@ -503,7 +506,14 @@ fn private_settlement_top_level_v1_dtos_are_strict() {
                 "responder_attestation",
             ][..],
         ),
-        ("PrivateSettlementAuditApprovalRequestV1", &["approval"][..]),
+        (
+            "PrivateSettlementAuditorCapsuleRequestV1",
+            &["audit_policy"][..],
+        ),
+        (
+            "PrivateSettlementAuditApprovalRequestV1",
+            &["audit_policy", "approval"][..],
+        ),
         (
             "PrivateSettlementAuditApprovalResponseV1",
             &[

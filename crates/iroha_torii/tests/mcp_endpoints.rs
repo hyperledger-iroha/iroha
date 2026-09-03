@@ -2019,7 +2019,7 @@ async fn mcp_jsonrpc_includes_universal_kagemusha_operations_for_operator_profil
     for name in expected {
         assert!(
             names.iter().any(|candidate| candidate == name),
-            "universal offline operation is missing from tools/list: {name}"
+            "universal KAGEMUSHA operation is missing from tools/list: {name}"
         );
     }
     assert!(names.iter().any(|name| name == "iroha.health"));

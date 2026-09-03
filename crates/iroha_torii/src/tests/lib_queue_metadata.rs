@@ -24,7 +24,7 @@ mod tests_queue_metadata {
                     reason: "non-canonical carrier".to_owned(),
                 },
                 "PRTRY:KAGEMUSHA_V1_OPERATION_CARRIER_REJECTED",
-                "Kagemusha V1 operation carrier failed canonical admission: non-canonical carrier",
+                "KAGEMUSHA V1 operation carrier failed canonical admission: non-canonical carrier",
             ),
             (
                 queue::Error::UnresolvedRoute {
@@ -48,7 +48,7 @@ mod tests_queue_metadata {
                     reason: "reverse owner missing".to_owned(),
                 },
                 "PRTRY:KAGEMUSHA_V1_OPERATION_INDEX_INCONSISTENT",
-                "Kagemusha V1 pending-operation index requires recovery: reverse owner missing",
+                "KAGEMUSHA V1 pending-operation index requires recovery: reverse owner missing",
             ),
         ];
         for (error, expected_code, expected_detail) in cases {
@@ -76,7 +76,7 @@ mod tests_queue_metadata {
             super::Error::queue_error_summary(&error),
             (
                 "kagemusha_v1_operation_id_conflict",
-                "Kagemusha V1 operation identifier is already pending",
+                "KAGEMUSHA V1 operation identifier is already pending",
             )
         );
         assert_eq!(

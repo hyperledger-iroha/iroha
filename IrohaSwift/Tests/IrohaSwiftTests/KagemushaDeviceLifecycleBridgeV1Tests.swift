@@ -38,21 +38,25 @@ final class KagemushaDeviceLifecycleBridgeV1Tests: XCTestCase {
     )
     XCTAssertEqual(
       KagemushaDeviceLifecycleOperationV1.allCases.map(\.rawValue),
-      (1...20).map(UInt8.init)
+      (1...27).map(UInt8.init)
     )
     XCTAssertEqual(
       KagemushaDeviceLifecycleOperationV1.allCases.map { String(describing: $0) },
       [
         "readActiveHardwareCredential",
+        "prepareAcceptanceIntent",
+        "recoverAcceptanceIntent",
+        "validateIntentReserveInboxAndIssueAcceptanceTicket",
+        "recoverAcceptanceTicket",
         "stageInboundPayment",
         "recoverStagedInboundPayment",
         "recoverInboundInboxPage",
         "prepareExactNextTransition",
         "recoverPreparedTransition",
         "abandonUncommittedPreparedTransition",
-        "commitVerifiedCandidate",
-        "recoverTerminalCommitCertificate",
-        "installFinalCommitWrapper",
+        "commitVerifiedCandidateAndSignTerminal",
+        "recoverTerminalOutcome",
+        "installTerminalEnvelope",
         "recoverInstalledEnvelopeOrStateProof",
         "signReceiveAcknowledgement",
         "releaseOutboxEntry",
@@ -60,9 +64,12 @@ final class KagemushaDeviceLifecycleBridgeV1Tests: XCTestCase {
         "prepareMintAuthorization",
         "recoverMintAuthorization",
         "verifyAuthorizationAndStageMintCredit",
-        "foldReceive",
+        "foldReceiveBatch",
         "readPendingCreditWatermark",
         "rotateHardwareEpoch",
+        "bootstrapAggregateState",
+        "recoverWalletSnapshot",
+        "createSignedPaymentRequest",
       ]
     )
     XCTAssertEqual(
@@ -76,8 +83,8 @@ final class KagemushaDeviceLifecycleBridgeV1Tests: XCTestCase {
         "oneUseSuccessorAuthorization",
         "rollbackResistantCounterAndJournal",
         "sealedTransitionRecovery",
-        "receiverBoundCreditCommit",
-        "rollbackResistantAcceptedCreditInbox",
+        "oneUseAcceptanceTickets",
+        "durableInboxReservation",
         "authenticatedInboundStaging",
         "authoritativeReplayRootRecovery",
         "senderOutboxReservation",
@@ -105,10 +112,12 @@ final class KagemushaDeviceLifecycleBridgeV1Tests: XCTestCase {
 
     for operation in KagemushaDeviceLifecycleOperationV1.allCases {
       endpoint.operation = operation
-      let result = try bridge.execute(
+      let result = try bridge.executeAuthenticated(
         operation: operation,
         requestID: fixed(0x11, count: 32),
-        canonicalCommand: Data([1, 2, 3])
+        canonicalCommand: Data([1, 2, 3]),
+        acceptedDevicePublicKey: operation == .readActiveHardwareCredential
+          ? nil : devicePublicKey()
       )
       XCTAssertEqual(result.status, .success)
       XCTAssertEqual(result.payload, Data([4, 5]))
@@ -150,7 +159,7 @@ final class KagemushaDeviceLifecycleBridgeV1Tests: XCTestCase {
       )
     }
 
-    for unknownOperation: UInt8 in [0, 25] {
+    for unknownOperation: UInt8 in [0, 28, 255] {
       var response = KagemushaDeviceLifecycleBridgeV1.Codec
         .encodeResponseForTests(
           operation: .stageInboundPayment,
@@ -188,7 +197,7 @@ final class KagemushaDeviceLifecycleBridgeV1Tests: XCTestCase {
 
     let recoveryRequired = KagemushaDeviceLifecycleBridgeV1.Codec
       .encodeResponseForTests(
-        operation: .recoverTerminalCommitCertificate,
+        operation: .recoverTerminalOutcome,
         status: .recoveryRequired,
         requestID: fixed(0x11, count: 32),
         payload: Data(),
@@ -197,7 +206,7 @@ final class KagemushaDeviceLifecycleBridgeV1Tests: XCTestCase {
     XCTAssertEqual(
       try KagemushaDeviceLifecycleBridgeV1.Codec.decodeResponse(
         recoveryRequired,
-        expectedOperation: .recoverTerminalCommitCertificate,
+        expectedOperation: .recoverTerminalOutcome,
         expectedRequestID: fixed(0x11, count: 32)
       ).status,
       .recoveryRequired
@@ -227,10 +236,11 @@ final class KagemushaDeviceLifecycleBridgeV1Tests: XCTestCase {
       try KagemushaDeviceLifecycleBridgeV1
       .withEndpointForTests(endpoint)
     XCTAssertThrowsError(
-      try bridge.execute(
-        operation: .recoverTerminalCommitCertificate,
+      try bridge.executeAuthenticated(
+        operation: .recoverTerminalOutcome,
         requestID: fixed(0x11, count: 32),
-        canonicalCommand: Data([1])
+        canonicalCommand: Data([1]),
+        acceptedDevicePublicKey: devicePublicKey()
       ))
   }
 
@@ -265,10 +275,14 @@ final class KagemushaDeviceLifecycleBridgeV1Tests: XCTestCase {
   private func fixed(_ value: UInt8, count: Int) -> Data {
     Data(repeating: value, count: count)
   }
+
+  private func devicePublicKey() -> Data {
+    Data([4]) + Data(repeating: 0x55, count: 64)
+  }
 }
 
 private final class FakeEndpoint: KagemushaDeviceLifecycleEndpointV1 {
-  var operation: KagemushaDeviceLifecycleOperationV1 = .recoverTerminalCommitCertificate
+  var operation: KagemushaDeviceLifecycleOperationV1 = .recoverTerminalOutcome
   var authenticator = Data(repeating: 0x44, count: 64)
   var capabilityFrame = try! KagemushaDeviceLifecycleBridgeV1.Codec
     .encodeCapabilitiesForTests(
@@ -289,6 +303,17 @@ private final class FakeEndpoint: KagemushaDeviceLifecycleEndpointV1 {
       payload: Data([4, 5]),
       authenticator: authenticator
     )
+  }
+
+  func verifyResponseAuthenticator(
+    response _: Data,
+    operation _: KagemushaDeviceLifecycleOperationV1,
+    requestID _: Data,
+    hardwarePolicyID _: Data,
+    qualificationReportDigest _: Data,
+    acceptedDevicePublicKey _: Data?
+  ) -> Bool {
+    authenticator.count == 64 && authenticator.contains(where: { $0 != 0 })
   }
 }
 

@@ -1979,6 +1979,11 @@ impl TieredStateBackend {
             world.private_settlement_outputs
         );
         collect_map!(
+            TieredSegment::PrivateSettlementStagedLocks,
+            PrivateSettlementStagedLock,
+            world.private_settlement_staged_locks
+        );
+        collect_map!(
             TieredSegment::PrivateSettlementReceipts,
             PrivateSettlementReceipt,
             world.private_settlement_receipts
@@ -2661,7 +2666,7 @@ mod measured_bytes_impls {
         private_settlement::{
             global_state::{
                 PrivateSettlementFinalizationReferenceV1, PrivateSettlementOutputRecordV1,
-                PrivateSettlementRootProvenanceV1,
+                PrivateSettlementRootProvenanceV1, PrivateSettlementStagedLockRecordV1,
             },
             state::{PrivateSettlementPoolGovernanceProjectionV1, PrivateSettlementPoolStateV1},
         },
@@ -2854,6 +2859,7 @@ mod measured_bytes_impls {
         PrivateSettlementPoolStateV1,
         PrivateSettlementRootProvenanceV1,
         PrivateSettlementOutputRecordV1,
+        PrivateSettlementStagedLockRecordV1,
         PrivateSettlementReceiptV1,
         PrivateSettlementAbortReceiptV1,
         KagemushaReservePoolV1,
@@ -4196,6 +4202,7 @@ enum TieredSegment {
     PrivateSettlementRoots,
     PrivateSettlementNullifiers,
     PrivateSettlementOutputs,
+    PrivateSettlementStagedLocks,
     PrivateSettlementReceipts,
     PrivateSettlementAborts,
     Proofs,
@@ -4278,6 +4285,7 @@ impl TieredSegment {
             TieredSegment::PrivateSettlementRoots => "private_settlement_roots",
             TieredSegment::PrivateSettlementNullifiers => "private_settlement_nullifiers",
             TieredSegment::PrivateSettlementOutputs => "private_settlement_outputs",
+            TieredSegment::PrivateSettlementStagedLocks => "private_settlement_staged_locks",
             TieredSegment::PrivateSettlementReceipts => "private_settlement_receipts",
             TieredSegment::PrivateSettlementAborts => "private_settlement_aborts",
             TieredSegment::Proofs => "proofs",
@@ -4313,9 +4321,7 @@ impl TieredSegment {
             TieredSegment::KagemushaReserveOperations => "kagemusha_reserve_operations",
             TieredSegment::KagemushaMintCreditOperations => "kagemusha_mint_credit_operations",
             TieredSegment::KagemushaIssuanceOperations => "kagemusha_issuance_operations",
-            TieredSegment::KagemushaRedemptionIdOperations => {
-                "kagemusha_redemption_id_operations"
-            }
+            TieredSegment::KagemushaRedemptionIdOperations => "kagemusha_redemption_id_operations",
             TieredSegment::KagemushaTerminalNullifierOperations => {
                 "kagemusha_terminal_nullifier_operations"
             }
@@ -4374,6 +4380,7 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "private_settlement_roots" => TieredSegment::PrivateSettlementRoots,
             "private_settlement_nullifiers" => TieredSegment::PrivateSettlementNullifiers,
             "private_settlement_outputs" => TieredSegment::PrivateSettlementOutputs,
+            "private_settlement_staged_locks" => TieredSegment::PrivateSettlementStagedLocks,
             "private_settlement_receipts" => TieredSegment::PrivateSettlementReceipts,
             "private_settlement_aborts" => TieredSegment::PrivateSettlementAborts,
             "proofs" => TieredSegment::Proofs,
@@ -4409,9 +4416,7 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "kagemusha_reserve_operations" => TieredSegment::KagemushaReserveOperations,
             "kagemusha_mint_credit_operations" => TieredSegment::KagemushaMintCreditOperations,
             "kagemusha_issuance_operations" => TieredSegment::KagemushaIssuanceOperations,
-            "kagemusha_redemption_id_operations" => {
-                TieredSegment::KagemushaRedemptionIdOperations
-            }
+            "kagemusha_redemption_id_operations" => TieredSegment::KagemushaRedemptionIdOperations,
             "kagemusha_terminal_nullifier_operations" => {
                 TieredSegment::KagemushaTerminalNullifierOperations
             }
@@ -4603,6 +4608,9 @@ pub(crate) enum TieredKeyHandle {
         crate::private_settlement::global_state::PrivateSettlementNullifierKeyV1,
     ),
     PrivateSettlementOutput(crate::private_settlement::global_state::PrivateSettlementOutputKeyV1),
+    PrivateSettlementStagedLock(
+        crate::private_settlement::global_state::PrivateSettlementStagedLockKeyV1,
+    ),
     PrivateSettlementReceipt(iroha_crypto::Hash),
     PrivateSettlementAbort(iroha_crypto::Hash),
     Proof(iroha_data_model::proof::ProofId),
@@ -4697,6 +4705,9 @@ impl TieredKeyHandle {
                 TieredSegment::PrivateSettlementNullifiers
             }
             TieredKeyHandle::PrivateSettlementOutput(_) => TieredSegment::PrivateSettlementOutputs,
+            TieredKeyHandle::PrivateSettlementStagedLock(_) => {
+                TieredSegment::PrivateSettlementStagedLocks
+            }
             TieredKeyHandle::PrivateSettlementReceipt(_) => {
                 TieredSegment::PrivateSettlementReceipts
             }
@@ -4808,6 +4819,9 @@ impl TieredKeyHandle {
                 Ok(norito::codec::Encode::encode(key))
             }
             TieredKeyHandle::PrivateSettlementOutput(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::PrivateSettlementStagedLock(key) => {
+                Ok(norito::codec::Encode::encode(key))
+            }
             TieredKeyHandle::PrivateSettlementReceipt(key)
             | TieredKeyHandle::PrivateSettlementAbort(key) => {
                 Ok(norito::codec::Encode::encode(key))
@@ -4944,6 +4958,9 @@ impl TieredKeyHandle {
             }
             TieredKeyHandle::PrivateSettlementOutput(id) => {
                 fetch!(world.private_settlement_outputs, id)
+            }
+            TieredKeyHandle::PrivateSettlementStagedLock(id) => {
+                fetch!(world.private_settlement_staged_locks, id)
             }
             TieredKeyHandle::PrivateSettlementReceipt(id) => {
                 fetch!(world.private_settlement_receipts, id)
@@ -5108,6 +5125,9 @@ impl TieredKeyHandle {
             }
             TieredKeyHandle::PrivateSettlementOutput(id) => {
                 fetch!(world.private_settlement_outputs, id)
+            }
+            TieredKeyHandle::PrivateSettlementStagedLock(id) => {
+                fetch!(world.private_settlement_staged_locks, id)
             }
             TieredKeyHandle::PrivateSettlementReceipt(id) => {
                 fetch!(world.private_settlement_receipts, id)
@@ -5318,6 +5338,9 @@ impl fmt::Display for TieredKeyHandle {
             }
             TieredKeyHandle::PrivateSettlementOutput(id) => {
                 write!(f, "private_settlement_output:{id:?}")
+            }
+            TieredKeyHandle::PrivateSettlementStagedLock(id) => {
+                write!(f, "private_settlement_staged_lock:{id:?}")
             }
             TieredKeyHandle::PrivateSettlementReceipt(id) => {
                 write!(f, "private_settlement_receipt:{id}")
@@ -5566,6 +5589,36 @@ mod tests {
                     "private-settlement cold payload",
                 );
             }
+        }
+
+        let prepared_world =
+            crate::private_settlement::global_state::tests::prepared_world_fixture();
+        backend
+            .record_world_snapshot(&prepared_world)
+            .expect("persist prepared private-settlement tiered snapshot");
+        let prepared_manifest = backend
+            .last_manifest()
+            .expect("prepared snapshot manifest recorded");
+        let prepared_snapshot_dir = root.join(format!("{:020}", prepared_manifest.snapshot_index));
+        let staged_entries = prepared_manifest
+            .cold_entries
+            .iter()
+            .filter(|entry| entry.segment == TieredSegment::PrivateSettlementStagedLocks)
+            .collect::<Vec<_>>();
+        assert!(
+            !staged_entries.is_empty(),
+            "active private-settlement staged locks must be represented in the cold manifest"
+        );
+        for entry in staged_entries {
+            let spill = entry
+                .spill_path
+                .as_ref()
+                .expect("cold staged-lock entry has a spill path");
+            assert_canaries_absent(
+                &fs::read(prepared_snapshot_dir.join(spill))
+                    .expect("read staged-lock cold payload"),
+                "private-settlement staged-lock cold payload",
+            );
         }
     }
 

@@ -75,7 +75,6 @@ from .canonical_request_v1 import (
 from .canonical_transport import (
     OPERATOR_FORBIDDEN_AUTH_HEADERS as _OPERATOR_FORBIDDEN_AUTH_HEADERS,
 )
-from .norito_frame import decode_norito_frame_payload
 from .canonical_transport import (
     CanonicalRequestHeaderPlan as _CanonicalRequestHeaderPlan,
 )
@@ -149,6 +148,7 @@ from .native_amx import (
     validate_bls_normal_validator_set,
 )
 from .norito_frame import (
+    decode_norito_frame_payload,
     schema_hash_for_type_name,
     validate_norito_frame,
 )
@@ -1797,7 +1797,6 @@ _SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT = (
 _OFFLINE_HASH_LITERAL_RE = re.compile(r"^hash:([0-9A-F]{64})#([0-9A-F]{4})$")
 _OFFLINE_MAX_JSON_DEPTH = 128
 _KAGEMUSHA_READINESS_MAX_BYTES_V1 = 4 * 1024
-_KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1 = 4 * 1024
 _KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1 = 8 * 1024
 _KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1 = 16 * 1024 * 1024
 _KAGEMUSHA_WIRE_VERSION = 1
@@ -2076,7 +2075,7 @@ def taira_local_signing_context(deployed_network_id: str) -> ToriiLocalSigningCo
 
 @dataclass(frozen=True)
 class KagemushaReadinessV1:
-    """Closed Kagemusha V1 readiness response."""
+    """Closed KAGEMUSHA V1 readiness response."""
 
     kagemusha_handoff_capability: str
     wire_version: int
@@ -2087,7 +2086,7 @@ class KagemushaReadinessV1:
     def from_payload(cls, payload: Mapping[str, Any]) -> "KagemushaReadinessV1":
         """Decode the exact universally compiled capability projection."""
 
-        context = "Kagemusha readiness response"
+        context = "KAGEMUSHA readiness response"
         record = _offline_mapping(payload, context)
         _offline_exact_object_fields(
             record,
@@ -2182,7 +2181,7 @@ class UnverifiedKagemushaOperationStatusV1:
     ) -> "UnverifiedKagemushaOperationStatusV1":
         """Validate the closed outer operation envelope without trusting finality."""
 
-        context = "Kagemusha V1 operation status"
+        context = "KAGEMUSHA V1 operation status"
         source = _snapshot_offline_json(payload, context)
         record = _offline_mapping(source, context)
         _offline_exact_object_fields(
@@ -2192,11 +2191,11 @@ class UnverifiedKagemushaOperationStatusV1:
         )
         if _offline_unsigned(record["version"], f"{context}.version", _OFFLINE_MAX_U32) != 1:
             raise RuntimeError(f"{context}.version must be 1")
-        operation_id = _offline_fixed_bytes(record["operation_id"], f"{context}.operation_id")
-        kind = _offline_tagged_unit(
+        operation_id = _kagemusha_fixed_bytes(record["operation_id"], f"{context}.operation_id")
+        kind = _kagemusha_tagged_unit(
             record["kind"], "kind", _KAGEMUSHA_OPERATION_KINDS, f"{context}.kind"
         )
-        state = _offline_tagged_unit(
+        state = _kagemusha_tagged_unit(
             record["state"], "state", _KAGEMUSHA_OPERATION_STATES, f"{context}.state"
         )
         rejection: Optional[KagemushaOperationRejectionV1] = None
@@ -2216,13 +2215,13 @@ class UnverifiedKagemushaOperationStatusV1:
                 required=("code", "detail_digest"),
             )
             rejection = KagemushaOperationRejectionV1(
-                code=_offline_tagged_unit(
+                code=_kagemusha_tagged_unit(
                     rejected["code"],
                     "code",
                     _KAGEMUSHA_REJECTION_CODES,
                     f"{context}.rejection.code",
                 ),
-                detail_digest=_offline_fixed_bytes(
+                detail_digest=_kagemusha_fixed_bytes(
                     rejected["detail_digest"], f"{context}.rejection.detail_digest"
                 ),
             )
@@ -2236,13 +2235,13 @@ class UnverifiedKagemushaOperationStatusV1:
         """Release the full status only through a caller-pinned finality verifier."""
 
         if trust_anchor is None:
-            raise TypeError("Kagemusha V1 finality trust anchor is required")
+            raise TypeError("KAGEMUSHA V1 finality trust anchor is required")
         if not callable(verifier):
-            raise TypeError("Kagemusha V1 finality verifier must be callable")
+            raise TypeError("KAGEMUSHA V1 finality verifier must be callable")
         return verifier(_snapshot_offline_json(self._source, "operation status"), trust_anchor)
 
 
-def _offline_fixed_bytes(value: Any, context: str) -> bytes:
+def _kagemusha_fixed_bytes(value: Any, context: str) -> bytes:
     if (
         not isinstance(value, list)
         or len(value) != 32
@@ -2253,7 +2252,7 @@ def _offline_fixed_bytes(value: Any, context: str) -> bytes:
     return bytes(value)
 
 
-def _offline_tagged_unit(
+def _kagemusha_tagged_unit(
     value: Any, tag: str, allowed: frozenset[str], context: str
 ) -> str:
     record = _offline_mapping(value, context)
@@ -2264,20 +2263,58 @@ def _offline_tagged_unit(
     return selected
 
 
-def _offline_operation_id_hex(value: Union[str, bytes, bytearray, memoryview]) -> str:
+def _kagemusha_operation_id_hex(value: Union[str, bytes, bytearray, memoryview]) -> str:
     if isinstance(value, str):
         if re.fullmatch(r"[0-9a-f]{64}", value) is None or value == "0" * 64:
-            raise ValueError("Kagemusha V1 operation ID must be 64 lowercase hexadecimal characters")
+            raise ValueError("KAGEMUSHA V1 operation ID must be 64 lowercase hexadecimal characters")
         return value
     if not isinstance(value, (bytes, bytearray, memoryview)):
-        raise TypeError("Kagemusha V1 operation ID must be bytes-like or lowercase hexadecimal")
+        raise TypeError("KAGEMUSHA V1 operation ID must be bytes-like or lowercase hexadecimal")
     raw = bytes(value)
     if len(raw) != 32 or not any(raw):
-        raise ValueError("Kagemusha V1 operation ID must be one nonzero 32-byte value")
+        raise ValueError("KAGEMUSHA V1 operation ID must be one nonzero 32-byte value")
     return raw.hex()
 
 
-def _offline_compact_field(payload: bytes, offset: int, context: str) -> Tuple[bytes, int]:
+def _require_kagemusha_submission_response(
+    response: requests.Response,
+    status: UnverifiedKagemushaOperationStatusV1,
+    operation_id: str,
+) -> None:
+    """Enforce the exact HTTP/status pairing for one KAGEMUSHA submission replay."""
+
+    expected_location = f"{_KAGEMUSHA_OPERATION_PATH_PREFIX}{operation_id}"
+    if response.headers.get("Location") != expected_location:
+        raise RuntimeError(
+            f"KAGEMUSHA V1 operation response Location must be {expected_location}"
+        )
+    retry_after = response.headers.get("Retry-After")
+    if response.status_code == 202:
+        if status.state != "pending":
+            raise RuntimeError("KAGEMUSHA V1 HTTP 202 response must be pending")
+        if (
+            not isinstance(retry_after, str)
+            or re.fullmatch(r"[0-9]+", retry_after) is None
+            or re.search(r"[1-9]", retry_after) is None
+        ):
+            raise RuntimeError(
+                "KAGEMUSHA V1 HTTP 202 response must have a positive Retry-After"
+            )
+        return
+    if response.status_code == 200:
+        if status.state not in ("applied", "rejected"):
+            raise RuntimeError(
+                "KAGEMUSHA V1 HTTP 200 response must be applied or rejected"
+            )
+        if retry_after is not None:
+            raise RuntimeError(
+                "KAGEMUSHA V1 HTTP 200 response must not have Retry-After"
+            )
+        return
+    raise RuntimeError("KAGEMUSHA V1 submission response must use HTTP 200 or 202")
+
+
+def _kagemusha_compact_field(payload: bytes, offset: int, context: str) -> Tuple[bytes, int]:
     length = 0
     shift = 0
     for index in range(10):
@@ -2299,7 +2336,7 @@ def _offline_compact_field(payload: bytes, offset: int, context: str) -> Tuple[b
     raise ValueError(f"{context} length exceeds u64")
 
 
-def _offline_command_body(
+def _kagemusha_command_body(
     value: Union[bytes, bytearray, memoryview],
     *,
     schema: str,
@@ -2318,11 +2355,13 @@ def _offline_command_body(
         expected_padding_length=8,
         expected_flags=0x02,
     )
-    version, offset = _offline_compact_field(payload, 0, f"{context}.version")
-    operation_id, _offset = _offline_compact_field(payload, offset, f"{context}.operation_id")
+    version, offset = _kagemusha_compact_field(payload, 0, f"{context}.version")
+    operation_id, _offset = _kagemusha_compact_field(
+        payload, offset, f"{context}.operation_id"
+    )
     if version != b"\x01\x00":
         raise ValueError(f"{context} version must be 1")
-    return body, _offline_operation_id_hex(operation_id)
+    return body, _kagemusha_operation_id_hex(operation_id)
 
 
 
@@ -9361,12 +9400,12 @@ class ToriiClient(
         return self._parse_uaid_manifests_response(mapping, context="uaid manifests response")
 
     # ------------------------------------------------------------------
-    # Kagemusha V1 readiness
+    # KAGEMUSHA V1 readiness
     # ------------------------------------------------------------------
     def get_kagemusha_readiness(
         self, *, timeout: Optional[float] = None
     ) -> KagemushaReadinessV1:
-        """Fetch the exact Kagemusha V1 readiness response."""
+        """Fetch the exact KAGEMUSHA V1 readiness response."""
 
         response = self._request(
             "GET",
@@ -9380,34 +9419,38 @@ class ToriiClient(
             response,
             {200},
             maximum_body_bytes=_KAGEMUSHA_READINESS_MAX_BYTES_V1,
-            context="Kagemusha V1 readiness",
+            context="KAGEMUSHA V1 readiness",
         )
         payload = self._offline_json_response(
             response,
-            "Kagemusha V1 readiness response",
+            "KAGEMUSHA V1 readiness response",
             maximum_body_bytes=_KAGEMUSHA_READINESS_MAX_BYTES_V1,
         )
         return KagemushaReadinessV1.from_payload(payload)
 
     def submit_kagemusha_top_up(
         self,
-        request: Union[bytes, bytearray, memoryview],
+        signed_transaction: bytes,
+        operation_id: bytes,
         *,
         timeout: Optional[float] = None,
     ) -> UnverifiedKagemushaOperationStatusV1:
-        """Submit one exact canonical Kagemusha V1 top-up intent."""
+        """Submit one exact payer-signed KAGEMUSHA V1 top-up transaction."""
 
-        body, operation_id = _offline_command_body(
-            request,
-            schema="iroha.torii.v1.kagemusha.top_up.request",
-            maximum=_KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1,
-            context="Kagemusha V1 top-up request",
-        )
+        if type(signed_transaction) is not bytes:
+            raise TypeError("signed_transaction must be exact immutable bytes")
+        if len(signed_transaction) < 2 or signed_transaction[0] != 1:
+            raise ValueError(
+                "signed_transaction must be a non-empty version-1 SignedTransaction"
+            )
+        if type(operation_id) is not bytes:
+            raise TypeError("operation_id must be exact immutable bytes")
+        operation_id_hex = _kagemusha_operation_id_hex(operation_id)
         return self._submit_kagemusha_operation(
             _KAGEMUSHA_TOP_UP_PATH,
             "top_up",
-            body,
-            operation_id,
+            signed_transaction,
+            operation_id_hex,
             timeout=timeout,
         )
 
@@ -9417,13 +9460,13 @@ class ToriiClient(
         *,
         timeout: Optional[float] = None,
     ) -> UnverifiedKagemushaOperationStatusV1:
-        """Submit one exact canonical Kagemusha V1 full or partial redemption intent."""
+        """Submit one exact canonical KAGEMUSHA V1 full or partial redemption intent."""
 
-        body, operation_id = _offline_command_body(
+        body, operation_id = _kagemusha_command_body(
             request,
             schema="iroha.torii.v1.kagemusha.redeem.request",
             maximum=_KAGEMUSHA_REDEMPTION_REQUEST_MAX_BYTES_V1,
-            context="Kagemusha V1 redemption request",
+            context="KAGEMUSHA V1 redemption request",
         )
         return self._submit_kagemusha_operation(
             _KAGEMUSHA_REDEEM_PATH,
@@ -9441,7 +9484,7 @@ class ToriiClient(
     ) -> UnverifiedKagemushaOperationStatusV1:
         """Read one operation while withholding any unverified monetary result."""
 
-        expected_id = _offline_operation_id_hex(operation_id)
+        expected_id = _kagemusha_operation_id_hex(operation_id)
         response = self._request(
             "GET",
             f"{_KAGEMUSHA_OPERATION_PATH_PREFIX}{expected_id}",
@@ -9455,17 +9498,17 @@ class ToriiClient(
             response,
             {200},
             maximum_body_bytes=_KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
-            context="Kagemusha V1 operation response",
+            context="KAGEMUSHA V1 operation response",
         )
         status = UnverifiedKagemushaOperationStatusV1.from_payload(
             self._offline_json_response(
                 response,
-                "Kagemusha V1 operation response",
+                "KAGEMUSHA V1 operation response",
                 maximum_body_bytes=_KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
             )
         )
         if status.operation_id.hex() != expected_id:
-            raise RuntimeError("Kagemusha V1 response operation ID does not match the resource")
+            raise RuntimeError("KAGEMUSHA V1 response operation ID does not match the resource")
         return status
 
     def _submit_kagemusha_operation(
@@ -9495,17 +9538,18 @@ class ToriiClient(
             response,
             {200, 202},
             maximum_body_bytes=_KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
-            context="Kagemusha V1 operation response",
+            context="KAGEMUSHA V1 operation response",
         )
         status = UnverifiedKagemushaOperationStatusV1.from_payload(
             self._offline_json_response(
                 response,
-                "Kagemusha V1 operation response",
+                "KAGEMUSHA V1 operation response",
                 maximum_body_bytes=_KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
             )
         )
         if status.operation_id.hex() != operation_id or status.kind != kind:
-            raise RuntimeError("Kagemusha V1 response does not match the submitted operation")
+            raise RuntimeError("KAGEMUSHA V1 response does not match the submitted operation")
+        _require_kagemusha_submission_response(response, status, operation_id)
         return status
 
     @staticmethod

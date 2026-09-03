@@ -27,6 +27,7 @@ REQUIRED_PRIVATE_STAGES = (
     "auditor_response",
     "committee_verification",
     "prepare",
+    "prepare_registration",
     "commit",
     "global_finality",
     "end_to_end",

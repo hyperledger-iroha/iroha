@@ -1,6 +1,6 @@
 import type { Buffer } from "buffer";
 import type { BrowserFeePayment } from "./transaction-codec.js";
-import type { KagemushaV1 } from "./kagemusha-v1.js";
+import type { Kagemusha } from "./kagemusha.js";
 import { OperatorSigningContext } from "./operator-request.js";
 import type { RepoAgreementLifecycleFields } from "./repo-agreement.js";
 import type { ToriiBlockMerkleCommitment, ToriiBlockMerkleProof, ToriiBlockProofs, ToriiBlockProofTrustedAnchor, ToriiBlockProofVerification } from "./dist/blockProofTypes.js";
@@ -10375,11 +10375,6 @@ export interface SubmitTransactionAndWaitOptions
   hashHex: string;
 }
 
-export interface SubmitOfflineSettlementAndWaitOptions
-  extends TransactionStatusPollOptions {
-  signal?: AbortSignal;
-}
-
 export declare class ToriiHttpError extends Error {
   constructor(details: {
     status: number;
@@ -10676,11 +10671,12 @@ export declare class ToriiBrowserClient {
     options?: { signal?: AbortSignal },
   ): Promise<KagemushaReadinessV1>;
   submitKagemushaTopUp(
-    request: KagemushaV1.TopUpRequest,
+    signedTransaction: VersionedSignedTransactionV1,
+    operationId: ArrayBuffer | ArrayBufferView,
     options?: { signal?: AbortSignal },
   ): Promise<UnverifiedKagemushaOperationStatusV1>;
   submitKagemushaRedemption(
-    request: KagemushaV1.RedemptionRequest,
+    request: Kagemusha.RedemptionRequest,
     options?: { signal?: AbortSignal },
   ): Promise<UnverifiedKagemushaOperationStatusV1>;
   getKagemushaOperation(
@@ -11016,11 +11012,12 @@ export declare class ToriiClient {
     options?: { signal?: AbortSignal },
   ): Promise<KagemushaReadinessV1>;
   submitKagemushaTopUp(
-    request: KagemushaV1.TopUpRequest,
+    signedTransaction: VersionedSignedTransactionV1,
+    operationId: ArrayBuffer | ArrayBufferView,
     options?: { signal?: AbortSignal },
   ): Promise<UnverifiedKagemushaOperationStatusV1>;
   submitKagemushaRedemption(
-    request: KagemushaV1.RedemptionRequest,
+    request: Kagemusha.RedemptionRequest,
     options?: { signal?: AbortSignal },
   ): Promise<UnverifiedKagemushaOperationStatusV1>;
   getKagemushaOperation(
@@ -14462,4 +14459,4 @@ export const NumericV1: {
 export * from "./nexus-app.js";
 export * from "./transaction-codec.js";
 export * from "./smart-contract-deployment.js";
-export { KagemushaV1 } from "./kagemusha-v1.js";
+export { Kagemusha } from "./kagemusha.js";

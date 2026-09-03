@@ -17,6 +17,8 @@ use halo2_proofs::{
         ipa::commitment::ParamsIPA,
     },
 };
+use iroha_crypto::kagemusha::KagemushaRecoverySeedV1;
+use sha2::{Digest as _, Sha256};
 use snark_verifier::{
     loader::native::NativeLoader,
     pcs::{
@@ -92,13 +94,14 @@ impl KagemushaEqAccumulatorV1 {
     /// Eq identity.
     pub fn try_from_bytes(bytes: &[u8]) -> Result<Self, KagemushaRecursionErrorV1> {
         validate_accumulator_length(KagemushaPastaParityV1::Eq, bytes)?;
-        let raw: [u8; ACCUMULATOR_BYTES] = bytes.try_into().map_err(|_| {
-            KagemushaRecursionErrorV1::InvalidAccumulatorLength {
-                parity: KagemushaPastaParityV1::Eq,
-                actual: bytes.len(),
-                expected: ACCUMULATOR_BYTES,
-            }
-        })?;
+        let raw: [u8; ACCUMULATOR_BYTES] =
+            bytes
+                .try_into()
+                .map_err(|_| KagemushaRecursionErrorV1::InvalidAccumulatorLength {
+                    parity: KagemushaPastaParityV1::Eq,
+                    actual: bytes.len(),
+                    expected: ACCUMULATOR_BYTES,
+                })?;
         parse_eq(&raw)?;
         Ok(Self(raw))
     }
@@ -170,13 +173,14 @@ impl KagemushaEpAccumulatorV1 {
     /// Ep identity.
     pub fn try_from_bytes(bytes: &[u8]) -> Result<Self, KagemushaRecursionErrorV1> {
         validate_accumulator_length(KagemushaPastaParityV1::Ep, bytes)?;
-        let raw: [u8; ACCUMULATOR_BYTES] = bytes.try_into().map_err(|_| {
-            KagemushaRecursionErrorV1::InvalidAccumulatorLength {
-                parity: KagemushaPastaParityV1::Ep,
-                actual: bytes.len(),
-                expected: ACCUMULATOR_BYTES,
-            }
-        })?;
+        let raw: [u8; ACCUMULATOR_BYTES] =
+            bytes
+                .try_into()
+                .map_err(|_| KagemushaRecursionErrorV1::InvalidAccumulatorLength {
+                    parity: KagemushaPastaParityV1::Ep,
+                    actual: bytes.len(),
+                    expected: ACCUMULATOR_BYTES,
+                })?;
         parse_ep(&raw)?;
         Ok(Self(raw))
     }
@@ -366,6 +370,10 @@ impl KagemushaEpFoldOutputV1 {
 
 /// Fold exactly one current Eq opening claim with exactly one predecessor history accumulator.
 ///
+/// Randomness is regenerated from the authenticated operation seed and an exact
+/// ordered-input/parameter context. Recovering the same operation reproduces the
+/// entire fold; this API never falls back to fresh operating-system entropy.
+///
 /// # Errors
 ///
 /// Rejects non-`k=16` parameters, malformed accumulators, a backend failure, or a transcript whose
@@ -374,6 +382,38 @@ pub fn fold_kagemusha_eq_accumulators_v1(
     params: &ParamsIPA<EqAffine>,
     current: &KagemushaEqAccumulatorV1,
     predecessor: &KagemushaEqAccumulatorV1,
+    recovery_seed: &KagemushaRecoverySeedV1,
+) -> Result<KagemushaEqFoldOutputV1, KagemushaRecursionErrorV1> {
+    validate_eq_params(params)?;
+    let context = fold_recovery_context_v1(
+        KagemushaPastaParityV1::Eq,
+        params.get_g().iter().map(GroupEncoding::to_bytes),
+        current.as_bytes(),
+        predecessor.as_bytes(),
+    );
+    let rng = recovery_seed
+        .rng(b"ipa-accumulator-fold:eq", &context)
+        .map_err(|error| KagemushaRecursionErrorV1::FoldCreation {
+            parity: KagemushaPastaParityV1::Eq,
+            reason: error.to_string(),
+        })?;
+    fold_kagemusha_eq_accumulators_with_rng_v1(params, current, predecessor, rng)
+}
+
+/// Fold Eq inputs with explicitly supplied entropy for the online issuer path.
+///
+/// Device-state and postcommit recovery callers must use the seed-requiring
+/// public entry point. An online issuer may use fresh entropy when it persists
+/// the resulting checkpoint before delivering it to a device.
+///
+/// # Errors
+///
+/// Rejects malformed parameters/accumulators, backend failure, or wrong proof size.
+pub(super) fn fold_kagemusha_eq_accumulators_with_rng_v1(
+    params: &ParamsIPA<EqAffine>,
+    current: &KagemushaEqAccumulatorV1,
+    predecessor: &KagemushaEqAccumulatorV1,
+    rng: impl rand_core_06::RngCore + rand_core_06::CryptoRng,
 ) -> Result<KagemushaEqFoldOutputV1, KagemushaRecursionErrorV1> {
     validate_eq_params(params)?;
     let inputs = [current.to_native()?, predecessor.to_native()?];
@@ -383,7 +423,7 @@ pub fn fold_kagemusha_eq_accumulators_v1(
         &proving_key,
         &inputs,
         &mut transcript,
-        rand_core_06::OsRng,
+        rng,
     )
     .map_err(|error| KagemushaRecursionErrorV1::FoldCreation {
         parity: KagemushaPastaParityV1::Eq,
@@ -398,6 +438,10 @@ pub fn fold_kagemusha_eq_accumulators_v1(
 
 /// Fold exactly one current Ep opening claim with exactly one predecessor history accumulator.
 ///
+/// Randomness is regenerated from the authenticated operation seed and an exact
+/// ordered-input/parameter context, separate from Eq and other proof purposes.
+/// This API never falls back to fresh operating-system entropy.
+///
 /// # Errors
 ///
 /// Rejects non-`k=16` parameters, malformed accumulators, a backend failure, or a transcript whose
@@ -406,6 +450,37 @@ pub fn fold_kagemusha_ep_accumulators_v1(
     params: &ParamsIPA<EpAffine>,
     current: &KagemushaEpAccumulatorV1,
     predecessor: &KagemushaEpAccumulatorV1,
+    recovery_seed: &KagemushaRecoverySeedV1,
+) -> Result<KagemushaEpFoldOutputV1, KagemushaRecursionErrorV1> {
+    validate_ep_params(params)?;
+    let context = fold_recovery_context_v1(
+        KagemushaPastaParityV1::Ep,
+        params.get_g().iter().map(GroupEncoding::to_bytes),
+        current.as_bytes(),
+        predecessor.as_bytes(),
+    );
+    let rng = recovery_seed
+        .rng(b"ipa-accumulator-fold:ep", &context)
+        .map_err(|error| KagemushaRecursionErrorV1::FoldCreation {
+            parity: KagemushaPastaParityV1::Ep,
+            reason: error.to_string(),
+        })?;
+    fold_kagemusha_ep_accumulators_with_rng_v1(params, current, predecessor, rng)
+}
+
+/// Fold Ep inputs with explicitly supplied entropy for the online issuer path.
+///
+/// Device-state and postcommit recovery callers must use the seed-requiring
+/// public entry point. The online issuer must persist its resulting checkpoint.
+///
+/// # Errors
+///
+/// Rejects malformed parameters/accumulators, backend failure, or wrong proof size.
+pub(super) fn fold_kagemusha_ep_accumulators_with_rng_v1(
+    params: &ParamsIPA<EpAffine>,
+    current: &KagemushaEpAccumulatorV1,
+    predecessor: &KagemushaEpAccumulatorV1,
+    rng: impl rand_core_06::RngCore + rand_core_06::CryptoRng,
 ) -> Result<KagemushaEpFoldOutputV1, KagemushaRecursionErrorV1> {
     validate_ep_params(params)?;
     let inputs = [current.to_native()?, predecessor.to_native()?];
@@ -415,7 +490,7 @@ pub fn fold_kagemusha_ep_accumulators_v1(
         &proving_key,
         &inputs,
         &mut transcript,
-        rand_core_06::OsRng,
+        rng,
     )
     .map_err(|error| KagemushaRecursionErrorV1::FoldCreation {
         parity: KagemushaPastaParityV1::Ep,
@@ -426,6 +501,52 @@ pub fn fold_kagemusha_ep_accumulators_v1(
         successor: KagemushaEpAccumulatorV1::from_native(&successor)?,
         proof,
     })
+}
+
+/// Hash the exact ordered fold inputs and the complete fixed-profile IPA basis.
+///
+/// Every generator is included, not merely the first generator or the degree.
+/// The fixed domain and H/S hash-to-curve inputs match the proving-key builders
+/// below. Length-framed generators and fixed-width ordered accumulator encodings
+/// leave no concatenation ambiguity and prevent seed reuse across parameter sets.
+fn fold_recovery_context_v1<I, B>(
+    parity: KagemushaPastaParityV1,
+    generators: I,
+    current: &[u8; ACCUMULATOR_BYTES],
+    predecessor: &[u8; ACCUMULATOR_BYTES],
+) -> [u8; 32]
+where
+    I: ExactSizeIterator<Item = B>,
+    B: AsRef<[u8]>,
+{
+    let mut hash = Sha256::new();
+    hash.update(b"iroha:kagemusha:v1:ipa-fold-recovery-context\0");
+    hash.update([match parity {
+        KagemushaPastaParityV1::Eq => 0,
+        KagemushaPastaParityV1::Ep => 1,
+    }]);
+    hash.update(KAGEMUSHA_RECURSION_IPA_K_V1.to_le_bytes());
+    for profile_value in [
+        POSEIDON_WIDTH,
+        POSEIDON_RATE,
+        POSEIDON_FULL_ROUNDS,
+        POSEIDON_PARTIAL_ROUNDS,
+        POSEIDON_SECURE_MDS,
+        KAGEMUSHA_IPA_FOLD_PROOF_BYTES_V1,
+    ] {
+        hash.update((profile_value as u64).to_le_bytes());
+    }
+    hash.update(b"Halo2-Parameters\0");
+    hash.update([2, 1]); // H and the enabled ZK blinding base S, respectively.
+    hash.update((generators.len() as u64).to_le_bytes());
+    for generator in generators {
+        let bytes = generator.as_ref();
+        hash.update((bytes.len() as u64).to_le_bytes());
+        hash.update(bytes);
+    }
+    hash.update(current);
+    hash.update(predecessor);
+    hash.finalize().into()
 }
 
 /// Verify and terminally decide one exact Eq predecessor/current fold.
@@ -467,10 +588,7 @@ pub fn verify_and_decide_kagemusha_eq_fold_v1(
         parity: KagemushaPastaParityV1::Eq,
         reason: format!("proof relation failed: {error:?}"),
     })?;
-    ensure_transcript_consumed(
-        KagemushaPastaParityV1::Eq,
-        transcript.finalize().position(),
-    )?;
+    ensure_transcript_consumed(KagemushaPastaParityV1::Eq, transcript.finalize().position())?;
     decide_eq_native(&deciding_key, successor.clone())?;
     if KagemushaEqAccumulatorV1::from_native(&successor)? != fold.successor {
         return Err(KagemushaRecursionErrorV1::FoldSuccessorSubstitution(
@@ -519,10 +637,7 @@ pub fn verify_and_decide_kagemusha_ep_fold_v1(
         parity: KagemushaPastaParityV1::Ep,
         reason: format!("proof relation failed: {error:?}"),
     })?;
-    ensure_transcript_consumed(
-        KagemushaPastaParityV1::Ep,
-        transcript.finalize().position(),
-    )?;
+    ensure_transcript_consumed(KagemushaPastaParityV1::Ep, transcript.finalize().position())?;
     decide_ep_native(&deciding_key, successor.clone())?;
     if KagemushaEpAccumulatorV1::from_native(&successor)? != fold.successor {
         return Err(KagemushaRecursionErrorV1::FoldSuccessorSubstitution(
@@ -830,7 +945,83 @@ const _: () = assert!(ACCUMULATOR_BYTES == 544);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use halo2_proofs::poly::commitment::Params as _;
+
+    #[test]
+    fn recovery_context_binds_parity_all_generators_and_ordered_inputs() {
+        // Artificial bytes test transcript framing only, not accumulator validity.
+        let generators = [[1_u8; 32], [2_u8; 32], [3_u8; 32]];
+        let current = [4_u8; ACCUMULATOR_BYTES];
+        let predecessor = [5_u8; ACCUMULATOR_BYTES];
+        let context = fold_recovery_context_v1(
+            KagemushaPastaParityV1::Eq,
+            generators.iter(),
+            &current,
+            &predecessor,
+        );
+        assert_eq!(
+            context,
+            fold_recovery_context_v1(
+                KagemushaPastaParityV1::Eq,
+                generators.iter(),
+                &current,
+                &predecessor,
+            )
+        );
+        assert_ne!(
+            context,
+            fold_recovery_context_v1(
+                KagemushaPastaParityV1::Ep,
+                generators.iter(),
+                &current,
+                &predecessor,
+            )
+        );
+        assert_ne!(
+            context,
+            fold_recovery_context_v1(
+                KagemushaPastaParityV1::Eq,
+                generators.iter(),
+                &predecessor,
+                &current,
+            )
+        );
+        for index in 0..generators.len() {
+            let mut changed_generators = generators;
+            changed_generators[index][0] ^= 1;
+            assert_ne!(
+                context,
+                fold_recovery_context_v1(
+                    KagemushaPastaParityV1::Eq,
+                    changed_generators.iter(),
+                    &current,
+                    &predecessor,
+                ),
+                "every parameter generator must be bound"
+            );
+        }
+        let mut changed_current = current;
+        changed_current[ACCUMULATOR_BYTES - 1] ^= 1;
+        assert_ne!(
+            context,
+            fold_recovery_context_v1(
+                KagemushaPastaParityV1::Eq,
+                generators.iter(),
+                &changed_current,
+                &predecessor,
+            )
+        );
+        let mut changed_predecessor = predecessor;
+        changed_predecessor[ACCUMULATOR_BYTES - 1] ^= 1;
+        assert_ne!(
+            context,
+            fold_recovery_context_v1(
+                KagemushaPastaParityV1::Eq,
+                generators.iter(),
+                &current,
+                &changed_predecessor,
+            )
+        );
+    }
 
     #[test]
     fn canonical_empty_histories_are_terminally_decided() {

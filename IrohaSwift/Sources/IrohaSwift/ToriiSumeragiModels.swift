@@ -284,7 +284,7 @@ public struct ToriiSumeragiV2ExecutionCommitment: Decodable, Sendable, Equatable
                 forKey: .kagemushaTopUpCount,
                 in: container,
                 debugDescription:
-                    "Sumeragi v2 kagemusha top-up count/root projection is not canonical"
+                    "Sumeragi v2 KAGEMUSHA top-up count/root projection is not canonical"
             )
         }
         nativeAmxApplicationManifestVersion = try container.decode(

@@ -755,7 +755,7 @@ pub mod isi {
                 if let Some(grantee) = grantee {
                     metadata.insert(
                         data_trigger_scope_authorization_grantee_key().clone(),
-                        Json::new(grantee.to_string()),
+                        Json::new(grantee),
                     );
                 }
             }
@@ -1544,6 +1544,15 @@ mod tests {
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("trigger fixture key generation should succeed")
     }
+    fn assert_smart_contract_error_contains(error: &Error, expected: &str) {
+        let Error::InvalidParameter(InvalidParameterError::SmartContract(message)) = error else {
+            panic!("expected a smart-contract parameter error, got {error:?}");
+        };
+        assert!(
+            message.contains(expected),
+            "unexpected smart-contract parameter error: {error:?}"
+        );
+    }
     fn data_trigger(id: &str, authority: AccountId, filter: impl Into<EventFilterBox>) -> Trigger {
         Trigger::new(
             id.parse().expect("valid trigger id"),
@@ -1617,10 +1626,7 @@ mod tests {
             let error = Register::trigger(trigger)
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("ordinary data trigger must stay within an exact owned subject");
-            assert!(
-                error.to_string().contains("CanRegisterGlobalDataTrigger"),
-                "unexpected scope rejection: {error}"
-            );
+            assert_smart_contract_error_contains(&error, "CanRegisterGlobalDataTrigger");
         }
     }
     #[test]
@@ -1656,7 +1662,7 @@ mod tests {
         ))
         .execute(&ALICE_ID, &mut stx)
         .expect_err("a capability for another trigger authority must not match");
-        assert!(error.to_string().contains("CanRegisterGlobalDataTrigger"));
+        assert_smart_contract_error_contains(&error, "CanRegisterGlobalDataTrigger");
 
         drop(stx);
         drop(state_block);
@@ -1944,11 +1950,9 @@ mod tests {
         ))
         .execute(&ALICE_ID, &mut stx)
         .expect_err("the sixty-fifth data trigger for one authority must be rejected");
-        assert!(
-            error
-                .to_string()
-                .contains("data trigger authority capacity exceeded: maximum 64"),
-            "unexpected authority-capacity rejection: {error}"
+        assert_smart_contract_error_contains(
+            &error,
+            "data trigger authority capacity exceeded: maximum 64",
         );
     }
     #[test]
@@ -2004,11 +2008,9 @@ mod tests {
         ))
         .execute(&ALICE_ID, &mut stx)
         .expect_err("the four-thousand-ninety-seventh data trigger must be rejected");
-        assert!(
-            error
-                .to_string()
-                .contains("data trigger capacity exceeded: maximum 4096"),
-            "unexpected global-capacity rejection: {error}"
+        assert_smart_contract_error_contains(
+            &error,
+            "data trigger capacity exceeded: maximum 4096",
         );
     }
     fn new_dummy_block() -> crate::block::CommittedBlock {

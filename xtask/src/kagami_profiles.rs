@@ -7,7 +7,7 @@ use iroha_data_model::{
     account::AccountId,
     asset::AssetDefinitionId,
     block::consensus_v2::is_valid_committee_size,
-    isi::SetParameter,
+    isi::{SetParameter, kagemusha_v1::KagemushaMintFinalityGenesisParametersV1},
     parameter::{
         Parameter,
         system::{ConsensusHandshakeMetadata, SumeragiConsensusMode, consensus_metadata},
@@ -33,6 +33,7 @@ pub(crate) struct KagamiProfileOptions {
     pub profiles: Vec<String>,
     pub kagami_override: Option<PathBuf>,
     pub nexus_xor_asset_definition_id: Option<String>,
+    pub kagemusha_mint_finality_parameters_dir: PathBuf,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ProfileSpec {
@@ -98,6 +99,7 @@ const PROFILE_GENESIS_CREATION_TIME_MS: u64 = 1_700_000_000_000;
 const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = "REPLACE_WITH_GENESIS_EXPECTED_HASH";
 const NEXUS_XOR_ASSET_DEFINITION_ID_REQUIRED: &str =
     "iroha3-nexus profile generation requires --nexus-xor-asset-definition-id <BASE58>";
+const KAGEMUSHA_MINT_FINALITY_PARAMETERS_MAX_BYTES: u64 = 1024 * 1024;
 fn format_toml_integer_u64(value: u64) -> String {
     let digits = value.to_string();
     let mut reversed = String::with_capacity(digits.len() + digits.len() / 3);
@@ -138,7 +140,11 @@ fn rendered_nexus_topology(spec: &ProfileSpec) -> &'static str {
 
 pub(crate) fn generate(options: KagamiProfileOptions) -> AnyResult<()> {
     let specs = resolve_requested_profiles(&options.profiles)?;
-    preflight_required_profile_inputs(&specs, options.nexus_xor_asset_definition_id.as_deref())?;
+    preflight_required_profile_inputs(
+        &specs,
+        options.nexus_xor_asset_definition_id.as_deref(),
+        &options.kagemusha_mint_finality_parameters_dir,
+    )?;
     let kagami_bin = resolve_kagami_path(options.kagami_override.as_deref())?;
     fs::create_dir_all(&options.output)?;
     for spec in specs {
@@ -147,6 +153,7 @@ pub(crate) fn generate(options: KagamiProfileOptions) -> AnyResult<()> {
             &kagami_bin,
             &options.output,
             options.nexus_xor_asset_definition_id.as_deref(),
+            &options.kagemusha_mint_finality_parameters_dir,
         )?;
     }
     Ok(())
@@ -154,6 +161,7 @@ pub(crate) fn generate(options: KagamiProfileOptions) -> AnyResult<()> {
 fn preflight_required_profile_inputs(
     specs: &[ProfileSpec],
     nexus_xor_asset_definition_id: Option<&str>,
+    kagemusha_mint_finality_parameters_dir: &Path,
 ) -> AnyResult<()> {
     if specs.iter().any(|spec| spec.profile_flag == "iroha3-nexus") {
         let Some(asset_definition_id) = nexus_xor_asset_definition_id else {
@@ -165,6 +173,14 @@ fn preflight_required_profile_inputs(
                  expected a canonical unprefixed Base58 asset definition id"
             )
         })?;
+    }
+    for spec in specs {
+        let peers = build_peers(spec)?;
+        load_profile_kagemusha_mint_finality_parameters(
+            spec,
+            &peers,
+            kagemusha_mint_finality_parameters_dir,
+        )?;
     }
     Ok(())
 }
@@ -193,6 +209,7 @@ fn write_profile_bundle(
     kagami_bin: &Path,
     output_root: &Path,
     nexus_xor_asset_definition_id: Option<&str>,
+    kagemusha_mint_finality_parameters_dir: &Path,
 ) -> AnyResult<()> {
     fs::create_dir_all(output_root)?;
     let staging = tempfile::Builder::new()
@@ -201,14 +218,20 @@ fn write_profile_bundle(
     let bundle_root = staging.path().to_path_buf();
     let genesis_key =
         deterministic_keypair(&format!("{}-genesis-key", spec.slug), Algorithm::Ed25519)?;
+    let peers = build_peers(spec)?;
+    let kagemusha_mint_finality = load_profile_kagemusha_mint_finality_parameters(
+        spec,
+        &peers,
+        kagemusha_mint_finality_parameters_dir,
+    )?;
     let genesis_json = generate_genesis(
         spec,
         kagami_bin,
         genesis_key.public_key(),
         &bundle_root,
         nexus_xor_asset_definition_id,
+        &kagemusha_mint_finality,
     )?;
-    let peers = build_peers(spec)?;
     let patched_genesis = inject_topology(genesis_json, &peers)?;
     let genesis_path = bundle_root.join("genesis.json");
     write_json(&genesis_path, &patched_genesis)?;
@@ -324,7 +347,13 @@ fn generate_genesis(
     genesis_public_key: &iroha_crypto::PublicKey,
     workdir: &Path,
     nexus_xor_asset_definition_id: Option<&str>,
+    kagemusha_mint_finality: &KagemushaMintFinalityGenesisParametersV1,
 ) -> AnyResult<RawGenesisTransaction> {
+    let parameters_file = tempfile::NamedTempFile::new_in(workdir)?;
+    fs::write(
+        parameters_file.path(),
+        json::to_vec_pretty(kagemusha_mint_finality)?,
+    )?;
     let mut command = Command::new(kagami_bin);
     command.args([
         "genesis",
@@ -337,7 +366,9 @@ fn generate_genesis(
         &genesis_public_key.to_string(),
         "--consensus-mode",
         "npos",
+        "--kagemusha-mint-finality-parameters",
     ]);
+    command.arg(parameters_file.path());
     if spec.requires_seed {
         command.args(["--vrf-seed-hex", &spec.vrf_seed_hex()]);
     }
@@ -378,11 +409,66 @@ fn inject_topology(
     let manifest = manifest
         .into_builder()
         .set_topology(topology)
-        .build_raw()
+        .build_raw()?
         .with_consensus_mode(consensus_mode)
         .with_consensus_meta()
         .with_chain_discriminant(chain_discriminant);
     Ok(manifest)
+}
+
+fn load_profile_kagemusha_mint_finality_parameters(
+    spec: &ProfileSpec,
+    peers: &[PeerMaterial],
+    parameters_dir: &Path,
+) -> AnyResult<KagemushaMintFinalityGenesisParametersV1> {
+    let path = parameters_dir.join(format!("{}.json", spec.slug));
+    let metadata = fs::metadata(&path).map_err(|error| {
+        format!(
+            "read operator-provisioned KAGEMUSHA mint-finality parameters `{}`: {error}",
+            path.display()
+        )
+    })?;
+    if !metadata.is_file() || metadata.len() > KAGEMUSHA_MINT_FINALITY_PARAMETERS_MAX_BYTES {
+        return Err(format!(
+            "operator-provisioned KAGEMUSHA mint-finality parameters `{}` must be a regular file no larger than {} bytes",
+            path.display(),
+            KAGEMUSHA_MINT_FINALITY_PARAMETERS_MAX_BYTES
+        )
+        .into());
+    }
+    let bytes = fs::read(&path)?;
+    let parameters: KagemushaMintFinalityGenesisParametersV1 = json::from_slice(&bytes)?;
+    iroha_core::zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
+        &parameters,
+    )?;
+    let mut expected_validators = peers
+        .iter()
+        .map(|peer| peer.peer_id.clone())
+        .collect::<Vec<_>>();
+    expected_validators.sort();
+    let current_validators = parameters
+        .epoch_roster
+        .validators
+        .iter()
+        .map(|entry| entry.validator.clone())
+        .collect::<Vec<_>>();
+    if current_validators != expected_validators {
+        return Err(format!(
+            "operator-provisioned KAGEMUSHA mint-finality roster `{}` does not match the exact {} profile topology",
+            path.display(),
+            spec.slug
+        )
+        .into());
+    }
+    if parameters.next_epoch_roster.is_some() {
+        return Err(format!(
+            "operator-provisioned KAGEMUSHA mint-finality parameters `{}` must set `next_epoch_roster` to null because the fixed {} profile schedule does not end epoch zero at height one",
+            path.display(),
+            spec.slug
+        )
+        .into());
+    }
+    Ok(parameters)
 }
 fn write_json(path: &Path, value: &RawGenesisTransaction) -> AnyResult<()> {
     let _chain_discriminant = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
@@ -1151,7 +1237,7 @@ fn render_readme(
     let runtime_key_note = if published_private_key_rendering(spec)
         == PrivateKeyRendering::RuntimeFiles
     {
-        "\nRuntime keys:\n- Validator, SoraNet transport, and streaming signing keys are not embedded. Provision the per-peer files named by each config under `/run/secrets/iroha` before starting a validator. The compose file mounts that host directory read-only and startup fails closed when a required file is absent.\n\n\n"
+        "\nRuntime keys:\n- Validator, SoraNet transport, streaming, and KAGEMUSHA mint-finality private keys are not embedded. Provision the per-peer files named by each config plus the private counterparts of the operator-supplied mint-finality public parameters under `/run/secrets/iroha` before starting a validator. The compose file mounts that host directory read-only and startup fails closed when a required configured file is absent.\n\n\n"
     } else {
         "\n"
     };
@@ -1182,7 +1268,7 @@ Files:
 - peer0.toml through peerN.toml — canonical prepared-bundle validator configs
 - docker-compose.yml — full validator committee mounting the shared genesis and per-peer configs
 {runtime_key_note}Regenerate:
-- cargo xtask kagami-profiles --profile {profile}{nexus_regeneration_arg}
+- cargo xtask kagami-profiles --profile {profile} --kagemusha-mint-finality-parameters-dir <AUTHORITY_DIR>{nexus_regeneration_arg}
 "#,
         slug = spec.slug,
         chain = spec.chain_id,
@@ -1387,12 +1473,52 @@ mod tests {
     use iroha_crypto::{HashOf, Signature};
     use iroha_data_model::{account::address::ChainDiscriminantGuard, block::BlockHeader};
     use tempfile::tempdir;
+    trait CompleteTestGenesisBuilder {
+        fn complete_for_test(self) -> Self;
+    }
+    impl CompleteTestGenesisBuilder for iroha_genesis::GenesisBuilder {
+        fn complete_for_test(self) -> Self {
+            let peers = build_peers(&PROFILES[0]).expect("build deterministic test peers");
+            let mut validators = peers
+                .iter()
+                .map(|peer| peer.peer_id.clone())
+                .collect::<Vec<_>>();
+            validators.sort();
+            let validators = validators
+                .into_iter()
+                .enumerate()
+                .map(|(index, validator)| {
+                    iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                        &[0xA0_u8.wrapping_add(u8::try_from(index).expect("small test roster")); 32],
+                        0,
+                        validator,
+                    )
+                    .expect("derive deterministic test mint-finality keys")
+                })
+                .collect();
+            self.with_sumeragi_v2_context_parameters(
+                iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
+            )
+            .with_kagemusha_mint_finality_genesis_parameters(
+                iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1 {
+                    epoch_roster: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterTemplateV1 {
+                        version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
+                        epoch: 0,
+                        validators,
+                    },
+                    next_epoch_roster: None,
+                },
+            )
+        }
+    }
     fn stub_genesis() -> RawGenesisTransaction {
         iroha_genesis::GenesisBuilder::new_without_executor(
             iroha_data_model::ChainId::from("stub"),
             ".",
         )
+        .complete_for_test()
         .build_raw()
+        .expect("complete stub genesis")
     }
     #[test]
     fn portable_bound_profile_manifest_does_not_publish_the_staging_path() {
@@ -1401,7 +1527,9 @@ mod tests {
             iroha_data_model::ChainId::from("stub"),
             staging.path(),
         )
+        .complete_for_test()
         .build_raw()
+        .expect("complete portable bound-manifest fixture")
         .with_consensus_meta();
         let portable = portable_bound_profile_manifest(
             stub_genesis(),
@@ -1428,7 +1556,9 @@ mod tests {
             staging.path().join("executor.to"),
             staging.path(),
         )
+        .complete_for_test()
         .build_raw()
+        .expect("complete leaking bound-manifest fixture")
         .with_consensus_meta();
         let error = portable_bound_profile_manifest(
             stub_genesis(),
@@ -1448,7 +1578,9 @@ mod tests {
             iroha_data_model::ChainId::from("stub"),
             staging.path(),
         )
+        .complete_for_test()
         .build_raw()
+        .expect("complete non-default-discriminant fixture")
         .with_chain_discriminant(non_default_discriminant)
         .with_consensus_meta();
         portable_bound_profile_manifest(
@@ -1468,6 +1600,32 @@ mod tests {
             build_peers(&PROFILES[1]).expect("rebuild deterministic peers")[0]
                 .peer_id
                 .public_key()
+        );
+    }
+    #[test]
+    fn profile_authority_rejects_a_successor_outside_the_fixed_schedule() {
+        let profile = PROFILES[0];
+        let peers = build_peers(&profile).expect("build deterministic profile peers");
+        let mut parameters = stub_genesis()
+            .kagemusha_mint_finality_genesis_parameters()
+            .clone();
+        let mut next_epoch_roster = parameters.epoch_roster.clone();
+        next_epoch_roster.epoch = 1;
+        parameters.next_epoch_roster = Some(next_epoch_roster);
+        let directory = tempdir().expect("profile authority directory");
+        fs::write(
+            directory.path().join(format!("{}.json", profile.slug)),
+            json::to_vec_pretty(&parameters).expect("encode profile authority"),
+        )
+        .expect("write profile authority");
+
+        let error =
+            load_profile_kagemusha_mint_finality_parameters(&profile, &peers, directory.path())
+                .expect_err("fixed profile schedule must reject a successor roster");
+        assert!(
+            error
+                .to_string()
+                .contains("does not end epoch zero at height one")
         );
     }
     #[test]
@@ -1536,7 +1694,9 @@ mod tests {
         )
         .account(account_key.public_key().clone())
         .finish_domain()
+        .complete_for_test()
         .build_raw()
+        .expect("complete chain-discriminant fixture")
         .with_chain_discriminant(369);
         let bundle = tempdir().expect("manifest serialization directory");
         let path = bundle.path().join("genesis.json");
@@ -1903,7 +2063,10 @@ mod tests {
         assert!(readme.contains("genesis.public_key"));
         assert!(readme.contains("genesis.expected_hash"));
         assert!(readme.contains("peer0.toml through peerN.toml"));
-        assert!(readme.contains("cargo xtask kagami-profiles --profile iroha3-dev\n"));
+        assert!(readme.contains(
+            "cargo xtask kagami-profiles --profile iroha3-dev \
+             --kagemusha-mint-finality-parameters-dir <AUTHORITY_DIR>\n"
+        ));
         assert!(!readme.contains("--nexus-xor-asset-definition-id"));
     }
     #[test]
@@ -1943,6 +2106,7 @@ mod tests {
         );
         assert!(readme.contains(
             "cargo xtask kagami-profiles --profile iroha3-nexus \
+             --kagemusha-mint-finality-parameters-dir <AUTHORITY_DIR> \
              --nexus-xor-asset-definition-id xor-definition-id\n"
         ));
         assert!(readme.contains("3 logical lanes (`core`, `governance`, `zk`)"));
@@ -1964,6 +2128,7 @@ mod tests {
             profiles: vec!["all".to_owned()],
             kagami_override: Some(kagami),
             nexus_xor_asset_definition_id: None,
+            kagemusha_mint_finality_parameters_dir: temp.path().join("missing-authority"),
         })
         .expect_err("all-profile generation without the Nexus XOR id must fail");
         assert_eq!(error.to_string(), NEXUS_XOR_ASSET_DEFINITION_ID_REQUIRED);
@@ -2017,6 +2182,7 @@ mod tests {
             profiles: vec![PROFILES[1].slug.to_owned()],
             kagami_override: Some(temp.path().join("unused-kagami")),
             nexus_xor_asset_definition_id: Some("xor#universal".to_owned()),
+            kagemusha_mint_finality_parameters_dir: temp.path().join("missing-authority"),
         })
         .expect_err("invalid Nexus XOR identity must fail before output mutation");
         assert!(

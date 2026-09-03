@@ -25,7 +25,7 @@ use iroha_data_model::{
         BootleLanternIssuerPolicyLifecycleV1, PrivacyProtocolIdV1, privacy_exact12_matrix_bytes_v1,
     },
 };
-use iroha_genesis::{RawGenesisTransaction, validate_genesis_manifest_json};
+use iroha_genesis::validate_genesis_manifest_json;
 use norito::json::{Map as JsonMap, Value as JsonValue};
 use std::{
     collections::BTreeSet,
@@ -61,9 +61,9 @@ const CANONICAL_PLAN_TEMPLATE_V1: &[u8] =
 const CANONICAL_CONFIG_TEMPLATE_V1: &[u8] =
     include_bytes!("../../../../configs/soranexus/taira/config.toml");
 const CANONICAL_GENESIS_TEMPLATE_V1: &[u8] =
-    include_bytes!("../../../../configs/soranexus/taira/genesis.json");
+    include_bytes!("../../../../configs/soranexus/taira/genesis.template.json");
 const GOLDEN_NEVO_UNSIGNED_V2: &[u8] =
-    include_bytes!("../../tests/fixtures/taira_nevo_v2/unsigned-genesis.json");
+    include_bytes!("../../tests/fixtures/taira_nevo_v2/unsigned-genesis.template.json");
 #[cfg(test)]
 const GOLDEN_NEVO_REVIEW_V2: &[u8] =
     include_bytes!("../../tests/fixtures/taira_nevo_v2/review.json");
@@ -71,13 +71,13 @@ const GOLDEN_NEVO_ONBOARDING_V2: &str = "testuﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7
 const GOLDEN_NEVO_API_SIGNER_V2: &str = "testuﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP";
 const GOLDEN_NEVO_INORI_V2: &str = "testuﾛ1QDｺ4ヰｶtBﾂSAﾐﾒｱK8jW7yﾔfｵﾒzｴiﾕｿtﾅFQ4ﾏvヰAｴ3MF4N9";
 const GOLDEN_NEVO_EPR_GUARD_V2: &str = "testuﾛ1Q1ヰﾁﾏ3ﾕmヰGmdLbﾜｦｦﾜF3qﾗﾇ2heEQ6vYｽ9tbEQLuCMJYJT";
-/// Inputs for native validation of one reviewed Taira NEVO unsigned genesis.
+/// Inputs for native validation of one reviewed Taira NEVO genesis source template.
 #[derive(Debug, ClapArgs)]
 pub(super) struct ValidateTairaNevoReviewV1Args {
-    /// Exact unsigned NEVO genesis bound by the review manifest.
+    /// Exact non-signable NEVO genesis source template bound by the review manifest.
     #[arg(long)]
     unsigned_genesis: PathBuf,
-    /// Deterministic public NEVO review manifest binding the unsigned genesis.
+    /// Deterministic public NEVO review manifest binding the genesis source template.
     #[arg(long)]
     review: PathBuf,
 }
@@ -99,7 +99,7 @@ pub(super) struct RenderTairaReleaseV1Args {
     /// Canonical disabled peer-1 Taira config template.
     #[arg(long)]
     config_template: PathBuf,
-    /// Canonical Taira genesis without privacy bootstrap instructions.
+    /// Canonical non-signable Taira genesis source template without privacy bootstrap instructions.
     #[arg(long)]
     genesis_template: PathBuf,
     /// Deterministic public NEVO review manifest binding the genesis template.
@@ -111,7 +111,7 @@ pub(super) struct RenderTairaReleaseV1Args {
     /// Fresh output path for the complete peer-1 release config.
     #[arg(long)]
     config_output: PathBuf,
-    /// Fresh output path for the complete release genesis.
+    /// Fresh `.template.json` output path for the overlaid release genesis source template.
     #[arg(long)]
     genesis_output: PathBuf,
     /// Fresh output path for the verified canonical public broker export.
@@ -167,6 +167,18 @@ pub(super) fn render_taira_release_v1<T: Write>(
     args: &RenderTairaReleaseV1Args,
     writer: &mut std::io::BufWriter<T>,
 ) -> color_eyre::Result<()> {
+    for (label, path) in [
+        ("Taira genesis source input", &args.genesis_template),
+        ("Taira genesis source output", &args.genesis_output),
+    ] {
+        if !path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(".template.json"))
+        {
+            bail!("{label} must use the `.template.json` suffix");
+        }
+    }
     let activation_instructions = read_bounded(
         &args.activation_instructions,
         MAX_INSTRUCTIONS_JSON_BYTES_V1,
@@ -225,7 +237,7 @@ pub(super) fn render_taira_release_v1<T: Write>(
         (
             &args.genesis_output,
             artifacts.genesis.as_slice(),
-            "Taira privacy release genesis",
+            "Taira privacy release genesis source template",
         ),
         (
             &args.broker_public_output,
@@ -239,8 +251,8 @@ pub(super) fn render_taira_release_v1<T: Write>(
         "plan_sha256": (hex::encode(sha256(&artifacts.plan))),
         "config_path": (args.config_output.display().to_string()),
         "config_sha256": (hex::encode(sha256(&artifacts.config))),
-        "genesis_path": (args.genesis_output.display().to_string()),
-        "genesis_sha256": (hex::encode(sha256(&artifacts.genesis))),
+        "genesis_source_template_path": (args.genesis_output.display().to_string()),
+        "genesis_source_template_sha256": (hex::encode(sha256(&artifacts.genesis))),
         "native_recomposition_passed": (artifacts.native_recomposition_passed),
         "broker_public_path": (args.broker_public_output.display().to_string()),
         "broker_public_sha256": (hex::encode(sha256(&artifacts.broker_public))),
@@ -1543,9 +1555,9 @@ fn validate_secret_free_config_template_v1(config: &toml::Value) -> color_eyre::
     let torii = toml_table_field_v1(root, "torii", "Taira config")?;
     expect_toml_string_v1(
         toml_table_field_v1(torii, "kagemusha_v1_commands", "Taira torii config")?,
-        "private_key_file",
-        "/run/secrets/iroha/taira-kagemusha-v1-commands-private-key",
-        "Taira Kagemusha V1 command private-key handle",
+        "redemption_private_key_file",
+        "/run/secrets/iroha/taira-kagemusha-v1-redemption-private-key",
+        "Taira KAGEMUSHA V1 redemption private-key handle",
     )?;
     let onboarding = toml_table_field_v1(torii, "account_onboarding", "Taira torii config")?;
     let onboarding_keys = onboarding
@@ -1694,33 +1706,6 @@ fn render_release_genesis_v1(
     iroha_genesis::init_instruction_registry();
     validate_genesis_manifest_json(bytes)
         .wrap_err("Taira genesis template exceeds fixed resource bounds")?;
-    let decoded_template: RawGenesisTransaction = norito::json::from_slice(bytes)
-        .wrap_err("Taira genesis template cannot be decoded natively")?;
-    if decoded_template.chain_id().as_str() != CHAIN_ID_V1
-        || u64::from(decoded_template.chain_discriminant()) != CHAIN_DISCRIMINANT_V1
-    {
-        bail!("Taira genesis template targets the wrong chain");
-    }
-    for instruction in decoded_template
-        .transactions()
-        .iter()
-        .flat_map(iroha_genesis::RawGenesisTx::instructions)
-    {
-        if instruction
-            .as_any()
-            .downcast_ref::<RegisterPrivacyProtocolActivationV1>()
-            .is_some()
-            || instruction
-                .as_any()
-                .downcast_ref::<RegisterPrivacyBootleLanternIssuerPolicyV1>()
-                .is_some()
-        {
-            bail!(
-                "Taira genesis staging template already contains a privacy bootstrap instruction"
-            );
-        }
-    }
-    drop(decoded_template);
     let genesis: JsonValue =
         norito::json::from_slice(bytes).wrap_err("Taira genesis template is not strict JSON")?;
     let root = object_v1(&genesis, "Taira genesis")?;
@@ -1737,6 +1722,28 @@ fn render_release_genesis_v1(
         .ok_or_else(|| eyre!("Taira genesis has no transaction array"))?;
     if transactions.is_empty() {
         bail!("Taira genesis has no transactions");
+    }
+    for transaction in transactions {
+        let instruction_values = transaction
+            .get("instructions")
+            .ok_or_else(|| eyre!("Taira genesis transaction has no instruction array"))?;
+        let decoded = iroha_genesis::genesis_instructions_json::from_value(instruction_values)
+            .wrap_err("Taira genesis source template contains an invalid instruction")?;
+        for instruction in decoded {
+            if instruction
+                .as_any()
+                .downcast_ref::<RegisterPrivacyProtocolActivationV1>()
+                .is_some()
+                || instruction
+                    .as_any()
+                    .downcast_ref::<RegisterPrivacyBootleLanternIssuerPolicyV1>()
+                    .is_some()
+            {
+                bail!(
+                    "Taira genesis staging template already contains a privacy bootstrap instruction"
+                );
+            }
+        }
     }
     let mut authority_registration_count = 0_usize;
     let mut governance_grant_count = 0_usize;
@@ -2040,7 +2047,7 @@ mod tests {
     const CONFIG_TEMPLATE_V1: &[u8] =
         include_bytes!("../../../../configs/soranexus/taira/config.toml");
     const GENESIS_TEMPLATE_V1: &[u8] =
-        include_bytes!("../../../../configs/soranexus/taira/genesis.json");
+        include_bytes!("../../../../configs/soranexus/taira/genesis.template.json");
     const NEVO_ONBOARDING_ACCOUNT_V1: &str = "testuﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP";
     const NEVO_API_SIGNER_ACCOUNT_V1: &str =
         "testuﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP";
@@ -2462,7 +2469,7 @@ mod tests {
     #[test]
     fn validate_only_nevo_review_rejects_digest_unbound_identity_mutation() {
         let directory = tempfile::tempdir().expect("create NEVO validation directory");
-        let unsigned_genesis_path = directory.path().join("unsigned-genesis.json");
+        let unsigned_genesis_path = directory.path().join("unsigned-genesis.template.json");
         let review_path = directory.path().join("review.json");
         let (genesis, review) = nevo_fixture_v1();
         fs::write(&unsigned_genesis_path, &genesis).expect("write NEVO unsigned genesis");
@@ -2607,10 +2614,16 @@ mod tests {
     #[test]
     fn reviewed_nevo_genesis_carries_exact_ephemeral_alias_authority() {
         let (genesis, _) = nevo_fixture_v1();
-        let raw: RawGenesisTransaction =
-            norito::json::from_slice(&genesis).expect("decode reviewed NEVO genesis");
-        let overlay = raw.transactions().last().expect("NEVO overlay transaction");
-        let instructions = overlay.instructions();
+        let genesis_json: JsonValue =
+            norito::json::from_slice(&genesis).expect("decode reviewed NEVO JSON");
+        let instruction_values = genesis_json
+            .get("transactions")
+            .and_then(JsonValue::as_array)
+            .and_then(|transactions| transactions.last())
+            .and_then(|transaction| transaction.get("instructions"))
+            .expect("reviewed overlay instructions");
+        let instructions = iroha_genesis::genesis_instructions_json::from_value(instruction_values)
+            .expect("decode reviewed NEVO instructions");
         assert_eq!(instructions.len(), 29);
 
         let RegisterBox::Role(register) = instructions[8]
@@ -2671,8 +2684,6 @@ mod tests {
             unregister.object().to_string(),
             GENESIS_ALIAS_BOOTSTRAP_ROLE_ID_V1
         );
-        let genesis_json: JsonValue =
-            norito::json::from_slice(&genesis).expect("decode reviewed NEVO JSON");
         assert!(
             genesis_json
                 .get("transactions")
@@ -2952,7 +2963,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("temporary release directory");
         let plan = directory.path().join("plan.json");
         let config = directory.path().join("config.toml");
-        let genesis = directory.path().join("genesis.json");
+        let genesis = directory.path().join("genesis.template.json");
         fs::write(&config, b"occupied").expect("occupy second path");
         assert!(
             write_new_artifact_set_v1([

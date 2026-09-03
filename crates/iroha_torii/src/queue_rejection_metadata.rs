@@ -43,7 +43,7 @@ impl Error {
             ),
             queue::Error::KagemushaV1OperationCarrierRejected { .. } => (
                 "kagemusha_v1_operation_carrier_rejected",
-                "Kagemusha V1 operation carrier failed canonical admission",
+                "KAGEMUSHA V1 operation carrier failed canonical admission",
             ),
             queue::Error::UnresolvedRoute { .. } => (
                 "queue_unresolved_route",
@@ -59,11 +59,11 @@ impl Error {
             ),
             queue::Error::KagemushaV1OperationIdConflict { .. } => (
                 "kagemusha_v1_operation_id_conflict",
-                "Kagemusha V1 operation identifier is already pending",
+                "KAGEMUSHA V1 operation identifier is already pending",
             ),
             queue::Error::KagemushaV1OperationIndexInconsistent { .. } => (
                 "kagemusha_v1_operation_index_inconsistent",
-                "Kagemusha V1 pending-operation index requires recovery",
+                "KAGEMUSHA V1 pending-operation index requires recovery",
             ),
             queue::Error::UnregisteredAuthority { .. } => (
                 "unregistered_authority",
@@ -193,7 +193,7 @@ fn queue_rejection_metadata(err: &queue::Error) -> (&'static str, String) {
         queue::Error::Expired => ("ED07", "transaction expired before admission".to_owned()),
         queue::Error::KagemushaV1OperationCarrierRejected { reason } => (
             "PRTRY:KAGEMUSHA_V1_OPERATION_CARRIER_REJECTED",
-            format!("Kagemusha V1 operation carrier failed canonical admission: {reason}"),
+            format!("KAGEMUSHA V1 operation carrier failed canonical admission: {reason}"),
         ),
         queue::Error::UnresolvedRoute { reason } => (
             "PRTRY:ROUTE_UNRESOLVED",
@@ -213,13 +213,13 @@ fn queue_rejection_metadata(err: &queue::Error) -> (&'static str, String) {
         } => (
             "PRTRY:KAGEMUSHA_V1_OPERATION_ID_CONFLICT",
             format!(
-                "Kagemusha V1 operation {} is already pending as entrypoint {existing_entrypoint_hash}",
+                "KAGEMUSHA V1 operation {} is already pending as entrypoint {existing_entrypoint_hash}",
                 hex::encode(operation_id)
             ),
         ),
         queue::Error::KagemushaV1OperationIndexInconsistent { reason } => (
             "PRTRY:KAGEMUSHA_V1_OPERATION_INDEX_INCONSISTENT",
-            format!("Kagemusha V1 pending-operation index requires recovery: {reason}"),
+            format!("KAGEMUSHA V1 pending-operation index requires recovery: {reason}"),
         ),
         queue::Error::UnregisteredAuthority { authority } => (
             "PRTRY:UNREGISTERED_AUTHORITY",

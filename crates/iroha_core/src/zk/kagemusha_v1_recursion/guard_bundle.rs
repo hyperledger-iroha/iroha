@@ -22,12 +22,12 @@ use halo2_proofs::{
     circuit::{Layouter, V1},
     plonk::{Circuit, ConstraintSystem, Error as PlonkError},
 };
-use iroha_data_model::nexus::AxtAssetIncarnationV1;
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_ASSET_SCALE_MAX_V1, KAGEMUSHA_HALO2_K_V1,
     KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KAGEMUSHA_WIRE_VERSION_V1,
     KagemushaDevicePublicKeyV1, kagemusha_device_key_reference_v1,
 };
+use iroha_data_model::nexus::AxtAssetIncarnationV1;
 use sha2::{Digest as _, Sha256};
 
 use super::{DigestV1, KagemushaNormalizedGuardStatementV1, KagemushaOperationV1};
@@ -61,6 +61,43 @@ use super::deferred_parent::{
 /// hops, or proof history.  A profile may issue any number of device credentials.
 pub const KAGEMUSHA_HARDWARE_POLICY_TREE_DEPTH_V1: usize = 16;
 
+/// Fixed release-manifest table width used by circuits that authenticate a qualified profile.
+///
+/// This bounds the number of hardware profiles in one release manifest. It does not bound
+/// devices, payments, received credits, balance history, proof depth, or the ability to spend a
+/// valid credit.
+pub(crate) const KAGEMUSHA_ENABLED_HARDWARE_PROFILE_SLOTS_V1: usize = 64;
+
+/// Constrain a hidden hardware-profile identifier to an enabled release-manifest entry.
+///
+/// Every slot, including canonical zero padding, is loaded as a circuit constant so setup and
+/// proving retain identical topology. `selector` controls whether membership is required.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) fn constrain_enabled_hardware_profile_membership_v1<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut Context<F>,
+    range: &RangeChip<F>,
+    selector: AssignedValue<F>,
+    hidden_profile: [AssignedValue<F>; 2],
+    enabled_profiles: &[DigestV1; KAGEMUSHA_ENABLED_HARDWARE_PROFILE_SLOTS_V1],
+) {
+    let gate = range.gate();
+    let mut matched = ctx.load_constant(F::ZERO);
+    for profile in enabled_profiles {
+        let limbs = crate::zk::kagemusha_v1_poseidon::digest_limbs::<F>(*profile);
+        let low = ctx.load_constant(limbs[0]);
+        let high = ctx.load_constant(limbs[1]);
+        let low_equal = gate.is_equal(ctx, hidden_profile[0], low);
+        let high_equal = gate.is_equal(ctx, hidden_profile[1], high);
+        let slot_match = gate.and(ctx, low_equal, high_equal);
+        let product = gate.mul(ctx, matched, slot_match);
+        let sum = gate.add(ctx, matched, slot_match);
+        matched = gate.sub(ctx, sum, product);
+    }
+    let missing = gate.not(ctx, matched);
+    let selected = gate.mul(ctx, selector, missing);
+    gate.assert_is_const(ctx, &selected, &F::ZERO);
+}
+
 const MINIMUM_UNUSABLE_ROWS: usize = 9;
 const DEVICE_KEY_REFERENCE_DOMAIN: &[u8] = b"iroha:kagemusha:v1:device-key-reference";
 const DEVICE_AUTHORITY_DOMAIN: &[u8] = b"iroha:kagemusha:v1:device-proof-authority";
@@ -92,7 +129,7 @@ pub(super) fn normalized_guard_statement_digest_v1(
 fn normalized_guard_statement_payload_v1(
     statement: &super::KagemushaNormalizedGuardStatementV1,
 ) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(1_152);
+    let mut bytes = Vec::with_capacity(1_282);
     bytes.extend_from_slice(&statement.version.to_le_bytes());
     bytes.extend_from_slice(&statement.protocol_version.to_le_bytes());
     bytes.extend_from_slice(&statement.predecessor_suite_id);
@@ -104,6 +141,7 @@ fn normalized_guard_statement_payload_v1(
     bytes.extend_from_slice(&statement.peer_credit_id);
     bytes.extend_from_slice(&statement.peer_recipient_lane_id);
     bytes.extend_from_slice(&statement.mint_finality_proof_binding_digest);
+    bytes.extend_from_slice(&statement.predecessor_release_id);
     bytes.extend_from_slice(&statement.release_id);
     bytes.extend_from_slice(&statement.network_id);
     bytes.extend_from_slice(&statement.asset_id);
@@ -137,7 +175,9 @@ fn normalized_guard_statement_payload_v1(
     bytes.extend_from_slice(&statement.precommit_binding_digest);
     bytes.extend_from_slice(&statement.terminal_commit_binding_digest);
     bytes.extend_from_slice(&statement.sender_one_time_authorization_digest);
-    bytes.extend_from_slice(&statement.rotate_verifier_authorization_digest);
+    bytes.extend_from_slice(&statement.suite_upgrade_authorization_digest);
+    bytes.push(statement.receive_active_count);
+    bytes.extend_from_slice(&statement.receive_credit_binding_digest);
     bytes.extend_from_slice(&statement.transition_intent_digest);
     bytes.extend_from_slice(&statement.transition_effect_digest);
     bytes.extend_from_slice(&statement.recovery_record_digest);
@@ -153,7 +193,8 @@ const fn operation_tag(operation: super::KagemushaOperationV1) -> u8 {
         super::KagemushaOperationV1::SendSplit => 2,
         super::KagemushaOperationV1::ReceiveFold => 3,
         super::KagemushaOperationV1::RedeemSplit => 4,
-        super::KagemushaOperationV1::Rotate => 5,
+        super::KagemushaOperationV1::SuiteUpgrade => 5,
+        super::KagemushaOperationV1::Rotate => 6,
     }
 }
 
@@ -302,10 +343,11 @@ impl KagemushaPlatformCredentialRelationWitnessV1 {
 
 /// Complete semantic witness for one hardware-authorized aggregate transition.
 ///
-/// The two credential proofs are supplied separately to the recursive wrapper. This witness
+/// The two credential proofs are supplied separately to the aggregate recursion circuit. This witness
 /// contains only their exact statements and the device-owned secrets that each credential binds.
-/// A rotation proves possession of both the consumed and replacement device authorities; every
-/// other operation uses one byte-identical credential in both fixed slots.
+/// A rotation proves possession of both the consumed and replacement device authorities. A suite
+/// upgrade keeps the hardware authority fixed while bridging to the successor suite credential;
+/// every other operation uses one byte-identical credential in both fixed slots.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KagemushaGuardBundleRelationWitnessV1 {
     /// Canonical fixed-layout transition statement.
@@ -361,9 +403,7 @@ impl KagemushaGuardBundleRelationWitnessV1 {
                     || self.predecessor_device_authority_secret
                         != self.successor_device_authority_secret
                 {
-                    return Err(
-                        "Kagemusha bootstrap credential slots must be identical".to_owned()
-                    );
+                    return Err("Kagemusha bootstrap credential slots must be identical".to_owned());
                 }
             }
             KagemushaOperationV1::Rotate => {
@@ -384,6 +424,26 @@ impl KagemushaGuardBundleRelationWitnessV1 {
                     || self.predecessor_credential == self.successor_credential
                 {
                     return Err("invalid Kagemusha hardware rotation".to_owned());
+                }
+            }
+            KagemushaOperationV1::SuiteUpgrade => {
+                validate_predecessor_credential_binding(
+                    &self.statement,
+                    &self.predecessor_credential,
+                )?;
+                if self.predecessor_device_authority_secret
+                    != self.successor_device_authority_secret
+                    || self.statement.predecessor_hardware_epoch_generation
+                        != self.statement.successor_hardware_epoch_generation
+                    || self.statement.predecessor_hardware_epoch_id
+                        != self.statement.successor_hardware_epoch_id
+                    || self.statement.predecessor_key_reference
+                        != self.statement.successor_key_reference
+                    || self.statement.predecessor_hardware_policy_id
+                        != self.statement.successor_hardware_policy_id
+                    || self.predecessor_credential == self.successor_credential
+                {
+                    return Err("invalid Kagemusha suite-upgrade credential bridge".to_owned());
                 }
             }
             _ => {
@@ -433,7 +493,6 @@ fn validate_common_credential_binding(
 ) -> Result<(), String> {
     if credential.version != guard.version
         || credential.protocol_version != guard.protocol_version
-        || credential.release_id != guard.release_id
         || credential.network_id != guard.network_id
         || credential.asset_id != guard.asset_id
         || credential.asset_incarnation != guard.asset_incarnation
@@ -453,7 +512,8 @@ fn validate_predecessor_credential_binding(
     guard: &KagemushaNormalizedGuardStatementV1,
     credential: &KagemushaPlatformCredentialStatementV1,
 ) -> Result<(), String> {
-    if credential.suite_id != guard.predecessor_suite_id
+    if credential.release_id != guard.predecessor_release_id
+        || credential.suite_id != guard.predecessor_suite_id
         || credential.hardware_epoch_generation != guard.predecessor_hardware_epoch_generation
         || credential.hardware_epoch_id != guard.predecessor_hardware_epoch_id
         || credential.key_reference != guard.predecessor_key_reference
@@ -468,7 +528,8 @@ fn validate_successor_credential_binding(
     guard: &KagemushaNormalizedGuardStatementV1,
     credential: &KagemushaPlatformCredentialStatementV1,
 ) -> Result<(), String> {
-    if credential.suite_id != guard.successor_suite_id
+    if credential.release_id != guard.release_id
+        || credential.suite_id != guard.successor_suite_id
         || credential.hardware_epoch_generation != guard.successor_hardware_epoch_generation
         || credential.hardware_epoch_id != guard.successor_hardware_epoch_id
         || credential.key_reference != guard.successor_key_reference
@@ -599,9 +660,7 @@ where
     }
     let mut builder = BaseCircuitBuilder::new(false)
         .use_k(usize::try_from(KAGEMUSHA_HALO2_K_V1).expect("k fits usize"))
-        .use_lookup_bits(
-            usize::try_from(KAGEMUSHA_HALO2_K_V1 - 1).expect("lookup bits fit usize"),
-        )
+        .use_lookup_bits(usize::try_from(KAGEMUSHA_HALO2_K_V1 - 1).expect("lookup bits fit usize"))
         .use_instance_columns(1);
     let range = builder.range_chip();
     let ctx = builder.main(0);
@@ -802,7 +861,7 @@ where
     Ok((builder, jobs))
 }
 
-/// Assigned semantic outputs consumed by the recursive GuardBundle wrapper.
+/// Assigned semantic outputs consumed by the aggregate recursion circuit.
 pub(super) struct KagemushaAssignedGuardBundleV1<F: KagemushaPoseidonFieldV1> {
     /// Canonical normalized statement digest.
     pub(super) guard_digest: [PastaSha256ByteV1<F>; 32],
@@ -818,6 +877,7 @@ pub(super) struct KagemushaAssignedGuardBundleV1<F: KagemushaPoseidonFieldV1> {
     pub(super) peer_credit_id: [AssignedValue<F>; 2],
     pub(super) peer_recipient_lane_id: [AssignedValue<F>; 2],
     pub(super) mint_finality_proof_binding_digest: [AssignedValue<F>; 2],
+    pub(super) predecessor_release_id: [AssignedValue<F>; 2],
     pub(super) release_id: [AssignedValue<F>; 2],
     pub(super) network_id: [AssignedValue<F>; 2],
     pub(super) asset_id: [AssignedValue<F>; 2],
@@ -847,7 +907,9 @@ pub(super) struct KagemushaAssignedGuardBundleV1<F: KagemushaPoseidonFieldV1> {
     pub(super) precommit_binding_digest: [AssignedValue<F>; 2],
     pub(super) terminal_commit_binding_digest: [AssignedValue<F>; 2],
     pub(super) sender_one_time_authorization_digest: [AssignedValue<F>; 2],
-    pub(super) rotate_verifier_authorization_digest: [AssignedValue<F>; 2],
+    pub(super) suite_upgrade_authorization_digest: [AssignedValue<F>; 2],
+    pub(super) receive_active_count: AssignedValue<F>,
+    pub(super) receive_credit_binding_digest: [AssignedValue<F>; 2],
     pub(super) transition_intent: [AssignedValue<F>; 2],
     pub(super) transition_effect: [AssignedValue<F>; 2],
     pub(super) recovery_record: [AssignedValue<F>; 2],
@@ -914,7 +976,7 @@ where
         u128::from(operation_tag(statement.operation)),
         8,
     );
-    let selectors: [AssignedValue<F>; 6] = core::array::from_fn(|tag| {
+    let selectors: [AssignedValue<F>; 7] = core::array::from_fn(|tag| {
         gate.is_equal(
             ctx,
             operation.value,
@@ -932,7 +994,8 @@ where
     let inbound = gate.add(ctx, selectors[1], selectors[3]);
     let outbound = gate.add(ctx, regular_send, selectors[4]);
     let uses_outbox = gate.add(ctx, selectors[2], selectors[4]);
-    let rotate = selectors[5];
+    let suite_upgrade = selectors[5];
+    let rotate = selectors[6];
     let exact_next = gate.sum(
         ctx,
         [
@@ -940,11 +1003,13 @@ where
             regular_send,
             selectors[3],
             selectors[4],
+            selectors[5],
         ],
     );
-    let journal_next = gate.sum(ctx, selectors[1..5].iter().copied());
+    let journal_next = gate.sum(ctx, selectors[1..6].iter().copied());
     let non_bootstrap = gate.not(ctx, bootstrap);
-    let empty_effect_operation = gate.add(ctx, bootstrap, rotate);
+    let bootstrap_or_upgrade = gate.add(ctx, bootstrap, suite_upgrade);
+    let empty_effect_operation = gate.add(ctx, bootstrap_or_upgrade, rotate);
     let monetary = gate.sum(
         ctx,
         [selectors[1], regular_send, selectors[3], selectors[4]],
@@ -971,6 +1036,7 @@ where
     let not_mint = gate.not(ctx, selectors[1]);
     assert_if_digest_zero(ctx, &range, not_mint, &mint_finality_proof_binding_digest);
 
+    let predecessor_release = assign_digest(ctx, &range, statement.predecessor_release_id);
     let release = assign_digest(ctx, &range, statement.release_id);
     let network = assign_digest(ctx, &range, statement.network_id);
     let asset = assign_digest(ctx, &range, statement.asset_id);
@@ -1019,8 +1085,11 @@ where
     let terminal_commit = assign_digest(ctx, &range, statement.terminal_commit_binding_digest);
     let sender_authorization =
         assign_digest(ctx, &range, statement.sender_one_time_authorization_digest);
-    let rotate_verifier_authorization =
-        assign_digest(ctx, &range, statement.rotate_verifier_authorization_digest);
+    let suite_upgrade_authorization =
+        assign_digest(ctx, &range, statement.suite_upgrade_authorization_digest);
+    let receive_active_count =
+        assign_uint_le(ctx, &range, u128::from(statement.receive_active_count), 8);
+    let receive_batch_binding = assign_digest(ctx, &range, statement.receive_credit_binding_digest);
     let intent = assign_digest(ctx, &range, statement.transition_intent_digest);
     let effect = assign_digest(ctx, &range, statement.transition_effect_digest);
     let recovery = assign_digest(ctx, &range, statement.recovery_record_digest);
@@ -1064,6 +1133,7 @@ where
     gate.assert_is_const(ctx, &incarnation_bits[0], &F::ONE);
     assert_if_digest_zero(ctx, &range, bootstrap, &predecessor_suite);
     assert_if_digest_zero(ctx, &range, bootstrap, &predecessor_vk);
+    assert_if_digest_zero(ctx, &range, bootstrap, &predecessor_release);
     assert_if_digest_zero(ctx, &range, bootstrap, &predecessor_state);
     assert_if_digest_zero(ctx, &range, bootstrap, &predecessor_nonce);
     assert_if_digest_zero(ctx, &range, bootstrap, &predecessor_epoch);
@@ -1076,6 +1146,7 @@ where
     assert_if_zero(ctx, &range, bootstrap, journal_after.value);
 
     for digest in [
+        &predecessor_release,
         &predecessor_suite,
         &predecessor_vk,
         &predecessor_state,
@@ -1086,22 +1157,8 @@ where
     ] {
         assert_if_digest_nonzero(ctx, &range, non_bootstrap, digest);
     }
-    let verifier_authorization_limbs = digest_limbs_assigned(ctx, &rotate_verifier_authorization);
-    let verifier_authorization_low_zero = gate.is_zero(ctx, verifier_authorization_limbs[0]);
-    let verifier_authorization_high_zero = gate.is_zero(ctx, verifier_authorization_limbs[1]);
-    let verifier_authorization_absent = gate.and(
-        ctx,
-        verifier_authorization_low_zero,
-        verifier_authorization_high_zero,
-    );
-    let verifier_authorization_present = gate.not(ctx, verifier_authorization_absent);
-    let rotate_same_verifier = gate.mul(ctx, rotate, verifier_authorization_absent);
-    let rotate_new_verifier = gate.mul(ctx, rotate, verifier_authorization_present);
-    let not_rotate = gate.not(ctx, rotate);
-    let invalid_verifier_authorization =
-        gate.mul(ctx, not_rotate, verifier_authorization_present);
-    gate.assert_is_const(ctx, &invalid_verifier_authorization, &F::ZERO);
-    let same_suite = gate.sum(ctx, [monetary, rotate_same_verifier, no_commit_closure]);
+    let same_suite = gate.sum(ctx, [monetary, rotate, no_commit_closure]);
+    assert_if_digest_equal(ctx, &range, same_suite, &predecessor_release, &release);
     assert_if_digest_equal(
         ctx,
         &range,
@@ -1110,20 +1167,15 @@ where
         &successor_suite,
     );
     assert_if_digest_equal(ctx, &range, same_suite, &predecessor_vk, &successor_vk);
+    assert_if_digest_different(ctx, &range, suite_upgrade, &predecessor_release, &release);
     assert_if_digest_different(
         ctx,
         &range,
-        rotate_new_verifier,
+        suite_upgrade,
         &predecessor_suite,
         &successor_suite,
     );
-    assert_if_digest_different(
-        ctx,
-        &range,
-        rotate_new_verifier,
-        &predecessor_vk,
-        &successor_vk,
-    );
+    assert_if_digest_different(ctx, &range, suite_upgrade, &predecessor_vk, &successor_vk);
 
     assert_if_digest_nonzero(ctx, &range, uses_outbox, &precommit);
     let no_outbox = gate.not(ctx, uses_outbox);
@@ -1145,12 +1197,17 @@ where
     assert_if_equal_value(ctx, &range, peer, terminal_present, sender_present);
     assert_if_digest_zero(ctx, &range, no_commit_closure, &terminal_commit);
     assert_if_digest_nonzero(ctx, &range, no_commit_closure, &sender_authorization);
-    assert_if_digest_nonzero(
-        ctx,
-        &range,
-        rotate_new_verifier,
-        &rotate_verifier_authorization,
-    );
+    assert_if_digest_nonzero(ctx, &range, suite_upgrade, &suite_upgrade_authorization);
+    let not_suite_upgrade = gate.not(ctx, suite_upgrade);
+    assert_if_digest_zero(ctx, &range, not_suite_upgrade, &suite_upgrade_authorization);
+    let receive = selectors[3];
+    let not_receive = gate.not(ctx, receive);
+    assert_if_nonzero(ctx, &range, receive, receive_active_count.value);
+    assert_if_zero(ctx, &range, not_receive, receive_active_count.value);
+    let count_below_seventeen = range.is_less_than_safe(ctx, receive_active_count.value, 17);
+    gate.assert_is_const(ctx, &count_below_seventeen, &F::ONE);
+    assert_if_digest_nonzero(ctx, &range, receive, &receive_batch_binding);
+    assert_if_digest_zero(ctx, &range, not_receive, &receive_batch_binding);
     let state_changes = gate.add(ctx, exact_next, rotate);
     assert_if_digest_different(
         ctx,
@@ -1248,7 +1305,6 @@ where
         );
         for (credential_value, guard_value) in [
             (&credential.asset_incarnation, &asset_incarnation),
-            (&credential.release_id, &release),
             (&credential.network_id, &network),
             (&credential.asset_id, &asset),
             (&credential.liability_pool_id, &pool),
@@ -1261,6 +1317,14 @@ where
         assert_equal_value(ctx, credential.asset_scale.value, scale.value);
         assert_equal_value(ctx, credential.policy_epoch.value, policy_epoch.value);
     }
+    bind_equal_digest(ctx, &range, &successor_credential.release_id, &release);
+    assert_if_digest_equal(
+        ctx,
+        &range,
+        non_bootstrap,
+        &predecessor_credential.release_id,
+        &predecessor_release,
+    );
     bind_equal_digest(
         ctx,
         &range,
@@ -1333,12 +1397,20 @@ where
         &predecessor_credential.digest,
         &successor_credential.digest,
     );
+    let changed_credential = gate.add(ctx, suite_upgrade, rotate);
     assert_if_digest_different(
         ctx,
         &range,
-        rotate,
+        changed_credential,
         &predecessor_credential.digest,
         &successor_credential.digest,
+    );
+    constrain_suite_upgrade_authority_continuity_v1(
+        ctx,
+        &range,
+        suite_upgrade,
+        &predecessor_credential.device_authority_commitment,
+        &successor_credential.device_authority_commitment,
     );
 
     for (secret, credential) in [
@@ -1398,6 +1470,7 @@ where
             peer_credit_id.to_vec(),
             peer_recipient_lane_id.to_vec(),
             mint_finality_proof_binding_digest.to_vec(),
+            predecessor_release.to_vec(),
             release.to_vec(),
             network.to_vec(),
             asset.to_vec(),
@@ -1427,7 +1500,9 @@ where
             precommit.to_vec(),
             terminal_commit.to_vec(),
             sender_authorization.to_vec(),
-            rotate_verifier_authorization.to_vec(),
+            suite_upgrade_authorization.to_vec(),
+            receive_active_count.bytes,
+            receive_batch_binding.to_vec(),
             intent.to_vec(),
             effect.to_vec(),
             recovery.to_vec(),
@@ -1452,6 +1527,7 @@ where
             ctx,
             &mint_finality_proof_binding_digest,
         ),
+        predecessor_release_id: digest_limbs_assigned(ctx, &predecessor_release),
         release_id: digest_limbs_assigned(ctx, &release),
         network_id: digest_limbs_assigned(ctx, &network),
         asset_id: digest_limbs_assigned(ctx, &asset),
@@ -1481,10 +1557,12 @@ where
         precommit_binding_digest: digest_limbs_assigned(ctx, &precommit),
         terminal_commit_binding_digest: digest_limbs_assigned(ctx, &terminal_commit),
         sender_one_time_authorization_digest: digest_limbs_assigned(ctx, &sender_authorization),
-        rotate_verifier_authorization_digest: digest_limbs_assigned(
+        suite_upgrade_authorization_digest: digest_limbs_assigned(
             ctx,
-            &rotate_verifier_authorization,
+            &suite_upgrade_authorization,
         ),
+        receive_active_count: receive_active_count.value,
+        receive_credit_binding_digest: digest_limbs_assigned(ctx, &receive_batch_binding),
         transition_intent: digest_limbs_assigned(ctx, &intent),
         transition_effect: digest_limbs_assigned(ctx, &effect),
         recovery_record: digest_limbs_assigned(ctx, &recovery),
@@ -1876,9 +1954,7 @@ where
     }
     let mut builder = BaseCircuitBuilder::new(false)
         .use_k(usize::try_from(KAGEMUSHA_HALO2_K_V1).expect("k fits usize"))
-        .use_lookup_bits(
-            usize::try_from(KAGEMUSHA_HALO2_K_V1 - 1).expect("lookup bits fit usize"),
-        )
+        .use_lookup_bits(usize::try_from(KAGEMUSHA_HALO2_K_V1 - 1).expect("lookup bits fit usize"))
         .use_instance_columns(1);
     let mut sha_jobs = PastaSha256JobsV1::default();
     let assigned = constrain_guard_bundle_semantics_v1(&mut builder, &mut sha_jobs, &relation)?;
@@ -2237,6 +2313,27 @@ fn assert_if_digest_equal<F: KagemushaPoseidonFieldV1>(
     }
 }
 
+/// Preserve the device authority across a suite bridge, but not an epoch rotation.
+///
+/// The enclosing relation separately proves both nonzero secret openings against these
+/// credential commitments. Their equality therefore binds the same authority under the
+/// existing SHA-256 binding assumption, even though the suite credentials must differ.
+fn constrain_suite_upgrade_authority_continuity_v1<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut Context<F>,
+    range: &RangeChip<F>,
+    suite_upgrade: AssignedValue<F>,
+    predecessor_authority: &[PastaSha256ByteV1<F>; 32],
+    successor_authority: &[PastaSha256ByteV1<F>; 32],
+) {
+    assert_if_digest_equal(
+        ctx,
+        range,
+        suite_upgrade,
+        predecessor_authority,
+        successor_authority,
+    );
+}
+
 fn assert_if_digest_different<F: KagemushaPoseidonFieldV1>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -2442,6 +2539,7 @@ mod tests {
                 peer_credit_id: [20; 32],
                 peer_recipient_lane_id: [21; 32],
                 mint_finality_proof_binding_digest: [0; 32],
+                predecessor_release_id: credential.release_id,
                 release_id: credential.release_id,
                 network_id: credential.network_id,
                 asset_id: credential.asset_id,
@@ -2471,7 +2569,9 @@ mod tests {
                 precommit_binding_digest: [0x34; 32],
                 terminal_commit_binding_digest: [0; 32],
                 sender_one_time_authorization_digest: [0; 32],
-                rotate_verifier_authorization_digest: [0; 32],
+                suite_upgrade_authorization_digest: [0; 32],
+                receive_active_count: 0,
+                receive_credit_binding_digest: [0; 32],
                 transition_intent_digest: [16; 32],
                 transition_effect_digest: [17; 32],
                 recovery_record_digest: [18; 32],
@@ -2573,15 +2673,152 @@ mod tests {
     }
 
     #[test]
+    fn non_upgrade_guard_rejects_release_transition_substitution() {
+        let mut witness = guard_witness();
+        witness.statement.predecessor_release_id[0] ^= 1;
+        witness.predecessor_credential.release_id = witness.statement.predecessor_release_id;
+        assert!(witness.validate().is_err());
+    }
+
+    #[test]
     fn guard_digest_is_fixed_layout_and_field_sensitive() {
         let witness = guard_witness();
         assert_eq!(
             normalized_guard_statement_payload_v1(&witness.statement).len(),
-            1_250
+            1_282
         );
         let digest = witness.statement_digest();
         let mut changed = witness;
         changed.statement.policy_epoch += 1;
         assert_ne!(digest, changed.statement_digest());
+    }
+
+    /// Exercise only the production assigned authority-continuity subrelation. In particular,
+    /// this harness does not call native witness validation, verify credential proofs, or claim
+    /// to qualify the complete GuardBundle relation or its separate SHA opening constraints.
+    fn authority_continuity_circuit<F: KagemushaPoseidonFieldV1>(
+        operation: KagemushaOperationV1,
+        predecessor_authority: DigestV1,
+        successor_authority: DigestV1,
+    ) -> BaseCircuitBuilder<F> {
+        let mut builder = BaseCircuitBuilder::new(false)
+            .use_k(9)
+            .use_lookup_bits(8)
+            .use_instance_columns(1);
+        let range = builder.range_chip();
+        let ctx = builder.main(0);
+        let operation = ctx.load_witness(F::from(u64::from(operation_tag(operation))));
+        let suite_upgrade = range.gate().is_equal(
+            ctx,
+            operation,
+            QuantumCell::Constant(F::from(u64::from(operation_tag(
+                KagemushaOperationV1::SuiteUpgrade,
+            )))),
+        );
+        let predecessor = assign_digest(ctx, &range, predecessor_authority);
+        let successor = assign_digest(ctx, &range, successor_authority);
+        constrain_suite_upgrade_authority_continuity_v1(
+            ctx,
+            &range,
+            suite_upgrade,
+            &predecessor,
+            &successor,
+        );
+        builder.assigned_instances = vec![vec![operation]];
+        builder.calculate_params(Some(MINIMUM_UNUSABLE_ROWS));
+        builder
+    }
+
+    fn check_authority_continuity_for_secrets<F: KagemushaPoseidonFieldV1>() {
+        let original_authority = device_authority_commitment_v1([0x41; 32]);
+        let changed_authority = device_authority_commitment_v1([0x42; 32]);
+        assert_ne!(original_authority, changed_authority);
+        for (operation, successor_authority, accepted) in [
+            (KagemushaOperationV1::SuiteUpgrade, original_authority, true),
+            (KagemushaOperationV1::SuiteUpgrade, changed_authority, false),
+            (KagemushaOperationV1::Rotate, changed_authority, true),
+        ] {
+            let circuit = authority_continuity_circuit::<F>(
+                operation,
+                original_authority,
+                successor_authority,
+            );
+            assert_eq!(
+                MockProver::run(
+                    9,
+                    &circuit,
+                    vec![vec![F::from(u64::from(operation_tag(operation)))]]
+                )
+                .expect("assigned authority-continuity prover")
+                .verify()
+                .is_ok(),
+                accepted,
+                "unexpected assigned authority-continuity result for {operation:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn guard_suite_upgrade_authority_continuity_preserves_secret_both_parities() {
+        check_authority_continuity_for_secrets::<Fp>();
+        check_authority_continuity_for_secrets::<Fq>();
+    }
+
+    fn check_authority_continuity_commitment_bytes<F: KagemushaPoseidonFieldV1>() {
+        let original_authority = device_authority_commitment_v1([0x41; 32]);
+        let operation = KagemushaOperationV1::SuiteUpgrade;
+        for index in 0..32 {
+            let mut substituted_authority = original_authority;
+            substituted_authority[index] ^= 1;
+            let circuit = authority_continuity_circuit::<F>(
+                operation,
+                original_authority,
+                substituted_authority,
+            );
+            assert!(
+                MockProver::run(
+                    9,
+                    &circuit,
+                    vec![vec![F::from(u64::from(operation_tag(operation)))]]
+                )
+                .expect("assigned authority-byte substitution prover")
+                .verify()
+                .is_err(),
+                "suite upgrade did not bind authority commitment byte {index}"
+            );
+        }
+    }
+
+    #[test]
+    fn guard_suite_upgrade_authority_continuity_binds_every_byte_both_parities() {
+        check_authority_continuity_commitment_bytes::<Fp>();
+        check_authority_continuity_commitment_bytes::<Fq>();
+    }
+
+    fn check_authority_continuity_operation_binding<F: KagemushaPoseidonFieldV1>() {
+        let circuit = authority_continuity_circuit::<F>(
+            KagemushaOperationV1::Rotate,
+            device_authority_commitment_v1([0x41; 32]),
+            device_authority_commitment_v1([0x42; 32]),
+        );
+        assert!(
+            MockProver::run(
+                9,
+                &circuit,
+                vec![vec![F::from(u64::from(operation_tag(
+                    KagemushaOperationV1::SuiteUpgrade,
+                )))]],
+            )
+            .expect("assigned authority operation-substitution prover")
+            .verify()
+            .is_err(),
+            "a changed-authority rotation cannot be relabeled as a suite upgrade"
+        );
+    }
+
+    #[test]
+    fn guard_suite_upgrade_authority_continuity_binds_operation_both_parities() {
+        check_authority_continuity_operation_binding::<Fp>();
+        check_authority_continuity_operation_binding::<Fq>();
     }
 }

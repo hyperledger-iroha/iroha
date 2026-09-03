@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the closed Kagemusha V1 release-evidence filesystem projection.
+"""Verify the closed KAGEMUSHA V1 release-evidence filesystem projection.
 
 This verifier never executes code selected by the candidate evidence bundle.
 It pins every input by descriptor, derives byte/count measurements from the
@@ -68,8 +68,8 @@ PAIRED_PROOF_MAX_BYTES = 6_528
 # ceiling limits filesystem work only; their admissible lengths come from the
 # authenticated compiled-protocol profile and are checked exactly below.
 INTERNAL_PROOF_RESOURCE_MAX_BYTES = MAX_ARTIFACT_BYTES
-RAW_SESSION_MAX_BYTES = 9_211
-TEXT_SESSION_MAX_BYTES = 12_288
+RAW_COMPLETE_EXCHANGE_MAX_BYTES = 9_211
+TEXT_COMPLETE_EXCHANGE_MAX_BYTES = 12_288
 PROCESS_RSS_MAX_BYTES = 128 * 1024 * 1024
 PROVE_P95_MAX_MS = 10_000
 VERIFY_P95_MAX_MS = 1_000
@@ -79,10 +79,15 @@ MIN_AGGREGATED_CREDITS = 1_000
 MIN_THERMAL_FOLDED_CREDITS = 1_000
 HALO2_K = 16
 MAX_CIRCUIT_ROWS = 1 << HALO2_K
+RECEIVE_FOLD_BATCH_WIDTH = 16
 
 ARTIFACT_ROLES = (
     "params_eq",
     "params_ep",
+    "inner_state_pk_eq",
+    "inner_state_vk_eq",
+    "inner_state_pk_ep",
+    "inner_state_vk_ep",
     "state_pk_eq",
     "state_vk_eq",
     "state_pk_ep",
@@ -103,10 +108,22 @@ ARTIFACT_ROLES = (
     "guard_bundle_vk_eq",
     "guard_bundle_pk_ep",
     "guard_bundle_vk_ep",
+    "terminal_authorization_pk_eq",
+    "terminal_authorization_vk_eq",
+    "terminal_authorization_pk_ep",
+    "terminal_authorization_vk_ep",
     "commit_wrapper_pk_eq",
     "commit_wrapper_vk_eq",
     "commit_wrapper_pk_ep",
     "commit_wrapper_vk_ep",
+    "inner_mint_authorization_pk_eq",
+    "inner_mint_authorization_vk_eq",
+    "inner_mint_authorization_pk_ep",
+    "inner_mint_authorization_vk_ep",
+    "inner_mint_credit_pk_eq",
+    "inner_mint_credit_vk_eq",
+    "inner_mint_credit_pk_ep",
+    "inner_mint_credit_vk_ep",
 )
 
 RELATIONS = (
@@ -116,7 +133,7 @@ RELATIONS = (
     "receive_fold",
     "redeem_split",
     "rotate",
-    "acceptance_intent_authorization",
+    "terminal_authorization",
     "commit_wrapper",
 )
 
@@ -130,31 +147,87 @@ HELPERS = (
 INTERNAL_PROOF_HELPERS = frozenset({"platform_credential", "guard_bundle"})
 
 ACCEPTANCE_CASES = (
-    "receiver_capacity_exhaustion",
+    "receiver_inbox_pressure",
     "sender_outbox_capacity_exhaustion",
-    "crash_after_prepare",
-    "crash_during_prove",
-    "crash_after_candidate_persist",
+    "crash_during_prepare",
+    "crash_after_prepare_before_proof",
+    "crash_during_proof",
+    "crash_after_proof_before_candidate_persistence",
+    "crash_during_candidate_persistence",
+    "crash_after_candidate_persistence_before_verification",
+    "crash_during_candidate_verification",
+    "crash_after_candidate_verification_before_hardware_commit",
     "crash_during_hardware_commit",
-    "crash_after_hardware_commit",
-    "crash_during_commit_wrapper",
-    "crash_after_commit_wrapper_generated_before_install",
-    "crash_before_exposure",
+    "crash_after_hardware_commit_before_terminal_authorization",
+    "crash_during_terminal_authorization",
+    "crash_after_terminal_authorization_before_final_envelope_persistence",
+    "crash_during_final_envelope_persistence",
+    "crash_after_final_envelope_persistence_before_exposure",
+    "crash_during_exposure",
+    "crash_during_transport",
+    "crash_after_transport_before_inbox_stage",
+    "crash_during_inbox_stage",
+    "crash_after_inbox_stage_before_ack",
+    "crash_during_ack_persistence",
+    "crash_after_ack_persistence_before_exposure",
+    "crash_during_ack_exposure",
+    "crash_during_ack_recovery",
+    "ack_recovery_idempotence",
+    "crash_during_recovery",
     "recovery_idempotence",
-    "delayed_delivery_across_suite_rotation",
+    "missing_sender_authorization",
+    "forged_sender_authorization",
+    "replayed_sender_authorization",
+    "cross_release_sender_authorization",
+    "missing_mint_authorization",
+    "forged_mint_authorization",
+    "replayed_mint_authorization",
+    "cross_release_mint_authorization",
+    "shuffled_concurrent_requests",
+    "delayed_delivery_after_request_expiry",
+    "delayed_delivery_across_ordinary_suite_rotation",
+    "delayed_delivery_across_credential_rotation",
+    "positive_exact_request",
+    "recipient_key_binding",
+    "request_amount_mismatch_rejection",
+    "committed_payment_after_request_expiry",
+    "exact_amount_binding",
+    "distinct_payments_same_request",
+    "shuffled_concurrent_payments_same_request",
+    "invoice_deduplication_application_policy",
+    "duplicate_transport",
+    "exact_duplicate_durable_ack",
+    "conflicting_credit_id_bytes",
+    "same_credit_replay",
+    "stale_state",
+    "two_successors_from_one_predecessor",
+    "rollback",
     "clock_rollback",
-    "lease_expiry",
-    "epoch_and_counter_rollover",
-    "suspension_online_recovery",
-    "single_exact",
-    "invoice_overpayment",
-    "partial_until_total",
-    "bounded_multi_payment",
-    "open_receive_reuse",
-    "acceptance_ticket_replay",
+    "monotonic_lease_expiry",
+    "counter_reuse_or_skip",
+    "forged_epoch_rotation",
+    "hardware_epoch_rollover",
+    "hardware_counter_rollover",
+    "ordinary_verifier_rotation",
+    "emergency_suspension_online_recovery",
+    "arithmetic_overflow",
+    "proof_output_substitution",
     "transcript_unlinkability",
+    "x25519_low_order_public_key_rejection",
+    "x25519_zero_dh_rejection",
+    "aead_ciphertext_substitution",
+    "aead_associated_data_substitution",
+    "deterministic_encryption_injected_randomness_kat",
+    "receive_fold_single_credit",
+    "receive_fold_replay_atomicity",
+    "pending_credit_backlog_no_count_rejection",
     "reserve_underflow",
+    "duplicate_redemption",
     "concurrent_redemption",
+    "top_up_recovery",
+    "full_redemption",
+    "partial_redemption",
+    "zero_balance_continuation",
     "animated_qr_loss_recovery",
     "animated_qr_reordering_recovery",
     "static_qr_size_guard",
@@ -162,6 +235,7 @@ ACCEPTANCE_CASES = (
     "physical_airplane_mode",
     "physical_restart",
     "physical_power_loss",
+    "physical_clock_rollback",
     "physical_backup_restore_rejection",
     "physical_memory_and_latency",
     "physical_thermal_folding",
@@ -175,6 +249,12 @@ ACCEPTANCE_CASES = (
     "native_fixture_jni",
     "native_fixture_qr",
     "native_fixture_nfc",
+)
+
+PUBLIC_MESSAGES = (
+    "payment_request",
+    "payment",
+    "acknowledgement",
 )
 
 PHYSICAL_PROFILE_CHECKS = (
@@ -194,10 +274,10 @@ FILE_KINDS = frozenset(
         "event_log",
         "internal_proof",
         "proof",
-        "raw_session",
+        "raw_complete_exchange",
         "report",
         "source_archive",
-        "text_session",
+        "text_complete_exchange",
         "observation",
         "transcript",
     }
@@ -237,6 +317,7 @@ REPORT_SCHEMAS = frozenset(
         "iroha.kagemusha_v1.hardware_profile_qualification_report",
         "iroha.kagemusha_v1.relation_qualification_report",
         "iroha.kagemusha_v1.helper_qualification_report",
+        "iroha.kagemusha_v1.receive_fold_occupancy_report",
         "iroha.kagemusha_v1.recursive_depth_report",
         "iroha.kagemusha_v1.aggregate_balance_report",
         "iroha.kagemusha_v1.thermal_report",
@@ -252,7 +333,7 @@ _SAFE_LITERAL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+=:-]{0,127}")
 
 
 class KagemushaEvidenceError(RuntimeError):
-    """Raised when the Kagemusha evidence closure is invalid."""
+    """Raised when the KAGEMUSHA evidence closure is invalid."""
 
 
 def _fail(message: str) -> NoReturn:
@@ -633,7 +714,7 @@ def rust_artifact_set_digest(artifacts: Sequence[Mapping[str, object]]) -> str:
 def rust_vk_set_digest(
     artifacts: Sequence[Mapping[str, object]], protocols: Mapping[str, object]
 ) -> str:
-    """Return the exact Rust state/wrapper/helper verifier-set identity."""
+    """Return the exact Rust state/helper verifier-set identity."""
 
     helpers = _array(protocols["helper_protocols"], "helper protocols")
     verifying_keys = [row for row in artifacts if "_vk_" in str(row["role"])]
@@ -641,12 +722,6 @@ def rust_vk_set_digest(
         _u16(WIRE_VERSION),
         _hex_bytes(protocols["state_eq_protocol_digest"], "state Eq protocol digest"),
         _hex_bytes(protocols["state_ep_protocol_digest"], "state Ep protocol digest"),
-        _hex_bytes(
-            protocols["commit_wrapper_eq_protocol_digest"], "wrapper Eq protocol digest"
-        ),
-        _hex_bytes(
-            protocols["commit_wrapper_ep_protocol_digest"], "wrapper Ep protocol digest"
-        ),
         _norito_vec([_helper_protocol_payload(row) for row in helpers]),
         _norito_vec([_artifact_payload(row) for row in verifying_keys]),
     )
@@ -698,9 +773,19 @@ def _depth_payload(value: Mapping[str, object]) -> bytes:
         _u32(int(value["depth"])),
         _u32(int(value["verified_handoffs"])),
         _u32(int(value["complete_proof_bytes"])),
-        _u32(int(value["raw_session_bytes"])),
-        _u32(int(value["text_session_bytes"])),
+        _u32(int(value["raw_complete_exchange_bytes"])),
+        _u32(int(value["text_complete_exchange_bytes"])),
         _evidence_file_payload(_object(value["report"], "depth report", {"sha256", "byte_len"})),
+    )
+
+
+def _occupancy_payload(value: Mapping[str, object]) -> bytes:
+    return _norito_struct(
+        _u8(int(value["occupancy"])),
+        _u32(int(value["complete_proof_bytes"])),
+        _evidence_file_payload(
+            _object(value["report"], "receive-fold occupancy report", {"sha256", "byte_len"})
+        ),
     )
 
 
@@ -725,8 +810,8 @@ def _thermal_payload(value: Mapping[str, object]) -> bytes:
 
 def _envelope_payload(value: Mapping[str, object]) -> bytes:
     return _norito_struct(
-        _u32(int(value["raw_session_bytes"])),
-        _u32(int(value["text_session_bytes"])),
+        _u32(int(value["raw_complete_exchange_bytes"])),
+        _u32(int(value["text_complete_exchange_bytes"])),
         _u32(int(value["handoff_p95_ms"])),
         _evidence_file_payload(_object(value["report"], "envelope report", {"sha256", "byte_len"})),
     )
@@ -751,6 +836,10 @@ def _profile_qualification_payload(value: Mapping[str, object]) -> bytes:
         _enabled_profile_payload(profile),
         _norito_vec([_relation_qualification_payload(row) for row in _array(value["relations"], "relations")]),
         _norito_vec([_helper_qualification_payload(row) for row in _array(value["helper_circuits"], "helper circuits")]),
+        _norito_vec([
+            _occupancy_payload(row)
+            for row in _array(value["receive_fold_occupancies"], "receive-fold occupancies")
+        ]),
         _norito_vec([_depth_payload(row) for row in _array(value["recursive_depths"], "recursive depths")]),
         _aggregate_payload(_object(value["aggregate_balance"], "aggregate qualification", {
             "independent_payments", "folded_credits", "spend_payments", "report",
@@ -760,7 +849,10 @@ def _profile_qualification_payload(value: Mapping[str, object]) -> bytes:
             "operation_energy_millijoules", "report",
         })),
         _envelope_payload(_object(value["envelope"], "envelope qualification", {
-            "raw_session_bytes", "text_session_bytes", "handoff_p95_ms", "report",
+            "raw_complete_exchange_bytes",
+            "text_complete_exchange_bytes",
+            "handoff_p95_ms",
+            "report",
         })),
         _norito_vec([_acceptance_payload(row) for row in _array(value["acceptance_cases"], "acceptance cases")]),
     )
@@ -793,8 +885,6 @@ def rust_release_profile_digest(
         _evidence_file_payload(circuit_shape_report),
         _hex_bytes(protocols["state_eq_protocol_digest"], "state Eq protocol digest"),
         _hex_bytes(protocols["state_ep_protocol_digest"], "state Ep protocol digest"),
-        _hex_bytes(protocols["commit_wrapper_eq_protocol_digest"], "wrapper Eq protocol digest"),
-        _hex_bytes(protocols["commit_wrapper_ep_protocol_digest"], "wrapper Ep protocol digest"),
         _norito_vec(
             [_helper_protocol_payload(row) for row in _array(protocols["helper_protocols"], "helper protocols")]
         ),
@@ -919,10 +1009,10 @@ def _max_for_kind(kind: str) -> int:
         "event_log": MAX_EVENT_LOG_BYTES,
         "internal_proof": INTERNAL_PROOF_RESOURCE_MAX_BYTES,
         "proof": PAIRED_PROOF_MAX_BYTES,
-        "raw_session": RAW_SESSION_MAX_BYTES,
+        "raw_complete_exchange": RAW_COMPLETE_EXCHANGE_MAX_BYTES,
         "report": MAX_REPORT_BYTES,
         "source_archive": MAX_SOURCE_ARCHIVE_BYTES,
-        "text_session": TEXT_SESSION_MAX_BYTES,
+        "text_complete_exchange": TEXT_COMPLETE_EXCHANGE_MAX_BYTES,
         "observation": MAX_OBSERVATION_BYTES,
         "transcript": MAX_TRANSCRIPT_BYTES,
     }[kind]
@@ -1327,12 +1417,6 @@ class EvidenceVerifier:
             "profile_digest": profile_digest,
             "eq_protocol_digest": protocols["state_eq_protocol_digest"],
             "ep_protocol_digest": protocols["state_ep_protocol_digest"],
-            "commit_wrapper_eq_protocol_digest": protocols[
-                "commit_wrapper_eq_protocol_digest"
-            ],
-            "commit_wrapper_ep_protocol_digest": protocols[
-                "commit_wrapper_ep_protocol_digest"
-            ],
             "artifact_set_digest": artifact_set_digest,
             "hardware_policy_digest": hardware_policy_digest,
             "evidence_closure": evidence_closure,
@@ -1431,7 +1515,9 @@ class EvidenceVerifier:
     def _capture_artifacts(self, raw_rows: object) -> None:
         rows = _array(raw_rows, "artifact inventory")
         if len(rows) != len(ARTIFACT_ROLES):
-            _fail("artifact inventory must contain exactly the 26 V1 roles")
+            _fail(
+                f"artifact inventory must contain exactly the {len(ARTIFACT_ROLES)} V1 roles"
+            )
         for index, (raw, expected_role) in enumerate(zip(rows, ARTIFACT_ROLES)):
             row = _object(raw, f"artifact row {index}", {"role", "path"})
             if row["role"] != expected_role:
@@ -1446,7 +1532,12 @@ class EvidenceVerifier:
         for role in ("params_eq", "params_ep"):
             if self.files[self.artifacts[role]].size != 4_194_372:
                 _fail(f"artifact {role!r} must be exactly 4194372 bytes")
-        for role in ("state_pk_eq", "state_pk_ep"):
+        for role in (
+            "inner_state_pk_eq",
+            "inner_state_pk_ep",
+            "state_pk_eq",
+            "state_pk_ep",
+        ):
             if self.files[self.artifacts[role]].size > 48_234_934:
                 _fail(f"artifact {role!r} exceeds the state proving-key limit")
         for role in ARTIFACT_ROLES:
@@ -1454,7 +1545,9 @@ class EvidenceVerifier:
             if role.endswith("_vk_eq") or role.endswith("_vk_ep"):
                 if size > 64 * 1024:
                     _fail(f"artifact {role!r} exceeds the verifying-key limit")
-            elif "_pk_" in role and not role.startswith("state_pk_"):
+            elif "_pk_" in role and not role.startswith(
+                ("inner_state_pk_", "state_pk_")
+            ):
                 if size > 64 * 1024 * 1024:
                     _fail(f"artifact {role!r} exceeds the helper proving-key limit")
         if sum(self.files[path].size for path in self.artifacts.values()) > 512 * 1024 * 1024:
@@ -1473,6 +1566,7 @@ class EvidenceVerifier:
             "qualification_report",
             "relations",
             "helpers",
+            "receive_fold_occupancies",
             "recursive_depths",
             "aggregate_balance",
             "thermal",
@@ -1732,6 +1826,8 @@ class EvidenceVerifier:
             {
                 "state_eq_protocol_digest",
                 "state_ep_protocol_digest",
+                "terminal_authorization_eq_protocol_digest",
+                "terminal_authorization_ep_protocol_digest",
                 "commit_wrapper_eq_protocol_digest",
                 "commit_wrapper_ep_protocol_digest",
                 "helper_protocols",
@@ -1742,6 +1838,8 @@ class EvidenceVerifier:
         for name in (
             "state_eq_protocol_digest",
             "state_ep_protocol_digest",
+            "terminal_authorization_eq_protocol_digest",
+            "terminal_authorization_ep_protocol_digest",
             "commit_wrapper_eq_protocol_digest",
             "commit_wrapper_ep_protocol_digest",
         ):
@@ -1806,7 +1904,10 @@ class EvidenceVerifier:
                 }
             )
         if len(set(all_digests)) != len(all_digests):
-            _fail("state, wrapper, and helper protocol digests must all be distinct")
+            _fail(
+                "state, terminal-authorization, acceptance-authorization, and helper "
+                "protocol digests must all be distinct"
+            )
         result["helper_protocols"] = helper_projection
         return result
 
@@ -1967,6 +2068,7 @@ class EvidenceVerifier:
             "qualification_report",
             "relations",
             "helpers",
+            "receive_fold_occupancies",
             "recursive_depths",
             "aggregate_balance",
             "thermal",
@@ -2089,6 +2191,30 @@ class EvidenceVerifier:
                 )
             )
 
+        occupancy_rows = _array(
+            profile["receive_fold_occupancies"], f"profile {profile_id} occupancies"
+        )
+        if len(occupancy_rows) != RECEIVE_FOLD_BATCH_WIDTH:
+            _fail("receive-fold occupancy matrix must contain exactly 1 through 16")
+        occupancies: list[dict[str, object]] = []
+        for occupancy_index, raw_row in enumerate(occupancy_rows, start=1):
+            row = _object(
+                raw_row,
+                f"receive-fold occupancy {occupancy_index}",
+                {"occupancy", "report"},
+            )
+            if row["occupancy"] != occupancy_index:
+                _fail("receive-fold occupancies must be exactly 1 through 16")
+            report_path = self._path(row["report"], "receive-fold occupancy report")
+            occupancies.append(
+                self._verify_occupancy(
+                    report_path,
+                    profile_id=profile_id,
+                    occupancy=occupancy_index,
+                    protocols=protocols,
+                )
+            )
+
         depth_rows = _array(
             profile["recursive_depths"], f"profile {profile_id} recursive depths"
         )
@@ -2118,8 +2244,8 @@ class EvidenceVerifier:
         invariant = {
             (
                 row["complete_proof_bytes"],
-                row["raw_session_bytes"],
-                row["text_session_bytes"],
+                row["raw_complete_exchange_bytes"],
+                row["text_complete_exchange_bytes"],
             )
             for row in depths
         }
@@ -2138,16 +2264,20 @@ class EvidenceVerifier:
         envelope = self._verify_envelope(envelope_path, profile_id=profile_id)
         depth_measurement = next(iter(invariant))
         if (
-            envelope["raw_session_bytes"] != depth_measurement[1]
-            or envelope["text_session_bytes"] != depth_measurement[2]
+            envelope["raw_complete_exchange_bytes"] != depth_measurement[1]
+            or envelope["text_complete_exchange_bytes"] != depth_measurement[2]
         ):
-            _fail("envelope and invariant-depth session measurements differ")
+            _fail("envelope and invariant-depth complete-exchange measurements differ")
 
         acceptance_rows = _array(
             profile["acceptance_cases"], f"profile {profile_id} acceptance cases"
         )
-        if len(acceptance_rows) != len(ACCEPTANCE_CASES):
-            _fail("every profile must contain exactly the 45 acceptance cases")
+        acceptance_case_count = len(ACCEPTANCE_CASES)
+        if len(acceptance_rows) != acceptance_case_count:
+            _fail(
+                "every profile must contain exactly "
+                f"{acceptance_case_count} acceptance cases"
+            )
         acceptance: list[dict[str, object]] = []
         for case_index, (raw_row, expected_case) in enumerate(
             zip(acceptance_rows, ACCEPTANCE_CASES)
@@ -2158,7 +2288,10 @@ class EvidenceVerifier:
                 {"case", "report"},
             )
             if row["case"] != expected_case:
-                _fail("acceptance cases are not in the canonical 45-case order")
+                _fail(
+                    "acceptance cases are not in the canonical "
+                    f"{acceptance_case_count}-case order"
+                )
             report_path = self._path(row["report"], f"{expected_case} report")
             acceptance.append(
                 self._verify_acceptance(
@@ -2170,6 +2303,7 @@ class EvidenceVerifier:
             "profile": profile_projection,
             "relations": relations,
             "helper_circuits": helpers,
+            "receive_fold_occupancies": occupancies,
             "recursive_depths": depths,
             "aggregate_balance": aggregate,
             "thermal": thermal,
@@ -2208,10 +2342,17 @@ class EvidenceVerifier:
             },
         )
         self._profile_and_name(report, profile_id, "relation", relation)
-        if relation in {"acceptance_intent_authorization", "commit_wrapper"}:
+        if relation == "terminal_authorization":
+            eq_protocol = protocols["terminal_authorization_eq_protocol_digest"]
+            ep_protocol = protocols["terminal_authorization_ep_protocol_digest"]
+            eq_role, ep_role = "terminal_authorization_vk_eq", "terminal_authorization_vk_ep"
+        elif relation == "commit_wrapper":
             eq_protocol = protocols["commit_wrapper_eq_protocol_digest"]
             ep_protocol = protocols["commit_wrapper_ep_protocol_digest"]
-            eq_role, ep_role = "commit_wrapper_vk_eq", "commit_wrapper_vk_ep"
+            eq_role, ep_role = (
+                "commit_wrapper_vk_eq",
+                "commit_wrapper_vk_ep",
+            )
         else:
             eq_protocol = protocols["state_eq_protocol_digest"]
             ep_protocol = protocols["state_ep_protocol_digest"]
@@ -2348,6 +2489,55 @@ class EvidenceVerifier:
             "report": _binding(self.files[path]),
         }
 
+    def _verify_occupancy(
+        self,
+        path: str,
+        *,
+        profile_id: str,
+        occupancy: int,
+        protocols: Mapping[str, object],
+    ) -> dict[str, object]:
+        report = self._report(
+            path,
+            "iroha.kagemusha_v1.receive_fold_occupancy_report",
+            {
+                "hardware_profile_id",
+                "occupancy",
+                "eq_protocol_digest",
+                "ep_protocol_digest",
+                "eq_verifying_key",
+                "ep_verifying_key",
+                "proof",
+            },
+        )
+        if report["hardware_profile_id"] != profile_id or report["occupancy"] != occupancy:
+            _fail("receive-fold occupancy report binding differs from its matrix row")
+        self._protocol_and_keys(
+            report,
+            eq_protocol=str(protocols["state_eq_protocol_digest"]),
+            ep_protocol=str(protocols["state_ep_protocol_digest"]),
+            eq_role="state_vk_eq",
+            ep_role="state_vk_ep",
+        )
+        proof = self._sample(
+            report["proof"], "proof", f"occupancy:{profile_id}:{occupancy}"
+        )
+        self._bind_report_command(
+            path,
+            report,
+            {
+                path,
+                proof,
+                self.artifacts["state_vk_eq"],
+                self.artifacts["state_vk_ep"],
+            },
+        )
+        return {
+            "occupancy": occupancy,
+            "complete_proof_bytes": self.files[proof].size,
+            "report": _binding(self.files[path]),
+        }
+
     def _verify_depth(
         self,
         path: str,
@@ -2367,8 +2557,8 @@ class EvidenceVerifier:
                 "eq_verifying_key",
                 "ep_verifying_key",
                 "proof",
-                "raw_session",
-                "text_session",
+                "raw_complete_exchange",
+                "text_complete_exchange",
                 "handoff_log",
             },
         )
@@ -2383,8 +2573,12 @@ class EvidenceVerifier:
         )
         owner = f"depth:{profile_id}:{depth}"
         proof = self._sample(report["proof"], "proof", owner)
-        raw_session = self._sample(report["raw_session"], "raw_session", owner)
-        text_session = self._sample(report["text_session"], "text_session", owner)
+        raw_complete_exchange = self._sample(
+            report["raw_complete_exchange"], "raw_complete_exchange", owner
+        )
+        text_complete_exchange = self._sample(
+            report["text_complete_exchange"], "text_complete_exchange", owner
+        )
         handoff_log = self._sample(report["handoff_log"], "event_log", owner)
         rows = self._json_lines(handoff_log, "recursive handoff log")
         for expected_index, row in enumerate(rows, start=1):
@@ -2403,8 +2597,8 @@ class EvidenceVerifier:
             {
                 path,
                 proof,
-                raw_session,
-                text_session,
+                raw_complete_exchange,
+                text_complete_exchange,
                 handoff_log,
                 self.artifacts["state_vk_eq"],
                 self.artifacts["state_vk_ep"],
@@ -2414,8 +2608,8 @@ class EvidenceVerifier:
             "depth": depth,
             "verified_handoffs": len(rows),
             "complete_proof_bytes": self.files[proof].size,
-            "raw_session_bytes": self.files[raw_session].size,
-            "text_session_bytes": self.files[text_session].size,
+            "raw_complete_exchange_bytes": self.files[raw_complete_exchange].size,
+            "text_complete_exchange_bytes": self.files[text_complete_exchange].size,
             "report": _binding(self.files[path]),
         }
 
@@ -2597,23 +2791,40 @@ class EvidenceVerifier:
         report = self._report(
             path,
             "iroha.kagemusha_v1.envelope_report",
-            {"hardware_profile_id", "raw_session", "text_session", "handoff_p95_ms"},
+            {
+                "hardware_profile_id",
+                "messages",
+                "raw_complete_exchange",
+                "text_complete_exchange",
+                "handoff_p95_ms",
+            },
         )
         if report["hardware_profile_id"] != profile_id:
             _fail("envelope report names a different profile")
+        if _array(report["messages"], "public handoff messages") != list(PUBLIC_MESSAGES):
+            _fail(
+                "envelope report must contain exactly payment_request, payment, "
+                "and acknowledgement in protocol order"
+            )
         owner = f"envelope:{profile_id}"
-        raw_session = self._sample(report["raw_session"], "raw_session", owner)
-        text_session = self._sample(report["text_session"], "text_session", owner)
+        raw_complete_exchange = self._sample(
+            report["raw_complete_exchange"], "raw_complete_exchange", owner
+        )
+        text_complete_exchange = self._sample(
+            report["text_complete_exchange"], "text_complete_exchange", owner
+        )
         handoff = _integer(
             report["handoff_p95_ms"],
             "complete handoff p95",
             minimum=1,
             maximum=HANDOFF_P95_MAX_MS,
         )
-        self._bind_report_command(path, report, {path, raw_session, text_session})
+        self._bind_report_command(
+            path, report, {path, raw_complete_exchange, text_complete_exchange}
+        )
         return {
-            "raw_session_bytes": self.files[raw_session].size,
-            "text_session_bytes": self.files[text_session].size,
+            "raw_complete_exchange_bytes": self.files[raw_complete_exchange].size,
+            "text_complete_exchange_bytes": self.files[text_complete_exchange].size,
             "handoff_p95_ms": handoff,
             "report": _binding(self.files[path]),
         }
@@ -2930,7 +3141,7 @@ def verify_evidence(
     )
     if manifest_info.sha256 != expected:
         _fail("evidence manifest SHA-256 differs from the explicit immutable identity")
-    manifest = load_json_object(payload, "kagemusha evidence manifest")
+    manifest = load_json_object(payload, "KAGEMUSHA evidence manifest")
     try:
         canonical = canonical_json_bytes(dict(manifest))
     except (TypeError, ValueError) as error:
@@ -2951,7 +3162,7 @@ def verify_evidence(
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Verify an immutable Kagemusha V1 release-evidence closure."
+        description="Verify an immutable KAGEMUSHA V1 release-evidence closure."
     )
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--manifest-sha256", required=True)
@@ -2972,7 +3183,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             expected_observer_policy_sha256=args.observer_policy_sha256,
         )
     except (KagemushaEvidenceError, ReleaseArtifactError, OSError, ValueError) as error:
-        print(f"Kagemusha release evidence rejected: {error}", file=sys.stderr)
+        print(f"KAGEMUSHA release evidence rejected: {error}", file=sys.stderr)
         return 1
     sys.stdout.buffer.write(canonical_json_bytes(projection))
     return 0

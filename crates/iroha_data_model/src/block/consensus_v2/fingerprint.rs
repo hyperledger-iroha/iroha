@@ -36,10 +36,13 @@ struct NposGenesisFingerprintInput {
 ///
 /// Only first-release frozen inputs are representable in the encoded
 /// projection: mode, cadence, block bound, signed DA/Nexus context, and NPoS
-/// election parameters. Exact network identity is deliberately not part of
-/// this genesis-embedded value: runtime handshakes authenticate a separate
-/// required `NetworkId`, avoiding a self-reference through the genesis block
-/// hash.
+/// election parameters. The separately signed, network-independent KAGEMUSHA
+/// mint-finality genesis templates are intentionally excluded from this
+/// secondary fingerprint; they remain authenticated by the genesis metadata
+/// that carries both this digest and the templates. Exact network identity is
+/// likewise not part of this genesis-embedded value: runtime handshakes
+/// authenticate a separate required `NetworkId`, avoiding a self-reference
+/// through the genesis block hash.
 ///
 /// # Errors
 ///
@@ -74,7 +77,7 @@ pub fn compute(params: &ConsensusGenesisParams) -> Result<[u8; 32], String> {
         mode,
         block_cadence_ms: params.block_cadence_ms,
         block_max_transactions: params.block_max_transactions,
-        context: params.v2_context.clone(),
+        context: params.v2_context,
         npos,
     };
     let mut hasher = Blake2b512::new();

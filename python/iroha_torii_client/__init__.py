@@ -1,4 +1,4 @@
-"""Typed Torii HTTP client with first-release Kagemusha V1 and SCCP helpers."""
+"""Typed Torii HTTP client with first-release KAGEMUSHA V1 and SCCP helpers."""
 
 from . import client as _client
 from . import governance_proposals as _governance_proposals

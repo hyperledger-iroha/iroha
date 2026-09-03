@@ -445,15 +445,96 @@ fn build_shared_sorafs_provider_cache(
 }
 include!("main/shared_sorafs_provider_cache_tests.rs");
 #[cfg(test)]
+fn deterministic_test_genesis_topology() -> Vec<iroha_genesis::GenesisTopologyEntry> {
+    (0_u8..4)
+        .map(|index| {
+            let key_pair = iroha_crypto::KeyPair::try_from_seed(
+                vec![0x40_u8.wrapping_add(index); 32],
+                Algorithm::BlsNormal,
+            )
+            .expect("derive deterministic test genesis validator");
+            let pop = iroha_crypto::bls_normal_pop_prove(key_pair.private_key())
+                .expect("derive deterministic test genesis validator proof of possession");
+            iroha_genesis::GenesisTopologyEntry::new(
+                PeerId::new(key_pair.public_key().clone()),
+                pop,
+            )
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn complete_test_genesis_builder_for_topology(
+    builder: iroha_genesis::GenesisBuilder,
+    topology: Vec<iroha_genesis::GenesisTopologyEntry>,
+) -> iroha_genesis::GenesisBuilder {
+    assert!(
+        !topology.is_empty(),
+        "test genesis topology must contain validators"
+    );
+    let mut validators = topology
+        .iter()
+        .map(|entry| entry.peer.clone())
+        .collect::<Vec<_>>();
+    validators.sort();
+    let validators = validators
+        .into_iter()
+        .enumerate()
+        .map(|(index, validator)| {
+            let seed_byte = 0xA0_u8.wrapping_add(
+                u8::try_from(index).expect("test genesis validator index fits in one byte"),
+            );
+            iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                &[seed_byte; 32],
+                0,
+                validator,
+            )
+            .expect("derive deterministic paired-Pasta test genesis validator keys")
+        })
+        .collect();
+    let parameters =
+        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1 {
+            epoch_roster:
+                iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterTemplateV1 {
+                    version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
+                    epoch: 0,
+                    validators,
+                },
+            next_epoch_roster: None,
+        };
+    parameters
+        .validate()
+        .expect("test genesis topology must form a canonical mint-finality roster");
+    builder
+        .set_topology(topology)
+        .with_sumeragi_v2_context_parameters(
+            iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(
+            ),
+        )
+        .with_kagemusha_mint_finality_genesis_parameters(parameters)
+}
+
+#[cfg(test)]
+fn complete_test_genesis_builder(
+    builder: iroha_genesis::GenesisBuilder,
+) -> iroha_genesis::GenesisBuilder {
+    complete_test_genesis_builder_for_topology(builder, deterministic_test_genesis_topology())
+}
+
+#[cfg(test)]
 mod handshake_payload_tests {
     use super::*;
     use iroha_genesis::{GenesisBuilder, ManifestCrypto};
     use std::path::PathBuf;
     fn handshake_payload_from_genesis() -> Json {
         let chain = iroha_data_model::ChainId::from("handshake-meta-test");
-        let manifest = GenesisBuilder::new_without_executor(chain, PathBuf::from("."))
-            .build_raw()
-            .with_consensus_meta();
+        let manifest = complete_test_genesis_builder(GenesisBuilder::new_without_executor(
+            chain,
+            PathBuf::from("."),
+        ))
+        .build_raw()
+        .expect("build complete handshake metadata test genesis")
+        .with_consensus_meta();
         let keypair = iroha_crypto::KeyPair::random();
         let genesis_block = manifest
             .build_and_sign(&keypair)
@@ -6352,27 +6433,27 @@ fn install_kagemusha_v1_runtime_verifier(
     let manifest = read(
         &files.manifest,
         iroha_data_model::kagemusha::KAGEMUSHA_RELEASE_MANIFEST_MAX_BYTES_V1,
-        "Kagemusha V1 release manifest",
+        "KAGEMUSHA V1 release manifest",
     )?;
     let receipt = read(
         &files.validation_receipt,
         iroha_data_model::kagemusha::KAGEMUSHA_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1,
-        "Kagemusha V1 validation receipt",
+        "KAGEMUSHA V1 validation receipt",
     )?;
     let policy = read(
         &files.authority_policy,
         iroha_data_model::kagemusha::KAGEMUSHA_RELEASE_AUTHORITY_POLICY_MAX_BYTES_V1,
-        "Kagemusha V1 authority policy",
+        "KAGEMUSHA V1 authority policy",
     )?;
     let attestation = read(
         &files.attestation,
         iroha_data_model::kagemusha::KAGEMUSHA_RELEASE_ATTESTATION_MAX_BYTES_V1,
-        "Kagemusha V1 release attestation",
+        "KAGEMUSHA V1 release attestation",
     )?;
     let profile = read(
         &files.recursive_profile,
         iroha_core::smartcontracts::isi::kagemusha::KAGEMUSHA_RECURSIVE_PROFILE_MAX_BYTES_V1,
-        "Kagemusha V1 recursive verifier profile",
+        "KAGEMUSHA V1 recursive verifier profile",
     )?;
     let verifier =
         iroha_core::smartcontracts::isi::kagemusha::load_authenticated_kagemusha_v1_runtime_verifier(
@@ -7734,7 +7815,7 @@ impl Iroha {
                 })?;
             install_kagemusha_v1_runtime_verifier(&mut state, &config).map_err(|error| {
                 Report::new(StartError::InitKura).attach(format!(
-                    "failed to install the authenticated Kagemusha V1 runtime: {error}"
+                    "failed to install the authenticated KAGEMUSHA V1 runtime: {error}"
                 ))
             })?;
         } else {
@@ -8550,7 +8631,7 @@ impl Iroha {
                                 "staged genesis cadence {staged_block_cadence_ms} ms differs from authenticated signed cadence {fresh_block_cadence_ms} ms",
                             )));
                         }
-                        let (mode, signed_parameters) =
+                        let (mode, _signed_parameters) =
                             signed_v2_genesis_context_metadata(genesis_block)
                                 .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
                         staged_v2_genesis = Some(
@@ -8558,7 +8639,6 @@ impl Iroha {
                                 genesis_block,
                                 &state_block,
                                 mode,
-                                signed_parameters,
                             )
                             .map_err(|error| {
                                 Report::new(StartError::InitKura).attach(format!(
@@ -10923,26 +11003,30 @@ mod genesis_key_tests {
     use iroha_genesis::GenesisBuilder;
     use std::path::PathBuf;
     fn prepared_genesis_proposal(keypair: &KeyPair) -> GenesisBlock {
-        let proposal = GenesisBuilder::new_without_executor(
+        let proposal = complete_test_genesis_builder(GenesisBuilder::new_without_executor(
             ChainId::from("configured-genesis-trust-anchor-test"),
             PathBuf::from("."),
-        )
+        ))
         .build_raw()
+        .expect("build complete prepared genesis manifest")
         .build_and_sign(keypair)
         .expect("build prepared genesis proposal");
         assert!(proposal.0.is_resultless_proposal());
         proposal
     }
     fn prepared_genesis_proposal_with_marker(keypair: &KeyPair, marker: &str) -> GenesisBlock {
-        let proposal = GenesisBuilder::new_without_executor(
-            ChainId::from("configured-genesis-trust-anchor-test"),
-            PathBuf::from("."),
+        let proposal = complete_test_genesis_builder(
+            GenesisBuilder::new_without_executor(
+                ChainId::from("configured-genesis-trust-anchor-test"),
+                PathBuf::from("."),
+            )
+            .append_instruction(iroha_data_model::isi::Log::new(
+                iroha_data_model::Level::INFO,
+                marker.to_owned(),
+            )),
         )
-        .append_instruction(iroha_data_model::isi::Log::new(
-            iroha_data_model::Level::INFO,
-            marker.to_owned(),
-        ))
         .build_raw()
+        .expect("build complete marked prepared genesis manifest")
         .build_and_sign(keypair)
         .expect("build marked prepared genesis proposal");
         assert!(proposal.0.is_resultless_proposal());
@@ -10963,7 +11047,12 @@ mod genesis_key_tests {
     #[test]
     fn derives_genesis_pubkey_from_block_authority() {
         let chain = ChainId::from("derive-genesis-pubkey-test");
-        let manifest = GenesisBuilder::new_without_executor(chain, PathBuf::from(".")).build_raw();
+        let manifest = complete_test_genesis_builder(GenesisBuilder::new_without_executor(
+            chain,
+            PathBuf::from("."),
+        ))
+        .build_raw()
+        .expect("build complete genesis public-key derivation manifest");
         let keypair = iroha_crypto::KeyPair::random();
         let genesis_block = manifest
             .build_and_sign(&keypair)
@@ -14021,7 +14110,7 @@ fn validate_genesis_execution_offline(
     genesis: &GenesisBlock,
     genesis_authority: &AccountId,
     signed_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
-    signed_parameters: iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters,
+    _signed_parameters: iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters,
     expected_block_cadence_ms: u64,
 ) -> ReportResult<iroha_core::sumeragi::GenesisV2Bootstrap, MainError> {
     let validation_root = DisposableValidationRoot::create().map_err(|error| {
@@ -14100,17 +14189,14 @@ fn validate_genesis_execution_offline(
             "staged genesis cadence {staged_block_cadence_ms} ms differs from authenticated signed cadence {expected_block_cadence_ms} ms"
         )));
     }
-    let validated_genesis = iroha_core::sumeragi::freeze_staged_genesis_v2(
-        genesis,
-        &staged,
-        signed_mode,
-        signed_parameters,
-    )
-    .map_err(|error| {
-        Report::new(MainError::Config).attach(format!(
-            "failed to freeze staged Sumeragi v2 genesis: {error}"
-        ))
-    })?;
+    let validated_genesis =
+        iroha_core::sumeragi::freeze_staged_genesis_v2(genesis, &staged, signed_mode).map_err(
+            |error| {
+                Report::new(MainError::Config).attach(format!(
+                    "failed to freeze staged Sumeragi v2 genesis: {error}"
+                ))
+            },
+        )?;
     Ok(validated_genesis)
 }
 fn parse_confidential_registry_hash(payload: &Json) -> ReportResult<Option<[u8; 32]>, MainError> {
@@ -14539,7 +14625,7 @@ fn verify_genesis_metadata(
             continue;
         }
         if meta.consensus_fingerprint.into_bytes() == consensus_caps.consensus_fingerprint {
-            matched_meta = Some(*meta);
+            matched_meta = Some(meta.clone());
             break;
         }
     }
@@ -16312,8 +16398,8 @@ mod tests {
                 std::num::NonZeroU64::new(11).expect("nonzero byte cap");
             let kagemusha_asset_definition_id = AssetDefinitionId::derive_from_components(
                 iroha_data_model::domain::DomainId::try_new("boi", "is")
-                    .expect("Kagemusha asset domain"),
-                "ds".parse().expect("Kagemusha asset name"),
+                    .expect("KAGEMUSHA asset domain"),
+                "ds".parse().expect("KAGEMUSHA asset name"),
             );
             let kagemusha_reserve_account_id = iroha_test_samples::ALICE_ID.clone();
             config.settlement.kagemusha.reserve_accounts.insert(
@@ -16343,7 +16429,7 @@ mod tests {
                     .reserve_accounts
                     .get(&kagemusha_asset_definition_id),
                 Some(&kagemusha_reserve_account_id),
-                "the exact Kagemusha reserve catalog must be installed before Kura replay",
+                "the exact KAGEMUSHA reserve catalog must be installed before Kura replay",
             );
         }
     }
@@ -18249,8 +18335,12 @@ mod tests {
         use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, ManifestCrypto};
         use std::sync::Arc;
         fn sample_manifest() -> RawGenesisTransaction {
-            GenesisBuilder::new_without_executor(ChainId::from("test-chain"), PathBuf::from("."))
-                .build_raw()
+            complete_test_genesis_builder(GenesisBuilder::new_without_executor(
+                ChainId::from("test-chain"),
+                PathBuf::from("."),
+            ))
+            .build_raw()
+            .expect("build complete sample genesis manifest")
         }
         fn sample_config_table() -> toml::Table {
             toml::toml! {
@@ -18481,7 +18571,11 @@ mod tests {
                 default_hash: "sm3-256".to_owned(),
                 ..Default::default()
             };
-            manifest = manifest.into_builder().with_crypto(crypto).build_raw();
+            manifest = manifest
+                .into_builder()
+                .with_crypto(crypto)
+                .build_raw()
+                .expect("rebuild complete sample genesis manifest");
             let config = sample_config();
             let err = ensure_manifest_crypto_matches(&manifest, &config)
                 .expect_err("allowed signing mismatch should be detected");
@@ -18509,9 +18603,13 @@ mod tests {
             let mut config = sample_config();
             let genesis_keys = config.common.key_pair.clone();
             let chain = config.common.chain.clone();
-            let manifest = GenesisBuilder::new_without_executor(chain.clone(), PathBuf::from("."))
-                .build_raw()
-                .with_consensus_meta();
+            let manifest = complete_test_genesis_builder(GenesisBuilder::new_without_executor(
+                chain.clone(),
+                PathBuf::from("."),
+            ))
+            .build_raw()
+            .expect("build complete crypto-mismatch genesis manifest")
+            .with_consensus_meta();
             let genesis_block = manifest.build_and_sign(&genesis_keys)?;
             let mut instructions = Vec::new();
             for tx in genesis_block.0.external_transactions() {
@@ -18680,9 +18778,12 @@ mod tests {
                     GenesisTopologyEntry::new(PeerId::new(key.public_key().clone()), pop)
                 })
                 .collect::<Vec<_>>();
-            let raw_genesis = GenesisBuilder::new_without_executor(chain_id.clone(), ".")
-                .set_topology(topology)
-                .build_raw();
+            let raw_genesis = complete_test_genesis_builder_for_topology(
+                GenesisBuilder::new_without_executor(chain_id.clone(), "."),
+                topology,
+            )
+            .build_raw()
+            .expect("build complete fresh v2 genesis staging manifest");
             let authority_id = AccountId::new(genesis_authority.public_key().clone());
             let mut config = sample_config();
             config.common.chain = chain_id.clone();
@@ -18702,7 +18803,7 @@ mod tests {
             let before_height = state.committed_height();
             let before_hashes = state.committed_block_hashes_snapshot();
             let mut voting_block = None;
-            let (mode, signed_parameters) =
+            let (mode, _signed_parameters) =
                 signed_v2_genesis_context_metadata(&genesis).expect("signed v2 metadata");
             let (_valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
                 genesis.0.clone(),
@@ -18715,13 +18816,8 @@ mod tests {
             )
             .unpack(|_| {})
             .expect("genesis executes in staging overlay");
-            let bootstrap = iroha_core::sumeragi::freeze_staged_genesis_v2(
-                &genesis,
-                &staged,
-                mode,
-                signed_parameters,
-            )
-            .expect("freeze staged height context");
+            let bootstrap = iroha_core::sumeragi::freeze_staged_genesis_v2(&genesis, &staged, mode)
+                .expect("freeze staged height context");
             assert_eq!(bootstrap.context().height, 1);
             assert_eq!(bootstrap.context().roster.len(), voter_keys.len());
             assert!(
@@ -18775,9 +18871,13 @@ mod tests {
             {
                 config.crypto.allowed_signing.push(Algorithm::BlsNormal);
             }
-            let base_genesis =
-                GenesisBuilder::new_without_executor(chain_id, ".").set_topology(topology);
-            let base_raw = base_genesis.build_raw();
+            let base_genesis = complete_test_genesis_builder_for_topology(
+                GenesisBuilder::new_without_executor(chain_id, "."),
+                topology,
+            );
+            let base_raw = base_genesis
+                .build_raw()
+                .expect("build complete offline semantic genesis manifest");
             let (context_hash, execution_policy_hash) =
                 staged_context_hashes_for_test(&base_raw, &genesis_authority, &config);
             let mut parameters = base_raw.sumeragi_v2_context_parameters();
@@ -18991,21 +19091,25 @@ mod tests {
             let config = sample_config();
             let genesis_keys = config.common.key_pair.clone();
             let chain = config.common.chain.clone();
-            let permissioned_genesis =
-                GenesisBuilder::new_without_executor(chain.clone(), PathBuf::from("."))
-                    .build_raw()
-                    .with_consensus_meta()
-                    .build_and_sign(&genesis_keys)?;
-            let npos_genesis =
+            let permissioned_genesis = complete_test_genesis_builder(
+                GenesisBuilder::new_without_executor(chain.clone(), PathBuf::from(".")),
+            )
+            .build_raw()
+            .expect("build complete permissioned genesis manifest")
+            .with_consensus_meta()
+            .build_and_sign(&genesis_keys)?;
+            let npos_genesis = complete_test_genesis_builder(
                 GenesisBuilder::new_without_executor(chain.clone(), PathBuf::from("."))
                     .append_parameter(Parameter::Custom(
                         iroha_data_model::parameter::system::SumeragiNposParameters::default()
                             .into_custom_parameter(),
-                    ))
-                    .build_raw()
-                    .with_consensus_mode(SumeragiConsensusMode::Npos)
-                    .with_consensus_meta()
-                    .build_and_sign(&genesis_keys)?;
+                    )),
+            )
+            .build_raw()
+            .expect("build complete NPoS genesis manifest")
+            .with_consensus_mode(SumeragiConsensusMode::Npos)
+            .with_consensus_meta()
+            .build_and_sign(&genesis_keys)?;
             let config_caps = build_consensus_config_caps(&config.nexus, None, None)
                 .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
             let (mode_tag, _bls_domain, consensus_caps, _, _) =
@@ -19031,9 +19135,13 @@ mod tests {
             let chain = config.common.chain.clone();
             // Build a canonical manifest with consensus metadata, then tamper with the advertised
             // fingerprint so genesis validation should fail.
-            let manifest = GenesisBuilder::new_without_executor(chain, PathBuf::from("."))
-                .build_raw()
-                .with_consensus_meta();
+            let manifest = complete_test_genesis_builder(GenesisBuilder::new_without_executor(
+                chain,
+                PathBuf::from("."),
+            ))
+            .build_raw()
+            .expect("build complete fingerprint-mismatch genesis manifest")
+            .with_consensus_meta();
             let mut manifest_value =
                 norito::json::value::to_value(&manifest).expect("serialize manifest");
             if let Some(obj) = manifest_value.as_object_mut() {
@@ -19104,12 +19212,15 @@ mod tests {
             manifest_crypto.default_hash = "sm3-256".to_owned();
             manifest_crypto.allowed_signing = vec![Algorithm::Ed25519, Algorithm::Sm2];
             manifest_crypto.sm2_distid_default = "CN1234567812345678".to_owned();
-            let manifest = GenesisBuilder::new_without_executor(
-                ChainId::from("test-chain"),
-                PathBuf::from("."),
+            let manifest = complete_test_genesis_builder(
+                GenesisBuilder::new_without_executor(
+                    ChainId::from("test-chain"),
+                    PathBuf::from("."),
+                )
+                .with_crypto(manifest_crypto),
             )
-            .with_crypto(manifest_crypto)
-            .build_raw();
+            .build_raw()
+            .expect("build complete SM manifest crypto fixture");
             let temp_dir = tempfile::tempdir()?;
             let config_path = temp_dir.path().join("config.toml");
             let manifest_path = temp_dir.path().join("manifest.json");
@@ -19213,7 +19324,12 @@ mod tests {
             F: FnMut(&mut toml::Table, &KeyPair),
         {
             let genesis_key_pair = KeyPair::random();
-            let raw = GenesisBuilder::new_without_executor(ChainId::from("chain"), ".").build_raw();
+            let raw = complete_test_genesis_builder(GenesisBuilder::new_without_executor(
+                ChainId::from("chain"),
+                ".",
+            ))
+            .build_raw()
+            .expect("build complete configuration fixture genesis manifest");
             iroha_genesis::init_instruction_registry();
             let proposal = raw
                 .build_and_sign(&genesis_key_pair)

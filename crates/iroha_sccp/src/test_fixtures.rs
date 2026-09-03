@@ -971,8 +971,7 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
                 execution_policy_hash: parent_context.execution_policy_hash,
                 da_layout: parent_context.da_layout,
                 leader_seed: parent_context.leader_seed,
-                kagemusha_mint_finality_epoch_id: parent_context
-                    .kagemusha_mint_finality_epoch_id,
+                kagemusha_mint_finality_epoch_id: parent_context.kagemusha_mint_finality_epoch_id,
                 kagemusha_mint_finality_epoch_roster: parent_context
                     .kagemusha_mint_finality_epoch_roster
                     .clone(),
@@ -1368,7 +1367,7 @@ mod tests {
                 .kagemusha_mint_finality_epoch_roster
                 .finality_epoch_id(),
             Ok(context.kagemusha_mint_finality_epoch_id),
-            "the SCCP fixture must carry a self-authenticating Kagemusha mint-finality roster"
+            "the SCCP fixture must carry a self-authenticating KAGEMUSHA mint-finality roster"
         );
         assert!(
             context

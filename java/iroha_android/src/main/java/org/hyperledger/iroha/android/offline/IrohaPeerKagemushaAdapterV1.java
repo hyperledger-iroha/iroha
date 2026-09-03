@@ -3,7 +3,11 @@ package org.hyperledger.iroha.android.offline;
 import java.util.Arrays;
 import java.util.Objects;
 
-/** Bounded handoff adapter for the sole canonical Kagemusha V1 wire values. */
+/**
+ * Bounded handoff adapter for the frozen five-message KAGEMUSHA V1 IPM1 exchange.
+ *
+ * <p>No-commit closure is an independently framed recovery value and is never a sixth IPM1 kind.
+ */
 public final class IrohaPeerKagemushaAdapterV1 {
   public static final int ARCHIVE_SCHEMA_VERSION = 1;
 
@@ -43,7 +47,7 @@ public final class IrohaPeerKagemushaAdapterV1 {
         Objects.requireNonNull(message, "message").canonicalPayload();
     if (payload.profile() != IrohaPeerPayloadProfile.KAGEMUSHA_V1
         || payload.schemaVersion() != ARCHIVE_SCHEMA_VERSION) {
-      throw new IllegalArgumentException("Unsupported Kagemusha V1 peer payload");
+      throw new IllegalArgumentException("Unsupported KAGEMUSHA V1 peer payload");
     }
     return payload.bytes();
   }

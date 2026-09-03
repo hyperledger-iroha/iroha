@@ -2107,14 +2107,13 @@ mod tests {
                 block_hash: HashOf::from_untyped_unchecked(Hash::new([marker, 1])),
                 payload_hash: Hash::new([marker, 2]),
             };
-            let commitment =
-                wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-                    Hash::new([marker, 3]),
-                    Hash::new([marker, 4]),
-                    Hash::new([marker, 5]),
-                    1,
-                    Hash::new([marker, 6]),
-                );
+            let commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                Hash::new([marker, 3]),
+                Hash::new([marker, 4]),
+                Hash::new([marker, 5]),
+                1,
+                Hash::new([marker, 6]),
+            );
             AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
                 wire::ConsensusMessageV2Payload::Vote(wire::Vote {
                     round: self.round,

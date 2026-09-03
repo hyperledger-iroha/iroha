@@ -121,6 +121,7 @@ const SUPPORTED_JS_CANONICALIZATION_INSTRUCTIONS = [
   "Governance.*",
   "Social.*",
   "SmartContract.*",
+  "TopUpKagemushaV1",
   "zk.*",
   "VerifyingKey.*",
   "Rwa.*",
@@ -323,6 +324,16 @@ const SUBMIT_BALLOT_WIRE_ID = "iroha.instruction.v1::zk::SubmitBallot";
 const FINALIZE_ELECTION_WIRE_ID = "iroha.instruction.v1::zk::FinalizeElection";
 const REGISTER_VERIFYING_KEY_WIRE_ID = "iroha.instruction.v1::verifying_keys::RegisterVerifyingKey";
 const UPDATE_VERIFYING_KEY_WIRE_ID = "iroha.instruction.v1::verifying_keys::UpdateVerifyingKey";
+const TOP_UP_KAGEMUSHA_WIRE_ID = "iroha.kagemusha.v1.top_up";
+const TOP_UP_KAGEMUSHA_INNER_TYPE_NAME =
+  "iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1";
+const KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_NAME =
+  "iroha.torii.v1.kagemusha.top_up.request";
+const KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeName(
+  KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_NAME,
+);
+const KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES = 16 * 1024;
+const KAGEMUSHA_TOP_UP_REQUEST_HEADER_PADDING = 8;
 const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
   "iroha.mint": "iroha_data_model::isi::mint_burn::MintBox",
   "iroha.burn": "iroha_data_model::isi::mint_burn::BurnBox",
@@ -409,6 +420,7 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
     "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey",
   [UPDATE_VERIFYING_KEY_WIRE_ID]:
     "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey",
+  [TOP_UP_KAGEMUSHA_WIRE_ID]: TOP_UP_KAGEMUSHA_INNER_TYPE_NAME,
 });
 const INSTRUCTION_WIRE_SCHEMA_BINDINGS = Object.freeze(
   Object.entries(INNER_TYPE_NAME_BY_WIRE_ID).map(
@@ -424,7 +436,13 @@ const INNER_SCHEMA_HASH_BY_WIRE_ID = Object.freeze(
     ]),
   ),
 );
-const INNER_HEADER_PADDING_BY_WIRE_ID = Object.freeze({});
+// `TopUpKagemushaV1` embeds a `u128`-aligned request, so its dynamic
+// instruction frame has the eight zero bytes required to align the payload
+// after Norito's 40-byte header.  This is part of the canonical
+// `InstructionBox` bytes and must match `frame_bare_with_header_flags::<T>`.
+const INNER_HEADER_PADDING_BY_WIRE_ID = Object.freeze({
+  [TOP_UP_KAGEMUSHA_WIRE_ID]: 8,
+});
 const BASE58_LOOKUP = new Map(
   Array.from(BASE58_ALPHABET, (char, index) => [char, BigInt(index)]),
 );
@@ -580,7 +598,7 @@ function rejectRetiredGenericZkInstruction(instruction) {
   for (const variant of RETIRED_GENERIC_ZK_VARIANTS) {
     if (Object.prototype.hasOwnProperty.call(instruction.zk, variant)) {
       throw new TypeError(
-        `zk.${variant} is retired in ABI V1; use the typed KagemushaV1 flow`,
+        `zk.${variant} is retired in ABI V1; use the typed KAGEMUSHA flow`,
       );
     }
   }
@@ -2677,9 +2695,76 @@ function encodePureJsInstruction(instruction) {
   );
 }
 
+function decodeCanonicalKagemushaTopUpRequestArchive(value, context) {
+  const archive = toBuffer(value);
+  if (archive.length === 0 || archive.length > KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES) {
+    throw new RangeError(
+      `${context} must be a non-empty canonical KAGEMUSHA top-up request no larger than ${KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES} bytes`,
+    );
+  }
+  const decoded = validateNoritoFrame(archive, {
+    context,
+    expectedSchemaHash: KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_HASH,
+    expectedPaddingLength: KAGEMUSHA_TOP_UP_REQUEST_HEADER_PADDING,
+    requireNonEmptyPayload: true,
+  });
+  if (decoded.flags !== COMPACT_LEN_FLAG) {
+    throw new Error(`${context} must use the canonical compact-length Norito layout`);
+  }
+  const canonical = frameNoritoPayload(
+    decoded.payload,
+    KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_HASH,
+    COMPACT_LEN_FLAG,
+    KAGEMUSHA_TOP_UP_REQUEST_HEADER_PADDING,
+  );
+  if (!archive.equals(canonical)) {
+    throw new Error(`${context} is not canonical Norito`);
+  }
+  return decoded.payload;
+}
+
+function encodeTopUpKagemushaInstruction(value) {
+  assertOnlyObjectKeys(value, ["request"], "TopUpKagemushaV1");
+  const requestPayload = decodeCanonicalKagemushaTopUpRequestArchive(
+    value.request,
+    "TopUpKagemushaV1.request",
+  );
+  return encodeInstructionEnvelope(
+    TOP_UP_KAGEMUSHA_WIRE_ID,
+    encodeNoritoField(requestPayload),
+  );
+}
+
+function decodeTopUpKagemushaInstructionPayload(payload, innerFlags) {
+  if (innerFlags !== COMPACT_LEN_FLAG) {
+    throw new Error("TopUpKagemushaV1 must use the canonical compact-length Norito layout");
+  }
+  const reader = new BufferReader(payload, "TopUpKagemushaV1", innerFlags);
+  const requestPayload = readNoritoField(reader, "request");
+  reader.assertEof();
+  const request = frameNoritoPayload(
+    requestPayload,
+    KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_HASH,
+    COMPACT_LEN_FLAG,
+    KAGEMUSHA_TOP_UP_REQUEST_HEADER_PADDING,
+  );
+  decodeCanonicalKagemushaTopUpRequestArchive(
+    request,
+    "TopUpKagemushaV1.request",
+  );
+  return { TopUpKagemushaV1: { request } };
+}
+
 function encodePureJsInstructionPayload(instruction) {
   if (!isPlainObject(instruction)) {
     throw new TypeError("instruction must be a JSON object");
+  }
+  if (Object.prototype.hasOwnProperty.call(instruction, "TopUpKagemushaV1")) {
+    assertOnlyObjectKeys(instruction, ["TopUpKagemushaV1"], "instruction");
+    if (!isPlainObject(instruction.TopUpKagemushaV1)) {
+      throw new TypeError("TopUpKagemushaV1 must be an object");
+    }
+    return encodeTopUpKagemushaInstruction(instruction.TopUpKagemushaV1);
   }
   if (isPlainObject(instruction.Mint)) {
     if (isPlainObject(instruction.Mint.Asset)) {
@@ -2974,6 +3059,8 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags) {
       return { ExecuteTrigger: decodeExecuteTriggerPayload(payload) };
     case "iroha.rwa":
       return decodeRwaInstructionPayload(payload);
+    case TOP_UP_KAGEMUSHA_WIRE_ID:
+      return decodeTopUpKagemushaInstructionPayload(payload, innerFlags);
     case CANCEL_ASSET_LOCK_WIRE_ID:
       return decodeCancelAssetLockInstructionPayload(payload);
     case SET_ASSET_TRANSFER_AVAILABILITY_WIRE_ID:

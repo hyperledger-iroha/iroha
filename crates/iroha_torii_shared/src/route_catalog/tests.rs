@@ -322,14 +322,14 @@ mod tests {
                 )
                 .len(),
             kagemusha::ROUTES.len(),
-            "every app-api node must expose the complete Kagemusha route family"
+            "every app-api node must expose the complete KAGEMUSHA route family"
         );
         assert_eq!(
             catalog
                 .project(CatalogProjection::Mcp, EnabledFeatures::new(&["app_api"]))
                 .len(),
             kagemusha::ROUTES.len(),
-            "the Kagemusha route family must be available to MCP clients"
+            "the KAGEMUSHA route family must be available to MCP clients"
         );
     }
     #[test]

@@ -1077,9 +1077,7 @@ mod tests {
             .collect::<Vec<_>>();
         let network_id = test_network_id();
         let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                network_id, 0, &roster,
-            );
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
         let context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,

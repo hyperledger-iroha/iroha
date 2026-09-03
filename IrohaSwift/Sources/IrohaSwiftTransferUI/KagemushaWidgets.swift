@@ -8,7 +8,7 @@ import UIKit
 import AppKit
 #endif
 
-/// Peer transports supported by Kagemusha V1.
+/// Peer transports supported by KAGEMUSHA V1.
 public enum IrohaKagemushaTransportKind: String, CaseIterable, Identifiable, Sendable {
     case qr
     case nfc
@@ -508,7 +508,7 @@ public struct IrohaKagemushaNfcGuidancePanel: View {
         case (_, .idle): return "Ready"
         case (.send, .waiting): return "Hold near receiver"
         case (.receive, .waiting): return "Waiting for sender"
-        case (.send, .committing): return "Committing cash handoff"
+        case (.send, .committing): return "Committing KAGEMUSHA handoff"
         case (.receive, .committing): return "Verifying payment"
         case (_, .transferring): return "Transferring committed payment"
         case (_, .deliveryReceipt): return "Delivery receipt received"

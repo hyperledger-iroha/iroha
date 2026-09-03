@@ -202,6 +202,13 @@ public abstract record class TransactionInstruction
         return new ExecuteTriggerInstruction(triggerId, args);
     }
 
+    /// <summary>Creates the sole first-release KAGEMUSHA top-up instruction.</summary>
+    public static TopUpKagemushaV1Instruction TopUpKagemushaV1(
+        Hyperledger.Iroha.Kagemusha.KagemushaTopUpRequestV1 request)
+    {
+        return new TopUpKagemushaV1Instruction(request);
+    }
+
     public static IssueReplicationOrderInstruction IssueReplicationOrder(
         string orderId,
         ReadOnlySpan<byte> orderPayload,

@@ -18,7 +18,7 @@ from .address import (
     AccountAddress,
     AccountAddressError,
 )
-from .kagemusha_v1 import KagemushaV1
+from .kagemusha import Kagemusha
 from .numeric_v1 import (
     INT_MAX,
     INT_MIN,
@@ -535,7 +535,7 @@ from .dataspaces import (
 _BASE_EXPORTS = [
     "AccountAddress",
     "AccountAddressError",
-    "KagemushaV1",
+    "Kagemusha",
     "CREATE_KAIGI_WIRE_ID_V1",
     "END_KAIGI_WIRE_ID_V1",
     "JOIN_KAIGI_WIRE_ID_V1",

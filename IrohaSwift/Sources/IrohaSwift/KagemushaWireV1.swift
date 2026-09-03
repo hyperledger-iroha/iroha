@@ -1,6 +1,6 @@
 import Foundation
 
-/// Failures from the bounded Kagemusha V1 text envelope.
+/// Failures from the bounded KAGEMUSHA V1 text envelope.
 public enum KagemushaWireEnvelopeErrorV1: Error, Equatable {
   case emptyPayload
   case invalidPrefix
@@ -10,7 +10,7 @@ public enum KagemushaWireEnvelopeErrorV1: Error, Equatable {
   case sizeExceeded(actual: Int, maximum: Int)
 }
 
-/// The canonical Kagemusha V1 value whose opaque Norito bytes are transported.
+/// The canonical KAGEMUSHA V1 value whose opaque Norito bytes are transported.
 public enum KagemushaWirePayloadKindV1: CaseIterable, Sendable {
   case paymentRequest
   case payment
@@ -56,7 +56,7 @@ public enum KagemushaWirePayloadKindV1: CaseIterable, Sendable {
   }
 }
 
-/// Exact size contract and opaque text envelope for Kagemusha V1.
+/// Exact size contract and opaque text envelope for KAGEMUSHA V1.
 ///
 /// This codec does not interpret or validate Norito. Callers must pass bytes produced by the
 /// canonical typed encoder and must run the typed decoder and cryptographic verifier after text
@@ -70,20 +70,22 @@ public enum KagemushaWireV1 {
   public static let requestMaximumTTLMS: UInt64 = 5 * 60 * 1_000
 
   public static let maximumAggregateStateBytes = 768
-  public static let maximumPaymentRequestBytes = 1_024
-  public static let maximumPaymentBytes = 7_936
-  public static let maximumAcknowledgementBytes = 512
+  public static let maximumPaymentRequestBytes = 928
+  public static let maximumPaymentBytes = 7_552
+  public static let maximumAcknowledgementBytes = 256
   public static let maximumMintAuthorizationBytes = 7_936
   public static let maximumMintCreditBytes = 7_936
   public static let maximumRedemptionVoucherBytes = 7_936
-  public static let maximumPaymentRequestTextBytes = 1_371
-  public static let maximumPaymentTextBytes = 10_587
-  public static let maximumAcknowledgementTextBytes = 688
+  public static let maximumPaymentRequestTextBytes = 1_243
+  public static let maximumPaymentTextBytes = 10_075
+  public static let maximumAcknowledgementTextBytes = 347
   public static let maximumMintAuthorizationTextBytes = 10_587
   public static let maximumMintCreditTextBytes = 10_587
   public static let maximumRedemptionVoucherTextBytes = 10_587
-  public static let maximumSessionRawBytes = 9_211
-  public static let maximumSessionTextBytes = 12_288
+  public static let targetCompleteExchangeRawBytes = 8_960
+  public static let maximumCompleteExchangeRawBytes = 9_211
+  public static let maximumCompleteExchangeTextBytes = 12_288
+  public static let maximumCommitCertificateBytes = 1_024
 
   public static let maximumPairedProofBytes = 6_528
   public static let maximumCurrentProofsBytes = 4_990
@@ -94,13 +96,29 @@ public enum KagemushaWireV1 {
   public static let x25519PublicKeyBytes = 32
   public static let xchachaNonceBytes = 24
   public static let xchachaTagBytes = 16
+  /// Exact canonical private opening size shared with the Rust V1 schema.
+  public static let creditOpeningCanonicalBytes = 200
+  /// Fixed plaintext size plus the XChaCha20-Poly1305 authentication tag.
+  public static let encryptedCreditCiphertextAndTagBytes =
+    creditOpeningCanonicalBytes + xchachaTagBytes
+  /// Exact canonical envelope size; the transport cap remains independently enforced.
+  public static let encryptedCreditCanonicalBytes = 327
   public static let encryptedCreditKDFSaltLabel = Data(
     "iroha:kagemusha:v1:credit-envelope-salt\0".utf8)
   public static let encryptedCreditKDFInfoLabel = Data(
     "iroha:kagemusha:v1:credit-envelope-key\0".utf8)
   public static let maximumHardwareProfileBytes = 512
   public static let maximumHardwareCredentialBytes = 768
-  public static let minimumPaymentOutboxBytes: UInt32 = 26_112
+  public static let minimumInboxStageBytes: UInt32 =
+    UInt32(maximumPaymentBytes + 512 + maximumAcknowledgementBytes)
+  public static let maximumSealedTransitionInputBytes: UInt32 = 2_048
+  public static let maximumRecoverySeedBytes: UInt32 = 512
+  public static let maximumPrecommitPairedProofBytes: UInt32 = 6_528
+  public static let maximumPrecommitCandidateMetadataBytes: UInt32 = 1_024
+  public static let maximumRedemptionProofBytes: UInt32 = 6_528
+  public static let maximumPaymentProofBytes: UInt32 = 6_528
+  public static let maximumOutboxRetryMetadataBytes: UInt32 = 512
+  public static let minimumPaymentOutboxBytes: UInt32 = 25_728
   public static let minimumRedemptionOutboxBytes: UInt32 = 26_112
   public static let requiredHardwareCapabilityMask: UInt16 = 0xffff
 

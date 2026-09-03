@@ -6,12 +6,14 @@ use crate::private_settlement::{
         private_settlement_abort_carrier_instruction_digest_v1,
         private_settlement_carrier_instruction_digest_v1,
         private_settlement_commit_bundle_digest_v1,
+        private_settlement_prepare_lock_carrier_instruction_digest_v1,
     },
     state::PrivateSettlementPoolGovernanceProjectionV1,
 };
 use iroha_data_model::isi::private_settlement::{
     AbortAtomicPrivateSettlementV1, ActivatePrivateSettlementPoolV1,
-    FinalizeAtomicPrivateSettlementV1, RotatePrivateSettlementPoolPolicyV1,
+    FinalizeAtomicPrivateSettlementV1, RegisterAtomicPrivateSettlementPrepareV1,
+    RotatePrivateSettlementPoolPolicyV1,
 };
 use iroha_data_model::nexus::{
     ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1, PrivateSettlementAbortReasonV1,
@@ -91,6 +93,29 @@ impl Execute for FinalizeAtomicPrivateSettlementV1 {
         let receipt = self.commit_bundle.into_receipt(finalized_height);
         state_transaction
             .apply_private_settlement_receipt_v1(receipt)
+            .map_err(|_| invalid_carrier())?;
+        Ok(())
+    }
+}
+
+impl Execute for RegisterAtomicPrivateSettlementPrepareV1 {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if authority != &self.barrier.manifest.sponsor {
+            return Err(invalid_carrier());
+        }
+        let payload_digest = self.barrier.prepared_bundle_digest;
+        let instruction_digest =
+            private_settlement_prepare_lock_carrier_instruction_digest_v1(&self)
+                .map_err(|_| invalid_carrier())?;
+        state_transaction
+            .consume_private_settlement_carrier_binding_v1(payload_digest, instruction_digest)
+            .map_err(|_| invalid_carrier())?;
+        state_transaction
+            .apply_private_settlement_prepare_locks_v1(self.barrier)
             .map_err(|_| invalid_carrier())?;
         Ok(())
     }

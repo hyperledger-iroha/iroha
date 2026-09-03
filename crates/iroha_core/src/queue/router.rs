@@ -22,6 +22,7 @@ use iroha_data_model::{
         BurnBox, CustomInstruction, GrantBox, Instruction, InstructionBox, MintBox, RegisterBox,
         RemoveKeyValueBox, RevokeBox, SetKeyValueBox, TransferBox, UnregisterBox,
         contract_alias::SetContractAlias,
+        kagemusha_v1::{RedeemKagemushaV1, TopUpKagemushaV1},
         musubi::{
             AcceptMusubiPackageMaintainerV1, AddMusubiArchiveLocationV1,
             AssertMusubiReleaseDigestV1, InviteMusubiPackageMaintainerV1, PublishMusubiReleaseV1,
@@ -32,10 +33,9 @@ use iroha_data_model::{
             SetMusubiPackageMaintainerRoleV1, SetMusubiPackageMetadataV1,
             SetMusubiRegistryPolicyV1, SetMusubiReleaseYankV1,
         },
-        kagemusha_v1::{RedeemKagemushaV1, TopUpKagemushaV1},
         private_settlement::{
             AbortAtomicPrivateSettlementV1, ActivatePrivateSettlementPoolV1,
-            FinalizeAtomicPrivateSettlementV1,
+            FinalizeAtomicPrivateSettlementV1, RegisterAtomicPrivateSettlementPrepareV1,
         },
         settlement::{
             DvpIsi, FundFxCorridorEscrow, FxCorridorPolicy, FxCorridorPolicyRegistry, PvpIsi,
@@ -420,6 +420,15 @@ pub enum RoutingResolveError {
         /// Policy selected by the settlement instruction.
         policy_id: Name,
     },
+    /// Alias lease routing needs the replayed governance state.
+    #[error("alias registry routing requires world state")]
+    AliasRegistryRoutingStateUnavailable,
+    /// A governed activation cannot be resolved without the exact proposal height.
+    #[error("alias registry routing activation requires an explicit block height")]
+    AliasRegistryRoutingHeightUnavailable,
+    /// The committed alias registry activation is malformed.
+    #[error("alias registry routing activation is malformed")]
+    AliasRegistryRoutingActivationMalformed,
     /// A persisted multisig proposal graph recursively approves the same proposal.
     #[error(
         "persisted multisig proposal `{instructions_hash}` for account `{account}` contains an approval cycle"
@@ -457,6 +466,15 @@ impl RoutingResolveError {
             Self::FxCorridorPolicyRegistryMissing => "fx_corridor_policy_registry_missing",
             Self::FxCorridorPolicyRegistryMalformed => "fx_corridor_policy_registry_malformed",
             Self::FxCorridorPolicyNotFound { .. } => "fx_corridor_policy_not_found",
+            Self::AliasRegistryRoutingStateUnavailable => {
+                "alias_registry_routing_state_unavailable"
+            }
+            Self::AliasRegistryRoutingHeightUnavailable => {
+                "alias_registry_routing_height_unavailable"
+            }
+            Self::AliasRegistryRoutingActivationMalformed => {
+                "alias_registry_routing_activation_malformed"
+            }
             Self::MultisigProposalCycle { .. } => "multisig_proposal_cycle",
             Self::StaleRoutingPlan => "stale_routing_plan",
         }
@@ -580,6 +598,7 @@ fn evaluate_policy_with_catalog_and_world_at_opt<W: WorldReadOnly>(
         world,
         ledger_time_ms,
         None,
+        None,
     )
     .map(|plan| plan.coordinator_route())
 }
@@ -597,6 +616,7 @@ pub fn evaluate_policy_plan_with_catalog_and_world<W: WorldReadOnly>(
         dataspace_catalog,
         tx,
         world,
+        None,
         None,
         None,
     )
@@ -618,6 +638,7 @@ pub fn evaluate_policy_plan_with_catalog_and_world_at<W: WorldReadOnly>(
         world,
         Some(ledger_time_ms),
         None,
+        None,
     )
 }
 /// Evaluate the active Nexus routing policy and resolve the full plan at a deterministic ledger
@@ -638,6 +659,7 @@ pub fn evaluate_policy_plan_with_nexus_and_world_at<W: WorldReadOnly>(
         tx,
         world,
         Some(ledger_time_ms),
+        None,
         None,
     )
 }
@@ -661,6 +683,7 @@ pub fn evaluate_policy_plan_with_nexus_and_world_at_block_height<W: WorldReadOnl
             nexus,
             block_height,
         )),
+        Some(block_height),
     )
 }
 fn evaluate_policy_plan_with_catalog_and_world_at_opt<W: WorldReadOnly>(
@@ -671,6 +694,7 @@ fn evaluate_policy_plan_with_catalog_and_world_at_opt<W: WorldReadOnly>(
     world: &W,
     ledger_time_ms: Option<u64>,
     autoscale_range: Option<AutoscaleElasticRange>,
+    routing_block_height: Option<u64>,
 ) -> Result<RoutingPlan, RoutingResolveError> {
     let matched_rule = policy
         .rules
@@ -683,6 +707,7 @@ fn evaluate_policy_plan_with_catalog_and_world_at_opt<W: WorldReadOnly>(
         dataspace_catalog,
         world,
         ledger_time_ms,
+        routing_block_height,
     )? {
         return Ok(plan);
     }
@@ -693,6 +718,7 @@ fn evaluate_policy_plan_with_catalog_and_world_at_opt<W: WorldReadOnly>(
         dataspace_catalog,
         world,
         ledger_time_ms,
+        routing_block_height,
     )? {
         return Ok(plan);
     }
@@ -713,6 +739,7 @@ fn evaluate_policy_plan_with_catalog_and_world_at_opt<W: WorldReadOnly>(
         Some(dataspace_catalog),
         world,
         ledger_time_ms,
+        routing_block_height,
     )?;
     target = reconcile_native_amx_participants_with_world(
         target,
@@ -720,6 +747,7 @@ fn evaluate_policy_plan_with_catalog_and_world_at_opt<W: WorldReadOnly>(
         dataspace_catalog,
         world,
         ledger_time_ms,
+        routing_block_height,
     )?;
     apply_authority_dataspace_target(
         &mut target,
@@ -975,6 +1003,11 @@ fn dataspace_scoped_permission_routing_plan(
             dataspace_catalog,
             state_view.world(),
             Some(state_view_ledger_time_ms(state_view)),
+            Some(
+                u64::try_from(state_view.height())
+                    .unwrap_or(u64::MAX)
+                    .saturating_add(1),
+            ),
         )?;
     }
     scoped_permission_plan_from_target(
@@ -994,6 +1027,7 @@ fn dataspace_scoped_permission_routing_plan_with_world<W: WorldReadOnly>(
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
     ledger_time_ms: Option<u64>,
+    routing_block_height: Option<u64>,
 ) -> Result<Option<RoutingPlan>, RoutingResolveError> {
     let Some(decision) = dataspace_scoped_permission_routing_decision_with_world(
         tx,
@@ -1010,6 +1044,7 @@ fn dataspace_scoped_permission_routing_plan_with_world<W: WorldReadOnly>(
         Some(dataspace_catalog),
         world,
         ledger_time_ms,
+        routing_block_height,
     )?;
     let target = reconcile_native_amx_participants_with_world(
         target,
@@ -1017,6 +1052,7 @@ fn dataspace_scoped_permission_routing_plan_with_world<W: WorldReadOnly>(
         dataspace_catalog,
         world,
         ledger_time_ms,
+        routing_block_height,
     )?;
     scoped_permission_plan_from_target(
         decision,
@@ -1048,6 +1084,7 @@ fn native_amx_fx_routing_plan_with_world<W: WorldReadOnly>(
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
     ledger_time_ms: Option<u64>,
+    routing_block_height: Option<u64>,
 ) -> Result<Option<RoutingPlan>, RoutingResolveError> {
     if !transaction_contains_fx_corridor_settlement(tx) {
         return Ok(None);
@@ -1059,6 +1096,7 @@ fn native_amx_fx_routing_plan_with_world<W: WorldReadOnly>(
         dataspace_catalog,
         world,
         ledger_time_ms,
+        routing_block_height,
     )?;
     if let Some(policy_dataspace) = smart_contract_deploy_policy_dataspace(matched_rule) {
         participant_dataspaces.push(policy_dataspace);
@@ -1160,6 +1198,9 @@ impl MultisigProposalRoutingStack {
 }
 #[derive(Clone, Debug, Default)]
 struct FxCorridorRoutingOverlay {
+    // Immutable for the entire recursive walk. Queue admission uses H+1; block/replay callers
+    // supply the exact proposal/authority height, independently of wall clock and FX mutations.
+    routing_block_height: Option<u64>,
     policies: BTreeMap<Name, FxCorridorPolicy>,
     executed_multisig_proposals: BTreeMap<MultisigProposalRoutingKey, Vec<InstructionBox>>,
 }
@@ -1674,11 +1715,17 @@ fn settlement_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
     ledger_time_ms: Option<u64>,
+    routing_block_height: Option<u64>,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
     let Some(executable) = transaction_executable(tx) else {
         return Ok(None);
     };
-    let mut fx_overlay = FxCorridorRoutingOverlay::default();
+    // The settlement pre-walk also resolves same-transaction multisig payloads, which may
+    // contain height-gated registry instructions even when there is no settlement leg.
+    let mut fx_overlay = FxCorridorRoutingOverlay {
+        routing_block_height,
+        ..FxCorridorRoutingOverlay::default()
+    };
     executable_settlement_dataspace_target_with_world(
         executable,
         dataspace_catalog,
@@ -1773,8 +1820,11 @@ fn instruction_settlement_dataspace_target_with_stack(
         return Ok(Some(activation.route.dataspace_id));
     }
     if any
-        .downcast_ref::<AbortAtomicPrivateSettlementV1>()
+        .downcast_ref::<RegisterAtomicPrivateSettlementPrepareV1>()
         .is_some()
+        || any
+            .downcast_ref::<AbortAtomicPrivateSettlementV1>()
+            .is_some()
         || any
             .downcast_ref::<FinalizeAtomicPrivateSettlementV1>()
             .is_some()
@@ -1980,8 +2030,11 @@ fn instruction_settlement_dataspace_target_with_world_and_stack<W: WorldReadOnly
         return Ok(Some(activation.route.dataspace_id));
     }
     if any
-        .downcast_ref::<AbortAtomicPrivateSettlementV1>()
+        .downcast_ref::<RegisterAtomicPrivateSettlementPrepareV1>()
         .is_some()
+        || any
+            .downcast_ref::<AbortAtomicPrivateSettlementV1>()
+            .is_some()
         || any
             .downcast_ref::<FinalizeAtomicPrivateSettlementV1>()
             .is_some()
@@ -2544,12 +2597,16 @@ fn transaction_dataspace_routing_target_info_with_world<W: WorldReadOnly>(
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
     ledger_time_ms: Option<u64>,
+    routing_block_height: Option<u64>,
 ) -> Result<TransactionDataspaceTarget, RoutingResolveError> {
     let Some(executable) = transaction_executable(tx) else {
         return Ok(TransactionDataspaceTarget::default());
     };
     let mut target = TransactionDataspaceTarget::default();
-    let mut fx_overlay = FxCorridorRoutingOverlay::default();
+    let mut fx_overlay = FxCorridorRoutingOverlay {
+        routing_block_height,
+        ..FxCorridorRoutingOverlay::default()
+    };
     let reject_cross_dataspace = amx_policy_rejects_cross_dataspace(tx);
     let instruction_refs = executable_instruction_refs(executable);
     let same_transaction_multisig_proposals =
@@ -2661,7 +2718,7 @@ pub(crate) fn native_amx_participant_dataspaces_with_world<W: WorldReadOnly>(
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
 ) -> Vec<DataSpaceId> {
-    native_amx_participant_dataspaces_with_world_at(tx, dataspace_catalog, world, None)
+    native_amx_participant_dataspaces_with_world_at(tx, dataspace_catalog, world, None, None)
         .unwrap_or_default()
 }
 fn native_amx_participant_dataspaces_with_world_at<W: WorldReadOnly>(
@@ -2669,9 +2726,13 @@ fn native_amx_participant_dataspaces_with_world_at<W: WorldReadOnly>(
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
     ledger_time_ms: Option<u64>,
+    routing_block_height: Option<u64>,
 ) -> Result<Vec<DataSpaceId>, RoutingResolveError> {
     let mut dataspaces = std::collections::BTreeSet::new();
-    let mut fx_overlay = FxCorridorRoutingOverlay::default();
+    let mut fx_overlay = FxCorridorRoutingOverlay {
+        routing_block_height,
+        ..FxCorridorRoutingOverlay::default()
+    };
     let mut multisig_stack = MultisigProposalRoutingStack::default();
     let Some(executable) = transaction_executable(tx) else {
         return Ok(Vec::new());
@@ -2820,6 +2881,7 @@ fn reconcile_native_amx_participants_with_world<W: WorldReadOnly>(
     dataspace_catalog: &DataSpaceCatalog,
     world: &W,
     ledger_time_ms: Option<u64>,
+    routing_block_height: Option<u64>,
 ) -> Result<TransactionDataspaceTarget, RoutingResolveError> {
     target
         .participants
@@ -2828,12 +2890,14 @@ fn reconcile_native_amx_participants_with_world<W: WorldReadOnly>(
             dataspace_catalog,
             world,
             ledger_time_ms,
+            routing_block_height,
         )?);
     if let Some(settlement_target) = settlement_transaction_dataspace_target_with_world(
         tx,
         Some(dataspace_catalog),
         world,
         ledger_time_ms,
+        routing_block_height,
     )? {
         if settlement_target == DataSpaceId::UNIVERSAL {
             target.dataspace_id = Some(DataSpaceId::UNIVERSAL);
@@ -3327,6 +3391,62 @@ fn compare_and_set_primary_account_alias_dataspace_target(
             .map(Some),
     )
 }
+/// SNS lease mutations and their derived identity records can use the universal registry.
+///
+/// In particular, acquiring a dataspace name must not require that dataspace to already have a
+/// lane/catalog entry. The native executor still validates the name/id pair, ownership, active
+/// parents, quote guard, and the global lease payment before creating any records.
+fn instruction_uses_universal_alias_registry(instruction: &dyn Instruction) -> bool {
+    let any = instruction.as_any();
+    any.is::<iroha_data_model::isi::alias_setup::EnsureAlias>()
+        || any.is::<iroha_data_model::isi::alias_setup::RenewAliasLease>()
+}
+
+fn alias_registry_routing_active(
+    world: &impl WorldReadOnly,
+    routing_block_height: Option<u64>,
+) -> Result<bool, RoutingResolveError> {
+    use iroha_data_model::alias_setup::AliasRegistryRoutingActivationV1;
+
+    let Some(parameter) = world
+        .parameters()
+        .custom()
+        .get(&AliasRegistryRoutingActivationV1::parameter_id())
+    else {
+        return Ok(false);
+    };
+    let activation = AliasRegistryRoutingActivationV1::from_custom_parameter(parameter)
+        .map_err(|_| RoutingResolveError::AliasRegistryRoutingActivationMalformed)?
+        .ok_or(RoutingResolveError::AliasRegistryRoutingActivationMalformed)?;
+    let height =
+        routing_block_height.ok_or(RoutingResolveError::AliasRegistryRoutingHeightUnavailable)?;
+    Ok(height >= activation.activation_height)
+}
+
+fn alias_registry_routing_active_with_state(
+    state_view: Option<&StateView<'_>>,
+) -> Result<bool, RoutingResolveError> {
+    let view = state_view.ok_or(RoutingResolveError::AliasRegistryRoutingStateUnavailable)?;
+    alias_registry_routing_active(
+        view.world(),
+        Some(
+            u64::try_from(view.height())
+                .unwrap_or(u64::MAX)
+                .saturating_add(1),
+        ),
+    )
+}
+
+fn alias_lease_dataspace_target(instruction: &dyn Instruction) -> Option<DataSpaceId> {
+    let any = instruction.as_any();
+    any.downcast_ref::<iroha_data_model::isi::alias_setup::EnsureAlias>()
+        .map(|ensure| ensure.intent.target().dataspace_id())
+        .or_else(|| {
+            any.downcast_ref::<iroha_data_model::isi::alias_setup::RenewAliasLease>()
+                .map(|renew| renew.target.dataspace_id())
+        })
+}
+
 fn instruction_transaction_dataspace_target(
     instruction: &dyn Instruction,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -3338,11 +3458,14 @@ fn instruction_transaction_dataspace_target(
     {
         return Ok(Some(settlement_target));
     }
-    if let Some(ensure) = any.downcast_ref::<iroha_data_model::isi::alias_setup::EnsureAlias>() {
-        return Ok(Some(ensure.intent.target().dataspace_id()));
-    }
-    if let Some(renew) = any.downcast_ref::<iroha_data_model::isi::alias_setup::RenewAliasLease>() {
-        return Ok(Some(renew.target.dataspace_id()));
+    if let Some(legacy_target) = alias_lease_dataspace_target(instruction) {
+        return Ok(Some(
+            if alias_registry_routing_active_with_state(state_view)? {
+                DataSpaceId::UNIVERSAL
+            } else {
+                legacy_target
+            },
+        ));
     }
     if let Some(configure) =
         any.downcast_ref::<iroha_data_model::isi::alias_setup::ConfigureAliasAutoRenew>()
@@ -3726,11 +3849,14 @@ fn instruction_transaction_dataspace_target_with_world_and_fx_overlay<W: WorldRe
     )? {
         return Ok(Some(settlement_target));
     }
-    if let Some(ensure) = any.downcast_ref::<iroha_data_model::isi::alias_setup::EnsureAlias>() {
-        return Ok(Some(ensure.intent.target().dataspace_id()));
-    }
-    if let Some(renew) = any.downcast_ref::<iroha_data_model::isi::alias_setup::RenewAliasLease>() {
-        return Ok(Some(renew.target.dataspace_id()));
+    if let Some(legacy_target) = alias_lease_dataspace_target(instruction) {
+        return Ok(Some(
+            if alias_registry_routing_active(world, fx_overlay.routing_block_height)? {
+                DataSpaceId::UNIVERSAL
+            } else {
+                legacy_target
+            },
+        ));
     }
     if let Some(configure) =
         any.downcast_ref::<iroha_data_model::isi::alias_setup::ConfigureAliasAutoRenew>()
@@ -4812,6 +4938,18 @@ fn extend_instruction_concrete_dataspace_targets_with_world_and_fx_overlay_and_s
     fx_overlay: &FxCorridorRoutingOverlay,
     stack: &mut MultisigProposalRoutingStack,
 ) -> Result<(), RoutingResolveError> {
+    if instruction_uses_universal_alias_registry(instruction) {
+        targets.extend(
+            instruction_transaction_dataspace_target_with_world_and_fx_overlay(
+                instruction,
+                dataspace_catalog,
+                world,
+                ledger_time_ms,
+                fx_overlay,
+            )?,
+        );
+        return Ok(());
+    }
     if let Some(fx_targets) = fx_corridor_instruction_concrete_dataspace_targets_with_world(
         instruction,
         world,
@@ -5519,12 +5657,18 @@ fn instruction_transaction_target_requires_universal_coordinator(
     state_view: Option<&StateView<'_>>,
 ) -> Result<bool, RoutingResolveError> {
     let any = instruction.as_any();
+    if instruction_uses_universal_alias_registry(instruction) {
+        return alias_registry_routing_active_with_state(state_view);
+    }
     if musubi_instruction_requires_universal_coordinator(any) {
         return Ok(true);
     }
     if any
-        .downcast_ref::<AbortAtomicPrivateSettlementV1>()
+        .downcast_ref::<RegisterAtomicPrivateSettlementPrepareV1>()
         .is_some()
+        || any
+            .downcast_ref::<AbortAtomicPrivateSettlementV1>()
+            .is_some()
         || any
             .downcast_ref::<FinalizeAtomicPrivateSettlementV1>()
             .is_some()
@@ -5666,12 +5810,18 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
     ledger_time_ms: Option<u64>,
 ) -> Result<bool, RoutingResolveError> {
     let any = instruction.as_any();
+    if instruction_uses_universal_alias_registry(instruction) {
+        return alias_registry_routing_active(world, None);
+    }
     if musubi_instruction_requires_universal_coordinator(any) {
         return Ok(true);
     }
     if any
-        .downcast_ref::<AbortAtomicPrivateSettlementV1>()
+        .downcast_ref::<RegisterAtomicPrivateSettlementPrepareV1>()
         .is_some()
+        || any
+            .downcast_ref::<AbortAtomicPrivateSettlementV1>()
+            .is_some()
         || any
             .downcast_ref::<FinalizeAtomicPrivateSettlementV1>()
             .is_some()
@@ -5930,6 +6080,9 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world_and_
     fx_overlay: &FxCorridorRoutingOverlay,
 ) -> Result<bool, RoutingResolveError> {
     let any = instruction.as_any();
+    if instruction_uses_universal_alias_registry(instruction) {
+        return alias_registry_routing_active(world, fx_overlay.routing_block_height);
+    }
     if let Some(multisig) = multisig_instruction(instruction) {
         // Concrete-target collection below is cycle-guarded and completes before the recursive
         // coordinator scan, preventing a cyclic payload from reaching that scan.
@@ -6316,6 +6469,9 @@ fn trigger_executable_transaction_target_needs_state(executable: &Executable) ->
 }
 fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instruction) -> bool {
     let any = instruction.as_any();
+    if instruction_uses_universal_alias_registry(instruction) {
+        return true;
+    }
     if any.downcast_ref::<SettleFxCorridor>().is_some() {
         return true;
     }
@@ -8665,6 +8821,11 @@ impl LaneRouter for ConfigLaneRouter {
                 nexus,
                 u64::try_from(state_view.height()).unwrap_or(u64::MAX),
             )),
+            Some(
+                u64::try_from(state_view.height())
+                    .unwrap_or(u64::MAX)
+                    .saturating_add(1),
+            ),
         )
     }
     fn try_route_without_state(
@@ -8829,7 +8990,7 @@ mod tests {
             prelude::{Mint, Register, Transfer},
             private_settlement::{
                 AbortAtomicPrivateSettlementV1, ActivatePrivateSettlementPoolV1,
-                FinalizeAtomicPrivateSettlementV1,
+                FinalizeAtomicPrivateSettlementV1, RegisterAtomicPrivateSettlementPrepareV1,
             },
             settlement::{
                 DvpIsi, FundFxCorridorEscrow, FxCorridorOracleEvidence, FxCorridorPolicy,
@@ -8849,7 +9010,7 @@ mod tests {
             AUTOSCALE_META_MANAGED, AssetPermissionManifest, AtomicPrivateSettlementV1, LaneConfig,
             LaneId, LaneVisibility, ManifestVersion, PrivateSettlementAbortReasonV1,
             PrivateSettlementCommitBundleV1, PrivateSettlementPoolGovernanceLifecycleV1,
-            PrivateSettlementRouteV1, UniversalAccountId,
+            PrivateSettlementPrepareBarrierV1, PrivateSettlementRouteV1, UniversalAccountId,
         },
         oracle::{FeedConfigVersion, FeedEvent, FeedEventOutcome, FeedSuccess, ObservationValue},
         peer::PeerId,
@@ -8883,6 +9044,76 @@ mod tests {
     }
 
     #[test]
+    fn alias_registry_routing_reconciles_committed_plans_at_their_authority_height() {
+        use iroha_data_model::{
+            alias_setup::{
+                AliasDataSpaceIntentV1, AliasIntentV1, AliasLeaseAcquisitionV1, AliasQuoteGuardV1,
+                AliasRegistryRoutingActivationV1, ResolvedDataSpaceV1,
+            },
+            isi::alias_setup::EnsureAlias,
+        };
+
+        let (owner, signer) = gen_account_in("alias-registry-replay");
+        let (dataspace, lane, _, _, router) = routed_dataspace_fixture("paynet");
+        let transaction = sample_transaction(
+            &owner,
+            signer.private_key(),
+            vec![
+                EnsureAlias::new(
+                    AliasIntentV1::Dataspace(AliasDataSpaceIntentV1 {
+                        dataspace: ResolvedDataSpaceV1::new("paynet".parse().unwrap(), dataspace),
+                        owner: owner.clone(),
+                    }),
+                    AliasLeaseAcquisitionV1::new(1, None),
+                    AliasQuoteGuardV1 {
+                        expected_policy_version: 1,
+                        expected_payment_asset:
+                            iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                                .parse()
+                                .unwrap(),
+                        max_amount: 0_u32.into(),
+                        valid_until_ms: 0,
+                    },
+                )
+                .into(),
+            ],
+        );
+        let state = blank_state();
+        install_router_nexus(&state, &router);
+        let committed = RoutingPlan::single(RoutingDecision::new(lane, dataspace));
+        let reconcile = |plan: &RoutingPlan, height| {
+            super::super::reconcile_execution_routing_plan(
+                &transaction,
+                plan,
+                &state.view(),
+                0,
+                height,
+            )
+        };
+        assert_eq!(reconcile(&committed, 2).unwrap(), committed);
+        let mut world = state.world.block();
+        world.parameters.get_mut().set_parameter(Parameter::Custom(
+            AliasRegistryRoutingActivationV1::new(3).into_custom_parameter(),
+        ));
+        world.commit();
+
+        // Block replay supplies the old authority height, even when the world already contains
+        // the activation. Rejected/no-op entries must retain this same routing-plan binding.
+        assert_eq!(reconcile(&committed, 2).unwrap(), committed);
+        assert!(matches!(
+            reconcile(&committed, 3),
+            Err(super::super::ExecutionRoutingReconciliationError::TopologyMismatch)
+        ));
+        let activated =
+            RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
+        assert_eq!(reconcile(&activated, 3).unwrap(), activated);
+        assert!(matches!(
+            reconcile(&activated, 2),
+            Err(super::super::ExecutionRoutingReconciliationError::TopologyMismatch)
+        ));
+    }
+
+    #[test]
     fn private_settlement_carrier_routes_to_universal_without_state_lookup() {
         let (sponsor, _) = gen_account_in("settlement");
         let instruction = InstructionBox::from(FinalizeAtomicPrivateSettlementV1::new(
@@ -8906,8 +9137,60 @@ mod tests {
                     reimbursement_leg_ordinal: 0,
                     legs: Vec::new(),
                 },
-                authority_catalog: Vec::new(),
+                authority_catalog: Default::default(),
                 legs: Vec::new(),
+            },
+        ));
+
+        assert_eq!(
+            instruction_settlement_dataspace_target(&*instruction, None, None),
+            Ok(Some(DataSpaceId::UNIVERSAL))
+        );
+        assert_eq!(
+            instruction_transaction_target_requires_universal_coordinator(
+                &*instruction,
+                None,
+                None,
+            ),
+            Ok(true)
+        );
+        assert!(!instruction_transaction_dataspace_target_needs_state(
+            &*instruction
+        ));
+    }
+
+    #[test]
+    fn private_settlement_prepare_registration_routes_to_universal_without_state_lookup() {
+        let (sponsor, _) = gen_account_in("settlement-prepare-registration");
+        let instruction = InstructionBox::from(RegisterAtomicPrivateSettlementPrepareV1::new(
+            PrivateSettlementPrepareBarrierV1 {
+                version: AtomicPrivateSettlementV1::VERSION,
+                manifest: AtomicPrivateSettlementV1 {
+                    version: AtomicPrivateSettlementV1::VERSION,
+                    network_id: super::super::queue_test_network_id(),
+                    bundle_id: Hash::new(b"router-private-settlement-prepare-registration"),
+                    authority_context_height: 10,
+                    expiry_height: 20,
+                    sponsor,
+                    public_fee_intent: iroha_data_model::transaction::FeePaymentIntent::authority(
+                        Vec::new(),
+                        None,
+                    ),
+                    fee_intent_digest: Hash::new(
+                        b"router-private-settlement-prepare-registration-fee",
+                    ),
+                    reimbursement_terms_commitment: Hash::new(
+                        b"router-private-settlement-prepare-registration-reimbursement",
+                    ),
+                    reimbursement_leg_ordinal: 0,
+                    legs: Vec::new(),
+                },
+                authority_catalog: Default::default(),
+                deltas: Vec::new(),
+                prepare_certificates: Vec::new(),
+                prepared_bundle_digest: Hash::new(
+                    b"router-private-settlement-prepare-registration-barrier",
+                ),
             },
         ));
 

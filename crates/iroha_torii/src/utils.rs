@@ -2085,7 +2085,7 @@ pub mod extractors {
             decode_body_as_norito_or_json::<T>(&body, format).map(NoritoJson)
         }
     }
-    /// Schema-specific body and decode limits for public Kagemusha API requests.
+    /// Schema-specific body and decode limits for public KAGEMUSHA API requests.
     #[cfg(feature = "app_api")]
     trait KagemushaCanonicalNoritoSchemaV1:
         NoritoSerialize + for<'de> NoritoDeserialize<'de> + Sized
@@ -2096,7 +2096,9 @@ pub mod extractors {
         fn decode_validated(body: &[u8]) -> Result<Self, KagemushaCanonicalNoritoDecodeError>;
     }
     #[cfg(feature = "app_api")]
-    impl KagemushaCanonicalNoritoSchemaV1 for iroha_torii_shared::kagemusha_api::KagemushaTopUpRequestV1 {
+    impl KagemushaCanonicalNoritoSchemaV1
+        for iroha_torii_shared::kagemusha_api::KagemushaTopUpRequestV1
+    {
         const MAX_BODY_BYTES: usize =
             iroha_torii_shared::kagemusha_api::KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES_V1;
 
@@ -2174,14 +2176,14 @@ pub mod extractors {
             KagemushaCanonicalNoritoDecodeError::Empty => typed_request_rejection(
                 StatusCode::BAD_REQUEST,
                 "request_norito_invalid",
-                "Kagemusha Norito request body must not be empty.",
+                "KAGEMUSHA Norito request body must not be empty.",
             ),
             KagemushaCanonicalNoritoDecodeError::TooLarge { actual, maximum } => {
                 typed_request_rejection(
                     StatusCode::PAYLOAD_TOO_LARGE,
                     "request_payload_too_large",
                     format!(
-                        "Kagemusha Norito request body is {actual} bytes; maximum is {maximum} bytes."
+                        "KAGEMUSHA Norito request body is {actual} bytes; maximum is {maximum} bytes."
                     ),
                 )
             }
@@ -2196,11 +2198,11 @@ pub mod extractors {
             KagemushaCanonicalNoritoDecodeError::Invalid(error) => typed_request_rejection(
                 StatusCode::BAD_REQUEST,
                 "request_norito_invalid",
-                format!("Invalid Kagemusha V1 request: {error}"),
+                format!("Invalid KAGEMUSHA V1 request: {error}"),
             ),
         }
     }
-    /// Extractor for one canonical, schema-bounded Kagemusha API Norito request.
+    /// Extractor for one canonical, schema-bounded KAGEMUSHA API Norito request.
     #[cfg(feature = "app_api")]
     #[derive(Clone, Copy, Debug)]
     pub(crate) struct KagemushaNorito<T>(
@@ -2677,6 +2679,15 @@ pub mod extractors {
             )
         }
         #[cfg(feature = "app_api")]
+        fn kagemusha_ingress_asset_incarnation() -> iroha_data_model::nexus::AxtAssetIncarnationV1 {
+            use iroha_crypto::Hash;
+
+            iroha_data_model::nexus::AxtAssetIncarnationV1::try_from_bytes(
+                *Hash::new(b"kagemusha-v1-ingress-asset-incarnation").as_ref(),
+            )
+            .expect("canonical asset incarnation")
+        }
+        #[cfg(feature = "app_api")]
         fn kagemusha_ingress_device_public_key(
             key: &p256::ecdsa::SigningKey,
         ) -> iroha_data_model::kagemusha::KagemushaDevicePublicKeyV1 {
@@ -2688,136 +2699,246 @@ pub mod extractors {
             .expect("canonical P-256 device key")
         }
         #[cfg(feature = "app_api")]
+        fn kagemusha_ingress_sign(
+            key: &p256::ecdsa::SigningKey,
+            bytes: &[u8],
+        ) -> iroha_data_model::kagemusha::KagemushaDeviceSignatureV1 {
+            use p256::ecdsa::{Signature, signature::Signer as _};
+
+            let signature: Signature = key.sign(bytes);
+            let signature = signature.normalize_s().unwrap_or(signature);
+            iroha_data_model::kagemusha::KagemushaDeviceSignatureV1::from_raw_bytes(
+                signature.to_bytes().as_ref(),
+            )
+            .expect("canonical low-S P-256 signature")
+        }
+        #[cfg(feature = "app_api")]
+        fn kagemusha_ingress_encrypted_credit(recipient_key: [u8; 32], tag: u8) -> Vec<u8> {
+            use iroha_data_model::kagemusha::{
+                KAGEMUSHA_WIRE_VERSION_V1, KAGEMUSHA_XCHACHA20POLY1305_NONCE_BYTES_V1,
+                KAGEMUSHA_XCHACHA20POLY1305_TAG_BYTES_V1, KagemushaEncryptedCreditEnvelopeV1,
+                kagemusha_credit_opening_canonical_len_v1,
+            };
+
+            let mut ephemeral_x25519_public_key = [0; 32];
+            ephemeral_x25519_public_key[0] = tag.wrapping_add(1);
+            KagemushaEncryptedCreditEnvelopeV1 {
+                version: KAGEMUSHA_WIRE_VERSION_V1,
+                ephemeral_x25519_public_key,
+                nonce: [tag; KAGEMUSHA_XCHACHA20POLY1305_NONCE_BYTES_V1],
+                ciphertext_and_tag: vec![
+                    tag;
+                    kagemusha_credit_opening_canonical_len_v1()
+                        .expect("credit opening length")
+                        + KAGEMUSHA_XCHACHA20POLY1305_TAG_BYTES_V1
+                ],
+            }
+            .canonical_bytes_against_recipient_key(recipient_key)
+            .expect("canonical encrypted credit")
+        }
+        #[cfg(feature = "app_api")]
+        fn kagemusha_ingress_paired_proof(
+            semantic_digest: [u8; 32],
+            proof_len: usize,
+            tag: u8,
+        ) -> iroha_data_model::kagemusha::KagemushaPairedProofV1 {
+            use iroha_data_model::kagemusha::{
+                KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1, KAGEMUSHA_WIRE_VERSION_V1,
+                KagemushaPairedProofV1,
+            };
+
+            KagemushaPairedProofV1 {
+                version: KAGEMUSHA_WIRE_VERSION_V1,
+                eq_protocol_digest: [tag; 32],
+                ep_protocol_digest: [tag.wrapping_add(1); 32],
+                semantic_digest,
+                guard_eq_credential_audit: [tag.wrapping_add(2); 32],
+                guard_ep_credential_audit: [tag.wrapping_add(3); 32],
+                eq_deferred_audit: [tag.wrapping_add(4); 32],
+                ep_deferred_audit: [tag.wrapping_add(5); 32],
+                eq_proof: vec![tag.wrapping_add(6); proof_len],
+                ep_proof: vec![tag.wrapping_add(7); proof_len],
+                eq_history: vec![tag.wrapping_add(8); KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+                ep_history: vec![tag.wrapping_add(9); KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
+            }
+        }
+        #[cfg(feature = "app_api")]
         fn kagemusha_ingress_top_up_fixture()
         -> iroha_torii_shared::kagemusha_api::KagemushaTopUpRequestV1 {
             use iroha_data_model::kagemusha::{
-                KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1, kagemusha_device_key_reference_v1,
+                KAGEMUSHA_WIRE_VERSION_V1, KagemushaHardwareCredentialV1,
+                KagemushaMintAuthorizationV1, kagemusha_device_key_reference_v1,
                 kagemusha_liability_pool_id_v1,
             };
-            let recipient_public_key = kagemusha_ingress_device_public_key(
-                &p256::ecdsa::SigningKey::from_slice(&[0x41; 32]).expect("fixture P-256 key"),
-            );
+            let recipient_key =
+                p256::ecdsa::SigningKey::from_slice(&[0x41; 32]).expect("fixture P-256 key");
+            let governance_key =
+                p256::ecdsa::SigningKey::from_slice(&[0x31; 32]).expect("governance P-256 key");
+            let recipient_public_key = kagemusha_ingress_device_public_key(&recipient_key);
             let network_id = kagemusha_ingress_network();
             let asset = kagemusha_ingress_asset();
-            iroha_torii_shared::kagemusha_api::KagemushaTopUpRequestV1 {
+            let asset_incarnation = kagemusha_ingress_asset_incarnation();
+            let suite_id = [0x4B; 32];
+            let recipient_lane_id = [0x46; 32];
+            let mut hardware_credential = KagemushaHardwareCredentialV1 {
+                version: KAGEMUSHA_WIRE_VERSION_V1,
+                credential_id: [0; 32],
+                network_id,
+                hardware_profile_id: [0x47; 32],
+                suite_id,
+                firmware_policy_digest: [0x48; 32],
+                policy_epoch: 1,
+                lane_commitment: recipient_lane_id,
+                hardware_epoch_id: [0x49; 32],
+                hardware_epoch_generation: 1,
+                device_public_key: recipient_public_key,
+                device_key_reference: kagemusha_device_key_reference_v1(&recipient_public_key),
+                issued_at_ms: 1,
+                expires_at_ms: 90_000,
+                governance_signature: kagemusha_ingress_sign(
+                    &governance_key,
+                    b"KAGEMUSHA V1 credential placeholder",
+                ),
+            }
+            .seal_credential_id()
+            .expect("seal hardware credential identity");
+            hardware_credential.governance_signature = kagemusha_ingress_sign(
+                &governance_key,
+                &hardware_credential
+                    .canonical_signing_bytes()
+                    .expect("credential signing bytes"),
+            );
+            let mut recipient_one_time_key = [0; 32];
+            recipient_one_time_key[0] = 9;
+            let request = iroha_torii_shared::kagemusha_api::KagemushaTopUpRequestV1 {
                 version: iroha_torii_shared::kagemusha_api::KAGEMUSHA_CHAIN_VERSION_V1,
                 operation_id: [0x42; 32],
                 issuance_commitment: [0; 32],
                 credit_id: [0; 32],
                 release_id: [0x43; 32],
+                suite_id,
+                vk_digest: [0x44; 32],
                 network_id,
-                liability_pool_id: kagemusha_liability_pool_id_v1(&network_id, &asset)
-                    .expect("canonical liability pool"),
+                liability_pool_id: kagemusha_liability_pool_id_v1(
+                    &network_id,
+                    &asset,
+                    asset_incarnation,
+                )
+                .expect("canonical liability pool"),
                 asset,
+                asset_incarnation,
                 scale: 4,
                 amount: 50_000,
                 payer: kagemusha_ingress_account(0x44),
                 recipient: kagemusha_ingress_account(0x45),
-                recipient_lane_id: [0x46; 32],
-                recipient_key_reference: kagemusha_device_key_reference_v1(
-                    &recipient_public_key,
-                ),
-                recipient_public_key,
-                recipient_hardware_policy_id: [0x47; 32],
-                credit_commitment: [0x48; 32],
-                encrypted_credit: vec![0x49; KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1],
+                hardware_credential,
+                recipient_credential_commitment: [0x4A; 32],
+                credit_commitment: [0x4C; 32],
+                recipient_one_time_key,
+                encrypted_credit: kagemusha_ingress_encrypted_credit(recipient_one_time_key, 0x4D),
                 artifact_manifest_digest: [0x4A; 32],
+                mint_authorization: None,
             }
             .seal_identifiers()
-            .expect("seal Kagemusha V1 top-up identifiers")
+            .expect("seal KAGEMUSHA V1 top-up identifiers");
+            let statement = request
+                .mint_authorization_statement()
+                .expect("mint authorization statement");
+            request
+                .attach_mint_authorization(KagemushaMintAuthorizationV1 {
+                    version: KAGEMUSHA_WIRE_VERSION_V1,
+                    proof: kagemusha_ingress_paired_proof(
+                        statement
+                            .canonical_digest()
+                            .expect("mint authorization semantic digest"),
+                        128,
+                        0x71,
+                    ),
+                    statement,
+                })
+                .expect("attach mint authorization")
         }
         #[cfg(feature = "app_api")]
         fn kagemusha_ingress_redemption_fixture()
         -> iroha_torii_shared::kagemusha_api::KagemushaRedemptionRequestV1 {
             use iroha_data_model::kagemusha::{
-                KAGEMUSHA_CURRENT_PROOFS_MAX_BYTES_V1,
-                KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1, KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1,
-                KAGEMUSHA_WIRE_VERSION_V1, KagemushaDeviceSignatureV1,
-                KagemushaPairedProofV1, KagemushaRedemptionStatementV1,
-                KagemushaRedemptionVoucherV1, kagemusha_device_key_reference_v1,
-                kagemusha_liability_pool_id_v1,
+                KAGEMUSHA_CURRENT_PROOFS_MAX_BYTES_V1, KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1,
+                KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1, KAGEMUSHA_WIRE_VERSION_V1,
+                KagemushaLifecycleBindingV1, KagemushaOperationKindV1,
+                KagemushaPastaStateCommitmentV1, KagemushaRedemptionStatementV1,
+                KagemushaRedemptionVoucherV1, kagemusha_liability_pool_id_v1,
             };
-            use p256::ecdsa::{Signature, SigningKey, signature::Signer as _};
 
             assert_eq!(
                 KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1 * 2,
                 KAGEMUSHA_CURRENT_PROOFS_MAX_BYTES_V1
             );
-            let sender_key = SigningKey::from_slice(&[0x51; 32]).expect("fixture P-256 key");
-            let sender_public_key = kagemusha_ingress_device_public_key(&sender_key);
+            assert!(KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1 > 0);
             let network_id = kagemusha_ingress_network();
             let asset = kagemusha_ingress_asset();
+            let asset_incarnation = kagemusha_ingress_asset_incarnation();
             let statement = KagemushaRedemptionStatementV1 {
                 version: KAGEMUSHA_WIRE_VERSION_V1,
-                release_id: [0x52; 32],
-                network_id,
-                asset: asset.clone(),
-                scale: 4,
-                amount: 12_000,
-                liability_pool_id: kagemusha_liability_pool_id_v1(&network_id, &asset)
+                lifecycle: KagemushaLifecycleBindingV1 {
+                    version: KAGEMUSHA_WIRE_VERSION_V1,
+                    network_id,
+                    protocol_version: KAGEMUSHA_WIRE_VERSION_V1,
+                    suite_id: [0x50; 32],
+                    vk_digest: [0x51; 32],
+                    release_id: [0x52; 32],
+                    asset: asset.clone(),
+                    asset_incarnation,
+                    scale: 4,
+                    liability_pool_id: kagemusha_liability_pool_id_v1(
+                        &network_id,
+                        &asset,
+                        asset_incarnation,
+                    )
                     .expect("canonical liability pool"),
+                    hardware_profile_id: [0x53; 32],
+                    policy_epoch: 1,
+                    operation_kind: KagemushaOperationKindV1::RedeemSplit,
+                    request_id: [0; 32],
+                    credit_id: [0; 32],
+                    ciphertext_digest: [0; 32],
+                },
+                amount: 12_000,
                 beneficiary: kagemusha_ingress_account(0x53),
-                sender_lane_id: [0x54; 32],
-                sender_hardware_epoch_id: [0x55; 32],
-                sender_key_reference: kagemusha_device_key_reference_v1(&sender_public_key),
-                sender_hardware_policy_id: [0x56; 32],
-                sender_before_sequence: 10,
-                sender_after_sequence: 11,
-                sender_before: [0x57; 32],
-                sender_after: [0x58; 32],
-                terminal_nullifier: [0; 32],
+                terminal_nullifier: [0x54; 32],
+                sender_before_commitment: KagemushaPastaStateCommitmentV1 {
+                    eq: [0x55; 32],
+                    ep: [0x56; 32],
+                },
+                sender_after_commitment: KagemushaPastaStateCommitmentV1 {
+                    eq: [0x57; 32],
+                    ep: [0x58; 32],
+                },
                 redemption_commitment: [0x59; 32],
                 redemption_id: [0; 32],
-                sender_committed_at_ms: 9_000,
-                transition_digest: [0; 32],
+                committed_at_ms: 9_000,
+                hardware_transition_commitment: [0x5A; 32],
             }
-            .seal_transition([0x5A; 32])
-            .expect("seal redemption transition");
-            let mut voucher = KagemushaRedemptionVoucherV1 {
+            .seal_redemption_id()
+            .expect("seal redemption identity");
+            let voucher = KagemushaRedemptionVoucherV1 {
                 version: KAGEMUSHA_WIRE_VERSION_V1,
-                proof: KagemushaPairedProofV1 {
-                    version: KAGEMUSHA_WIRE_VERSION_V1,
-                    eq_protocol_digest: [0x5B; 32],
-                    ep_protocol_digest: [0x5C; 32],
-                    semantic_digest: statement
+                proof: kagemusha_ingress_paired_proof(
+                    statement
                         .canonical_digest()
                         .expect("redemption statement digest"),
-                    guard_eq_credential_audit: [0x19; 32],
-                    guard_ep_credential_audit: [0x1A; 32],
-                    eq_deferred_audit: [0x15; 32],
-                    ep_deferred_audit: [0x16; 32],
-                    predecessor_state:
-                        iroha_data_model::kagemusha::KagemushaPastaStateCommitmentV1::ZERO,
-                    successor_state:
-                        iroha_data_model::kagemusha::KagemushaPastaStateCommitmentV1::ZERO,
-                    eq_proof: vec![0x5D; KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1],
-                    ep_proof: vec![0x5E; KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1],
-                    eq_history: vec![0x5F; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
-                    ep_history: vec![0x60; KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1],
-                },
+                    KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1,
+                    0x5B,
+                ),
                 statement,
-                sender_public_key,
-                signature: KagemushaDeviceSignatureV1::from_raw_bytes(&[1; 64])
-                    .expect("placeholder scalar signature"),
-                artifact_manifest_digest: [0x61; 32],
             };
-            let signature: Signature = sender_key.sign(
-                &voucher
-                    .canonical_signing_bytes()
-                    .expect("redemption signing bytes"),
-            );
-            let signature = signature.normalize_s().unwrap_or(signature);
-            voucher.signature =
-                KagemushaDeviceSignatureV1::from_raw_bytes(signature.to_bytes().as_ref())
-                    .expect("canonical low-S signature");
             let request = iroha_torii_shared::kagemusha_api::KagemushaRedemptionRequestV1 {
                 version: iroha_torii_shared::kagemusha_api::KAGEMUSHA_CHAIN_VERSION_V1,
                 operation_id: [0x62; 32],
                 voucher,
             };
             request
-                .validate()
-                .expect("valid Kagemusha V1 redemption");
+                .validate_shape()
+                .expect("valid KAGEMUSHA V1 redemption");
             request
         }
         #[derive(Clone, Debug, PartialEq, crate::json_macros::JsonDeserialize)]
@@ -3967,7 +4088,7 @@ pub mod extractors {
                 );
                 assert_eq!(
                     super::super::norito_request_content_type(&headers)
-                        .expect_err("Kagemusha commands have one wire representation")
+                        .expect_err("KAGEMUSHA commands have one wire representation")
                         .status(),
                     StatusCode::UNSUPPORTED_MEDIA_TYPE,
                     "content_type={raw}"
@@ -4091,13 +4212,13 @@ pub mod extractors {
                 T: KagemushaCanonicalNoritoSchemaV1 + core::fmt::Debug + PartialEq,
             {
                 let canonical =
-                    norito::encode_canonical(value).expect("encode canonical Kagemusha DTO");
+                    norito::encode_canonical(value).expect("encode canonical KAGEMUSHA DTO");
                 assert!(
                     canonical.len() <= T::MAX_BODY_BYTES,
-                    "representative Kagemusha DTO exceeds its exact route cap"
+                    "representative KAGEMUSHA DTO exceeds its exact route cap"
                 );
                 let decoded = decode_kagemusha_canonical_norito::<T>(&canonical)
-                    .expect("valid Kagemusha V1 DTO must pass the shared validator");
+                    .expect("valid KAGEMUSHA V1 DTO must pass the shared validator");
                 assert_eq!(&decoded, value);
             }
             let top_up = kagemusha_ingress_top_up_fixture();

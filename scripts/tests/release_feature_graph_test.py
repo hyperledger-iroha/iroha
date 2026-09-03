@@ -90,7 +90,7 @@ def initialize_tracked_release_surface(destination: Path) -> None:
         "csharp/tests/Hyperledger.Iroha.Sdk.Tests/ArtifactTests.cs": "// reviewed\n",
         "dashboards/alerts/fastpq_acceleration_rules.yml": "groups: []\n",
         "dashboards/alerts/tests/fastpq_acceleration_rules.test.yml": "rule_files: []\n",
-        "defaults/genesis.json": "{}\n",
+        "defaults/genesis.template.json": "{}\n",
         "gradle/mobile-sdk-external-android-build.settings.gradle.kts": "// reviewed\n",
         "java/iroha_android/build.gradle.kts": "plugins {}\n",
         "java/iroha_android/gradle/wrapper/gradle-wrapper.properties": "distributionUrl=https://example.invalid/gradle.zip\n",
@@ -339,7 +339,7 @@ def test_trusted_release_surface_seal_rejects_drift_addition_and_removal(
     assert_seal_rejects(checker, tmp_path, baseline)
     taira_config.write_bytes(taira_config_original)
 
-    default_genesis = tmp_path / "defaults" / "genesis.json"
+    default_genesis = tmp_path / "defaults" / "genesis.template.json"
     default_genesis_original = default_genesis.read_bytes()
     default_genesis.write_bytes(b'{"fixture":true}\n')
     assert_seal_rejects(checker, tmp_path, baseline)
@@ -677,7 +677,7 @@ def test_trusted_release_surface_covers_all_tracked_release_support() -> None:
         Path("csharp/Directory.Build.props"),
         Path("csharp/Directory.Packages.props"),
         Path("csharp/global.json"),
-        Path("defaults/genesis.json"),
+        Path("defaults/genesis.template.json"),
         Path("csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj"),
         Path("flake.nix"),
         Path("scripts/package_sorafs_cli_candidate.py"),

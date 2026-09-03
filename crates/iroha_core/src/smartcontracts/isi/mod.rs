@@ -12,6 +12,8 @@ pub mod domain;
 /// Native asset escrow instruction handlers.
 pub mod escrow;
 pub mod identifier;
+/// Kagemusha reserve settlement instruction handlers.
+pub mod kagemusha;
 pub mod kaigi;
 /// Ministry agenda submission handlers.
 pub mod ministry;
@@ -19,8 +21,6 @@ pub mod multisig;
 /// Musubi package registry instruction handlers.
 pub mod musubi;
 pub mod nft;
-/// Kagemusha reserve settlement instruction handlers.
-pub mod kagemusha;
 /// Oracle feed admission and aggregation instruction handlers.
 pub mod oracle;
 /// Canonical first-release privacy governance and proof admission.
@@ -561,6 +561,9 @@ define_instruction_handlers! {
     >,
     dispatch_instruction::<
         iroha_data_model::isi::private_settlement::RotatePrivateSettlementPoolPolicyV1
+    >,
+    dispatch_instruction::<
+        iroha_data_model::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1
     >,
     dispatch_instruction::<
         iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1

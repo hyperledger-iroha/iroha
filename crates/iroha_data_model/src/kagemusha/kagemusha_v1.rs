@@ -1,4 +1,4 @@
-//! Canonical first-release wire contract for hardware-guarded Kagemusha.
+//! Canonical first-release wire contract for hardware-guarded KAGEMUSHA.
 //!
 //! Decode and `validate_shape*` routines in this module enforce canonical
 //! framing, bounded allocation, signatures under embedded keys, and exact
@@ -21,7 +21,7 @@ use p256::ecdsa::{
 };
 use sha2::{Digest as _, Sha256};
 
-/// Version carried by every clean-slate Kagemusha wire value.
+/// Version carried by every clean-slate KAGEMUSHA wire value.
 pub const KAGEMUSHA_WIRE_VERSION_V1: u16 = 1;
 /// Version of the secure-device lane and journal lifecycle contract.
 pub const KAGEMUSHA_DEVICE_LIFECYCLE_VERSION_V1: u16 = 1;
@@ -29,7 +29,7 @@ pub const KAGEMUSHA_DEVICE_LIFECYCLE_VERSION_V1: u16 = 1;
 pub const KAGEMUSHA_HANDOFF_CAPABILITY_V1: &str = "kagemusha_handoff_v1";
 /// Text transport discriminator for canonical unpadded base64url messages.
 pub const KAGEMUSHA_TEXT_PREFIX_V1: &str = "kgm1:";
-/// Maximum authoritative asset scale represented by Kagemusha V1.
+/// Maximum authoritative asset scale represented by KAGEMUSHA V1.
 pub const KAGEMUSHA_ASSET_SCALE_MAX_V1: u32 = 28;
 /// Maximum lifetime of a signed payment request in Unix milliseconds.
 pub const KAGEMUSHA_REQUEST_MAX_TTL_MS_V1: u64 = 5 * 60 * 1_000;
@@ -40,11 +40,11 @@ pub const KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V1: usize = 64;
 /// Maximum canonical aggregate-state metadata bytes.
 pub const KAGEMUSHA_AGGREGATE_STATE_MAX_BYTES_V1: usize = 768;
 /// Maximum canonical receiver-request bytes.
-pub const KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1: usize = 1_024;
+pub const KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1: usize = 928;
 /// Maximum canonical sender-response bytes.
-pub const KAGEMUSHA_PAYMENT_MAX_BYTES_V1: usize = 7_936;
+pub const KAGEMUSHA_PAYMENT_MAX_BYTES_V1: usize = 7_552;
 /// Maximum canonical receiver-acknowledgement bytes.
-pub const KAGEMUSHA_ACKNOWLEDGEMENT_MAX_BYTES_V1: usize = 512;
+pub const KAGEMUSHA_ACKNOWLEDGEMENT_MAX_BYTES_V1: usize = 256;
 /// Maximum canonical top-up mint-credit bytes.
 pub const KAGEMUSHA_MINT_CREDIT_MAX_BYTES_V1: usize = 7_936;
 /// Maximum canonical pre-debit recipient mint-authorization bytes.
@@ -69,12 +69,6 @@ pub const KAGEMUSHA_MINT_AUTHORIZATION_TEXT_MAX_BYTES_V1: usize = KAGEMUSHA_TEXT
 /// Maximum complete `kgm1:` text redemption-voucher bytes.
 pub const KAGEMUSHA_REDEMPTION_VOUCHER_TEXT_MAX_BYTES_V1: usize = KAGEMUSHA_TEXT_PREFIX_V1.len()
     + unpadded_base64url_len(KAGEMUSHA_REDEMPTION_VOUCHER_MAX_BYTES_V1);
-/// Qualification target for the terminal request/payment/ack delivery trio.
-pub const KAGEMUSHA_SESSION_TARGET_BYTES_V1: usize = 8_960;
-/// Absolute raw limit for the terminal request/payment/ack delivery trio.
-pub const KAGEMUSHA_SESSION_MAX_BYTES_V1: usize = 9_211;
-/// Absolute text limit for the terminal request/payment/ack delivery trio.
-pub const KAGEMUSHA_TEXT_SESSION_MAX_BYTES_V1: usize = 12_288;
 /// Qualification target for the two current recursive proofs.
 pub const KAGEMUSHA_PAIRED_PROOF_TARGET_BYTES_V1: usize = 6_144;
 /// Absolute canonical byte limit for the complete paired-proof value.
@@ -90,6 +84,11 @@ pub const KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1: usize = 2_495;
 pub const KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1: usize = 544;
 /// Maximum encrypted credit-opening bytes carried by a credit envelope.
 pub const KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1: usize = 384;
+/// Exact canonical envelope bytes for the fixed V1 plaintext and authentication tag.
+///
+/// This is an encoded-length identity, not a replacement for the existing
+/// encrypted-credit transport cap or authenticated envelope validation.
+pub const KAGEMUSHA_ENCRYPTED_CREDIT_CANONICAL_BYTES_V1: usize = 327;
 /// Maximum canonical bytes in the fixed private credit-opening plaintext.
 pub const KAGEMUSHA_CREDIT_OPENING_MAX_BYTES_V1: usize = 256;
 /// Exact X25519 public-key width used by encrypted credit envelopes.
@@ -98,16 +97,109 @@ pub const KAGEMUSHA_X25519_PUBLIC_KEY_BYTES_V1: usize = 32;
 pub const KAGEMUSHA_XCHACHA20POLY1305_NONCE_BYTES_V1: usize = 24;
 /// Exact authentication-tag width appended to an encrypted credit plaintext.
 pub const KAGEMUSHA_XCHACHA20POLY1305_TAG_BYTES_V1: usize = 16;
-/// HKDF-SHA256 salt label for the Kagemusha V1 encrypted-credit KEM.
+/// HKDF-SHA256 salt label for the KAGEMUSHA V1 encrypted-credit KEM.
 pub const KAGEMUSHA_ENCRYPTED_CREDIT_KDF_SALT_LABEL_V1: &[u8] =
     b"iroha:kagemusha:v1:credit-envelope-salt\0";
-/// HKDF-SHA256 info label for the Kagemusha V1 encrypted-credit KEM.
+/// HKDF-SHA256 info label for the KAGEMUSHA V1 encrypted-credit KEM.
 pub const KAGEMUSHA_ENCRYPTED_CREDIT_KDF_INFO_LABEL_V1: &[u8] =
     b"iroha:kagemusha:v1:credit-envelope-key\0";
 /// Maximum canonical hardware-profile registry entry bytes.
 pub const KAGEMUSHA_HARDWARE_PROFILE_MAX_BYTES_V1: usize = 512;
 /// Maximum canonical compact hardware credential bytes.
 pub const KAGEMUSHA_HARDWARE_CREDENTIAL_MAX_BYTES_V1: usize = 768;
+/// Exact canonical Norito bytes hashed by a V1 hardware credential identity.
+pub const KAGEMUSHA_HARDWARE_CREDENTIAL_ID_PREIMAGE_BYTES_V1: usize = 376;
+/// Byte offset of the 32-byte lane in the canonical credential-ID preimage.
+pub const KAGEMUSHA_HARDWARE_CREDENTIAL_ID_LANE_OFFSET_V1: usize = 185;
+/// Semantic value ranges in the canonical credential-ID preimage, in field order.
+///
+/// The fields are version, network, profile, suite, firmware policy, policy epoch,
+/// lane, hardware epoch, hardware generation, device key, key reference, issuance,
+/// and expiry. Header, CRC, and field-length prefixes are outside these ranges.
+pub const KAGEMUSHA_HARDWARE_CREDENTIAL_ID_PREIMAGE_FIELD_RANGES_V1: [core::ops::Range<usize>; 13] = [
+    41..43,
+    44..76,
+    77..109,
+    110..142,
+    143..175,
+    176..184,
+    185..217,
+    218..250,
+    251..259,
+    260..325,
+    326..358,
+    359..367,
+    368..376,
+];
+/// Exact canonical Norito bytes hashed by a V1 hardware-profile identity.
+pub const KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_BYTES_V1: usize = 378;
+/// Semantic value ranges in the canonical profile-ID preimage, in field order.
+///
+/// The fields are version, protocol version, provider, platform class (u32-LE),
+/// product, firmware policy, enrollment verifier, trust roots, allowed suite,
+/// policy epoch, governance key, capabilities, qualification report, activation,
+/// and expiry. Header, CRC, and field-length prefixes are outside these ranges.
+pub const KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_FIELD_RANGES_V1: [core::ops::Range<usize>; 15] = [
+    41..43,
+    44..46,
+    47..79,
+    80..84,
+    85..117,
+    118..150,
+    151..183,
+    184..216,
+    217..249,
+    250..258,
+    259..324,
+    325..327,
+    328..360,
+    361..369,
+    370..378,
+];
+/// Exact canonical Norito bytes hashed by a randomized recipient commitment.
+pub const KAGEMUSHA_RECIPIENT_CREDENTIAL_COMMITMENT_PREIMAGE_BYTES_V1: usize = 139;
+/// Operation, credential-ID, and private opening ranges in that order.
+pub const KAGEMUSHA_RECIPIENT_CREDENTIAL_COMMITMENT_PREIMAGE_FIELD_RANGES_V1: [core::ops::Range<
+    usize,
+>; 3] = [41..73, 74..106, 107..139];
+/// Exact canonical Norito bytes hashed by a mint-credit opening commitment.
+pub const KAGEMUSHA_MINT_CREDIT_OPENING_COMMITMENT_PREIMAGE_BYTES_V1: usize = 305;
+/// Semantic mint-opening preimage ranges, in the authoritative field order.
+///
+/// The fields are version, network, asset digest, incarnation, scale, pool,
+/// amount, recipient-account digest, one-time key, and private credit opening.
+/// The incarnation range selects only its 32 hash bytes; both its outer length
+/// at 117 and nested length at 118 remain framing bytes. Root padding occupies
+/// 40..48 because the preimage includes a u128 amount.
+pub const KAGEMUSHA_MINT_CREDIT_OPENING_COMMITMENT_PREIMAGE_FIELD_RANGES_V1: [core::ops::Range<
+    usize,
+>; 10] = [
+    49..51,
+    52..84,
+    85..117,
+    119..151,
+    152..156,
+    157..189,
+    190..206,
+    207..239,
+    240..272,
+    273..305,
+];
+/// Exact canonical Norito plaintext bytes in a V1 credit opening.
+pub const KAGEMUSHA_CREDIT_OPENING_CANONICAL_BYTES_V1: usize = 200;
+/// Version, credit ID, amount, credit opening, recipient opening, and recovery nonce ranges.
+///
+/// Header, CRC, root padding at 40..48, and field-length prefixes are excluded.
+pub const KAGEMUSHA_CREDIT_OPENING_CANONICAL_FIELD_RANGES_V1: [core::ops::Range<usize>; 6] =
+    [49..51, 52..84, 85..101, 102..134, 135..167, 168..200];
+/// Qualification target for the three separately framed protocol messages.
+pub const KAGEMUSHA_COMPLETE_EXCHANGE_TARGET_BYTES_V1: usize = 8_960;
+/// Absolute raw cap for the complete request/payment/acknowledgement exchange.
+pub const KAGEMUSHA_COMPLETE_EXCHANGE_MAX_BYTES_V1: usize = 9_211;
+/// Absolute text cap for the three separately framed `kgm1:` messages.
+pub const KAGEMUSHA_COMPLETE_TEXT_EXCHANGE_MAX_BYTES_V1: usize = 12_288;
+/// Maximum canonical recoverable hardware commit-certificate bytes.
+pub const KAGEMUSHA_COMMIT_CERTIFICATE_MAX_BYTES_V1: usize = 1_024;
 /// Maximum hardware-owned staging metadata persisted beside one payment.
 pub const KAGEMUSHA_INBOX_STAGING_METADATA_MAX_BYTES_V1: u32 = 512;
 /// Minimum durable receiver staging bytes for one maximum payment and acknowledgement.
@@ -123,6 +215,9 @@ pub const KAGEMUSHA_PRECOMMIT_PAIRED_PROOF_MAX_BYTES_V1: u32 =
     outbox_budget_component_from_usize(KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1);
 /// Maximum canonical precommit candidate metadata excluding its paired proof.
 pub const KAGEMUSHA_PRECOMMIT_CANDIDATE_METADATA_MAX_BYTES_V1: u32 = 1_024;
+/// Maximum canonical redemption-proof bytes.
+pub const KAGEMUSHA_REDEMPTION_PROOF_MAX_BYTES_V1: u32 =
+    outbox_budget_component_from_usize(KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1);
 /// Maximum authenticated durable-retry metadata beside one terminal envelope.
 pub const KAGEMUSHA_OUTBOX_RETRY_METADATA_MAX_BYTES_V1: u32 = 512;
 
@@ -137,6 +232,8 @@ const fn checked_outbox_budget_v1(canonical_envelope_max_bytes: usize) -> u32 {
         KAGEMUSHA_RECOVERY_SEEDS_MAX_BYTES_V1,
         KAGEMUSHA_PRECOMMIT_PAIRED_PROOF_MAX_BYTES_V1,
         KAGEMUSHA_PRECOMMIT_CANDIDATE_METADATA_MAX_BYTES_V1,
+        outbox_budget_component_from_usize(KAGEMUSHA_COMMIT_CERTIFICATE_MAX_BYTES_V1),
+        KAGEMUSHA_REDEMPTION_PROOF_MAX_BYTES_V1,
         outbox_budget_component_from_usize(canonical_envelope_max_bytes),
         KAGEMUSHA_OUTBOX_RETRY_METADATA_MAX_BYTES_V1,
     ];
@@ -145,7 +242,7 @@ const fn checked_outbox_budget_v1(canonical_envelope_max_bytes: usize) -> u32 {
     while index < parts.len() {
         total = match total.checked_add(parts[index]) {
             Some(next) => next,
-            None => panic!("Kagemusha V1 outbox budget overflow"),
+            None => panic!("KAGEMUSHA V1 outbox budget overflow"),
         };
         index += 1;
     }
@@ -166,9 +263,9 @@ pub const KAGEMUSHA_HARDWARE_CAPABILITY_ONE_USE_SUCCESSOR_AUTHORIZATION_V1: u16 
 pub const KAGEMUSHA_HARDWARE_CAPABILITY_ROLLBACK_RESISTANT_COUNTER_AND_JOURNAL_V1: u16 = 1 << 2;
 /// Hardware seals transition inputs and deterministic recovery seeds.
 pub const KAGEMUSHA_HARDWARE_CAPABILITY_SEALED_TRANSITION_RECOVERY_V1: u16 = 1 << 3;
-/// Hardware makes a committed send an irrevocable receiver-bound credit.
+/// Hardware makes a committed payment an irrevocable receiver-bound credit.
 pub const KAGEMUSHA_HARDWARE_CAPABILITY_RECEIVER_BOUND_CREDIT_COMMIT_V1: u16 = 1 << 4;
-/// Hardware atomically records accepted credits and rollback-resistant inbox receipts.
+/// Hardware owns a rollback-resistant accepted-credit inbox and durable receipts.
 pub const KAGEMUSHA_HARDWARE_CAPABILITY_ROLLBACK_RESISTANT_ACCEPTED_CREDIT_INBOX_V1: u16 = 1 << 5;
 /// Hardware authenticates inbound staging, exact deduplication, and inbox paging.
 pub const KAGEMUSHA_HARDWARE_CAPABILITY_AUTHENTICATED_INBOUND_STAGING_V1: u16 = 1 << 6;
@@ -178,19 +275,19 @@ pub const KAGEMUSHA_HARDWARE_CAPABILITY_AUTHORITATIVE_REPLAY_ROOT_RECOVERY_V1: u
 pub const KAGEMUSHA_HARDWARE_CAPABILITY_SENDER_OUTBOX_RESERVATION_V1: u16 = 1 << 8;
 /// Hardware owns an authenticated durable byte-identical retry outbox.
 pub const KAGEMUSHA_HARDWARE_CAPABILITY_AUTHENTICATED_DURABLE_RETRY_OUTBOX_V1: u16 = 1 << 9;
-/// Hardware atomically installs one recoverable successor and transition certificate.
-pub const KAGEMUSHA_HARDWARE_CAPABILITY_ATOMIC_RECOVERABLE_TRANSITION_V1: u16 = 1 << 10;
-/// Hardware authenticates the complete durable monetary state across restart and recovery.
-pub const KAGEMUSHA_HARDWARE_CAPABILITY_AUTHENTICATED_DURABLE_STATE_V1: u16 = 1 << 11;
-/// Hardware supplies the literal trusted commit time bound by every monetary transition.
-pub const KAGEMUSHA_HARDWARE_CAPABILITY_TRUSTED_COMMIT_TIME_V1: u16 = 1 << 12;
+/// Hardware atomically commits only the exact Core-verified candidate digest.
+pub const KAGEMUSHA_HARDWARE_CAPABILITY_ATOMIC_VERIFIED_CANDIDATE_COMMIT_V1: u16 = 1 << 10;
+/// Hardware recovers the terminal commit certificate after every terminal outcome.
+pub const KAGEMUSHA_HARDWARE_CAPABILITY_RECOVERABLE_TERMINAL_COMMIT_CERTIFICATE_V1: u16 = 1 << 11;
+/// Hardware supplies trusted time or consumes a secure monotonic authorization lease.
+pub const KAGEMUSHA_HARDWARE_CAPABILITY_TRUSTED_TIME_OR_LEASE_V1: u16 = 1 << 12;
 /// Hardware rotates the complete balance and replay root offline.
 pub const KAGEMUSHA_HARDWARE_CAPABILITY_OFFLINE_HARDWARE_EPOCH_ROTATION_V1: u16 = 1 << 13;
 /// Hardware rolls exhausted counters without cloning spend authority.
 pub const KAGEMUSHA_HARDWARE_CAPABILITY_ROLLBACK_SAFE_COUNTER_ROLLOVER_V1: u16 = 1 << 14;
 /// Hardware fails closed instead of falling back to software authority.
 pub const KAGEMUSHA_HARDWARE_CAPABILITY_NO_SOFTWARE_FALLBACK_V1: u16 = 1 << 15;
-/// Exact capability set required from every Kagemusha V1 hardware profile.
+/// Exact capability set required from every KAGEMUSHA V1 hardware profile.
 pub const KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1: u16 =
     KAGEMUSHA_HARDWARE_CAPABILITY_EXACT_NEXT_PREDECESSOR_CONSUMPTION_V1
         | KAGEMUSHA_HARDWARE_CAPABILITY_ONE_USE_SUCCESSOR_AUTHORIZATION_V1
@@ -202,9 +299,9 @@ pub const KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1: u16 =
         | KAGEMUSHA_HARDWARE_CAPABILITY_AUTHORITATIVE_REPLAY_ROOT_RECOVERY_V1
         | KAGEMUSHA_HARDWARE_CAPABILITY_SENDER_OUTBOX_RESERVATION_V1
         | KAGEMUSHA_HARDWARE_CAPABILITY_AUTHENTICATED_DURABLE_RETRY_OUTBOX_V1
-        | KAGEMUSHA_HARDWARE_CAPABILITY_ATOMIC_RECOVERABLE_TRANSITION_V1
-        | KAGEMUSHA_HARDWARE_CAPABILITY_AUTHENTICATED_DURABLE_STATE_V1
-        | KAGEMUSHA_HARDWARE_CAPABILITY_TRUSTED_COMMIT_TIME_V1
+        | KAGEMUSHA_HARDWARE_CAPABILITY_ATOMIC_VERIFIED_CANDIDATE_COMMIT_V1
+        | KAGEMUSHA_HARDWARE_CAPABILITY_RECOVERABLE_TERMINAL_COMMIT_CERTIFICATE_V1
+        | KAGEMUSHA_HARDWARE_CAPABILITY_TRUSTED_TIME_OR_LEASE_V1
         | KAGEMUSHA_HARDWARE_CAPABILITY_OFFLINE_HARDWARE_EPOCH_ROTATION_V1
         | KAGEMUSHA_HARDWARE_CAPABILITY_ROLLBACK_SAFE_COUNTER_ROLLOVER_V1
         | KAGEMUSHA_HARDWARE_CAPABILITY_NO_SOFTWARE_FALLBACK_V1;
@@ -222,18 +319,26 @@ const HARDWARE_PROFILE_DIGEST_DOMAIN: &[u8] = b"iroha:kagemusha:v1:hardware-prof
 const SUITE_COMMITMENT_DOMAIN: &[u8] = b"iroha:kagemusha:v1:suite-commitment";
 const HARDWARE_CREDENTIAL_ID_DOMAIN: &[u8] = b"iroha:kagemusha:v1:hardware-credential-id";
 const HARDWARE_CREDENTIAL_SIGNING_DOMAIN: &[u8] = b"iroha:kagemusha:v1:hardware-credential-signing";
-const CREDIT_ID_DOMAIN: &[u8] = b"iroha:kagemusha:v1:credit-id";
+const PREPARED_TRANSFER_DIGEST_DOMAIN: &[u8] = b"iroha:kagemusha:v1:prepared-transfer";
+/// Domain for a request-bound peer credit identity.
+pub const KAGEMUSHA_CREDIT_ID_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:credit-id";
+/// Domain for the pre-ID commitment to one peer credit opening.
+pub const KAGEMUSHA_PEER_CREDIT_OPENING_COMMITMENT_DOMAIN_V1: &[u8] =
+    b"iroha:kagemusha:v1:peer-credit-opening-commitment";
 const STATEMENT_DIGEST_DOMAIN: &[u8] = b"iroha:kagemusha:v1:send-split-statement";
 const LIFECYCLE_BINDING_DIGEST_DOMAIN: &[u8] = b"iroha:kagemusha:v1:lifecycle-binding";
 const CIPHERTEXT_DIGEST_DOMAIN: &[u8] = b"iroha:kagemusha:v1:ciphertext";
 const PEER_CREDIT_CONTEXT_DIGEST_DOMAIN: &[u8] = b"iroha:kagemusha:v1:peer-credit-context";
-const PEER_CREDIT_LIFECYCLE_CONTEXT_DIGEST_DOMAIN: &[u8] =
-    b"iroha:kagemusha:v1:peer-credit-lifecycle-context";
 const ACCOUNT_IDENTITY_DIGEST_DOMAIN: &[u8] = b"iroha:kagemusha:v1:account-identity";
 const MINT_CREDIT_OPENING_COMMITMENT_DOMAIN: &[u8] =
     b"iroha:kagemusha:v1:mint-credit-opening-commitment";
 const RECIPIENT_CREDENTIAL_COMMITMENT_DOMAIN: &[u8] =
     b"iroha:kagemusha:v1:recipient-credential-commitment";
+const COMMIT_CERTIFICATE_ID_DOMAIN: &[u8] = b"iroha:kagemusha:v1:commit-certificate-id";
+const COMMIT_CERTIFICATE_DIGEST_DOMAIN: &[u8] = b"iroha:kagemusha:v1:commit-certificate";
+const HARDWARE_TERMINAL_BODY_COMMITMENT_DOMAIN: &[u8] =
+    b"iroha:kagemusha:v1:hardware-terminal-body";
+const OUTBOX_RESERVATION_COMMITMENT_DOMAIN: &[u8] = b"iroha:kagemusha:v1:outbox-reservation";
 const PAYMENT_DIGEST_DOMAIN: &[u8] = b"iroha:kagemusha:v1:payment";
 const INBOX_RECEIPT_DOMAIN: &[u8] = b"iroha:kagemusha:v1:durable-inbox-receipt";
 const ACKNOWLEDGEMENT_SIGNING_DOMAIN: &[u8] = b"iroha:kagemusha:v1:acknowledgement-signing";
@@ -248,7 +353,7 @@ const MINT_AUTHORIZATION_DIGEST_DOMAIN: &[u8] = b"iroha:kagemusha:v1:mint-author
 const REDEMPTION_ID_DOMAIN: &[u8] = b"iroha:kagemusha:v1:redemption-id";
 const REDEMPTION_STATEMENT_DIGEST_DOMAIN: &[u8] = b"iroha:kagemusha:v1:redemption-statement";
 
-/// Error returned when canonical Kagemusha V1 data fails validation.
+/// Error returned when canonical KAGEMUSHA V1 data fails validation.
 #[derive(Debug)]
 pub enum KagemushaValidationErrorV1 {
     /// Canonical Norito encoding or decoding failed.
@@ -270,12 +375,12 @@ pub enum KagemushaValidationErrorV1 {
 impl core::fmt::Display for KagemushaValidationErrorV1 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Codec(error) => write!(f, "canonical Kagemusha V1 codec failed: {error}"),
+            Self::Codec(error) => write!(f, "canonical KAGEMUSHA V1 codec failed: {error}"),
             Self::EncodedSizeExceeded { actual, max } => {
-                write!(f, "Kagemusha V1 wire size {actual} exceeds limit {max}")
+                write!(f, "KAGEMUSHA V1 wire size {actual} exceeds limit {max}")
             }
             Self::InvalidField { field } => {
-                write!(f, "invalid Kagemusha V1 field `{field}`")
+                write!(f, "invalid KAGEMUSHA V1 field `{field}`")
             }
         }
     }
@@ -289,7 +394,7 @@ impl From<norito::Error> for KagemushaValidationErrorV1 {
     }
 }
 
-/// Sole Kagemusha V1 device authority key.
+/// Sole KAGEMUSHA V1 device authority key.
 ///
 /// The wire value is exactly one canonical uncompressed SEC1 NIST P-256 point
 /// (`0x04 || x || y`). There is no algorithm tag or selector.
@@ -298,7 +403,7 @@ impl From<norito::Error> for KagemushaValidationErrorV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct KagemushaDevicePublicKeyV1([u8; KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V1]);
 
-/// Sole Kagemusha V1 device signature.
+/// Sole KAGEMUSHA V1 device signature.
 ///
 /// The wire value is the fixed-width big-endian ECDSA scalar pair `r || s`.
 /// Both scalars must be in `1..n`, and `s` must be low.
@@ -327,7 +432,7 @@ impl norito::NoritoSerialize for KagemushaDevicePublicKeyV1 {
 impl<'de> norito::NoritoDeserialize<'de> for KagemushaDevicePublicKeyV1 {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
-            .expect("Kagemusha device public key must be canonical SEC1 bytes")
+            .expect("KAGEMUSHA device public key must be canonical SEC1 bytes")
     }
 
     fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> Result<Self, norito::Error> {
@@ -372,7 +477,7 @@ impl norito::NoritoSerialize for KagemushaDeviceSignatureV1 {
 impl<'de> norito::NoritoDeserialize<'de> for KagemushaDeviceSignatureV1 {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
-            .expect("Kagemusha device signature must be canonical raw P-256 bytes")
+            .expect("KAGEMUSHA device signature must be canonical raw P-256 bytes")
     }
 
     fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> Result<Self, norito::Error> {
@@ -494,7 +599,7 @@ impl KagemushaDeviceSignatureV1 {
         &self.0
     }
 
-    /// Verify ECDSA-P256-SHA256 under the fixed Kagemusha V1 profile.
+    /// Verify ECDSA-P256-SHA256 under the fixed KAGEMUSHA V1 profile.
     ///
     /// # Errors
     ///
@@ -682,17 +787,19 @@ pub struct KagemushaPairedProofV1 {
     /// Current Ep/Fq augmented IPA proof.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub ep_proof: Vec<u8>,
-    /// Freshly rerandomized, statement-bound compact Eq/Fp delayed-history accumulator.
+    /// Terminal transported Eq/Fp history: the private carrier's current opening claim folded
+    /// into its complete prior history and bound inside the compact outer proof.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub eq_history: Vec<u8>,
-    /// Freshly rerandomized, statement-bound compact Ep/Fq delayed-history accumulator.
+    /// Terminal transported Ep/Fq history: the private carrier's current opening claim folded
+    /// into its complete prior history and bound inside the compact outer proof.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub ep_history: Vec<u8>,
 }
 
 /// Qualified platform class represented by one governed hardware profile.
 ///
-/// A class label never grants Kagemusha authority by itself. The complete
+/// A class label never grants KAGEMUSHA authority by itself. The complete
 /// profile, physical qualification evidence, credential, and recursive proof
 /// must all validate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
@@ -710,7 +817,7 @@ pub enum KagemushaHardwarePlatformClassV1 {
     OtherQualified,
 }
 
-/// Governed Kagemusha V1 non-forking hardware-service profile.
+/// Governed KAGEMUSHA V1 non-forking hardware-service profile.
 ///
 /// The capability mask must equal
 /// [`KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1`]. A stock hardware-backed
@@ -778,7 +885,7 @@ pub struct KagemushaHardwareCredentialV1 {
     /// Digest-derived credential identity.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub credential_id: [u8; 32],
-    /// Exact network on which the device may authorize Kagemusha.
+    /// Exact network on which the device may authorize KAGEMUSHA.
     pub network_id: NetworkId,
     /// Governed hardware profile identity.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -810,6 +917,85 @@ pub struct KagemushaHardwareCredentialV1 {
     pub expires_at_ms: u64,
     /// Governance/profile-issuer signature over the exact compact credential.
     pub governance_signature: KagemushaDeviceSignatureV1,
+}
+
+/// Exact one-byte IPM1 payload-kind discriminator.
+///
+/// These are the only three transported lifecycle message kinds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
+#[repr(u8)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(tag = "kind", content = "value", rename_all = "snake_case")]
+#[norito(deny_unknown_fields)]
+pub enum KagemushaIpm1PayloadKindV1 {
+    /// Receiver payment request. Stable tag: `1`.
+    Request = 1,
+    /// Committed sender payment. Stable tag: `2`.
+    Payment = 2,
+    /// Durable receiver acknowledgement. Stable tag: `3`.
+    Acknowledgement = 3,
+}
+
+impl KagemushaIpm1PayloadKindV1 {
+    /// Return the frozen one-byte IPM1 wire tag.
+    #[must_use]
+    pub const fn wire_tag(self) -> u8 {
+        self as u8
+    }
+
+    /// Parse one frozen IPM1 wire tag.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for every value outside `1..=3`.
+    pub fn from_wire_tag(tag: u8) -> Result<Self, KagemushaValidationErrorV1> {
+        match tag {
+            1 => Ok(Self::Request),
+            2 => Ok(Self::Payment),
+            3 => Ok(Self::Acknowledgement),
+            _ => Err(invalid("kagemusha.ipm1.payload_kind")),
+        }
+    }
+}
+
+impl norito::NoritoSerialize for KagemushaIpm1PayloadKindV1 {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
+        writer.write_all(&[self.wire_tag()])?;
+        Ok(())
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        Some(1)
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        Some(1)
+    }
+}
+
+impl<'de> norito::NoritoDeserialize<'de> for KagemushaIpm1PayloadKindV1 {
+    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("IPM1 payload kind must use a frozen tag")
+    }
+
+    fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> Result<Self, norito::Error> {
+        let bytes =
+            norito::core::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
+        let (value, used) = <Self as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
+        if used != bytes.len() {
+            return Err(norito::Error::LengthMismatch);
+        }
+        Ok(value)
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for KagemushaIpm1PayloadKindV1 {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::Error> {
+        let tag = *bytes.first().ok_or(norito::Error::LengthMismatch)?;
+        let value =
+            Self::from_wire_tag(tag).map_err(|error| norito::Error::Message(error.to_string()))?;
+        Ok((value, 1))
+    }
 }
 
 /// Exact recipient-only plaintext protected by an encrypted credit envelope.
@@ -881,7 +1067,7 @@ pub struct KagemushaEncryptedCreditAadV1 {
 ///
 /// `encrypted_credit` fields elsewhere on the V1 wire contain the exact
 /// canonical Norito encoding of this value. The recipient key is supplied by
-/// the signed request or mint-authorization context and is not repeated here.
+/// the signed payment request or mint-authorization context and is not repeated here.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
@@ -905,18 +1091,17 @@ pub struct KagemushaEncryptedCreditEnvelopeV1 {
 #[norito(tag = "operation", content = "value", rename_all = "snake_case")]
 #[norito(deny_unknown_fields)]
 pub enum KagemushaOperationKindV1 {
-    /// Establish a zero-balance hardware lane.
+    /// Establish a zero-balance hardware lane. Stable tag: `0`.
     Bootstrap,
-    /// Fold one finalized reserve-backed mint credit.
+    /// Fold one finalized reserve-backed mint credit. Stable tag: `1`.
     MintFold,
-    /// Produce one receiver-bound payment credit.
+    /// Produce one receiver-bound payment credit. Stable tag: `2`.
     SendSplit,
-    /// Fold exactly one receiver-bound credit into the aggregate balance.
+    /// Fold one receiver-bound credit into the aggregate balance. Stable tag: `3`.
     ReceiveFold,
-    /// Produce one online redemption voucher.
+    /// Produce one online redemption voucher. Stable tag: `4`.
     RedeemSplit,
-    /// Rotate the hardware epoch and, when governed, the recursive verifier suite
-    /// without changing monetary value.
+    /// Rotate the hardware epoch without changing monetary value. Stable tag: `5`.
     Rotate,
 }
 
@@ -964,6 +1149,9 @@ pub struct KagemushaLifecycleBindingV1 {
     /// Receiver request identity for `SendSplit`, otherwise zero.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub request_id: [u8; 32],
+    /// Receiver lane commitment for `SendSplit`, otherwise zero.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub receiver_lane_commitment: [u8; 32],
     /// Receiver credit identity for `SendSplit`, otherwise zero.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub credit_id: [u8; 32],
@@ -972,7 +1160,224 @@ pub struct KagemushaLifecycleBindingV1 {
     pub ciphertext_digest: [u8; 32],
 }
 
-/// Receiver-created authorization for one payment into a stable inbox lane.
+/// Trusted-time payload proving commitment before the request deadline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct KagemushaTrustedCommitTimeV1 {
+    /// Hiding commitment to the qualified clock evidence, commit instant, and authority.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub time_evidence_commitment: [u8; 32],
+}
+
+/// Secure monotonic-lease evidence proving commitment before a deadline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct KagemushaMonotonicLeaseV1 {
+    /// Hiding commitment to the unique lease, window, consumed counter, and authority.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub lease_evidence_commitment: [u8; 32],
+}
+
+/// Public evidence that qualified hardware committed before the applicable deadline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(
+    tag = "source",
+    content = "evidence",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum KagemushaCommitEvidenceV1 {
+    /// Qualified hardware supplied trusted time.
+    TrustedTime(KagemushaTrustedCommitTimeV1),
+    /// Qualified hardware consumed a secure monotonic authorization lease.
+    MonotonicLease(KagemushaMonotonicLeaseV1),
+}
+
+/// Sender outbox capacity reserved before hardware may consume its predecessor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct KagemushaOutboxReservationV1 {
+    /// Unique one-use reservation identity.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub reservation_id: [u8; 32],
+    /// Exact operation whose canonical terminal envelope owns the reservation.
+    pub operation_kind: KagemushaOperationKindV1,
+    /// Physical outbox bytes reserved for all recoverable artifacts.
+    pub reserved_outbox_bytes: u32,
+    /// Inclusive reservation issuance time in Unix milliseconds.
+    pub issued_at_ms: u64,
+    /// Exclusive deadline for consuming this reservation.
+    pub expires_at_ms: u64,
+}
+
+/// Self-free hardware terminal body committed before a certificate ID exists.
+///
+/// The construction order is terminal body, terminal commitment, certificate
+/// ID, then payment or redemption proof. This record contains no derived
+/// certificate or final-proof field, avoiding a hash fixed point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct KagemushaHardwareTerminalBodyV1 {
+    /// Wire/lifecycle contract version.
+    pub version: u16,
+    /// Digest of the exact prepared candidate persisted before commit.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub candidate_envelope_digest: [u8; 32],
+    /// Digest of the released lifecycle binding.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub lifecycle_binding_digest: [u8; 32],
+    /// Unique transition nullifier installed by this terminal commit.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub transition_nullifier: [u8; 32],
+    /// Commitment to the consumed private outbox reservation.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub outbox_reservation_commitment: [u8; 32],
+    /// Trusted-time or secure-lease evidence consumed at commit.
+    pub commit_evidence: KagemushaCommitEvidenceV1,
+    /// Qualified hardware profile governing the terminal body.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub hardware_profile_id: [u8; 32],
+    /// Exact hardware-policy epoch.
+    pub policy_epoch: u64,
+    /// Hiding commitment to the private committed successor state.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub private_successor_commitment: [u8; 32],
+    /// Hiding commitment to the rollback-resistant journal terminal record.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub private_journal_commitment: [u8; 32],
+    /// Hiding commitment to deterministic recovery material.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub private_recovery_commitment: [u8; 32],
+}
+
+/// Recoverable hardware terminal certificate emitted by atomic commit.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct KagemushaCommitCertificateV1 {
+    /// Wire version.
+    pub version: u16,
+    /// Digest-derived terminal certificate identity.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub certificate_id: [u8; 32],
+    /// Digest of the durably persisted, locally verified candidate envelope.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub candidate_envelope_digest: [u8; 32],
+    /// Digest of the exact released lifecycle binding.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub lifecycle_binding_digest: [u8; 32],
+    /// Unique transition nullifier installed by hardware commit.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub transition_nullifier: [u8; 32],
+    /// Hiding commitment to the consumed private outbox reservation.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub outbox_reservation_commitment: [u8; 32],
+    /// Trusted-time or monotonic-lease evidence used at commit.
+    pub commit_evidence: KagemushaCommitEvidenceV1,
+    /// Qualified sender hardware profile proven by the terminal proof.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub hardware_profile_id: [u8; 32],
+    /// Sender policy epoch proven by the terminal proof.
+    pub policy_epoch: u64,
+    /// Commitment to the self-free private terminal body and hardware state.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub hardware_terminal_commitment: [u8; 32],
+}
+
+/// Final paired proof authorizing one committed offline payment.
+///
+/// This exposes neither aggregate-state links nor stable credential pseudonyms.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct KagemushaPaymentProofV1 {
+    /// Wire version.
+    pub version: u16,
+    /// Canonical little-endian Fp protocol digest.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub eq_protocol_digest: [u8; 32],
+    /// Canonical little-endian Fq protocol digest.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub ep_protocol_digest: [u8; 32],
+    /// Digest of the unlinkable public transition statement.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub semantic_digest: [u8; 32],
+    /// Digest of the prepared transition proof/envelope verified by this proof.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub candidate_envelope_digest: [u8; 32],
+    /// Digest of the terminal commit certificate verified by this proof.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub commit_certificate_digest: [u8; 32],
+    /// Eq/Fp deferred reciprocal-verification audit.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub eq_deferred_audit: [u8; 32],
+    /// Ep/Fq deferred reciprocal-verification audit.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub ep_deferred_audit: [u8; 32],
+    /// Current Eq/Fp augmented IPA proof.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    pub eq_proof: Vec<u8>,
+    /// Current Ep/Fq augmented IPA proof.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    pub ep_proof: Vec<u8>,
+    /// Compact Eq/Fp delayed-history accumulator.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    pub eq_history: Vec<u8>,
+    /// Compact Ep/Fq delayed-history accumulator.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    pub ep_history: Vec<u8>,
+}
+
+/// Final paired proof authorizing one online redemption.
+///
+/// This exposes neither aggregate-state links nor stable credential pseudonyms.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct KagemushaRedemptionProofV1 {
+    /// Wire version.
+    pub version: u16,
+    /// Canonical little-endian Fp protocol digest.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub eq_protocol_digest: [u8; 32],
+    /// Canonical little-endian Fq protocol digest.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub ep_protocol_digest: [u8; 32],
+    /// Digest of the unlinkable public transition statement.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub semantic_digest: [u8; 32],
+    /// Digest of the prepared transition proof/envelope verified by this proof.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub candidate_envelope_digest: [u8; 32],
+    /// Digest of the terminal commit certificate verified by this proof.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub commit_certificate_digest: [u8; 32],
+    /// Eq/Fp deferred reciprocal-verification audit.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub eq_deferred_audit: [u8; 32],
+    /// Ep/Fq deferred reciprocal-verification audit.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub ep_deferred_audit: [u8; 32],
+    /// Current Eq/Fp augmented IPA proof.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    pub eq_proof: Vec<u8>,
+    /// Current Ep/Fq augmented IPA proof.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    pub ep_proof: Vec<u8>,
+    /// Compact Eq/Fp delayed-history accumulator.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    pub eq_history: Vec<u8>,
+    /// Compact Ep/Fq delayed-history accumulator.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    pub ep_history: Vec<u8>,
+}
+
+/// Receiver-created authorization for any number of distinct exact-amount payments.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
@@ -995,16 +1400,14 @@ pub struct KagemushaPaymentRequestV1 {
     pub liability_pool_id: [u8; 32],
     /// Recipient account identity.
     pub recipient: AccountId,
-    /// Stable receiver hardware lane authorized to accept and fold every matching credit.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
-    pub recipient_lane_id: [u8; 32],
-    /// Recipient X25519 key protecting every credit opening made against this request.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
-    pub recipient_encryption_key: [u8; 32],
-    /// Exact positive amount authorized by every payment made against this request.
+    /// Exact positive amount requested for each payment made against this request.
     pub amount: u128,
-    /// Compact qualified-hardware credential authorizing this request and its inbox lane.
+    /// Recipient X25519 public key used to encrypt every independently identified credit.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub recipient_encryption_key: [u8; KAGEMUSHA_X25519_PUBLIC_KEY_BYTES_V1],
+    /// Compact qualified-hardware credential binding the receiver device, lane, and policy.
     pub hardware_credential: KagemushaHardwareCredentialV1,
+
     /// Unique recipient nonce.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub request_id: [u8; 32],
@@ -1016,61 +1419,55 @@ pub struct KagemushaPaymentRequestV1 {
     pub signature: KagemushaDeviceSignatureV1,
 }
 
-/// Unlinkable public send statement decided by both Pasta parities.
-///
-/// The private candidate proof consumes and creates aggregate state, but those
-/// predecessor and successor commitments never appear in this public record.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+/// Compact terminal output bound by the post-commit proof.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
-pub struct KagemushaTransferStatementV1 {
+pub struct KagemushaPaymentOutputV1 {
     /// Wire version.
     pub version: u16,
-    /// Complete released-credit lifecycle binding.
-    pub lifecycle: KagemushaLifecycleBindingV1,
-    /// Positive transfer amount in atomic units.
+    /// Digest of the exact signed receiver request.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub request_digest: [u8; 32],
+    /// Exact positive amount transferred by this payment.
     pub amount: u128,
+    /// Hiding commitment to the consumed sender aggregate state.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub sender_before_commitment: [u8; 32],
+    /// Hiding commitment to the immediately usable sender successor state.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub sender_after_commitment: [u8; 32],
     /// Unique, proof-derived transition nullifier with no public state preimage.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub transition_nullifier: [u8; 32],
-    /// Opaque aggregate-state commitment consumed by sender hardware.
-    pub sender_before_commitment: KagemushaPastaStateCommitmentV1,
-    /// Opaque exact successor commitment installed by sender hardware.
-    pub sender_after_commitment: KagemushaPastaStateCommitmentV1,
-    /// Digest of the exact recipient request.
+    /// Request-bound receiver credit identity derived from the transition nullifier.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
-    pub request_digest: [u8; 32],
-    /// Stable receiver lane copied from the signed request.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
-    pub recipient_lane_id: [u8; 32],
-    /// Request-scoped recipient encryption key copied from the signed request.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
-    pub recipient_encryption_key: [u8; 32],
+    pub credit_id: [u8; 32],
     /// Commitment to amount-bound ciphertext semantics.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub ciphertext_commitment: [u8; 32],
-    /// Literal trusted hardware commit time in Unix milliseconds.
+    /// Trusted-time or secure monotonic-lease evidence used by hardware commit.
+    pub commit_evidence: KagemushaCommitEvidenceV1,
+    /// Trusted sender commit time; request expiry gates only this instant.
     pub committed_at_ms: u64,
-    /// Commitment to the normalized exact-next hardware transition and recoverable certificate.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
-    pub hardware_transition_commitment: [u8; 32],
 }
 
-/// Sender response containing one receiver-bound aggregate credit proof.
+/// Sender terminal response carrying its post-commit proof and recoverable certificate.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaPaymentV1 {
     /// Wire version.
     pub version: u16,
-    /// Unlinkable public statement decided by both proof parities.
-    pub statement: KagemushaTransferStatementV1,
-    /// Constant-size recursive proof of the aggregate split and normalized
-    /// hardware transition.
-    pub proof: KagemushaPairedProofV1,
+    /// Exact public output known before hardware commitment.
+    pub output: KagemushaPaymentOutputV1,
     /// Recipient-only encrypted credit opening.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub encrypted_credit: Vec<u8>,
+    /// Recoverable certificate emitted only after the exact candidate was committed.
+    pub commit_certificate: KagemushaCommitCertificateV1,
+    /// Post-commit paired proof of the candidate and its hardware terminal certificate.
+    pub proof: KagemushaPaymentProofV1,
 }
 
 /// Durable secure-inbox record named by a receiver acknowledgement.
@@ -1149,7 +1546,7 @@ pub struct KagemushaMintAuthorizationContextV1 {
     pub amount: u128,
     /// Online account debited by the top-up.
     pub payer: AccountId,
-    /// Kagemusha account authorized to receive the credit.
+    /// KAGEMUSHA account authorized to receive the credit.
     pub recipient: AccountId,
     /// Exact compact credential privately opened by the authorization proof.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -1197,10 +1594,15 @@ pub struct KagemushaMintAuthorizationStatementV1 {
 
 /// Release-pinned recipient authorization verified before reserve mutation.
 ///
-/// Both proof parities establish the exact authenticated credential, fresh
-/// commitment openings, recipient encryption-key possession, and ciphertext
-/// opening relation described by `statement`. The finalized mint helper later
-/// recursively verifies this same authorization digest.
+/// Both proof parities are required to establish the exact authenticated credential,
+/// fresh commitment openings, recipient encryption-key possession, and ciphertext
+/// opening relation described by `statement`. Shape validation of this value does
+/// not establish any of those monetary relations.
+///
+/// TODO: Close the finalized MintAuthority helper's recursive authorization and
+/// canonical statement-opening relations. Its current signed-root membership of a
+/// host-precomputed statement digest is not that closure. MintFold must also join the
+/// reopened recipient/lifecycle and exact replay key/value to the active state lane.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
@@ -1273,7 +1675,11 @@ pub struct KagemushaMintCreditV1 {
     /// Release-pinned genesis finality-roster identifier carried by the authority chain.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub finality_genesis_roster_id: [u8; 32],
-    /// Canonical binding of both helper proofs, audits, and complete history accumulators.
+    /// SHA commitment to the inner paired authority metadata, proved by both compact helpers.
+    ///
+    /// This preserves the inner audit/history commitment in outer public cells 20..21; it is
+    /// not recomputed from the transported outer audit/history fields. Shape validation alone
+    /// does not authenticate it: both proof parities and complete histories must be verified.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub finality_proof_binding_digest: [u8; 32],
     /// Recipient-only encrypted credit opening.
@@ -1286,8 +1692,8 @@ pub struct KagemushaMintCreditV1 {
 
 /// Unlinkable terminal transition that converts aggregate cash to an online claim.
 ///
-/// Stable sender identity remains hidden while opaque predecessor/successor
-/// commitments and the normalized hardware transition are bound publicly.
+/// Stable sender identity and predecessor/successor commitments remain private
+/// proof inputs and never appear in this public record.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
@@ -1303,22 +1709,14 @@ pub struct KagemushaRedemptionStatementV1 {
     /// Unique, proof-derived terminal nullifier with no public state preimage.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub terminal_nullifier: [u8; 32],
-    /// Opaque aggregate-state commitment consumed by sender hardware.
-    pub sender_before_commitment: KagemushaPastaStateCommitmentV1,
-    /// Opaque exact successor commitment installed by sender hardware.
-    pub sender_after_commitment: KagemushaPastaStateCommitmentV1,
     /// Commitment to the public redemption claim and private proof output.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub redemption_commitment: [u8; 32],
     /// Unique identity of this exact redemption voucher.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub redemption_id: [u8; 32],
-    /// Literal trusted hardware commit time in Unix milliseconds.
-    pub committed_at_ms: u64,
-    /// Commitment to the normalized exact-next hardware transition and
-    /// recoverable private certificate.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
-    pub hardware_transition_commitment: [u8; 32],
+    /// Trusted-time or secure monotonic-lease evidence used by hardware commit.
+    pub commit_evidence: KagemushaCommitEvidenceV1,
 }
 
 /// Constant-size terminal voucher submitted for online redemption.
@@ -1330,9 +1728,13 @@ pub struct KagemushaRedemptionVoucherV1 {
     pub version: u16,
     /// Public terminal transition.
     pub statement: KagemushaRedemptionStatementV1,
-    /// Constant-size recursive proof of balance conservation and the normalized
-    /// hardware transition.
-    pub proof: KagemushaPairedProofV1,
+    /// Recoverable hardware terminal certificate for the exact candidate.
+    pub commit_certificate: KagemushaCommitCertificateV1,
+    /// Final redemption proof of balance conservation and committed terminal state.
+    pub proof: KagemushaRedemptionProofV1,
+    /// Digest of the authenticated artifact manifest used by the proof.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub artifact_manifest_digest: [u8; 32],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode)]
@@ -1343,7 +1745,7 @@ struct LiabilityPoolPreimageV1 {
     asset_incarnation: AxtAssetIncarnationV1,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode)]
 #[norito(schema_name = "iroha.kagemusha.v1.hardware-profile-id-preimage")]
 struct HardwareProfileIdPreimageV1 {
     version: u16,
@@ -1363,59 +1765,6 @@ struct HardwareProfileIdPreimageV1 {
     expires_at_ms: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode)]
-#[norito(schema_name = "iroha.kagemusha.v1.payment-request-signing-preimage")]
-struct PaymentRequestSigningPreimageV1 {
-    domain: Vec<u8>,
-    version: u16,
-    release_id: [u8; 32],
-    network_id: NetworkId,
-    asset: AssetDefinitionId,
-    asset_incarnation: AxtAssetIncarnationV1,
-    scale: u32,
-    liability_pool_id: [u8; 32],
-    recipient: AccountId,
-    recipient_lane_id: [u8; 32],
-    recipient_encryption_key: [u8; 32],
-    amount: u128,
-    hardware_credential_id: [u8; 32],
-    request_id: [u8; 32],
-    issued_at_ms: u64,
-    expires_at_ms: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Encode)]
-#[norito(schema_name = "iroha.kagemusha.v1.credit-id-preimage")]
-struct CreditIdPreimageV1 {
-    transition_nullifier: [u8; 32],
-    request_digest: [u8; 32],
-    sender_before_commitment: KagemushaPastaStateCommitmentV1,
-    sender_after_commitment: KagemushaPastaStateCommitmentV1,
-    recipient_lane_id: [u8; 32],
-    recipient_encryption_key: [u8; 32],
-    amount: u128,
-    ciphertext_commitment: [u8; 32],
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Encode)]
-#[norito(schema_name = "iroha.kagemusha.v1.peer-credit-lifecycle-context-preimage")]
-struct PeerCreditLifecycleContextPreimageV1 {
-    version: u16,
-    network_id: NetworkId,
-    protocol_version: u16,
-    suite_id: [u8; 32],
-    vk_digest: [u8; 32],
-    release_id: [u8; 32],
-    asset: AssetDefinitionId,
-    asset_incarnation: AxtAssetIncarnationV1,
-    scale: u32,
-    liability_pool_id: [u8; 32],
-    hardware_profile_id: [u8; 32],
-    policy_epoch: u64,
-    operation_kind: KagemushaOperationKindV1,
-    request_id: [u8; 32],
-}
-
 /// Exact pre-ID peer-transfer context authenticated by encrypted-credit AAD.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1426,27 +1775,23 @@ pub struct KagemushaPeerCreditContextV1 {
     /// Digest of the exact signed receiver request.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub request_digest: [u8; 32],
-    /// Opaque aggregate-state commitment consumed by the sender.
-    pub sender_before_commitment: KagemushaPastaStateCommitmentV1,
-    /// Opaque exact successor commitment installed by the sender.
-    pub sender_after_commitment: KagemushaPastaStateCommitmentV1,
-    /// Digest of the released lifecycle fields that exist before encryption.
+    /// Exact positive amount transferred by the request.
+    pub amount: u128,
+    /// Consumed sender state commitment.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
-    pub lifecycle_context_digest: [u8; 32],
-    /// Signed stable receiver lane.
+    pub sender_before_commitment: [u8; 32],
+    /// Sender successor state commitment.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
-    pub recipient_lane_id: [u8; 32],
-    /// Signed request-scoped recipient X25519 public key.
+    pub sender_after_commitment: [u8; 32],
+    /// Request-bound transfer digest fixed before encryption and proving.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub prepared_transfer_digest: [u8; 32],
+    /// Request-owned recipient X25519 public key.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub recipient_encryption_key: [u8; 32],
-    /// Literal hardware-attested sender commit time.
-    pub committed_at_ms: u64,
-    /// Commitment to the normalized exact-next hardware transition.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
-    pub hardware_transition_commitment: [u8; 32],
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode)]
 #[norito(schema_name = "iroha.kagemusha.v1.mint-credit-opening-commitment-preimage")]
 struct MintCreditOpeningCommitmentPreimageV1 {
     version: u16,
@@ -1461,7 +1806,7 @@ struct MintCreditOpeningCommitmentPreimageV1 {
     credit_commitment_opening: [u8; 32],
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode)]
 #[norito(schema_name = "iroha.kagemusha.v1.recipient-credential-commitment-preimage")]
 struct RecipientCredentialCommitmentPreimageV1 {
     operation_id: [u8; 32],
@@ -1485,6 +1830,433 @@ struct HardwareCredentialIdPreimageV1 {
     device_key_reference: [u8; 32],
     issued_at_ms: u64,
     expires_at_ms: u64,
+}
+
+fn fixed_canonical_preimage_bytes_v1<T: Encode, const N: usize>(
+    preimage: &T,
+    field: &'static str,
+) -> Result<[u8; N], KagemushaValidationErrorV1> {
+    norito::encode_canonical(preimage)?
+        .try_into()
+        .map_err(|_| invalid(field))
+}
+
+mod canonical_mint_frame_sealed {
+    /// Prevent downstream crates from extending the monetary-frame allowlist.
+    pub trait Sealed {}
+}
+
+/// A KAGEMUSHA monetary type whose canonical Norito frame may enter a proof relation.
+///
+/// This sealed marker restricts the layout API to the exact V1 mint hierarchy and its typed
+/// account/asset identity leaves. It does not validate a value or grant monetary authority; the
+/// recursive circuit must still constrain all semantic payload bytes and verify the release-pinned
+/// proofs that authenticate them.
+pub trait KagemushaCanonicalMintFrameV1: Encode + canonical_mint_frame_sealed::Sealed {
+    /// Frozen offset at which this root type's bare payload starts.
+    const PAYLOAD_OFFSET_V1: usize;
+    /// Frozen canonical V1 layout flags for this monetary type.
+    const HEADER_FLAGS_V1: u8;
+}
+
+impl canonical_mint_frame_sealed::Sealed for AccountId {}
+impl KagemushaCanonicalMintFrameV1 for AccountId {
+    const PAYLOAD_OFFSET_V1: usize = 40;
+    const HEADER_FLAGS_V1: u8 = norito::core::header_flags::COMPACT_LEN;
+}
+impl canonical_mint_frame_sealed::Sealed for AssetDefinitionId {}
+impl KagemushaCanonicalMintFrameV1 for AssetDefinitionId {
+    const PAYLOAD_OFFSET_V1: usize = 40;
+    const HEADER_FLAGS_V1: u8 = norito::core::header_flags::COMPACT_LEN;
+}
+impl canonical_mint_frame_sealed::Sealed for KagemushaMintAuthorizationContextV1 {}
+impl KagemushaCanonicalMintFrameV1 for KagemushaMintAuthorizationContextV1 {
+    const PAYLOAD_OFFSET_V1: usize = 48;
+    const HEADER_FLAGS_V1: u8 = norito::core::header_flags::COMPACT_LEN;
+}
+impl canonical_mint_frame_sealed::Sealed for KagemushaMintAuthorizationStatementV1 {}
+impl KagemushaCanonicalMintFrameV1 for KagemushaMintAuthorizationStatementV1 {
+    const PAYLOAD_OFFSET_V1: usize = 48;
+    const HEADER_FLAGS_V1: u8 = norito::core::header_flags::COMPACT_LEN;
+}
+impl canonical_mint_frame_sealed::Sealed for KagemushaPairedProofV1 {}
+impl KagemushaCanonicalMintFrameV1 for KagemushaPairedProofV1 {
+    const PAYLOAD_OFFSET_V1: usize = 40;
+    const HEADER_FLAGS_V1: u8 = norito::core::header_flags::COMPACT_LEN;
+}
+impl canonical_mint_frame_sealed::Sealed for KagemushaMintAuthorizationV1 {}
+impl KagemushaCanonicalMintFrameV1 for KagemushaMintAuthorizationV1 {
+    const PAYLOAD_OFFSET_V1: usize = 48;
+    const HEADER_FLAGS_V1: u8 = norito::core::header_flags::COMPACT_LEN;
+}
+impl canonical_mint_frame_sealed::Sealed for KagemushaLifecycleBindingV1 {}
+impl KagemushaCanonicalMintFrameV1 for KagemushaLifecycleBindingV1 {
+    const PAYLOAD_OFFSET_V1: usize = 40;
+    const HEADER_FLAGS_V1: u8 = norito::core::header_flags::COMPACT_LEN;
+}
+impl canonical_mint_frame_sealed::Sealed for KagemushaMintCreditStatementV1 {}
+impl KagemushaCanonicalMintFrameV1 for KagemushaMintCreditStatementV1 {
+    const PAYLOAD_OFFSET_V1: usize = 48;
+    const HEADER_FLAGS_V1: u8 = norito::core::header_flags::COMPACT_LEN;
+}
+impl canonical_mint_frame_sealed::Sealed for KagemushaMintCreditV1 {}
+impl KagemushaCanonicalMintFrameV1 for KagemushaMintCreditV1 {
+    const PAYLOAD_OFFSET_V1: usize = 48;
+    const HEADER_FLAGS_V1: u8 = norito::core::header_flags::COMPACT_LEN;
+}
+
+/// Model-owned fixed prefix for one variable-length canonical monetary frame.
+///
+/// The prefix contains the exact Norito header and root-alignment padding. `Some(byte)` pins a
+/// codec-owned byte. The sixteen `None` slots are exactly the little-endian payload length at
+/// `23..31` and CRC64-XZ at `31..39`; a circuit must derive both from its constrained payload.
+/// No payload bytes, proof authority, or protocol-specific capacity are carried here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KagemushaCanonicalFramePrefixV1 {
+    bytes: Vec<Option<u8>>,
+}
+
+impl KagemushaCanonicalFramePrefixV1 {
+    /// Borrow the fixed header/alignment template.
+    #[must_use]
+    pub fn bytes(&self) -> &[Option<u8>] {
+        &self.bytes
+    }
+
+    /// Return the exact offset at which the bare canonical payload starts.
+    #[must_use]
+    pub fn payload_offset(&self) -> usize {
+        self.bytes.len()
+    }
+}
+
+/// Derive authoritative header and root-alignment framing for an allowed mint value.
+///
+/// The descriptor is obtained from the canonical encoder under its fixed V1 flags, then checked
+/// against an independently produced bare payload. This keeps schema bytes, codec version,
+/// layout flags, and type alignment in the data model rather than duplicating them in a circuit.
+/// The result deliberately omits a capacity: callers must use an existing release/envelope bound,
+/// and selecting a smaller buffer must never become a cumulative money-usage restriction.
+///
+/// # Errors
+///
+/// Returns an error if canonical framing cannot be encoded or its header/payload split is not the
+/// exact V1 layout.
+pub fn kagemusha_canonical_mint_frame_prefix_v1<T: KagemushaCanonicalMintFrameV1>(
+    value: &T,
+) -> Result<KagemushaCanonicalFramePrefixV1, KagemushaValidationErrorV1> {
+    const LENGTH_RANGE: core::ops::Range<usize> = 23..31;
+    const CHECKSUM_RANGE: core::ops::Range<usize> = 31..39;
+    let frame = norito::encode_canonical(value)?;
+    let mut payload = Vec::new();
+    norito::codec::encode_adaptive_into(value, &mut payload)?;
+    let payload_offset = frame
+        .len()
+        .checked_sub(payload.len())
+        .filter(|offset| *offset >= norito::core::Header::SIZE)
+        .ok_or_else(|| invalid("kagemusha.canonical_mint_frame.prefix"))?;
+    if frame.get(payload_offset..) != Some(payload.as_slice())
+        || payload_offset != T::PAYLOAD_OFFSET_V1
+        || canonical_frame_overhead_v1::<T>() != T::PAYLOAD_OFFSET_V1
+        || frame[39] != T::HEADER_FLAGS_V1
+        || frame.get(LENGTH_RANGE.clone())
+            != Some(
+                &u64::try_from(payload.len())
+                    .map_err(|_| invalid("kagemusha.canonical_mint_frame.payload_length"))?
+                    .to_le_bytes(),
+            )
+        || frame[norito::core::Header::SIZE..payload_offset]
+            .iter()
+            .any(|byte| *byte != 0)
+    {
+        return Err(invalid("kagemusha.canonical_mint_frame.prefix"));
+    }
+    let mut bytes = frame[..payload_offset]
+        .iter()
+        .copied()
+        .map(Some)
+        .collect::<Vec<_>>();
+    bytes[LENGTH_RANGE].fill(None);
+    bytes[CHECKSUM_RANGE].fill(None);
+    Ok(KagemushaCanonicalFramePrefixV1 { bytes })
+}
+
+fn fixed_canonical_preimage_layout_v1<T: Encode, const N: usize>(
+    preimage: &T,
+    ranges: &[core::ops::Range<usize>],
+    values: &[&[u8]],
+    field: &'static str,
+) -> Result<[Option<u8>; N], KagemushaValidationErrorV1> {
+    let bytes = fixed_canonical_preimage_bytes_v1::<_, N>(preimage, field)?;
+    if N < 40 || ranges.len() != values.len() {
+        return Err(invalid(field));
+    }
+    let mut layout = bytes.map(Some);
+    layout[31..39].fill(None);
+    let mut previous_end = 40;
+    for (range, value) in ranges.iter().zip(values) {
+        if range.start < previous_end || bytes.get(range.clone()) != Some(*value) {
+            return Err(invalid(field));
+        }
+        layout[range.clone()].fill(None);
+        previous_end = range.end;
+    }
+    Ok(layout)
+}
+
+/// Return fixed framing for the canonical randomized recipient commitment.
+///
+/// `Some` bytes pin the authoritative Norito header and field prefixes. Semantic
+/// values occupy [`KAGEMUSHA_RECIPIENT_CREDENTIAL_COMMITMENT_PREIMAGE_FIELD_RANGES_V1`].
+/// CRC64 bytes 31..39 are `None`, but are part of the hashed preimage: a circuit
+/// creating a fresh commitment must compute and constrain them from its payload.
+/// This template itself neither computes a witness CRC nor grants authority.
+///
+/// # Errors
+///
+/// Returns an error for encoding failure or an unexpected canonical field layout.
+pub fn kagemusha_recipient_credential_commitment_preimage_layout_v1() -> Result<
+    [Option<u8>; KAGEMUSHA_RECIPIENT_CREDENTIAL_COMMITMENT_PREIMAGE_BYTES_V1],
+    KagemushaValidationErrorV1,
+> {
+    let preimage = RecipientCredentialCommitmentPreimageV1 {
+        operation_id: [1; 32],
+        hardware_credential_id: [2; 32],
+        recipient_binding_opening: [3; 32],
+    };
+    fixed_canonical_preimage_layout_v1(
+        &preimage,
+        &KAGEMUSHA_RECIPIENT_CREDENTIAL_COMMITMENT_PREIMAGE_FIELD_RANGES_V1,
+        &[
+            &preimage.operation_id,
+            &preimage.hardware_credential_id,
+            &preimage.recipient_binding_opening,
+        ],
+        "kagemusha.recipient_credential_commitment.preimage_layout",
+    )
+}
+
+/// Return fixed framing for the canonical mint-credit opening commitment.
+///
+/// The template pins the complete header, root alignment padding, and all field
+/// prefixes, including the incarnation's nested prefix. Semantic value ranges
+/// are [`KAGEMUSHA_MINT_CREDIT_OPENING_COMMITMENT_PREIMAGE_FIELD_RANGES_V1`].
+/// CRC64 bytes 31..39 are deliberately `None`; fresh commitment circuits must
+/// compute them from the canonical payload, excluding header and root padding.
+/// No raw field concatenation or alternate digest transcript is introduced.
+///
+/// # Errors
+///
+/// Returns an error for encoding failure or an unexpected canonical field layout.
+pub fn kagemusha_mint_credit_opening_commitment_preimage_layout_v1() -> Result<
+    [Option<u8>; KAGEMUSHA_MINT_CREDIT_OPENING_COMMITMENT_PREIMAGE_BYTES_V1],
+    KagemushaValidationErrorV1,
+> {
+    let field = "kagemusha.mint_credit_opening_commitment.preimage_layout";
+    let preimage = MintCreditOpeningCommitmentPreimageV1 {
+        version: KAGEMUSHA_WIRE_VERSION_V1,
+        network_id: [1; 32],
+        asset_identity_digest: [2; 32],
+        asset_incarnation: AxtAssetIncarnationV1::try_from_bytes(
+            *iroha_crypto::Hash::new(b"kagemusha-mint-opening-preimage-layout").as_ref(),
+        )
+        .map_err(|_| invalid(field))?,
+        scale: 3,
+        liability_pool_id: [4; 32],
+        amount: 5,
+        recipient_account_digest: [6; 32],
+        recipient_one_time_key: [7; 32],
+        credit_commitment_opening: [8; 32],
+    };
+    fixed_canonical_preimage_layout_v1(
+        &preimage,
+        &KAGEMUSHA_MINT_CREDIT_OPENING_COMMITMENT_PREIMAGE_FIELD_RANGES_V1,
+        &[
+            &preimage.version.to_le_bytes(),
+            &preimage.network_id,
+            &preimage.asset_identity_digest,
+            preimage.asset_incarnation.as_bytes(),
+            &preimage.scale.to_le_bytes(),
+            &preimage.liability_pool_id,
+            &preimage.amount.to_le_bytes(),
+            &preimage.recipient_account_digest,
+            &preimage.recipient_one_time_key,
+            &preimage.credit_commitment_opening,
+        ],
+        field,
+    )
+}
+
+/// Return fixed framing for the unchanged canonical hardware-profile identity.
+///
+/// The platform discriminant is a u32-LE semantic field, not a framing constant.
+/// Semantic fields occupy [`KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_FIELD_RANGES_V1`].
+/// CRC64 bytes 31..39 are `None`: compute them when creating a fresh identity, or
+/// bind the entire preimage hash to an already authenticated profile identity.
+/// This shape-only template supplies no profile qualification or authority.
+///
+/// # Errors
+///
+/// Returns an error for encoding failure or an unexpected canonical field layout.
+pub fn kagemusha_hardware_profile_id_preimage_layout_v1()
+-> Result<[Option<u8>; KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_BYTES_V1], KagemushaValidationErrorV1>
+{
+    let field = "kagemusha.hardware_profile.id_preimage_layout";
+    let generator = P256VerifyingKey::from_sec1_bytes(&[
+        0x03, 0x6b, 0x17, 0xd1, 0xf2, 0xe1, 0x2c, 0x42, 0x47, 0xf8, 0xbc, 0xe6, 0xe5, 0x63, 0xa4,
+        0x40, 0xf2, 0x77, 0x03, 0x7d, 0x81, 0x2d, 0xeb, 0x33, 0xa0, 0xf4, 0xa1, 0x39, 0x45, 0xd8,
+        0x98, 0xc2, 0x96,
+    ])
+    .map_err(|_| invalid(field))?;
+    let preimage = HardwareProfileIdPreimageV1 {
+        version: KAGEMUSHA_WIRE_VERSION_V1,
+        protocol_version: KAGEMUSHA_WIRE_VERSION_V1,
+        provider_id: [1; 32],
+        platform_class: KagemushaHardwarePlatformClassV1::OtherQualified,
+        product_class_digest: [2; 32],
+        firmware_policy_digest: [3; 32],
+        enrollment_attestation_verifier_digest: [4; 32],
+        attestation_trust_roots_digest: [5; 32],
+        allowed_suite_commitment: [6; 32],
+        policy_epoch: 7,
+        governance_credential_public_key: KagemushaDevicePublicKeyV1::from_sec1_bytes(
+            generator.to_encoded_point(false).as_bytes(),
+        )?,
+        capability_mask: KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1,
+        qualification_report_digest: [8; 32],
+        valid_from_ms: 9,
+        expires_at_ms: 10,
+    };
+    fixed_canonical_preimage_layout_v1(
+        &preimage,
+        &KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_FIELD_RANGES_V1,
+        &[
+            &preimage.version.to_le_bytes(),
+            &preimage.protocol_version.to_le_bytes(),
+            &preimage.provider_id,
+            &3_u32.to_le_bytes(),
+            &preimage.product_class_digest,
+            &preimage.firmware_policy_digest,
+            &preimage.enrollment_attestation_verifier_digest,
+            &preimage.attestation_trust_roots_digest,
+            &preimage.allowed_suite_commitment,
+            &preimage.policy_epoch.to_le_bytes(),
+            preimage.governance_credential_public_key.as_sec1_bytes(),
+            &preimage.capability_mask.to_le_bytes(),
+            &preimage.qualification_report_digest,
+            &preimage.valid_from_ms.to_le_bytes(),
+            &preimage.expires_at_ms.to_le_bytes(),
+        ],
+        field,
+    )
+}
+
+/// Return fixed framing for the canonical encrypted-credit plaintext.
+///
+/// Semantic fields occupy [`KAGEMUSHA_CREDIT_OPENING_CANONICAL_FIELD_RANGES_V1`].
+/// Header, root padding, and field prefixes are fixed. The CRC64 at 31..39 is
+/// part of the plaintext and must be computed from the payload when a circuit
+/// creates these bytes; `None` does not authorize omitting or zeroing the CRC.
+///
+/// # Errors
+///
+/// Returns an error for encoding failure or an unexpected canonical field layout.
+pub fn kagemusha_credit_opening_canonical_layout_v1()
+-> Result<[Option<u8>; KAGEMUSHA_CREDIT_OPENING_CANONICAL_BYTES_V1], KagemushaValidationErrorV1> {
+    let opening = KagemushaCreditOpeningV1 {
+        version: KAGEMUSHA_WIRE_VERSION_V1,
+        credit_id: [1; 32],
+        amount: 2,
+        credit_commitment_opening: [3; 32],
+        recipient_binding_opening: [4; 32],
+        recovery_nonce: [5; 32],
+    };
+    fixed_canonical_preimage_layout_v1(
+        &opening,
+        &KAGEMUSHA_CREDIT_OPENING_CANONICAL_FIELD_RANGES_V1,
+        &[
+            &opening.version.to_le_bytes(),
+            &opening.credit_id,
+            &opening.amount.to_le_bytes(),
+            &opening.credit_commitment_opening,
+            &opening.recipient_binding_opening,
+            &opening.recovery_nonce,
+        ],
+        "kagemusha.credit_opening.canonical_layout",
+    )
+}
+
+/// Return fixed framing bytes for the unchanged canonical credential-ID preimage.
+///
+/// Header bytes 0..31, the layout flag at 39, and all thirteen field-length
+/// prefixes are fixed by the authoritative private Norito type. Value bytes and
+/// the data-dependent CRC64 at 31..39 are left unconstrained. This template
+/// supplies no credential authority and does not verify that CRC; proof users
+/// must hash the entire preimage and bind its digest to an authenticated ID.
+///
+/// # Errors
+///
+/// Returns an error for a codec failure or unexpected first-release layout.
+pub fn kagemusha_hardware_credential_id_preimage_layout_v1() -> Result<
+    [Option<u8>; KAGEMUSHA_HARDWARE_CREDENTIAL_ID_PREIMAGE_BYTES_V1],
+    KagemushaValidationErrorV1,
+> {
+    // Encoding this shape-only template never constructs or authorizes a credential.
+    let generator = P256VerifyingKey::from_sec1_bytes(&[
+        0x03, 0x6b, 0x17, 0xd1, 0xf2, 0xe1, 0x2c, 0x42, 0x47, 0xf8, 0xbc, 0xe6, 0xe5, 0x63, 0xa4,
+        0x40, 0xf2, 0x77, 0x03, 0x7d, 0x81, 0x2d, 0xeb, 0x33, 0xa0, 0xf4, 0xa1, 0x39, 0x45, 0xd8,
+        0x98, 0xc2, 0x96,
+    ])
+    .map_err(|_| invalid("kagemusha.hardware_credential.id_preimage_layout"))?;
+    let preimage = HardwareCredentialIdPreimageV1 {
+        version: KAGEMUSHA_WIRE_VERSION_V1,
+        network_id: NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+            iroha_crypto::Hash::new(b"kagemusha-credential-preimage-layout"),
+        )),
+        hardware_profile_id: [0; 32],
+        suite_id: [0; 32],
+        firmware_policy_digest: [0; 32],
+        policy_epoch: 0,
+        lane_commitment: [0; 32],
+        hardware_epoch_id: [0; 32],
+        hardware_epoch_generation: 0,
+        device_public_key: KagemushaDevicePublicKeyV1::from_sec1_bytes(
+            generator.to_encoded_point(false).as_bytes(),
+        )?,
+        device_key_reference: [0; 32],
+        issued_at_ms: 0,
+        expires_at_ms: 0,
+    };
+    let bytes = norito::encode_canonical(&preimage)?;
+    if bytes.len() != KAGEMUSHA_HARDWARE_CREDENTIAL_ID_PREIMAGE_BYTES_V1 {
+        return Err(invalid("kagemusha.hardware_credential.id_preimage_layout"));
+    }
+    let mut layout = [None; KAGEMUSHA_HARDWARE_CREDENTIAL_ID_PREIMAGE_BYTES_V1];
+    for (index, byte) in bytes.iter().take(31).enumerate() {
+        layout[index] = Some(*byte);
+    }
+    layout[39] = Some(bytes[39]);
+    for (offset, length) in [
+        (40, 2),
+        (43, 32),
+        (76, 32),
+        (109, 32),
+        (142, 32),
+        (175, 8),
+        (184, 32),
+        (217, 32),
+        (250, 8),
+        (259, 65),
+        (325, 32),
+        (358, 8),
+        (367, 8),
+    ] {
+        if bytes[offset] != length {
+            return Err(invalid("kagemusha.hardware_credential.id_preimage_layout"));
+        }
+        layout[offset] = Some(length);
+    }
+    Ok(layout)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode)]
@@ -1550,13 +2322,9 @@ struct MintLifecycleContextPreimageV1 {
 struct RedemptionIdPreimageV1 {
     lifecycle_binding_digest: [u8; 32],
     terminal_nullifier: [u8; 32],
-    sender_before_commitment: KagemushaPastaStateCommitmentV1,
-    sender_after_commitment: KagemushaPastaStateCommitmentV1,
     amount: u128,
     beneficiary: AccountId,
     redemption_commitment: [u8; 32],
-    committed_at_ms: u64,
-    hardware_transition_commitment: [u8; 32],
 }
 
 fn invalid(field: &'static str) -> KagemushaValidationErrorV1 {
@@ -1585,7 +2353,78 @@ fn digest_bytes(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-/// Derive the canonical digest bound to an encrypted Kagemusha credit.
+const fn kagemusha_operation_kind_tag_v1(operation: KagemushaOperationKindV1) -> u32 {
+    match operation {
+        KagemushaOperationKindV1::Bootstrap => 0,
+        KagemushaOperationKindV1::MintFold => 1,
+        KagemushaOperationKindV1::SendSplit => 2,
+        KagemushaOperationKindV1::ReceiveFold => 3,
+        KagemushaOperationKindV1::RedeemSplit => 4,
+        KagemushaOperationKindV1::Rotate => 5,
+    }
+}
+
+fn outbox_reservation_circuit_transcript_v1(reservation: KagemushaOutboxReservationV1) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(56);
+    bytes.extend_from_slice(&reservation.reservation_id);
+    bytes.extend_from_slice(
+        &kagemusha_operation_kind_tag_v1(reservation.operation_kind).to_le_bytes(),
+    );
+    bytes.extend_from_slice(&reservation.reserved_outbox_bytes.to_le_bytes());
+    bytes.extend_from_slice(&reservation.issued_at_ms.to_le_bytes());
+    bytes.extend_from_slice(&reservation.expires_at_ms.to_le_bytes());
+    bytes
+}
+
+fn commit_evidence_circuit_transcript_v1(evidence: KagemushaCommitEvidenceV1) -> [u8; 36] {
+    let (tag, commitment) = match evidence {
+        KagemushaCommitEvidenceV1::TrustedTime(value) => (0_u32, value.time_evidence_commitment),
+        KagemushaCommitEvidenceV1::MonotonicLease(value) => {
+            (1_u32, value.lease_evidence_commitment)
+        }
+    };
+    let mut bytes = [0_u8; 36];
+    bytes[..4].copy_from_slice(&tag.to_le_bytes());
+    bytes[4..].copy_from_slice(&commitment);
+    bytes
+}
+
+fn commit_certificate_id_circuit_transcript_v1(
+    certificate: &KagemushaCommitCertificateV1,
+) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(238);
+    bytes.extend_from_slice(&certificate.version.to_le_bytes());
+    bytes.extend_from_slice(&certificate.candidate_envelope_digest);
+    bytes.extend_from_slice(&certificate.lifecycle_binding_digest);
+    bytes.extend_from_slice(&certificate.transition_nullifier);
+    bytes.extend_from_slice(&certificate.outbox_reservation_commitment);
+    bytes.extend_from_slice(&commit_evidence_circuit_transcript_v1(
+        certificate.commit_evidence,
+    ));
+    bytes.extend_from_slice(&certificate.hardware_profile_id);
+    bytes.extend_from_slice(&certificate.policy_epoch.to_le_bytes());
+    bytes.extend_from_slice(&certificate.hardware_terminal_commitment);
+    bytes
+}
+
+fn commit_certificate_circuit_transcript_v1(certificate: &KagemushaCommitCertificateV1) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(270);
+    bytes.extend_from_slice(&certificate.version.to_le_bytes());
+    bytes.extend_from_slice(&certificate.certificate_id);
+    bytes.extend_from_slice(&certificate.candidate_envelope_digest);
+    bytes.extend_from_slice(&certificate.lifecycle_binding_digest);
+    bytes.extend_from_slice(&certificate.transition_nullifier);
+    bytes.extend_from_slice(&certificate.outbox_reservation_commitment);
+    bytes.extend_from_slice(&commit_evidence_circuit_transcript_v1(
+        certificate.commit_evidence,
+    ));
+    bytes.extend_from_slice(&certificate.hardware_profile_id);
+    bytes.extend_from_slice(&certificate.policy_epoch.to_le_bytes());
+    bytes.extend_from_slice(&certificate.hardware_terminal_commitment);
+    bytes
+}
+
+/// Derive the canonical digest bound to an encrypted KAGEMUSHA credit.
 ///
 /// This hash is a wire/codec operation. It does not encrypt, decrypt, or prove
 /// the opening and therefore is never sufficient for monetary admission.
@@ -1788,7 +2627,7 @@ where
     Ok(value)
 }
 
-/// Derive the stable reference to an Kagemusha device key.
+/// Derive the stable reference to an KAGEMUSHA device key.
 #[must_use]
 pub fn kagemusha_device_key_reference_v1(public_key: &KagemushaDevicePublicKeyV1) -> [u8; 32] {
     let mut hasher = Sha256::new();
@@ -1832,43 +2671,140 @@ pub fn kagemusha_liability_pool_id_v1(
     )
 }
 
-/// Derive an unlinkable payment credit identity from pre-encryption output bindings.
+/// Commit the private opening material before deriving its public peer credit ID.
 ///
-/// The transition nullifier is a private-state-derived circuit output. No
-/// predecessor/successor commitment, sequence, or stable sender lane appears
-/// in this preimage. `ciphertext_commitment` is sampled independently of the
-/// final credit ID and commits the credit-opening semantics. Construction is
-/// acyclic: sample the opening and commitment, derive this ID, then bind the ID
-/// into AEAD plaintext or associated data. The final lifecycle and recursive
-/// proof separately bind the exact ciphertext digest to this commitment and opening.
+/// This commitment deliberately excludes `credit_id`, so construction remains
+/// acyclic. The receiver circuit separately constrains the opened credit ID and
+/// amount to the proof-derived public values.
 ///
 /// # Errors
 ///
-/// Returns an error when the canonical identity preimage cannot be encoded.
-#[allow(clippy::too_many_arguments)]
+/// Returns an error for a reserved digest, key, opening, nonce, or zero amount.
+pub fn kagemusha_peer_credit_opening_commitment_v1(
+    request_digest: [u8; 32],
+    recipient_one_time_key: [u8; 32],
+    amount: u128,
+    credit_commitment_opening: [u8; 32],
+    recipient_binding_opening: [u8; 32],
+    recovery_nonce: [u8; 32],
+) -> Result<[u8; 32], KagemushaValidationErrorV1> {
+    for (field, value) in [
+        (
+            "kagemusha.peer_credit_opening.request_digest",
+            request_digest,
+        ),
+        (
+            "kagemusha.peer_credit_opening.recipient_one_time_key",
+            recipient_one_time_key,
+        ),
+        (
+            "kagemusha.peer_credit_opening.credit_commitment_opening",
+            credit_commitment_opening,
+        ),
+        (
+            "kagemusha.peer_credit_opening.recipient_binding_opening",
+            recipient_binding_opening,
+        ),
+        (
+            "kagemusha.peer_credit_opening.recovery_nonce",
+            recovery_nonce,
+        ),
+    ] {
+        require_nonzero(field, value)?;
+    }
+    if amount == 0 {
+        return Err(invalid("kagemusha.peer_credit_opening.amount"));
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(KAGEMUSHA_PEER_CREDIT_OPENING_COMMITMENT_DOMAIN_V1);
+    hasher.update([0]);
+    hasher.update(KAGEMUSHA_WIRE_VERSION_V1.to_le_bytes());
+    hasher.update(request_digest);
+    hasher.update(recipient_one_time_key);
+    hasher.update(amount.to_le_bytes());
+    hasher.update(credit_commitment_opening);
+    hasher.update(recipient_binding_opening);
+    hasher.update(recovery_nonce);
+    Ok(hasher.finalize().into())
+}
+
+/// Derive a request-bound peer credit identity.
+///
+/// Hashes the credit-ID domain, a zero separator, the transition nullifier, and
+/// exact signed request digest. Each distinct transition nullifier therefore
+/// identifies one credit even when many senders satisfy the same request.
+///
+/// # Errors
+///
+/// Returns an error for a reserved transition nullifier or request digest.
 pub fn kagemusha_credit_id_v1(
     transition_nullifier: [u8; 32],
     request_digest: [u8; 32],
-    sender_before_commitment: KagemushaPastaStateCommitmentV1,
-    sender_after_commitment: KagemushaPastaStateCommitmentV1,
-    recipient_lane_id: [u8; 32],
-    recipient_encryption_key: [u8; 32],
-    amount: u128,
+) -> Result<[u8; 32], KagemushaValidationErrorV1> {
+    require_nonzero(
+        "kagemusha.credit_id.transition_nullifier",
+        transition_nullifier,
+    )?;
+    require_nonzero("kagemusha.credit_id.request_digest", request_digest)?;
+    let mut hasher = Sha256::new();
+    hasher.update(KAGEMUSHA_CREDIT_ID_DOMAIN_V1);
+    hasher.update([0]);
+    hasher.update(transition_nullifier);
+    hasher.update(request_digest);
+    Ok(hasher.finalize().into())
+}
+
+/// Derive the request-bound transfer commitment before encryption and proving.
+///
+/// The semantic transcript binds the exact signed request, sender predecessor
+/// and successor, transition nullifier, and the
+/// ID-independent ciphertext-opening commitment.
+/// This never hashes ciphertext bytes, certificate bytes, or randomized proofs.
+///
+/// # Errors
+///
+/// Returns an error for an invalid request or reserved output field.
+pub fn kagemusha_prepared_transfer_digest_v1(
+    request: &KagemushaPaymentRequestV1,
+    sender_before_commitment: [u8; 32],
+    sender_after_commitment: [u8; 32],
+    transition_nullifier: [u8; 32],
     ciphertext_commitment: [u8; 32],
 ) -> Result<[u8; 32], KagemushaValidationErrorV1> {
-    digest_encoded(
-        CREDIT_ID_DOMAIN,
-        &CreditIdPreimageV1 {
-            transition_nullifier,
-            request_digest,
+    request.validate_shape()?;
+    for (field, value) in [
+        (
+            "kagemusha.prepared_transfer.sender_before",
             sender_before_commitment,
+        ),
+        (
+            "kagemusha.prepared_transfer.sender_after",
             sender_after_commitment,
-            recipient_lane_id,
-            recipient_encryption_key,
-            amount,
+        ),
+        (
+            "kagemusha.prepared_transfer.transition_nullifier",
+            transition_nullifier,
+        ),
+        (
+            "kagemusha.prepared_transfer.ciphertext_commitment",
             ciphertext_commitment,
-        },
-    )
+        ),
+    ] {
+        require_nonzero(field, value)?;
+    }
+    if sender_before_commitment == sender_after_commitment {
+        return Err(invalid("kagemusha.prepared_transfer.state_commitments"));
+    }
+    let mut transcript = Vec::with_capacity(210);
+    transcript.extend_from_slice(&KAGEMUSHA_WIRE_VERSION_V1.to_le_bytes());
+    transcript.extend_from_slice(&request.canonical_digest()?);
+    transcript.extend_from_slice(&request.amount.to_le_bytes());
+    transcript.extend_from_slice(&sender_before_commitment);
+    transcript.extend_from_slice(&sender_after_commitment);
+    transcript.extend_from_slice(&transition_nullifier);
+    transcript.extend_from_slice(&request.recipient_encryption_key);
+    transcript.extend_from_slice(&ciphertext_commitment);
+    Ok(digest_bytes(PREPARED_TRANSFER_DIGEST_DOMAIN, &transcript))
 }
 
 /// Return the exact canonical plaintext length for every V1 credit opening.
@@ -1969,80 +2905,8 @@ impl KagemushaCreditOpeningV1 {
     }
 }
 
-fn peer_credit_lifecycle_context_digest_v1(
-    lifecycle: &KagemushaLifecycleBindingV1,
-) -> Result<[u8; 32], KagemushaValidationErrorV1> {
-    require_valid_header(
-        lifecycle.version,
-        &lifecycle.network_id,
-        lifecycle.scale,
-        None,
-        "kagemusha.peer_credit_context.lifecycle_header",
-    )?;
-    lifecycle
-        .asset_incarnation
-        .validate()
-        .map_err(|_| invalid("kagemusha.peer_credit_context.asset_incarnation"))?;
-    for (field, value) in [
-        ("kagemusha.peer_credit_context.suite_id", lifecycle.suite_id),
-        (
-            "kagemusha.peer_credit_context.vk_digest",
-            lifecycle.vk_digest,
-        ),
-        (
-            "kagemusha.peer_credit_context.release_id",
-            lifecycle.release_id,
-        ),
-        (
-            "kagemusha.peer_credit_context.liability_pool_id",
-            lifecycle.liability_pool_id,
-        ),
-        (
-            "kagemusha.peer_credit_context.hardware_profile_id",
-            lifecycle.hardware_profile_id,
-        ),
-        (
-            "kagemusha.peer_credit_context.request_id",
-            lifecycle.request_id,
-        ),
-    ] {
-        require_nonzero(field, value)?;
-    }
-    if lifecycle.protocol_version != KAGEMUSHA_WIRE_VERSION_V1
-        || lifecycle.policy_epoch == 0
-        || lifecycle.operation_kind != KagemushaOperationKindV1::SendSplit
-        || lifecycle.liability_pool_id
-            != kagemusha_liability_pool_id_v1(
-                &lifecycle.network_id,
-                &lifecycle.asset,
-                lifecycle.asset_incarnation,
-            )?
-    {
-        return Err(invalid("kagemusha.peer_credit_context.lifecycle"));
-    }
-    digest_encoded(
-        PEER_CREDIT_LIFECYCLE_CONTEXT_DIGEST_DOMAIN,
-        &PeerCreditLifecycleContextPreimageV1 {
-            version: lifecycle.version,
-            network_id: lifecycle.network_id,
-            protocol_version: lifecycle.protocol_version,
-            suite_id: lifecycle.suite_id,
-            vk_digest: lifecycle.vk_digest,
-            release_id: lifecycle.release_id,
-            asset: lifecycle.asset.clone(),
-            asset_incarnation: lifecycle.asset_incarnation,
-            scale: lifecycle.scale,
-            liability_pool_id: lifecycle.liability_pool_id,
-            hardware_profile_id: lifecycle.hardware_profile_id,
-            policy_epoch: lifecycle.policy_epoch,
-            operation_kind: lifecycle.operation_kind,
-            request_id: lifecycle.request_id,
-        },
-    )
-}
-
 impl KagemushaPeerCreditContextV1 {
-    /// Validate the exact pre-encryption request, state, receiver, and lifecycle projection.
+    /// Validate the exact pre-encryption request and sender transition projection.
     ///
     /// # Errors
     ///
@@ -2051,32 +2915,28 @@ impl KagemushaPeerCreditContextV1 {
         if self.version != KAGEMUSHA_WIRE_VERSION_V1 {
             return Err(invalid("kagemusha.peer_credit_context.version"));
         }
+        if self.amount == 0 || self.sender_before_commitment == self.sender_after_commitment {
+            return Err(invalid("kagemusha.peer_credit_context.amount_or_state"));
+        }
         for (field, value) in [
             (
                 "kagemusha.peer_credit_context.request_digest",
                 self.request_digest,
             ),
             (
-                "kagemusha.peer_credit_context.lifecycle_context_digest",
-                self.lifecycle_context_digest,
+                "kagemusha.peer_credit_context.sender_before",
+                self.sender_before_commitment,
             ),
             (
-                "kagemusha.peer_credit_context.recipient_lane_id",
-                self.recipient_lane_id,
+                "kagemusha.peer_credit_context.sender_after",
+                self.sender_after_commitment,
             ),
             (
-                "kagemusha.peer_credit_context.hardware_transition_commitment",
-                self.hardware_transition_commitment,
+                "kagemusha.peer_credit_context.prepared_transfer_digest",
+                self.prepared_transfer_digest,
             ),
         ] {
             require_nonzero(field, value)?;
-        }
-        if self.sender_before_commitment.is_zero()
-            || self.sender_after_commitment.is_zero()
-            || self.sender_before_commitment == self.sender_after_commitment
-            || self.committed_at_ms == 0
-        {
-            return Err(invalid("kagemusha.peer_credit_context.transition"));
         }
         require_valid_x25519_public_key(
             "kagemusha.peer_credit_context.recipient_encryption_key",
@@ -2165,24 +3025,24 @@ impl KagemushaEncryptedCreditAadV1 {
     ///
     /// The peer transition field is the ID-independent credit-opening
     /// commitment. The surrounding context binds the complete exact request,
-    /// sender transition, receiver lane/key, trusted commit time, and all
-    /// lifecycle fields available before credit ID and ciphertext derivation.
+    /// sender state transition and all lifecycle fields available before credit
+    /// ID and ciphertext derivation.
     ///
     /// # Errors
     ///
     /// Returns an error for any invalid or substituted peer context.
     pub fn for_peer(
-        statement: &KagemushaTransferStatementV1,
+        output: &KagemushaPaymentOutputV1,
         request: &KagemushaPaymentRequestV1,
     ) -> Result<Self, KagemushaValidationErrorV1> {
-        let context = statement.peer_credit_context_against(request)?;
+        let context = output.peer_credit_context_against(request)?;
         Ok(Self {
             version: KAGEMUSHA_WIRE_VERSION_V1,
             purpose: KagemushaEncryptedCreditPurposeV1::Peer,
             context_digest: context.canonical_digest()?,
-            issuance_or_transition_commitment: statement.ciphertext_commitment,
-            credit_id: statement.lifecycle.credit_id,
-            amount: statement.amount,
+            issuance_or_transition_commitment: output.ciphertext_commitment,
+            credit_id: output.credit_id,
+            amount: request.amount,
         })
     }
 }
@@ -2309,6 +3169,75 @@ pub fn kagemusha_mint_credit_opening_commitment_v1(
     recipient_one_time_key: [u8; KAGEMUSHA_X25519_PUBLIC_KEY_BYTES_V1],
     credit_commitment_opening: [u8; 32],
 ) -> Result<[u8; 32], KagemushaValidationErrorV1> {
+    digest_encoded(
+        MINT_CREDIT_OPENING_COMMITMENT_DOMAIN,
+        &mint_credit_opening_commitment_preimage_v1(
+            network_id,
+            asset,
+            asset_incarnation,
+            scale,
+            liability_pool_id,
+            amount,
+            recipient,
+            recipient_one_time_key,
+            credit_commitment_opening,
+        )?,
+    )
+}
+
+/// Return the exact canonical bytes hashed by a mint-opening commitment.
+///
+/// This uses the same validated typed preimage as
+/// [`kagemusha_mint_credit_opening_commitment_v1`], including canonical typed
+/// account and asset identity digests. Its header, padding, nested incarnation
+/// prefix, and CRC64 are retained unchanged; this is not a new wire codec.
+///
+/// # Errors
+///
+/// Returns an error for invalid inputs, encoding failure, or changed fixed layout.
+#[allow(clippy::too_many_arguments)]
+pub fn kagemusha_mint_credit_opening_commitment_preimage_v1(
+    network_id: &NetworkId,
+    asset: &AssetDefinitionId,
+    asset_incarnation: AxtAssetIncarnationV1,
+    scale: u32,
+    liability_pool_id: [u8; 32],
+    amount: u128,
+    recipient: &AccountId,
+    recipient_one_time_key: [u8; KAGEMUSHA_X25519_PUBLIC_KEY_BYTES_V1],
+    credit_commitment_opening: [u8; 32],
+) -> Result<
+    [u8; KAGEMUSHA_MINT_CREDIT_OPENING_COMMITMENT_PREIMAGE_BYTES_V1],
+    KagemushaValidationErrorV1,
+> {
+    fixed_canonical_preimage_bytes_v1(
+        &mint_credit_opening_commitment_preimage_v1(
+            network_id,
+            asset,
+            asset_incarnation,
+            scale,
+            liability_pool_id,
+            amount,
+            recipient,
+            recipient_one_time_key,
+            credit_commitment_opening,
+        )?,
+        "kagemusha.mint_credit_opening_commitment.preimage_layout",
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn mint_credit_opening_commitment_preimage_v1(
+    network_id: &NetworkId,
+    asset: &AssetDefinitionId,
+    asset_incarnation: AxtAssetIncarnationV1,
+    scale: u32,
+    liability_pool_id: [u8; 32],
+    amount: u128,
+    recipient: &AccountId,
+    recipient_one_time_key: [u8; KAGEMUSHA_X25519_PUBLIC_KEY_BYTES_V1],
+    credit_commitment_opening: [u8; 32],
+) -> Result<MintCreditOpeningCommitmentPreimageV1, KagemushaValidationErrorV1> {
     require_valid_header(
         KAGEMUSHA_WIRE_VERSION_V1,
         network_id,
@@ -2336,21 +3265,18 @@ pub fn kagemusha_mint_credit_opening_commitment_v1(
             "kagemusha.mint_credit_opening_commitment.liability_pool_id",
         ));
     }
-    digest_encoded(
-        MINT_CREDIT_OPENING_COMMITMENT_DOMAIN,
-        &MintCreditOpeningCommitmentPreimageV1 {
-            version: KAGEMUSHA_WIRE_VERSION_V1,
-            network_id: *network_id.as_bytes(),
-            asset_identity_digest: kagemusha_asset_identity_digest_v1(asset)?,
-            asset_incarnation,
-            scale,
-            liability_pool_id,
-            amount,
-            recipient_account_digest: digest_encoded(ACCOUNT_IDENTITY_DIGEST_DOMAIN, recipient)?,
-            recipient_one_time_key,
-            credit_commitment_opening,
-        },
-    )
+    Ok(MintCreditOpeningCommitmentPreimageV1 {
+        version: KAGEMUSHA_WIRE_VERSION_V1,
+        network_id: *network_id.as_bytes(),
+        asset_identity_digest: kagemusha_asset_identity_digest_v1(asset)?,
+        asset_incarnation,
+        scale,
+        liability_pool_id,
+        amount,
+        recipient_account_digest: digest_encoded(ACCOUNT_IDENTITY_DIGEST_DOMAIN, recipient)?,
+        recipient_one_time_key,
+        credit_commitment_opening,
+    })
 }
 
 /// Derive the exact randomized recipient-credential commitment for mint authorization.
@@ -2364,6 +3290,47 @@ pub fn kagemusha_recipient_credential_commitment_v1(
     hardware_credential_id: [u8; 32],
     recipient_binding_opening: [u8; 32],
 ) -> Result<[u8; 32], KagemushaValidationErrorV1> {
+    digest_encoded(
+        RECIPIENT_CREDENTIAL_COMMITMENT_DOMAIN,
+        &recipient_credential_commitment_preimage_v1(
+            operation_id,
+            hardware_credential_id,
+            recipient_binding_opening,
+        )?,
+    )
+}
+
+/// Return the exact canonical bytes hashed by the randomized recipient commitment.
+///
+/// The authoritative private preimage, input validation, and digest transcript
+/// are unchanged. These bytes retain all header, field-prefix, and CRC64 bytes.
+///
+/// # Errors
+///
+/// Returns an error for reserved inputs, encoding failure, or changed fixed layout.
+pub fn kagemusha_recipient_credential_commitment_preimage_v1(
+    operation_id: [u8; 32],
+    hardware_credential_id: [u8; 32],
+    recipient_binding_opening: [u8; 32],
+) -> Result<
+    [u8; KAGEMUSHA_RECIPIENT_CREDENTIAL_COMMITMENT_PREIMAGE_BYTES_V1],
+    KagemushaValidationErrorV1,
+> {
+    fixed_canonical_preimage_bytes_v1(
+        &recipient_credential_commitment_preimage_v1(
+            operation_id,
+            hardware_credential_id,
+            recipient_binding_opening,
+        )?,
+        "kagemusha.recipient_credential_commitment.preimage_layout",
+    )
+}
+
+fn recipient_credential_commitment_preimage_v1(
+    operation_id: [u8; 32],
+    hardware_credential_id: [u8; 32],
+    recipient_binding_opening: [u8; 32],
+) -> Result<RecipientCredentialCommitmentPreimageV1, KagemushaValidationErrorV1> {
     for (field, value) in [
         (
             "kagemusha.recipient_credential_commitment.operation_id",
@@ -2380,14 +3347,11 @@ pub fn kagemusha_recipient_credential_commitment_v1(
     ] {
         require_nonzero(field, value)?;
     }
-    digest_encoded(
-        RECIPIENT_CREDENTIAL_COMMITMENT_DOMAIN,
-        &RecipientCredentialCommitmentPreimageV1 {
-            operation_id,
-            hardware_credential_id,
-            recipient_binding_opening,
-        },
-    )
+    Ok(RecipientCredentialCommitmentPreimageV1 {
+        operation_id,
+        hardware_credential_id,
+        recipient_binding_opening,
+    })
 }
 
 /// Derive the deterministic durable-inbox receipt commitment.
@@ -2463,6 +3427,26 @@ impl KagemushaHardwareProfileV1 {
     /// Returns an error when canonical encoding fails.
     pub fn expected_hardware_profile_id(&self) -> Result<[u8; 32], KagemushaValidationErrorV1> {
         digest_encoded(HARDWARE_PROFILE_DIGEST_DOMAIN, &self.id_preimage())
+    }
+
+    /// Return the exact unchanged canonical Norito profile-ID preimage.
+    ///
+    /// The 40-byte header and fifteen compact-length-prefixed fields are retained,
+    /// including the u32-LE platform discriminant, 65-byte governance key, and CRC64.
+    /// This encodes the unsigned identity body without validating or authorizing
+    /// the profile, so it can also be used before sealing its profile ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for encoding failure or an unexpected fixed V1 layout.
+    pub fn canonical_id_preimage_bytes(
+        &self,
+    ) -> Result<[u8; KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_BYTES_V1], KagemushaValidationErrorV1>
+    {
+        fixed_canonical_preimage_bytes_v1(
+            &self.id_preimage(),
+            "kagemusha.hardware_profile.id_preimage_layout",
+        )
     }
 
     /// Populate the canonical profile identity.
@@ -2567,7 +3551,34 @@ impl KagemushaHardwareCredentialV1 {
     ///
     /// Returns an error when canonical encoding fails.
     pub fn expected_credential_id(&self) -> Result<[u8; 32], KagemushaValidationErrorV1> {
-        digest_encoded(HARDWARE_CREDENTIAL_ID_DOMAIN, &self.id_preimage())
+        Ok(digest_bytes(
+            HARDWARE_CREDENTIAL_ID_DOMAIN,
+            &self.canonical_id_preimage_bytes()?,
+        ))
+    }
+
+    /// Return the exact unchanged canonical Norito credential-ID preimage.
+    ///
+    /// This is not a new wire codec. The 40-byte Norito header is followed by
+    /// thirteen compact-length-prefixed fixed-width fields, with payload widths
+    /// 2,32,32,32,32,8,32,32,8,65,32,8,8. The lane occupies bytes 185..217.
+    /// The identity hashes the credential-ID domain, zero separator, u64-LE
+    /// byte length, and these complete bytes, including the canonical header.
+    /// A proof opening this preimage must bind its digest to the authenticated
+    /// credential ID and the lane at this exact offset, not search for a value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an encoding failure or unexpected V1 codec layout.
+    pub fn canonical_id_preimage_bytes(&self) -> Result<Vec<u8>, KagemushaValidationErrorV1> {
+        let bytes = norito::encode_canonical(&self.id_preimage())?;
+        let offset = KAGEMUSHA_HARDWARE_CREDENTIAL_ID_LANE_OFFSET_V1;
+        if bytes.len() != KAGEMUSHA_HARDWARE_CREDENTIAL_ID_PREIMAGE_BYTES_V1
+            || bytes.get(offset..offset + 32) != Some(self.lane_commitment.as_slice())
+        {
+            return Err(invalid("kagemusha.hardware_credential.id_preimage_layout"));
+        }
+        Ok(bytes)
     }
 
     /// Populate the canonical credential identity before governance signs it.
@@ -2680,6 +3691,44 @@ impl KagemushaHardwareCredentialV1 {
     }
 }
 
+/// Return the complete durable outbox reservation for a terminal operation.
+///
+/// The budget includes the candidate, sealed recovery material, certificate,
+/// post-commit proof and final envelope; non-terminal operations have no outbox.
+#[must_use]
+pub const fn kagemusha_outbox_min_reserved_bytes_v1(
+    operation_kind: KagemushaOperationKindV1,
+) -> Option<u32> {
+    match operation_kind {
+        KagemushaOperationKindV1::SendSplit => Some(KAGEMUSHA_PAYMENT_OUTBOX_MIN_BYTES_V1),
+        KagemushaOperationKindV1::RedeemSplit => Some(KAGEMUSHA_REDEMPTION_OUTBOX_MIN_BYTES_V1),
+        _ => None,
+    }
+}
+
+impl KagemushaCommitEvidenceV1 {
+    /// Validate the hiding commitment for the selected qualified deadline source.
+    ///
+    /// This is a structural check only. A release-pinned proof must establish
+    /// trusted time or monotonic-lease consumption before the commit deadline.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a reserved zero evidence commitment.
+    pub fn validate(&self) -> Result<(), KagemushaValidationErrorV1> {
+        match self {
+            Self::TrustedTime(evidence) => require_nonzero(
+                "kagemusha.commit_evidence.time_evidence_commitment",
+                evidence.time_evidence_commitment,
+            ),
+            Self::MonotonicLease(evidence) => require_nonzero(
+                "kagemusha.commit_evidence.lease_evidence_commitment",
+                evidence.lease_evidence_commitment,
+            ),
+        }
+    }
+}
+
 impl KagemushaLifecycleBindingV1 {
     /// Validate the complete released-transition lifecycle context.
     ///
@@ -2729,17 +3778,20 @@ impl KagemushaLifecycleBindingV1 {
         match self.operation_kind {
             KagemushaOperationKindV1::SendSplit
                 if self.request_id != [0; 32]
+                    && self.receiver_lane_commitment != [0; 32]
                     && credit_fields.iter().all(|value| *value != [0; 32]) => {}
             KagemushaOperationKindV1::SendSplit => {
                 return Err(invalid("kagemusha.lifecycle.payment_binding"));
             }
             KagemushaOperationKindV1::MintFold
                 if self.request_id == [0; 32]
+                    && self.receiver_lane_commitment == [0; 32]
                     && credit_fields.iter().all(|value| *value != [0; 32]) => {}
             KagemushaOperationKindV1::MintFold => {
                 return Err(invalid("kagemusha.lifecycle.mint_binding"));
             }
-            _ if core::iter::once(&self.request_id)
+            _ if [self.request_id, self.receiver_lane_commitment]
+                .iter()
                 .chain(credit_fields.iter())
                 .all(|value| *value == [0; 32]) => {}
             _ => return Err(invalid("kagemusha.lifecycle.non_payment_binding")),
@@ -2755,6 +3807,374 @@ impl KagemushaLifecycleBindingV1 {
     pub fn canonical_digest(&self) -> Result<[u8; 32], KagemushaValidationErrorV1> {
         self.validate()?;
         digest_encoded(LIFECYCLE_BINDING_DIGEST_DOMAIN, self)
+    }
+}
+
+impl KagemushaOutboxReservationV1 {
+    /// Validate operation, capacity, identity, and lifetime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a non-terminal operation, insufficient capacity,
+    /// reserved identity, or empty lifetime.
+    pub fn validate(self) -> Result<(), KagemushaValidationErrorV1> {
+        let minimum = kagemusha_outbox_min_reserved_bytes_v1(self.operation_kind)
+            .ok_or_else(|| invalid("kagemusha.outbox_reservation.operation_kind"))?;
+        if self.reservation_id == [0; 32]
+            || self.reserved_outbox_bytes < minimum
+            || self.issued_at_ms >= self.expires_at_ms
+        {
+            return Err(invalid("kagemusha.outbox_reservation"));
+        }
+        Ok(())
+    }
+
+    /// Return the hiding commitment proven by the final terminal proof.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when validation fails.
+    pub fn canonical_commitment(self) -> Result<[u8; 32], KagemushaValidationErrorV1> {
+        self.validate()?;
+        Ok(digest_bytes(
+            OUTBOX_RESERVATION_COMMITMENT_DOMAIN,
+            &outbox_reservation_circuit_transcript_v1(self),
+        ))
+    }
+}
+
+impl KagemushaHardwareTerminalBodyV1 {
+    /// Return the hiding commitment used by the terminal certificate.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a reserved field, unsupported version, invalid
+    /// commit evidence, or canonical encoding failure.
+    pub fn canonical_commitment(&self) -> Result<[u8; 32], KagemushaValidationErrorV1> {
+        if self.version != KAGEMUSHA_WIRE_VERSION_V1 || self.policy_epoch == 0 {
+            return Err(invalid("kagemusha.hardware_terminal_body.context"));
+        }
+        self.commit_evidence.validate()?;
+        for (field, value) in [
+            (
+                "kagemusha.hardware_terminal_body.candidate_envelope_digest",
+                self.candidate_envelope_digest,
+            ),
+            (
+                "kagemusha.hardware_terminal_body.lifecycle_binding_digest",
+                self.lifecycle_binding_digest,
+            ),
+            (
+                "kagemusha.hardware_terminal_body.transition_nullifier",
+                self.transition_nullifier,
+            ),
+            (
+                "kagemusha.hardware_terminal_body.outbox_reservation_commitment",
+                self.outbox_reservation_commitment,
+            ),
+            (
+                "kagemusha.hardware_terminal_body.hardware_profile_id",
+                self.hardware_profile_id,
+            ),
+            (
+                "kagemusha.hardware_terminal_body.private_successor_commitment",
+                self.private_successor_commitment,
+            ),
+            (
+                "kagemusha.hardware_terminal_body.private_journal_commitment",
+                self.private_journal_commitment,
+            ),
+            (
+                "kagemusha.hardware_terminal_body.private_recovery_commitment",
+                self.private_recovery_commitment,
+            ),
+        ] {
+            require_nonzero(field, value)?;
+        }
+        digest_encoded(HARDWARE_TERMINAL_BODY_COMMITMENT_DOMAIN, self)
+    }
+}
+
+impl KagemushaCommitCertificateV1 {
+    /// Validate public shape and self-identity without authorizing hardware state.
+    ///
+    /// The native proof must bind the complete sender lifecycle and authenticate
+    /// the terminal commitment against a qualified profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed evidence, identity, reserved fields or size.
+    pub fn validate_shape(&self) -> Result<(), KagemushaValidationErrorV1> {
+        self.commit_evidence.validate()?;
+        if self.version != KAGEMUSHA_WIRE_VERSION_V1
+            || self.policy_epoch == 0
+            || [
+                self.candidate_envelope_digest,
+                self.lifecycle_binding_digest,
+                self.transition_nullifier,
+                self.outbox_reservation_commitment,
+                self.hardware_profile_id,
+                self.hardware_terminal_commitment,
+            ]
+            .contains(&[0; 32])
+            || self.certificate_id != self.expected_certificate_id()?
+        {
+            return Err(invalid("kagemusha.commit_certificate.shape"));
+        }
+        require_encoded_size(self, KAGEMUSHA_COMMIT_CERTIFICATE_MAX_BYTES_V1)?;
+        Ok(())
+    }
+
+    /// Digest the exact public certificate transcript after structural validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed certificate shape or self-identity.
+    pub fn canonical_digest(&self) -> Result<[u8; 32], KagemushaValidationErrorV1> {
+        self.validate_shape()?;
+        Ok(digest_bytes(
+            COMMIT_CERTIFICATE_DIGEST_DOMAIN,
+            &commit_certificate_circuit_transcript_v1(self),
+        ))
+    }
+    /// Compute the terminal certificate identity without self-reference.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error only if its fixed transcript cannot be constructed.
+    pub fn expected_certificate_id(&self) -> Result<[u8; 32], KagemushaValidationErrorV1> {
+        Ok(digest_bytes(
+            COMMIT_CERTIFICATE_ID_DOMAIN,
+            &commit_certificate_id_circuit_transcript_v1(self),
+        ))
+    }
+
+    /// Populate the canonical certificate identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if identity derivation fails.
+    pub fn seal_certificate_id(mut self) -> Result<Self, KagemushaValidationErrorV1> {
+        self.certificate_id = self.expected_certificate_id()?;
+        Ok(self)
+    }
+
+    /// Bind a self-free terminal body and then derive the certificate identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the body is invalid or differs from the public certificate fields.
+    pub fn seal_with_terminal_body(
+        mut self,
+        body: &KagemushaHardwareTerminalBodyV1,
+    ) -> Result<Self, KagemushaValidationErrorV1> {
+        if body.version != self.version
+            || body.candidate_envelope_digest != self.candidate_envelope_digest
+            || body.lifecycle_binding_digest != self.lifecycle_binding_digest
+            || body.transition_nullifier != self.transition_nullifier
+            || body.outbox_reservation_commitment != self.outbox_reservation_commitment
+            || body.commit_evidence != self.commit_evidence
+            || body.hardware_profile_id != self.hardware_profile_id
+            || body.policy_epoch != self.policy_epoch
+        {
+            return Err(invalid("kagemusha.hardware_terminal_body.binding"));
+        }
+        self.hardware_terminal_commitment = body.canonical_commitment()?;
+        self.seal_certificate_id()
+    }
+
+    /// Validate this recoverable certificate against the exact lifecycle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a substituted lifecycle, evidence, nullifier,
+    /// terminal body, certificate identity, or size.
+    pub fn validate_against(
+        &self,
+        lifecycle: &KagemushaLifecycleBindingV1,
+        expected_evidence: KagemushaCommitEvidenceV1,
+        expected_nullifier: [u8; 32],
+    ) -> Result<(), KagemushaValidationErrorV1> {
+        lifecycle.validate()?;
+        self.commit_evidence.validate()?;
+        if self.version != KAGEMUSHA_WIRE_VERSION_V1
+            || self.candidate_envelope_digest == [0; 32]
+            || self.lifecycle_binding_digest != lifecycle.canonical_digest()?
+            || self.transition_nullifier != expected_nullifier
+            || self.transition_nullifier == [0; 32]
+            || self.outbox_reservation_commitment == [0; 32]
+            || self.commit_evidence != expected_evidence
+            || self.hardware_profile_id != lifecycle.hardware_profile_id
+            || self.policy_epoch != lifecycle.policy_epoch
+            || self.hardware_terminal_commitment == [0; 32]
+            || self.certificate_id != self.expected_certificate_id()?
+        {
+            return Err(invalid("kagemusha.commit_certificate.binding"));
+        }
+        require_encoded_size(self, KAGEMUSHA_COMMIT_CERTIFICATE_MAX_BYTES_V1)?;
+        Ok(())
+    }
+
+    /// Return the fixed-width certificate digest constrained by both final-proof parities.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid lifecycle, evidence, nullifier, or certificate binding.
+    pub fn canonical_digest_against(
+        &self,
+        lifecycle: &KagemushaLifecycleBindingV1,
+        expected_evidence: KagemushaCommitEvidenceV1,
+        expected_nullifier: [u8; 32],
+    ) -> Result<[u8; 32], KagemushaValidationErrorV1> {
+        self.validate_against(lifecycle, expected_evidence, expected_nullifier)?;
+        Ok(digest_bytes(
+            COMMIT_CERTIFICATE_DIGEST_DOMAIN,
+            &commit_certificate_circuit_transcript_v1(self),
+        ))
+    }
+
+    /// Decode and validate one exact bounded terminal certificate.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed, oversized, non-canonical, or substituted input.
+    pub fn decode_canonical_exact_against(
+        bytes: &[u8],
+        lifecycle: &KagemushaLifecycleBindingV1,
+        expected_evidence: KagemushaCommitEvidenceV1,
+        expected_nullifier: [u8; 32],
+    ) -> Result<Self, KagemushaValidationErrorV1> {
+        let certificate: Self =
+            decode_bounded_canonical(bytes, KAGEMUSHA_COMMIT_CERTIFICATE_MAX_BYTES_V1)?;
+        certificate.validate_against(lifecycle, expected_evidence, expected_nullifier)?;
+        Ok(certificate)
+    }
+}
+
+impl KagemushaPaymentProofV1 {
+    /// Validate bounded proof material and exact terminal bindings.
+    ///
+    /// Cryptographic verification remains the native core's responsibility;
+    /// this method enforces the closed wire shape and public digest equality.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an empty, oversized, aliased, or substituted field.
+    pub fn validate_shape_against(
+        &self,
+        semantic_digest: [u8; 32],
+        candidate_envelope_digest: [u8; 32],
+        commit_certificate_digest: [u8; 32],
+    ) -> Result<(), KagemushaValidationErrorV1> {
+        if self.version != KAGEMUSHA_WIRE_VERSION_V1
+            || self.eq_protocol_digest == [0; 32]
+            || self.ep_protocol_digest == [0; 32]
+            || self.eq_protocol_digest == self.ep_protocol_digest
+            || self.semantic_digest != semantic_digest
+            || self.candidate_envelope_digest != candidate_envelope_digest
+            || self.commit_certificate_digest != commit_certificate_digest
+            || self.eq_deferred_audit == [0; 32]
+            || self.ep_deferred_audit == [0; 32]
+            || self.eq_deferred_audit == self.ep_deferred_audit
+            || self.eq_proof.is_empty()
+            || self.ep_proof.is_empty()
+            || self.eq_proof.len() > KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1
+            || self.ep_proof.len() > KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1
+            || self.eq_proof.len() + self.ep_proof.len() > KAGEMUSHA_CURRENT_PROOFS_MAX_BYTES_V1
+            || self.eq_history.len() != KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1
+            || self.ep_history.len() != KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1
+            || self.eq_history.iter().all(|byte| *byte == 0)
+            || self.ep_history.iter().all(|byte| *byte == 0)
+            || self.eq_history == self.ep_history
+        {
+            return Err(invalid("kagemusha.payment_proof.binding"));
+        }
+        require_encoded_size(self, KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1)?;
+        Ok(())
+    }
+
+    /// Decode and validate one exact bounded payment proof.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed, oversized, non-canonical, or substituted input.
+    pub fn decode_canonical_exact_against(
+        bytes: &[u8],
+        semantic_digest: [u8; 32],
+        candidate_envelope_digest: [u8; 32],
+        commit_certificate_digest: [u8; 32],
+    ) -> Result<Self, KagemushaValidationErrorV1> {
+        let proof: Self = decode_bounded_canonical(bytes, KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1)?;
+        proof.validate_shape_against(
+            semantic_digest,
+            candidate_envelope_digest,
+            commit_certificate_digest,
+        )?;
+        Ok(proof)
+    }
+}
+
+impl KagemushaRedemptionProofV1 {
+    /// Validate bounded proof material and exact terminal bindings.
+    ///
+    /// Cryptographic verification remains the native core's responsibility;
+    /// this method enforces the closed wire shape and public digest equality.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an empty, oversized, aliased, or substituted field.
+    pub fn validate_shape_against(
+        &self,
+        semantic_digest: [u8; 32],
+        candidate_envelope_digest: [u8; 32],
+        commit_certificate_digest: [u8; 32],
+    ) -> Result<(), KagemushaValidationErrorV1> {
+        if self.version != KAGEMUSHA_WIRE_VERSION_V1
+            || self.eq_protocol_digest == [0; 32]
+            || self.ep_protocol_digest == [0; 32]
+            || self.eq_protocol_digest == self.ep_protocol_digest
+            || self.semantic_digest != semantic_digest
+            || self.candidate_envelope_digest != candidate_envelope_digest
+            || self.commit_certificate_digest != commit_certificate_digest
+            || self.eq_deferred_audit == [0; 32]
+            || self.ep_deferred_audit == [0; 32]
+            || self.eq_deferred_audit == self.ep_deferred_audit
+            || self.eq_proof.is_empty()
+            || self.ep_proof.is_empty()
+            || self.eq_proof.len() > KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1
+            || self.ep_proof.len() > KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1
+            || self.eq_proof.len() + self.ep_proof.len() > KAGEMUSHA_CURRENT_PROOFS_MAX_BYTES_V1
+            || self.eq_history.len() != KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1
+            || self.ep_history.len() != KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1
+            || self.eq_history.iter().all(|byte| *byte == 0)
+            || self.ep_history.iter().all(|byte| *byte == 0)
+            || self.eq_history == self.ep_history
+        {
+            return Err(invalid("kagemusha.redemption_proof.binding"));
+        }
+        require_encoded_size(self, KAGEMUSHA_REDEMPTION_PROOF_MAX_BYTES_V1 as usize)?;
+        Ok(())
+    }
+
+    /// Decode and validate one exact bounded redemption proof.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed, oversized, non-canonical, or substituted input.
+    pub fn decode_canonical_exact_against(
+        bytes: &[u8],
+        semantic_digest: [u8; 32],
+        candidate_envelope_digest: [u8; 32],
+        commit_certificate_digest: [u8; 32],
+    ) -> Result<Self, KagemushaValidationErrorV1> {
+        let proof: Self =
+            decode_bounded_canonical(bytes, KAGEMUSHA_REDEMPTION_PROOF_MAX_BYTES_V1 as usize)?;
+        proof.validate_shape_against(
+            semantic_digest,
+            candidate_envelope_digest,
+            commit_certificate_digest,
+        )?;
+        Ok(proof)
     }
 }
 
@@ -2839,7 +4259,7 @@ impl KagemushaAggregateStateCommitmentV1 {
 /// Encode the exact canonical recipient-request bytes authorized by hardware.
 ///
 /// This constructor is the single cross-crate signing contract. The request
-/// binds one exact positive amount, receiver lane/key, and compact hardware credential.
+/// binds one exact amount, receiver encryption key, and compact hardware credential.
 ///
 /// # Errors
 ///
@@ -2854,37 +4274,52 @@ pub fn kagemusha_payment_request_signing_bytes_v1(
     scale: u32,
     liability_pool_id: [u8; 32],
     recipient: &AccountId,
-    recipient_lane_id: [u8; 32],
-    recipient_encryption_key: [u8; 32],
     amount: u128,
+    recipient_encryption_key: [u8; KAGEMUSHA_X25519_PUBLIC_KEY_BYTES_V1],
     hardware_credential_id: [u8; 32],
     request_id: [u8; 32],
     issued_at_ms: u64,
     expires_at_ms: u64,
 ) -> Result<Vec<u8>, KagemushaValidationErrorV1> {
-    Ok(norito::encode_canonical(
-        &PaymentRequestSigningPreimageV1 {
-            domain: REQUEST_SIGNING_DOMAIN.to_vec(),
-            version,
-            release_id,
-            network_id: *network_id,
-            asset: asset.clone(),
-            asset_incarnation,
-            scale,
-            liability_pool_id,
-            recipient: recipient.clone(),
-            recipient_lane_id,
-            recipient_encryption_key,
-            amount,
-            hardware_credential_id,
-            request_id,
-            issued_at_ms,
-            expires_at_ms,
-        },
-    )?)
+    let mut bytes = REQUEST_SIGNING_DOMAIN.to_vec();
+    bytes.push(0);
+    bytes.extend_from_slice(&version.to_le_bytes());
+    bytes.extend_from_slice(&release_id);
+    bytes.extend_from_slice(network_id.as_bytes());
+    bytes.extend_from_slice(&kagemusha_asset_identity_digest_v1(asset)?);
+    bytes.extend_from_slice(asset_incarnation.as_bytes());
+    bytes.extend_from_slice(&scale.to_le_bytes());
+    bytes.extend_from_slice(&liability_pool_id);
+    bytes.extend_from_slice(&digest_encoded(ACCOUNT_IDENTITY_DIGEST_DOMAIN, recipient)?);
+    bytes.extend_from_slice(&amount.to_le_bytes());
+    bytes.extend_from_slice(&recipient_encryption_key);
+    bytes.extend_from_slice(&hardware_credential_id);
+    bytes.extend_from_slice(&request_id);
+    bytes.extend_from_slice(&issued_at_ms.to_le_bytes());
+    bytes.extend_from_slice(&expires_at_ms.to_le_bytes());
+    Ok(bytes)
 }
 
 impl KagemushaPaymentRequestV1 {
+    /// Return the fixed signed semantic transcript, distinct from Norito wire encoding.
+    ///
+    /// Layout: version:u16 LE | release:32 | network:32 | normalized asset:32 |
+    /// incarnation:32 | scale:u32 LE | pool:32 | normalized account:32 |
+    /// amount:u128 LE | receiver encryption key:32 | credential ID:32 |
+    /// request ID:32 | issued:u64 LE |
+    /// expires:u64 LE | signature:64. Identity normalization uses the existing
+    /// typed Norito asset/account digest domains; no typed identity is discarded on wire.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid amount/key or unencodable normalized identity.
+    pub fn circuit_transcript_bytes(&self) -> Result<Vec<u8>, KagemushaValidationErrorV1> {
+        let signed = self.canonical_signing_bytes()?;
+        let mut bytes = signed[REQUEST_SIGNING_DOMAIN.len() + 1..].to_vec();
+        bytes.extend_from_slice(self.signature.as_raw_bytes());
+        Ok(bytes)
+    }
+
     /// Return the exact bytes signed by the recipient device.
     ///
     /// # Errors
@@ -2900,9 +4335,8 @@ impl KagemushaPaymentRequestV1 {
             self.scale,
             self.liability_pool_id,
             &self.recipient,
-            self.recipient_lane_id,
-            self.recipient_encryption_key,
             self.amount,
+            self.recipient_encryption_key,
             self.hardware_credential.credential_id,
             self.request_id,
             self.issued_at_ms,
@@ -2984,17 +4418,9 @@ impl KagemushaPaymentRequestV1 {
                 self.liability_pool_id,
             ),
             ("kagemusha.request.request_id", self.request_id),
-            (
-                "kagemusha.request.recipient_lane_id",
-                self.recipient_lane_id,
-            ),
         ] {
             require_nonzero(field, value)?;
         }
-        require_valid_x25519_public_key(
-            "kagemusha.request.recipient_encryption_key",
-            self.recipient_encryption_key,
-        )?;
         if self.liability_pool_id
             != kagemusha_liability_pool_id_v1(
                 &self.network_id,
@@ -3010,9 +4436,12 @@ impl KagemushaPaymentRequestV1 {
         if self.amount == 0 {
             return Err(invalid("kagemusha.request.amount"));
         }
+        require_valid_x25519_public_key(
+            "kagemusha.request.recipient_encryption_key",
+            self.recipient_encryption_key,
+        )?;
         self.hardware_credential.validate_shape()?;
         if self.hardware_credential.network_id != self.network_id
-            || self.hardware_credential.lane_commitment != self.recipient_lane_id
             || self.issued_at_ms < self.hardware_credential.issued_at_ms
             || self.expires_at_ms > self.hardware_credential.expires_at_ms
         {
@@ -3059,165 +4488,156 @@ impl KagemushaPaymentRequestV1 {
     /// Returns an error when the request is invalid or cannot be encoded.
     pub fn canonical_digest(&self) -> Result<[u8; 32], KagemushaValidationErrorV1> {
         self.validate_shape()?;
-        digest_encoded(REQUEST_DIGEST_DOMAIN, self)
+        Ok(digest_bytes(
+            REQUEST_DIGEST_DOMAIN,
+            &self.circuit_transcript_bytes()?,
+        ))
     }
 }
 
-impl KagemushaTransferStatementV1 {
-    /// Build the exact pre-ID context authenticated by a peer-credit envelope.
-    ///
-    /// This projection intentionally excludes `lifecycle.credit_id`,
-    /// `lifecycle.ciphertext_digest`, proof bytes, and certificate openings. It
-    /// can therefore be computed before AEAD sealing while still binding the
-    /// exact request, sender transition, trusted commit time, receiver lane/key,
-    /// and normalized hardware-transition commitment.
+impl KagemushaPaymentOutputV1 {
+    /// Return the exact fixed semantic transcript, not Norito wire bytes.
+    #[must_use]
+    pub fn circuit_transcript_bytes(&self) -> [u8; 254] {
+        let mut bytes = [0; 254];
+        bytes[..2].copy_from_slice(&self.version.to_le_bytes());
+        bytes[2..34].copy_from_slice(&self.request_digest);
+        bytes[34..50].copy_from_slice(&self.amount.to_le_bytes());
+        for (index, digest) in [
+            self.sender_before_commitment,
+            self.sender_after_commitment,
+            self.transition_nullifier,
+            self.credit_id,
+            self.ciphertext_commitment,
+        ]
+        .iter()
+        .enumerate()
+        {
+            bytes[50 + index * 32..82 + index * 32].copy_from_slice(digest);
+        }
+        bytes[210..246]
+            .copy_from_slice(&commit_evidence_circuit_transcript_v1(self.commit_evidence));
+        bytes[246..].copy_from_slice(&self.committed_at_ms.to_le_bytes());
+        bytes
+    }
+
+    /// Digest the fixed output transcript independently of proof and certificate bytes.
     ///
     /// # Errors
     ///
-    /// Returns an error for an invalid or substituted request/session binding.
+    /// Returns an error for reserved fields, an unchanged state, or invalid evidence.
+    pub fn canonical_digest(&self) -> Result<[u8; 32], KagemushaValidationErrorV1> {
+        if self.version != KAGEMUSHA_WIRE_VERSION_V1
+            || self.amount == 0
+            || self.committed_at_ms == 0
+            || self.sender_before_commitment == self.sender_after_commitment
+            || [
+                self.request_digest,
+                self.sender_before_commitment,
+                self.sender_after_commitment,
+                self.transition_nullifier,
+                self.credit_id,
+                self.ciphertext_commitment,
+            ]
+            .contains(&[0; 32])
+        {
+            return Err(invalid("kagemusha.payment_output.shape"));
+        }
+        self.commit_evidence.validate()?;
+        Ok(digest_bytes(
+            STATEMENT_DIGEST_DOMAIN,
+            &self.circuit_transcript_bytes(),
+        ))
+    }
+
+    /// Compute the request-bound credit ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid request or zero nullifier.
+    pub fn expected_credit_id_against(
+        &self,
+        request: &KagemushaPaymentRequestV1,
+    ) -> Result<[u8; 32], KagemushaValidationErrorV1> {
+        kagemusha_credit_id_v1(self.transition_nullifier, request.canonical_digest()?)
+    }
+
+    /// Populate the stable credit ID before encryption.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid request context.
+    pub fn seal_credit_id_against(
+        mut self,
+        request: &KagemushaPaymentRequestV1,
+    ) -> Result<Self, KagemushaValidationErrorV1> {
+        self.credit_id = self.expected_credit_id_against(request)?;
+        Ok(self)
+    }
+
+    /// Build the pre-encryption context directly from the signed request.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid request, output, or receiver binding.
     pub fn peer_credit_context_against(
         &self,
         request: &KagemushaPaymentRequestV1,
     ) -> Result<KagemushaPeerCreditContextV1, KagemushaValidationErrorV1> {
         request.validate_shape()?;
+        self.canonical_digest()?;
         let request_digest = request.canonical_digest()?;
-        if self.version != KAGEMUSHA_WIRE_VERSION_V1
-            || self.lifecycle.version != self.version
-            || self.amount == 0
-            || self.transition_nullifier == [0; 32]
-            || self.sender_before_commitment.is_zero()
-            || self.sender_after_commitment.is_zero()
-            || self.sender_before_commitment == self.sender_after_commitment
-            || self.ciphertext_commitment == [0; 32]
-            || self.hardware_transition_commitment == [0; 32]
-            || self.request_digest != request_digest
-            || self.recipient_lane_id != request.recipient_lane_id
-            || self.recipient_encryption_key != request.recipient_encryption_key
+        if self.request_digest != request_digest
             || self.amount != request.amount
+            || self.credit_id != self.expected_credit_id_against(request)?
             || self.committed_at_ms < request.issued_at_ms
             || self.committed_at_ms >= request.expires_at_ms
-            || self.lifecycle.release_id != request.release_id
-            || self.lifecycle.network_id != request.network_id
-            || self.lifecycle.asset != request.asset
-            || self.lifecycle.asset_incarnation != request.asset_incarnation
-            || self.lifecycle.scale != request.scale
-            || self.lifecycle.liability_pool_id != request.liability_pool_id
-            || self.lifecycle.suite_id != request.hardware_credential.suite_id
-            || self.lifecycle.request_id != request.request_id
-            || self.lifecycle.credit_id != self.expected_credit_id()?
         {
             return Err(invalid("kagemusha.peer_credit_context.binding"));
         }
         let context = KagemushaPeerCreditContextV1 {
             version: KAGEMUSHA_WIRE_VERSION_V1,
             request_digest,
+            amount: self.amount,
             sender_before_commitment: self.sender_before_commitment,
             sender_after_commitment: self.sender_after_commitment,
-            lifecycle_context_digest: peer_credit_lifecycle_context_digest_v1(&self.lifecycle)?,
-            recipient_lane_id: self.recipient_lane_id,
-            recipient_encryption_key: self.recipient_encryption_key,
-            committed_at_ms: self.committed_at_ms,
-            hardware_transition_commitment: self.hardware_transition_commitment,
+            prepared_transfer_digest: kagemusha_prepared_transfer_digest_v1(
+                request,
+                self.sender_before_commitment,
+                self.sender_after_commitment,
+                self.transition_nullifier,
+                self.ciphertext_commitment,
+            )?,
+            recipient_encryption_key: request.recipient_encryption_key,
         };
         context.validate_shape()?;
         Ok(context)
     }
 
-    /// Compute the required output-credit identity.
+    /// Validate direct request, receiver, amount, deadline, and output bindings.
     ///
     /// # Errors
     ///
-    /// Returns an error when the canonical identity preimage cannot be encoded.
-    pub fn expected_credit_id(&self) -> Result<[u8; 32], KagemushaValidationErrorV1> {
-        kagemusha_credit_id_v1(
-            self.transition_nullifier,
-            self.request_digest,
-            self.sender_before_commitment,
-            self.sender_after_commitment,
-            self.recipient_lane_id,
-            self.recipient_encryption_key,
-            self.amount,
-            self.ciphertext_commitment,
-        )
-    }
-
-    /// Populate the canonical unlinkable output-credit identity before AEAD.
-    ///
-    /// The `ciphertext_commitment` must already bind an ID-independent opening.
-    /// Callers may then encrypt with the returned credit ID in plaintext or
-    /// associated data and set `lifecycle.ciphertext_digest` to the resulting
-    /// exact bytes before validating the complete statement.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when credit identity hashing fails.
-    pub fn seal_credit_id(mut self) -> Result<Self, KagemushaValidationErrorV1> {
-        self.lifecycle.credit_id = self.expected_credit_id()?;
-        Ok(self)
-    }
-
-    /// Validate the exact unlinkable public send binding.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when lifecycle, output, nullifier, or hardware binding is invalid.
-    pub fn validate(&self) -> Result<(), KagemushaValidationErrorV1> {
-        if self.version != KAGEMUSHA_WIRE_VERSION_V1 || self.lifecycle.version != self.version {
-            return Err(invalid("kagemusha.statement.version"));
-        }
-        self.lifecycle.validate()?;
-        for (field, value) in [
-            (
-                "kagemusha.statement.transition_nullifier",
-                self.transition_nullifier,
-            ),
-            ("kagemusha.statement.request_digest", self.request_digest),
-            (
-                "kagemusha.statement.recipient_lane_id",
-                self.recipient_lane_id,
-            ),
-            (
-                "kagemusha.statement.recipient_encryption_key",
-                self.recipient_encryption_key,
-            ),
-            (
-                "kagemusha.statement.ciphertext_commitment",
-                self.ciphertext_commitment,
-            ),
-            (
-                "kagemusha.statement.hardware_transition_commitment",
-                self.hardware_transition_commitment,
-            ),
-        ] {
-            require_nonzero(field, value)?;
-        }
-        require_valid_x25519_public_key(
-            "kagemusha.statement.recipient_encryption_key",
-            self.recipient_encryption_key,
-        )?;
-        if self.amount == 0
-            || self.committed_at_ms == 0
-            || self.sender_before_commitment.is_zero()
-            || self.sender_after_commitment.is_zero()
-            || self.sender_before_commitment == self.sender_after_commitment
-            || self.lifecycle.operation_kind != KagemushaOperationKindV1::SendSplit
-        {
-            return Err(invalid("kagemusha.statement.operation"));
-        }
-        if self.lifecycle.credit_id != self.expected_credit_id()? {
-            return Err(invalid("kagemusha.statement.credit_id"));
-        }
+    /// Returns an error for invalid or substituted context.
+    pub fn validate_shape_against(
+        &self,
+        request: &KagemushaPaymentRequestV1,
+    ) -> Result<(), KagemushaValidationErrorV1> {
+        self.peer_credit_context_against(request)?;
         Ok(())
     }
 
-    /// Return the common semantic digest constrained by both Pasta parities.
+    /// Digest the output after exact request validation.
     ///
     /// # Errors
     ///
-    /// Returns an error when the statement is invalid or cannot be encoded.
-    pub fn canonical_digest(&self) -> Result<[u8; 32], KagemushaValidationErrorV1> {
-        self.validate()?;
-        digest_encoded(STATEMENT_DIGEST_DOMAIN, self)
+    /// Returns an error for invalid or substituted context.
+    pub fn canonical_digest_against(
+        &self,
+        request: &KagemushaPaymentRequestV1,
+    ) -> Result<[u8; 32], KagemushaValidationErrorV1> {
+        self.validate_shape_against(request)?;
+        self.canonical_digest()
     }
 }
 
@@ -3281,12 +4701,47 @@ impl KagemushaPairedProofV1 {
     }
 }
 
+/// Derive the payment body digest from its two exact component digests.
+///
+/// Hashes body-domain | zero | u64-LE(64) | output digest | ciphertext digest.
+/// It excludes the final proof and commit certificate.
+#[must_use]
+pub fn kagemusha_payment_body_digest_from_digests_v1(
+    output_digest: [u8; 32],
+    encrypted_credit_digest: [u8; 32],
+) -> [u8; 32] {
+    let mut transcript = [0; 64];
+    transcript[..32].copy_from_slice(&output_digest);
+    transcript[32..].copy_from_slice(&encrypted_credit_digest);
+    digest_bytes(b"iroha:kagemusha:v1:payment-body", &transcript)
+}
+
+/// Derive the body before hardware commit, without placeholder proof bytes.
+///
+/// Candidate and final proof semantic digests are both this digest. The final
+/// proof independently binds the certificate. Exact context and profile
+/// validation remain separate mandatory checks.
+///
+/// # Errors
+///
+/// Returns an error for a malformed output or encrypted-credit envelope.
+pub fn kagemusha_payment_body_digest_v1(
+    output: &KagemushaPaymentOutputV1,
+    encrypted_credit: &[u8],
+) -> Result<[u8; 32], KagemushaValidationErrorV1> {
+    KagemushaEncryptedCreditEnvelopeV1::decode_canonical_shape_exact(encrypted_credit)?;
+    Ok(kagemusha_payment_body_digest_from_digests_v1(
+        output.canonical_digest()?,
+        kagemusha_ciphertext_digest_v1(encrypted_credit),
+    ))
+}
+
 impl KagemushaPaymentV1 {
-    /// Encode this validated payment as canonical unpadded `kgm1:` base64url text.
+    /// Encode a shape-validated committed payment as canonical text.
     ///
     /// # Errors
     ///
-    /// Returns an error when request validation, encoding, or a size bound fails.
+    /// Returns an error for invalid context, bindings, framing, or size.
     pub fn encode_text_against(
         &self,
         request: &KagemushaPaymentRequestV1,
@@ -3299,11 +4754,11 @@ impl KagemushaPaymentV1 {
         )
     }
 
-    /// Decode one exact canonical unpadded `kgm1:` payment against its request.
+    /// Decode bounded canonical text against the exact request.
     ///
     /// # Errors
     ///
-    /// Returns an error for invalid context, size, prefix, padding, base64url, or Norito bytes.
+    /// Returns an error for invalid context, bindings, framing, or size.
     pub fn decode_text_exact_against(
         text: &str,
         request: &KagemushaPaymentRequestV1,
@@ -3316,13 +4771,11 @@ impl KagemushaPaymentV1 {
         )
     }
 
-    /// Decode and validate one exact bounded sender response.
-    ///
-    /// The outer cap is enforced before Norito reads declared collection lengths.
+    /// Decode the complete bounded canonical committed-payment envelope.
     ///
     /// # Errors
     ///
-    /// Returns an error for an oversized, malformed, non-canonical, or invalid response.
+    /// Returns an error for invalid context, bindings, framing, or size.
     pub fn decode_canonical_shape_exact_against(
         bytes: &[u8],
         request: &KagemushaPaymentRequestV1,
@@ -3332,69 +4785,59 @@ impl KagemushaPaymentV1 {
         Ok(payment)
     }
 
-    /// Validate this response's complete structural binding against the exact
-    /// signed recipient request.
-    ///
-    /// The literal trusted hardware commit instant must fall inside the signed
-    /// request window. This function deliberately accepts no current-wall-clock
-    /// argument: money committed in-window remains valid indefinitely.
+    /// Return the proof-independent body digest after exact output validation.
     ///
     /// # Errors
     ///
-    /// This checks proof framing and digest bindings, not the recursive proof's
-    /// cryptographic validity or the release catalog. Monetary admission must
-    /// first authenticate the request profile and then use the release-pinned
-    /// native proof verifier.
+    /// Returns an error for malformed or substituted request, key, or output.
+    pub fn body_digest_against(
+        &self,
+        request: &KagemushaPaymentRequestV1,
+    ) -> Result<[u8; 32], KagemushaValidationErrorV1> {
+        if self.version != KAGEMUSHA_WIRE_VERSION_V1 || self.output.version != self.version {
+            return Err(invalid("kagemusha.payment.version"));
+        }
+        self.output.validate_shape_against(request)?;
+        KagemushaEncryptedCreditEnvelopeV1::decode_canonical_shape_exact_against_recipient_key(
+            &self.encrypted_credit,
+            request.recipient_encryption_key,
+        )?;
+        kagemusha_payment_body_digest_v1(&self.output, &self.encrypted_credit)
+    }
+
+    /// Validate exact wire bindings without claiming cryptographic proof validity.
     ///
-    /// Returns an error when a public context, proof shape, statement, request,
-    /// trusted commit time, or size binding fails.
+    /// Native verification must authenticate the release/profile and recursively
+    /// prove the hidden sender transition and exact hardware certificate.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid certificate, proof, evidence, output, or size.
     pub fn validate_shape_against(
         &self,
         request: &KagemushaPaymentRequestV1,
     ) -> Result<(), KagemushaValidationErrorV1> {
-        request.validate_shape()?;
-        let request_digest = request.canonical_digest()?;
-        if self.version != KAGEMUSHA_WIRE_VERSION_V1
-            || self.statement.version != self.version
-            || self.statement.lifecycle.release_id != request.release_id
-            || self.statement.lifecycle.network_id != request.network_id
-            || self.statement.lifecycle.asset != request.asset
-            || self.statement.lifecycle.asset_incarnation != request.asset_incarnation
-            || self.statement.lifecycle.scale != request.scale
-            || self.statement.lifecycle.liability_pool_id != request.liability_pool_id
-            || self.statement.lifecycle.suite_id != request.hardware_credential.suite_id
-            || self.statement.request_digest != request_digest
-            || self.statement.lifecycle.request_id != request.request_id
-            || self.statement.recipient_lane_id != request.recipient_lane_id
-            || self.statement.recipient_encryption_key != request.recipient_encryption_key
-            || self.statement.amount != request.amount
-            || self.statement.committed_at_ms < request.issued_at_ms
-            || self.statement.committed_at_ms >= request.expires_at_ms
+        let body_digest = self.body_digest_against(request)?;
+        self.commit_certificate.validate_shape()?;
+        if self.commit_certificate.transition_nullifier != self.output.transition_nullifier
+            || self.commit_certificate.commit_evidence != self.output.commit_evidence
         {
-            return Err(invalid("kagemusha.payment.request_binding"));
+            return Err(invalid("kagemusha.payment.commit_certificate"));
         }
-        self.statement.validate()?;
-        KagemushaEncryptedCreditEnvelopeV1::decode_canonical_shape_exact_against_recipient_key(
-            &self.encrypted_credit,
-            self.statement.recipient_encryption_key,
+        self.proof.validate_shape_against(
+            body_digest,
+            self.commit_certificate.candidate_envelope_digest,
+            self.commit_certificate.canonical_digest()?,
         )?;
-        KagemushaEncryptedCreditAadV1::for_peer(&self.statement, request)?;
-        if self.statement.lifecycle.ciphertext_digest
-            != kagemusha_ciphertext_digest_v1(&self.encrypted_credit)
-        {
-            return Err(invalid("kagemusha.payment.encrypted_credit"));
-        }
-        self.proof
-            .validate_shape_for_semantic_digest(self.statement.canonical_digest()?)?;
         require_encoded_size(self, KAGEMUSHA_PAYMENT_MAX_BYTES_V1)?;
         Ok(())
     }
 
-    /// Return the canonical response digest after validating its request.
+    /// Return the complete proof-bearing envelope digest after finalization.
     ///
     /// # Errors
     ///
-    /// Returns an error when the response is invalid or cannot be encoded.
+    /// Returns an error for an invalid envelope or contextual binding.
     pub fn canonical_digest_against(
         &self,
         request: &KagemushaPaymentRequestV1,
@@ -3403,17 +4846,17 @@ impl KagemushaPaymentV1 {
         digest_encoded(PAYMENT_DIGEST_DOMAIN, self)
     }
 
-    /// Return the unlinkable circuit nullifier used for conflict detection.
+    /// Return the unlinkable transition nullifier used for conflict detection.
     ///
     /// # Errors
     ///
-    /// Returns an error only when the reserved all-zero value is present.
+    /// Returns an error for the reserved zero nullifier.
     pub fn sender_conflict_key(&self) -> Result<[u8; 32], KagemushaValidationErrorV1> {
         require_nonzero(
             "kagemusha.payment.transition_nullifier",
-            self.statement.transition_nullifier,
+            self.output.transition_nullifier,
         )?;
-        Ok(self.statement.transition_nullifier)
+        Ok(self.output.transition_nullifier)
     }
 }
 
@@ -3440,7 +4883,7 @@ pub fn kagemusha_acknowledgement_signing_bytes_v1(
 }
 
 impl KagemushaAcknowledgementV1 {
-    /// Encode this validated acknowledgement as canonical unpadded `kgm1:` base64url text.
+    /// Encode this acknowledgement as canonical unpadded `kgm1:` base64url text.
     ///
     /// # Errors
     ///
@@ -3462,7 +4905,7 @@ impl KagemushaAcknowledgementV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error for invalid context, size, prefix, padding, base64url, or Norito bytes.
+    /// Returns an error for invalid context, size, prefix, or canonical bytes.
     pub fn decode_text_exact_against(
         text: &str,
         request: &KagemushaPaymentRequestV1,
@@ -3476,11 +4919,11 @@ impl KagemushaAcknowledgementV1 {
         )
     }
 
-    /// Decode and validate one exact bounded durable-inbox acknowledgement.
+    /// Decode and validate one bounded durable-inbox acknowledgement.
     ///
     /// # Errors
     ///
-    /// Returns an error for an oversized, malformed, non-canonical, or invalid acknowledgement.
+    /// Returns an error for oversized, malformed, non-canonical, or invalid input.
     pub fn decode_canonical_shape_exact_against(
         bytes: &[u8],
         request: &KagemushaPaymentRequestV1,
@@ -3506,15 +4949,11 @@ impl KagemushaAcknowledgementV1 {
         )
     }
 
-    /// Validate this acknowledgement's structural binding against its request
-    /// and response.
-    ///
-    /// Hardware epoch, monotonic inbox sequence, and acknowledgement time stay
-    /// private under the signed receipt commitment.
+    /// Validate request, payment, credit, durable receipt, and receiver signature bindings.
     ///
     /// # Errors
     ///
-    /// Returns an error when receipt, identity, signature, or size binding fails.
+    /// Returns an error when any receipt, identity, signature, or size binding fails.
     pub fn validate_shape_against(
         &self,
         request: &KagemushaPaymentRequestV1,
@@ -3527,7 +4966,7 @@ impl KagemushaAcknowledgementV1 {
             || self.request_digest != request_digest
             || self.payment_digest != payment_digest
             || self.inbox_receipt.version != self.version
-            || self.inbox_receipt.credit_id != payment.statement.lifecycle.credit_id
+            || self.inbox_receipt.credit_id != payment.output.credit_id
             || self.inbox_receipt.receipt_commitment == [0; 32]
         {
             return Err(invalid("kagemusha.acknowledgement.binding"));
@@ -3550,29 +4989,21 @@ const fn unpadded_base64url_len(raw_len: usize) -> usize {
         }
 }
 
-fn validate_kagemusha_raw_session_size_v1(raw: usize) -> Result<(), KagemushaValidationErrorV1> {
-    if raw > KAGEMUSHA_SESSION_MAX_BYTES_V1 {
-        return Err(KagemushaValidationErrorV1::EncodedSizeExceeded {
-            actual: raw,
-            max: KAGEMUSHA_SESSION_MAX_BYTES_V1,
-        });
-    }
-    Ok(())
-}
-
-/// Validate a complete session's structural bindings and return its raw size.
+/// Validate the complete three-message KAGEMUSHA exchange and return its raw size.
 ///
-/// This does not cryptographically verify the recursive payment proof or
-/// authenticate the embedded hardware profile against a release catalog.
+/// Distinct payments may independently bind the same signed request. This
+/// validator imposes no request-local payment count or cumulative amount state.
 ///
 /// # Errors
 ///
-/// Returns an error when a message is invalid or the aggregate raw/text envelope is oversized.
-pub fn validate_kagemusha_session_shape_v1(
+/// Returns an error for any invalid binding or aggregate raw/text size overrun.
+pub fn validate_kagemusha_complete_exchange_shape_v1(
     request: &KagemushaPaymentRequestV1,
     payment: &KagemushaPaymentV1,
     acknowledgement: &KagemushaAcknowledgementV1,
 ) -> Result<usize, KagemushaValidationErrorV1> {
+    request.validate_shape()?;
+    payment.validate_shape_against(request)?;
     acknowledgement.validate_shape_against(request, payment)?;
     let lengths = [
         require_encoded_size(request, KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1)?,
@@ -3580,18 +5011,130 @@ pub fn validate_kagemusha_session_shape_v1(
         require_encoded_size(acknowledgement, KAGEMUSHA_ACKNOWLEDGEMENT_MAX_BYTES_V1)?,
     ];
     let raw = lengths.iter().sum::<usize>();
-    validate_kagemusha_raw_session_size_v1(raw)?;
+    if raw > KAGEMUSHA_COMPLETE_EXCHANGE_MAX_BYTES_V1 {
+        return Err(KagemushaValidationErrorV1::EncodedSizeExceeded {
+            actual: raw,
+            max: KAGEMUSHA_COMPLETE_EXCHANGE_MAX_BYTES_V1,
+        });
+    }
     let text = lengths
         .iter()
         .map(|length| KAGEMUSHA_TEXT_PREFIX_V1.len() + unpadded_base64url_len(*length))
         .sum::<usize>();
-    if text > KAGEMUSHA_TEXT_SESSION_MAX_BYTES_V1 {
+    if text > KAGEMUSHA_COMPLETE_TEXT_EXCHANGE_MAX_BYTES_V1 {
         return Err(KagemushaValidationErrorV1::EncodedSizeExceeded {
             actual: text,
-            max: KAGEMUSHA_TEXT_SESSION_MAX_BYTES_V1,
+            max: KAGEMUSHA_COMPLETE_TEXT_EXCHANGE_MAX_BYTES_V1,
         });
     }
     Ok(raw)
+}
+
+fn canonical_compact_length_width_v1(mut length: usize) -> usize {
+    let mut width = 1;
+    while length >= 128 {
+        length >>= 7;
+        width += 1;
+    }
+    width
+}
+
+fn canonical_frame_overhead_v1<T>() -> usize {
+    let header = norito::core::Header::SIZE;
+    let alignment = norito::core::archived_payload_align::<T>();
+    header + (alignment - header % alignment) % alignment
+}
+
+fn mint_authorization_encoded_length_v1(
+    context_payload_bytes: usize,
+    paired_proof_payload_bytes: usize,
+) -> Option<usize> {
+    let statement_payload_bytes = 102_usize
+        .checked_add(context_payload_bytes)?
+        .checked_add(canonical_compact_length_width_v1(context_payload_bytes))?;
+    canonical_frame_overhead_v1::<KagemushaMintAuthorizationV1>()
+        .checked_add(3)?
+        .checked_add(statement_payload_bytes)?
+        .checked_add(canonical_compact_length_width_v1(statement_payload_bytes))?
+        .checked_add(paired_proof_payload_bytes)?
+        .checked_add(canonical_compact_length_width_v1(
+            paired_proof_payload_bytes,
+        ))
+}
+
+/// Derive a mint authorization's maximum complete canonical context-frame size.
+///
+/// The two inputs must be the **exact** current-proof byte widths authenticated
+/// by the caller's selected release/circuit shape. A maximum proof allowance is
+/// not a minimum proof length and must not be substituted here: doing so could
+/// incorrectly exclude valid accounts. This arithmetic helper cannot establish
+/// that the caller's proof bytes or release actually have the supplied widths.
+///
+/// The result includes the context's own Norito header and alignment padding.
+/// It is derived only from those exact proof widths, both existing 544-byte
+/// histories, canonical framing, and the existing 7,936-byte full-authorization
+/// cap. It does not impose an account, controller, or multisig-member-count cap.
+/// Full authorization shape checks and cryptographic verification remain required.
+///
+/// # Errors
+///
+/// Returns an error for empty/oversized proof widths, arithmetic overflow, or
+/// proof framing that cannot fit the existing authorization and paired-proof caps.
+pub fn kagemusha_mint_authorization_context_capacity_v1(
+    eq_current_proof_bytes: usize,
+    ep_current_proof_bytes: usize,
+) -> Result<usize, KagemushaValidationErrorV1> {
+    let field = "kagemusha.mint_authorization.context_capacity";
+    if eq_current_proof_bytes == 0
+        || ep_current_proof_bytes == 0
+        || eq_current_proof_bytes > KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1
+        || ep_current_proof_bytes > KAGEMUSHA_PARITY_PROOF_MAX_BYTES_V1
+    {
+        return Err(invalid(field));
+    }
+    let proof_bytes = eq_current_proof_bytes
+        .checked_add(ep_current_proof_bytes)
+        .filter(|total| *total <= KAGEMUSHA_CURRENT_PROOFS_MAX_BYTES_V1)
+        .ok_or_else(|| invalid(field))?;
+    let eq_payload = eq_current_proof_bytes
+        .checked_add(8)
+        .ok_or_else(|| invalid(field))?;
+    let ep_payload = ep_current_proof_bytes
+        .checked_add(8)
+        .ok_or_else(|| invalid(field))?;
+    // Version, seven digests, two exact history vectors, and both proof vector
+    // counts occupy 1,358 payload bytes before the proof bytes and their prefixes.
+    let paired_payload = 1_358_usize
+        .checked_add(proof_bytes)
+        .and_then(|length| length.checked_add(canonical_compact_length_width_v1(eq_payload)))
+        .and_then(|length| length.checked_add(canonical_compact_length_width_v1(ep_payload)))
+        .ok_or_else(|| invalid(field))?;
+    let paired_length = canonical_frame_overhead_v1::<KagemushaPairedProofV1>()
+        .checked_add(paired_payload)
+        .ok_or_else(|| invalid(field))?;
+    if paired_length > KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1
+        || mint_authorization_encoded_length_v1(0, paired_payload)
+            .is_none_or(|length| length > KAGEMUSHA_MINT_AUTHORIZATION_MAX_BYTES_V1)
+    {
+        return Err(invalid(field));
+    }
+    // Monotone integer search handles every compact-length-prefix boundary;
+    // no assumption about the shape or count of account controllers is needed.
+    let mut low = 0;
+    let mut high = KAGEMUSHA_MINT_AUTHORIZATION_MAX_BYTES_V1;
+    while low < high {
+        let candidate = low + (high - low).div_ceil(2);
+        if mint_authorization_encoded_length_v1(candidate, paired_payload)
+            .is_some_and(|length| length <= KAGEMUSHA_MINT_AUTHORIZATION_MAX_BYTES_V1)
+        {
+            low = candidate;
+        } else {
+            high = candidate - 1;
+        }
+    }
+    canonical_frame_overhead_v1::<KagemushaMintAuthorizationContextV1>()
+        .checked_add(low)
+        .ok_or_else(|| invalid(field))
 }
 
 impl KagemushaMintAuthorizationContextV1 {
@@ -4074,13 +5617,9 @@ impl KagemushaRedemptionStatementV1 {
         Ok(RedemptionIdPreimageV1 {
             lifecycle_binding_digest: self.lifecycle.canonical_digest()?,
             terminal_nullifier: self.terminal_nullifier,
-            sender_before_commitment: self.sender_before_commitment,
-            sender_after_commitment: self.sender_after_commitment,
             amount: self.amount,
             beneficiary: self.beneficiary.clone(),
             redemption_commitment: self.redemption_commitment,
-            committed_at_ms: self.committed_at_ms,
-            hardware_transition_commitment: self.hardware_transition_commitment,
         })
     }
 
@@ -4139,25 +5678,18 @@ impl KagemushaRedemptionStatementV1 {
                 "kagemusha.redemption_statement.redemption_id",
                 self.redemption_id,
             ),
-            (
-                "kagemusha.redemption_statement.hardware_transition_commitment",
-                self.hardware_transition_commitment,
-            ),
         ] {
             require_nonzero(field, value)?;
         }
         if self.amount == 0
-            || self.committed_at_ms == 0
-            || self.sender_before_commitment.is_zero()
-            || self.sender_after_commitment.is_zero()
             || self.lifecycle.operation_kind != KagemushaOperationKindV1::RedeemSplit
-            || self.sender_before_commitment == self.sender_after_commitment
             || self.terminal_nullifier == self.redemption_commitment
             || self.terminal_nullifier == self.redemption_id
             || self.redemption_commitment == self.redemption_id
         {
             return Err(invalid("kagemusha.redemption_statement.operation"));
         }
+        self.commit_evidence.validate()?;
         if self.redemption_id != self.expected_redemption_id()? {
             return Err(invalid("kagemusha.redemption_statement.redemption_id"));
         }
@@ -4216,7 +5748,7 @@ impl KagemushaRedemptionVoucherV1 {
         Ok(voucher)
     }
 
-    /// Validate terminal state consumption and recursive hardware binding.
+    /// Validate terminal state consumption, certificate, and redemption-proof binding.
     ///
     /// Global redemption admission must additionally reject a previously seen
     /// `terminal_nullifier`.
@@ -4229,8 +5761,25 @@ impl KagemushaRedemptionVoucherV1 {
             return Err(invalid("kagemusha.redemption_voucher.version"));
         }
         self.statement.validate_shape()?;
-        self.proof
-            .validate_shape_for_semantic_digest(self.statement.canonical_digest()?)?;
+        self.commit_certificate.validate_against(
+            &self.statement.lifecycle,
+            self.statement.commit_evidence,
+            self.statement.terminal_nullifier,
+        )?;
+        let certificate_digest = self.commit_certificate.canonical_digest_against(
+            &self.statement.lifecycle,
+            self.statement.commit_evidence,
+            self.statement.terminal_nullifier,
+        )?;
+        self.proof.validate_shape_against(
+            self.statement.canonical_digest()?,
+            self.commit_certificate.candidate_envelope_digest,
+            certificate_digest,
+        )?;
+        require_nonzero(
+            "kagemusha.redemption_voucher.artifact_manifest_digest",
+            self.artifact_manifest_digest,
+        )?;
         require_encoded_size(self, KAGEMUSHA_REDEMPTION_VOUCHER_MAX_BYTES_V1)?;
         Ok(())
     }

@@ -269,9 +269,7 @@ fn gas_for_kaigi_proof_verification(
         .saturating_add(zk_gas_per_nullifier().saturating_mul(nullifiers))
         .saturating_add(zk_gas_per_commitment().saturating_mul(commitments))
 }
-fn gas_for_kagemusha_v1_redemption(
-    redeem: &dm_isi::kagemusha_v1::RedeemKagemushaV1,
-) -> u64 {
+fn gas_for_kagemusha_v1_redemption(redeem: &dm_isi::kagemusha_v1::RedeemKagemushaV1) -> u64 {
     let proof = &redeem.request.voucher.proof;
     let proof_bytes = proof
         .eq_proof

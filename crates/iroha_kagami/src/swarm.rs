@@ -3045,7 +3045,7 @@ mod tests {
         tx_history_mandatory_alias_source, validate_prepared_genesis,
         validate_runtime_projection_policy,
     };
-    use crate::{RunArgs, localnet::LocalnetOptions};
+    use crate::{RunArgs, genesis::CompleteTestGenesisBuilder as _, localnet::LocalnetOptions};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, bls_normal_pop_prove};
     use iroha_data_model::{
         ChainId, NetworkId,
@@ -3941,8 +3941,9 @@ mod tests {
             ChainId::from("resultless-prepared-bundle"),
             PathBuf::from("."),
         )
-        .set_topology(topology)
+        .set_topology_for_test(topology)
         .build_raw()
+        .expect("complete resultless prepared-bundle fixture")
         .with_consensus_mode(SumeragiConsensusMode::Permissioned)
         .with_consensus_meta();
         let genesis_key = KeyPair::random();
@@ -4175,7 +4176,9 @@ api_port = 9000
     fn write_minimal_genesis(path: &Path) {
         let manifest =
             GenesisBuilder::new_without_executor(ChainId::from("test-chain"), PathBuf::from("."))
+                .complete_for_test()
                 .build_raw()
+                .expect("complete minimal swarm fixture")
                 .with_consensus_mode(
                     iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned,
                 );
@@ -4187,7 +4190,9 @@ api_port = 9000
             ChainId::from("npos-without-parameters"),
             PathBuf::from("."),
         )
+        .complete_for_test()
         .build_raw()
+        .expect("complete NPoS-without-parameters fixture")
         .with_consensus_mode(iroha_data_model::parameter::system::SumeragiConsensusMode::Npos);
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis");
         fs::write(path, json).expect("write NPoS genesis without parameters");
@@ -4198,7 +4203,9 @@ api_port = 9000
             .append_parameter(Parameter::Custom(
                 SumeragiNposParameters::default().into_custom_parameter(),
             ))
+            .complete_for_test()
             .build_raw()
+            .expect("complete NPoS swarm fixture")
             .with_consensus_mode(iroha_data_model::parameter::system::SumeragiConsensusMode::Npos);
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis");
         fs::write(path, json).expect("write npos genesis");

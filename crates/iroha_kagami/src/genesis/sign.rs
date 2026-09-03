@@ -1,4 +1,4 @@
-use super::{ensure_npos_parameters, require_v2_wire_protocol_only};
+use super::require_v2_wire_protocol_only;
 use crate::{
     Outcome, RunArgs,
     genesis::{PUBLIC_XOR_ALIAS, public_xor_profile_for_chain_id, reject_retired_public_chain_id},
@@ -1281,9 +1281,7 @@ pub(super) fn prepare_genesis_for_signing(
     if topology_override.is_some() {
         genesis = genesis.clear_topology();
     }
-    if matches!(consensus_mode, SumeragiConsensusMode::Npos) {
-        ensure_npos_parameters(&genesis)?;
-    }
+    super::ensure_kagemusha_mint_finality_schedule_matches_consensus(&genesis)?;
     let final_topology = topology_override
         .map(<[PeerId]>::to_vec)
         .unwrap_or_else(|| collect_topology_peers(&genesis));
@@ -1293,6 +1291,13 @@ pub(super) fn prepare_genesis_for_signing(
             "--peer-pop requires --topology to align PoPs with peers"
         ));
     }
+    let topology_entries = topology_override
+        .map(|topology| build_topology_entries(topology, peer_pops))
+        .transpose()?;
+    super::ensure_kagemusha_mint_finality_epoch_zero_authority_matches_topology(
+        &genesis,
+        &final_topology,
+    )?;
 
     let uses_npos = matches!(consensus_mode, SumeragiConsensusMode::Npos);
     let topology_peers = if uses_npos {
@@ -1332,10 +1337,9 @@ pub(super) fn prepare_genesis_for_signing(
     } else {
         let chain_discriminant = genesis.chain_discriminant();
         let mut builder = genesis.into_builder();
-        if let Some(topology) = topology_override {
+        if let Some(entries) = topology_entries {
             // Put topology into a dedicated transaction so it remains separate
             // from other genesis instructions.
-            let entries = build_topology_entries(topology, peer_pops)?;
             builder = builder.next_transaction().set_topology(entries);
         }
         if needs_npos_bootstrap {
@@ -1350,7 +1354,7 @@ pub(super) fn prepare_genesis_for_signing(
             )?;
         }
         builder
-            .build_raw()
+            .build_raw()?
             .with_chain_discriminant(chain_discriminant)
             .with_consensus_mode(consensus_mode)
             .with_consensus_meta()
@@ -1612,11 +1616,12 @@ fn decode_hex(s: &str) -> Result<Vec<u8>, color_eyre::eyre::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_crypto::{Algorithm, KeyPair as CryptoKeyPair, bls_normal_pop_prove};
+    use crate::genesis::CompleteTestGenesisBuilder as _;
+    use iroha_crypto::{Algorithm, HashOf, KeyPair as CryptoKeyPair, bls_normal_pop_prove};
     use iroha_data_model::{
-        ChainId,
+        ChainId, NetworkId,
         asset::AssetDefinitionAlias,
-        block::{SignedBlock, decode_framed_signed_block},
+        block::{BlockHeader, SignedBlock, decode_framed_signed_block},
         isi::{
             SetParameter, asset_alias::SetAssetDefinitionAlias, mint_burn::MintBox,
             register::RegisterBox, staking::RegisterPublicLaneValidator,
@@ -1756,220 +1761,37 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 .expect("genesis block signature must verify");
         }
     }
-    fn sign_checked_in_profile(
-        root: &std::path::Path,
-        genesis_path: &str,
-        config_path: &str,
-    ) -> ConsensusHandshakeMetaTest {
-        sign_checked_in_profile_with_optional_config(root, genesis_path, Some(config_path))
-    }
-    fn locally_loadable_profile_config(path: &Path) -> (tempfile::TempDir, PathBuf) {
-        let source = fs::read_to_string(path).expect("read checked-in profile config");
-        let source_is_loadable = load_peer_config_bytes(path, source.as_bytes()).is_ok();
-        // Published profile configs intentionally resolve node identities from
-        // container secret files. Replacing only those identities with matching
-        // deterministic test pairs keeps every consensus-policy field intact
-        // while making the production signing path locally testable.
-        let mut table = toml::Table::from_str(&source).expect("parse checked-in profile config");
-        if !source_is_loadable {
-            table.insert(
-                "public_key".into(),
-                toml::Value::String(
-                    "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
-                        .to_owned(),
-                ),
-            );
-            table.remove("private_key_file");
-            table.insert(
-                "private_key".into(),
-                toml::Value::String(
-                    "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
-                        .to_owned(),
-                ),
-            );
-            table.insert(
-                "soranet_transport_public_key".into(),
-                toml::Value::String(
-                    "ed0120D9F6AEF1813164294D1D9C0662FEB9C7F7861B4DFFE385680331093DA4ABD10B"
-                        .to_owned(),
-                ),
-            );
-            table.remove("soranet_transport_private_key_file");
-            table.insert(
-                "soranet_transport_private_key".into(),
-                toml::Value::String(
-                    "802620134C4527B3852AE2218A8F079B301C651EAD8C7567B96BD7A9BE8DB366E46B89"
-                        .to_owned(),
-                ),
-            );
-            let streaming = table
-                .get_mut("streaming")
-                .and_then(toml::Value::as_table_mut)
-                .expect("checked-in profile config has streaming identity");
-            streaming.insert(
-                "identity_public_key".into(),
-                toml::Value::String(
-                    "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
-                        .to_owned(),
-                ),
-            );
-            streaming.remove("identity_private_key_file");
-            streaming.insert(
-                "identity_private_key".into(),
-                toml::Value::String(
-                    "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
-                        .to_owned(),
-                ),
-            );
-        }
-
-        let directory = tempfile::tempdir().expect("create local profile signing config");
-        let rendered = directory.path().join("config.toml");
-        crate::secure_fs::write_private_file_atomic(
-            &rendered,
-            toml::to_string(&table)
-                .expect("serialize local profile signing config")
-                .as_bytes(),
-        )
-        .expect("write local profile signing config");
-        (directory, rendered)
-    }
-
-    fn sign_checked_in_profile_with_optional_config(
-        root: &std::path::Path,
-        genesis_path: &str,
-        config_path: Option<&str>,
-    ) -> ConsensusHandshakeMetaTest {
-        const DEV_GENESIS_SEED: &str =
-            "435e15ae8cca7d8ce54313e1ed60b98bd3be7832bbaa6e33b358068b61f6ea97";
-        const NEXUS_GENESIS_SEED: &str =
-            "ac74a176f589853d5a7488ae8c04caee8b99b408a98c1d2971b3d525e9f0e91c";
-        let key_file_from_seed = |seed: &str| {
-            let mut seed =
-                crate::crypto::parse_keygen_seed_hex(seed).expect("decode checked-in fixture seed");
-            let key_pair = KeyPair::try_from_seed(std::mem::take(&mut *seed), Algorithm::Ed25519)
-                .expect("derive checked-in fixture key");
-            test_private_key_file_for(&key_pair)
-        };
-        let private_key_file = match genesis_path {
-            "defaults/kagami/iroha3-dev/genesis.json" => key_file_from_seed(DEV_GENESIS_SEED),
-            "defaults/kagami/iroha3-nexus/genesis.json" => key_file_from_seed(NEXUS_GENESIS_SEED),
-            _ => test_private_key_file(),
-        };
-        let rendered_config =
-            config_path.map(|path| locally_loadable_profile_config(&root.join(path)));
-        let args = Args {
-            genesis_file: root.join(genesis_path),
-            out_file: None,
-            bound_manifest_out: None,
-            expected_hash_out: None,
-            topology: None,
-            peer_pops: Vec::new(),
-            private_key_file,
-            expected_public_key: None,
-            creation_time_ms: None,
-            config: rendered_config
-                .as_ref()
-                .map(|(_, rendered)| rendered.clone()),
-        };
-        let mut writer = BufWriter::new(Vec::new());
-        args.run(&mut writer)
-            .unwrap_or_else(|error| panic!("failed to sign {genesis_path}: {error:#}"));
-        let bytes = writer.into_inner().expect("flush signed genesis buffer");
-        let block = decode_framed_signed_block(&bytes)
-            .unwrap_or_else(|error| panic!("failed to decode signed {genesis_path}: {error}"));
-        consensus_handshake_meta(&block)
-    }
-    fn assert_checked_in_genesis_template_is_current(root: &Path, path: &str) {
-        let manifest = RawGenesisTransaction::from_path(root.join(path))
-            .unwrap_or_else(|error| panic!("checked-in {path} must parse: {error:#}"));
-        assert_eq!(manifest.wire_protocol_version(), 4, "{path}");
-        ensure_npos_parameters(&manifest)
-            .unwrap_or_else(|error| panic!("checked-in {path} has invalid NPoS policy: {error}"));
-        let context = manifest.sumeragi_v2_context_parameters();
-        assert_ne!(context.nexus_amx_context_hash, [0; 32], "{path}");
-        assert_ne!(context.execution_policy_hash, [0; 32], "{path}");
-        let refreshed = manifest.clone().with_consensus_meta();
-        assert_eq!(
-            manifest.consensus_fingerprint(),
-            refreshed.consensus_fingerprint(),
-            "{path} has a stale consensus fingerprint"
-        );
-    }
-
     #[test]
-    fn checked_in_genesis_templates_are_current_and_parse() {
+    fn checked_in_genesis_source_templates_are_explicitly_incomplete() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         for path in [
-            "defaults/genesis.json",
-            "defaults/kagami/iroha3-dev/genesis.json",
-            "defaults/kagami/iroha3-nexus/genesis.json",
-            "defaults/nexus/genesis.json",
-            "configs/soranexus/nexus/genesis.json",
-            "configs/soranexus/taira/genesis.json",
+            "defaults/genesis.template.json",
+            "defaults/kagami/iroha3-dev/genesis.template.json",
+            "defaults/kagami/iroha3-nexus/genesis.template.json",
+            "defaults/nexus/genesis.template.json",
+            "configs/soranexus/nexus/genesis.template.json",
+            "configs/soranexus/taira/genesis.template.json",
         ] {
-            assert_checked_in_genesis_template_is_current(&root, path);
-        }
-    }
-
-    #[test]
-    fn checked_in_topology_profile_genesis_templates_are_current() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        for path in [
-            "defaults/kagami/iroha3-nexus/genesis.json",
-            "defaults/nexus/genesis.json",
-            "configs/soranexus/nexus/genesis.json",
-            "configs/soranexus/taira/genesis.json",
-        ] {
-            assert_checked_in_genesis_template_is_current(&root, path);
-        }
-    }
-    #[test]
-    fn checked_in_unsigned_templates_use_canonical_nexus_amx_projection() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let fixtures = [
-            (
-                "defaults/kagami/iroha3-nexus/genesis.json",
-                "defaults/kagami/iroha3-nexus/config.toml",
-                true,
-            ),
-            (
-                "defaults/nexus/genesis.json",
-                "defaults/nexus/config.toml",
-                false,
-            ),
-            (
-                "configs/soranexus/nexus/genesis.json",
-                "configs/soranexus/nexus/config.toml",
-                false,
-            ),
-            (
-                "configs/soranexus/taira/genesis.json",
-                "configs/soranexus/taira/config.toml",
-                false,
-            ),
-        ];
-        for (genesis_path, config_path, has_sample_topology) in fixtures {
-            let manifest = RawGenesisTransaction::from_path(root.join(genesis_path))
-                .unwrap_or_else(|error| panic!("checked-in {genesis_path} must parse: {error:#}"));
-            let has_topology = manifest
-                .transactions()
-                .iter()
-                .any(|transaction| !transaction.topology().is_empty());
-            assert_eq!(has_topology, has_sample_topology, "{genesis_path}");
-            let config = checked_in_config(&root.join(config_path));
-            let expected = actual::sumeragi_v2_nexus_amx_context_hash(
-                &config.nexus,
-                &config.pipeline,
-                &[],
-                &[],
-            );
+            let full_path = root.join(path);
+            let bytes = fs::read(&full_path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", full_path.display()));
+            let value: norito::json::Value = norito::json::from_slice(&bytes)
+                .unwrap_or_else(|error| panic!("parse {}: {error}", full_path.display()));
+            let object = value
+                .as_object()
+                .expect("source template must be an object");
             assert_eq!(
-                manifest
-                    .sumeragi_v2_context_parameters()
-                    .nexus_amx_context_hash,
-                <[u8; 32]>::from(expected),
-                "{genesis_path} must carry the config-only projection; a deployable signer rebinds it after the final roster and operator-supplied public XOR identity are present"
+                object.get("consensus_fingerprint"),
+                Some(&norito::json::Value::Null),
+                "{path} must not advertise a fingerprint before authority materialization"
+            );
+            assert!(
+                !object.contains_key("kagemusha_mint_finality"),
+                "{path} must leave operator authority unmaterialized"
+            );
+            assert!(
+                RawGenesisTransaction::from_path(&full_path).is_err(),
+                "{path} must not be accepted by the signing path"
             );
         }
     }
@@ -2021,11 +1843,15 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let directory = tempfile::tempdir().expect("create signing config custody fixture");
         let canonical_directory = fs::canonicalize(directory.path())
             .expect("canonicalize signing config custody directory");
-        fs::copy(
-            root.join("defaults/kagami/iroha3-dev/genesis.expected_hash"),
+        let network_id =
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"signing config custody fixture",
+            )));
+        fs::write(
             canonical_directory.join("genesis.expected_hash"),
+            format!("{network_id}\n"),
         )
-        .expect("copy signing config network identity");
+        .expect("write signing config network identity");
         let path = canonical_directory.join("peer0.toml");
         fs::write(&path, source).expect("write signing config custody fixture");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644))
@@ -2036,36 +1862,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
             .expect("make signing config owner-only");
         load_peer_config(&path).expect("owner-only signing config must load");
-    }
-    fn assert_checked_in_profile_commitment_matches_production_signing(
-        root: &Path,
-        genesis_path: &str,
-        config_path: &str,
-    ) {
-        let manifest = RawGenesisTransaction::from_path(root.join(genesis_path))
-            .unwrap_or_else(|error| panic!("checked-in {genesis_path} must parse: {error:#}"));
-        let signed = sign_checked_in_profile(root, genesis_path, config_path);
-        assert_eq!(signed.wire_protocol_version, 4, "{genesis_path}");
-        assert_eq!(
-            signed.sumeragi_v2,
-            manifest.sumeragi_v2_context_parameters(),
-            "{genesis_path} must carry the exact context produced by the production signing path"
-        );
-        assert_eq!(
-            Some(signed.consensus_fingerprint),
-            manifest.consensus_fingerprint(),
-            "{genesis_path} fingerprint must cover the exact staged context"
-        );
-    }
-
-    #[test]
-    fn checked_in_profile_commitments_match_production_signing() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        assert_checked_in_profile_commitment_matches_production_signing(
-            &root,
-            "defaults/kagami/iroha3-dev/genesis.json",
-            "defaults/kagami/iroha3-dev/peer0.toml",
-        );
     }
     #[test]
     #[expect(
@@ -2079,8 +1875,9 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .expect("derive deterministic genesis key");
         config.genesis.public_key = genesis_key_pair.public_key().clone();
         let mut raw = GenesisBuilder::new_without_executor(config.common.chain.clone(), ".")
-            .set_topology(valid_test_topology_entries(4))
+            .set_topology_for_test(valid_test_topology_entries(4))
             .build_raw()
+            .expect("complete restaging parity fixture")
             .with_consensus_mode(SumeragiConsensusMode::Permissioned);
         let mut unbound_parameters = raw.sumeragi_v2_context_parameters();
         unbound_parameters.nexus_amx_context_hash = Hash::new(b"unbound-nexus-amx").into();
@@ -2209,41 +2006,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         );
     }
 
-    #[test]
-    #[ignore = "read-only maintainer utility for refreshing generated profile commitments"]
-    fn print_checked_in_profile_commitments() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        // The operator-facing Taira template pins a deliberately undistributed genesis key, so
-        // it can only be rebound by the deployment signer that owns that key.
-        for (genesis_path, config_path) in [
-            ("defaults/genesis.json", None),
-            (
-                "defaults/kagami/iroha3-dev/genesis.json",
-                Some("defaults/kagami/iroha3-dev/peer0.toml"),
-            ),
-            (
-                "defaults/kagami/iroha3-nexus/genesis.json",
-                Some("defaults/kagami/iroha3-nexus/config.toml"),
-            ),
-            (
-                "defaults/nexus/genesis.json",
-                Some("defaults/nexus/config.toml"),
-            ),
-            (
-                "configs/soranexus/nexus/genesis.json",
-                Some("configs/soranexus/nexus/config.toml"),
-            ),
-        ] {
-            let signed =
-                sign_checked_in_profile_with_optional_config(&root, genesis_path, config_path);
-            eprintln!(
-                "{genesis_path}: {} {} {}",
-                hex::encode(signed.sumeragi_v2.nexus_amx_context_hash),
-                hex::encode(signed.sumeragi_v2.execution_policy_hash),
-                signed.consensus_fingerprint
-            );
-        }
-    }
     fn checked_genesis_sign_keypair() -> CryptoKeyPair {
         CryptoKeyPair::try_random().expect("genesis sign fixture key generation should succeed")
     }
@@ -2272,6 +2034,27 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 GenesisTopologyEntry::new(PeerId::new(key_pair.public_key().clone()), pop)
             })
             .collect()
+    }
+    fn with_test_authority_for_topology(path: PathBuf, topology: &[PeerId]) -> PathBuf {
+        let manifest =
+            RawGenesisTransaction::from_path(&path).expect("parse test genesis manifest");
+        let consensus_mode = manifest.consensus_mode();
+        let chain_discriminant = manifest.chain_discriminant();
+        let manifest = super::super::complete_test_genesis_builder_for_peers(
+            manifest.into_builder(),
+            topology.to_vec(),
+        )
+        .build_raw()
+        .expect("complete topology-bound signing fixture")
+        .with_consensus_mode(consensus_mode)
+        .with_chain_discriminant(chain_discriminant)
+        .with_consensus_meta();
+        fs::write(
+            &path,
+            norito::json::to_vec_pretty(&manifest).expect("encode topology-bound fixture"),
+        )
+        .expect("write topology-bound fixture");
+        path
     }
     fn replace_manifest_wire_protocol_version(
         path: &std::path::Path,
@@ -2490,7 +2273,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     fn bound_manifest_output_matches_the_manifest_used_for_signing() {
         let temp = tempfile::tempdir().expect("bound manifest temp dir");
         let bound_manifest_path = temp.path().join("genesis.bound.json");
-        let genesis_file = minimal_genesis_file();
+        let (topology, peer_pops) = valid_test_topology(4);
+        let genesis_file = with_test_authority_for_topology(minimal_genesis_file(), &topology);
         let genesis_key_pair = KeyPair::try_from_seed(vec![0x41; 32], Algorithm::Ed25519)
             .expect("derive genesis signing key");
         let unbound_manifest = RawGenesisTransaction::from_path(&genesis_file)
@@ -2519,7 +2303,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 "amx_per_instruction_ns".to_owned(),
                 toml::Value::Integer(51),
             );
-        let (topology, peer_pops) = valid_test_topology(4);
         let config_path = temp.path().join("peer0.toml");
         crate::secure_fs::write_private_file_atomic(
             &config_path,
@@ -3017,21 +2800,25 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let existing_peer = PeerId::new(existing_kp.public_key().clone());
         let existing_pop = iroha_crypto::bls_normal_pop_prove(existing_kp.private_key())
             .expect("generate BLS PoP");
+        let (new_peers, peer_pops) = valid_test_topology(4);
         let genesis_file = tempfile::NamedTempFile::new().expect("create temp genesis file");
-        let manifest = GenesisBuilder::new_without_executor(
-            ChainId::from("topology-override"),
-            PathBuf::from("."),
+        let manifest = super::super::complete_test_genesis_builder_for_peers(
+            GenesisBuilder::new_without_executor(
+                ChainId::from("topology-override"),
+                PathBuf::from("."),
+            )
+            .append_parameter(Parameter::Custom(
+                SumeragiNposParameters::default().into_custom_parameter(),
+            ))
+            .set_topology(vec![GenesisTopologyEntry::new(existing_peer, existing_pop)]),
+            new_peers.clone(),
         )
-        .append_parameter(Parameter::Custom(
-            SumeragiNposParameters::default().into_custom_parameter(),
-        ))
-        .set_topology(vec![GenesisTopologyEntry::new(existing_peer, existing_pop)])
         .build_raw()
+        .expect("complete topology-override fixture")
         .with_consensus_mode(SumeragiConsensusMode::Npos)
         .with_consensus_meta();
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
         fs::write(genesis_file.path(), json).expect("write genesis json");
-        let (new_peers, peer_pops) = valid_test_topology(4);
         let topology_json = norito::json::to_json(&new_peers).unwrap();
         let args = Args {
             genesis_file: genesis_file.path().to_path_buf(),
@@ -3082,8 +2869,9 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         )))
         .next_transaction()
         .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333)))
-        .set_topology(valid_test_topology_entries(4))
+        .set_topology_for_test(valid_test_topology_entries(4))
         .build_raw()
+        .expect("complete direct-sign fixture")
         .with_consensus_mode(SumeragiConsensusMode::Permissioned)
         .with_consensus_meta();
         let genesis_file = tempfile::NamedTempFile::new().expect("create temp genesis file");
@@ -3310,7 +3098,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     }
     #[test]
     fn sign_auto_bootstraps_npos_validators_for_topology() {
-        let genesis_file = npos_genesis_file();
+        let (peers, peer_pops) = valid_test_topology(4);
+        let genesis_file = with_test_authority_for_topology(npos_genesis_file(), &peers);
         let manifest =
             RawGenesisTransaction::from_path(&genesis_file).expect("parse NPoS genesis fixture");
         let _chain_discriminant = staged_genesis_chain_discriminant(&manifest);
@@ -3332,7 +3121,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .public_key()
             .clone(),
         );
-        let (peers, peer_pops) = valid_test_topology(4);
         let topology_json = norito::json::to_json(&peers).unwrap();
         let args = Args {
             genesis_file,
@@ -3441,7 +3229,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .parse()
             .expect("valid canonical asset id");
         let args = Args {
-            genesis_file: alias_backed_npos_genesis_file(),
+            genesis_file: with_test_authority_for_topology(
+                alias_backed_npos_genesis_file(),
+                &peers,
+            ),
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: None,
@@ -3493,7 +3284,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .expect("valid canonical asset id");
         let bound_manifest = tempfile::NamedTempFile::new().expect("create bound manifest file");
         let args = Args {
-            genesis_file: public_taira_alias_backed_npos_genesis_file(),
+            genesis_file: with_test_authority_for_topology(
+                public_taira_alias_backed_npos_genesis_file(),
+                &peers,
+            ),
             out_file: None,
             bound_manifest_out: Some(bound_manifest.path().to_path_buf()),
             expected_hash_out: None,
@@ -3552,7 +3346,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let (peers, peer_pops) = valid_test_topology(4);
         let topology_json = norito::json::to_json(&peers).unwrap();
         let args = Args {
-            genesis_file: public_nexus_npos_genesis_file_without_xor_alias(),
+            genesis_file: with_test_authority_for_topology(
+                public_nexus_npos_genesis_file_without_xor_alias(),
+                &peers,
+            ),
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: None,
@@ -3577,7 +3374,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let (peers, peer_pops) = valid_test_topology(4);
         let topology_json = norito::json::to_json(&peers).unwrap();
         let args = Args {
-            genesis_file: public_taira_alias_backed_npos_genesis_file(),
+            genesis_file: with_test_authority_for_topology(
+                public_taira_alias_backed_npos_genesis_file(),
+                &peers,
+            ),
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: None,
@@ -3605,7 +3405,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let (peers, peer_pops) = valid_test_topology(4);
         let topology_json = norito::json::to_json(&peers).unwrap();
         let args = Args {
-            genesis_file: public_taira_conflicting_xor_alias_npos_genesis_file(),
+            genesis_file: with_test_authority_for_topology(
+                public_taira_conflicting_xor_alias_npos_genesis_file(),
+                &peers,
+            ),
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: None,
@@ -3630,7 +3433,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let (peers, peer_pops) = valid_test_topology(4);
         let topology_json = norito::json::to_json(&peers).unwrap();
         let args = Args {
-            genesis_file: npos_genesis_file(),
+            genesis_file: with_test_authority_for_topology(npos_genesis_file(), &peers),
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: None,
@@ -3671,7 +3474,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let (peers, peer_pops) = valid_test_topology(4);
         let topology_json = norito::json::to_json(&peers).unwrap();
         let args = Args {
-            genesis_file: npos_genesis_file(),
+            genesis_file: with_test_authority_for_topology(npos_genesis_file(), &peers),
             out_file: None,
             bound_manifest_out: None,
             expected_hash_out: None,
@@ -3761,9 +3564,12 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     #[test]
     fn peer_config_chain_must_match_manifest() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let manifest = RawGenesisTransaction::from_path(root.join("defaults/genesis.json"))
-            .expect("parse genesis fixture");
         let mut config = checked_in_config(&root.join("defaults/nexus/config.toml"));
+        let manifest = GenesisBuilder::new_without_executor(config.common.chain.clone(), ".")
+            .set_topology_for_test(valid_test_topology_entries(4))
+            .build_raw()
+            .expect("build complete config-aligned genesis")
+            .with_chain_discriminant(*config.common.chain_discriminant.value());
         ensure_peer_config_matches_manifest(&config, &manifest)
             .expect("baseline config and manifest match");
         config.common.chain = ChainId::from("concurrently-replaced-chain");
@@ -3778,9 +3584,12 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     #[test]
     fn peer_config_discriminant_must_match_manifest() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let manifest = RawGenesisTransaction::from_path(root.join("defaults/genesis.json"))
-            .expect("parse genesis fixture");
         let mut config = checked_in_config(&root.join("defaults/nexus/config.toml"));
+        let manifest = GenesisBuilder::new_without_executor(config.common.chain.clone(), ".")
+            .set_topology_for_test(valid_test_topology_entries(4))
+            .build_raw()
+            .expect("build complete config-aligned genesis")
+            .with_chain_discriminant(*config.common.chain_discriminant.value());
         *config.common.chain_discriminant.value_mut() = manifest
             .chain_discriminant()
             .checked_add(1)
@@ -3896,8 +3705,9 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .expect("create temp genesis file");
         let manifest =
             GenesisBuilder::new_without_executor(ChainId::from("test-chain"), PathBuf::from("."))
-                .set_topology(valid_test_topology_entries(4))
+                .set_topology_for_test(valid_test_topology_entries(4))
                 .build_raw()
+                .expect("complete minimal signing fixture")
                 .with_consensus_mode(SumeragiConsensusMode::Permissioned)
                 .with_consensus_meta();
         let genesis_json = norito::json::to_json_pretty(&manifest).expect("serialize genesis");
@@ -3933,8 +3743,9 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 .append_parameter(Parameter::Custom(
                     SumeragiNposParameters::default().into_custom_parameter(),
                 ))
-                .set_topology(valid_test_topology_entries(4))
+                .set_topology_for_test(valid_test_topology_entries(4))
                 .build_raw()
+                .expect("complete NPoS signing fixture")
                 .with_consensus_mode(SumeragiConsensusMode::Npos)
                 .with_consensus_meta();
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
@@ -3973,7 +3784,9 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         .append_parameter(Parameter::Custom(
             SumeragiNposParameters::default().into_custom_parameter(),
         ))
+        .complete_for_test()
         .build_raw()
+        .expect("complete alias-backed NPoS fixture")
         .with_consensus_mode(SumeragiConsensusMode::Npos)
         .with_consensus_meta();
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
@@ -4014,7 +3827,9 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         .append_parameter(Parameter::Custom(
             SumeragiNposParameters::default().into_custom_parameter(),
         ))
+        .complete_for_test()
         .build_raw()
+        .expect("complete public Taira NPoS fixture")
         .with_consensus_mode(SumeragiConsensusMode::Npos)
         .with_chain_discriminant(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT)
         .with_consensus_meta();
@@ -4035,7 +3850,9 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         .append_parameter(Parameter::Custom(
             SumeragiNposParameters::default().into_custom_parameter(),
         ))
+        .complete_for_test()
         .build_raw()
+        .expect("complete public Nexus NPoS fixture")
         .with_consensus_mode(SumeragiConsensusMode::Npos)
         .with_chain_discriminant(crate::genesis::profile::NEXUS_CHAIN_DISCRIMINANT)
         .with_consensus_meta();
@@ -4091,7 +3908,9 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         .append_parameter(Parameter::Custom(
             SumeragiNposParameters::default().into_custom_parameter(),
         ))
+        .complete_for_test()
         .build_raw()
+        .expect("complete conflicting Taira XOR fixture")
         .with_consensus_mode(SumeragiConsensusMode::Npos)
         .with_chain_discriminant(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT)
         .with_consensus_meta();

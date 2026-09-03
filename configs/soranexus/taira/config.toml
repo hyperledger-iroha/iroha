@@ -116,6 +116,8 @@ allowed_origins = [
   "https://bokolo-m-selen.soramitsu.io",
   "https://bokolo-ezipei.soramitsu.io",
   "https://bpng.soramitsu.io",
+  "https://mibank.soramitsu.io",
+  "https://explorer-bpng.soramitsu.io",
   "https://bokolo-explorer.soramitsu.io",
 ]
 allowed_methods = ["GET", "POST", "DELETE", "OPTIONS"]
@@ -124,6 +126,10 @@ allowed_headers = [
   "authorization",
   "content-type",
   "idempotency-key",
+  "x-client-app",
+  "x-request-id",
+  "x-account-id",
+  "x-correlation-id",
   "mcp-method",
   "mcp-name",
   "mcp-protocol-version",
@@ -144,8 +150,8 @@ expose_operator_routes = false
 allow_tool_prefixes = ["iroha."]
 
 [torii.kagemusha_v1_commands]
-private_key_file = "/run/secrets/iroha/taira-kagemusha-v1-commands-private-key"
-minimum_xor_balance = "1"
+redemption_private_key_file = "/run/secrets/iroha/taira-kagemusha-v1-redemption-private-key"
+redemption_minimum_xor_balance = "1"
 max_tx_value = "1000000000"
 operation_registry_max_entries = 4096
 operation_registry_max_bytes = 593920
@@ -153,7 +159,7 @@ operation_registry_max_bytes = 593920
 # The base template deliberately has no active `[settlement.kagemusha]` release
 # paths, so ordinary rendering has no dependency on unpublished artifacts.
 # Runtime deployments that enable settlement must provide their reviewed
-# Kagemusha V1 policy, artifact release, qualification seal, and decoded-budget settings
+# KAGEMUSHA V1 policy, artifact release, qualification seal, and decoded-budget settings
 # through their deployment-specific configuration source.
 
 [torii.account_onboarding]

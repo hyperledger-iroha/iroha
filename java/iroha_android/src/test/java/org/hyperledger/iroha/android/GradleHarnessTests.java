@@ -51,6 +51,7 @@ public final class GradleHarnessTests {
         "org.hyperledger.iroha.android.client.IdentifierReceiptCanonicalEncoderTests",
         "org.hyperledger.iroha.android.client.JsonEncoderTests",
         "org.hyperledger.iroha.android.client.JsonParserTests",
+        "org.hyperledger.iroha.android.client.KagemushaToriiClientV1Tests",
         "org.hyperledger.iroha.android.client.NoritoRpcClientTests",
         "org.hyperledger.iroha.android.client.SubscriptionToriiClientTests",
         "org.hyperledger.iroha.android.client.PipelineStatusExtractorTests",

@@ -170,6 +170,51 @@ fn rejected_transaction_gas_is_accountable(gas_used: u64, result: &TransactionRe
             ))
         )
 }
+
+/// Enforce the signature-bound payer and admission intent of every native KAGEMUSHA V1 top-up.
+///
+/// Queue admission calls this before deriving an operation-id claim, while stateful validation
+/// repeats it as a deterministic last line of defence for block and replay execution paths.
+pub(crate) fn validate_kagemusha_top_up_admission_invariants_v1(
+    tx: &SignedTransaction,
+) -> Result<(), &'static str> {
+    fn is_top_up(instruction: &InstructionBox) -> bool {
+        instruction
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1>()
+            .is_some()
+    }
+    let contains_top_up = tx.instructions().explicit_instructions().any(is_top_up)
+        || matches!(
+            tx.instructions(),
+            Executable::IvmProved(proved) if proved.overlay.iter().any(is_top_up)
+        );
+    if !contains_top_up {
+        return Ok(());
+    }
+    let Executable::Instructions(instructions) = tx.instructions() else {
+        return Err(
+            "KAGEMUSHA V1 top-up cannot be carried by batch, proved, overlay, or opaque execution",
+        );
+    };
+    let [instruction] = instructions.as_ref() else {
+        return Err("a KAGEMUSHA V1 top-up must be the only instruction in its signed transaction");
+    };
+    let Some(top_up) = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1>()
+    else {
+        return Err("KAGEMUSHA V1 top-up carrier shape changed during validation");
+    };
+    let request = top_up.request();
+    if tx.authority() != &request.payer {
+        return Err("KAGEMUSHA V1 top-up authority must equal the embedded payer");
+    }
+    if tx.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
+        return Err("KAGEMUSHA V1 top-up transaction must bind QueuePlanSynced admission");
+    }
+    Ok(())
+}
 /// Project a hash known to identify an external signed transaction into its entrypoint identity.
 ///
 /// `TransactionEntrypoint::External` deliberately preserves the signed transaction's digest.
@@ -1081,6 +1126,7 @@ fn is_time_sensitive_instruction_type(type_id: TypeId) -> bool {
         iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1,
         iroha_data_model::isi::kagemusha_v1::RedeemKagemushaV1,
         iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1,
+        iroha_data_model::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1,
         iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1,
         iroha_data_model::isi::private_settlement::FinalizeAtomicPrivateSettlementV1,
         iroha_data_model::isi::oracle::RecordTwitterBinding,
@@ -2846,6 +2892,9 @@ impl StateBlock<'_> {
         routing_decision: Option<crate::queue::RoutingDecision>,
     ) -> Result<StatefulAdmission, TransactionRejectionReason> {
         let authority = tx.authority().clone();
+        validate_kagemusha_top_up_admission_invariants_v1(tx).map_err(|reason| {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason.to_owned()))
+        })?;
         if code::is_historical_contract_subject(&state_transaction.world, &authority) {
             warn!(
                 authority = %authority,
@@ -8339,6 +8388,9 @@ pub mod tests {
             TypeId::of::<iroha_data_model::isi::kagemusha_v1::RedeemKagemushaV1>(),
             TypeId::of::<iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1>(
             ),
+            TypeId::of::<
+                iroha_data_model::isi::private_settlement::RegisterAtomicPrivateSettlementPrepareV1,
+            >(),
             TypeId::of::<iroha_data_model::isi::private_settlement::AbortAtomicPrivateSettlementV1>(
             ),
             TypeId::of::<

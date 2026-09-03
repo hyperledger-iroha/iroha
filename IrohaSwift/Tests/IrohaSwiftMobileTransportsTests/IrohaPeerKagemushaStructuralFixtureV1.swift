@@ -10,6 +10,6 @@ func mobileKagemushaStructuralArchiveV1(
         typeName: kind.requiredKagemushaCanonicalSchema,
         payload: payload,
         flags: NoritoHeader.compactLen,
-        payloadAlignment: 16
+        payloadAlignment: kind.requiredKagemushaPayloadAlignment
     )
 }

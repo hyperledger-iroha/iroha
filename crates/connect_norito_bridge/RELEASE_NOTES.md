@@ -1,19 +1,44 @@
 # NoritoBridge XCFramework Artifacts
 
+Static bridge archives explicitly bundle PQClean's common SHA3/SHAKE and
+architecture-specific Keccak helpers. The Apple builder links each thin slice
+into a real C consumer with every archive member loaded before staging or
+publication, including slices restored from CI. Its host macOS consumer also
+checks SHA3-256/SHAKE256 known answers, ML-DSA signing/verification and tamper
+rejection, and ML-KEM encapsulation/decapsulation.
+
 Current source ABI: 23. ABI 14 added
 `connect_norito_encode_transfer_instruction_box` for native multisig proposal
-instruction boxes; later additive revisions include the bounded Kagemusha V1
+instruction boxes; later additive revisions include the bounded KAGEMUSHA V1
 wire validators and SoraFS Governance DAG block/head-chain reference
 validators consumed by the C# SDK. The ABI-23 Kotlin/JVM and Java/Android
 `NativeSignerBridge` surface additionally requires native-signer JNI contract
 revision 5. Revision 4 sealed the removal of generic `Shield`, `ZkTransfer`, and
 `Unshield` transaction encoders plus native anonymous-escrow and authority-free
 Kaigi helpers from the C and JNI surfaces. The bridge retains specialized
-Kagemusha V1 raw/text validators for request, acceptance authorization,
-ticket, payment, acknowledgement, mint authorization, bound mint credit, and
-redemption voucher. The source surface also validates the authenticated
-no-commit recovery closure and the complete five-message exchange as exact
-cross-bound objects, plus fail-closed device-lifecycle probes. `RegisterZkAsset`
+KAGEMUSHA raw/text validators for the sole ordered IPM1 lifecycle—request (`1`),
+payment (`2`), and durable acknowledgement (`3`)—plus mint authorization, bound
+mint credit, and redemption voucher. Every progressive validator requires the
+exact preceding messages, and the exchange validator enforces the complete
+three-message binding and aggregate caps. The fail-closed device surface exposes
+the sole contiguous 22-operation lifecycle and exact `0x0000ffff` capability mask.
+The generic C and JNI execute paths now parse the complete `IKGMJCM1` frame and
+reject bad magic, version, operation, flags, request ID, length, digest, or
+suffix before reporting service availability. Receiver operations use distinct
+bounded canonical Norito schemas and exact credit-ID recovery selectors; their
+reply validators bind the staged request/payment bytes and receipt context and
+retain full-width `u128` inbox revisions. Operation 16 has shared canonical
+mint-stage command/result bodies and two structural C validation exports. Both
+C and JNI reject malformed operation-16 bodies before returning unavailable.
+The command binds the exact pre-debit authorization and finalized mint credit;
+the result binds the same credit ID with a closed new-stage/duplicate status.
+Private reservation openings and full Guard certificates remain native-only.
+The current exact artifact inventory requires the current KAGEMUSHA C exports,
+including both mint-stage validators; previous binaries do not satisfy it.
+This is wire and dispatcher code only:
+the stock capabilities and valid execution results remain unavailable, and no
+test engine, host flag, or shape-valid reply grants monetary authority.
+`RegisterZkAsset`
 now carries exactly
 `asset`, `vk_unshield`, and `vk_shield`; optional key presence enables each
 settlement role, with no mode, boolean enablement, or asset-bound transfer-key

@@ -51,7 +51,7 @@ impl core::fmt::Display for ConsensusFingerprint {
         write!(formatter, "0x{}", hex::encode(self.0))
     }
 }
-/// Consensus-state staging record for the next Kagemusha V1 Pasta roster.
+/// Consensus-state staging record for the next KAGEMUSHA V1 Pasta roster.
 ///
 /// Validators read this value from the finalized world state before building
 /// an epoch-boundary height context. The old roster then authenticates the
@@ -83,7 +83,7 @@ impl KagemushaMintFinalityNextEpochParameterV1 {
     pub fn parameter_id() -> CustomParameterId {
         Self::PARAMETER_ID_STR
             .parse()
-            .expect("valid Kagemusha V1 next-roster parameter identifier")
+            .expect("valid KAGEMUSHA V1 next-roster parameter identifier")
     }
 
     /// Validate the complete public roster before it enters consensus state.
@@ -91,9 +91,7 @@ impl KagemushaMintFinalityNextEpochParameterV1 {
     /// # Errors
     ///
     /// Returns the roster validation error unchanged.
-    pub fn validate(
-        &self,
-    ) -> Result<(), crate::isi::kagemusha_v1::KagemushaIsiValidationErrorV1> {
+    pub fn validate(&self) -> Result<(), crate::isi::kagemusha_v1::KagemushaIsiValidationErrorV1> {
         self.roster.validate()
     }
 
@@ -176,6 +174,11 @@ pub struct ConsensusHandshakeMetadata {
     pub wire_protocol_version: u32,
     /// Canonical consensus fingerprint.
     pub consensus_fingerprint: ConsensusFingerprint,
+    /// Signed network-independent KAGEMUSHA mint-finality genesis authority.
+    ///
+    /// Core binds the final genesis-derived network identity to these
+    /// templates before constructing the first height context.
+    pub kagemusha_mint_finality: crate::isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1,
     /// Signed inputs for the first Sumeragi v2 height context.
     pub sumeragi_v2: crate::block::consensus_v2::SumeragiV2GenesisContextParameters,
 }
@@ -185,7 +188,8 @@ impl ConsensusHandshakeMetadata {
     /// # Errors
     ///
     /// Returns an error when the wire version is not the first-release version
-    /// or the signed Sumeragi v2 genesis context is invalid.
+    /// or the signed Sumeragi v2 context/KAGEMUSHA genesis authority is
+    /// invalid.
     pub fn validate(&self) -> Result<(), String> {
         let expected_version = u32::from(crate::block::consensus_v2::PROTOCOL_VERSION);
         if self.wire_protocol_version != expected_version {
@@ -194,6 +198,9 @@ impl ConsensusHandshakeMetadata {
             );
         }
         self.sumeragi_v2
+            .validate()
+            .map_err(|error| error.to_string())?;
+        self.kagemusha_mint_finality
             .validate()
             .map_err(|error| error.to_string())?;
         Ok(())
@@ -2641,6 +2648,8 @@ mod tests {
             block_cadence_ms: NonZeroU64::new(1_000).unwrap(),
             wire_protocol_version: u32::from(crate::block::consensus_v2::PROTOCOL_VERSION),
             consensus_fingerprint: ConsensusFingerprint::new([0xab; 32]),
+            kagemusha_mint_finality:
+                crate::block::consensus_v2::test_kagemusha_mint_finality_genesis_parameters(),
             sumeragi_v2: crate::block::consensus_v2::test_genesis_context_parameters(),
         }
     }
@@ -2658,6 +2667,18 @@ mod tests {
     }
     #[cfg(feature = "json")]
     #[test]
+    fn handshake_metadata_requires_kagemusha_genesis_authority() {
+        let mut value = norito::json::to_value(&handshake_metadata_fixture())
+            .expect("serialize handshake metadata");
+        value
+            .as_object_mut()
+            .expect("metadata object")
+            .remove("kagemusha_mint_finality");
+        norito::json::value::from_value::<ConsensusHandshakeMetadata>(value)
+            .expect_err("signed KAGEMUSHA genesis authority must be mandatory");
+    }
+    #[cfg(feature = "json")]
+    #[test]
     fn handshake_metadata_validation_is_strict() {
         let baseline = handshake_metadata_fixture();
         baseline.validate().expect("canonical metadata");
@@ -2667,6 +2688,10 @@ mod tests {
         let mut bad_context = baseline;
         bad_context.sumeragi_v2.da_layout.parity_shards = 0;
         assert!(bad_context.validate().is_err());
+
+        let mut bad_kagemusha = handshake_metadata_fixture();
+        bad_kagemusha.kagemusha_mint_finality.epoch_roster.epoch = 1;
+        assert!(bad_kagemusha.validate().is_err());
     }
     #[cfg(feature = "json")]
     #[test]

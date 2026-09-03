@@ -1,3 +1,5 @@
+use iroha_data_model::parameter::{Parameter, system::SumeragiNposParameters};
+
 #[tokio::test]
 async fn creates_all_dirs_while_writing_snapshots() {
     let tmp_root = tempdir().unwrap();

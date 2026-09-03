@@ -12,6 +12,7 @@ public interface AtomicPrivateSettlementResponseVerifierV1 {
   /** Verify an auditor capsule against the exact governed auditor signing key. */
   void verifyAuditorCapsuleResponse(
       byte[] responseJson,
+      byte[] requestJson,
       byte[] expectedNetworkId,
       byte[] requestedPayloadDigest,
       String auditorPublicKey);

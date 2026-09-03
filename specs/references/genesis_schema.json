@@ -2,16 +2,21 @@
   "RawGenesisTransaction": {
     "Struct": [
       { "name": "chain", "type": "ChainId" },
+      { "name": "chain_discriminant", "type": "u16" },
       { "name": "executor", "type": "Option<String>" },
       { "name": "ivm_dir", "type": "String" },
       { "name": "transactions", "type": "Vec<RawGenesisTx>" },
       { "name": "consensus_mode", "type": "SumeragiConsensusMode" },
-      { "name": "bls_domain", "type": "Option<String>" },
       { "name": "wire_protocol_version", "type": "u32" },
       { "name": "consensus_fingerprint", "type": "Option<String>" },
       { "name": "sumeragi_v2", "type": "SumeragiV2GenesisContextParameters" },
+      {
+        "name": "kagemusha_mint_finality",
+        "type": "KagemushaMintFinalityGenesisParametersV1"
+      },
       { "name": "crypto", "type": "ManifestCrypto" }
-    ]
+    ],
+    "docs": "Canonical first-release raw genesis manifest. Both signed consensus-authority fields are mandatory."
   },
   "SumeragiV2GenesisContextParameters": {
     "Struct": [
@@ -20,6 +25,38 @@
       { "name": "execution_policy_hash", "type": "[u8; 32]" }
     ],
     "docs": "Required signed Sumeragi v2 height-context transport and execution-policy parameters."
+  },
+  "KagemushaMintFinalityGenesisParametersV1": {
+    "Struct": [
+      {
+        "name": "epoch_roster",
+        "type": "KagemushaMintFinalityEpochRosterTemplateV1"
+      },
+      {
+        "name": "next_epoch_roster",
+        "type": "Option<KagemushaMintFinalityEpochRosterTemplateV1>"
+      }
+    ],
+    "docs": "Required signed network-independent KAGEMUSHA mint-finality authority. The epoch-zero roster is mandatory; next_epoch_roster must be present and is non-null exactly when NPoS height one is an epoch boundary."
+  },
+  "KagemushaMintFinalityEpochRosterTemplateV1": {
+    "Struct": [
+      { "name": "version", "type": "u16" },
+      { "name": "epoch", "type": "u64" },
+      {
+        "name": "validators",
+        "type": "Vec<KagemushaMintFinalityValidatorKeysV1>"
+      }
+    ],
+    "docs": "Strictly ordered exact 3f + 1 consensus/Pasta public-key roster for one epoch."
+  },
+  "KagemushaMintFinalityValidatorKeysV1": {
+    "Struct": [
+      { "name": "validator", "type": "PeerId" },
+      { "name": "eq_proof_public_key", "type": "[u8; 32]" },
+      { "name": "ep_proof_public_key", "type": "[u8; 32]" }
+    ],
+    "docs": "Consensus validator identity plus separately provisioned canonical compressed Pasta public keys."
   },
   "RawGenesisTx": {
     "Struct": [

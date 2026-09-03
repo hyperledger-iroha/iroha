@@ -4,7 +4,8 @@ use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::{NetworkId, nexus::ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1};
 use iroha_torii_shared::private_settlement_api::{
     PrivateSettlementAuditApprovalRequestV1, PrivateSettlementAuditApprovalResponseV1,
-    PrivateSettlementAuditorCapsuleResponseV1, PrivateSettlementCommitteeProofResponseV1,
+    PrivateSettlementAuditorCapsuleRequestV1, PrivateSettlementAuditorCapsuleResponseV1,
+    PrivateSettlementCommitteeProofResponseV1,
     validate_private_settlement_audit_approval_response_v1,
     validate_private_settlement_auditor_capsule_response_v1,
     validate_private_settlement_auditor_identity_v1,
@@ -81,19 +82,26 @@ pub fn verify_committee_proof_response_v1(
 }
 
 /// Verify an auditor-only capsule response and the requesting auditor identity.
-#[napi(js_name = "privateSettlementVerifyAuditorCapsuleResponseV1")]
-pub fn verify_auditor_capsule_response_v1(
+#[napi(js_name = "privateSettlementVerifyAuditorCapsuleResponseWithRequestV1")]
+pub fn verify_auditor_capsule_response_with_request_v1(
     response_json: Uint8Array,
+    request_json: Uint8Array,
     expected_network_id: Uint8Array,
     requested_payload_digest: Uint8Array,
     auditor_signing_key_literal: String,
 ) -> napi::Result<()> {
+    let request: PrivateSettlementAuditorCapsuleRequestV1 = json::from_slice(bounded_json(
+        &request_json,
+        APPROVAL_REQUEST_JSON_MAX_BYTES_V1,
+    )?)
+    .map_err(|_| invalid())?;
     let response: PrivateSettlementAuditorCapsuleResponseV1 =
         json::from_slice(bounded_json(&response_json, RESPONSE_JSON_MAX_BYTES_V1)?)
             .map_err(|_| invalid())?;
     validate_private_settlement_auditor_capsule_response_v1(
         &expected_network(&expected_network_id)?,
         requested_payload(&requested_payload_digest)?,
+        &request,
         &response,
     )
     .map_err(|_| invalid())?;
@@ -155,7 +163,8 @@ mod tests {
                 Uint8Array::from(vec![1; 32]),
             )
             .expect_err("short network must fail"),
-            verify_auditor_capsule_response_v1(
+            verify_auditor_capsule_response_with_request_v1(
+                Uint8Array::from(b"{}".to_vec()),
                 Uint8Array::from(b"{}".to_vec()),
                 Uint8Array::from(vec![0; 31]),
                 Uint8Array::from(vec![1; 32]),

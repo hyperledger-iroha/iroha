@@ -9638,9 +9638,9 @@ public struct ToriiVerifyingKeyDetail: Decodable, Sendable {
 
 }
 
-/// Asset-neutral Kagemusha protocol capability advertised by every app-api node.
+/// Asset-neutral KAGEMUSHA protocol capability advertised by every app-api node.
 ///
-/// A conforming node exposes the sole Kagemusha wire/lifecycle V1
+/// A conforming node exposes the sole KAGEMUSHA wire/lifecycle V1
 /// interface, independent of assets, dataspaces, and transaction history.
 public struct ToriiKagemushaStatus: Decodable, Sendable, Equatable {
     public let kagemushaHandoffCapability: String
@@ -9696,18 +9696,84 @@ public struct ToriiKagemushaStatus: Decodable, Sendable, Equatable {
                 debugDescription: "device_lifecycle_version must be 1"
             )
         }
-        guard decodedReady else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .ready,
-                in: container,
-                debugDescription: "ready must be true for universal Kagemusha capability"
-            )
-        }
 
         kagemushaHandoffCapability = decodedCapability
         wireVersion = decodedWireVersion
         deviceLifecycleVersion = decodedDeviceLifecycleVersion
         ready = decodedReady
+    }
+}
+
+/// Closed catalog of generic KAGEMUSHA reserve operations.
+public enum ToriiKagemushaOperationKindV1: String, Sendable, Equatable {
+    case topUp = "top_up"
+    case redemption
+}
+
+/// Pollable lifecycle of one idempotent KAGEMUSHA reserve operation.
+public enum ToriiKagemushaOperationStateV1: String, Sendable, Equatable {
+    case pending
+    case applied
+    case rejected
+}
+
+/// Stable terminal KAGEMUSHA rejection classes.
+public enum ToriiKagemushaRejectionCodeV1: String, Sendable, Equatable {
+    case invalidRequest = "invalid_request"
+    case unauthorized
+    case insufficientOnlineBalance = "insufficient_online_balance"
+    case invalidProof = "invalid_proof"
+    case hardwarePolicyRejected = "hardware_policy_rejected"
+    case identityConflict = "identity_conflict"
+    case reserveUnderflow = "reserve_underflow"
+    case arithmeticOverflow = "arithmetic_overflow"
+    case internalFailure = "internal_failure"
+}
+
+/// Public rejection metadata that grants no monetary authority.
+public struct ToriiKagemushaOperationRejectionV1: Sendable, Equatable {
+    public let code: ToriiKagemushaRejectionCodeV1
+    public let detailDigest: Data
+}
+
+/// Structurally checked KAGEMUSHA operation metadata whose applied result remains private.
+///
+/// The complete response is released only to a caller-pinned verifier. In particular, an
+/// untrusted Torii response cannot select the trust root used to authorize its own finality.
+public struct ToriiUnverifiedKagemushaOperationStatusV1: @unchecked Sendable {
+    public let operationID: Data
+    public let kind: ToriiKagemushaOperationKindV1
+    public let state: ToriiKagemushaOperationStateV1
+    public let rejection: ToriiKagemushaOperationRejectionV1?
+    private let responseJSON: Data
+
+    fileprivate init(
+        operationID: Data,
+        kind: ToriiKagemushaOperationKindV1,
+        state: ToriiKagemushaOperationStateV1,
+        rejection: ToriiKagemushaOperationRejectionV1?,
+        responseJSON: Data
+    ) {
+        self.operationID = Data(operationID)
+        self.kind = kind
+        self.state = state
+        self.rejection = rejection
+        self.responseJSON = Data(responseJSON)
+    }
+
+    /// Authenticate and release the complete response through caller-owned trust state.
+    public func verifyAgainst<Anchor, Verified>(
+        _ trustAnchor: Anchor,
+        verifier: (Data, Anchor) throws -> Verified
+    ) rethrows -> Verified {
+        try verifier(Data(responseJSON), trustAnchor)
+    }
+}
+
+extension ToriiUnverifiedKagemushaOperationStatusV1: CustomStringConvertible {
+    public var description: String {
+        "ToriiUnverifiedKagemushaOperationStatusV1(kind: \(kind.rawValue), "
+            + "state: \(state.rawValue), result: [WITHHELD])"
     }
 }
 
@@ -9729,7 +9795,7 @@ private enum ToriiKagemushaCapabilityValidation {
             throw DecodingError.dataCorruptedError(
                 forKey: unknown,
                 in: fields,
-                debugDescription: "Unsupported Kagemusha capability field \(unknown.stringValue)"
+                debugDescription: "Unsupported KAGEMUSHA capability field \(unknown.stringValue)"
             )
         }
     }
@@ -21860,7 +21926,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     private static let defaultListPageSize = 100
     private static let feeQuoteResponseMaximumBytes = 64 * 1024
     private static let feeSponsorProgramResponseMaximumBytes = 64 * 1024
-    private static let kagemushaCapabilityResponseMaximumBytes = 256 * 1024
+    private static let kagemushaCapabilityResponseMaximumBytes = 4 * 1024
+    private static let kagemushaOperationStatusResponseMaximumBytes = 16 * 1024 * 1024
     private static let sccpCapabilitiesResponseMaximumBytes = 64 * 1024
     private static let sccpRecentMessagesResponseMaximumBytes = 8 * 1024 * 1024
     private static let sccpDiscoveryResponseMaximumBytes = 64 * 1024 * 1024
@@ -26659,7 +26726,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                                       headers: ["Accept": "application/json"])
         let (data, response) = try await sendBoundedSccpResponse(
             request,
-            context: "Kagemusha capability",
+            context: "KAGEMUSHA capability",
             maximumBytes: Self.kagemushaCapabilityResponseMaximumBytes
         )
         try ensureStatus(response, equals: 200, responseBody: data)
@@ -26671,10 +26738,242 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(in: data)
         } catch {
             throw ToriiClientError.invalidPayload(
-                "Kagemusha capability response must be valid UTF-8 JSON without duplicate object keys"
+                "KAGEMUSHA capability response must be valid UTF-8 JSON without duplicate object keys"
             )
         }
         return try decodeJSON(ToriiKagemushaStatus.self, from: data)
+    }
+
+    /// Submit one exact canonical payer-signed KAGEMUSHA top-up transaction.
+    public func submitKagemushaTopUp(
+        _ transaction: SignedTransactionEnvelope,
+        operationID: Data
+    ) async throws -> ToriiUnverifiedKagemushaOperationStatusV1 {
+        return try await submitKagemushaOperation(
+            path: "/v1/kagemusha/top-up",
+            operationID: operationID,
+            expectedKind: .topUp,
+            body: transaction.norito
+        )
+    }
+
+    /// Submit one exact canonical full or partial KAGEMUSHA redemption request.
+    public func submitKagemushaRedemption(
+        _ value: KagemushaRedemptionRequestV1
+    ) async throws -> ToriiUnverifiedKagemushaOperationStatusV1 {
+        let body = try KagemushaNoritoV1.encodeRedemptionRequestShape(value)
+        return try await submitKagemushaOperation(
+            path: "/v1/kagemusha/redeem",
+            operationID: value.operationID,
+            expectedKind: .redemption,
+            body: body
+        )
+    }
+
+    /// Poll one KAGEMUSHA reserve operation while withholding unverified applied results.
+    public func getKagemushaOperation(
+        operationID: Data
+    ) async throws -> ToriiUnverifiedKagemushaOperationStatusV1 {
+        try Self.requireKagemushaOperationID(operationID)
+        let request = try makeRequest(
+            path: "/v1/kagemusha/operations/\(operationID.hexEncodedString())",
+            headers: ["Accept": "application/json"]
+        )
+        let (status, _) = try await receiveKagemushaOperationStatus(
+            request, acceptedStatuses: [200])
+        guard status.operationID == operationID else {
+            throw ToriiClientError.invalidPayload(
+                "KAGEMUSHA operation response identity does not match the requested resource"
+            )
+        }
+        return status
+    }
+
+    private func submitKagemushaOperation(
+        path: String,
+        operationID: Data,
+        expectedKind: ToriiKagemushaOperationKindV1,
+        body: Data
+    ) async throws -> ToriiUnverifiedKagemushaOperationStatusV1 {
+        try Self.requireKagemushaOperationID(operationID)
+        let request = try makeRequest(
+            path: path,
+            method: .post,
+            body: body,
+            headers: [
+                "Accept": "application/json",
+                "Content-Type": "application/x-norito",
+                "Idempotency-Key": operationID.hexEncodedString(),
+            ]
+        )
+        let (status, response) = try await receiveKagemushaOperationStatus(
+            request, acceptedStatuses: [200, 202])
+        guard status.operationID == operationID, status.kind == expectedKind else {
+            throw ToriiClientError.invalidPayload(
+                "KAGEMUSHA operation response does not match the submitted request"
+            )
+        }
+        let expectedLocation =
+            "/v1/kagemusha/operations/\(operationID.hexEncodedString())"
+        guard response.value(forHTTPHeaderField: "Location") == expectedLocation else {
+            throw ToriiClientError.invalidPayload(
+                "KAGEMUSHA operation response has an invalid Location"
+            )
+        }
+        switch (response.statusCode, status.state) {
+        case (202, .pending):
+            guard let retryAfter = response.value(forHTTPHeaderField: "Retry-After"),
+                  let retrySeconds = UInt64(retryAfter), retrySeconds > 0
+            else {
+                throw ToriiClientError.invalidPayload(
+                    "Pending KAGEMUSHA operation response requires a positive Retry-After"
+                )
+            }
+        case (200, .applied), (200, .rejected):
+            guard response.value(forHTTPHeaderField: "Retry-After") == nil else {
+                throw ToriiClientError.invalidPayload(
+                    "Terminal KAGEMUSHA operation response must not include Retry-After"
+                )
+            }
+        default:
+            throw ToriiClientError.invalidPayload(
+                "KAGEMUSHA operation response status does not match its lifecycle state"
+            )
+        }
+        return status
+    }
+
+    private func receiveKagemushaOperationStatus(
+        _ request: URLRequest,
+        acceptedStatuses: Set<Int>
+    ) async throws -> (ToriiUnverifiedKagemushaOperationStatusV1, HTTPURLResponse) {
+        let (data, response) = try await sendBoundedSccpResponse(
+            request,
+            context: "KAGEMUSHA operation status",
+            maximumBytes: Self.kagemushaOperationStatusResponseMaximumBytes
+        )
+        guard acceptedStatuses.contains(response.statusCode) else {
+            throw ToriiClientError.httpStatus(
+                code: response.statusCode, message: nil, rejectCode: nil)
+        }
+        try ensureResponseMediaType(response, equals: "application/json")
+        guard !data.isEmpty else { throw ToriiClientError.emptyBody }
+        do {
+            try StrictJSONDuplicateKeyRejector.rejectDuplicateObjectKeys(in: data)
+        } catch {
+            throw ToriiClientError.invalidPayload(
+                "KAGEMUSHA operation response must be UTF-8 JSON without duplicate keys"
+            )
+        }
+        let root = try decodeJSON([String: ToriiJSONValue].self, from: data)
+        return (
+            try Self.parseKagemushaOperationStatus(root, responseJSON: data),
+            response
+        )
+    }
+
+    private static func parseKagemushaOperationStatus(
+        _ root: [String: ToriiJSONValue],
+        responseJSON: Data
+    ) throws -> ToriiUnverifiedKagemushaOperationStatusV1 {
+        let expectedFields: Set<String> = [
+            "version", "operation_id", "kind", "state", "result", "rejection",
+        ]
+        guard Set(root.keys) == expectedFields,
+              root["version"] == .number(1)
+        else {
+            throw ToriiClientError.invalidPayload(
+                "KAGEMUSHA operation status has missing or unknown fields"
+            )
+        }
+        let operationID = try kagemushaFixed32(root["operation_id"], field: "operation_id")
+        let kindTag = try kagemushaTaggedUnit(root["kind"], tag: "kind")
+        let stateTag = try kagemushaTaggedUnit(root["state"], tag: "state")
+        guard let kind = ToriiKagemushaOperationKindV1(rawValue: kindTag),
+              let state = ToriiKagemushaOperationStateV1(rawValue: stateTag)
+        else {
+            throw ToriiClientError.invalidPayload("unsupported KAGEMUSHA operation tag")
+        }
+        let result = root["result"] ?? .null
+        let rejectionValue = root["rejection"] ?? .null
+        let rejection: ToriiKagemushaOperationRejectionV1?
+        switch state {
+        case .pending:
+            guard result == .null, rejectionValue == .null else {
+                throw ToriiClientError.invalidPayload("invalid pending KAGEMUSHA status")
+            }
+            rejection = nil
+        case .applied:
+            guard case .object = result, rejectionValue == .null else {
+                throw ToriiClientError.invalidPayload("invalid applied KAGEMUSHA status")
+            }
+            rejection = nil
+        case .rejected:
+            guard result == .null, case let .object(record) = rejectionValue,
+                  Set(record.keys) == ["code", "detail_digest"]
+            else {
+                throw ToriiClientError.invalidPayload("invalid rejected KAGEMUSHA status")
+            }
+            let codeTag = try kagemushaTaggedUnit(record["code"], tag: "code")
+            guard let code = ToriiKagemushaRejectionCodeV1(rawValue: codeTag) else {
+                throw ToriiClientError.invalidPayload("unsupported KAGEMUSHA rejection code")
+            }
+            rejection = ToriiKagemushaOperationRejectionV1(
+                code: code,
+                detailDigest: try kagemushaFixed32(
+                    record["detail_digest"], field: "detail_digest")
+            )
+        }
+        return ToriiUnverifiedKagemushaOperationStatusV1(
+            operationID: operationID,
+            kind: kind,
+            state: state,
+            rejection: rejection,
+            responseJSON: responseJSON
+        )
+    }
+
+    private static func kagemushaTaggedUnit(
+        _ value: ToriiJSONValue?, tag: String
+    ) throws -> String {
+        guard case let .object(record)? = value,
+              Set(record.keys) == [tag, "value"],
+              record["value"] == .null,
+              case let .string(name)? = record[tag]
+        else { throw ToriiClientError.invalidPayload("invalid KAGEMUSHA \(tag) tag") }
+        return name
+    }
+
+    private static func kagemushaFixed32(
+        _ value: ToriiJSONValue?, field: String
+    ) throws -> Data {
+        guard case let .array(values)? = value, values.count == 32 else {
+            throw ToriiClientError.invalidPayload("KAGEMUSHA \(field) must contain 32 bytes")
+        }
+        var result = Data()
+        result.reserveCapacity(32)
+        for value in values {
+            guard case let .number(number) = value,
+                  number.rounded(.towardZero) == number,
+                  number >= 0, number <= 255
+            else {
+                throw ToriiClientError.invalidPayload(
+                    "KAGEMUSHA \(field) contains an invalid byte")
+            }
+            result.append(UInt8(number))
+        }
+        try requireKagemushaOperationID(result, field: field)
+        return result
+    }
+
+    private static func requireKagemushaOperationID(
+        _ value: Data,
+        field: String = "operationID"
+    ) throws {
+        guard value.count == 32, value.contains(where: { $0 != 0 }) else {
+            throw ToriiClientError.invalidPayload(
+                "KAGEMUSHA \(field) must be one nonzero 32-byte value")
+        }
     }
 
     public func getMetrics(asText: Bool = false) async throws -> ToriiMetricsResponse {

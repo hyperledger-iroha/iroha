@@ -7,3 +7,5 @@ pub mod axt;
 /// Canonical V1 appeal-finance cancellation fixtures.
 #[cfg(feature = "json")]
 pub mod cancel_asset_lock;
+/// Deterministic KAGEMUSHA V1 signing fixtures.
+pub mod kagemusha;

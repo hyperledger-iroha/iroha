@@ -11,10 +11,10 @@ public enum IrohaPeerPayloadProfileV1 : ushort
     KagemushaV1 = 1,
 }
 
-/// <summary>Stable three-message Kagemusha V1 exchange identifiers carried by IPM1.</summary>
+/// <summary>The only three KAGEMUSHA V1 peer-message identifiers carried by IPM1.</summary>
 public enum IrohaPeerPayloadKindV1 : byte
 {
-    ReceiveRequest = 1,
+    Request = 1,
     Payment = 2,
     Acknowledgement = 3,
 }
@@ -36,12 +36,12 @@ public sealed record IrohaPeerWireLimitsV1
     public static IrohaPeerWireLimitsV1 PeerV1 { get; } = new();
 
     public IrohaPeerWireLimitsV1(
-        int maximumCanonicalBytes = KagemushaV1.MaximumPaymentBytes,
-        int maximumKagemushaEncodedBytes = KagemushaV1.MaximumPaymentBytes)
+        int maximumCanonicalBytes = Kagemusha.MaximumPaymentBytes,
+        int maximumKagemushaEncodedBytes = Kagemusha.MaximumPaymentBytes)
     {
-        if (maximumCanonicalBytes is < 1 or > KagemushaV1.MaximumPaymentBytes)
+        if (maximumCanonicalBytes is < 1 or > Kagemusha.MaximumPaymentBytes)
             throw new ArgumentOutOfRangeException(nameof(maximumCanonicalBytes));
-        if (maximumKagemushaEncodedBytes is < 1 or > KagemushaV1.MaximumPaymentBytes)
+        if (maximumKagemushaEncodedBytes is < 1 or > Kagemusha.MaximumPaymentBytes)
             throw new ArgumentOutOfRangeException(nameof(maximumKagemushaEncodedBytes));
         MaximumCanonicalBytes = maximumCanonicalBytes;
         MaximumKagemushaEncodedBytes = maximumKagemushaEncodedBytes;
@@ -101,9 +101,9 @@ public sealed class IrohaPeerCanonicalPayloadV1 : IEquatable<IrohaPeerCanonicalP
 
     private static int MaximumFor(IrohaPeerPayloadKindV1 kind) => kind switch
     {
-        IrohaPeerPayloadKindV1.ReceiveRequest => KagemushaV1.MaximumRequestBytes,
-        IrohaPeerPayloadKindV1.Payment => KagemushaV1.MaximumPaymentBytes,
-        IrohaPeerPayloadKindV1.Acknowledgement => KagemushaV1.MaximumAcknowledgementBytes,
+        IrohaPeerPayloadKindV1.Request => Kagemusha.MaximumRequestBytes,
+        IrohaPeerPayloadKindV1.Payment => Kagemusha.MaximumPaymentBytes,
+        IrohaPeerPayloadKindV1.Acknowledgement => Kagemusha.MaximumAcknowledgementBytes,
         _ => throw new ArgumentOutOfRangeException(nameof(kind)),
     };
 
@@ -111,7 +111,7 @@ public sealed class IrohaPeerCanonicalPayloadV1 : IEquatable<IrohaPeerCanonicalP
     {
         var schema = kind switch
         {
-            IrohaPeerPayloadKindV1.ReceiveRequest =>
+            IrohaPeerPayloadKindV1.Request =>
                 "iroha_data_model::kagemusha::kagemusha_v1::KagemushaPaymentRequestV1",
             IrohaPeerPayloadKindV1.Payment =>
                 "iroha_data_model::kagemusha::kagemusha_v1::KagemushaPaymentV1",
@@ -122,7 +122,10 @@ public sealed class IrohaPeerCanonicalPayloadV1 : IEquatable<IrohaPeerCanonicalP
         var (payload, flags) = NoritoCodec.Decode(schema, archive);
         if (flags != NoritoCodec.CanonicalLayoutFlags)
             throw new ArgumentException("Peer payload must use canonical compact Norito framing.", nameof(archive));
-        var padding = kind == IrohaPeerPayloadKindV1.Acknowledgement ? 0 : 8;
+        var padding = kind is IrohaPeerPayloadKindV1.Request
+            or IrohaPeerPayloadKindV1.Payment
+            ? 8
+            : 0;
         var encoded = NoritoCodec.Encode(schema, payload, NoritoCodec.CanonicalLayoutFlags);
         if (padding != 0)
         {
@@ -136,7 +139,7 @@ public sealed class IrohaPeerCanonicalPayloadV1 : IEquatable<IrohaPeerCanonicalP
     }
 }
 
-/// <summary>Immutable, transport-neutral IPM1 envelope for one three-message payload.</summary>
+/// <summary>Immutable, transport-neutral IPM1 envelope for one KAGEMUSHA payload.</summary>
 public sealed class IrohaPeerWireMessageV1 : IEquatable<IrohaPeerWireMessageV1>
 {
     public const byte Version = 1;
@@ -366,7 +369,7 @@ public static class IrohaPeerKagemushaAdapterV1
         ArgumentNullException.ThrowIfNull(message);
         if (message.CanonicalPayload.Profile != IrohaPeerPayloadProfileV1.KagemushaV1
             || message.CanonicalPayload.SchemaVersion != IrohaPeerWireMessageV1.ArchiveSchemaVersion)
-            throw new ArgumentException("Unexpected Kagemusha peer profile.", nameof(message));
+            throw new ArgumentException("Unexpected KAGEMUSHA peer profile.", nameof(message));
         return message.CanonicalPayload.Bytes();
     }
 }

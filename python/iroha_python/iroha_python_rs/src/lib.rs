@@ -165,7 +165,8 @@ use iroha_torii_shared::{
     connect_sdk,
     private_settlement_api::{
         PrivateSettlementAuditApprovalRequestV1, PrivateSettlementAuditApprovalResponseV1,
-        PrivateSettlementAuditorCapsuleResponseV1, PrivateSettlementCommitteeProofResponseV1,
+        PrivateSettlementAuditorCapsuleRequestV1, PrivateSettlementAuditorCapsuleResponseV1,
+        PrivateSettlementCommitteeProofResponseV1,
         validate_private_settlement_audit_approval_response_v1,
         validate_private_settlement_auditor_capsule_response_v1,
         validate_private_settlement_auditor_identity_v1,
@@ -14941,9 +14942,10 @@ fn private_settlement_verify_committee_proof_response_v1_py(
 }
 
 #[pyfunction]
-#[pyo3(name = "private_settlement_verify_auditor_capsule_response_v1")]
-fn private_settlement_verify_auditor_capsule_response_v1_py(
+#[pyo3(name = "private_settlement_verify_auditor_capsule_response_with_request_v1")]
+fn private_settlement_verify_auditor_capsule_response_with_request_v1_py(
     response_json: &[u8],
+    request_json: &[u8],
     expected_network_id: &[u8],
     requested_payload_digest: &[u8],
     auditor_signing_key: &str,
@@ -14952,14 +14954,21 @@ fn private_settlement_verify_auditor_capsule_response_v1_py(
         response_json,
         PRIVATE_SETTLEMENT_RESPONSE_JSON_MAX_BYTES_V1,
     )?;
+    let request_json = private_settlement_response_bytes_v1(
+        request_json,
+        PRIVATE_SETTLEMENT_APPROVAL_REQUEST_JSON_MAX_BYTES_V1,
+    )?;
     let expected_network = private_settlement_expected_network_id_v1(expected_network_id)?;
     let requested = private_settlement_requested_payload_digest_v1(requested_payload_digest)?;
     let auditor_key = private_settlement_auditor_signing_key_v1(auditor_signing_key)?;
+    let request: PrivateSettlementAuditorCapsuleRequestV1 = json::from_slice(request_json)
+        .map_err(|_| PyValueError::new_err("atomic private settlement response is invalid"))?;
     let response: PrivateSettlementAuditorCapsuleResponseV1 = json::from_slice(response_json)
         .map_err(|_| PyValueError::new_err("atomic private settlement response is invalid"))?;
     validate_private_settlement_auditor_capsule_response_v1(
         &expected_network,
         requested,
+        &request,
         &response,
     )
     .map_err(|_| PyValueError::new_err("atomic private settlement response is invalid"))?;
@@ -15474,7 +15483,7 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
-        private_settlement_verify_auditor_capsule_response_v1_py,
+        private_settlement_verify_auditor_capsule_response_with_request_v1_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
