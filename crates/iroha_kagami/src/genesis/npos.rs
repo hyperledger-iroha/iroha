@@ -48,9 +48,10 @@ mod tests {
     ) -> RawGenesisTransaction {
         let builder =
             GenesisBuilder::new_without_executor(ChainId::from("npos-genesis"), PathBuf::from("."));
-        builder
+        crate::verify::configured_test_genesis_builder(builder, Vec::new())
             .append_parameter(params)
             .build_raw()
+            .expect("build NPoS parameter fixture with explicit authority")
             .with_consensus_mode(consensus_mode)
     }
     #[test]
@@ -77,8 +78,10 @@ mod tests {
     }
     #[test]
     fn ignores_unrelated_set_parameter() {
-        let mut builder =
-            GenesisBuilder::new_without_executor(ChainId::from("npos-genesis"), PathBuf::from("."));
+        let mut builder = crate::verify::configured_test_genesis_builder(
+            GenesisBuilder::new_without_executor(ChainId::from("npos-genesis"), PathBuf::from(".")),
+            Vec::new(),
+        );
         let grant = Grant::account_permission(
             iroha_executor_data_model::permission::parameter::CanSetParameters,
             ALICE_ID.clone(),
@@ -87,6 +90,7 @@ mod tests {
         let manifest = roundtrip_manifest(
             &builder
                 .build_raw()
+                .expect("build unrelated-parameter fixture with explicit authority")
                 .with_consensus_mode(SumeragiConsensusMode::Permissioned),
         );
         assert!(!has_npos_parameters(&manifest).expect("valid manifest"));

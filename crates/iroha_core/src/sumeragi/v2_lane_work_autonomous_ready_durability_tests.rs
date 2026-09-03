@@ -1499,6 +1499,13 @@ fn voting_validator_outside_lane_committee_skips_private_new_view_cursor_restore
         autonomous_artifact(&adapter, &proposal, adapter.context.epoch).is_none(),
         "a validator outside the lane committee must not own its private durable artifact"
     );
+    assert_eq!(
+        adapter
+            .lane_sessions
+            .insert_recovered_proposal_replacing_uncommitted_conflict(proposal.clone()),
+        Ok(crate::lane_consensus::LaneBlockSessionInsertOutcome::Inserted),
+        "the globally protected carrier must install its exact observer session before READY authorization"
+    );
 
     assert_eq!(
         adapter.persist_and_authorize_autonomous_payload(&payload, &proposal),

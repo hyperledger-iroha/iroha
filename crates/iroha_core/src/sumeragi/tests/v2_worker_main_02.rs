@@ -266,7 +266,7 @@ fn worker_completion_is_retained_behind_a_full_runtime_fifo() {
         Arc::clone(&admission),
     );
     let (completion_tx, completion_rx) = mpsc::sync_channel(channel_capacity);
-    try_send_tracked_completion(
+    try_send_tracked_completion_with_lifecycle_ordinal(
         &completion_tx,
         &admission,
         V2IoCompletion::Signature {
@@ -274,6 +274,7 @@ fn worker_completion_is_retained_behind_a_full_runtime_fifo() {
             signature: vec![0x4b],
             outbound_payload: None,
         },
+        Some(7_601),
     )
     .expect("retain one completed worker result");
     let snapshot_at = Instant::now() + Duration::from_millis(250);
@@ -315,6 +316,104 @@ fn worker_completion_is_retained_behind_a_full_runtime_fifo() {
     assert_eq!(drained.oldest_age, None);
     assert_eq!(drained.max_service_debt, 0);
 }
+
+#[test]
+fn empty_completion_lane_mints_an_executor_bound_runtime_cut() {
+    let (service, _) = fixture();
+    let V2CompletionRuntimeCutDecisionV1::Runtime(cut) = service
+        .prepare_completion_runtime_cut(true)
+        .expect("prepare empty Completion-lane cut")
+    else {
+        panic!("an empty Completion lane must release Runtime");
+    };
+    assert!(
+        cut.consume_for_executor(&ConsensusOutputGuard::isolated(), &service.context)
+            .is_none(),
+        "a cut cannot cross its fail-stop output owner"
+    );
+
+    let V2CompletionRuntimeCutDecisionV1::Runtime(cut) = service
+        .prepare_completion_runtime_cut(true)
+        .expect("remint empty Completion-lane cut")
+    else {
+        panic!("an empty Completion lane must remain releasable");
+    };
+    assert!(
+        cut.consume_for_executor(&service.output_guard, &service.context)
+            .is_some()
+    );
+}
+
+#[test]
+fn completion_runtime_cut_blocks_then_reliefs_an_exact_worker_head() {
+    let (mut service, _) = fixture();
+    let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded I/O admission"));
+    let channel_capacity = admission.capacity();
+    let (command_tx, _command_rx) = v2_io_command_channel(
+        channel_capacity,
+        channel_capacity.max(1),
+        channel_capacity.max(1),
+        channel_capacity.max(1),
+        Arc::clone(&admission),
+    );
+    let (completion_tx, completion_rx) = mpsc::sync_channel(channel_capacity);
+    try_send_tracked_completion_with_lifecycle_ordinal(
+        &completion_tx,
+        &admission,
+        V2IoCompletion::Signature {
+            work_id: EffectWorkId::for_test(7_601),
+            signature: vec![0x5c],
+            outbound_payload: None,
+        },
+        Some(7_601),
+    )
+    .expect("retain one runtime-producing completion");
+    let retained_at = match admission.completion_runtime_cut_observation() {
+        V2IoCompletionRuntimeCutObservationV1::Pending(owner) => owner.retained_at,
+        V2IoCompletionRuntimeCutObservationV1::Empty { .. } => {
+            panic!("the tracked completion must own the physical head")
+        }
+    };
+    service.io = Some(V2IoHandle {
+        command_tx,
+        completion_rx,
+        join: None,
+        allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+        admission: Arc::clone(&admission),
+    });
+
+    assert!(matches!(
+        service
+            .prepare_completion_runtime_cut(true)
+            .expect("inspect cut with free runtime capacity"),
+        V2CompletionRuntimeCutDecisionV1::RetryCompletion
+    ),
+        "a pending completion must return the outer driver to Completion rank"
+    );
+    assert!(matches!(
+        service.take_next_completion(false),
+        IoCompletionTake {
+            completion: None,
+            retained_runtime: true,
+        }
+    ));
+    let V2CompletionRuntimeCutDecisionV1::CapacityRelief(cut) = service
+        .prepare_completion_runtime_cut(false)
+        .expect("prepare full-FIFO relief cut")
+    else {
+        panic!("the held runtime completion requires one relief step");
+    };
+    assert_eq!(
+        cut.consume_for_executor(&service.output_guard, &service.context),
+        Some((retained_at, 7_601)),
+        "capacity relief must run at the exact worker-retention timestamp"
+    );
+
+    let _ = service.held_io_completion.take();
+    admission.acknowledge_completion_at(0);
+    drop(service.io.take());
+}
+
 #[test]
 fn production_drain_publishes_worker_completion_behind_full_runtime_fifo() {
     let (mut service, keys) = fixture();

@@ -7,7 +7,13 @@ use iroha_data_model::{
     account::AccountId,
     asset::AssetDefinitionId,
     block::consensus_v2::is_valid_committee_size,
-    isi::SetParameter,
+    isi::{
+        SetParameter,
+        offline_cash_v1::{
+            OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterTemplateV1,
+            OfflineCashMintFinalityGenesisParametersV1,
+        },
+    },
     parameter::{
         Parameter,
         system::{ConsensusHandshakeMetadata, SumeragiConsensusMode, consensus_metadata},
@@ -375,14 +381,70 @@ fn inject_topology(
         .iter()
         .map(|peer| GenesisTopologyEntry::new(peer.peer_id.clone(), peer.pop.clone()))
         .collect();
+    let mint_finality = profile_mint_finality_genesis_parameters(peers)?;
     let manifest = manifest
         .into_builder()
+        .with_offline_cash_mint_finality_genesis_parameters(mint_finality)
         .set_topology(topology)
-        .build_raw()
+        .build_raw()?
         .with_consensus_mode(consensus_mode)
         .with_consensus_meta()
         .with_chain_discriminant(chain_discriminant);
     Ok(manifest)
+}
+
+fn profile_mint_finality_genesis_parameters(
+    peers: &[PeerMaterial],
+) -> AnyResult<OfflineCashMintFinalityGenesisParametersV1> {
+    let mut topology = peers
+        .iter()
+        .map(|peer| peer.peer_id.clone())
+        .collect::<Vec<_>>();
+    topology.sort();
+    if !is_valid_committee_size(topology.len()) {
+        return Err(format!(
+            "profile Offline Cash mint-finality authority requires an exact revision-4 3f+1 committee, found {} validators",
+            topology.len()
+        )
+        .into());
+    }
+    if topology.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(
+            "profile Offline Cash mint-finality authority contains duplicate validators".into(),
+        );
+    }
+    let validators = topology
+        .into_iter()
+        .enumerate()
+        .map(|(index, validator)| {
+            // Published profile fixtures are deterministic, but this material
+            // is deliberately domain-separated from every BLS consensus key.
+            let seed: [u8; 32] = Hash::new(format!(
+                "iroha:xtask:kagami-profile:offline-cash-mint-finality:v1:epoch-0:{index}:{validator}"
+            ))
+            .into();
+            iroha_core::zk::offline_cash_v1_recursion::derive_offline_cash_mint_finality_validator_keys_v1(
+                &seed,
+                0,
+                validator,
+            )
+            .map_err(|error| {
+                format!("derive profile Offline Cash mint-finality validator keys: {error}")
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let parameters = OfflineCashMintFinalityGenesisParametersV1 {
+        epoch_roster: OfflineCashMintFinalityEpochRosterTemplateV1 {
+            version: OFFLINE_CASH_CHAIN_VERSION_V1,
+            epoch: 0,
+            validators,
+        },
+        next_epoch_roster: None,
+    };
+    parameters
+        .validate()
+        .map_err(|error| format!("invalid profile Offline Cash genesis authority: {error}"))?;
+    Ok(parameters)
 }
 fn write_json(path: &Path, value: &RawGenesisTransaction) -> AnyResult<()> {
     let _chain_discriminant = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
@@ -1385,24 +1447,40 @@ mod tests {
     use super::*;
     use iroha_config::{base::toml::TomlSource, parameters::actual};
     use iroha_crypto::{HashOf, Signature};
-    use iroha_data_model::{account::address::ChainDiscriminantGuard, block::BlockHeader};
+    use iroha_data_model::{
+        account::address::ChainDiscriminantGuard,
+        block::{BlockHeader, consensus_v2::SumeragiV2GenesisContextParameters},
+    };
     use tempfile::tempdir;
+
+    fn complete_test_genesis_builder(
+        builder: iroha_genesis::GenesisBuilder,
+    ) -> RawGenesisTransaction {
+        let peers = build_peers(&PROFILES[0]).expect("build deterministic test authority peers");
+        let mint_finality = profile_mint_finality_genesis_parameters(&peers)
+            .expect("derive deterministic test Offline Cash authority");
+        builder
+            .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+            .with_offline_cash_mint_finality_genesis_parameters(mint_finality)
+            .build_raw()
+            .expect("build complete profile test genesis")
+    }
+
     fn stub_genesis() -> RawGenesisTransaction {
-        iroha_genesis::GenesisBuilder::new_without_executor(
+        complete_test_genesis_builder(iroha_genesis::GenesisBuilder::new_without_executor(
             iroha_data_model::ChainId::from("stub"),
             ".",
-        )
-        .build_raw()
+        ))
     }
     #[test]
     fn portable_bound_profile_manifest_does_not_publish_the_staging_path() {
         let staging = tempdir().expect("profile staging directory");
-        let resolved_bound_manifest = iroha_genesis::GenesisBuilder::new_without_executor(
-            iroha_data_model::ChainId::from("stub"),
-            staging.path(),
-        )
-        .build_raw()
-        .with_consensus_meta();
+        let resolved_bound_manifest =
+            complete_test_genesis_builder(iroha_genesis::GenesisBuilder::new_without_executor(
+                iroha_data_model::ChainId::from("stub"),
+                staging.path(),
+            ))
+            .with_consensus_meta();
         let portable = portable_bound_profile_manifest(
             stub_genesis(),
             &resolved_bound_manifest,
@@ -1423,13 +1501,13 @@ mod tests {
         )
         .expect_err("absolute staging path must fail closed");
         assert!(error.to_string().contains("portable `ivm_dir` value `.`"));
-        let leaking_bound_manifest = iroha_genesis::GenesisBuilder::new(
-            iroha_data_model::ChainId::from("stub"),
-            staging.path().join("executor.to"),
-            staging.path(),
-        )
-        .build_raw()
-        .with_consensus_meta();
+        let leaking_bound_manifest =
+            complete_test_genesis_builder(iroha_genesis::GenesisBuilder::new(
+                iroha_data_model::ChainId::from("stub"),
+                staging.path().join("executor.to"),
+                staging.path(),
+            ))
+            .with_consensus_meta();
         let error = portable_bound_profile_manifest(
             stub_genesis(),
             &leaking_bound_manifest,
@@ -1444,13 +1522,13 @@ mod tests {
 
         let non_default_discriminant = 369;
         let generated_manifest = stub_genesis().with_chain_discriminant(non_default_discriminant);
-        let resolved_bound_manifest = iroha_genesis::GenesisBuilder::new_without_executor(
-            iroha_data_model::ChainId::from("stub"),
-            staging.path(),
-        )
-        .build_raw()
-        .with_chain_discriminant(non_default_discriminant)
-        .with_consensus_meta();
+        let resolved_bound_manifest =
+            complete_test_genesis_builder(iroha_genesis::GenesisBuilder::new_without_executor(
+                iroha_data_model::ChainId::from("stub"),
+                staging.path(),
+            ))
+            .with_chain_discriminant(non_default_discriminant)
+            .with_consensus_meta();
         portable_bound_profile_manifest(
             generated_manifest,
             &resolved_bound_manifest,
@@ -1491,6 +1569,13 @@ mod tests {
         let _wrong_discriminant = ChainDiscriminantGuard::enter(753);
         let patched = inject_topology(source, &peers).expect("inject topology");
         assert_eq!(patched.chain_discriminant(), 369);
+        let expected_mint_finality = profile_mint_finality_genesis_parameters(&peers)
+            .expect("derive expected profile mint-finality authority");
+        assert_eq!(
+            patched.offline_cash_mint_finality_genesis_parameters(),
+            &expected_mint_finality,
+            "topology injection must replace the portable authority with the exact profile roster"
+        );
         let txs = patched.transactions();
         assert_eq!(txs.len(), 1, "stub genesis should carry one transaction");
         let tx0 = &txs[0];
@@ -1526,17 +1611,18 @@ mod tests {
         let account_key =
             deterministic_keypair("manifest-chain-discriminant-account", Algorithm::Ed25519)
                 .expect("derive deterministic account key");
-        let manifest = iroha_genesis::GenesisBuilder::new_without_executor(
-            iroha_data_model::ChainId::from("manifest-chain-discriminant"),
-            ".",
+        let manifest = complete_test_genesis_builder(
+            iroha_genesis::GenesisBuilder::new_without_executor(
+                iroha_data_model::ChainId::from("manifest-chain-discriminant"),
+                ".",
+            )
+            .domain(
+                iroha_data_model::domain::DomainId::try_new("accounts", "universal")
+                    .expect("valid fixture domain"),
+            )
+            .account(account_key.public_key().clone())
+            .finish_domain(),
         )
-        .domain(
-            iroha_data_model::domain::DomainId::try_new("accounts", "universal")
-                .expect("valid fixture domain"),
-        )
-        .account(account_key.public_key().clone())
-        .finish_domain()
-        .build_raw()
         .with_chain_discriminant(369);
         let bundle = tempdir().expect("manifest serialization directory");
         let path = bundle.path().join("genesis.json");

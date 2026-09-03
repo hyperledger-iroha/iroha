@@ -987,6 +987,7 @@ fn replay_rotates_topology_for_npos_prf_leader() {
 fn replay_rotates_topology_for_npos_prf_leader_impl() {
     use iroha_crypto::Algorithm;
     use iroha_data_model::{
+        block::consensus_v2::{SumeragiV2GenesisContextParameters, ValidatorPower},
         events::time::{ExecutionTime, TimeEventFilter},
         parameter::system::{Parameter, SumeragiConsensusMode, SumeragiNposParameters},
         peer::PeerId,
@@ -1000,9 +1001,10 @@ fn replay_rotates_topology_for_npos_prf_leader_impl() {
         SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in,
     };
     let chain_id = ChainId::from("iroha:test:npos-replay");
-    let peer_keypairs = (0..4)
+    let mut peer_keypairs = (0..4)
         .map(|_| crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal))
         .collect::<Vec<_>>();
+    peer_keypairs.sort_by(|left, right| left.public_key().cmp(right.public_key()));
     let peers = peer_keypairs
         .iter()
         .map(|keypair| PeerId::new(keypair.public_key().clone()))
@@ -1030,9 +1032,23 @@ fn replay_rotates_topology_for_npos_prf_leader_impl() {
             )
         })
         .collect::<Vec<_>>();
+    let mut mint_finality_roster = peers
+        .iter()
+        .cloned()
+        .map(|validator| ValidatorPower {
+            validator,
+            power: 1,
+        })
+        .collect::<Vec<_>>();
+    mint_finality_roster.sort();
+    let mint_finality = crate::offline_cash_v1_test_fixtures::mint_finality_genesis_parameters(
+        &mint_finality_roster,
+    );
     let (user_id, user_keypair) = gen_account_in("wonderland");
     let mut genesis_builder =
         GenesisBuilder::new_without_executor(chain_id.clone(), "ivm/libs/not/installed")
+            .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+            .with_offline_cash_mint_finality_genesis_parameters(mint_finality)
             .set_topology(topology_entries)
             .append_parameter(Parameter::Custom(npos_params.into_custom_parameter()));
     genesis_builder = genesis_builder
@@ -1101,6 +1117,17 @@ fn replay_rotates_topology_for_npos_prf_leader_impl() {
                         last_reward_epoch: None,
                     },
                 );
+                block.public_lane_stake_shares.insert(
+                    (LaneId::SINGLE, validator.clone(), validator.clone()),
+                    iroha_data_model::nexus::PublicLaneStakeShare {
+                        lane_id: LaneId::SINGLE,
+                        validator: validator.clone(),
+                        staker: validator.clone(),
+                        bonded: iroha_primitives::numeric::Quantity::from(1_000_u64),
+                        pending_unbonds: std::collections::BTreeMap::new(),
+                        metadata: iroha_data_model::metadata::Metadata::default(),
+                    },
+                );
             }
             block.commit();
         }
@@ -1129,7 +1156,13 @@ fn replay_rotates_topology_for_npos_prf_leader_impl() {
         .find(|keypair| keypair.public_key() == leader_peer.public_key())
         .expect("selected leader belongs to the exact validator committee")
         .private_key();
-    let new_block = crate::block::BlockBuilder::new(Vec::new())
+    let (_block_time_handle, block_time_source) = TimeSource::new_mock(
+        genesis_signed
+            .header()
+            .creation_time()
+            .saturating_add(Duration::from_millis(1)),
+    );
+    let new_block = crate::block::BlockBuilder::new_with_time_source(Vec::new(), block_time_source)
         .chain(0, Some(&genesis_signed))
         .sign(signer)
         .unpack(|_| {});

@@ -1650,6 +1650,9 @@ impl ProductionLifecycleOwnerV1 {
         services: &mut ProductionV2Services,
         executor: &mut V2EffectExecutor<SerializedV2Runtime>,
         lease: super::TurnLease,
+        physical_completion: Option<
+            crate::sumeragi::v2_worker::LifecycleValidatePhysicalCompletionV1,
+        >,
     ) -> Result<ProductionCompletionDispatchV1, ProductionCompletionDispatchErrorV1> {
         let ordinal = lease.ordinal();
         let Some((&slot, _)) = lease.physical_slots().first_key_value() else {
@@ -1673,7 +1676,9 @@ impl ProductionLifecycleOwnerV1 {
                 return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
             }
         };
-        let preview = match executor.prepare_ready_durable_validate_adapter_preview(execution) {
+        let preview = match executor
+            .prepare_ready_durable_validate_adapter_preview(execution, physical_completion)
+        {
             Ok(preview) => preview,
             Err(error) => {
                 drop(error);
@@ -2248,6 +2253,7 @@ impl ProductionLifecycleOwnerV1 {
             executor,
             runner_debt,
             None,
+            None,
         )
     }
 
@@ -2259,12 +2265,16 @@ impl ProductionLifecycleOwnerV1 {
         executor: &mut V2EffectExecutor<SerializedV2Runtime>,
         runner_debt: u64,
         required_ordinal: u128,
+        physical_completion: Option<
+            crate::sumeragi::v2_worker::LifecycleValidatePhysicalCompletionV1,
+        >,
     ) -> Result<ProductionCompletionDispatchV1, ProductionCompletionDispatchErrorV1> {
         self.dispatch_completion_with_runner_debt_and_required_ordinal(
             services,
             executor,
             runner_debt,
             Some(required_ordinal),
+            physical_completion.map(|completion| (required_ordinal, completion)),
         )
     }
 
@@ -2274,7 +2284,16 @@ impl ProductionLifecycleOwnerV1 {
         executor: &mut V2EffectExecutor<SerializedV2Runtime>,
         runner_debt: u64,
         required_ordinal: Option<u128>,
+        required_ready_validate_completion: Option<(
+            u128,
+            crate::sumeragi::v2_worker::LifecycleValidatePhysicalCompletionV1,
+        )>,
     ) -> Result<ProductionCompletionDispatchV1, ProductionCompletionDispatchErrorV1> {
+        if required_ready_validate_completion
+            .is_some_and(|(ordinal, _)| Some(ordinal) != required_ordinal)
+        {
+            return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
+        }
         if let Some(fault) = self.coordinator.fault {
             return Err(ProductionCompletionDispatchErrorV1::CoordinatorFaulted(
                 fault,
@@ -2718,6 +2737,11 @@ impl ProductionLifecycleOwnerV1 {
         if lease.work_class() != expected_class {
             return Err(ProductionCompletionDispatchErrorV1::UnexpectedPlan);
         }
+        if required_ready_validate_completion.is_some_and(|(required, _)| {
+            required != ordinal || expected_class != LifecycleWorkClass::Validate
+        }) {
+            return Err(ProductionCompletionDispatchErrorV1::UnexpectedPlan);
+        }
         match expected_class {
             LifecycleWorkClass::Validate => {
                 if !validate_io.contains(&ordinal) {
@@ -2726,7 +2750,14 @@ impl ProductionLifecycleOwnerV1 {
                         None => {}
                     }
                     drop(census);
-                    return self.publish_ready_validate_outcome(services, executor, lease);
+                    let physical_completion =
+                        required_ready_validate_completion.map(|(_, completion)| completion);
+                    return self.publish_ready_validate_outcome(
+                        services,
+                        executor,
+                        lease,
+                        physical_completion,
+                    );
                 }
                 let census = census.ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
                 let reservation = census
@@ -2915,6 +2946,7 @@ impl ProductionLifecycleOwnerV1 {
         runner_debt: u64,
     ) -> Result<ReadyValidateSuccessorDispatchV1, ProductionCompletionDispatchErrorV1> {
         let ordinal = successor.lifecycle_ordinal();
+        let physical_completion = successor.physical_completion();
         let Some(record) = self.coordinator.records.get(&ordinal) else {
             return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
         };
@@ -2954,6 +2986,11 @@ impl ProductionLifecycleOwnerV1 {
         let (dispatch_key, incumbent_dispatch_key, round, subject, apply_is_authorized) = successor
             .preliminary_retransmit_identity(attestation)
             .ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
+        if physical_completion
+            .is_some_and(|completion| incumbent_dispatch_key != Some(completion.dispatch_key()))
+        {
+            return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
+        }
         executor
             .arm_live_lifecycle_validate_successor(
                 dispatch_key,
@@ -2968,6 +3005,7 @@ impl ProductionLifecycleOwnerV1 {
             executor,
             runner_debt,
             ordinal,
+            physical_completion,
         )?;
         if matches!(
             selected,

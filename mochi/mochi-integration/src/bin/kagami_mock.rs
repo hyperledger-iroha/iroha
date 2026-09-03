@@ -323,12 +323,57 @@ fn verify(args: Vec<String>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_crypto::{Algorithm, KeyPair, bls_normal_pop_prove};
-    use iroha_data_model::{block::decode_framed_signed_block, peer::PeerId};
+    use iroha_crypto::{Algorithm, Hash, KeyPair, bls_normal_pop_prove};
+    use iroha_data_model::{
+        block::decode_framed_signed_block,
+        isi::offline_cash_v1::{
+            OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterTemplateV1,
+            OfflineCashMintFinalityGenesisParametersV1,
+        },
+        peer::PeerId,
+    };
     use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
     use mochi_core::kagami_stub_genesis_policies_from_config;
     use norito::json::Value;
     const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = "REPLACE_WITH_GENESIS_EXPECTED_HASH";
+
+    fn mint_finality_authority_for_topology(
+        topology: &[GenesisTopologyEntry],
+    ) -> OfflineCashMintFinalityGenesisParametersV1 {
+        let mut validators = topology
+            .iter()
+            .map(|entry| entry.peer.clone())
+            .collect::<Vec<_>>();
+        validators.sort();
+        let validators = validators
+            .into_iter()
+            .enumerate()
+            .map(|(index, validator)| {
+                let seed: [u8; 32] = Hash::new(format!(
+                    "iroha:mochi:kagami-mock:offline-cash-mint-finality:v1:epoch-0:{index}:{validator}"
+                ))
+                .into();
+                iroha_core::zk::offline_cash_v1_recursion::derive_offline_cash_mint_finality_validator_keys_v1(
+                    &seed,
+                    0,
+                    validator,
+                )
+                .expect("derive independent mock Offline Cash validator keys")
+            })
+            .collect();
+        let parameters = OfflineCashMintFinalityGenesisParametersV1 {
+            epoch_roster: OfflineCashMintFinalityEpochRosterTemplateV1 {
+                version: OFFLINE_CASH_CHAIN_VERSION_V1,
+                epoch: 0,
+                validators,
+            },
+            next_epoch_roster: None,
+        };
+        parameters
+            .validate()
+            .expect("mock Offline Cash authority must match the four-validator topology");
+        parameters
+    }
 
     fn with_valid_topology(manifest_json: String) -> String {
         let manifest: RawGenesisTransaction =
@@ -342,11 +387,14 @@ mod tests {
                 GenesisTopologyEntry::new(PeerId::new(validator.public_key().clone()), pop)
             })
             .collect();
+        let mint_finality = mint_finality_authority_for_topology(&topology);
         let manifest = manifest
             .into_builder()
+            .with_offline_cash_mint_finality_genesis_parameters(mint_finality)
             .next_transaction()
             .set_topology(topology)
-            .build_raw();
+            .build_raw()
+            .expect("rebuild mock manifest with complete signed authority");
         norito::json::to_json_pretty(&manifest).expect("encode mock manifest")
     }
 

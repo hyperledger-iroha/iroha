@@ -1028,6 +1028,14 @@ pub(crate) fn execute_instruction_detached(
         return Ok(());
     }
     // Registration and removal depend on live ownership and permission state.
+    if any
+        .downcast_ref::<iroha_data_model::isi::register::RegisterCommitteePeerWithPop>()
+        .is_some()
+    {
+        return Err(ValidationFail::InternalError(
+            "detached: registration requires sequential authorization".to_owned(),
+        ));
+    }
     if let Some(rb) = any.downcast_ref::<RegisterBox>() {
         match rb {
             RegisterBox::Peer(_) => {}
@@ -9501,6 +9509,7 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         UnregisterBox,
         iroha_data_model::isi::Upgrade,
         iroha_data_model::isi::register::RegisterPeerWithPop,
+        iroha_data_model::isi::register::RegisterCommitteePeerWithPop,
     ) {
         return true;
     }
@@ -9871,9 +9880,12 @@ fn validate_initial_native_instruction_authority(
     {
         return deny("consensus evidence penalty cancellation requires CanManagePeers");
     }
-    if any
+    if (any
         .downcast_ref::<iroha_data_model::isi::register::RegisterPeerWithPop>()
         .is_some()
+        || any
+            .downcast_ref::<iroha_data_model::isi::register::RegisterCommitteePeerWithPop>()
+            .is_some())
         && !is_genesis
         && !initial_authority_has_exact_permission(
             state_transaction,
@@ -17173,6 +17185,16 @@ mod tests {
         let mut delta = crate::state::DetachedStateTransactionDelta::default();
         let err = execute_instruction_detached(&alice(), &InstructionBox::from(isi), &mut delta)
             .expect_err("peer registration must be unsupported in detached mode");
+        assert!(matches!(err, ValidationFail::InternalError(msg) if msg.contains("registration")));
+    }
+    #[test]
+    fn detached_register_committee_peer_forces_sequential_path() {
+        let peer_id = make_peer_id();
+        let isi =
+            iroha_data_model::isi::register::RegisterCommitteePeerWithPop::new(peer_id, Vec::new());
+        let mut delta = crate::state::DetachedStateTransactionDelta::default();
+        let err = execute_instruction_detached(&alice(), &InstructionBox::from(isi), &mut delta)
+            .expect_err("committee peer registration must be unsupported in detached mode");
         assert!(matches!(err, ValidationFail::InternalError(msg) if msg.contains("registration")));
     }
     #[test]

@@ -124,6 +124,47 @@ impl RegisterPeerWithPop {
         self
     }
 }
+/// Register a non-global-voting peer identity for participant-lane committee service.
+///
+/// This instruction stores a live, unbounded [`ConsensusKeyRole::Committee`]
+/// key for the peer. It is intentionally not a [`RegisterBox`] variant:
+/// genesis global-voter extraction recognizes only [`RegisterPeerWithPop`].
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct RegisterCommitteePeerWithPop {
+    /// Peer identity to register outside the global voting roster.
+    pub peer: PeerId,
+    /// BLS-normal Proof-of-Possession bytes for `peer.public_key()`.
+    pub pop: Vec<u8>,
+    /// Optional explicit activation height (defaults to policy-derived lead time).
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub activation_at: Option<u64>,
+}
+impl_display! {
+    RegisterCommitteePeerWithPop => "REGISTER_COMMITTEE_PEER_WITH_POP `{}`", peer
+}
+impl RegisterCommitteePeerWithPop {
+    /// Construct a proof-bound, non-voting committee peer registration.
+    #[must_use]
+    pub fn new(peer: PeerId, pop: Vec<u8>) -> Self {
+        Self {
+            peer,
+            pop,
+            activation_at: None,
+        }
+    }
+    /// Attach an explicit activation height; it must satisfy the lead-time policy.
+    #[must_use]
+    pub fn with_activation_at(mut self, activation_at: u64) -> Self {
+        self.activation_at = Some(activation_at);
+        self
+    }
+}
 isi! {
     /// Generic instruction for an unregistration of an object from the identifiable destination.
     pub struct Unregister<O: Identifiable> {
@@ -306,6 +347,7 @@ enum_type! {
 impl crate::seal::Instruction for RegisterBox {}
 impl crate::seal::Instruction for UnregisterBox {}
 impl crate::seal::Instruction for RegisterPeerWithPop {}
+impl crate::seal::Instruction for RegisterCommitteePeerWithPop {}
 impl crate::seal::Instruction for Register<Domain> {}
 impl crate::seal::Instruction for Register<Account> {}
 impl crate::seal::Instruction for Register<AssetDefinition> {}
@@ -353,6 +395,40 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterPeerWithPop {
                 pop,
                 activation_at,
                 expiry_at,
+            },
+            offset,
+        ))
+    }
+}
+impl<'a> norito::core::DecodeFromSlice<'a> for RegisterCommitteePeerWithPop {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = norito::core::effective_decode_flags()
+            .unwrap_or_else(norito::core::default_encode_flags);
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+        let mut offset = 0usize;
+        let peer = super::decode_aos_canonical_field::<PeerId>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let pop = super::decode_aos_canonical_field::<Vec<u8>>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let activation_at = super::decode_aos_canonical_field::<Option<u64>>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((
+            Self {
+                peer,
+                pop,
+                activation_at,
             },
             offset,
         ))
@@ -586,6 +662,13 @@ mod tests {
             expiry_at: Some(100),
         }
     }
+    fn register_committee_peer_with_pop() -> RegisterCommitteePeerWithPop {
+        RegisterCommitteePeerWithPop {
+            peer: PeerId::new(public_key(0x66)),
+            pop: vec![6_u8, 7, 8, 9],
+            activation_at: Some(11),
+        }
+    }
     fn assert_slice_roundtrip<T>(value: T)
     where
         T: Encode + for<'de> DecodeFromSlice<'de> + PartialEq + core::fmt::Debug,
@@ -619,6 +702,16 @@ mod tests {
         let decoded = RegisterPeerWithPop::decode(&mut &encoded[..]).expect("decode");
         assert_eq!(decoded, isi);
     }
+    #[test]
+    fn register_committee_peer_with_pop_roundtrip_and_registry_decode() {
+        let isi = register_committee_peer_with_pop();
+        assert_slice_roundtrip(isi.clone());
+        let registry = crate::isi::registry::default();
+        let wire_id = registry
+            .wire_id(std::any::type_name::<RegisterCommitteePeerWithPop>())
+            .expect("committee-peer registration has a canonical wire id");
+        assert_registry_decodes(&registry, wire_id, isi);
+    }
     #[cfg(feature = "json")]
     #[test]
     fn register_peer_with_pop_json_rejects_unknown_fields() {
@@ -631,6 +724,7 @@ mod tests {
     fn register_unregister_decode_from_slice_roundtrips() {
         let account = account(0x61);
         assert_slice_roundtrip(register_peer_with_pop());
+        assert_slice_roundtrip(register_committee_peer_with_pop());
         assert_slice_roundtrip(Register::domain(Domain::new(domain_id())));
         assert_slice_roundtrip(Register::account(Account::new(account.clone())));
         assert_slice_roundtrip(Register::asset_definition(AssetDefinition::numeric(

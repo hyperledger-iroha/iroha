@@ -940,7 +940,7 @@ pub mod network {
     /// Maximum encrypted frame size for peer messages in bytes.
     ///
     /// The recommended maximal Sumeragi v2 `CertifiedBodyResponse` occupies
-    /// 16,828,108 bytes before the P2P relay/data wrapper and AEAD nonce/tag.
+    /// 16,844,237 bytes before the P2P relay/data wrapper and AEAD nonce/tag.
     /// Rounding the cap up to 17 MiB leaves just under 1 MiB for those bounded
     /// layers while keeping every retained frame allocation finite.
     /// The encrypted ceiling includes AEAD expansion in addition to the full
@@ -958,8 +958,8 @@ pub mod network {
     /// Maximum frame size for control-plane messages.
     ///
     /// Consensus-safety proposals and timeout certificates use this topic. A
-    /// 2 MiB cap carries the reviewed sub-1 MiB non-manifest proposal ceiling
-    /// plus the recommended manifest and bounded P2P envelope overhead.
+    /// 2 MiB cap carries the reviewed 1,106,267-byte maximal proposal ceiling
+    /// plus the bounded P2P envelope overhead.
     pub const MAX_FRAME_BYTES_CONTROL: NonZeroUsize = nonzero!(2 * 1024 * 1024_usize);
     /// Maximum frame size for block sync / consensus payload traffic.
     pub const MAX_FRAME_BYTES_BLOCK_SYNC: NonZeroUsize = MAX_PLAINTEXT_FRAME_BYTES;
@@ -3938,13 +3938,13 @@ pub mod sumeragi {
     /// One isolated quota is reserved for every protocol-permitted validator
     /// and every configured authenticated non-validator lane. This keeps the
     /// default safe when a signed NPoS election expands to its default ceiling.
-    pub const QUEUE_BODY_BYTES: NonZeroUsize = nonzero!(1089_usize * 1024 * 1024);
+    pub const QUEUE_BODY_BYTES: NonZeroUsize = nonzero!(1122_usize * 1024 * 1024);
     /// Per-ingress-source canonical outer-ingress wire-byte partition. The
     /// default contains disjoint maximum ordinary-envelope, certified-fence-escape,
     /// payload-completion, and timeout-vote partitions. The ordinary and completion partitions also
     /// cover the one-MiB atomic lane-certificate and four-MiB executable-source
     /// protocol floors when deployments choose a smaller global block body.
-    pub const QUEUE_BODY_SOURCE_BYTES: NonZeroUsize = nonzero!(33_usize * 1024 * 1024);
+    pub const QUEUE_BODY_SOURCE_BYTES: NonZeroUsize = nonzero!(34_usize * 1024 * 1024);
     /// Fixed wire-envelope headroom beyond body or chunk-hash bytes.
     pub const BODY_ENVELOPE_HEADROOM_BYTES: usize = 64 * 1024;
     /// Maximum chunk count in the recommended signed DA layout.
@@ -3963,7 +3963,7 @@ pub mod sumeragi {
     ///
     /// The maximum 31-validator certificate forms fit this bound. Height
     /// activation derives and checks their exact canonical wire requirement.
-    pub const CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES: usize = 64 * 1024;
+    pub const CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES: usize = 1024 * 1024;
     /// Payload-chunk ingress and orphan-buffer capacity.
     pub const QUEUE_CHUNK_CAPACITY: NonZeroUsize = nonzero!(2048_usize);
     /// Reconstructed bodies waiting for reducer delivery.

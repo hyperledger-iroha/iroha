@@ -1284,10 +1284,11 @@ pub(super) fn prepare_genesis_for_signing(
     if matches!(consensus_mode, SumeragiConsensusMode::Npos) {
         ensure_npos_parameters(&genesis)?;
     }
-    let final_topology = topology_override
+    let mut final_topology = topology_override
         .map(<[PeerId]>::to_vec)
         .unwrap_or_else(|| collect_topology_peers(&genesis));
     ensure_valid_genesis_committee(&final_topology)?;
+    final_topology.sort();
     if topology_override.is_none() && !peer_pops.is_empty() {
         return Err(eyre!(
             "--peer-pop requires --topology to align PoPs with peers"
@@ -1350,12 +1351,16 @@ pub(super) fn prepare_genesis_for_signing(
             )?;
         }
         builder
-            .build_raw()
+            .build_raw()?
             .with_chain_discriminant(chain_discriminant)
             .with_consensus_mode(consensus_mode)
             .with_consensus_meta()
     };
-    ensure_valid_genesis_committee(&collect_topology_peers(&prepared))?;
+    prepared
+        .validate_offline_cash_mint_finality_topology()
+        .wrap_err(
+            "refusing to sign a genesis whose final topology lacks its exact provisioned Offline Cash authority; Kagami never derives or rewrites production Pasta keys",
+        )?;
     Ok(prepared)
 }
 
@@ -1616,10 +1621,20 @@ mod tests {
     use iroha_data_model::{
         ChainId,
         asset::AssetDefinitionAlias,
-        block::{SignedBlock, decode_framed_signed_block},
+        block::{
+            SignedBlock, consensus_v2::SumeragiV2GenesisContextParameters,
+            decode_framed_signed_block,
+        },
         isi::{
-            SetParameter, asset_alias::SetAssetDefinitionAlias, mint_burn::MintBox,
-            register::RegisterBox, staking::RegisterPublicLaneValidator,
+            SetParameter,
+            asset_alias::SetAssetDefinitionAlias,
+            mint_burn::MintBox,
+            offline_cash_v1::{
+                OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterTemplateV1,
+                OfflineCashMintFinalityGenesisParametersV1,
+            },
+            register::RegisterBox,
+            staking::RegisterPublicLaneValidator,
         },
         nexus::{LaneCatalog, LaneConfig},
         parameter::{
@@ -2080,7 +2095,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         config.genesis.public_key = genesis_key_pair.public_key().clone();
         let mut raw = GenesisBuilder::new_without_executor(config.common.chain.clone(), ".")
             .set_topology(valid_test_topology_entries(4))
-            .build_raw()
+            .build_raw_fixture()
             .with_consensus_mode(SumeragiConsensusMode::Permissioned);
         let mut unbound_parameters = raw.sumeragi_v2_context_parameters();
         unbound_parameters.nexus_amx_context_hash = Hash::new(b"unbound-nexus-amx").into();
@@ -2251,27 +2266,136 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         CryptoKeyPair::try_random_with_algorithm(algorithm)
             .expect("genesis sign fixture key generation should succeed")
     }
-    fn valid_test_topology(count: usize) -> (Vec<PeerId>, Vec<String>) {
-        (0..count)
-            .map(|_| {
-                let key_pair = checked_genesis_sign_keypair_with_algorithm(Algorithm::BlsNormal);
+    trait GenesisFixtureBuilderExt {
+        fn build_raw_fixture(self) -> RawGenesisTransaction;
+    }
+    impl GenesisFixtureBuilderExt for GenesisBuilder {
+        fn build_raw_fixture(self) -> RawGenesisTransaction {
+            configured_genesis_fixture_builder(self)
+                .build_raw()
+                .expect("build genesis-signing fixture with explicit deterministic authority")
+        }
+    }
+    fn configured_genesis_fixture_builder(builder: GenesisBuilder) -> GenesisBuilder {
+        let validators = valid_test_topology_material(4)
+            .into_iter()
+            .map(|(validator, _)| validator)
+            .enumerate()
+            .map(|(index, validator)| {
+                let seed_byte = 0xA0_u8.wrapping_add(
+                    u8::try_from(index).expect("genesis-sign fixture index fits in u8"),
+                );
+                iroha_core::zk::offline_cash_v1_recursion::derive_offline_cash_mint_finality_validator_keys_v1(
+                    &[seed_byte; 32],
+                    0,
+                    validator,
+                )
+                .expect("derive independent genesis-sign fixture Pasta keys")
+            })
+            .collect();
+        let offline_cash_mint_finality = OfflineCashMintFinalityGenesisParametersV1 {
+            epoch_roster: OfflineCashMintFinalityEpochRosterTemplateV1 {
+                version: OFFLINE_CASH_CHAIN_VERSION_V1,
+                epoch: 0,
+                validators,
+            },
+            next_epoch_roster: None,
+        };
+        offline_cash_mint_finality
+            .validate()
+            .expect("deterministic genesis-sign fixture authority is canonical");
+        builder
+            .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+            .with_offline_cash_mint_finality_genesis_parameters(offline_cash_mint_finality)
+    }
+    fn valid_test_topology_material(count: usize) -> Vec<(PeerId, Vec<u8>)> {
+        let mut topology = (0..count)
+            .map(|index| {
+                let seed_byte = 0x40_u8
+                    .checked_add(
+                        u8::try_from(index)
+                            .expect("genesis-sign fixture validator index fits in u8"),
+                    )
+                    .expect("genesis-sign fixture validator seed domain is not exhausted");
+                let key_pair =
+                    CryptoKeyPair::try_from_seed(vec![seed_byte; 32], Algorithm::BlsNormal)
+                        .expect("derive deterministic genesis-sign fixture validator");
                 let pop = bls_normal_pop_prove(key_pair.private_key())
                     .expect("generate checked topology proof of possession");
-                let peer = PeerId::new(key_pair.public_key().clone());
+                (PeerId::new(key_pair.public_key().clone()), pop)
+            })
+            .collect::<Vec<_>>();
+        topology.sort_by(|(left, _), (right, _)| left.cmp(right));
+        topology
+    }
+    fn valid_test_topology(count: usize) -> (Vec<PeerId>, Vec<String>) {
+        valid_test_topology_material(count)
+            .into_iter()
+            .map(|(peer, pop)| {
                 let encoded_pop = format!("{}={}", peer.public_key(), hex::encode(pop));
                 (peer, encoded_pop)
             })
             .unzip()
     }
     fn valid_test_topology_entries(count: usize) -> Vec<GenesisTopologyEntry> {
-        (0..count)
-            .map(|_| {
-                let key_pair = checked_genesis_sign_keypair_with_algorithm(Algorithm::BlsNormal);
-                let pop = bls_normal_pop_prove(key_pair.private_key())
-                    .expect("generate checked topology proof of possession");
-                GenesisTopologyEntry::new(PeerId::new(key_pair.public_key().clone()), pop)
-            })
+        valid_test_topology_material(count)
+            .into_iter()
+            .map(|(peer, pop)| GenesisTopologyEntry::new(peer, pop))
             .collect()
+    }
+    #[test]
+    fn signing_accepts_authority_matching_the_canonical_final_topology() {
+        let mut topology = valid_test_topology_entries(4);
+        topology.reverse();
+        let genesis =
+            GenesisBuilder::new_without_executor(ChainId::from("matching-authority"), ".")
+                .set_topology(topology)
+                .build_raw_fixture();
+
+        prepare_genesis_for_signing(
+            genesis,
+            None,
+            SumeragiConsensusMode::Permissioned,
+            None,
+            &[],
+        )
+        .expect("canonical sorting must align the exact configured authority");
+    }
+    #[test]
+    fn signing_rejects_authority_not_matching_the_final_topology() {
+        let topology = valid_test_topology_entries(4);
+        let genesis =
+            GenesisBuilder::new_without_executor(ChainId::from("mismatched-authority"), ".")
+                .set_topology(topology)
+                .build_raw_fixture();
+        let mut authority = genesis
+            .offline_cash_mint_finality_genesis_parameters()
+            .clone();
+        let replacement = CryptoKeyPair::try_from_seed(vec![0x7F; 32], Algorithm::BlsNormal)
+            .expect("derive replacement fixture validator");
+        authority.epoch_roster.validators[0].validator =
+            PeerId::new(replacement.public_key().clone());
+        authority
+            .epoch_roster
+            .validators
+            .sort_by(|left, right| left.validator.cmp(&right.validator));
+        authority
+            .validate()
+            .expect("mismatched authority remains structurally canonical");
+        let genesis = genesis.with_offline_cash_mint_finality_genesis_parameters(authority);
+
+        let error = prepare_genesis_for_signing(
+            genesis,
+            None,
+            SumeragiConsensusMode::Permissioned,
+            None,
+            &[],
+        )
+        .expect_err("signing must reject a different mint-finality authority");
+        let message = format!("{error:#}");
+        assert!(message.contains("differs from the canonical validator topology"));
+        assert!(message.contains("provision"));
+        assert!(message.contains("never derives or rewrites production Pasta keys"));
     }
     fn replace_manifest_wire_protocol_version(
         path: &std::path::Path,
@@ -3026,7 +3150,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             SumeragiNposParameters::default().into_custom_parameter(),
         ))
         .set_topology(vec![GenesisTopologyEntry::new(existing_peer, existing_pop)])
-        .build_raw()
+        .build_raw_fixture()
         .with_consensus_mode(SumeragiConsensusMode::Npos)
         .with_consensus_meta();
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
@@ -3083,7 +3207,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         .next_transaction()
         .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333)))
         .set_topology(valid_test_topology_entries(4))
-        .build_raw()
+        .build_raw_fixture()
         .with_consensus_mode(SumeragiConsensusMode::Permissioned)
         .with_consensus_meta();
         let genesis_file = tempfile::NamedTempFile::new().expect("create temp genesis file");
@@ -3897,7 +4021,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let manifest =
             GenesisBuilder::new_without_executor(ChainId::from("test-chain"), PathBuf::from("."))
                 .set_topology(valid_test_topology_entries(4))
-                .build_raw()
+                .build_raw_fixture()
                 .with_consensus_mode(SumeragiConsensusMode::Permissioned)
                 .with_consensus_meta();
         let genesis_json = norito::json::to_json_pretty(&manifest).expect("serialize genesis");
@@ -3934,7 +4058,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                     SumeragiNposParameters::default().into_custom_parameter(),
                 ))
                 .set_topology(valid_test_topology_entries(4))
-                .build_raw()
+                .build_raw_fixture()
                 .with_consensus_mode(SumeragiConsensusMode::Npos)
                 .with_consensus_meta();
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
@@ -3973,7 +4097,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         .append_parameter(Parameter::Custom(
             SumeragiNposParameters::default().into_custom_parameter(),
         ))
-        .build_raw()
+        .build_raw_fixture()
         .with_consensus_mode(SumeragiConsensusMode::Npos)
         .with_consensus_meta();
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
@@ -4014,7 +4138,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         .append_parameter(Parameter::Custom(
             SumeragiNposParameters::default().into_custom_parameter(),
         ))
-        .build_raw()
+        .build_raw_fixture()
         .with_consensus_mode(SumeragiConsensusMode::Npos)
         .with_chain_discriminant(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT)
         .with_consensus_meta();
@@ -4035,7 +4159,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         .append_parameter(Parameter::Custom(
             SumeragiNposParameters::default().into_custom_parameter(),
         ))
-        .build_raw()
+        .build_raw_fixture()
         .with_consensus_mode(SumeragiConsensusMode::Npos)
         .with_chain_discriminant(crate::genesis::profile::NEXUS_CHAIN_DISCRIMINANT)
         .with_consensus_meta();
@@ -4091,7 +4215,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         .append_parameter(Parameter::Custom(
             SumeragiNposParameters::default().into_custom_parameter(),
         ))
-        .build_raw()
+        .build_raw_fixture()
         .with_consensus_mode(SumeragiConsensusMode::Npos)
         .with_chain_discriminant(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT)
         .with_consensus_meta();

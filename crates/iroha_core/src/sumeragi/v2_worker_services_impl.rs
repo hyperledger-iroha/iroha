@@ -56,6 +56,141 @@ struct LifecycleIoQueuedCommandKindsV1 {
 }
 
 impl ProductionV2Services {
+    /// Linearize one Runtime step after the physical Completion prefix.
+    ///
+    /// `RetryCompletion` leaves Runtime untouched and sends the outer driver
+    /// back to Completion rank. The I/O worker and this census use the same mutex, so
+    /// an asynchronously completed Validate cannot appear between an empty
+    /// census and a timeout step while still claiming the earlier ordering.
+    /// When an ordinary completion is blocked solely by a full runtime FIFO,
+    /// the returned capacity cut instead permits one exact Completion-class
+    /// step linearized at that completion's retention time, after which the
+    /// physical Completion rank must be retried.
+    pub(in crate::sumeragi) fn prepare_completion_runtime_cut(
+        &self,
+        runtime_capacity_available: bool,
+    ) -> Result<V2CompletionRuntimeCutDecisionV1, String> {
+        static TEMP_COMPLETION_CUT_LOGGED: std::sync::atomic::AtomicUsize =
+            std::sync::atomic::AtomicUsize::new(0);
+        if self.output_guard.restart_required() {
+            return Err("Sumeragi v2 consensus requires process restart".to_owned());
+        }
+        let runtime_cut = |cut_at| {
+            V2CompletionRuntimeCutDecisionV1::Runtime(V2CompletionRuntimeCutV1::new(
+                Arc::clone(&self.output_guard),
+                self.context.id(),
+                self.context.height,
+                cut_at,
+            ))
+        };
+        let capacity_relief_cut = |cut_at, blocked_completion_lifecycle_ordinal| {
+            V2CompletionCapacityReliefCutV1::new(
+                Arc::clone(&self.output_guard),
+                self.context.id(),
+                self.context.height,
+                cut_at,
+                blocked_completion_lifecycle_ordinal,
+            )
+            .map(V2CompletionRuntimeCutDecisionV1::CapacityRelief)
+            .ok_or_else(|| {
+                "capacity-blocked completion lost its actor-global lifecycle ordinal".to_owned()
+            })
+        };
+
+        if let Some(completion) = self.held_io_completion.as_ref() {
+            if TEMP_COMPLETION_CUT_LOGGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 16 {
+                iroha_logger::warn!(
+                    runtime_capacity_available,
+                    requires_runtime_capacity = completion.requires_runtime_capacity(),
+                    dedicated_lifecycle = completion.is_dedicated_lifecycle_completion(),
+                    "TEMP Completion-to-Runtime cut observed held completion"
+                );
+            }
+            if runtime_capacity_available
+                || completion.is_dedicated_lifecycle_completion()
+                || !completion.requires_runtime_capacity()
+            {
+                return Ok(V2CompletionRuntimeCutDecisionV1::RetryCompletion);
+            }
+            let Some(io) = self.io.as_ref() else {
+                return Ok(V2CompletionRuntimeCutDecisionV1::RetryCompletion);
+            };
+            let V2IoCompletionRuntimeCutObservationV1::Pending(owner) =
+                io.admission.completion_runtime_cut_observation()
+            else {
+                return Err(
+                    "held runtime completion lost its physical ownership record".to_owned(),
+                );
+            };
+            if !owner.requires_runtime_capacity || owner.is_dedicated_lifecycle() {
+                return Err(
+                    "held runtime completion changed its physical ownership class".to_owned(),
+                );
+            }
+            let blocked_ordinal = owner.runtime_lifecycle_ordinal.ok_or_else(|| {
+                "held runtime completion lost its actor-global lifecycle ordinal".to_owned()
+            })?;
+            return capacity_relief_cut(owner.retained_at, blocked_ordinal);
+        }
+
+        // Local reconstruction completions have no worker-side timestamp, but
+        // they are already retained on this serialized service. A full FIFO
+        // therefore permits one relief step at the present cut; otherwise the
+        // next Completion turn can consume them directly.
+        if !self.local_completions.is_empty() {
+            if runtime_capacity_available {
+                return Ok(V2CompletionRuntimeCutDecisionV1::RetryCompletion);
+            }
+            let blocked_ordinal = self
+                .local_completions
+                .front()
+                .expect("non-empty local completion queue has a head")
+                .runtime_lifecycle_ordinal();
+            return capacity_relief_cut(Instant::now(), blocked_ordinal);
+        }
+
+        let Some(io) = self.io.as_ref() else {
+            return Ok(runtime_cut(Instant::now()));
+        };
+        // Worker retention samples its timestamp inside this same mutex.
+        match io.admission.completion_runtime_cut_observation() {
+            V2IoCompletionRuntimeCutObservationV1::Empty { cut_at } => {
+                Ok(runtime_cut(cut_at))
+            }
+            V2IoCompletionRuntimeCutObservationV1::Pending(owner)
+                if !runtime_capacity_available
+                    && owner.requires_runtime_capacity
+                    && !owner.is_dedicated_lifecycle() =>
+            {
+                let blocked_ordinal = owner.runtime_lifecycle_ordinal.ok_or_else(|| {
+                    "capacity-blocked completion lost its actor-global lifecycle ordinal"
+                        .to_owned()
+                })?;
+                capacity_relief_cut(owner.retained_at, blocked_ordinal)
+            }
+            V2IoCompletionRuntimeCutObservationV1::Pending(owner) => {
+                if TEMP_COMPLETION_CUT_LOGGED
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                    < 16
+                {
+                    iroha_logger::warn!(
+                        runtime_capacity_available,
+                        requires_runtime_capacity = owner.requires_runtime_capacity,
+                        dedicated_lifecycle = owner.is_dedicated_lifecycle(),
+                        runtime_lifecycle_ordinal = ?owner.runtime_lifecycle_ordinal,
+                        lifecycle_apply = owner.lifecycle_decision_apply.is_some(),
+                        lifecycle_validate = owner.lifecycle_validate.is_some(),
+                        recovered_sign = owner.recovered_lifecycle_sign.is_some(),
+                        recovered_fetch = owner.recovered_decision_fetch.is_some(),
+                        certified_serve = owner.lifecycle_certified_serve.is_some(),
+                        "TEMP Completion-to-Runtime cut observed physical completion"
+                    );
+                }
+                Ok(V2CompletionRuntimeCutDecisionV1::RetryCompletion)
+            }
+        }
+    }
+
     /// Whether Phase B reparked a certified-Fetch result behind the service boundary.
     #[cfg(test)]
     pub(in crate::sumeragi) fn has_reparked_certified_fetch_completion_for_test(&self) -> bool {
@@ -2541,6 +2676,12 @@ impl ProductionV2Services {
                 | V2IoCompletion::LifecycleValidate(_)
                 | V2IoCompletion::LifecycleCertifiedServe(_)
         ) {
+            if let V2IoCompletion::LifecycleValidate(guarded) = &completion {
+                iroha_logger::warn!(
+                    lifecycle_ordinal = guarded.key().lifecycle_ordinal(),
+                    "TEMP generic completion classifier parked lifecycle Validate"
+                );
+            }
             assert!(
                 self.held_io_completion.is_none(),
                 "completion ownership metadata must preserve one recovered lifecycle head"
@@ -2873,6 +3014,10 @@ impl ProductionV2Services {
                 Ok(LifecycleCompletionTakeV1::DecisionFetch(completion))
             }
             V2IoCompletion::LifecycleValidate(guarded) => {
+                iroha_logger::warn!(
+                    lifecycle_ordinal = guarded.key().lifecycle_ordinal(),
+                    "TEMP lifecycle completion classifier took lifecycle Validate"
+                );
                 let completion = self
                     .io
                     .as_ref()

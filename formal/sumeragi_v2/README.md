@@ -388,12 +388,12 @@ height-context state are not migrated in place.
   most the aggregate ingress capacity, matching the runtime admission gate;
   this makes one-item removal decrease the counted depth by exactly one even
   when preservation is checked from an arbitrary invariant state. Each
-  authenticated source also leaves a distinct configured 64 KiB certified-fence-escape
+  authenticated source also leaves a distinct configured 1 MiB certified-fence-escape
   reserve unavailable to ordinary traffic. Each validator additionally leaves a
   64 KiB timeout-vote reserve unavailable to ordinary traffic (in addition to body
-  envelope headroom). That isolated region exceeds the conservative 4 KiB
-  maximum valid timeout-vote envelope; the sizing envelope even covers a
-  128-signer PrepareQC, beyond the production cap of 31 validators. A
+  envelope headroom). The certified region covers the exact maximal timeout
+  certificate for the production cap of 31 validators; the timeout-vote region
+  exceeds the conservative 4 KiB maximum valid vote envelope. A
   validator lane owns at most one distinct queued TimeoutVote in that region;
   transport copies coalesce while that lane owns the exact envelope, and the
   authenticated delivery record continues coalescing while the corresponding
@@ -447,9 +447,9 @@ height-context state are not migrated in place.
   every layer. With `F(x)` denoting compact-length framing, the manifest bound
   is `F(8 + C * F(32)) + 228`; the proposal adds the maximal grouped TC,
   separately carried highest PrepareQC, and signature. The conservative bound
-  sizes a 128-validator proposal at 232,541 bare bytes, beyond the production
-  cap of 31 validators, and the recommended maximum transport completion is
-  16,828,108 bare bytes, including a current responder `PeerId` at the
+  sizes the protocol-maximum 31-validator proposal at 1,106,267 bare bytes,
+  and the recommended maximum transport completion is 16,844,237 bare bytes,
+  including a current responder `PeerId` at the
   protocol-wide maximum public-key payload. `CertifiedBodyRequest`
   carries a maximal PrepareQC, `CommitCertificateRequest` carries the actual
   frozen chain id, and `CommitCertificateResponse` carries a maximal CommitQC.

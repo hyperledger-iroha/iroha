@@ -776,7 +776,7 @@ _PRODUCTION_FAIR_V2_INGRESS_HISTORY_ITEM_SHA256 = {
 }
 _PRODUCTION_FAIR_V2_INGRESS_TEST_ITEM_SHA256 = {
     "fair_v2_ingress_recommended_context_fits_default_disjoint_byte_partitions": (
-        "8c399a680c43dcc37ba129b95ad1594bb280ccd1df3aa4da5da9bb3e32450ce3"
+        "e814623ffde8fafeb7a0dd0e9086335c4374a8e52390ccfa067848cb16863065"
     ),
     "fair_v2_ingress_coalesces_stale_timeout_vote_retry_without_regressing_route": (
         "6f7d5a69eed80d1f0969993aa2dabcae9903031851feb3e7b37fe27649f079ae"

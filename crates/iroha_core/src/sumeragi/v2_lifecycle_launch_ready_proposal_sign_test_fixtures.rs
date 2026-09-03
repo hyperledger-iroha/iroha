@@ -68,6 +68,41 @@ impl LaunchedProductionLifecycleV1 {
         self.executor.runtime_queue_snapshot_for_test(now)
     }
 
+    /// Freeze the production timeout owner after a worker completion has
+    /// become physical but before lifecycle publication consumes it.
+    pub(in crate::sumeragi) fn freeze_due_timeout_for_ready_sign_test(
+        &mut self,
+        now: Instant,
+    ) -> Result<bool, EffectExecutorError> {
+        let physical_cut = self
+            .leader_wire_ingress_binding
+            .ingress
+            .next_physical_admission_ordinal();
+        self.executor
+            .freeze_pre_timeout_locked_prepare_qc_cut(now, physical_cut)
+            .map(|cut| cut.is_some())
+    }
+
+    /// Run one production executor step at an exact synthetic scheduler time.
+    pub(in crate::sumeragi) fn step_runtime_for_ready_sign_test(
+        &mut self,
+        now: Instant,
+    ) -> Result<crate::sumeragi::v2_effects::EffectExecutorStep, EffectExecutorError> {
+        self.executor.step(now, &mut self.services)
+    }
+
+    /// Inspect the last production runtime owner selected by the executor.
+    pub(in crate::sumeragi) fn runtime_step_observation_for_ready_sign_test(
+        &self,
+    ) -> Option<crate::sumeragi::v2_effects::RuntimeStepObservationV1> {
+        self.executor.last_runtime_step_observation_for_test()
+    }
+
+    /// Return whether ProposalIntent fsync has produced its lifecycle Sign handoff.
+    pub(in crate::sumeragi) fn has_pending_live_wal_sign_for_ready_sign_test(&self) -> bool {
+        self.executor.has_pending_live_wal_sign_admission()
+    }
+
     /// Retain one inert ordinary physical Completion head ahead of Ready work.
     pub(in crate::sumeragi) fn install_ordinary_completion_head_for_ready_sign_test(
         &mut self,

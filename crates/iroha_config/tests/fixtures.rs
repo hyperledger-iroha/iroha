@@ -1948,7 +1948,7 @@ fn taira_config_enables_untrusted_cid_hosting() {
         .expect("Taira should configure an aggregate canonical wire-byte budget");
     assert_eq!(
         body_bytes,
-        198 * 1024 * 1024,
+        204 * 1024 * 1024,
         "Taira aggregate canonical wire-byte budget should isolate its six ingress source partitions"
     );
     let body_source_bytes = queues
@@ -1957,7 +1957,7 @@ fn taira_config_enables_untrusted_cid_hosting() {
         .expect("Taira should configure a per-source canonical wire-byte budget");
     assert_eq!(
         body_source_bytes,
-        33 * 1024 * 1024,
+        34 * 1024 * 1024,
         "Taira should retain one canonical outer-ingress wire-byte quota per source"
     );
     assert_eq!(
@@ -2203,10 +2203,10 @@ fn sumeragi_v2_explicit_schema_parses() {
         2
     );
     assert_eq!(cfg.sumeragi.queues.bodies.get(), 96);
-    assert_eq!(cfg.sumeragi.queues.body_bytes.get(), 68 * 1024 * 1024);
+    assert_eq!(cfg.sumeragi.queues.body_bytes.get(), 72 * 1024 * 1024);
     assert_eq!(
         cfg.sumeragi.queues.body_source_bytes.get(),
-        17 * 1024 * 1024
+        18 * 1024 * 1024
     );
     assert_eq!(cfg.sumeragi.queues.chunks.get(), 768);
     assert_eq!(cfg.sumeragi.queues.ready_bodies.get(), 48);
@@ -2233,7 +2233,7 @@ fn sumeragi_v2_rejects_queue_and_key_policy_errors() {
         ),
         (
             "bad.sumeragi_body_source_bytes_too_small.toml",
-            "sumeragi.queues.body_source_bytes must isolate max-payload envelopes, 65536 bytes of fixed headroom per envelope, 33800 recommended payload-completion manifest bytes, 1048576 lane-progress bytes, 4194304 lane-completion bytes, 65536 certified-fence-escape bytes, and 65536 timeout-vote bytes (minimum 33850376, configured 16777216)",
+            "sumeragi.queues.body_source_bytes must isolate max-payload envelopes, 65536 bytes of fixed headroom per envelope, 33800 recommended payload-completion manifest bytes, 1048576 lane-progress bytes, 4194304 lane-completion bytes, 1048576 certified-fence-escape bytes, and 65536 timeout-vote bytes (minimum 34833416, configured 16777216)",
         ),
         (
             "bad.sumeragi_body_queue_too_small.toml",
@@ -2241,7 +2241,7 @@ fn sumeragi_v2_rejects_queue_and_key_policy_errors() {
         ),
         (
             "bad.sumeragi_body_bytes_too_small.toml",
-            "sumeragi.queues.body_bytes must reserve one validator and every configured authenticated non-validator source (minimum 103809024, configured 103809023)",
+            "sumeragi.queues.body_bytes must reserve one validator and every configured authenticated non-validator source (minimum 106954752, configured 106954751)",
         ),
     ] {
         let report = load_config_from_fixtures(fixture)

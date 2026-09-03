@@ -88,7 +88,8 @@ use super::{
     v2_transport::AuthenticatedCertifiedBodyRequest,
     v2_worker::{
         ExactFanoutOwnership, KuraReplicaAdvertRefreshOwner, ProductionV2Services,
-        QueuePlanBatchSources, V2CleanupSupervisor, durable_exact_output_handoff_owner_pair,
+        QueuePlanBatchSources, V2CleanupSupervisor, V2CompletionRuntimeCutDecisionV1,
+        durable_exact_output_handoff_owner_pair,
     },
 };
 use crate::{
@@ -2060,6 +2061,8 @@ pub(in crate::sumeragi) enum AdvanceExecutorYieldCheckpointV1 {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::sumeragi) enum AdvanceExecutorYieldCauseV1 {
+    CompletionPendingAtRuntimeCut,
+    CompletionCapacityReliefStepped,
     RecoveredLifecycleOutputCompleted,
     RecoveredLifecycleOutputSourceRetained,
     SettledLiveWalSign,
@@ -2085,6 +2088,15 @@ impl AdvanceExecutorYieldV1 {
         cause: AdvanceExecutorYieldCauseV1,
     ) -> Self {
         Self { checkpoint, cause }
+    }
+
+    /// Whether the next outer turn must re-enter Completion before Runtime.
+    pub(in crate::sumeragi) const fn requires_completion_retry(self) -> bool {
+        matches!(
+            self.cause,
+            AdvanceExecutorYieldCauseV1::CompletionPendingAtRuntimeCut
+                | AdvanceExecutorYieldCauseV1::CompletionCapacityReliefStepped
+        )
     }
 }
 
@@ -2188,7 +2200,36 @@ fn advance_executor(
             ));
         }
         executor.set_ingress_physical_cut(receiver.next_physical_admission_ordinal())?;
-        match executor.step(Instant::now(), services)? {
+        let completion_cut = services
+            .prepare_completion_runtime_cut(executor.remaining_completion_capacity() != 0)
+            .map_err(V2RunnerError::Service)?;
+        let (step, retry_completion_after_step) = match completion_cut {
+            V2CompletionRuntimeCutDecisionV1::RetryCompletion => {
+                return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                    AdvanceExecutorYieldV1::new(
+                        AdvanceExecutorYieldCheckpointV1::BeforeStep,
+                        AdvanceExecutorYieldCauseV1::CompletionPendingAtRuntimeCut,
+                    ),
+                ));
+            }
+            V2CompletionRuntimeCutDecisionV1::Runtime(completion_cut) => (
+                executor.step_after_completion_runtime_cut(completion_cut, services)?,
+                false,
+            ),
+            V2CompletionRuntimeCutDecisionV1::CapacityRelief(completion_cut) => (
+                executor.step_completion_capacity_relief_after_cut(completion_cut, services)?,
+                true,
+            ),
+        };
+        match step {
+            EffectExecutorStep::Idle if retry_completion_after_step => {
+                return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                    AdvanceExecutorYieldV1::new(
+                        AdvanceExecutorYieldCheckpointV1::AfterStep,
+                        AdvanceExecutorYieldCauseV1::CompletionCapacityReliefStepped,
+                    ),
+                ));
+            }
             EffectExecutorStep::Idle => return Ok(AdvanceExecutorSliceOutcomeV1::Idle),
             EffectExecutorStep::Advanced { .. } => {
                 // A PrepareQC can replace the protected lock without changing
@@ -2197,6 +2238,14 @@ fn advance_executor(
                 // reclaim service ownership for the superseded subject.
                 let _ = reconcile_executor_locked_body(executor, services)?;
             }
+        }
+        if retry_completion_after_step {
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::AfterStep,
+                    AdvanceExecutorYieldCauseV1::CompletionCapacityReliefStepped,
+                ),
+            ));
         }
         let recovered = super::v2_lifecycle_coordinator::settle_one_recovered_lifecycle_output(
             lifecycle_owner,

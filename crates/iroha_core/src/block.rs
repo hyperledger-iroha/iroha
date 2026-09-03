@@ -743,7 +743,7 @@ fn consensus_pop_matches_lane_authority(
             },
         );
     }
-    crate::state::live_consensus_key_pop_for_peer(world, peer, height)
+    crate::state::live_consensus_key_pop_for_peer_on_lane(world, peer, height, lane_id)
         .is_none_or(|live_pop| live_pop == presented_pop)
 }
 impl<T: StateReadOnly> NativeAmxAuthorityContext for T {
@@ -24503,25 +24503,56 @@ pub(crate) mod valid {
                 kura::Kura, query::store::LiveQueryStore, sumeragi::network_topology::Topology,
             };
             use iroha_data_model::{
-                block::consensus_v2::ConsensusMode,
+                block::consensus_v2::{
+                    ConsensusMode, SumeragiV2GenesisContextParameters, ValidatorPower,
+                },
                 parameter::{Parameter, system::SumeragiParameter},
                 peer::PeerId,
                 prelude::*,
             };
-            use iroha_genesis::GenesisBuilder;
+            use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
             iroha_genesis::init_instruction_registry();
             let chain_id = ChainId::from("00000000-0000-0000-0000-000000000001");
             let genesis_keypair = crate::block::checked_keypair();
             let genesis_account = AccountId::new(genesis_keypair.public_key().clone());
+            let mut topology = (0..4)
+                .map(|_| {
+                    let validator = crate::block::checked_keypair_with_algorithm(
+                        iroha_crypto::Algorithm::BlsNormal,
+                    );
+                    let pop = iroha_crypto::bls_normal_pop_prove(validator.private_key())
+                        .expect("derive genesis side-effect fixture validator PoP");
+                    GenesisTopologyEntry::new(PeerId::new(validator.public_key().clone()), pop)
+                })
+                .collect::<Vec<_>>();
+            topology.sort_by(|left, right| left.peer.cmp(&right.peer));
+            let roster = topology
+                .iter()
+                .map(|entry| ValidatorPower {
+                    validator: entry.peer.clone(),
+                    power: 1,
+                })
+                .collect::<Vec<_>>();
+            let mint_finality =
+                crate::offline_cash_v1_test_fixtures::mint_finality_genesis_parameters(&roster);
             let manifest = GenesisBuilder::new_without_executor(chain_id.clone(), ".")
+                .with_sumeragi_v2_context_parameters(
+                    SumeragiV2GenesisContextParameters::recommended(),
+                )
+                .with_offline_cash_mint_finality_genesis_parameters(mint_finality)
                 .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(100)))
                 .next_transaction()
                 .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333)))
+                .set_topology(topology)
                 .build_raw()
                 .expect("ordered genesis parameters form one valid raw transaction");
             let genesis = manifest
                 .build_and_sign(&genesis_keypair)
                 .expect("ordered genesis parameters should build");
+            let topology = Topology::new(
+                crate::sumeragi::signed_genesis_voting_peers(&genesis)
+                    .expect("signed genesis must expose its exact voting roster"),
+            );
             let genesis_domain =
                 Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_account);
             let genesis_account_model =
@@ -24537,7 +24568,6 @@ pub(crate) mod valid {
                 &state,
                 std::slice::from_ref(&genesis_keypair),
             );
-            let topology = Topology::new(vec![PeerId::new(genesis_keypair.public_key().clone())]);
             let genesis_block = with_current_state_confidential_features(
                 genesis.0,
                 &state,

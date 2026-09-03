@@ -3937,12 +3937,17 @@ mod tests {
                 GenesisTopologyEntry::new(PeerId::new(validator.public_key().clone()), pop)
             })
             .collect::<Vec<_>>();
-        let manifest = GenesisBuilder::new_without_executor(
-            ChainId::from("resultless-prepared-bundle"),
-            PathBuf::from("."),
+        let authority_topology = topology.iter().map(|entry| entry.peer.clone()).collect();
+        let manifest = crate::verify::configured_test_genesis_builder(
+            GenesisBuilder::new_without_executor(
+                ChainId::from("resultless-prepared-bundle"),
+                PathBuf::from("."),
+            ),
+            authority_topology,
         )
         .set_topology(topology)
         .build_raw()
+        .expect("build resultless prepared fixture with exact explicit authority")
         .with_consensus_mode(SumeragiConsensusMode::Permissioned)
         .with_consensus_meta();
         let genesis_key = KeyPair::random();
@@ -4173,33 +4178,44 @@ api_port = 9000
         }
     }
     fn write_minimal_genesis(path: &Path) {
-        let manifest =
-            GenesisBuilder::new_without_executor(ChainId::from("test-chain"), PathBuf::from("."))
-                .build_raw()
-                .with_consensus_mode(
-                    iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned,
-                );
+        let manifest = crate::verify::configured_test_genesis_builder(
+            GenesisBuilder::new_without_executor(ChainId::from("test-chain"), PathBuf::from(".")),
+            Vec::new(),
+        )
+        .build_raw()
+        .expect("build minimal swarm fixture with explicit authority")
+        .with_consensus_mode(
+            iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned,
+        );
         let genesis_json = norito::json::to_json_pretty(&manifest).expect("serialize genesis");
         fs::write(path, genesis_json).expect("write minimal genesis");
     }
     fn write_npos_genesis_without_parameters(path: &Path) {
-        let manifest = GenesisBuilder::new_without_executor(
-            ChainId::from("npos-without-parameters"),
-            PathBuf::from("."),
+        let manifest = crate::verify::configured_test_genesis_builder(
+            GenesisBuilder::new_without_executor(
+                ChainId::from("npos-without-parameters"),
+                PathBuf::from("."),
+            ),
+            Vec::new(),
         )
         .build_raw()
+        .expect("build NPoS-without-parameters swarm fixture with explicit authority")
         .with_consensus_mode(iroha_data_model::parameter::system::SumeragiConsensusMode::Npos);
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis");
         fs::write(path, json).expect("write NPoS genesis without parameters");
     }
     fn write_npos_genesis(path: &Path) {
         let chain = ChainId::from("npos-swarm");
-        let manifest = GenesisBuilder::new_without_executor(chain, PathBuf::from("."))
-            .append_parameter(Parameter::Custom(
-                SumeragiNposParameters::default().into_custom_parameter(),
-            ))
-            .build_raw()
-            .with_consensus_mode(iroha_data_model::parameter::system::SumeragiConsensusMode::Npos);
+        let manifest = crate::verify::configured_test_genesis_builder(
+            GenesisBuilder::new_without_executor(chain, PathBuf::from(".")),
+            Vec::new(),
+        )
+        .append_parameter(Parameter::Custom(
+            SumeragiNposParameters::default().into_custom_parameter(),
+        ))
+        .build_raw()
+        .expect("build NPoS swarm fixture with explicit authority")
+        .with_consensus_mode(iroha_data_model::parameter::system::SumeragiConsensusMode::Npos);
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis");
         fs::write(path, json).expect("write npos genesis");
     }

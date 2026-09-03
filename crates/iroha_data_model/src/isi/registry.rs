@@ -330,11 +330,11 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 361;
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 351;
         #[cfg(feature = "governance")]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 361;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 351;
         #[cfg(not(feature = "governance"))]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 344;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 334;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -384,9 +384,9 @@ mod tests {
         use sha2::{Digest, Sha256};
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "5a8afd9ce1e0f86cc4acb458bc7abf9ca2eaf27e8572981b76497e49d4325a26";
+            "5eac6c5cdf846c53a6372745194b23e342242a0c004debe5461fedb5160a0853";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "ac4d2277c476c444ccc2463716a030e2b49c756f01fe7045e17ffd19215ae0ca";
+            "4cd2566dc4f63942e1e52b751a1b097747793e32dab67d24bde9420902177abd";
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries
                 .into_iter()
@@ -1404,8 +1404,25 @@ mod tests {
                 "EscrowDispute",
             ]
             .concat(),
+            "iroha.instruction.v1::offline::TopUpKagemushaRecursiveV4".to_owned(),
+            "iroha.instruction.v1::offline::RedeemKagemushaRecursiveV4".to_owned(),
+            "iroha.instruction.v1::offline::ActivateKagemushaRecursiveReleaseV4".to_owned(),
+            "iroha.offline.kagemusha.recursive_release.enable.v1".to_owned(),
+            "iroha.offline.kagemusha.recursive_release.cancel.v1".to_owned(),
+            "iroha.offline.kagemusha.recursive_release.deactivate.v1".to_owned(),
+            "iroha.offline.kagemusha.taira_canary.record.v1".to_owned(),
+            "iroha.offline.kagemusha.taira_canary.authorize.v1".to_owned(),
+            "iroha.offline.device_attestation.register".to_owned(),
+            "iroha.instruction.v1::offline::SetOfflineDeviceAttestationPolicy".to_owned(),
+            "iroha.instruction.v1::sorafs::RegisterSorafsAnonymousServiceNote".to_owned(),
+            "iroha.instruction.v1::sorafs::RegisterSorafsAnonymousJurorCandidacy".to_owned(),
+            "iroha.instruction.v1::sorafs::RefundSorafsAnonymousServiceEscrow".to_owned(),
+            "iroha.instruction.v1::sorafs::SlashSorafsAnonymousServiceEscrow".to_owned(),
         ];
         let registry = default();
+        let current = RegisterBox::Domain(Register::domain(Domain::new(domain_id())));
+        let raw_current = raw_instruction_payload(&current);
+        let framed_current = framed_instruction_payload(&current);
         for retired in &retired_wires {
             assert!(
                 !registry.contains(retired),
@@ -1414,6 +1431,15 @@ mod tests {
             assert!(
                 registry.decode(retired, &[]).is_none(),
                 "retired confidential wire must not be dispatchable: {retired}"
+            );
+            assert!(!is_instruction_wire_id_registered(retired));
+            assert!(
+                crate::isi::frame_instruction_payload(retired, &raw_current).is_err(),
+                "public framing must reject retired wire: {retired}"
+            );
+            assert!(
+                crate::isi::decode_instruction_from_pair(retired, &framed_current).is_err(),
+                "public pair decoding must reject retired wire: {retired}"
             );
         }
     }

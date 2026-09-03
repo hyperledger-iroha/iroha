@@ -1123,12 +1123,35 @@ fn create_blocks(rt: &tokio::runtime::Runtime, temp_dir: &TempDir) -> Vec<Commit
     let mut blocks = Vec::new();
     let (leader_public_key, leader_private_key) =
         checked_keypair_with_algorithm(Algorithm::BlsNormal).into_parts();
-    let peer_id = PeerId::new(leader_public_key.clone());
-    let topology = Topology::new(vec![peer_id]);
-    let topology_entries = vec![GenesisTopologyEntry::new(
+    let mut topology_entries = vec![GenesisTopologyEntry::new(
         PeerId::new(leader_public_key.clone()),
         bls_normal_pop_prove(&leader_private_key).expect("generate BLS PoP"),
     )];
+    topology_entries.extend((0..3).map(|_| {
+        let validator = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let pop = bls_normal_pop_prove(validator.private_key())
+            .expect("generate additional Kura fixture validator PoP");
+        GenesisTopologyEntry::new(PeerId::new(validator.public_key().clone()), pop)
+    }));
+    topology_entries.sort_by(|left, right| left.peer.cmp(&right.peer));
+    let topology = Topology::new(
+        topology_entries
+            .iter()
+            .map(|entry| entry.peer.clone())
+            .collect::<Vec<_>>(),
+    );
+    let mint_finality_roster = topology_entries
+        .iter()
+        .map(
+            |entry| iroha_data_model::block::consensus_v2::ValidatorPower {
+                validator: entry.peer.clone(),
+                power: 1,
+            },
+        )
+        .collect::<Vec<_>>();
+    let mint_finality = crate::offline_cash_v1_test_fixtures::mint_finality_genesis_parameters(
+        &mint_finality_roster,
+    );
     let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
     let (genesis_id, genesis_key_pair) = gen_account_in("genesis");
     let genesis_domain_id = DomainId::try_new("genesis", "universal").expect("Valid");
@@ -1176,6 +1199,11 @@ fn create_blocks(rt: &tokio::runtime::Runtime, temp_dir: &TempDir) -> Vec<Commit
         BTreeMap::from([(LaneId::SINGLE, lane_manifest)]),
     )));
     let genesis = GenesisBuilder::new_without_executor(chain_id.clone(), "ivm/libs/not/installed")
+        .with_sumeragi_v2_context_parameters(
+            iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(
+            ),
+        )
+        .with_offline_cash_mint_finality_genesis_parameters(mint_finality)
         .set_topology(topology_entries)
         .build_and_sign(&genesis_key_pair)
         .expect("genesis block should be built");

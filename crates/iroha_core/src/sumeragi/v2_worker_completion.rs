@@ -277,6 +277,38 @@ pub(in crate::sumeragi) struct PreparedRecoveredDecisionFetchBodyCompletionV1 {
 pub(in crate::sumeragi) struct PreparedLifecycleValidateCompletionV1 {
     guarded: Box<GuardedLifecycleValidateWorkerResultV1>,
     queue: Arc<V2IoCommandQueue>,
+    physical_completion: LifecycleValidatePhysicalCompletionV1,
+}
+/// Process-local proof that one exact lifecycle Validate result entered the
+/// guarded worker-completion queue at this monotonic instant.
+///
+/// The value is minted only while transferring the matching queue owner. It
+/// is intentionally neither serialized nor reconstructed during recovery.
+#[derive(Clone, Copy, Debug)]
+pub(in crate::sumeragi) struct LifecycleValidatePhysicalCompletionV1 {
+    key: LifecycleValidateDispatchKeyV1,
+    retained_at: std::time::Instant,
+}
+impl LifecycleValidatePhysicalCompletionV1 {
+    /// Construct process-local completion timing authority for focused join tests.
+    #[cfg(test)]
+    pub(crate) const fn for_test(
+        key: LifecycleValidateDispatchKeyV1,
+        retained_at: std::time::Instant,
+    ) -> Self {
+        Self { key, retained_at }
+    }
+
+    /// Return the exact worker dispatch whose result was retained.
+    pub(in crate::sumeragi) const fn dispatch_key(self) -> LifecycleValidateDispatchKeyV1 {
+        self.key
+    }
+
+    /// Return the worker queue's exact monotonic retention instant.
+    pub(in crate::sumeragi) const fn retained_at(self) -> std::time::Instant {
+        self.retained_at
+    }
+
 }
 /// Guarded lifecycle Serve completion retained through LedgerV1 and reply delivery.
 #[must_use = "Certified-Serve completion must be settled and acknowledged"]
@@ -291,9 +323,16 @@ impl PreparedLifecycleValidateCompletionV1 {
         ownership_position: usize,
     ) -> Option<Self> {
         let key = guarded.key();
-        (guarded.result().matches_dispatch_key(key)
-            && queue.transfer_lifecycle_validate_completion(key, ownership_position))
-        .then_some(Self { guarded, queue })
+        if !guarded.result().matches_dispatch_key(key) {
+            return None;
+        }
+        let retained_at =
+            queue.transfer_lifecycle_validate_completion(key, ownership_position)?;
+        Some(Self {
+            guarded,
+            queue,
+            physical_completion: LifecycleValidatePhysicalCompletionV1 { key, retained_at },
+        })
     }
 
     /// Split the executed dispatch from its still-armed queue/publication owner.
@@ -303,7 +342,11 @@ impl PreparedLifecycleValidateCompletionV1 {
         ExecutedDurableValidateDispatch,
         LifecycleValidateCompletionAckV1,
     ) {
-        let Self { guarded, queue } = self;
+        let Self {
+            guarded,
+            queue,
+            physical_completion,
+        } = self;
         let (key, dispatch, drop_guard) = (*guarded).into_parts();
         (
             dispatch,
@@ -311,6 +354,7 @@ impl PreparedLifecycleValidateCompletionV1 {
                 key,
                 queue,
                 drop_guard,
+                physical_completion,
             },
         )
     }
@@ -321,8 +365,17 @@ pub(in crate::sumeragi) struct LifecycleValidateCompletionAckV1 {
     key: LifecycleValidateDispatchKeyV1,
     queue: Arc<V2IoCommandQueue>,
     drop_guard: LifecycleValidateCompletionDropGuardV1,
+    physical_completion: LifecycleValidatePhysicalCompletionV1,
 }
 impl LifecycleValidateCompletionAckV1 {
+    /// Borrow the exact worker-retention evidence before publication consumes
+    /// this acknowledgement owner.
+    pub(in crate::sumeragi) const fn physical_completion(
+        &self,
+    ) -> LifecycleValidatePhysicalCompletionV1 {
+        self.physical_completion
+    }
+
     /// Retire the exact command index only after registry/coordinator publication.
     pub(in crate::sumeragi) fn acknowledge_after_publication(mut self) {
         self.queue.acknowledge_lifecycle_validate(self.key);
@@ -1588,6 +1641,16 @@ impl V2IoHandle {
                                             false
                                         }
                                         Ok(true) => {
+                                            if let V2IoCompletion::LifecycleValidate(guarded) =
+                                                &completion
+                                            {
+                                                iroha_logger::warn!(
+                                                    lifecycle_ordinal = guarded
+                                                        .key()
+                                                        .lifecycle_ordinal(),
+                                                    "TEMP lifecycle Validate worker completion sealed"
+                                                );
+                                            }
                                             send_completion_with_lifecycle_ordinal(
                                                 &completion_tx,
                                                 &worker_admission,

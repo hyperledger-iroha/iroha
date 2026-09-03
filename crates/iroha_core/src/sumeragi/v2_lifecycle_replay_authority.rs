@@ -3787,6 +3787,9 @@ impl PreparedLifecycleLocalProposalReadyV1 {
     pub(in crate::sumeragi) fn publish_into_runtime(
         self,
         runtime: &mut SerializedV2Runtime,
+        physical_completion: Option<
+            crate::sumeragi::v2_worker::LifecycleValidatePhysicalCompletionV1,
+        >,
     ) -> Result<PublishedLifecycleLocalProposalReadyV1, Self> {
         let Self {
             effect,
@@ -3850,6 +3853,7 @@ impl PreparedLifecycleLocalProposalReadyV1 {
             validated_receipt.clone(),
             replay.validate_pending.as_ref(),
             lifecycle_ordinal,
+            physical_completion,
         ) {
             Ok(admission) => admission,
             Err(_) => {

@@ -177,6 +177,93 @@ use tokio::{
     sync::{Semaphore, broadcast, mpsc, oneshot},
     task,
 };
+
+#[cfg(test)]
+fn deterministic_genesis_topology_for_test() -> Vec<iroha_genesis::GenesisTopologyEntry> {
+    let mut topology = (0_u8..4)
+        .map(|index| {
+            let seed = 0x60_u8.wrapping_add(index);
+            let key_pair = iroha_crypto::KeyPair::try_from_seed(
+                vec![seed; 32],
+                iroha_crypto::Algorithm::BlsNormal,
+            )
+            .expect("derive deterministic irohad test validator");
+            let pop = iroha_crypto::bls_normal_pop_prove(key_pair.private_key())
+                .expect("derive deterministic irohad test validator proof of possession");
+            iroha_genesis::GenesisTopologyEntry::new(
+                iroha_data_model::peer::PeerId::new(key_pair.public_key().clone()),
+                pop,
+            )
+        })
+        .collect::<Vec<_>>();
+    topology.sort_by(|left, right| left.peer.cmp(&right.peer));
+    topology
+}
+
+#[cfg(test)]
+fn configured_genesis_builder_for_test(
+    builder: iroha_genesis::GenesisBuilder,
+) -> iroha_genesis::GenesisBuilder {
+    configured_genesis_builder_with_topology_for_test(
+        builder,
+        deterministic_genesis_topology_for_test(),
+    )
+}
+
+#[cfg(test)]
+fn configured_genesis_builder_with_topology_for_test(
+    builder: iroha_genesis::GenesisBuilder,
+    mut topology: Vec<iroha_genesis::GenesisTopologyEntry>,
+) -> iroha_genesis::GenesisBuilder {
+    use iroha_data_model::{
+        block::consensus_v2::{SumeragiV2GenesisContextParameters, is_valid_committee_size},
+        isi::offline_cash_v1::{
+            OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterTemplateV1,
+            OfflineCashMintFinalityGenesisParametersV1,
+        },
+    };
+
+    topology.sort_by(|left, right| left.peer.cmp(&right.peer));
+    assert!(
+        is_valid_committee_size(topology.len()),
+        "irohad genesis fixtures require an exact supported 3f + 1 topology"
+    );
+    assert!(
+        !topology.windows(2).any(|pair| pair[0].peer == pair[1].peer),
+        "irohad genesis fixture topology must not repeat validators"
+    );
+    let validators = topology
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            let seed = 0xA0_u8.wrapping_add(
+                u8::try_from(index).expect("irohad test validator index fits in one byte"),
+            );
+            iroha_core::zk::offline_cash_v1_recursion::derive_offline_cash_mint_finality_validator_keys_v1(
+                &[seed; 32],
+                0,
+                entry.peer.clone(),
+            )
+            .expect("derive independent irohad test Pasta authority")
+        })
+        .collect();
+    let authority = OfflineCashMintFinalityGenesisParametersV1 {
+        epoch_roster: OfflineCashMintFinalityEpochRosterTemplateV1 {
+            version: OFFLINE_CASH_CHAIN_VERSION_V1,
+            epoch: 0,
+            validators,
+        },
+        next_epoch_roster: None,
+    };
+    authority
+        .validate()
+        .expect("irohad test Offline Cash authority must be canonical");
+    builder
+        .set_topology(topology)
+        .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+        .with_offline_cash_mint_finality_genesis_parameters(authority)
+}
+
 const NODE_RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 /// Build-time source identity embedded for release artifact validation.
 const BUILD_SOURCE_ID: Option<&str> = option_env!("IROHA_GIT_COMMIT_HASH");
@@ -451,9 +538,13 @@ mod handshake_payload_tests {
     use std::path::PathBuf;
     fn handshake_payload_from_genesis() -> Json {
         let chain = iroha_data_model::ChainId::from("handshake-meta-test");
-        let manifest = GenesisBuilder::new_without_executor(chain, PathBuf::from("."))
-            .build_raw()
-            .with_consensus_meta();
+        let manifest = configured_genesis_builder_for_test(GenesisBuilder::new_without_executor(
+            chain,
+            PathBuf::from("."),
+        ))
+        .build_raw()
+        .expect("build handshake genesis fixture")
+        .with_consensus_meta();
         let keypair = iroha_crypto::KeyPair::random();
         let genesis_block = manifest
             .build_and_sign(&keypair)
@@ -10922,26 +11013,30 @@ mod genesis_key_tests {
     use iroha_genesis::GenesisBuilder;
     use std::path::PathBuf;
     fn prepared_genesis_proposal(keypair: &KeyPair) -> GenesisBlock {
-        let proposal = GenesisBuilder::new_without_executor(
+        let proposal = configured_genesis_builder_for_test(GenesisBuilder::new_without_executor(
             ChainId::from("configured-genesis-trust-anchor-test"),
             PathBuf::from("."),
-        )
+        ))
         .build_raw()
+        .expect("build configured genesis fixture")
         .build_and_sign(keypair)
         .expect("build prepared genesis proposal");
         assert!(proposal.0.is_resultless_proposal());
         proposal
     }
     fn prepared_genesis_proposal_with_marker(keypair: &KeyPair, marker: &str) -> GenesisBlock {
-        let proposal = GenesisBuilder::new_without_executor(
-            ChainId::from("configured-genesis-trust-anchor-test"),
-            PathBuf::from("."),
+        let proposal = configured_genesis_builder_for_test(
+            GenesisBuilder::new_without_executor(
+                ChainId::from("configured-genesis-trust-anchor-test"),
+                PathBuf::from("."),
+            )
+            .append_instruction(iroha_data_model::isi::Log::new(
+                iroha_data_model::Level::INFO,
+                marker.to_owned(),
+            )),
         )
-        .append_instruction(iroha_data_model::isi::Log::new(
-            iroha_data_model::Level::INFO,
-            marker.to_owned(),
-        ))
         .build_raw()
+        .expect("build marked configured genesis fixture")
         .build_and_sign(keypair)
         .expect("build marked prepared genesis proposal");
         assert!(proposal.0.is_resultless_proposal());
@@ -10962,7 +11057,12 @@ mod genesis_key_tests {
     #[test]
     fn derives_genesis_pubkey_from_block_authority() {
         let chain = ChainId::from("derive-genesis-pubkey-test");
-        let manifest = GenesisBuilder::new_without_executor(chain, PathBuf::from(".")).build_raw();
+        let manifest = configured_genesis_builder_for_test(GenesisBuilder::new_without_executor(
+            chain,
+            PathBuf::from("."),
+        ))
+        .build_raw()
+        .expect("build configured genesis fixture");
         let keypair = iroha_crypto::KeyPair::random();
         let genesis_block = manifest
             .build_and_sign(&keypair)
@@ -18245,8 +18345,12 @@ mod tests {
         use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, ManifestCrypto};
         use std::sync::Arc;
         fn sample_manifest() -> RawGenesisTransaction {
-            GenesisBuilder::new_without_executor(ChainId::from("test-chain"), PathBuf::from("."))
-                .build_raw()
+            configured_genesis_builder_for_test(GenesisBuilder::new_without_executor(
+                ChainId::from("test-chain"),
+                PathBuf::from("."),
+            ))
+            .build_raw()
+            .expect("build sample genesis manifest")
         }
         fn sample_config_table() -> toml::Table {
             toml::toml! {
@@ -18477,7 +18581,11 @@ mod tests {
                 default_hash: "sm3-256".to_owned(),
                 ..Default::default()
             };
-            manifest = manifest.into_builder().with_crypto(crypto).build_raw();
+            manifest = manifest
+                .into_builder()
+                .with_crypto(crypto)
+                .build_raw()
+                .expect("rebuild genesis manifest with changed crypto");
             let config = sample_config();
             let err = ensure_manifest_crypto_matches(&manifest, &config)
                 .expect_err("allowed signing mismatch should be detected");
@@ -18505,9 +18613,12 @@ mod tests {
             let mut config = sample_config();
             let genesis_keys = config.common.key_pair.clone();
             let chain = config.common.chain.clone();
-            let manifest = GenesisBuilder::new_without_executor(chain.clone(), PathBuf::from("."))
-                .build_raw()
-                .with_consensus_meta();
+            let manifest = configured_genesis_builder_for_test(
+                GenesisBuilder::new_without_executor(chain.clone(), PathBuf::from(".")),
+            )
+            .build_raw()
+            .expect("build configured crypto-mismatch genesis")
+            .with_consensus_meta();
             let genesis_block = manifest.build_and_sign(&genesis_keys)?;
             let mut instructions = Vec::new();
             for tx in genesis_block.0.external_transactions() {
@@ -18676,9 +18787,12 @@ mod tests {
                     GenesisTopologyEntry::new(PeerId::new(key.public_key().clone()), pop)
                 })
                 .collect::<Vec<_>>();
-            let raw_genesis = GenesisBuilder::new_without_executor(chain_id.clone(), ".")
-                .set_topology(topology)
-                .build_raw();
+            let raw_genesis = configured_genesis_builder_with_topology_for_test(
+                GenesisBuilder::new_without_executor(chain_id.clone(), "."),
+                topology,
+            )
+            .build_raw()
+            .expect("build fresh v2 genesis fixture");
             let authority_id = AccountId::new(genesis_authority.public_key().clone());
             let mut config = sample_config();
             config.common.chain = chain_id.clone();
@@ -18766,9 +18880,13 @@ mod tests {
             {
                 config.crypto.allowed_signing.push(Algorithm::BlsNormal);
             }
-            let base_genesis =
-                GenesisBuilder::new_without_executor(chain_id, ".").set_topology(topology);
-            let base_raw = base_genesis.build_raw();
+            let base_genesis = configured_genesis_builder_with_topology_for_test(
+                GenesisBuilder::new_without_executor(chain_id, "."),
+                topology,
+            );
+            let base_raw = base_genesis
+                .build_raw()
+                .expect("build offline semantic genesis fixture");
             let (context_hash, execution_policy_hash) =
                 staged_context_hashes_for_test(&base_raw, &genesis_authority, &config);
             let mut parameters = base_raw.sumeragi_v2_context_parameters();
@@ -18982,21 +19100,25 @@ mod tests {
             let config = sample_config();
             let genesis_keys = config.common.key_pair.clone();
             let chain = config.common.chain.clone();
-            let permissioned_genesis =
-                GenesisBuilder::new_without_executor(chain.clone(), PathBuf::from("."))
-                    .build_raw()
-                    .with_consensus_meta()
-                    .build_and_sign(&genesis_keys)?;
-            let npos_genesis =
+            let permissioned_genesis = configured_genesis_builder_for_test(
+                GenesisBuilder::new_without_executor(chain.clone(), PathBuf::from(".")),
+            )
+            .build_raw()
+            .expect("build permissioned genesis fixture")
+            .with_consensus_meta()
+            .build_and_sign(&genesis_keys)?;
+            let npos_genesis = configured_genesis_builder_for_test(
                 GenesisBuilder::new_without_executor(chain.clone(), PathBuf::from("."))
                     .append_parameter(Parameter::Custom(
                         iroha_data_model::parameter::system::SumeragiNposParameters::default()
                             .into_custom_parameter(),
-                    ))
-                    .build_raw()
-                    .with_consensus_mode(SumeragiConsensusMode::Npos)
-                    .with_consensus_meta()
-                    .build_and_sign(&genesis_keys)?;
+                    )),
+            )
+            .build_raw()
+            .expect("build NPoS genesis fixture")
+            .with_consensus_mode(SumeragiConsensusMode::Npos)
+            .with_consensus_meta()
+            .build_and_sign(&genesis_keys)?;
             let config_caps = build_consensus_config_caps(&config.nexus, None, None)
                 .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
             let (mode_tag, _bls_domain, consensus_caps, _, _) =
@@ -19022,9 +19144,12 @@ mod tests {
             let chain = config.common.chain.clone();
             // Build a canonical manifest with consensus metadata, then tamper with the advertised
             // fingerprint so genesis validation should fail.
-            let manifest = GenesisBuilder::new_without_executor(chain, PathBuf::from("."))
-                .build_raw()
-                .with_consensus_meta();
+            let manifest = configured_genesis_builder_for_test(
+                GenesisBuilder::new_without_executor(chain, PathBuf::from(".")),
+            )
+            .build_raw()
+            .expect("build configured fingerprint-mismatch genesis")
+            .with_consensus_meta();
             let mut manifest_value =
                 norito::json::value::to_value(&manifest).expect("serialize manifest");
             if let Some(obj) = manifest_value.as_object_mut() {
@@ -19095,12 +19220,15 @@ mod tests {
             manifest_crypto.default_hash = "sm3-256".to_owned();
             manifest_crypto.allowed_signing = vec![Algorithm::Ed25519, Algorithm::Sm2];
             manifest_crypto.sm2_distid_default = "CN1234567812345678".to_owned();
-            let manifest = GenesisBuilder::new_without_executor(
-                ChainId::from("test-chain"),
-                PathBuf::from("."),
+            let manifest = configured_genesis_builder_for_test(
+                GenesisBuilder::new_without_executor(
+                    ChainId::from("test-chain"),
+                    PathBuf::from("."),
+                )
+                .with_crypto(manifest_crypto),
             )
-            .with_crypto(manifest_crypto)
-            .build_raw();
+            .build_raw()
+            .expect("build manifest-crypto fixture");
             let temp_dir = tempfile::tempdir()?;
             let config_path = temp_dir.path().join("config.toml");
             let manifest_path = temp_dir.path().join("manifest.json");
@@ -19142,6 +19270,30 @@ mod tests {
         use iroha_genesis::GenesisBuilder;
         use iroha_primitives::addr::socket_addr;
         use path_absolutize::Absolutize as _;
+
+        fn config_test_args(config_path: PathBuf, genesis_manifest_json: Option<PathBuf>) -> Args {
+            Args {
+                config: Some(config_path),
+                genesis_manifest_json,
+                startup: StartupArgs {
+                    check_config: false,
+                    trace_config: false,
+                    config_blake3: None,
+                },
+                terminal_colors: false,
+                language: None,
+                sora: false,
+                #[cfg(feature = "test-network-parliament-signers")]
+                test_network_parliament_beacon_signer_mode:
+                    TestNetworkParliamentBeaconSignerMode::Valid,
+                fastpq_execution_mode: None,
+                fastpq_poseidon_mode: None,
+                fastpq_device_class: None,
+                fastpq_chip_family: None,
+                fastpq_gpu_kind: None,
+            }
+        }
+
         fn config_factory(genesis_public_key: &PublicKey) -> toml::Table {
             let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let pubkey = keypair.public_key().clone();
@@ -19204,7 +19356,12 @@ mod tests {
             F: FnMut(&mut toml::Table, &KeyPair),
         {
             let genesis_key_pair = KeyPair::random();
-            let raw = GenesisBuilder::new_without_executor(ChainId::from("chain"), ".").build_raw();
+            let raw = configured_genesis_builder_for_test(GenesisBuilder::new_without_executor(
+                ChainId::from("chain"),
+                ".",
+            ))
+            .build_raw()
+            .expect("build config-integration genesis fixture");
             iroha_genesis::init_instruction_registry();
             let proposal = raw
                 .build_and_sign(&genesis_key_pair)

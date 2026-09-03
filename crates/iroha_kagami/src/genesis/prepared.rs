@@ -877,14 +877,21 @@ mod tests {
                 }
             })
             .collect::<Vec<_>>();
-        let reviewed = GenesisBuilder::new_without_executor(configs[0].common.chain.clone(), ".")
-            .append_parameter(Parameter::Custom(
-                SumeragiNposParameters::default().into_custom_parameter(),
-            ))
-            .build_raw()
-            .with_chain_discriminant(*configs[0].common.chain_discriminant.value())
-            .with_consensus_mode(SumeragiConsensusMode::Npos)
-            .with_consensus_meta();
+        let reviewed = crate::verify::configured_test_genesis_builder(
+            GenesisBuilder::new_without_executor(configs[0].common.chain.clone(), "."),
+            validator_bindings
+                .iter()
+                .map(|binding| iroha_data_model::prelude::PeerId::new(binding.public_key.clone()))
+                .collect(),
+        )
+        .append_parameter(Parameter::Custom(
+            SumeragiNposParameters::default().into_custom_parameter(),
+        ))
+        .build_raw()
+        .expect("build reviewed prepared-genesis fixture with exact explicit authority")
+        .with_chain_discriminant(*configs[0].common.chain_discriminant.value())
+        .with_consensus_mode(SumeragiConsensusMode::Npos)
+        .with_consensus_meta();
         let reviewed_bytes =
             norito::json::to_vec_pretty(&reviewed).expect("encode reviewed fixture manifest");
         let pre_sign_value = expected_pre_sign_value(&reviewed_bytes, &validator_bindings)

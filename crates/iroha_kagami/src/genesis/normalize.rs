@@ -167,10 +167,13 @@ mod tests {
     use tempfile::NamedTempFile;
     fn minimal_genesis() -> NamedTempFile {
         let genesis_file = NamedTempFile::new().expect("create temp genesis");
-        let manifest =
-            GenesisBuilder::new_without_executor(ChainId::from("test-chain"), PathBuf::from("."))
-                .build_raw()
-                .with_consensus_mode(SumeragiConsensusMode::Permissioned);
+        let manifest = crate::verify::configured_test_genesis_builder(
+            GenesisBuilder::new_without_executor(ChainId::from("test-chain"), PathBuf::from(".")),
+            Vec::new(),
+        )
+        .build_raw()
+        .expect("build minimal normalize fixture with explicit authority")
+        .with_consensus_mode(SumeragiConsensusMode::Permissioned);
         let genesis_json = norito::json::to_json_pretty(&manifest).expect("serialize genesis");
         fs::write(genesis_file.path(), genesis_json).expect("write genesis json");
         genesis_file

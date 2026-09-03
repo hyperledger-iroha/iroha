@@ -14,7 +14,12 @@ use iroha_crypto::Algorithm;
 use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
     asset::AssetDefinitionAlias,
+    block::consensus_v2::SumeragiV2GenesisContextParameters,
     hijiri::HijiriParametersV1,
+    isi::offline_cash_v1::{
+        OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterTemplateV1,
+        OfflineCashMintFinalityGenesisParametersV1,
+    },
     parameter::{
         Parameter, Parameters,
         custom::{CustomParameter, CustomParameterId},
@@ -190,6 +195,67 @@ struct ResolvedGenesisSettings {
     profile_vrf_seed: Option<[u8; 32]>,
     public_xor_asset_definition_id: Option<AssetDefinitionId>,
 }
+/// Build the deterministic authority template emitted by the standalone development generator.
+///
+/// This is public, reproducible fixture material rather than production key custody. The signing
+/// path refuses to sign it against any other canonical topology; production operators must replace
+/// the template with their independently provisioned validator identities and Pasta public keys.
+fn development_only_genesis_authority_template()
+-> color_eyre::Result<OfflineCashMintFinalityGenesisParametersV1> {
+    let mut topology = (0_u8..4)
+        .map(|index| {
+            iroha_crypto::KeyPair::try_from_seed(
+                vec![0x40_u8.wrapping_add(index); 32],
+                Algorithm::BlsNormal,
+            )
+            .map(|key_pair| PeerId::new(key_pair.public_key().clone()))
+            .map_err(|error| {
+                color_eyre::eyre::eyre!(
+                    "derive deterministic Kagami genesis validator {index}: {error}"
+                )
+            })
+        })
+        .collect::<color_eyre::Result<Vec<_>>>()?;
+    topology.sort();
+    let validators = topology
+        .into_iter()
+        .enumerate()
+        .map(|(index, validator)| {
+            let seed_byte = 0xA0_u8.wrapping_add(
+                u8::try_from(index).expect("four-validator Kagami roster index fits in u8"),
+            );
+            iroha_core::zk::offline_cash_v1_recursion::derive_offline_cash_mint_finality_validator_keys_v1(
+                &[seed_byte; 32],
+                0,
+                validator,
+            )
+            .map_err(|error| {
+                color_eyre::eyre::eyre!(
+                    "derive deterministic Kagami Offline Cash validator keys: {error}"
+                )
+            })
+        })
+        .collect::<color_eyre::Result<Vec<_>>>()?;
+    let parameters = OfflineCashMintFinalityGenesisParametersV1 {
+        epoch_roster: OfflineCashMintFinalityEpochRosterTemplateV1 {
+            version: OFFLINE_CASH_CHAIN_VERSION_V1,
+            epoch: 0,
+            validators,
+        },
+        next_epoch_roster: None,
+    };
+    parameters.validate().map_err(|error| {
+        color_eyre::eyre::eyre!("invalid deterministic Kagami genesis authority: {error}")
+    })?;
+    Ok(parameters)
+}
+fn configure_fresh_genesis_builder(builder: GenesisBuilder) -> color_eyre::Result<GenesisBuilder> {
+    Ok(builder
+        .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+        .with_offline_cash_mint_finality_genesis_parameters(
+            development_only_genesis_authority_template()?,
+        ))
+}
 fn apply_profile_overrides(
     profile: GenesisProfile,
     chain_id: Option<&ChainId>,
@@ -322,15 +388,15 @@ fn build_genesis_for_mode(
             resolved_vrf_seed,
         ),
     }?;
-    Ok(apply_npos_crypto_overrides(genesis, consensus_mode))
+    apply_npos_crypto_overrides(genesis, consensus_mode)
 }
 fn apply_npos_crypto_overrides(
     genesis: RawGenesisTransaction,
     consensus_mode: SumeragiConsensusMode,
-) -> RawGenesisTransaction {
+) -> color_eyre::Result<RawGenesisTransaction> {
     let npos_bootstrap = matches!(consensus_mode, SumeragiConsensusMode::Npos);
     if !npos_bootstrap {
-        return genesis;
+        return Ok(genesis);
     }
     let mut crypto = genesis.crypto().clone();
     if !crypto
@@ -437,7 +503,7 @@ fn append_public_xor_binding(
             ),
         );
     }
-    Ok(builder.build_raw().with_consensus_meta())
+    Ok(builder.build_raw()?.with_consensus_meta())
 }
 fn public_xor_numeric_spec(asset_definition_id: &AssetDefinitionId) -> NumericSpec {
     if asset_definition_id.to_string() == TAIRA_XOR_ASSET_DEFINITION_ID {
@@ -563,10 +629,10 @@ impl<T: Write> RunArgs<T> for Args {
             _ => ConsensusPolicy::Any,
         };
         validate_consensus_mode(consensus_mode, consensus_policy)?;
-        let builder = match executor {
+        let builder = configure_fresh_genesis_builder(match executor {
             Some(path) => GenesisBuilder::new(chain, path, ivm_dir),
             None => GenesisBuilder::new_without_executor(chain, ivm_dir),
-        }
+        })?
         .with_crypto(crypto);
         let mut genesis = build_genesis_for_mode(
             mode,
@@ -722,7 +788,7 @@ pub fn generate_default(
         .append_instruction(grant_permission_to_read_all_ledger_data)
         .append_instruction(grant_permission_to_manage_soracloud)
         .append_instruction(grant_permission_to_register_accounts);
-    let manifest = builder.build_raw().with_consensus_mode(consensus_mode);
+    let manifest = builder.build_raw()?.with_consensus_mode(consensus_mode);
     // Enrich with consensus metadata and fingerprint for operator visibility.
     Ok(manifest.with_consensus_meta())
 }
@@ -730,6 +796,13 @@ pub fn generate_default(
 mod consensus_manifest_tests {
     use super::*;
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
+    fn test_genesis_builder(chain: ChainId) -> GenesisBuilder {
+        configure_fresh_genesis_builder(GenesisBuilder::new_without_executor(
+            chain,
+            PathBuf::from("."),
+        ))
+        .expect("configure deterministic Kagami genesis fixture authority")
+    }
     fn account_permission_grants(manifest: &RawGenesisTransaction) -> Vec<(AccountId, Permission)> {
         manifest
             .transactions()
@@ -823,10 +896,7 @@ mod consensus_manifest_tests {
     #[test]
     fn synthetic_npos_genesis_has_canonical_metadata() {
         let manifest = generate_synthetic(
-            GenesisBuilder::new_without_executor(
-                ChainId::from("synthetic-meta"),
-                PathBuf::from("."),
-            ),
+            test_genesis_builder(ChainId::from("synthetic-meta")),
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
             None,
             SumeragiConsensusMode::Npos,
@@ -849,7 +919,7 @@ mod consensus_manifest_tests {
         let defaults = profile_defaults(GenesisProfile::Iroha3Dev);
         let seed = [9; 32];
         let manifest = generate_default(
-            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from(".")),
+            test_genesis_builder(defaults.chain_id.clone()),
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
             None,
             SumeragiConsensusMode::Npos,
@@ -874,10 +944,7 @@ mod consensus_manifest_tests {
     #[test]
     fn npos_genesis_rejects_missing_seed() {
         let error = generate_default(
-            GenesisBuilder::new_without_executor(
-                ChainId::from("missing-npos-seed"),
-                PathBuf::from("."),
-            ),
+            test_genesis_builder(ChainId::from("missing-npos-seed")),
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
             None,
             SumeragiConsensusMode::Npos,
@@ -890,10 +957,7 @@ mod consensus_manifest_tests {
     #[test]
     fn generated_genesis_does_not_reregister_its_preseeded_authority() {
         let manifest = generate_default(
-            GenesisBuilder::new_without_executor(
-                ChainId::from("authority-is-alice"),
-                PathBuf::from("."),
-            ),
+            test_genesis_builder(ChainId::from("authority-is-alice")),
             iroha_test_samples::ALICE_KEYPAIR.public_key(),
             None,
             SumeragiConsensusMode::Permissioned,
@@ -924,10 +988,7 @@ mod consensus_manifest_tests {
     #[test]
     fn generated_default_grants_global_reader_to_bootstrap_alice() {
         let manifest = generate_default(
-            GenesisBuilder::new_without_executor(
-                ChainId::from("default-global-reader"),
-                PathBuf::from("."),
-            ),
+            test_genesis_builder(ChainId::from("default-global-reader")),
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
             None,
             SumeragiConsensusMode::Permissioned,
@@ -1104,6 +1165,6 @@ fn generate_synthetic(
             }
         }
     }
-    let manifest = builder.build_raw().with_consensus_mode(consensus_mode);
+    let manifest = builder.build_raw()?.with_consensus_mode(consensus_mode);
     Ok(manifest.with_consensus_meta())
 }

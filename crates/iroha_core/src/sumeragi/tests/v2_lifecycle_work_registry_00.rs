@@ -342,6 +342,50 @@ fn owned_production_ready_validate_fixture(
 }
 
 #[cfg(feature = "bls")]
+#[test]
+fn ready_validate_rejects_foreign_physical_completion_key() {
+    let OwnedReadyDurableValidateFixture {
+        ready,
+        coordinator,
+        mut successor,
+        ..
+    } = owned_production_ready_validate_fixture(
+        ProductionReadyValidateDispatchRow::ValidatedPersist,
+        0xE1,
+    );
+    let attestation = coordinator
+        .attest_ready_validate_demand(&ready.holder, ready.lease.ordinal())
+        .expect("attest the exact Ready Validate carrier");
+    let incumbent_digest = ready.fixture.lease.physical_slots()[&ready.fixture.slot];
+    let incumbent_key = attestation
+        .dispatch_key()
+        .with_carrier_digest(incumbent_digest);
+    successor.physical_completion = Some(
+        crate::sumeragi::v2_worker::LifecycleValidatePhysicalCompletionV1::for_test(
+            incumbent_key,
+            std::time::Instant::now(),
+        ),
+    );
+    assert!(
+        successor.exactly_matches_ready_attestation(attestation),
+        "the exact incumbent worker key must join its published replacement"
+    );
+
+    let foreign_digest = LifecycleDigest::new([0xFE; 32]);
+    assert_ne!(foreign_digest, incumbent_digest);
+    successor.physical_completion = Some(
+        crate::sumeragi::v2_worker::LifecycleValidatePhysicalCompletionV1::for_test(
+            incumbent_key.with_carrier_digest(foreign_digest),
+            std::time::Instant::now(),
+        ),
+    );
+    assert!(
+        !successor.exactly_matches_ready_attestation(attestation),
+        "a completion token for a foreign carrier digest must fail closed"
+    );
+}
+
+#[cfg(feature = "bls")]
 struct ProductionRecoveredApplyReadyFixture {
     owned: OwnedReadyDurableValidateFixture,
     commit_qc: wire::QuorumCertificate,

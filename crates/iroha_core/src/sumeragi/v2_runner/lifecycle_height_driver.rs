@@ -802,7 +802,7 @@ impl LifecycleV2IngressDrainDispositionV1 {
     ) -> Self {
         Self {
             producer_claim,
-            retry_before_producer: false,
+            retry_before_producer: advance_executor_yield.requires_completion_retry(),
             terminal_settlement_stops_runtime: false,
             advance_executor_yield: Some(advance_executor_yield),
         }
@@ -1434,6 +1434,32 @@ mod tests {
         assert_eq!(disposition.advance_executor_yield(), Some(reason));
         assert_eq!(disposition.producer_claim(), claim);
         assert!(!disposition.requires_yield());
+
+        let completion_cut = AdvanceExecutorYieldV1::new(
+            AdvanceExecutorYieldCheckpointV1::BeforeStep,
+            AdvanceExecutorYieldCauseV1::CompletionPendingAtRuntimeCut,
+        );
+        let completion_disposition =
+            LifecycleV2IngressDrainDispositionV1::after_advance_executor_yield(
+                claim,
+                completion_cut,
+            );
+        assert_eq!(
+            completion_disposition.advance_executor_yield(),
+            Some(completion_cut)
+        );
+        assert!(completion_disposition.requires_yield());
+        let capacity_relief = AdvanceExecutorYieldV1::new(
+            AdvanceExecutorYieldCheckpointV1::AfterStep,
+            AdvanceExecutorYieldCauseV1::CompletionCapacityReliefStepped,
+        );
+        assert!(
+            LifecycleV2IngressDrainDispositionV1::after_advance_executor_yield(
+                claim,
+                capacity_relief,
+            )
+            .requires_yield()
+        );
     }
 
     #[test]

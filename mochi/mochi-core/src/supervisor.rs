@@ -4412,7 +4412,7 @@ impl GenesisMaterial {
             manifest
                 .into_builder()
                 .with_block_cadence_ms(block_cadence_ms)
-                .build_raw()
+                .build_raw()?
                 .with_consensus_meta()
         };
         let manifest =
@@ -4421,7 +4421,7 @@ impl GenesisMaterial {
             .iter()
             .map(|spec| GenesisTopologyEntry::new(spec.peer_id(), spec.pop_bytes().to_vec()))
             .collect();
-        let manifest = genesis::with_topology(manifest, topology);
+        let manifest = genesis::with_topology(manifest, topology)?;
         let json = norito::json::to_vec_pretty(&manifest)?;
         fs::write(&manifest_path, json)?;
         fs::write(&public_key_path, format!("{}\n", key_pair.public_key()))?;

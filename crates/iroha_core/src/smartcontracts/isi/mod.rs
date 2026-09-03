@@ -119,6 +119,7 @@ macro_rules! define_instruction_handlers {
     };
 }
 define_instruction_handlers! {
+    dispatch_instruction::<iroha_data_model::isi::register::RegisterCommitteePeerWithPop>,
     dispatch_instruction::<RegisterPeerWithPop>,
     dispatch_instruction::<RegisterBox>,
     dispatch_instruction::<UnregisterBox>,

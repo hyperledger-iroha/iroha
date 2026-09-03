@@ -188,10 +188,12 @@ Registers a validator and bonds an initial stake:
 Validation rules:
 
 - `initial_stake` ≥ `min_self_stake` (governance parameter).
-- `peer_id` MUST resolve to a registered world-state peer that is present in the
-  current commit topology. Because registration opens a tenure with no
-  `deactivation_height`, the peer MUST have an unbounded `Validator` consensus
-  key (no expiry) that is live at the scheduled `activation_height`.
+- `peer_id` MUST resolve to a registered world-state peer. Lane `0` additionally
+  requires the peer in the current global commit topology with an unbounded
+  `Validator` consensus key. A non-zero participant lane prefers an unbounded
+  `Committee` key and accepts an unbounded `Validator` key for transparent-path
+  compatibility; either key must be live at the scheduled `activation_height`,
+  and the peer does not join global quorum merely by serving that lane.
 - A public lane cannot bind the same `peer_id` to multiple retained validator
   records. Exited records continue to reserve both their validator-capacity
   slot and peer identity while any slashable custody remains.
@@ -290,9 +292,11 @@ run before ordinary transactions, so cancellation in that block is too late.
   `nexus.staking.public_validator_mode = stake_elected` while restricted lanes
   stay admin-managed (`nexus.staking.restricted_validator_mode = admin_managed`).
   For stake-elected lanes, `RegisterPublicLaneValidator` now binds an explicit
-  `peer_id`, and the runtime requires that peer to be registered, online with a
-  live, unbounded `Validator` consensus key, and present in the commit topology
-  before the registration succeeds. Stake-elected operators can repair a stale
+  `peer_id`. Lane `0` requires a registered peer with a live, unbounded
+  `Validator` key in the global commit topology. Non-zero participant lanes
+  prefer a live, unbounded `Committee` key and accept a `Validator` key for
+  transparent-path compatibility without adding that peer to global quorum.
+  Stake-elected operators can repair a stale
   binding with `RebindPublicLaneValidatorPeer` only before the pre-state freeze
   for its `activation_height`; an activated tenure must exit and release
   custody before a different peer identity can register. While a validator

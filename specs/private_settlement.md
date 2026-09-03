@@ -28,6 +28,11 @@ The authority is not a caller-selected set of four keys. At the manifest's
 ordered roster and active lane incarnation from consensus state, requires the
 resolved authority height to equal that context height, requires the V1
 `f = 1` four-validator geometry, and verifies every BLS proof of possession.
+Private-settlement authorities require a live `Committee` key for every member;
+the generic participant-lane resolver's live `Validator` compatibility fallback
+is retained only for the separately supported transparent path. A
+Committee-only peer is registered in WSV and trusted P2P state but is never
+added to lane `0`'s signed topology, NPoS candidate set, or global quorum.
 Restricted upload, Prepare voting, and global receipt admission all use this
 same state-anchored authority boundary.
 

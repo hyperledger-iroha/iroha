@@ -381,7 +381,14 @@ fn preflight_historical_autonomous_lane_recovery_inner(
                 let world = state.world_view();
                 expected_validators
                     .iter()
-                    .map(|peer| crate::state::live_consensus_key_pop_for_peer(&world, peer, height))
+                    .map(|peer| {
+                        crate::state::live_consensus_key_pop_for_peer_on_lane(
+                            &world,
+                            peer,
+                            height,
+                            descriptor.lane_id,
+                        )
+                    })
                     .collect::<Option<Vec<_>>>()
                     .ok_or_else(|| {
                         invalid_historical_autonomous_recovery(

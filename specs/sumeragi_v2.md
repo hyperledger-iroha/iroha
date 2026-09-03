@@ -117,6 +117,25 @@ Kagami re-stages the final signed body under that final `NetworkId` and refuses 
 both context commitments reproduce exactly. A template is therefore not a deployable commitment
 by itself.
 
+Offline Cash mint-finality authority uses the same post-hash binding boundary, but remains a
+distinct signed genesis field. `ConsensusHandshakeMetadata.offline_cash_mint_finality` contains a
+mandatory networkless epoch-zero `OfflineCashMintFinalityEpochRosterTemplateV1` and an optional
+networkless epoch-one template. The successor template is present only when height one is the
+epoch-zero boundary. Once the final signed genesis exists, its canonical block hash defines
+`NetworkId = hash(final signed genesis)`; only then does Core bind each signed template into an
+`OfflineCashMintFinalityEpochRosterV1` before constructing the first `HeightContext`. For the
+closed four-validator genesis profile, Core requires the template's validator vector to match the
+frozen Sumeragi voter vector exactly in count, order, and `PeerId` at every position, and it rejects
+any Pasta key which is not a canonical non-identity Pallas or Vesta point.
+
+Network independence ends at the signed templates. Each bound runtime roster contains the final
+`NetworkId`; its `finality_epoch_id`, the containing `HeightContext`, every mint-finality seal
+message, and deterministic Schnorr nonce derivation remain network-bound. The paired public keys
+are provisioned earlier as a domain-separated derivation of a validator-local seed, the election
+epoch, and the canonical `PeerId`; they are not derived from BLS keys or from a placeholder network
+identity. Every validator must use a seed unique to that validator and deployment, and deployments
+must never reuse those seeds across networks.
+
 Genesis also carries `sumeragi_v2.execution_policy_hash`. This is a separate, versioned identity
 for boot configuration which is read from `State` during transaction admission, transaction and
 trigger execution, block validation, replay, or snapshot recovery. Genesis signing derives it from
@@ -210,9 +229,14 @@ Peer admission also checks a distinct, domain-separated genesis fingerprint. Its
 projection contains the protocol, genesis-selected mode, signed cadence and block bound,
 DA/Nexus/execution-policy context, and (for NPoS) the epoch seed, election and reconfiguration
 inputs. Network identity is authenticated separately and deliberately excluded from this
-genesis-embedded value. Legacy collectors, phase-specific/adaptive timeouts, the old global-DA
-boolean, and mutable BLS-domain strings are excluded. The former full-parameter fingerprint is
-available only to archival tooling and is never an input to live v2 admission.
+genesis-embedded value. The Offline Cash mint-finality templates are also excluded from this
+secondary fingerprint because the final genesis signature already authenticates their exact bytes
+beside the fingerprint. Snapshot reconstruction therefore retains only the stable three-field
+`SumeragiV2GenesisContextParameters` projection--`da_layout`, `nexus_amx_context_hash`, and
+`execution_policy_hash`--rather than inventing or rebinding genesis templates. Legacy collectors,
+phase-specific/adaptive timeouts, the old global-DA boolean, and mutable BLS-domain strings are
+excluded. The former full-parameter fingerprint is available only to archival tooling and is never
+an input to live v2 admission.
 
 The peer handshake carries the canonical `ivm::gas::schedule_hash()` as an
 independent execution capability. Admission requires an exact match before a
@@ -927,6 +951,12 @@ the initial import has completed, operators may disable the one-time digest bypa
 permits startup from the marker alone. Missing or substituted lineage, an unexpected anchor parent,
 or a later snapshot above the anchor without the complete lineage-bound first finality artifact
 stops startup before Kura writers, consensus, or network ingress open.
+
+Snapshot recovery does not recreate the networkless Offline Cash genesis templates. The
+snapshot-reconstructible Sumeragi boot projection is exactly the stable three fields named above;
+the authenticated full `HeightContext` separately restores the already-bound mint-finality roster,
+its `finality_epoch_id`, and the final `NetworkId`. Neither path accepts a locally synthesized
+template as authority.
 
 The token-consuming finalizer may complete deferred commit-manifest, retained-stage, finality, and
 carrier recovery. Startup therefore never executes the replay plan computed while Kura was still

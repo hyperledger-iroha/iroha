@@ -34,7 +34,7 @@ use crate::{
     },
     smartcontracts::isi::staking::validator_election_eligible_at_height,
     state::{
-        State, WorldReadOnly, live_consensus_key_pop_for_peer,
+        State, WorldReadOnly, live_consensus_key_pop_for_peer_with_role,
         public_lane_validator_record_matches_key,
     },
 };
@@ -42,6 +42,7 @@ use iroha_crypto::{Hash, HashOf, KeyPair, PublicKey};
 use iroha_data_model::{
     account::AccountId,
     block::{BlockHeader, consensus_v2 as wire},
+    consensus::ConsensusKeyRole,
 };
 use mv::storage::StorageReadOnly;
 use std::{
@@ -885,10 +886,11 @@ fn authenticate_snapshot_bootstrap_record(
             .zip(&record.validator_set_pops)
             .enumerate()
         {
-            let live_pop = live_consensus_key_pop_for_peer(
+            let live_pop = live_consensus_key_pop_for_peer_with_role(
                 world,
                 &entry.validator,
                 record.context.height,
+                ConsensusKeyRole::Validator,
             )
             .ok_or_else(|| {
                 snapshot_bootstrap_error(format!(

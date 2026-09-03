@@ -96,7 +96,7 @@ fn retired_release_snapshot_state_fixture(
         },
         decision: ProductionInFlightFirstReleaseDecisionProjection {
             release_scope: binding_a,
-            release_owner: local_actor,
+            release_owner: producer,
             ..ProductionInFlightFirstReleaseDecisionProjection::default()
         },
         release: ProductionInFlightFirstReleaseReleaseProjection {
@@ -253,37 +253,46 @@ fn authorize_retired_release_pair_fixture(
     )
 }
 #[test]
-fn snapshot_recovery_accepts_prepared_retired_release_pair_for_local_committee_roles() {
-    for local_actor_index in [0, 1] {
-        let authorization = authorize_retired_release_pair_fixture(
+fn snapshot_recovery_accepts_prepared_retired_release_pair_for_local_producer() {
+    let authorization = authorize_retired_release_pair_fixture(
+        AutonomousLaneRetirementQueueSnapshotPhaseV1::Prepared,
+        0,
+        1,
+        RetiredReleasePairMismatch::None,
+    )
+    .expect("authorize exact partial-prefix producer retirement evidence and signed cursor pair");
+    assert!(authorization.checked_groups.is_empty());
+    assert_eq!(authorization.checked_planner_groups.len(), 1);
+    let recovered = authorization.checked_planner_groups[0].recovered_state;
+    assert_eq!(recovered.payload_binding_a, recovered.producer);
+    assert_eq!(recovered.decision.release_owner, recovered.producer);
+    assert_eq!(
+        recovered.queue.reservation_state,
+        IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_PREPARED
+    );
+    assert_eq!(recovered.release.pending_prefix, 2);
+    assert_eq!(recovered.release.released_prefix, 1);
+    authorization
+        .into_reconciliation_receipt()
+        .expect("consume exact paired action-25 stutter");
+}
+#[test]
+fn snapshot_recovery_rejects_prepared_retired_release_pair_for_local_nonproducer() {
+    assert!(matches!(
+        authorize_retired_release_pair_fixture(
             AutonomousLaneRetirementQueueSnapshotPhaseV1::Prepared,
-            local_actor_index,
+            1,
             1,
             RetiredReleasePairMismatch::None,
-        )
-        .expect("authorize exact partial-prefix retirement evidence and signed cursor pair");
-        assert!(authorization.checked_groups.is_empty());
-        assert_eq!(authorization.checked_planner_groups.len(), 1);
-        let recovered = authorization.checked_planner_groups[0].recovered_state;
-        let local_actor = 1_u128 << u32::from(local_actor_index);
-        assert_eq!(recovered.payload_binding_a, 1 | local_actor);
-        assert_eq!(recovered.decision.release_owner, local_actor);
-        assert_eq!(
-            recovered.queue.reservation_state,
-            IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_PREPARED
-        );
-        assert_eq!(recovered.release.pending_prefix, 2);
-        assert_eq!(recovered.release.released_prefix, 1);
-        authorization
-            .into_reconciliation_receipt()
-            .expect("consume exact paired action-25 stutter");
-    }
+        ),
+        Err(LaneQueueReservationError::InvalidIdentity(_))
+    ));
 }
 #[test]
 fn snapshot_recovery_accepts_completed_retired_release_pair_with_full_prefix() {
     let authorization = authorize_retired_release_pair_fixture(
         AutonomousLaneRetirementQueueSnapshotPhaseV1::Completed,
-        1,
+        0,
         2,
         RetiredReleasePairMismatch::None,
     )
@@ -313,7 +322,7 @@ fn snapshot_recovery_rejects_retired_release_pair_identity_drift() {
         assert!(matches!(
             authorize_retired_release_pair_fixture(
                 AutonomousLaneRetirementQueueSnapshotPhaseV1::Prepared,
-                1,
+                0,
                 1,
                 mismatch,
             ),

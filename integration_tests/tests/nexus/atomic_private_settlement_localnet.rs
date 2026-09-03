@@ -36,6 +36,7 @@ use iroha::{
             private_settlement::{
                 ActivatePrivateSettlementPoolV1, FinalizeAtomicPrivateSettlementV1,
             },
+            register::RegisterCommitteePeerWithPop,
             settlement::{
                 DvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementLeg,
                 SettlementPlan,
@@ -67,9 +68,10 @@ use iroha::{
         prelude::{FindAssetById, FindAssets, FindPermissionsByAccountId},
         privacy::{
             PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1, PrivacyCommitmentV1,
-            PrivacyEncryptedOutputV1, PrivacyEncryptionKeyV1, PrivacyNullifierV1, PrivacyPoolIdV1,
-            PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
-            PrivacyProtocolLifecycleV1, PrivacyRecipientIdV1, PrivacyRootV1,
+            PrivacyCompiledProfileResultV1, PrivacyEncryptedOutputV1, PrivacyEncryptionKeyV1,
+            PrivacyNullifierV1, PrivacyPoolIdV1, PrivacyProposedLifecycleV1,
+            PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+            PrivacyRecipientIdV1, PrivacyRootV1,
         },
         query::block::prelude::FindBlocks,
         transaction::{
@@ -92,7 +94,10 @@ use iroha_core::{
             prepare_atomic_private_settlement_input_openings_v1,
             prepare_atomic_private_settlement_outputs_v1,
         },
-        ivm_private_note::{derive_note_authority_v1, ivm_private_recipient_public_key_v1},
+        ivm_private_note::{
+            derive_ivm_private_recipient_id_v1, derive_note_authority_v1,
+            ivm_private_recipient_public_key_v1,
+        },
     },
     privacy_profiles::compiled_privacy_profile_v1,
     private_settlement::{
@@ -106,9 +111,11 @@ use iroha_data_model::prelude::QueryBuilderExt;
 use iroha_executor_data_model::permission::{
     governance::CanEnactGovernance, settlement::CanExecuteSettlement,
 };
+use iroha_genesis::GenesisTopologyEntry;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_network::{
-    Network, NetworkBuilder, NetworkPeer, unexecuted_genesis_factory_with_post_topology,
+    CommitteeValidatorP2pBootstrap, Network, NetworkBuilder, NetworkPeer,
+    unexecuted_genesis_factory_with_post_topology,
 };
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use reqwest::Url;
@@ -126,7 +133,17 @@ const REAL_PROCESS_VALIDATOR_WORKER_THREADS: u64 = 4;
 const GLOBAL_LANE_ID: u32 = 0;
 const VALIDATOR_STAKE: u64 = 2_000;
 const PRIVACY_GENESIS_PROPOSAL_HEIGHT: u64 = 1;
-const PRIVATE_SETTLEMENT_ACTIVATION_HEIGHT: u64 = 2;
+const PRIVACY_PROFILE_ACTIVATION_HEIGHT: u64 =
+    PRIVACY_GENESIS_PROPOSAL_HEIGHT + PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1;
+const PRIVATE_SETTLEMENT_MINIMUM_ACTIVATION_NOTICE_BLOCKS: u64 = 1;
+const PRIVATE_SETTLEMENT_NOTICE_ACTIVATION_HEIGHT: u64 =
+    PRIVACY_GENESIS_PROPOSAL_HEIGHT + PRIVATE_SETTLEMENT_MINIMUM_ACTIVATION_NOTICE_BLOCKS;
+const PRIVATE_SETTLEMENT_ACTIVATION_HEIGHT: u64 =
+    if PRIVACY_PROFILE_ACTIVATION_HEIGHT > PRIVATE_SETTLEMENT_NOTICE_ACTIVATION_HEIGHT {
+        PRIVACY_PROFILE_ACTIVATION_HEIGHT
+    } else {
+        PRIVATE_SETTLEMENT_NOTICE_ACTIVATION_HEIGHT
+    };
 const MAX_EXPIRY_BLOCKS: u64 = 4_096;
 const SIDECAR_RETENTION_BLOCKS: u64 = 4_096;
 const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1024 * 1024 * 1024;
@@ -138,6 +155,10 @@ const TRANSPARENT_CONTROL_OUTPUT_BASELINE: u64 = 1;
 const TEST_STACK_BYTES: usize = 64 * 1024 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const FINALITY_TIMEOUT: Duration = Duration::from_secs(300);
+const PRIVATE_SETTLEMENT_LEG_PRIVATE_MATERIAL_DOMAIN_V1: &[u8] =
+    b"iroha:atomic-private-settlement:release-leg-private-material:v1\0";
+const PRIVATE_SETTLEMENT_REIMBURSEMENT_SALT_DOMAIN_V1: &[u8] =
+    b"iroha:atomic-private-settlement:release-reimbursement-salt:v1\0";
 
 fn zero_hash() -> Hash {
     Hash::prehashed([0; Hash::LENGTH])
@@ -161,11 +182,20 @@ impl TopologyShape {
         self.participants + 1
     }
 
-    const fn peer_count(self) -> usize {
-        self.lane_count() * VALIDATORS_PER_LANE
+    const fn global_validator_count(self) -> usize {
+        VALIDATORS_PER_LANE
     }
 
-    fn validator_range(self, lane: usize) -> Range<usize> {
+    const fn participant_validator_count(self) -> usize {
+        self.participants * VALIDATORS_PER_LANE
+    }
+
+    const fn process_count(self) -> usize {
+        self.global_validator_count() + self.participant_validator_count()
+    }
+
+    fn committee_range(self, lane: usize) -> Range<usize> {
+        assert!(lane < self.lane_count(), "committee lane is in range");
         let start = lane * VALIDATORS_PER_LANE;
         start..start + VALIDATORS_PER_LANE
     }
@@ -188,7 +218,7 @@ impl TopologyShape {
             .collect()
     }
 
-    fn p2p_validator_counts_by_visibility(self) -> (usize, usize) {
+    fn p2p_process_counts_by_visibility(self) -> (usize, usize) {
         let participant_visibilities = self.participant_visibility_profile();
         let public_lanes = 1 + participant_visibilities
             .iter()
@@ -211,6 +241,13 @@ impl TopologyShape {
         );
         Ok(())
     }
+}
+
+fn process_peer(network: &Network, index: usize) -> &NetworkPeer {
+    network
+        .all_peers()
+        .nth(index)
+        .unwrap_or_else(|| panic!("process index {index} is in range"))
 }
 
 fn participant_dataspace_alias(ordinal: usize) -> String {
@@ -312,15 +349,12 @@ fn ensure_exact_private_settlement_carrier_fee(
 }
 
 fn genesis_private_note_activation() -> PrivacyProtocolActivationRecordV1 {
-    let activate_at_height = PRIVACY_GENESIS_PROPOSAL_HEIGHT
-        .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
-        .expect("privacy activation height fits u64");
     compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
         .expect("compiled IVM private-note profile")
         .activation_record(PrivacyProtocolLifecycleV1::Proposed(
             PrivacyProposedLifecycleV1 {
                 proposed_at_height: PRIVACY_GENESIS_PROPOSAL_HEIGHT,
-                activate_at_height,
+                activate_at_height: PRIVACY_PROFILE_ACTIVATION_HEIGHT,
             },
         ))
 }
@@ -394,10 +428,40 @@ fn transparent_control_asset_id(asset_ordinal: usize, owner_ordinal: usize) -> A
     )
 }
 
-fn genesis_post_topology(shape: TopologyShape, topology: &[PeerId]) -> Vec<Vec<InstructionBox>> {
-    assert_eq!(topology.len(), shape.peer_count());
+fn genesis_post_topology(
+    shape: TopologyShape,
+    topology: &[PeerId],
+    committee_validator_entries: &[GenesisTopologyEntry],
+) -> Vec<Vec<InstructionBox>> {
+    assert_eq!(topology.len(), shape.process_count());
+    assert_eq!(
+        committee_validator_entries.len(),
+        shape.participant_validator_count()
+    );
+    let committee_validator_peers = committee_validator_entries
+        .iter()
+        .map(|entry| entry.peer.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        &topology[shape.global_validator_count()..],
+        committee_validator_peers.as_slice(),
+        "committee-validator PoP entries must match the participant-process suffix"
+    );
     let stake_definition = stake_asset_definition_id();
-    let mut universal = vec![
+    // Participant processes are proof-bound WSV peer identities with Committee
+    // keys. They are deliberately registered after the exact signed global
+    // topology and never become global Sumeragi voters.
+    let mut universal = committee_validator_entries
+        .iter()
+        .map(|entry| {
+            let pop = entry
+                .pop_bytes()
+                .expect("committee-validator topology PoP must be valid hex")
+                .expect("committee-validator topology entry must carry a PoP");
+            RegisterCommitteePeerWithPop::new(entry.peer.clone(), pop).into()
+        })
+        .collect::<Vec<InstructionBox>>();
+    universal.extend([
         Register::domain(Domain::new(
             DomainId::try_new("universal", "universal").expect("Nexus fee domain"),
         ))
@@ -430,7 +494,7 @@ fn genesis_post_topology(shape: TopologyShape, topology: &[PeerId]) -> Vec<Vec<I
         )
         .into(),
         Grant::account_permission(Permission::from(CanEnactGovernance), ALICE_ID.clone()).into(),
-    ];
+    ]);
     for ordinal in 0..shape.participants {
         let definition = cbdc_asset_definition_id(ordinal);
         universal.push(
@@ -567,7 +631,12 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
         .expect("validator worker width fits i64");
     NetworkBuilder::new()
         .with_base_seed("atomic-private-settlement-n3-real-process-v1")
-        .with_peers(shape.peer_count())
+        .with_peers(shape.global_validator_count())
+        .with_committee_validator_p2p_bootstrap(
+            CommitteeValidatorP2pBootstrap::new(shape.participant_validator_count())
+                .expect("participant committee validator count fits the P2P capacity"),
+        )
+        .expect("global and participant committee validators fit P2P fanout")
         // Keep every release profile, including the correctness-only N=3
         // smoke, on a production-like signed cadence. The smoke deliberately
         // pays the mandatory 300-height governance notice in full.
@@ -575,14 +644,23 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
         .with_peer_startup_timeout(Duration::from_secs(20 * 60))
         .with_npos_consensus()
         .without_npos_genesis_bootstrap()
-        .with_genesis_block(move |topology, topology_entries| {
-            unexecuted_genesis_factory_with_post_topology(
-                Vec::new(),
-                genesis_post_topology(shape, topology.as_ref()),
-                topology,
-                topology_entries,
-            )
-        })
+        .with_genesis_block_and_committee_validator_entries(
+            move |topology, topology_entries, committee_validator_entries| {
+                let mut process_topology = topology.iter().cloned().collect::<Vec<_>>();
+                process_topology.extend(
+                    committee_validator_entries
+                        .iter()
+                        .map(|entry| entry.peer.clone()),
+                );
+                assert_eq!(process_topology.len(), shape.process_count());
+                unexecuted_genesis_factory_with_post_topology(
+                    Vec::new(),
+                    genesis_post_topology(shape, &process_topology, &committee_validator_entries),
+                    topology,
+                    topology_entries,
+                )
+            },
+        )
         .with_genesis_instruction(npos_override_instruction(VALIDATORS_PER_LANE))
         .with_config_layer(move |layer| {
             let lanes = (0..shape.lane_count())
@@ -742,7 +820,7 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
                         "atomic_private_settlement",
                         "minimum_activation_notice_blocks",
                     ],
-                    1_i64,
+                    PRIVATE_SETTLEMENT_MINIMUM_ACTIVATION_NOTICE_BLOCKS as i64,
                 )
                 .write(
                     ["nexus", "atomic_private_settlement", "max_participants"],
@@ -874,9 +952,10 @@ fn committees_from_network(
         .enumerate()
         .map(|(ordinal, route)| {
             let lane = ordinal + 1;
-            let mut rows = network.peers()[shape.validator_range(lane)]
+            let processes = network.all_peers().collect::<Vec<_>>();
+            let mut rows = processes[shape.committee_range(lane)]
                 .iter()
-                .map(|peer: &NetworkPeer| {
+                .map(|peer: &&NetworkPeer| {
                     let validator = PeerId::from(
                         peer.bls_public_key()
                             .ok_or_else(|| eyre!("validator has no BLS identity"))?
@@ -918,6 +997,9 @@ fn committees_from_network(
 
 fn activate_ivm_private_note(client: &Client) -> Result<u64> {
     let expected = genesis_private_note_activation();
+    let expected_compiled_profile = PrivacyCompiledProfileResultV1::Available(
+        compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)?.into(),
+    );
     let mut ticks = 0_u64;
     let tick_limit = PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1
         .checked_add(16)
@@ -942,15 +1024,13 @@ fn activate_ivm_private_note(client: &Client) -> Result<u64> {
             PrivacyProtocolLifecycleV1::Active(active) => {
                 ensure!(
                     active.proposed_at_height == PRIVACY_GENESIS_PROPOSAL_HEIGHT
-                        && active.activated_at_height
-                            == PRIVACY_GENESIS_PROPOSAL_HEIGHT
-                                + PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1
+                        && active.activated_at_height == PRIVACY_PROFILE_ACTIVATION_HEIGHT
                         && active.state_since_height == active.activated_at_height,
                     "governed IVM private-note activation history differs from genesis schedule"
                 );
                 ensure!(
-                    row.is_network_available(),
-                    "active IVM profile is not network-available"
+                    row.compiled_profile == expected_compiled_profile,
+                    "active IVM profile differs from the exact compiled private-note profile"
                 );
                 return Ok(capability.committed_height);
             }
@@ -1182,16 +1262,86 @@ fn placeholder_view_authorization(
     )
 }
 
-fn note_opening(seed: u8, active: bool, value: u128) -> PrivateSettlementAuditNoteOpeningV1 {
+fn private_settlement_leg_private_material(
+    manifest: &AtomicPrivateSettlementV1,
+    governed: &GovernedLeg,
+    leg_ordinal: usize,
+    material_ordinal: usize,
+    purpose: &[u8],
+) -> [u8; 32] {
+    use sha2::Digest as _;
+
+    let mut digest = sha2::Sha256::new();
+    digest.update(PRIVATE_SETTLEMENT_LEG_PRIVATE_MATERIAL_DOMAIN_V1);
+    digest.update(manifest.bundle_id.as_ref());
+    digest.update(governed.governance.governance_digest.as_ref());
+    digest.update(
+        u64::try_from(leg_ordinal)
+            .expect("private-settlement leg ordinal fits u64")
+            .to_le_bytes(),
+    );
+    digest.update(
+        u64::try_from(material_ordinal)
+            .expect("private-settlement material ordinal fits u64")
+            .to_le_bytes(),
+    );
+    digest.update(
+        u64::try_from(purpose.len())
+            .expect("private-settlement material purpose length fits u64")
+            .to_le_bytes(),
+    );
+    digest.update(purpose);
+    digest.finalize().into()
+}
+
+fn private_settlement_reimbursement_terms_salt(
+    manifest: &AtomicPrivateSettlementV1,
+    governed: &GovernedLeg,
+) -> [u8; 32] {
+    use sha2::Digest as _;
+
+    // `bundle_id` commits to the reimbursement commitment, so derive this
+    // salt from the rest of the unique bundle preimage to avoid a cycle.
+    let mut digest = sha2::Sha256::new();
+    digest.update(PRIVATE_SETTLEMENT_REIMBURSEMENT_SALT_DOMAIN_V1);
+    digest.update(manifest.network_id.as_bytes());
+    digest.update(manifest.authority_context_height.to_le_bytes());
+    digest.update(manifest.expiry_height.to_le_bytes());
+    digest.update(manifest.fee_intent_digest.as_ref());
+    digest.update(governed.governance.governance_digest.as_ref());
+    digest.finalize().into()
+}
+
+fn note_opening(
+    manifest: &AtomicPrivateSettlementV1,
+    governed: &GovernedLeg,
+    leg_ordinal: usize,
+    purpose: &[u8],
+    note_ordinal: usize,
+    active: bool,
+    value: u128,
+) -> PrivateSettlementAuditNoteOpeningV1 {
+    let field_base = note_ordinal
+        .checked_mul(6)
+        .expect("private-settlement note material ordinal fits usize");
+    let field = |offset| {
+        private_settlement_leg_private_material(
+            manifest,
+            governed,
+            leg_ordinal,
+            field_base + offset,
+            purpose,
+        )
+    };
     PrivateSettlementAuditNoteOpeningV1 {
         active,
-        commitment: PrivacyCommitmentV1::new(bytes(seed)),
+        commitment: PrivacyCommitmentV1::new(field(0)),
         value,
-        spending_authority: bytes(seed.wrapping_add(1)),
-        rho: bytes(seed.wrapping_add(2)),
-        blinding: bytes(seed.wrapping_add(3)),
-        memo_digest: bytes(seed.wrapping_add(4)),
-        dummy_domain: (!active).then(|| hash(seed.wrapping_add(5))),
+        spending_authority: field(1),
+        rho: field(2),
+        blinding: field(3),
+        memo_digest: field(4),
+        dummy_domain: (!active).then(|| Hash::prehashed(field(5))),
     }
 }
 
@@ -1233,7 +1383,7 @@ fn reimbursement_commitment(
         sponsor_reimbursement_amount: 5,
         fee_intent_digest: manifest.fee_intent_digest,
         settlement_expiry_height: manifest.expiry_height,
-        reimbursement_terms_salt: bytes(0x94),
+        reimbursement_terms_salt: private_settlement_reimbursement_terms_salt(manifest, governed),
         memo: Vec::new(),
         policy_references: Vec::new(),
         inputs: Vec::new(),
@@ -1298,8 +1448,22 @@ fn prepare_leg_with_private_data(
     authority_digest: Hash,
     private_data: &PrivateSettlementLegPrivateData,
 ) -> Result<PreparedLeg> {
-    let mut output_rng = iroha_crypto::rng_from_seed_slice(&bytes(0xF1 + ordinal as u8));
-    let mut capsule_rng = iroha_crypto::rng_from_seed_slice(&bytes(0xF4 + ordinal as u8));
+    let output_rng_seed = private_settlement_leg_private_material(
+        manifest,
+        &governed,
+        ordinal,
+        0,
+        b"output-encryption-rng",
+    );
+    let capsule_rng_seed = private_settlement_leg_private_material(
+        manifest,
+        &governed,
+        ordinal,
+        0,
+        b"audit-capsule-rng",
+    );
+    let mut output_rng = iroha_crypto::rng_from_seed_slice(&output_rng_seed);
+    let mut capsule_rng = iroha_crypto::rng_from_seed_slice(&capsule_rng_seed);
     prepare_leg_with_private_data_and_rngs(
         ordinal,
         governed,
@@ -1364,18 +1528,89 @@ fn prepare_leg_with_private_data_and_rngs(
     let payer = &private_data.payer;
     let recipient = &private_data.recipient;
     let input_secrets = [
-        bytes(0xC1 + ordinal as u8 * 2),
-        bytes(0xC2 + ordinal as u8 * 2),
+        private_settlement_leg_private_material(
+            manifest,
+            &governed,
+            ordinal,
+            0,
+            b"input-spending-secret",
+        ),
+        private_settlement_leg_private_material(
+            manifest,
+            &governed,
+            ordinal,
+            1,
+            b"input-spending-secret",
+        ),
     ];
     let output_secrets = [
-        bytes(0xD1 + ordinal as u8 * 3),
-        bytes(0xD2 + ordinal as u8 * 3),
-        bytes(0xD3 + ordinal as u8 * 3),
+        private_settlement_leg_private_material(
+            manifest,
+            &governed,
+            ordinal,
+            0,
+            b"output-spending-secret",
+        ),
+        private_settlement_leg_private_material(
+            manifest,
+            &governed,
+            ordinal,
+            1,
+            b"output-spending-secret",
+        ),
+        private_settlement_leg_private_material(
+            manifest,
+            &governed,
+            ordinal,
+            2,
+            b"output-spending-secret",
+        ),
     ];
     let view_secrets = [
-        bytes(0x61 + ordinal as u8 * 3),
-        bytes(0x62 + ordinal as u8 * 3),
-        bytes(0x63 + ordinal as u8 * 3),
+        private_settlement_leg_private_material(
+            manifest,
+            &governed,
+            ordinal,
+            0,
+            b"output-view-secret",
+        ),
+        private_settlement_leg_private_material(
+            manifest,
+            &governed,
+            ordinal,
+            1,
+            b"output-view-secret",
+        ),
+        private_settlement_leg_private_material(
+            manifest,
+            &governed,
+            ordinal,
+            2,
+            b"output-view-secret",
+        ),
+    ];
+    let ephemeral_secrets = [
+        private_settlement_leg_private_material(
+            manifest,
+            &governed,
+            ordinal,
+            0,
+            b"output-ephemeral-secret",
+        ),
+        private_settlement_leg_private_material(
+            manifest,
+            &governed,
+            ordinal,
+            1,
+            b"output-ephemeral-secret",
+        ),
+        private_settlement_leg_private_material(
+            manifest,
+            &governed,
+            ordinal,
+            2,
+            b"output-ephemeral-secret",
+        ),
     ];
     let reimbursement = if ordinal == 0 { 5 } else { 0 };
     let change = 7;
@@ -1406,12 +1641,20 @@ fn prepare_leg_with_private_data_and_rngs(
         sponsor_reimbursement_amount: reimbursement,
         fee_intent_digest: manifest.fee_intent_digest,
         settlement_expiry_height: manifest.expiry_height,
-        reimbursement_terms_salt: bytes(0x94),
+        reimbursement_terms_salt: private_settlement_reimbursement_terms_salt(manifest, &governed),
         memo: private_data.memo.clone(),
         policy_references: vec![governed.governance.governance_digest],
         inputs: vec![
-            note_opening(0x70 + ordinal as u8 * 5, true, input_amount),
-            note_opening(0x71 + ordinal as u8 * 5, false, 0),
+            note_opening(
+                manifest,
+                &governed,
+                ordinal,
+                b"input-note",
+                0,
+                true,
+                input_amount,
+            ),
+            note_opening(manifest, &governed, ordinal, b"input-note", 1, false, 0),
         ],
         outputs: vec![
             PrivateSettlementAuditOutputV1 {
@@ -1424,9 +1667,17 @@ fn prepare_leg_with_private_data_and_rngs(
                     manifest.expiry_height,
                 ),
                 encryption_opening: PrivateSettlementAuditEncryptionOpeningV1 {
-                    ephemeral_secret: bytes(0xE1 + ordinal as u8 * 3),
+                    ephemeral_secret: ephemeral_secrets[0],
                 },
-                note: note_opening(0x80 + ordinal as u8 * 4, true, amount),
+                note: note_opening(
+                    manifest,
+                    &governed,
+                    ordinal,
+                    b"output-note",
+                    0,
+                    true,
+                    amount,
+                ),
             },
             PrivateSettlementAuditOutputV1 {
                 role: PrivateSettlementAuditOutputRoleV1::PayerChange,
@@ -1438,9 +1689,17 @@ fn prepare_leg_with_private_data_and_rngs(
                     manifest.expiry_height,
                 ),
                 encryption_opening: PrivateSettlementAuditEncryptionOpeningV1 {
-                    ephemeral_secret: bytes(0xE2 + ordinal as u8 * 3),
+                    ephemeral_secret: ephemeral_secrets[1],
                 },
-                note: note_opening(0x81 + ordinal as u8 * 4, true, change),
+                note: note_opening(
+                    manifest,
+                    &governed,
+                    ordinal,
+                    b"output-note",
+                    1,
+                    true,
+                    change,
+                ),
             },
             PrivateSettlementAuditOutputV1 {
                 role: PrivateSettlementAuditOutputRoleV1::SponsorReimbursement,
@@ -1452,9 +1711,17 @@ fn prepare_leg_with_private_data_and_rngs(
                     manifest.expiry_height,
                 ),
                 encryption_opening: PrivateSettlementAuditEncryptionOpeningV1 {
-                    ephemeral_secret: bytes(0xE3 + ordinal as u8 * 3),
+                    ephemeral_secret: ephemeral_secrets[2],
                 },
-                note: note_opening(0x82 + ordinal as u8 * 4, ordinal == 0, reimbursement),
+                note: note_opening(
+                    manifest,
+                    &governed,
+                    ordinal,
+                    b"output-note",
+                    2,
+                    ordinal == 0,
+                    reimbursement,
+                ),
             },
         ],
     };
@@ -1609,12 +1876,12 @@ fn provisional_materials(
 }
 
 fn assert_no_partial_visibility(network: &Network, bundle_id: Hash, phase: &str) -> Result<()> {
-    for peer in network.peers() {
+    for peer in network.all_peers() {
         match peer
             .client()
             .private_settlement_bundle_receipt_v1(bundle_id)
         {
-            Ok(PrivateSettlementBundleReceiptResponseV1::Pending { .. }) | Err(_) => {}
+            Ok(PrivateSettlementBundleReceiptResponseV1::Pending { .. }) => {}
             Ok(PrivateSettlementBundleReceiptResponseV1::Finalized(receipt)) => {
                 return Err(eyre!(
                     "{phase}: peer {} exposed {} finalized legs before global carrier",
@@ -1625,6 +1892,12 @@ fn assert_no_partial_visibility(network: &Network, bundle_id: Hash, phase: &str)
             Ok(PrivateSettlementBundleReceiptResponseV1::Aborted(_)) => {
                 return Err(eyre!(
                     "{phase}: peer {} exposed an unexpected abort",
+                    peer.id()
+                ));
+            }
+            Err(error) => {
+                return Err(eyre!(
+                    "{phase}: peer {} receipt query failed instead of proving pending state: {error}",
                     peer.id()
                 ));
             }
@@ -1641,7 +1914,7 @@ fn wait_for_identical_receipt(
     let mut last = String::new();
     while started.elapsed() < FINALITY_TIMEOUT {
         let mut receipts = Vec::new();
-        for peer in network.peers() {
+        for peer in network.all_peers() {
             match peer
                 .client()
                 .private_settlement_bundle_receipt_v1(bundle_id)
@@ -1653,7 +1926,7 @@ fn wait_for_identical_receipt(
                 Err(error) => last = format!("{}: {error}", peer.id()),
             }
         }
-        if receipts.len() == network.peers().len()
+        if receipts.len() == network.all_peers().count()
             && receipts.windows(2).all(|pair| pair[0] == pair[1])
         {
             return Ok(receipts.remove(0));
@@ -1669,8 +1942,10 @@ fn run_n3_real_process_smoke() -> Result<()> {
     let shape = TopologyShape::new(PARTICIPANT_COUNT);
     shape.validate()?;
     ensure!(
-        shape.peer_count() == 16,
-        "N=3 requires 4 global + 12 participant validators"
+        shape.global_validator_count() == 4
+            && shape.participant_validator_count() == 12
+            && shape.process_count() == 16,
+        "N=3 requires four global voters plus twelve non-global participant committee validators"
     );
     ensure!(
         shape.participant_visibility_profile()
@@ -1977,12 +2252,80 @@ fn release_sources_do_not_construct_fee_free_non_genesis_transactions() {
 }
 
 #[test]
-fn genesis_ivm_private_note_activation_is_exact() {
+fn genesis_registers_only_participant_processes_as_committee_peers() {
     let shape = TopologyShape::new(PARTICIPANT_COUNT);
-    let topology = (0..shape.peer_count())
+    let process_entries = (0..shape.process_count())
+        .map(|index| {
+            let seed = u8::try_from(index + 1).expect("fixture process index fits u8");
+            let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic BLS process key");
+            let pop = iroha_crypto::bls_normal_pop_prove(keypair.private_key())
+                .expect("derive process PoP");
+            GenesisTopologyEntry::new(PeerId::new(keypair.public_key().clone()), pop)
+        })
+        .collect::<Vec<_>>();
+    let topology = process_entries
+        .iter()
+        .map(|entry| entry.peer.clone())
+        .collect::<Vec<_>>();
+    let committee_validator_entries = process_entries[shape.global_validator_count()..].to_vec();
+
+    let transactions = genesis_post_topology(shape, &topology, &committee_validator_entries);
+    let registrations = transactions
+        .iter()
+        .flatten()
+        .filter_map(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<RegisterCommitteePeerWithPop>()
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(registrations.len(), shape.participant_validator_count());
+    for (registration, entry) in registrations.iter().zip(&committee_validator_entries) {
+        assert_eq!(registration.peer, entry.peer);
+        assert_eq!(
+            registration.pop,
+            entry
+                .pop_bytes()
+                .expect("fixture PoP hex")
+                .expect("fixture carries PoP")
+        );
+    }
+    assert!(registrations.iter().all(|registration| {
+        !topology[..shape.global_validator_count()].contains(&registration.peer)
+    }));
+}
+
+#[test]
+fn genesis_ivm_private_note_activation_is_exact() {
+    assert_eq!(
+        PRIVACY_PROFILE_ACTIVATION_HEIGHT,
+        PRIVACY_GENESIS_PROPOSAL_HEIGHT + PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
+        "compiled private-note governance delay determines profile activation"
+    );
+    assert_eq!(
+        PRIVATE_SETTLEMENT_ACTIVATION_HEIGHT,
+        PRIVACY_PROFILE_ACTIVATION_HEIGHT.max(PRIVATE_SETTLEMENT_NOTICE_ACTIVATION_HEIGHT),
+        "APS must activate at the earliest height satisfying both profile and notice schedules"
+    );
+    assert!(
+        PRIVATE_SETTLEMENT_ACTIVATION_HEIGHT >= PRIVACY_PROFILE_ACTIVATION_HEIGHT
+            && PRIVATE_SETTLEMENT_ACTIVATION_HEIGHT
+                >= PRIVACY_GENESIS_PROPOSAL_HEIGHT
+                    + PRIVATE_SETTLEMENT_MINIMUM_ACTIVATION_NOTICE_BLOCKS,
+        "APS activation must not precede either prerequisite"
+    );
+    let shape = TopologyShape::new(PARTICIPANT_COUNT);
+    let topology = (0..shape.process_count())
         .map(|index| PeerId::new(validator_authority_keypair(index).public_key().clone()))
         .collect::<Vec<_>>();
-    let transactions = genesis_post_topology(shape, &topology);
+    let committee_validator_entries = topology[shape.global_validator_count()..]
+        .iter()
+        .cloned()
+        .map(|peer| GenesisTopologyEntry::new(peer, vec![1]))
+        .collect::<Vec<_>>();
+    let transactions = genesis_post_topology(shape, &topology, &committee_validator_entries);
     let governance_permission = Permission::from(CanEnactGovernance);
     let (governance_transaction, governance_instruction) = transactions
         .iter()
@@ -2036,10 +2379,130 @@ fn genesis_ivm_private_note_activation_is_exact() {
         registration.activation.lifecycle,
         PrivacyProtocolLifecycleV1::Proposed(PrivacyProposedLifecycleV1 {
             proposed_at_height: PRIVACY_GENESIS_PROPOSAL_HEIGHT,
-            activate_at_height: PRIVACY_GENESIS_PROPOSAL_HEIGHT
-                + PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
+            activate_at_height: PRIVACY_PROFILE_ACTIVATION_HEIGHT,
         })
     );
+}
+
+#[test]
+fn repeat_bundle_private_material_is_reproducible_and_disjoint() {
+    let routes = (0..PARTICIPANT_COUNT)
+        .map(|ordinal| PrivateSettlementRouteV1 {
+            dataspace_id: DataSpaceId::new(
+                u64::try_from(ordinal + 1).expect("fixture dataspace ordinal fits u64"),
+            ),
+            lane_id: LaneId::new(
+                u32::try_from(ordinal + 1).expect("fixture lane ordinal fits u32"),
+            ),
+            lane_incarnation: hash(0xE0 + ordinal as u8),
+        })
+        .collect::<Vec<_>>();
+    let network_id = iroha::data_model::NetworkId::from_genesis_hash(
+        HashOf::<BlockHeader>::from_untyped_unchecked(hash(0xF8)),
+    );
+    let first_authority_height = PRIVATE_SETTLEMENT_ACTIVATION_HEIGHT + 10;
+    let first_expiry_height = first_authority_height + 100;
+    let first_governed = governed_legs(&routes, first_authority_height, first_expiry_height)
+        .expect("first deterministic governance set");
+    let first_manifest = proof_manifest(
+        network_id,
+        first_authority_height,
+        first_expiry_height,
+        &first_governed,
+    )
+    .expect("first deterministic manifest");
+    let second_authority_height = first_authority_height + 1;
+    let second_expiry_height = first_expiry_height + 1;
+    let second_governed = governed_legs(&routes, second_authority_height, second_expiry_height)
+        .expect("second deterministic governance set");
+    let second_manifest = proof_manifest(
+        network_id,
+        second_authority_height,
+        second_expiry_height,
+        &second_governed,
+    )
+    .expect("second deterministic manifest");
+    assert_ne!(first_manifest.bundle_id, second_manifest.bundle_id);
+
+    let material_shapes: &[(&[u8], usize)] = &[
+        (b"output-encryption-rng", 1),
+        (b"audit-capsule-rng", 1),
+        (b"input-spending-secret", 2),
+        (b"output-spending-secret", 3),
+        (b"output-view-secret", 3),
+        (b"output-ephemeral-secret", 3),
+        (b"input-note", 12),
+        (b"output-note", 18),
+    ];
+    let expected_materials_per_leg = material_shapes
+        .iter()
+        .map(|(_, count)| count)
+        .sum::<usize>()
+        + 1;
+    let mut materials = std::collections::BTreeSet::<[u8; 32]>::new();
+    let mut recipient_ids = std::collections::BTreeSet::<PrivacyRecipientIdV1>::new();
+    for (bundle_ordinal, (manifest, governed)) in [
+        (&first_manifest, first_governed.as_slice()),
+        (&second_manifest, second_governed.as_slice()),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for (leg_ordinal, leg) in governed.iter().enumerate() {
+            assert!(
+                materials.insert(private_settlement_reimbursement_terms_salt(manifest, leg,)),
+                "bundle {bundle_ordinal} leg {leg_ordinal} reused its reimbursement salt"
+            );
+            for (purpose, count) in material_shapes {
+                for material_ordinal in 0..*count {
+                    let material = private_settlement_leg_private_material(
+                        manifest,
+                        leg,
+                        leg_ordinal,
+                        material_ordinal,
+                        purpose,
+                    );
+                    assert_eq!(
+                        material,
+                        private_settlement_leg_private_material(
+                            manifest,
+                            leg,
+                            leg_ordinal,
+                            material_ordinal,
+                            purpose,
+                        ),
+                        "bundle-private derivation must be reproducible"
+                    );
+                    assert!(
+                        materials.insert(material),
+                        "bundle {bundle_ordinal} leg {leg_ordinal} reused {purpose:?} slot {material_ordinal}"
+                    );
+                }
+            }
+            for output_ordinal in 0..3 {
+                let view_secret = private_settlement_leg_private_material(
+                    manifest,
+                    leg,
+                    leg_ordinal,
+                    output_ordinal,
+                    b"output-view-secret",
+                );
+                let view_public = ivm_private_recipient_public_key_v1(&view_secret)
+                    .expect("derived view secret is valid");
+                let recipient_id = derive_ivm_private_recipient_id_v1(view_public)
+                    .expect("derived view public key is valid");
+                assert!(
+                    recipient_ids.insert(recipient_id),
+                    "repeat bundles must not reuse an encrypted-output recipient id"
+                );
+            }
+        }
+    }
+    assert_eq!(
+        materials.len(),
+        2 * PARTICIPANT_COUNT * expected_materials_per_leg
+    );
+    assert_eq!(recipient_ids.len(), 2 * PARTICIPANT_COUNT * 3);
 }
 
 #[test]
@@ -2055,11 +2518,13 @@ fn n3_correctness_smoke_retains_the_release_network_cadence() {
 fn n3_topology_has_one_global_and_three_disjoint_four_validator_committees() {
     let shape = TopologyShape::new(3);
     assert_eq!(shape.lane_count(), 4);
-    assert_eq!(shape.peer_count(), 16);
-    assert_eq!(shape.validator_range(0), 0..4);
-    assert_eq!(shape.validator_range(1), 4..8);
-    assert_eq!(shape.validator_range(2), 8..12);
-    assert_eq!(shape.validator_range(3), 12..16);
+    assert_eq!(shape.global_validator_count(), 4);
+    assert_eq!(shape.participant_validator_count(), 12);
+    assert_eq!(shape.process_count(), 16);
+    assert_eq!(shape.committee_range(0), 0..4);
+    assert_eq!(shape.committee_range(1), 4..8);
+    assert_eq!(shape.committee_range(2), 8..12);
+    assert_eq!(shape.committee_range(3), 12..16);
 }
 
 #[test]
@@ -2076,7 +2541,7 @@ fn n3_primary_topology_mixes_public_and_permissioned_participant_dataspaces() {
     assert_eq!(participant_dataspace_alias(0), "public-1");
     assert_eq!(participant_dataspace_alias(1), "private-2");
     assert_eq!(participant_dataspace_alias(2), "private-3");
-    assert_eq!(shape.p2p_validator_counts_by_visibility(), (8, 8));
+    assert_eq!(shape.p2p_process_counts_by_visibility(), (8, 8));
 }
 
 #[test]
@@ -2085,10 +2550,13 @@ fn release_matrix_shapes_are_disjoint_and_exact() {
         let shape = TopologyShape::new(participants);
         shape.validate().expect("supported release shape");
         let ranges = (0..shape.lane_count())
-            .map(|lane| shape.validator_range(lane))
+            .map(|lane| shape.committee_range(lane))
             .collect::<Vec<_>>();
         assert_eq!(ranges.first().expect("global range").start, 0);
-        assert_eq!(ranges.last().expect("last range").end, shape.peer_count());
+        assert_eq!(
+            ranges.last().expect("last range").end,
+            shape.process_count()
+        );
         assert!(ranges.windows(2).all(|pair| pair[0].end == pair[1].start));
         assert!(
             ranges

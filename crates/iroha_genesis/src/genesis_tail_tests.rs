@@ -2,7 +2,7 @@
 fn roundtrip_raw_genesis_serialization() -> Result<()> {
     let (_tmp_dir, builder) = test_builder();
     let raw = builder
-        .build_raw()
+        .build_raw()?
         .with_consensus_mode(SumeragiConsensusMode::Permissioned);
     let json = norito::json::to_json(&raw)?;
     let de: RawGenesisTransaction = norito::json::from_str(&json)?;
@@ -23,7 +23,7 @@ fn build_raw_coalesces_parameters_into_one_authoritative_snapshot() -> Result<()
     .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(667)))
     .next_transaction()
     .append_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(333)))
-    .build_raw()
+    .build_raw_for_test()
     .with_consensus_mode(SumeragiConsensusMode::Permissioned);
     let transactions = &raw.transactions;
     assert_eq!(transactions.len(), 3);
@@ -90,7 +90,23 @@ fn default_genesis_proposal_roundtrips() -> Result<()> {
     }
     let genesis_path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../defaults/genesis.json");
-    let genesis = RawGenesisTransaction::from_path(&genesis_path)?;
+    let mut genesis = RawGenesisTransaction::from_path(&genesis_path)?;
+    // This test exercises resultless proposal encoding rather than PoP
+    // admission. Supply structurally present fixture PoPs for the exact
+    // authority identities; prepared-bundle tests below cover cryptographic
+    // PoP rejection with independently generated keys.
+    let topology = genesis
+        .offline_cash_mint_finality_genesis_parameters()
+        .epoch_roster
+        .validators
+        .iter()
+        .map(|keys| GenesisTopologyEntry::new(keys.validator.clone(), vec![0xA5; 96]))
+        .collect();
+    genesis
+        .transactions
+        .first_mut()
+        .expect("default genesis has a transaction")
+        .topology = topology;
     let kp = checked_genesis_fixture_keypair();
     let proposal = genesis.build_and_sign(&kp)?;
     assert!(
@@ -183,7 +199,7 @@ fn prepared_proposal_fixture() -> (RawGenesisTransaction, KeyPair, SignedBlock, 
     let manifest =
         GenesisBuilder::new_without_executor(ChainId::from("prepared-verifier-fixture"), ".")
             .set_topology(topology)
-            .build_raw()
+            .build_raw_for_test()
             .with_consensus_meta();
     let genesis_key = checked_genesis_fixture_keypair();
     let proposal = manifest
@@ -415,7 +431,7 @@ fn prepared_bundle_verifier_rejects_manifest_semantics_and_validator_pops() {
         .append_instruction(Register::domain(Domain::new(
             DomainId::try_new("drift", "universal").expect("domain id"),
         )))
-        .build_raw()
+        .build_raw_for_test()
         .with_consensus_meta();
     let error = validate_prepared_genesis_bundle(
         &wire,
@@ -437,7 +453,7 @@ fn prepared_bundle_verifier_rejects_manifest_semantics_and_validator_pops() {
     let bad_manifest =
         GenesisBuilder::new_without_executor(ChainId::from("prepared-verifier-bad-pop"), ".")
             .set_topology(bad_entries)
-            .build_raw()
+            .build_raw_for_test()
             .with_consensus_meta();
     let bad_proposal = bad_manifest
         .clone()

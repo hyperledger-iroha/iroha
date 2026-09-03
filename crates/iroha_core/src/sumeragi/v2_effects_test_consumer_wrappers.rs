@@ -7,7 +7,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         effects: Vec<AdapterEffect>,
         services: &mut S,
     ) -> Result<usize, EffectExecutorError> {
-        self.consume_effects_with_runner_decision_cleanup(effects, services, None)
+        self.consume_effects_with_runner_decision_cleanup(effects, services, None, None)
     }
 
     #[cfg(test)]

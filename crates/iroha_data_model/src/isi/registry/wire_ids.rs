@@ -198,6 +198,7 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(InvalidInstruction => "iroha.invalid_instruction"),
     built_in_wire_id!(verifying_keys::RegisterVerifyingKey => "iroha.instruction.v1::verifying_keys::RegisterVerifyingKey"),
     built_in_wire_id!(verifying_keys::UpdateVerifyingKey => "iroha.instruction.v1::verifying_keys::UpdateVerifyingKey"),
+    built_in_wire_id!(crate::isi::register::RegisterCommitteePeerWithPop => "iroha.peer.committee.register_with_pop"),
     built_in_wire_id!(consensus_keys::RegisterConsensusKey => "consensus::RegisterConsensusKey"),
     built_in_wire_id!(consensus_keys::RotateConsensusKey => "consensus::RotateConsensusKey"),
     built_in_wire_id!(consensus_keys::DisableConsensusKey => "consensus::DisableConsensusKey"),

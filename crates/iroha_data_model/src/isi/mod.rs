@@ -269,6 +269,7 @@ impl_direct_instruction_box!(crate::isi::runtime_upgrade::CancelRuntimeUpgrade);
 impl_direct_instruction_box!(crate::isi::verifying_keys::RegisterVerifyingKey);
 impl_direct_instruction_box!(crate::isi::verifying_keys::UpdateVerifyingKey);
 // Allow direct boxing of consensus key lifecycle instructions.
+impl_direct_instruction_box!(crate::isi::register::RegisterCommitteePeerWithPop);
 impl_direct_instruction_box!(crate::isi::consensus_keys::RegisterConsensusKey);
 impl_direct_instruction_box!(crate::isi::consensus_keys::RotateConsensusKey);
 impl_direct_instruction_box!(crate::isi::consensus_keys::DisableConsensusKey);

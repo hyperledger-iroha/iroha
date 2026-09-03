@@ -804,10 +804,10 @@ block-sync plaintext ceiling is the 17 MiB global cap minus the 28-byte AEAD
 expansion.
 
 Kagami-generated localnets inherit those 17/17/2/17 MiB frame caps, the
-161-entry count bound, and a 33 MiB per-source byte partition. They accept only
+161-entry count bound, and a 34 MiB per-source byte partition. They accept only
 exact `3f + 1` rosters from 4 through 31 validators and set aggregate
 body-ingress bytes from the validator and authenticated non-validator source
-partitions, giving a 198 MiB four-validator baseline when `H = 2`. The checked-in
+partitions, giving a 204 MiB four-validator baseline when `H = 2`. The checked-in
 Taira template carries the same four-validator per-source baseline. Disposable
 Taira networks inherit their full 4, 7, 10, …, 31 geometry directly from Kagami
 instead of passing through a second renderer.

@@ -28,8 +28,8 @@ proposal_queue_scan_multiplier = 4
 
 [sumeragi.queues]
 authenticated_non_validator_sources = 2
-body_bytes = 1141899264
-body_source_bytes = 34603008
+body_bytes = 213909504
+body_source_bytes = 35651584
 
 [network]
 address = "addr:0.0.0.0:1340#5668"

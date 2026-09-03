@@ -16914,6 +16914,14 @@ impl SumeragiV2Adapter {
             }
         };
         let disposition = outcome.disposition();
+        if matches!(&queued, reducer::Event::LocalProposalReady { .. }) {
+            iroha_logger::warn!(
+                ?disposition,
+                effect_count = outcome.effects().len(),
+                current_tag = ?self.reducer.current_tag(),
+                "TEMP local ProposalReady reducer trace"
+            );
+        }
         self.record_reducer_outcome(&queued, disposition, outcome.effects());
         if disposition == reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy) {
             self.log_body_progress(&queued, disposition, 0);

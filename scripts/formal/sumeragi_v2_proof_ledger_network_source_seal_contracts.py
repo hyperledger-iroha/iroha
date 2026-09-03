@@ -397,8 +397,8 @@ self.validator_dial_scheduler.note_session_established(
         (
             "taira_config",
             ("sumeragi", "queues"),
-            (("authenticated_non_validator_sources", 2), ("body_bytes", 207_618_048),
-             ("body_source_bytes", 34_603_008)),
+            (("authenticated_non_validator_sources", 2), ("body_bytes", 213_909_504),
+             ("body_source_bytes", 35_651_584)),
             "production Taira profile pins H=2 and six source partitions",
         ),
         (

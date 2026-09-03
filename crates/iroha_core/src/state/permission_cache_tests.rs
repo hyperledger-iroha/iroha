@@ -307,21 +307,51 @@ fn permission_cache_rebuilds_after_restart_impl() {
     let leader_keypair =
         crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
     let (leader_public_key, leader_private_key) = leader_keypair.into_parts();
-    let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
-        leader_public_key.clone(),
-    )]);
     let leader_pop =
         iroha_crypto::bls_normal_pop_prove(&leader_private_key).expect("generate BLS PoP");
+    let mut topology_entries = vec![GenesisTopologyEntry::new(
+        PeerId::new(leader_public_key.clone()),
+        leader_pop,
+    )];
+    topology_entries.extend((0..3).map(|_| {
+        let validator =
+            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let pop = iroha_crypto::bls_normal_pop_prove(validator.private_key())
+            .expect("generate additional permission-cache validator PoP");
+        GenesisTopologyEntry::new(PeerId::new(validator.public_key().clone()), pop)
+    }));
+    topology_entries.sort_by(|left, right| left.peer.cmp(&right.peer));
+    let topology = crate::sumeragi::network_topology::Topology::new(
+        topology_entries
+            .iter()
+            .map(|entry| entry.peer.clone())
+            .collect::<Vec<_>>(),
+    );
+    let mint_finality_roster = topology_entries
+        .iter()
+        .map(
+            |entry| iroha_data_model::block::consensus_v2::ValidatorPower {
+                validator: entry.peer.clone(),
+                power: 1,
+            },
+        )
+        .collect::<Vec<_>>();
+    let mint_finality = crate::offline_cash_v1_test_fixtures::mint_finality_genesis_parameters(
+        &mint_finality_roster,
+    );
     let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
     let (registrar, registrar_keypair) = gen_account_in("wonderland");
     let (owner, owner_keypair) = gen_account_in("wonderland");
     let trigger_id: TriggerId = "trigger_alpha".parse().unwrap();
-    let mut genesis_builder =
-        GenesisBuilder::new_without_executor(chain_id.clone(), "ivm/libs/not/installed")
-            .set_topology(vec![GenesisTopologyEntry::new(
-                PeerId::new(leader_public_key.clone()),
-                leader_pop,
-            )]);
+    let mut genesis_builder = GenesisBuilder::new_without_executor(
+        chain_id.clone(),
+        "ivm/libs/not/installed",
+    )
+    .with_sumeragi_v2_context_parameters(
+        iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
+    )
+    .with_offline_cash_mint_finality_genesis_parameters(mint_finality)
+    .set_topology(topology_entries);
     genesis_builder = genesis_builder
         .domain(DomainId::try_new("wonderland", "universal").expect("domain id"))
         .account(registrar_keypair.public_key().clone())

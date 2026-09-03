@@ -691,7 +691,16 @@ mod tests {
                 .expect("fixture chain id is canonical"),
             ".",
         )
+        .with_sumeragi_v2_context_parameters(
+            iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(
+            ),
+        )
+        .with_offline_cash_mint_finality_genesis_parameters(
+            crate::deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+        )
+        .set_topology(crate::deterministic_test_genesis_topology_entries())
         .build_raw()
+        .expect("complete bounded signed-genesis fixture")
         .with_consensus_meta();
         let block = manifest
             .build_and_sign(&crate::checked_genesis_fixture_keypair())

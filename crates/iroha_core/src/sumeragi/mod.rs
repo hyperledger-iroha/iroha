@@ -55,7 +55,7 @@ use std::{
 };
 static CONFIGURED_SUMERAGI_STACK_SIZE_BYTES: AtomicUsize = AtomicUsize::new(0);
 const WORKER_WAKE_CHANNEL_CAP: usize = 1;
-// The valid v2 timeout-vote envelope has at most 128 signers and two bounded BLS signatures.
+// The valid v2 timeout-vote envelope has at most 31 signers and two bounded signatures.
 // Keep this conservative ceiling aligned with the formal refinement and maximal fixture below;
 // the production byte reserve is intentionally much larger.
 const MAX_VALID_TIMEOUT_VOTE_WIRE_BYTES: usize = 4 * 1024;
@@ -66,7 +66,7 @@ const MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES: usize = MAX_MERGE_EXECUTION_CERTIFIE
 const MAX_LANE_COMPLETION_MESSAGE_WIRE_BYTES: usize = MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES;
 const _: () = assert!(TIMEOUT_VOTE_RESERVE_BYTES >= MAX_VALID_TIMEOUT_VOTE_WIRE_BYTES);
 // A maximal Offline Cash V1 CommitQC carries the ordinary BLS aggregate plus
-// the exact 2f + 1 paired-Pasta seal bundle for the bounded 128-validator roster.
+// the exact 2f + 1 paired-Pasta seal bundle for the bounded 31-validator roster.
 const _: () =
     assert!(iroha_data_model::block::consensus_v2::MAX_CONSENSUS_SIGNATURE_BYTES == 16 * 1024);
 type SumeragiThreadWork = Box<dyn FnOnce() + Send + 'static>;
@@ -8555,13 +8555,13 @@ mod authoritative_runtime_gate_tests {
         );
         let required = super::fair_v2_ingress_required_transport_completion_bytes(layout);
         assert_eq!(
-            required, 16_828_108,
+            required, 16_844_237,
             "recommended wire ceiling is a regression boundary"
         );
         let required_proposal =
             super::fair_v2_ingress_required_proposal_bytes(layout, wire::MAX_VALIDATORS_PER_HEIGHT);
         assert_eq!(
-            required_proposal, 73_916,
+            required_proposal, 1_106_267,
             "maximal proposal wire geometry is a regression boundary"
         );
         let proposal = v2_maximum_structural_proposal_wire(layout, wire::MAX_VALIDATORS_PER_HEIGHT);
@@ -8675,16 +8675,16 @@ mod authoritative_runtime_gate_tests {
         let minimal_layout = minimal_rs16_layout();
         let minimal_proposal_bytes =
             super::fair_v2_ingress_required_proposal_bytes(minimal_layout, 1);
-        assert_eq!(minimal_proposal_bytes, 2_709);
+        assert_eq!(minimal_proposal_bytes, 67_236);
         assert_eq!(
             encoded_v2_len(&v2_maximum_structural_proposal_wire(minimal_layout, 1)),
             minimal_proposal_bytes,
             "minimal-layout/single-validator geometry must not rely on maximal-roster dominance"
         );
         assert!(
-            super::fair_v2_ingress_required_commit_certificate_response_bytes(1)
-                > minimal_proposal_bytes,
-            "protocol-maximum rotated responder must dominate a minimal proposal"
+            minimal_proposal_bytes
+                > super::fair_v2_ingress_required_commit_certificate_response_bytes(1),
+            "the two signature-bearing proposal branches must dominate a minimal recovery response"
         );
         let minimal_peer = maximal_roster
             .first()

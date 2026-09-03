@@ -240,10 +240,14 @@ mod tests {
     }
     #[test]
     fn run_accepts_permissioned_consensus() {
-        let manifest = GenesisBuilder::new_without_executor(ChainId::from("0"), PathBuf::from("."))
-            .build_raw()
-            .with_consensus_mode(SumeragiConsensusMode::Permissioned)
-            .with_consensus_meta();
+        let manifest = crate::verify::configured_test_genesis_builder(
+            GenesisBuilder::new_without_executor(ChainId::from("0"), PathBuf::from(".")),
+            Vec::new(),
+        )
+        .build_raw()
+        .expect("build permissioned validation fixture with explicit authority")
+        .with_consensus_mode(SumeragiConsensusMode::Permissioned)
+        .with_consensus_meta();
         let manifest = norito::json::to_json_pretty(&manifest).expect("serialize manifest");
         let temp = NamedTempFile::new().expect("create temp file");
         fs::write(temp.path(), manifest).expect("write manifest");
@@ -256,14 +260,18 @@ mod tests {
     }
     #[test]
     fn run_accepts_canonical_npos() {
-        let manifest = GenesisBuilder::new_without_executor(
-            ChainId::from("npos-validate"),
-            PathBuf::from("."),
+        let manifest = crate::verify::configured_test_genesis_builder(
+            GenesisBuilder::new_without_executor(
+                ChainId::from("npos-validate"),
+                PathBuf::from("."),
+            ),
+            Vec::new(),
         )
         .append_parameter(Parameter::Custom(
             SumeragiNposParameters::default().into_custom_parameter(),
         ))
         .build_raw()
+        .expect("build NPoS validation fixture with explicit authority")
         .with_consensus_mode(SumeragiConsensusMode::Npos)
         .with_consensus_meta();
         let json = norito::json::to_json_pretty(&manifest).expect("serialize manifest");

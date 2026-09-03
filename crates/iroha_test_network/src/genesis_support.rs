@@ -314,7 +314,14 @@ fn load_node_config(path: &Path, allow_unresolved_hash: bool) -> Result<(actual:
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, bls_normal_pop_prove};
-    use iroha_data_model::peer::PeerId;
+    use iroha_data_model::{
+        block::consensus_v2::SumeragiV2GenesisContextParameters,
+        isi::offline_cash_v1::{
+            OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterTemplateV1,
+            OfflineCashMintFinalityGenesisParametersV1,
+        },
+        peer::PeerId,
+    };
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
     use std::fs;
     const CONFIGURED_HASH: &str =
@@ -331,9 +338,43 @@ mod tests {
                 GenesisTopologyEntry::new(PeerId::new(validator.public_key().clone()), pop)
             })
             .collect::<Vec<_>>();
+        let mut validators = topology
+            .iter()
+            .map(|entry| entry.peer.clone())
+            .collect::<Vec<_>>();
+        validators.sort();
+        let validators = validators
+            .into_iter()
+            .enumerate()
+            .map(|(index, validator)| {
+                let seed_byte = 0xB0_u8.wrapping_add(
+                    u8::try_from(index).expect("genesis-support validator index fits in one byte"),
+                );
+                iroha_core::zk::offline_cash_v1_recursion::derive_offline_cash_mint_finality_validator_keys_v1(
+                    &[seed_byte; 32],
+                    0,
+                    validator,
+                )
+                .expect("derive independent genesis-support Pasta authority")
+            })
+            .collect();
+        let mint_finality = OfflineCashMintFinalityGenesisParametersV1 {
+            epoch_roster: OfflineCashMintFinalityEpochRosterTemplateV1 {
+                version: OFFLINE_CASH_CHAIN_VERSION_V1,
+                epoch: 0,
+                validators,
+            },
+            next_epoch_roster: None,
+        };
+        mint_finality
+            .validate()
+            .expect("genesis-support test authority must be canonical");
         let manifest = GenesisBuilder::new_without_executor(chain_id, ".")
+            .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+            .with_offline_cash_mint_finality_genesis_parameters(mint_finality)
             .set_topology(topology)
             .build_raw()
+            .expect("build complete genesis-support fixture")
             .with_consensus_meta();
         let genesis_key = KeyPair::try_random().expect("generate genesis key");
         (manifest, genesis_key)

@@ -1533,13 +1533,17 @@ fn direct_cached_validate_successor_releases_retry_ordinal_fixture() {
         panic!("direct cached Validate must publish one validated replacement")
     };
     assert_eq!(published.lifecycle_ordinal(), validate_ordinal);
+    let physical_completion = ack.physical_completion();
     ack.acknowledge_after_publication();
 
     let resolved = owner
         .dispatch_ready_validate_successor_for_test(
             &mut services,
             &mut executor,
-            super::ReadyValidateSuccessorV1::from_validated(published),
+            super::ReadyValidateSuccessorV1::from_validated(
+                published,
+                physical_completion,
+            ),
             0,
         )
         .expect("resolve the direct cached Validate successor");
@@ -2830,6 +2834,267 @@ fn local_proposal_intent_live_wal_sign_is_typed_dispatched_once_and_prepares_suc
 }
 
 #[cfg(feature = "bls")]
+#[test]
+fn pre_timeout_physical_local_validate_completion_reaches_proposal_intent_before_timeout() {
+    let handle = std::thread::Builder::new()
+        .name("pre-timeout-physical-local-validate-completion".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(pre_timeout_physical_local_validate_completion_fixture)
+        .expect("spawn pre-timeout physical local Validate completion fixture");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[cfg(feature = "bls")]
+#[allow(clippy::too_many_lines)]
+fn pre_timeout_physical_local_validate_completion_fixture() {
+    let marker = 0xDF;
+    let (mut fixture, _body_directory, body_store, durable) =
+        durable_local_validate_store_fixture_at_view(marker, 0);
+    let AdapterEffect::ValidateBody { tag, .. } = &fixture.effect else {
+        unreachable!("local pre-timeout fixture retains one Validate effect")
+    };
+    let tag = *tag;
+    let validate_ordinal = fixture.lease.ordinal();
+    let commitment = ValidatedBodyReceipt::for_test(durable).execution_commitment();
+    let coordinator = ready_durable_validate_coordinator(&[&fixture]);
+    let registry = take_dispatch_registry(&mut fixture);
+    let owner_directory = TempDir::new().expect("temporary pre-timeout lifecycle owner");
+    let (mut owner, runtime_ordinal_authority) =
+        super::super::ProductionLifecycleOwnerV1::ready_validate_completion_owner_for_test(
+            fixture.verified.clone(),
+            coordinator,
+            registry,
+            body_store,
+            owner_directory.path(),
+        );
+    let lifecycle_ordinals =
+        crate::sumeragi::v2_runtime::RuntimeLifecycleOrdinalSource::from_authority(
+            runtime_ordinal_authority,
+        );
+
+    let runtime_directory = TempDir::new().expect("temporary pre-timeout safety WAL");
+    let local_validator = fixture.verified.context().leader(0);
+    let (adapter, startup) = SumeragiV2Adapter::open(
+        &runtime_directory.path().join("safety.wal"),
+        fixture.verified.clone(),
+        Some(local_validator),
+        tag.generation(),
+        [marker; 32],
+        AdapterFingerprints {
+            node: Hash::new(b"pre-timeout local Validate node"),
+            build: Hash::new(b"pre-timeout local Validate build"),
+            config: Hash::new(b"pre-timeout local Validate config"),
+        },
+        DeferredAdmissionOrdinalSource::new(
+            validate_ordinal
+                .checked_add(1)
+                .expect("local Validate successor ordinal remains representable"),
+        ),
+    )
+    .expect("open pre-timeout local Validate adapter");
+    assert!(startup.is_empty());
+    let started = std::time::Instant::now();
+    let round_timeout = std::time::Duration::from_secs(10);
+    let (runtime, startup) =
+        crate::sumeragi::v2_runtime::SerializedV2Runtime::new_with_lifecycle_ordinals(
+            adapter,
+            startup,
+            started,
+            round_timeout,
+            crate::sumeragi::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
+            lifecycle_ordinals,
+        )
+        .expect("wrap pre-timeout local Validate adapter");
+    assert!(startup.is_empty());
+
+    let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
+    let (mut services, _) = crate::sumeragi::v2_worker::tests::fixture();
+    crate::sumeragi::v2_worker::tests::install_active_tag_for_test(&mut services, tag);
+    let (mut executor, mut planner_io) = owner.bind_body_store_to_lifecycle_completion_io_for_test(
+        &mut services,
+        runtime,
+        std::sync::Arc::clone(&output_guard),
+        local_validator,
+        4,
+    );
+    let keys = durable_store_keys(marker);
+    let signer = usize::try_from(local_validator).expect("local leader index is representable");
+    crate::sumeragi::v2_worker::tests::install_local_signer_for_test(&mut services, &keys[signer]);
+    executor
+        .arm_live_clocks(
+            super::super::ProductionLifecycleLiveClockActivationPermitV1::for_test(),
+            started,
+        )
+        .expect("arm pre-timeout local Validate clocks after service construction");
+    let binding_directory = TempDir::new().expect("temporary pre-timeout ingress binding");
+    let validator = fixture.verified.context().roster[signer].validator.clone();
+    let ingress =
+        super::super::LaunchedProductionLifecycleV1::prepare_ready_local_proposal_sign_ingress_for_test(
+            &executor,
+            &binding_directory,
+            &validator,
+        );
+    let mut launched =
+        super::super::LaunchedProductionLifecycleV1::ready_local_proposal_sign_fixture_for_test(
+            owner, executor, services, ingress,
+        );
+    let (mut lane_work, _) =
+        crate::sumeragi::v2_lane_work::tests::fixture(wire::ConsensusMode::Permissioned);
+
+    let (dispatched, after_validate_dispatch) =
+        super::super::v2_runner::with_lifecycle_current_runner_turn_for_test(
+            fixture.verified.context(),
+            super::super::v2_runner::LifecycleRunnerRankTarget::Completion,
+            |runner| {
+                let ready = match launched.drive_completion_pre_gate(runner, &mut lane_work) {
+                    super::super::ProductionLifecycleCompletionPreGateV1::Ready(ready) => ready,
+                    super::super::ProductionLifecycleCompletionPreGateV1::Ordinary(runner) => {
+                        drop(runner);
+                        panic!("Ready local Validate unexpectedly passed through Completion")
+                    }
+                    super::super::ProductionLifecycleCompletionPreGateV1::Selected(_) => {
+                        panic!("Ready local Validate selected a parked completion")
+                    }
+                };
+                match launched.drive_ready_completion_turn(ready) {
+                    super::super::ProductionLifecycleCompletionTurnV1::Selected(
+                        super::super::ProductionLifecycleCompletionSelectionV1::CompletionIoDispatch(
+                            result,
+                        ),
+                    ) => result.expect("dispatch the genuine local Validate worker"),
+                    super::super::ProductionLifecycleCompletionTurnV1::PassThrough(runner) => {
+                        drop(runner);
+                        panic!("Ready local Validate unexpectedly passed through Ready dispatch")
+                    }
+                    super::super::ProductionLifecycleCompletionTurnV1::Selected(_) => {
+                        panic!("Ready local Validate selected the wrong Completion class")
+                    }
+                }
+            },
+        );
+    assert_eq!(
+        after_validate_dispatch,
+        super::super::v2_runner::LifecycleRunnerRankTarget::Runtime
+    );
+    assert_eq!(
+        dispatched,
+        super::super::ProductionCompletionDispatchV1::ValidateQueued {
+            ordinal: validate_ordinal,
+        }
+    );
+
+    planner_io.activate_one_lifecycle_validate();
+    assert_eq!(
+        planner_io.execute_held_lifecycle_validate_fixture(
+            commitment,
+            std::sync::Arc::clone(&output_guard),
+        ),
+        1,
+        "the real worker must execute the local body before publishing completion"
+    );
+    let physical_completion = planner_io.lifecycle_validate_io_snapshot();
+    assert_eq!(physical_completion.completion_pending(), 1);
+    assert_eq!(physical_completion.completion_owners(), 1);
+    let mut launched = ReadyLocalProposalSignLaunchedFixtureGuard::new(launched, planner_io);
+
+    let deadline = started + round_timeout;
+    assert_eq!(
+        launched
+            .freeze_due_timeout_for_ready_sign_test(deadline)
+            .expect("freeze the production deadline after physical completion"),
+        false,
+        "the clean local fixture has no unchanged-lock PrepareQC exception"
+    );
+
+    let (published, after_validate_publication) =
+        super::super::v2_runner::with_lifecycle_current_runner_turn_for_test(
+            fixture.verified.context(),
+            super::super::v2_runner::LifecycleRunnerRankTarget::Completion,
+            |runner| match launched.drive_completion_pre_gate(runner, &mut lane_work) {
+                super::super::ProductionLifecycleCompletionPreGateV1::Selected(selected) => {
+                    selected
+                }
+                super::super::ProductionLifecycleCompletionPreGateV1::Ordinary(runner) => {
+                    drop(runner);
+                    panic!("physical local Validate completion passed through")
+                }
+                super::super::ProductionLifecycleCompletionPreGateV1::Ready(ready) => {
+                    drop(ready);
+                    panic!("physical local Validate completion was not classified")
+                }
+            },
+        );
+    assert_eq!(
+        after_validate_publication,
+        super::super::v2_runner::LifecycleRunnerRankTarget::Runtime
+    );
+    assert!(matches!(
+        published,
+        super::super::ProductionLifecycleCompletionSelectionV1::LifecycleValidatePublished {
+            ordinal
+        } if ordinal == validate_ordinal
+    ));
+
+    let (successor, after_validate_successor) =
+        super::super::v2_runner::with_lifecycle_current_runner_turn_for_test(
+            fixture.verified.context(),
+            super::super::v2_runner::LifecycleRunnerRankTarget::Completion,
+            |runner| match launched.drive_completion_pre_gate(runner, &mut lane_work) {
+                super::super::ProductionLifecycleCompletionPreGateV1::Selected(selected) => {
+                    selected
+                }
+                super::super::ProductionLifecycleCompletionPreGateV1::Ordinary(runner) => {
+                    drop(runner);
+                    panic!("published local Validate successor passed through")
+                }
+                super::super::ProductionLifecycleCompletionPreGateV1::Ready(ready) => {
+                    drop(ready);
+                    panic!("published local Validate successor was not retained")
+                }
+            },
+        );
+    assert_eq!(
+        after_validate_successor,
+        super::super::v2_runner::LifecycleRunnerRankTarget::Runtime
+    );
+    assert!(matches!(
+        successor,
+        super::super::ProductionLifecycleCompletionSelectionV1::CompletionIoDispatch(Ok(
+            super::super::ProductionCompletionDispatchV1::ValidateNoSuccessor { ordinal }
+        )) if ordinal == validate_ordinal
+    ));
+    assert_eq!(
+        launched
+            .runtime_queue_snapshot_for_ready_sign_test(deadline)
+            .completion
+            .depth,
+        1,
+        "the validated local handoff must reach the runtime Completion FIFO"
+    );
+
+    assert!(matches!(
+        launched
+            .step_runtime_for_ready_sign_test(deadline)
+            .expect("step the exact due production runtime"),
+        crate::sumeragi::v2_effects::EffectExecutorStep::Advanced { .. }
+    ));
+    assert_eq!(
+        launched
+            .runtime_step_observation_for_ready_sign_test()
+            .and_then(|observation| observation.selected()),
+        Some(crate::sumeragi::v2_runtime::RuntimeSelectedOwnerKind::PreTimeoutLocalProposalReady),
+        "a Validate completion physically queued before the timeout freeze must retain one bounded ProposalIntent handoff"
+    );
+    assert!(
+        launched.has_pending_live_wal_sign_for_ready_sign_test(),
+        "ProposalIntent must be fsynced before the still-due TimeoutIntent"
+    );
+    assert!(!output_guard.restart_required());
+}
+
+#[cfg(feature = "bls")]
 struct ReadyLocalProposalSignLaunchedFixtureGuard {
     launched: Option<super::super::LaunchedProductionLifecycleV1>,
     planner: Option<crate::sumeragi::v2_worker::tests::LifecyclePlannerIoFixture>,
@@ -2970,7 +3235,7 @@ fn local_proposal_intent_live_wal_sign_fixture() {
             | ReadyDurableValidateAdapterPublicationKind::ValidatedNoEffect
     ));
     let published = local
-        .publish_into_runtime(&mut runtime)
+        .publish_into_runtime(&mut runtime, None)
         .unwrap_or_else(|_| panic!("publish exact local-proposal runtime handoff"));
     let physical_admission_ordinal = lease
         .ordinal()

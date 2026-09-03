@@ -519,12 +519,16 @@ fn validate_sidecar_barrier_services_the_typed_pacemaker_escape_before_lane_work
         .map(|offset| progress_dequeue + offset)
         .expect("the missing-sidecar barrier retains a typed runtime gate");
     let physical_cut = lane_branch[pacemaker_gate..]
-        .find("executor.set_ingress_physical_cut(")
+        .find(".set_ingress_physical_cut(")
         .map(|offset| pacemaker_gate + offset)
         .expect("the escape preserves the fair-ingress physical cut");
-    let pacemaker_step = lane_branch[physical_cut..]
-        .find("executor.step_pacemaker_once(")
+    let completion_cut = lane_branch[physical_cut..]
+        .find(".prepare_completion_runtime_cut(")
         .map(|offset| physical_cut + offset)
+        .expect("the escape linearizes behind the physical Completion prefix");
+    let pacemaker_step = lane_branch[completion_cut..]
+        .find("executor.step_pacemaker_after_completion_runtime_cut(")
+        .map(|offset| completion_cut + offset)
         .expect("the escape services one typed pacemaker turn");
     let retain_certified_view = lane_branch[pacemaker_step..]
         .find("lane_work.retain_merge_sidecars_for_global_view(")
@@ -534,13 +538,23 @@ fn validate_sidecar_barrier_services_the_typed_pacemaker_escape_before_lane_work
         .find("drive_merge_sidecar_recovery(")
         .map(|offset| retain_certified_view + offset)
         .expect("ordinary sidecar recovery follows certified-view reconciliation");
+    let capacity_relief = lane_branch[completion_cut..]
+        .find("executor.step_completion_capacity_relief_after_cut(")
+        .map(|offset| completion_cut + offset)
+        .expect("a full FIFO admits only the typed Completion-class relief turn");
 
     assert!(ingress_gate < progress_dequeue);
     assert!(progress_dequeue < pacemaker_gate);
     assert!(pacemaker_gate < physical_cut);
+    assert!(physical_cut < completion_cut);
     assert!(physical_cut < pacemaker_step);
     assert!(pacemaker_step < retain_certified_view);
     assert!(retain_certified_view < generic_sidecar_drive);
+    assert!(completion_cut < capacity_relief);
+    assert!(
+        !lane_branch.contains("executor.step_after_completion_runtime_cut("),
+        "the Validate-sidecar barrier must never reopen generic reducer scheduling"
+    );
 
     let predicate_start = turn_driver
         .find("fn selected_ingress_is_validate_sidecar_pacemaker_progress(")

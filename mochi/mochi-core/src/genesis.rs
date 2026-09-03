@@ -1,11 +1,20 @@
 //! Mochi-specific extensions for Kagami-generated genesis manifests.
+use iroha_crypto::Hash;
 use iroha_data_model::{
     account::Account,
     asset::{AssetBalancePolicy, AssetDefinition},
+    block::consensus_v2::is_valid_committee_size,
     domain::Domain,
-    isi::{Grant, GrantBox, Mint, MintBox, Register, RegisterBox},
+    isi::{
+        Grant, GrantBox, Mint, MintBox, Register, RegisterBox,
+        offline_cash_v1::{
+            OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterTemplateV1,
+            OfflineCashMintFinalityGenesisParametersV1,
+        },
+    },
     metadata::Metadata,
     nexus::DataSpaceId,
+    peer::PeerId,
     permission::Permission,
     prelude::{AccountId, AssetDefinitionId, AssetId, DomainId, NumericSpec},
 };
@@ -153,15 +162,79 @@ pub fn with_local_account_onboarding_bootstrap(
         builder =
             builder.append_instruction(Grant::account_permission(permission, authority.clone()));
     }
-    Ok(builder.build_raw())
+    builder.build_raw()
 }
-/// Attach topology information to a genesis manifest inside a dedicated transaction.
+
+/// Derive development-only mint-finality authority for one exact Mochi committee.
+pub(crate) fn localnet_mint_finality_genesis_parameters(
+    topology: &[GenesisTopologyEntry],
+) -> color_eyre::Result<OfflineCashMintFinalityGenesisParametersV1> {
+    let mut validators = topology
+        .iter()
+        .map(|entry| entry.peer.clone())
+        .collect::<Vec<PeerId>>();
+    validators.sort();
+    if !is_valid_committee_size(validators.len()) {
+        return Err(color_eyre::eyre::eyre!(
+            "Mochi Offline Cash mint-finality authority requires an exact Sumeragi v2 3f+1 committee"
+        ));
+    }
+    if validators.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(color_eyre::eyre::eyre!(
+            "Mochi Offline Cash mint-finality authority contains duplicate validators"
+        ));
+    }
+    let validators = validators
+        .into_iter()
+        .enumerate()
+        .map(|(index, validator)| {
+            // Mochi localnets are disposable development deployments. Keep this
+            // seed independent from every consensus secret while binding the
+            // public authority to the exact canonical validator identity.
+            let seed: [u8; 32] = Hash::new(format!(
+                "iroha:mochi:localnet:offline-cash-mint-finality:v1:epoch-0:{index}:{validator}"
+            ))
+            .into();
+            iroha_core::zk::offline_cash_v1_recursion::derive_offline_cash_mint_finality_validator_keys_v1(
+                &seed,
+                0,
+                validator,
+            )
+            .map_err(|error| {
+                color_eyre::eyre::eyre!(
+                    "derive Mochi Offline Cash mint-finality validator keys: {error}"
+                )
+            })
+        })
+        .collect::<color_eyre::Result<Vec<_>>>()?;
+    let parameters = OfflineCashMintFinalityGenesisParametersV1 {
+        epoch_roster: OfflineCashMintFinalityEpochRosterTemplateV1 {
+            version: OFFLINE_CASH_CHAIN_VERSION_V1,
+            epoch: 0,
+            validators,
+        },
+        next_epoch_roster: None,
+    };
+    parameters.validate().map_err(|error| {
+        color_eyre::eyre::eyre!("invalid Mochi Offline Cash genesis authority: {error}")
+    })?;
+    Ok(parameters)
+}
+
+/// Attach topology information and its matching private-finality authority to a genesis manifest.
+///
+/// # Errors
+///
+/// Returns an error unless `topology` is a unique exact `3f + 1` committee or
+/// its independent paired-Pasta public keys can be derived and validated.
 pub fn with_topology(
     manifest: RawGenesisTransaction,
     topology: Vec<GenesisTopologyEntry>,
-) -> RawGenesisTransaction {
+) -> color_eyre::Result<RawGenesisTransaction> {
+    let mint_finality = localnet_mint_finality_genesis_parameters(&topology)?;
     manifest
         .into_builder()
+        .with_offline_cash_mint_finality_genesis_parameters(mint_finality)
         .next_transaction()
         .set_topology(topology)
         .build_raw()
@@ -169,17 +242,44 @@ pub fn with_topology(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_crypto::{Algorithm, KeyPair, bls_normal_pop_prove};
     use iroha_data_model::{
+        block::consensus_v2::SumeragiV2GenesisContextParameters,
         isi::{GrantBox, MintBox, RegisterBox},
+        peer::PeerId,
         prelude::ChainId,
     };
     use iroha_genesis::GenesisBuilder;
     use iroha_test_samples::ALICE_ID;
+
+    fn deterministic_topology(seed_base: u8) -> Vec<GenesisTopologyEntry> {
+        (0_u8..4)
+            .map(|index| {
+                let validator = KeyPair::try_from_seed(
+                    vec![seed_base.wrapping_add(index); 32],
+                    Algorithm::BlsNormal,
+                )
+                .expect("derive deterministic Mochi test validator");
+                let pop = bls_normal_pop_prove(validator.private_key())
+                    .expect("derive deterministic Mochi test validator PoP");
+                GenesisTopologyEntry::new(PeerId::new(validator.public_key().clone()), pop)
+            })
+            .collect()
+    }
+
     #[test]
     fn local_onboarding_bootstrap_is_exact_funded_and_idempotent() {
         const EXPECTED_CANONICAL_XOR_ID: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
         let chain_id: ChainId = "local-onboarding".parse().expect("infallible chain id");
-        let manifest = GenesisBuilder::new_without_executor(chain_id, ".").build_raw();
+        let topology = deterministic_topology(0xD0);
+        let mint_finality = localnet_mint_finality_genesis_parameters(&topology)
+            .expect("derive deterministic Mochi test Offline Cash authority");
+        let manifest = GenesisBuilder::new_without_executor(chain_id, ".")
+            .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+            .with_offline_cash_mint_finality_genesis_parameters(mint_finality)
+            .set_topology(topology)
+            .build_raw()
+            .expect("build complete Mochi onboarding test genesis");
         let manifest = with_local_account_onboarding_bootstrap(manifest, &ALICE_ID)
             .expect("append local onboarding bootstrap");
         let transaction_count = manifest.transactions().len();
@@ -276,6 +376,36 @@ mod tests {
             assert_eq!(count, 1, "permission must be granted exactly once");
         }
     }
+
+    #[test]
+    fn topology_replacement_rebinds_the_private_finality_authority() {
+        let original_topology = deterministic_topology(0xB0);
+        let original_authority = localnet_mint_finality_genesis_parameters(&original_topology)
+            .expect("derive original test authority");
+        let manifest = GenesisBuilder::new_without_executor(ChainId::from("topology-rebind"), ".")
+            .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+            .with_offline_cash_mint_finality_genesis_parameters(original_authority)
+            .build_raw()
+            .expect("build original complete test manifest");
+        let replacement_topology = deterministic_topology(0xC0);
+        let expected_authority = localnet_mint_finality_genesis_parameters(&replacement_topology)
+            .expect("derive replacement test authority");
+        let patched = with_topology(manifest, replacement_topology.clone())
+            .expect("replace topology and private-finality authority");
+        assert_eq!(
+            patched.offline_cash_mint_finality_genesis_parameters(),
+            &expected_authority
+        );
+        assert_eq!(
+            patched
+                .transactions()
+                .last()
+                .expect("topology transaction")
+                .topology(),
+            replacement_topology
+        );
+    }
+
     #[test]
     fn bundled_sample_asset_ids_are_canonical_and_distinct() {
         let rose = sample_rose_definition_id();

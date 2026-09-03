@@ -118,8 +118,8 @@ expected_hash_file = "genesis.expected_hash"
 # commands = 1024
 # authenticated_non_validator_sources = 2
 # bodies = 161
-# body_bytes = 1141899264
-# body_source_bytes = 34603008
+# body_bytes = 1176502272
+# body_source_bytes = 35651584
 # chunks = 2048
 # ready_bodies = 128
 

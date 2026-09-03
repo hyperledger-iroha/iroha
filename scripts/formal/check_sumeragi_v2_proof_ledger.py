@@ -27681,7 +27681,7 @@ outbound_frame_queue_max_high_bytes: config
             "first-release maximum validator geometry",
         ),
         (
-            "pub const MAX_CONSENSUS_SIGNATURE_BYTES: usize = 256;",
+            "pub const MAX_CONSENSUS_SIGNATURE_BYTES: usize = 16 * 1024;",
             "first-release maximum consensus signature geometry",
         ),
     ):
@@ -28553,12 +28553,12 @@ let mut emitter = Emitter::new();
         ),
         (
             "pub const QUEUE_BODY_BYTES: NonZeroUsize = "
-            "nonzero!(231_usize * 1024 * 1024);",
+            "nonzero!(1122_usize * 1024 * 1024);",
             "reviewed aggregate outer-ingress byte reserve",
         ),
         (
             "pub const QUEUE_BODY_SOURCE_BYTES: NonZeroUsize = "
-            "nonzero!(33_usize * 1024 * 1024);",
+            "nonzero!(34_usize * 1024 * 1024);",
             "reviewed per-source outer-ingress byte reserve",
         ),
     )
@@ -28852,8 +28852,8 @@ queues.insert(
         (
             "taira_config",
             "authenticated_non_validator_sources = 2\n"
-            "body_bytes = 207618048\n"
-            "body_source_bytes = 34603008",
+            "body_bytes = 213909504\n"
+            "body_source_bytes = 35651584",
             "production Taira profile pins H=2 and six source partitions",
         ),
         (

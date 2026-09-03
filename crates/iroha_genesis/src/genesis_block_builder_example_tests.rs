@@ -30,7 +30,9 @@ fn genesis_block_builder_example() -> Result<()> {
         .asset("hats".parse().unwrap(), NumericSpec::default())
         .finish_domain();
     // In real cases executor should be constructed from an IVM bytecode blob
-    let finished_genesis = genesis_builder.build_and_sign(&checked_genesis_fixture_keypair())?;
+    let finished_genesis = genesis_builder
+        .set_topology(deterministic_test_genesis_topology_entries())
+        .build_and_sign(&checked_genesis_fixture_keypair())?;
     let transactions = &finished_genesis
         .0
         .external_transactions()

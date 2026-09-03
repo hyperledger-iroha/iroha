@@ -2796,5 +2796,6 @@ fn decode_frame(bytes: &[u8], max_frame_bytes: u64) -> Result<DecodedServicedCan
         producer_continuations: state.producer_continuations,
     })
 }
+
 #[cfg(test)]
 include!("serviced_candidate_store_cases.rs");

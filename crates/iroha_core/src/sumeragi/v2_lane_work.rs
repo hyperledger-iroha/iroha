@@ -3388,10 +3388,11 @@ impl V2LaneWorkAdapter {
                 .roster
                 .iter()
                 .filter_map(|entry| {
-                    crate::state::live_consensus_key_pop_for_peer(
+                    crate::state::live_consensus_key_pop_for_peer_with_role(
                         &world,
                         &entry.validator,
                         context.height,
+                        iroha_data_model::consensus::ConsensusKeyRole::Validator,
                     )
                     .map(|pop| (entry.validator.public_key().clone(), pop))
                 })
@@ -3613,10 +3614,11 @@ impl V2LaneWorkAdapter {
                 .roster
                 .iter()
                 .filter_map(|entry| {
-                    crate::state::live_consensus_key_pop_for_peer(
+                    crate::state::live_consensus_key_pop_for_peer_with_role(
                         &world,
                         &entry.validator,
                         context.height,
+                        iroha_data_model::consensus::ConsensusKeyRole::Validator,
                     )
                     .map(|pop| (entry.validator.public_key().clone(), pop))
                 })
@@ -9596,10 +9598,11 @@ impl V2LaneWorkAdapter {
                     .validator_set
                     .iter()
                     .map(|peer| {
-                        crate::state::live_consensus_key_pop_for_peer(
+                        crate::state::live_consensus_key_pop_for_peer_on_lane(
                             &world,
                             peer,
                             certificate.body.proposal_height,
+                            certificate.body.lane_id,
                         )
                     })
                     .collect::<Option<Vec<_>>>()?
@@ -13370,10 +13373,11 @@ impl V2LaneWorkAdapter {
                             .validator_set
                             .iter()
                             .map(|validator| {
-                                crate::state::live_consensus_key_pop_for_peer(
+                                crate::state::live_consensus_key_pop_for_peer_on_lane(
                                     &world,
                                     validator,
                                     proposal.descriptor.proposal_height,
+                                    proposal.descriptor.lane_id,
                                 )
                             })
                             .collect::<Option<Vec<_>>>()
@@ -15108,15 +15112,22 @@ impl V2LaneWorkAdapter {
     fn consensus_pop_for_peer_at_height(
         &self,
         world: &impl WorldReadOnly,
+        lane_id: LaneId,
         peer: &PeerId,
         authority_height: u64,
     ) -> Option<Vec<u8>> {
-        if authority_height == self.context.height
+        if lane_id == LaneId::SINGLE
+            && authority_height == self.context.height
             && let Some(pop) = self.frozen_validator_pops.get(peer.public_key())
         {
             return Some(pop.clone());
         }
-        crate::state::live_consensus_key_pop_for_peer(world, peer, authority_height)
+        crate::state::live_consensus_key_pop_for_peer_on_lane(
+            world,
+            peer,
+            authority_height,
+            lane_id,
+        )
     }
     fn pops_for_lane_qc(&self, qc: &LaneBlockQcV1) -> BTreeMap<PublicKey, Vec<u8>> {
         if let Some(record) = self
@@ -15142,8 +15153,13 @@ impl V2LaneWorkAdapter {
                     .is_some_and(|byte| byte & (1_u8 << (index % 8)) != 0)
             })
             .filter_map(|(_, peer)| {
-                self.consensus_pop_for_peer_at_height(&world, peer, qc.body.proposal_height)
-                    .map(|pop| (peer.public_key().clone(), pop))
+                self.consensus_pop_for_peer_at_height(
+                    &world,
+                    qc.body.lane_id,
+                    peer,
+                    qc.body.proposal_height,
+                )
+                .map(|pop| (peer.public_key().clone(), pop))
             })
             .collect()
     }

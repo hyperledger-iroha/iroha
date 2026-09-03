@@ -2298,10 +2298,12 @@ fn completion_payload_anchor_accepts_an_authenticated_committed_prefix() {
 fn cancelling_store_wait_joins_late_writer() {
     let completed = Arc::new(AtomicBool::new(false));
     let late = Arc::clone(&completed);
-    let thread = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(10));
-        late.store(true, Ordering::Release);
-    });
+    let thread =
+        crate::panic_recovery::spawn_thread_recoverable(std::thread::Builder::new(), move || {
+            std::thread::sleep(Duration::from_millis(10));
+            late.store(true, Ordering::Release);
+        })
+        .expect("spawn late store writer");
     drop(BlockingStoreJoinGuardV1(Some(thread)));
     assert!(completed.load(Ordering::Acquire));
 }

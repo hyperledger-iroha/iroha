@@ -14225,8 +14225,11 @@ impl Drop for StateView<'_> {
         }
     }
 }
-/// Derive a collision-resistant validator consensus key identifier from a peer public key.
-pub(crate) fn derive_validator_key_id(public_key: &PublicKey) -> ConsensusKeyId {
+fn derive_peer_consensus_key_id(
+    public_key: &PublicKey,
+    role: ConsensusKeyRole,
+    prefix: &str,
+) -> ConsensusKeyId {
     let key_label = public_key.to_string();
     let hash = Blake2b512::digest(key_label.as_bytes());
     let mut suffix = String::with_capacity(32);
@@ -14234,10 +14237,18 @@ pub(crate) fn derive_validator_key_id(public_key: &PublicKey) -> ConsensusKeyId 
     for byte in hash_bytes.iter().take(16) {
         let _ = write!(suffix, "{byte:02x}");
     }
-    let ident: Ident = format!("validator-{suffix}")
+    let ident: Ident = format!("{prefix}-{suffix}")
         .parse()
-        .expect("validator key identifier must parse");
-    ConsensusKeyId::new(ConsensusKeyRole::Validator, ident)
+        .expect("derived consensus key identifier must parse");
+    ConsensusKeyId::new(role, ident)
+}
+/// Derive a collision-resistant validator consensus key identifier from a peer public key.
+pub(crate) fn derive_validator_key_id(public_key: &PublicKey) -> ConsensusKeyId {
+    derive_peer_consensus_key_id(public_key, ConsensusKeyRole::Validator, "validator")
+}
+/// Derive a collision-resistant participant-committee key identifier from a peer public key.
+pub(crate) fn derive_committee_key_id(public_key: &PublicKey) -> ConsensusKeyId {
+    derive_peer_consensus_key_id(public_key, ConsensusKeyRole::Committee, "committee")
 }
 /// Fetch the stored BLS proof-of-possession for a consensus public key.
 ///
@@ -14513,6 +14524,66 @@ pub(crate) fn peer_consensus_key_gate(
     peer_id: &PeerId,
     block_height: u64,
 ) -> ConsensusKeyGate {
+    peer_consensus_key_gate_matching_role(snapshot, peer_id, block_height, None)
+}
+/// Resolve the lifecycle gate for one peer and one exact consensus-key role.
+pub(crate) fn peer_consensus_key_gate_for_role(
+    snapshot: &impl WorldReadOnly,
+    peer_id: &PeerId,
+    block_height: u64,
+    role: ConsensusKeyRole,
+) -> ConsensusKeyGate {
+    peer_consensus_key_gate_matching_role(snapshot, peer_id, block_height, Some(&role))
+}
+const GLOBAL_LANE_CONSENSUS_KEY_ROLES: &[ConsensusKeyRole] = &[ConsensusKeyRole::Validator];
+const PARTICIPANT_LANE_CONSENSUS_KEY_ROLES: &[ConsensusKeyRole] =
+    &[ConsensusKeyRole::Committee, ConsensusKeyRole::Validator];
+/// Return the ordered consensus-key roles accepted for one lane.
+///
+/// Global consensus accepts only `Validator` keys. Participant lanes prefer
+/// the narrower `Committee` role but retain `Validator` compatibility for
+/// existing transparent lane deployments.
+pub(crate) fn consensus_key_roles_for_lane(lane_id: LaneId) -> &'static [ConsensusKeyRole] {
+    if lane_id == LaneId::SINGLE {
+        GLOBAL_LANE_CONSENSUS_KEY_ROLES
+    } else {
+        PARTICIPANT_LANE_CONSENSUS_KEY_ROLES
+    }
+}
+const fn consensus_key_gate_priority(gate: ConsensusKeyGate) -> u8 {
+    match gate {
+        ConsensusKeyGate::Missing => 0,
+        ConsensusKeyGate::NotYetActive => 1,
+        ConsensusKeyGate::Expired => 2,
+        ConsensusKeyGate::Disabled => 3,
+        ConsensusKeyGate::Live => 4,
+    }
+}
+/// Resolve the best lifecycle gate among the roles accepted for one lane.
+pub(crate) fn peer_consensus_key_gate_for_lane(
+    snapshot: &impl WorldReadOnly,
+    peer_id: &PeerId,
+    block_height: u64,
+    lane_id: LaneId,
+) -> ConsensusKeyGate {
+    let mut best = ConsensusKeyGate::Missing;
+    for role in consensus_key_roles_for_lane(lane_id) {
+        let candidate = peer_consensus_key_gate_for_role(snapshot, peer_id, block_height, *role);
+        if candidate == ConsensusKeyGate::Live {
+            return candidate;
+        }
+        if consensus_key_gate_priority(candidate) > consensus_key_gate_priority(best) {
+            best = candidate;
+        }
+    }
+    best
+}
+fn peer_consensus_key_gate_matching_role(
+    snapshot: &impl WorldReadOnly,
+    peer_id: &PeerId,
+    block_height: u64,
+    role: Option<&ConsensusKeyRole>,
+) -> ConsensusKeyGate {
     let pk = peer_id.public_key();
     let Some(ids) = snapshot
         .consensus_keys_by_pk()
@@ -14521,15 +14592,11 @@ pub(crate) fn peer_consensus_key_gate(
     else {
         return ConsensusKeyGate::Missing;
     };
-    let priority = |gate: ConsensusKeyGate| match gate {
-        ConsensusKeyGate::Missing => 0,
-        ConsensusKeyGate::NotYetActive => 1,
-        ConsensusKeyGate::Expired => 2,
-        ConsensusKeyGate::Disabled => 3,
-        ConsensusKeyGate::Live => 4,
-    };
     let mut gate = ConsensusKeyGate::Missing;
     for id in ids {
+        if role.is_some_and(|role| &id.role != role) {
+            continue;
+        }
         let Some(record) = snapshot.consensus_keys().get(&id) else {
             continue;
         };
@@ -14554,7 +14621,7 @@ pub(crate) fn peer_consensus_key_gate(
         if candidate == ConsensusKeyGate::Live {
             return ConsensusKeyGate::Live;
         }
-        if priority(candidate) > priority(gate) {
+        if consensus_key_gate_priority(candidate) > consensus_key_gate_priority(gate) {
             gate = candidate;
         }
     }
@@ -14571,15 +14638,70 @@ pub(crate) fn peer_has_live_consensus_key(
         ConsensusKeyGate::Live
     )
 }
+/// Check whether a peer has a live key for one exact consensus role.
+pub(crate) fn peer_has_live_consensus_key_for_role(
+    snapshot: &impl WorldReadOnly,
+    peer_id: &PeerId,
+    block_height: u64,
+    role: ConsensusKeyRole,
+) -> bool {
+    matches!(
+        peer_consensus_key_gate_for_role(snapshot, peer_id, block_height, role),
+        ConsensusKeyGate::Live
+    )
+}
+/// Check whether a peer has a live key in the role set accepted for one lane.
+pub(crate) fn peer_has_live_consensus_key_for_lane(
+    snapshot: &impl WorldReadOnly,
+    peer_id: &PeerId,
+    block_height: u64,
+    lane_id: LaneId,
+) -> bool {
+    peer_consensus_key_gate_for_lane(snapshot, peer_id, block_height, lane_id)
+        == ConsensusKeyGate::Live
+}
 /// Fetch the stored BLS proof-of-possession for a peer's live consensus key.
 pub(crate) fn live_consensus_key_pop_for_peer(
     snapshot: &impl WorldReadOnly,
     peer_id: &PeerId,
     block_height: u64,
 ) -> Option<Vec<u8>> {
+    live_consensus_key_pop_for_peer_matching_role(snapshot, peer_id, block_height, None)
+}
+/// Fetch the stored PoP for a peer's live key with one exact consensus role.
+pub(crate) fn live_consensus_key_pop_for_peer_with_role(
+    snapshot: &impl WorldReadOnly,
+    peer_id: &PeerId,
+    block_height: u64,
+    role: ConsensusKeyRole,
+) -> Option<Vec<u8>> {
+    live_consensus_key_pop_for_peer_matching_role(snapshot, peer_id, block_height, Some(&role))
+}
+/// Fetch a live PoP using the ordered role policy for one lane.
+pub(crate) fn live_consensus_key_pop_for_peer_on_lane(
+    snapshot: &impl WorldReadOnly,
+    peer_id: &PeerId,
+    block_height: u64,
+    lane_id: LaneId,
+) -> Option<Vec<u8>> {
+    consensus_key_roles_for_lane(lane_id)
+        .iter()
+        .find_map(|role| {
+            live_consensus_key_pop_for_peer_with_role(snapshot, peer_id, block_height, *role)
+        })
+}
+fn live_consensus_key_pop_for_peer_matching_role(
+    snapshot: &impl WorldReadOnly,
+    peer_id: &PeerId,
+    block_height: u64,
+    role: Option<&ConsensusKeyRole>,
+) -> Option<Vec<u8>> {
     let pk = peer_id.public_key();
     let ids = snapshot.consensus_keys_by_pk().get(&pk.to_string())?;
     for id in ids {
+        if role.is_some_and(|role| &id.role != role) {
+            continue;
+        }
         let Some(record) = snapshot.consensus_keys().get(id) else {
             continue;
         };
@@ -14652,7 +14774,12 @@ where
             if !candidate_peers.contains(&peer) || !present_peers.contains(&peer) {
                 return None;
             }
-            if !peer_has_live_consensus_key(world, &peer, block_height) {
+            if !peer_has_live_consensus_key_for_role(
+                world,
+                &peer,
+                block_height,
+                ConsensusKeyRole::Validator,
+            ) {
                 return None;
             }
             Some(peer)
@@ -14784,7 +14911,12 @@ where
             if !present_peers.contains(&pid) {
                 continue;
             }
-            if !peer_has_live_consensus_key(world, &pid, block_height) {
+            if !peer_has_live_consensus_key_for_role(
+                world,
+                &pid,
+                block_height,
+                ConsensusKeyRole::Validator,
+            ) {
                 continue;
             }
             active_candidates.insert(pid);
@@ -14848,7 +14980,9 @@ where
             Some(pid)
         })
         .collect();
-    candidates.retain(|peer| peer_has_live_consensus_key(world, peer, block_height));
+    candidates.retain(|peer| {
+        peer_has_live_consensus_key_for_role(world, peer, block_height, ConsensusKeyRole::Validator)
+    });
     candidates.sort();
     candidates.dedup();
     select_threshold_beacon_committee(world, epoch, selection_seed, candidates)
@@ -14883,7 +15017,7 @@ mod stake_snapshot_tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         account::AccountId as DMAccountId,
-        consensus::{ConsensusKeyRecord, ConsensusKeyStatus},
+        consensus::{ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
         metadata::Metadata,
         nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneVisibility},
     };
@@ -14894,7 +15028,28 @@ mod stake_snapshot_tests {
         status: ConsensusKeyStatus,
         activation_height: u64,
     ) {
-        let ident = derive_validator_key_id(peer.public_key());
+        seed_consensus_key_with_role(
+            world_block,
+            peer,
+            ConsensusKeyRole::Validator,
+            status,
+            activation_height,
+        );
+    }
+    fn seed_consensus_key_with_role(
+        world_block: &mut WorldBlock<'_>,
+        peer: &PeerId,
+        role: ConsensusKeyRole,
+        status: ConsensusKeyStatus,
+        activation_height: u64,
+    ) {
+        let ident = match role {
+            ConsensusKeyRole::Validator => derive_validator_key_id(peer.public_key()),
+            ConsensusKeyRole::Committee => derive_committee_key_id(peer.public_key()),
+            ConsensusKeyRole::Endorsement => {
+                ConsensusKeyId::new(ConsensusKeyRole::Endorsement, "test-endorsement-key")
+            }
+        };
         let mut record = ConsensusKeyRecord {
             id: ident,
             public_key: peer.public_key().clone(),
@@ -15734,6 +15889,122 @@ mod stake_snapshot_tests {
         assert!(!roster.contains(&PeerId::from(missing_kp.public_key().clone())));
     }
     #[test]
+    fn npos_epoch_roster_excludes_live_committee_role_keys() {
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.staking.min_validator_stake = 1_u64.into();
+            nexus.staking.max_validators = NonZeroU32::new(4).expect("nonzero validator limit");
+        }
+        let validator_keys: Vec<_> = (0..4).map(|_| crate::state::checked_keypair()).collect();
+        let committee_key = crate::state::checked_keypair();
+        let committee_peer = PeerId::from(committee_key.public_key().clone());
+        let committee_account = DMAccountId::of(committee_key.public_key().clone());
+        let mut wb = state.world.block();
+        let validator_peers = validator_keys
+            .iter()
+            .map(|keypair| {
+                let peer = PeerId::from(keypair.public_key().clone());
+                let validator = DMAccountId::of(keypair.public_key().clone());
+                let _ = wb.peers.get_mut().push(peer.clone());
+                seed_consensus_key(&mut wb, &peer, ConsensusKeyStatus::Active, 0);
+                let mut record =
+                    active_lane_validator_record(LaneId::SINGLE, &validator, peer.clone(), 100);
+                record.activation_height = 0;
+                wb.public_lane_validators
+                    .insert((LaneId::SINGLE, validator), record);
+                peer
+            })
+            .collect::<Vec<_>>();
+        let _ = wb.peers.get_mut().push(committee_peer.clone());
+        seed_consensus_key_with_role(
+            &mut wb,
+            &committee_peer,
+            ConsensusKeyRole::Committee,
+            ConsensusKeyStatus::Active,
+            0,
+        );
+        let mut committee_record = active_lane_validator_record(
+            LaneId::SINGLE,
+            &committee_account,
+            committee_peer.clone(),
+            10_000,
+        );
+        committee_record.activation_height = 0;
+        wb.public_lane_validators.insert(
+            (LaneId::SINGLE, committee_account.clone()),
+            committee_record,
+        );
+        wb.commit();
+
+        let roster = state
+            .view()
+            .epoch_validator_peer_ids_for_testing(0)
+            .expect("four Validator-role candidates remain");
+        assert_eq!(roster.len(), validator_peers.len());
+        assert!(validator_peers.iter().all(|peer| roster.contains(peer)));
+        assert!(
+            !roster.contains(&committee_peer),
+            "a live Committee-role identity must never enter the global NPoS roster"
+        );
+    }
+    #[test]
+    fn shared_stake_projection_uses_target_lane_key_policy() {
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
+        let source_lane = LaneId::new(1);
+        let committee_key = crate::state::checked_keypair();
+        let committee_peer = PeerId::from(committee_key.public_key().clone());
+        let committee_account = DMAccountId::of(committee_key.public_key().clone());
+        let mut wb = state.world.block();
+        let _ = wb.peers.get_mut().push(committee_peer.clone());
+        seed_consensus_key_with_role(
+            &mut wb,
+            &committee_peer,
+            ConsensusKeyRole::Committee,
+            ConsensusKeyStatus::Active,
+            0,
+        );
+        let mut record =
+            active_lane_validator_record(source_lane, &committee_account, committee_peer, 100);
+        record.activation_height = 0;
+        wb.public_lane_validators
+            .insert((source_lane, committee_account), record);
+        wb.commit();
+
+        let world = state.world.view();
+        let source_lanes = BTreeSet::from([source_lane]);
+        let minimum_stake = Quantity::from(1_u64);
+        let global_candidates = lane_authority::live_stake_candidates_for_lanes(
+            &world,
+            LaneId::SINGLE,
+            &source_lanes,
+            Some(source_lane),
+            &minimum_stake,
+            4,
+            0,
+        )
+        .expect("one canonical shared-stake projection");
+        assert!(
+            global_candidates.is_empty(),
+            "a Committee-only source projection must not authorize global lane zero"
+        );
+        let participant_candidates = lane_authority::live_stake_candidates_for_lanes(
+            &world,
+            source_lane,
+            &source_lanes,
+            Some(source_lane),
+            &minimum_stake,
+            4,
+            0,
+        )
+        .expect("one canonical participant projection");
+        assert_eq!(participant_candidates.len(), 1);
+    }
+    #[test]
     fn public_lane_snapshot_widens_missing_commit_topology_membership() {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
@@ -15932,6 +16203,9 @@ mod stake_snapshot_tests {
             .map(|keypair| seed_active_public_lane_validator(&mut wb, keypair, LaneId::SINGLE, 3))
             .collect();
         wb.commit();
+        state.push_block_hash_for_testing(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::new(b"multi-lane-duplicate-peer-active-height"),
+        ));
         let sv = state.view();
         let roster = sv.epoch_validator_peer_ids_for_testing(0).expect("roster");
         assert_eq!(roster.len(), 4);
@@ -25735,10 +26009,11 @@ impl State {
                 .zip(&record.validator_set_pops)
                 .enumerate()
             {
-                let live_pop = live_consensus_key_pop_for_peer(
+                let live_pop = live_consensus_key_pop_for_peer_with_role(
                     &world,
                     &entry.validator,
                     record.context.height,
+                    ConsensusKeyRole::Validator,
                 )
                 .ok_or_else(|| {
                     format!(
@@ -31554,6 +31829,7 @@ impl State {
         let world = self.world.view();
         bounded_authority::live_manifest_validator_bindings(
             &world,
+            lane_id,
             &rules.validator_bindings,
             &rules.validators,
             block_height,
@@ -31791,6 +32067,7 @@ impl State {
             if !rules.validator_bindings.is_empty() {
                 let pool = bounded_authority::live_manifest_validator_bindings(
                     world,
+                    lane_id,
                     &rules.validator_bindings,
                     &rules.validators,
                     proposal_height,
@@ -31810,6 +32087,7 @@ impl State {
             }
             let pool = bounded_authority::live_manifest_validator_account_peers(
                 world,
+                lane_id,
                 &rules.validators,
                 proposal_height,
             )
@@ -31849,6 +32127,7 @@ impl State {
         let canonical_owner = stake_source_lanes.iter().next().copied();
         let Some(stake_candidates) = lane_authority::live_stake_candidates_for_lanes(
             world,
+            lane_id,
             &stake_source_lanes,
             canonical_owner,
             &nexus.staking.min_validator_stake,
@@ -31915,12 +32194,16 @@ impl State {
         let validator_pops = validator_set
             .iter()
             .map(|peer| {
-                live_consensus_key_pop_for_peer(world, peer, proposal_height).ok_or(
-                    LaneLifecycleError::InvalidAutoscaleManagedLane {
-                        lane: lane.id,
-                        reason: "pinned committee member lacks a live durable BLS proof-of-possession",
-                    },
+                live_consensus_key_pop_for_peer_on_lane(
+                    world,
+                    peer,
+                    proposal_height,
+                    lane.id,
                 )
+                .ok_or(LaneLifecycleError::InvalidAutoscaleManagedLane {
+                    lane: lane.id,
+                    reason: "pinned committee member lacks a live durable BLS proof-of-possession",
+                })
             })
             .collect::<Result<Vec<_>, _>>()?;
         let committee = autoscale_lane_committee_from_validator_set(validator_set, validator_pops)?;

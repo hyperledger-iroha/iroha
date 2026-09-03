@@ -92,24 +92,49 @@ fn checked_genesis_fixture_keypair_with_algorithm(algorithm: Algorithm) -> KeyPa
         .expect("genesis fixture key generation should succeed")
 }
 #[cfg(test)]
+fn deterministic_test_genesis_topology_entries() -> Vec<GenesisTopologyEntry> {
+    let mut topology = (0_u8..4)
+        .map(|index| {
+            let validator_seed = 0x20_u8.wrapping_add(index);
+            let validator = KeyPair::try_from_seed(vec![validator_seed; 32], Algorithm::BlsNormal)
+                .expect("derive deterministic genesis fixture validator");
+            let pop = iroha_crypto::bls_normal_pop_prove(validator.private_key())
+                .expect("derive deterministic genesis fixture proof of possession");
+            GenesisTopologyEntry::new(
+                iroha_data_model::peer::PeerId::new(validator.public_key().clone()),
+                pop,
+            )
+        })
+        .collect::<Vec<_>>();
+    topology.sort_by(|left, right| left.peer.cmp(&right.peer));
+    topology
+}
+#[cfg(test)]
 fn deterministic_test_offline_cash_mint_finality_genesis_parameters()
 -> OfflineCashMintFinalityGenesisParametersV1 {
+    let validators = deterministic_test_genesis_topology_entries()
+        .into_iter()
+        .map(|entry| entry.peer)
+        .collect();
+    test_offline_cash_mint_finality_genesis_parameters_for_topology(validators)
+}
+#[cfg(test)]
+fn test_offline_cash_mint_finality_genesis_parameters_for_topology(
+    mut topology: Vec<iroha_data_model::peer::PeerId>,
+) -> OfflineCashMintFinalityGenesisParametersV1 {
     use iroha_data_model::isi::offline_cash_v1::{
         OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterTemplateV1,
         OfflineCashMintFinalityValidatorKeysV1,
     };
 
-    let mut validators = (0_u8..4)
-        .map(|index| {
-            let validator_seed = 0x20_u8.wrapping_add(index);
+    topology.sort();
+    let validators = topology
+        .into_iter()
+        .enumerate()
+        .map(|(index, validator)| {
+            let index = u8::try_from(index).expect("test validator index fits in u8");
             let eq_key_seed = 0xA0_u8.wrapping_add(index);
             let ep_key_seed = 0xC0_u8.wrapping_add(index);
-            let validator = iroha_data_model::peer::PeerId::new(
-                KeyPair::try_from_seed(vec![validator_seed; 32], Algorithm::BlsNormal)
-                    .expect("derive deterministic genesis fixture validator")
-                    .public_key()
-                    .clone(),
-            );
             OfflineCashMintFinalityValidatorKeysV1 {
                 validator,
                 eq_proof_public_key: [eq_key_seed; 32],
@@ -117,7 +142,6 @@ fn deterministic_test_offline_cash_mint_finality_genesis_parameters()
             }
         })
         .collect::<Vec<_>>();
-    validators.sort_by(|left, right| left.validator.cmp(&right.validator));
     let parameters = OfflineCashMintFinalityGenesisParametersV1 {
         epoch_roster: OfflineCashMintFinalityEpochRosterTemplateV1 {
             version: OFFLINE_CASH_CHAIN_VERSION_V1,
@@ -3600,6 +3624,57 @@ impl RawGenesisTransaction {
     pub fn transactions(&self) -> &[RawGenesisTx] {
         &self.transactions
     }
+    /// Validate that the signed epoch-zero Offline Cash authority names the
+    /// exact canonical validator topology which will enter genesis.
+    ///
+    /// The Pasta proof keys are separately provisioned and must never be
+    /// inferred from consensus keys while signing. Consequently, changing a
+    /// topology requires replacing the manifest's
+    /// `offline_cash_mint_finality` authority before the manifest can be
+    /// signed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the topology is not an exact supported `3f + 1`
+    /// committee, repeats a peer, or differs from the ordered validator
+    /// identities in the epoch-zero authority template.
+    pub fn validate_offline_cash_mint_finality_topology(&self) -> Result<()> {
+        self.offline_cash_mint_finality
+            .validate()
+            .map_err(|error| {
+                eyre!("invalid signed Offline Cash mint-finality genesis parameters: {error}")
+            })?;
+        let mut topology = self
+            .transactions
+            .iter()
+            .flat_map(|transaction| transaction.topology.iter())
+            .map(|entry| entry.peer.clone())
+            .collect::<Vec<_>>();
+        if !is_valid_committee_size(topology.len()) {
+            return Err(eyre!(
+                "genesis signing requires an exact Sumeragi v2 `3f + 1` topology in the supported range 4..={MAX_VALIDATORS_PER_HEIGHT} before the Offline Cash mint-finality authority can be bound (saw {})",
+                topology.len()
+            ));
+        }
+        topology.sort();
+        if topology.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(eyre!(
+                "genesis topology repeats a validator identity; provision one canonical entry per validator"
+            ));
+        }
+        let authority = &self.offline_cash_mint_finality.epoch_roster.validators;
+        if authority.len() != topology.len()
+            || authority
+                .iter()
+                .zip(&topology)
+                .any(|(keys, peer)| &keys.validator != peer)
+        {
+            return Err(eyre!(
+                "genesis Offline Cash mint-finality epoch-zero authority differs from the canonical validator topology; provision `offline_cash_mint_finality` with independently generated Pasta keys for this exact topology before signing"
+            ));
+        }
+        Ok(())
+    }
     /// Replace one instruction-only raw transaction with one or more instruction-only transactions.
     ///
     /// This deliberately refuses to rewrite a transaction that also carries parameters, IVM
@@ -3863,7 +3938,9 @@ impl RawGenesisTransaction {
     ///
     /// # Errors
     ///
-    /// Fails if `RawGenesisTransaction::parse` fails.
+    /// Fails if the system clock is invalid, the signed Offline Cash authority
+    /// does not match the canonical genesis topology, or
+    /// [`RawGenesisTransaction::parse`] fails.
     pub fn build_and_sign_with_confidential_policy_hash(
         self,
         genesis_key_pair: &KeyPair,
@@ -3922,8 +3999,10 @@ impl RawGenesisTransaction {
     ///
     /// # Errors
     ///
-    /// Fails if `RawGenesisTransaction::parse` fails or the transaction and
-    /// block timestamps cannot be represented in `u64` milliseconds.
+    /// Fails if the signed Offline Cash authority does not match the canonical
+    /// genesis topology, [`RawGenesisTransaction::parse`] fails, or the
+    /// transaction and block timestamps cannot be represented in `u64`
+    /// milliseconds.
     pub fn build_and_sign_with_da_proof_policies_and_confidential_policy_hash_at(
         self,
         genesis_key_pair: &KeyPair,
@@ -3931,6 +4010,7 @@ impl RawGenesisTransaction {
         confidential_policy_hash: Option<[u8; 32]>,
         creation_time_base_ms: u64,
     ) -> Result<GenesisBlock> {
+        self.validate_offline_cash_mint_finality_topology()?;
         let genesis_account = AccountId::new(genesis_key_pair.public_key().clone());
         let instruction_batches = self.parse()?;
         let timestamp_span = u64::try_from(instruction_batches.len())
@@ -4517,8 +4597,8 @@ impl GenesisBuilder {
     ///
     /// # Errors
     ///
-    /// Fails unless the separately provisioned Offline Cash V1 Pasta roster
-    /// has been supplied as part of the signed Sumeragi v2 context parameters.
+    /// Fails unless both the signed Sumeragi v2 context and the separately
+    /// provisioned Offline Cash V1 Pasta roster templates have been supplied.
     pub fn build_raw(self) -> Result<RawGenesisTransaction> {
         let mut parameter_snapshot = Parameters::default();
         let mut source_transactions = self.transactions;
@@ -4811,15 +4891,36 @@ mod tests {
 
     impl GenesisBuilder {
         fn build_raw_for_test(self) -> RawGenesisTransaction {
+            let topology = self
+                .transactions
+                .iter()
+                .flat_map(|transaction| transaction.topology.iter())
+                .map(|entry| entry.peer.clone())
+                .collect::<Vec<_>>();
+            let mut canonical_topology = topology.clone();
+            canonical_topology.sort();
+            let exact_unique_committee = is_valid_committee_size(canonical_topology.len())
+                && !canonical_topology.windows(2).any(|pair| pair[0] == pair[1]);
+            let offline_cash_mint_finality = if exact_unique_committee {
+                test_offline_cash_mint_finality_genesis_parameters_for_topology(topology)
+            } else {
+                deterministic_test_offline_cash_mint_finality_genesis_parameters()
+            };
             self.with_sumeragi_v2_context_parameters(
                 SumeragiV2GenesisContextParameters::recommended(),
             )
-            .with_offline_cash_mint_finality_genesis_parameters(
-                deterministic_test_offline_cash_mint_finality_genesis_parameters(),
-            )
+            .with_offline_cash_mint_finality_genesis_parameters(offline_cash_mint_finality)
             .build_raw()
             .expect("complete deterministic test genesis builder")
         }
+    }
+    fn with_test_signing_topology(mut manifest: RawGenesisTransaction) -> RawGenesisTransaction {
+        manifest
+            .transactions
+            .first_mut()
+            .expect("test genesis manifest has one transaction")
+            .topology = deterministic_test_genesis_topology_entries();
+        manifest
     }
 
     #[test]
@@ -4878,7 +4979,7 @@ mod tests {
             norito::json::to_vec(&from_hashed_bytes)?,
             "in-memory admission must reproduce the signer's exact path semantics"
         );
-        from_path.build_and_sign(&kp)?;
+        with_test_signing_topology(from_path).build_and_sign(&kp)?;
         Ok(())
     }
     #[test]
@@ -4950,7 +5051,8 @@ mod tests {
             .clone()
             .expect("expected consensus fingerprint");
         manifest.consensus_fingerprint = Some(ConsensusFingerprint::new([0xDE; 32]));
-        let genesis = manifest.build_and_sign(&checked_genesis_fixture_keypair())?;
+        let genesis = with_test_signing_topology(manifest)
+            .build_and_sign(&checked_genesis_fixture_keypair())?;
         let mut found = None;
         for tx in genesis.0.external_transactions() {
             if let Executable::Instructions(batch) = tx.instructions() {
@@ -5799,6 +5901,7 @@ mod tests {
             .domain(DomainId::try_new("wonderland", "universal")?)
             .account(alice_public_key)
             .finish_domain()
+            .set_topology(deterministic_test_genesis_topology_entries())
             .build_and_sign(&genesis_key_pair)?;
         Ok(())
     }
@@ -5808,7 +5911,9 @@ mod tests {
         let genesis_key_pair = checked_genesis_fixture_keypair();
         let (tmp_dir, builder) = test_builder();
         let _ = tmp_dir;
-        let block = builder.build_and_sign(&genesis_key_pair)?;
+        let block = builder
+            .set_topology(deterministic_test_genesis_topology_entries())
+            .build_and_sign(&genesis_key_pair)?;
         let encoded = block.0.encode_versioned();
         let decoded = SignedBlock::decode_all_versioned(&encoded)?;
         assert_eq!(

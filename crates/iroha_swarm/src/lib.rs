@@ -10,7 +10,7 @@ const BASE_PORT_API: u16 = 8080;
 // Keep `iroha_config` out of the production dependency graph; a dev-only contract test below
 // pins these generator literals and their checked formula to the shared configuration defaults.
 const GENERATED_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES: usize = 2;
-const GENERATED_SUMERAGI_BODY_SOURCE_BYTES: usize = 33 * 1024 * 1024;
+const GENERATED_SUMERAGI_BODY_SOURCE_BYTES: usize = 34 * 1024 * 1024;
 /// Swarm error.
 #[derive(displaydoc::Display, Debug)]
 pub enum Error {
@@ -1744,7 +1744,7 @@ mod tests {
                         "chain = \"prepared\"\n# container projection for peer {index}\n\
                          [sumeragi.queues]\n\
                          authenticated_non_validator_sources = 5\n\
-                         body_source_bytes = 34603008\n\
+                         body_source_bytes = 35651584\n\
                          body_bytes = {AUTHORED_BODY_BYTES}\n"
                     ),
                 )

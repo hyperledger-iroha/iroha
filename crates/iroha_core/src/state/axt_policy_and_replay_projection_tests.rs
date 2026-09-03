@@ -488,6 +488,26 @@ state_test! { sync axt_slot_uses_authenticated_time_for_hash_only_snapshot_paren
     let mut anchored = hash_only_state();
     anchored.nexus.get_mut().axt.slot_length_ms = nonzero!(10_u64);
     let parameters = crate::offline_cash_v1_test_fixtures::genesis_context_parameters();
+    let mut mint_finality_validators = (1_u8..=4)
+        .map(|seed| {
+            let key_pair = iroha_crypto::KeyPair::try_from_seed(
+                vec![seed; 32],
+                iroha_crypto::Algorithm::BlsNormal,
+            )
+            .expect("derive deterministic snapshot mint-finality validator");
+            iroha_data_model::block::consensus_v2::ValidatorPower {
+                validator: iroha_data_model::peer::PeerId::new(key_pair.public_key().clone()),
+                power: 1,
+            }
+        })
+        .collect::<Vec<_>>();
+    mint_finality_validators.sort();
+    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
+        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+            anchored.network_id,
+            0,
+            &mint_finality_validators,
+        );
     let snapshot_block_hash = anchored
         .latest_block_hash_fast()
         .expect("hash-only fixture has a committed tip");
@@ -515,13 +535,8 @@ state_test! { sync axt_slot_uses_authenticated_time_for_hash_only_snapshot_paren
                 min_signers: 0,
                 total_power: 0,
             },
-            offline_cash_mint_finality_epoch_id: parameters
-                .offline_cash_mint_finality_epoch_roster
-                .finality_epoch_id()
-                .expect("canonical test mint-finality roster"),
-            offline_cash_mint_finality_epoch_roster: parameters
-                .offline_cash_mint_finality_epoch_roster
-                .clone(),
+            offline_cash_mint_finality_epoch_id,
+            offline_cash_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::prehashed(parameters.nexus_amx_context_hash),
             execution_policy_hash: Hash::prehashed(parameters.execution_policy_hash),
             da_layout: parameters.da_layout,

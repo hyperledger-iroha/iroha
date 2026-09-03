@@ -449,7 +449,7 @@ required|executor|pending_durable_validate_admissions:|executor omitted lifecycl
 required|executor|BTreeMap<LocalProposalReadyCommandIdentity, LocalProposalReadyReplayEvidenceV1>|executor omitted local replay cut BTreeMap<LocalProposalReadyCommandIdentity, LocalProposalReadyReplayEvidenceV1>
 required|executor|BTreeMap<LocalProposalReadyCommandIdentity, LocalProposalIntentReplayEvidenceV1>|executor omitted local replay cut BTreeMap<LocalProposalReadyCommandIdentity, LocalProposalIntentReplayEvidenceV1>
 required|executor|.project_exact_validate(|executor omitted local replay cut .project_exact_validate(
-required|executor|handoff.publish_into_runtime(&mut self.runtime)|executor omitted lifecycle local-ready publication cut
+required|executor|.publish_into_runtime(&mut self.runtime, physical_completion)|executor omitted lifecycle local-ready publication cut with guarded completion timing
 required|executor|.bind_proposal_intent(|executor omitted local replay cut .bind_proposal_intent(
 required|executor|plan_local_proposal_replay_consumptions(|executor omitted local replay cut plan_local_proposal_replay_consumptions(
 required|executor|retire_local_proposal_ready_replay(|executor omitted local replay cut retire_local_proposal_ready_replay(

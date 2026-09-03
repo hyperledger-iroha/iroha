@@ -15,6 +15,7 @@ test = []
 
 [dependencies]
 iroha_crypto = { workspace = true, features = ["consensus"], default-features = false }
+iroha_core = { workspace = true, default-features = false }
 iroha_data_model = { workspace = true, features = ["application-model", "http", "transparent_api"], default-features = false }
 iroha_executor_data_model = { workspace = true }
 iroha_genesis = { workspace = true }
@@ -45,7 +46,6 @@ tempfile = { workspace = true }
 httpmock = "0.8.2"
 # Preserve the reviewed lock graph without restoring retired production edges.
 iroha_config.workspace = true
-iroha_core = { workspace = true, default-features = false }
 
 [[test]]
 name = "composer_drafts"

@@ -713,9 +713,9 @@ geometry, not an abstract payload-size allowance. If `F(x)` is canonical
 compact-length framing, a frozen layout with `C` chunk hashes has manifest
 ceiling `F(8 + C * F(32)) + 228`. The maximal proposal contains that manifest,
 one full-QC timeout group per validator, the separately carried highest QC, and
-maximum signatures; the recommended 128-validator value is 232,541 bare bytes.
+maximum signatures; the protocol-maximum 31-validator value is 1,106,267 bare bytes.
 The maximum recommended `PayloadChunk`/`CertifiedBodyResponse` envelope is
-16,828,108 bare bytes; the response arm includes a current responder `PeerId`
+16,844,237 bare bytes; the response arm includes a current responder `PeerId`
 at the protocol-wide maximum public-key payload. Recovery request and
 `CommitCertificateResponse` ceilings include maximum QCs, maximum signatures,
 the actual chain-id length where present, and an embedded `PeerId` derived from

@@ -32,7 +32,9 @@ use iroha_data_model::{
     asset::AssetDefinitionAlias,
     block::{
         BlockHeader,
-        consensus_v2::{MAX_VALIDATORS_PER_HEIGHT, is_valid_committee_size},
+        consensus_v2::{
+            MAX_VALIDATORS_PER_HEIGHT, SumeragiV2GenesisContextParameters, is_valid_committee_size,
+        },
     },
     da::commitment::DaProofPolicyBundle,
     isi::{
@@ -41,6 +43,10 @@ use iroha_data_model::{
         nexus::{
             ActivateFeeSponsorProgramRevision, CreateFeeSponsorProgram,
             EnrollFeeSponsorBeneficiary, FundFeeSponsorProgram, StageFeeSponsorProgramRevision,
+        },
+        offline_cash_v1::{
+            OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterTemplateV1,
+            OfflineCashMintFinalityGenesisParametersV1,
         },
         space_directory::PublishSpaceDirectoryManifest,
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
@@ -1381,7 +1387,12 @@ fn generate_localnet_inner<T: Write>(
     } else {
         None
     };
-    let mut genesis = generate_raw_genesis(&genesis_public_key, opts.consensus_mode, &chain_id)?;
+    let mut genesis = generate_raw_genesis_for_peers(
+        &genesis_public_key,
+        opts.consensus_mode,
+        &chain_id,
+        &peers,
+    )?;
     if opts.extra_accounts > 0 || !assets.is_empty() {
         genesis = extend_genesis(
             genesis,
@@ -1394,25 +1405,25 @@ fn generate_localnet_inner<T: Write>(
     genesis = append_localnet_service_accounts(
         genesis,
         &[&client_identity.account_id, &onboarding_identity.account_id],
-    );
+    )?;
     genesis = append_localnet_alias_fee_bootstrap(
         genesis,
         &genesis_account_id,
         &client_identity.account_id,
         &onboarding_identity.account_id,
-    );
+    )?;
     genesis = apply_parameter_overrides(
         genesis,
         Some(block_cadence_ms),
         block_max_transactions,
         opts.consensus_mode,
-    );
+    )?;
     genesis = append_localnet_contract_permissions_for_client(
         genesis,
         &genesis_account_id,
         &client_identity.account_id,
-    );
-    genesis = append_peer_pop(genesis, &peers);
+    )?;
+    genesis = append_peer_pop(genesis, &peers)?;
     if npos_bootstrap {
         let gas_account_id = gas_account_id
             .as_ref()
@@ -1439,7 +1450,7 @@ fn generate_localnet_inner<T: Write>(
             &client_identity.account_id,
         )?;
     }
-    genesis = apply_localnet_crypto_overrides(genesis, npos_bootstrap);
+    genesis = apply_localnet_crypto_overrides(genesis, npos_bootstrap)?;
     let alias_setup_request =
         localnet_alias_setup_request(&genesis_account_id, &client_identity.account_id, taira)?;
     let append_alias_setup_to_current_transaction = npos_bootstrap
@@ -1451,7 +1462,7 @@ fn generate_localnet_inner<T: Write>(
         genesis,
         &alias_setup_request,
         append_alias_setup_to_current_transaction,
-    );
+    )?;
     genesis =
         append_localnet_onboarding_permissions(genesis, &onboarding_identity.account_id, taira)?;
     let alias_setup_intent_path =
@@ -3288,17 +3299,21 @@ fn render_peer_config(
     root.insert("torii".into(), Value::Table(torii));
     Zeroizing::new(toml::to_string(&*root).expect("serializing peer config to TOML"))
 }
-fn generate_raw_genesis(
+fn generate_raw_genesis_for_peers(
     genesis_public_key: &iroha_crypto::PublicKey,
     consensus_mode: SumeragiConsensusMode,
     chain_id: &str,
+    peers: &[Peer],
 ) -> Result<RawGenesisTransaction> {
     let chain_id = chain_id
         .parse::<ChainId>()
         .wrap_err("localnet chain id must be canonical")?;
     let npos_epoch_seed = matches!(consensus_mode, SumeragiConsensusMode::Npos)
         .then(|| localnet_npos_epoch_seed(&chain_id));
-    let builder = GenesisBuilder::new_without_executor(chain_id, PathBuf::from("."));
+    let offline_cash_mint_finality = localnet_offline_cash_mint_finality_genesis_parameters(peers)?;
+    let builder = GenesisBuilder::new_without_executor(chain_id, PathBuf::from("."))
+        .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+        .with_offline_cash_mint_finality_genesis_parameters(offline_cash_mint_finality);
     generate_default(
         builder,
         genesis_public_key,
@@ -3307,6 +3322,90 @@ fn generate_raw_genesis(
         None,
         npos_epoch_seed,
     )
+}
+#[cfg(test)]
+fn generate_raw_genesis(
+    genesis_public_key: &iroha_crypto::PublicKey,
+    consensus_mode: SumeragiConsensusMode,
+    chain_id: &str,
+) -> Result<RawGenesisTransaction> {
+    let peers = build_peers(
+        TAIRA_TESTNET_PEERS,
+        Some(b"iroha:kagami:localnet:raw-genesis-fixture:v1"),
+        8_080,
+        1_337,
+    )?;
+    generate_raw_genesis_for_peers(genesis_public_key, consensus_mode, chain_id, &peers)
+}
+fn canonical_localnet_topology(peers: &[Peer]) -> Vec<PeerId> {
+    let mut topology = peers
+        .iter()
+        .map(|peer| PeerId::new(peer.public_key.clone()))
+        .collect::<Vec<_>>();
+    topology.sort();
+    topology
+}
+fn localnet_offline_cash_mint_finality_genesis_parameters(
+    peers: &[Peer],
+) -> Result<OfflineCashMintFinalityGenesisParametersV1> {
+    let topology = canonical_localnet_topology(peers);
+    ensure!(
+        is_valid_committee_size(topology.len()),
+        "localnet Offline Cash mint-finality authority requires an exact Sumeragi v2 3f+1 committee"
+    );
+    let validators = topology
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(index, validator)| {
+            // This seed is deliberately domain-separated from every consensus key derivation.
+            // Localnet material is disposable and deterministic; production deployments inject
+            // independently provisioned runtime-owned Pasta authority instead.
+            let seed: [u8; 32] = Hash::new(format!(
+                "iroha:kagami:localnet:offline-cash-mint-finality:v1:epoch-0:{index}:{validator}"
+            ))
+            .into();
+            iroha_core::zk::offline_cash_v1_recursion::derive_offline_cash_mint_finality_validator_keys_v1(
+                &seed,
+                0,
+                validator,
+            )
+            .map_err(|error| eyre!("derive localnet Offline Cash validator keys: {error}"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let parameters = OfflineCashMintFinalityGenesisParametersV1 {
+        epoch_roster: OfflineCashMintFinalityEpochRosterTemplateV1 {
+            version: OFFLINE_CASH_CHAIN_VERSION_V1,
+            epoch: 0,
+            validators,
+        },
+        next_epoch_roster: None,
+    };
+    parameters
+        .validate()
+        .map_err(|error| eyre!("invalid localnet Offline Cash genesis authority: {error}"))?;
+    ensure!(
+        parameters
+            .epoch_roster
+            .validators
+            .iter()
+            .map(|keys| &keys.validator)
+            .eq(topology.iter()),
+        "localnet Offline Cash mint-finality authority differs from canonical validator topology"
+    );
+    let validation_network_id =
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"iroha:kagami:localnet:offline-cash-mint-finality:key-validation:v1",
+        )));
+    let bound_roster = parameters
+        .epoch_roster
+        .bind_network_id(validation_network_id)
+        .map_err(|error| eyre!("bind localnet Offline Cash validation roster: {error}"))?;
+    iroha_core::zk::offline_cash_v1_recursion::validate_offline_cash_mint_finality_roster_keys_v1(
+        &bound_roster,
+    )
+    .map_err(|error| eyre!("invalid localnet Offline Cash curve keys: {error}"))?;
+    Ok(parameters)
 }
 fn extend_genesis(
     genesis: RawGenesisTransaction,
@@ -3369,7 +3468,7 @@ fn extend_genesis(
             ));
         }
     }
-    Ok(builder.build_raw())
+    builder.build_raw()
 }
 fn localnet_npos_epoch_seed(chain_id: &ChainId) -> [u8; 32] {
     let mut epoch_seed: [u8; 32] =
@@ -3443,11 +3542,11 @@ fn apply_parameter_overrides(
     block_cadence_ms: Option<u64>,
     block_max_transactions: u64,
     consensus_mode: SumeragiConsensusMode,
-) -> RawGenesisTransaction {
+) -> Result<RawGenesisTransaction> {
     let include_npos = matches!(consensus_mode, SumeragiConsensusMode::Npos);
     let mut parameters = genesis
         .effective_parameters()
-        .expect("generated localnet genesis has one structured parameter block");
+        .wrap_err("generated localnet genesis must have one structured parameter block")?;
     let fee_asset_id = localnet_fee_asset_literal();
     let gas_limit_param_id = localnet_custom_parameter_id("ivm_gas_limit_per_block");
     let block_max_transactions =
@@ -3480,7 +3579,7 @@ fn apply_parameter_overrides(
         || gas_fee_params_need_update
         || parameters.block.max_transactions != block_max_transactions;
     if !should_update {
-        return genesis;
+        return Ok(genesis);
     }
     parameters.block.max_transactions = block_max_transactions;
     if let Some(block_cadence_ms) = block_cadence_ms {
@@ -3512,9 +3611,9 @@ fn apply_parameter_overrides(
 fn apply_localnet_crypto_overrides(
     genesis: RawGenesisTransaction,
     npos_bootstrap: bool,
-) -> RawGenesisTransaction {
+) -> Result<RawGenesisTransaction> {
     if !npos_bootstrap {
-        return genesis;
+        return Ok(genesis);
     }
     let mut crypto = genesis.crypto().clone();
     if !crypto
@@ -3540,21 +3639,21 @@ fn apply_localnet_crypto_overrides(
     crypto.allowed_curve_ids.dedup();
     genesis.into_builder().with_crypto(crypto).build_raw()
 }
-fn append_peer_pop(genesis: RawGenesisTransaction, peers: &[Peer]) -> RawGenesisTransaction {
+fn append_peer_pop(
+    genesis: RawGenesisTransaction,
+    peers: &[Peer],
+) -> Result<RawGenesisTransaction> {
+    let mut topology = peers
+        .iter()
+        .map(|peer| {
+            GenesisTopologyEntry::new(PeerId::new(peer.public_key.clone()), peer.bls_pop.clone())
+        })
+        .collect::<Vec<_>>();
+    topology.sort_by(|left, right| left.peer.cmp(&right.peer));
     genesis
         .into_builder()
         .next_transaction()
-        .set_topology(
-            peers
-                .iter()
-                .map(|peer| {
-                    GenesisTopologyEntry::new(
-                        PeerId::new(peer.public_key.clone()),
-                        peer.bls_pop.clone(),
-                    )
-                })
-                .collect(),
-        )
+        .set_topology(topology)
         .build_raw()
 }
 #[cfg(test)]
@@ -3567,11 +3666,12 @@ fn append_localnet_contract_permissions(
         genesis_account_id,
         &localnet_client_account_id(),
     )
+    .expect("rebuilding a generated localnet fixture preserves explicit genesis authority")
 }
 fn append_localnet_service_accounts(
     genesis: RawGenesisTransaction,
     service_accounts: &[&AccountId],
-) -> RawGenesisTransaction {
+) -> Result<RawGenesisTransaction> {
     let mut registered = genesis
         .instructions()
         .filter_map(|instruction| {
@@ -3596,7 +3696,7 @@ fn append_localnet_alias_fee_bootstrap(
     genesis_account_id: &AccountId,
     operator_account_id: &AccountId,
     onboarding_account_id: &AccountId,
-) -> RawGenesisTransaction {
+) -> Result<RawGenesisTransaction> {
     let mut registrations = BootstrapRegistrations::from_manifest(&genesis);
     let universal_domain = DomainId::parse_fully_qualified(LOCALNET_UNIVERSAL_DOMAIN)
         .expect("static universal domain must remain canonical");
@@ -3705,7 +3805,7 @@ fn append_localnet_alias_setup(
     genesis: RawGenesisTransaction,
     request: &AliasSetupPlanRequestV1,
     append_to_current_transaction: bool,
-) -> RawGenesisTransaction {
+) -> Result<RawGenesisTransaction> {
     let mut builder = genesis.into_builder();
     if !append_to_current_transaction {
         builder = builder.next_transaction();
@@ -3774,13 +3874,13 @@ fn append_localnet_onboarding_permissions(
             ));
         }
     }
-    Ok(builder.build_raw())
+    builder.build_raw()
 }
 fn append_localnet_contract_permissions_for_client(
     genesis: RawGenesisTransaction,
     genesis_account_id: &AccountId,
     client_account_id: &AccountId,
-) -> RawGenesisTransaction {
+) -> Result<RawGenesisTransaction> {
     let enact_governance: Permission = CanEnactGovernance.into();
     let manage_offline_reserve = Permission::new("CanManageOfflineReserve".into(), Json::new(()));
     let manage_verifying_keys = Permission::new("CanManageVerifyingKeys".into(), Json::new(()));
@@ -4079,7 +4179,7 @@ fn append_localnet_npos_bootstrap(
             });
         }
     }
-    Ok(builder.build_raw())
+    builder.build_raw()
 }
 #[allow(clippy::too_many_lines)]
 fn append_private_dataspace_genesis_bootstrap_for_client(
@@ -4296,7 +4396,7 @@ fn append_private_dataspace_genesis_bootstrap_for_client(
             client_account_id.clone(),
         ));
     }
-    Ok(builder.build_raw())
+    builder.build_raw()
 }
 struct GenesisConsensusPolicies {
     da_proof_policies: Option<DaProofPolicyBundle>,
@@ -5929,6 +6029,30 @@ mod tests {
     include!("localnet/runtime_artifact_tests.rs");
 
     #[test]
+    fn localnet_offline_cash_authority_matches_canonical_four_validator_topology() {
+        let peers = build_peers(4, Some(b"offline-cash-authority-fixture"), 8_080, 13_337)
+            .expect("derive deterministic localnet peers");
+        let expected_topology = canonical_localnet_topology(&peers);
+        let parameters = localnet_offline_cash_mint_finality_genesis_parameters(&peers)
+            .expect("derive validated localnet Offline Cash authority");
+        let actual_topology = parameters
+            .epoch_roster
+            .validators
+            .iter()
+            .map(|keys| keys.validator.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(actual_topology, expected_topology);
+        assert_eq!(actual_topology.len(), 4);
+        assert_eq!(parameters.epoch_roster.epoch, 0);
+        assert!(parameters.next_epoch_roster.is_none());
+        assert_eq!(
+            parameters,
+            localnet_offline_cash_mint_finality_genesis_parameters(&peers)
+                .expect("repeat deterministic localnet Offline Cash authority derivation")
+        );
+    }
+
+    #[test]
     #[expect(
         clippy::too_many_lines,
         reason = "this end-to-end fixture keeps each generated signer, validator registration, config, custody file, and launch-script assertion in one canonical consistency check"
@@ -6233,9 +6357,13 @@ mod tests {
         } else {
             effective_localnet_assets_for_client(&opts.assets, client_account_id)
         };
-        let mut genesis =
-            generate_raw_genesis(&genesis_public_key, opts.consensus_mode, DEFAULT_CHAIN_ID)
-                .expect("generate raw genesis");
+        let mut genesis = generate_raw_genesis_for_peers(
+            &genesis_public_key,
+            opts.consensus_mode,
+            DEFAULT_CHAIN_ID,
+            &peers,
+        )
+        .expect("generate raw genesis");
         if opts.extra_accounts > 0 || !assets.is_empty() {
             genesis = extend_genesis(
                 genesis,
@@ -6251,7 +6379,8 @@ mod tests {
             block_cadence_ms,
             block_max_transactions,
             opts.consensus_mode,
-        );
+        )
+        .expect("apply generated localnet fixture parameter overrides");
         genesis = if uses_default_client {
             append_localnet_contract_permissions(genesis, &genesis_account_id)
         } else {
@@ -6260,8 +6389,10 @@ mod tests {
                 &genesis_account_id,
                 client_account_id,
             )
+            .expect("append generated localnet fixture contract permissions")
         };
-        genesis = append_peer_pop(genesis, &peers);
+        genesis = append_peer_pop(genesis, &peers)
+            .expect("append generated localnet fixture topology and proofs of possession");
         if npos_bootstrap {
             let gas_account_id = localnet_gas_account_id(&genesis_public_key)
                 .expect("test localnet gas account derivation should succeed");
@@ -6294,6 +6425,7 @@ mod tests {
             .expect("append private-dataspace genesis bootstrap");
         }
         apply_localnet_crypto_overrides(genesis, npos_bootstrap)
+            .expect("apply generated localnet fixture cryptography overrides")
     }
     include!("localnet/private_profile_bootstrap_tests.rs");
     fn genesis_json_from_path(path: &Path) -> json::Value {
@@ -7500,7 +7632,7 @@ mod tests {
         );
         assert_eq!(
             queues.get("body_bytes").and_then(toml::Value::as_integer),
-            Some(198 * 1024 * 1024)
+            Some(204 * 1024 * 1024)
         );
         assert_eq!(
             queues
@@ -8048,7 +8180,7 @@ mod tests {
         );
         assert_eq!(
             queues.get("body_bytes").and_then(toml::Value::as_integer),
-            Some(297 * 1024 * 1024),
+            Some(306 * 1024 * 1024),
             "seven validators and two authenticated non-validator sources each need one isolated body quota"
         );
         let manifest = localnet_genesis_for_opts(&opts);

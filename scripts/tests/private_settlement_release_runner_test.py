@@ -13,6 +13,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "private_settlement_release_runner.py"
@@ -765,7 +766,7 @@ def _route_occurrence(
     acknowledgement_bytes = MODULE.canonical_bytes(acknowledgement)
     return {
         "control_type": phase,
-        "peer_index": 0,
+        "peer_index": MODULE.VALIDATORS_PER_DATASPACE,
         "command_sha256": command_sha,
         "command_hex": command_bytes.hex(),
         "acknowledgement_sha256": MODULE.hashlib.sha256(
@@ -951,6 +952,113 @@ def _rewrite_state_observation(
     )
 
 
+def _refresh_fault_observation_summary(
+    summary: dict[str, Any], bundle_id: str
+) -> None:
+    """Recompute the real V1 attempt and response chains for a test summary."""
+
+    peer_index = summary["peer_index"]
+    response_chain = MODULE.hashlib.sha256()
+    response_chain.update(MODULE.FAULT_CONTINUOUS_OBSERVATION_DOMAIN_V1)
+    response_chain.update(bytes.fromhex(bundle_id))
+    response_chain.update(MODULE.struct.pack("<Q", peer_index))
+    first_response = None
+    last_response = None
+    total_successes = 0
+    total_failures = 0
+    total_baseline = 0
+    total_finalized = 0
+    for phase_index, phase in enumerate(summary["phase_coverage"]):
+        attempt_chain = MODULE.hashlib.sha256()
+        attempt_chain.update(MODULE.FAULT_CONTINUOUS_OBSERVATION_PHASE_DOMAIN_V1)
+        attempt_chain.update(bytes.fromhex(bundle_id))
+        attempt_chain.update(MODULE.struct.pack("<Q", peer_index))
+        attempt_chain.update(MODULE.struct.pack("<Q", phase_index))
+        phase_name = phase["phase"].encode("ascii")
+        attempt_chain.update(MODULE.struct.pack("<Q", len(phase_name)))
+        attempt_chain.update(phase_name)
+        attempt_chain.update(bytes((int(phase["expected_unavailable"]),)))
+        attempt_chain.update(bytes((int(phase["finalization_allowed"]),)))
+        phase_successes = 0
+        phase_failures = 0
+        phase_baseline = 0
+        phase_finalized = 0
+        for attempt in phase["attempts"]:
+            for _ in range(attempt["repetitions"]):
+                attempt_class = attempt["class"]
+                if attempt_class == "expected_unavailable":
+                    phase_failures += 1
+                    attempt_chain.update(b"\x00")
+                    attempt_chain.update(
+                        MODULE.FAULT_CONTINUOUS_EXPECTED_UNAVAILABLE_CLASS_V1.encode(
+                            "ascii"
+                        )
+                    )
+                    continue
+                response_digest = MODULE.hashlib.sha256(
+                    bytes.fromhex(attempt["evidence"])
+                ).digest()
+                phase_successes += 1
+                if attempt_class == "baseline":
+                    phase_baseline += 1
+                    attempt_chain.update(b"\x01")
+                elif attempt_class == "finalized":
+                    phase_finalized += 1
+                    attempt_chain.update(b"\x02")
+                else:
+                    raise AssertionError(f"unknown fixture attempt class {attempt_class}")
+                attempt_chain.update(response_digest)
+                response_chain.update(response_digest)
+                response_hex = response_digest.hex()
+                first_response = first_response or response_hex
+                last_response = response_hex
+        checkpoint = phase["checkpoint_attempt"]
+        bindings = phase["checkpoint_control_bindings"]
+        attempt_chain.update(b"checkpoint\0")
+        attempt_chain.update(MODULE.struct.pack("<Q", checkpoint))
+        attempt_chain.update(b"checkpoint-controls\0")
+        attempt_chain.update(MODULE.struct.pack("<Q", len(bindings)))
+        for binding in bindings:
+            encoded = binding.encode("ascii")
+            attempt_chain.update(MODULE.struct.pack("<Q", len(encoded)))
+            attempt_chain.update(encoded)
+        phase.update(
+            {
+                "successful_observations": phase_successes,
+                "poll_failures": phase_failures,
+                "baseline_observations": phase_baseline,
+                "finalized_observations": phase_finalized,
+                "attempt_chain_sha256": attempt_chain.hexdigest(),
+            }
+        )
+        total_successes += phase_successes
+        total_failures += phase_failures
+        total_baseline += phase_baseline
+        total_finalized += phase_finalized
+    assert first_response is not None and last_response is not None
+    summary.update(
+        {
+            "check_count": total_successes,
+            "poll_failure_count": total_failures,
+            "first_response_sha256": first_response,
+            "last_response_sha256": last_response,
+            "response_chain_sha256": response_chain.hexdigest(),
+            "baseline_observations": total_baseline,
+            "finalized_observations": total_finalized,
+        }
+    )
+
+
+def _refresh_fault_observation_row(row: dict[str, Any]) -> None:
+    """Recompute all continuous summary bindings in a test observation row."""
+
+    for summary in row["continuous_observations"]:
+        _refresh_fault_observation_summary(summary, row["bundle_id"])
+    row["continuous_checks"] = sum(
+        summary["check_count"] for summary in row["continuous_observations"]
+    )
+
+
 def write_fault_evidence(
     evidence_dir: Path,
     payload: dict[str, Any],
@@ -1061,14 +1169,6 @@ def write_fault_evidence(
                 )
                 revision += 1
             elif collection == "phase_cut_partitions":
-                for carrier_action in ("hold", "heal"):
-                    for peer_index in range(MODULE.GLOBAL_VALIDATORS):
-                        trial_controls.append(
-                            _consensus_carrier_occurrence(
-                                peer_index, carrier_action, revision
-                            )
-                        )
-                        revision += 1
                 for dataspace_ordinal in range(participants):
                     before_pid = 600 + dataspace_ordinal * 2
                     trial_controls.append(
@@ -1103,6 +1203,14 @@ def write_fault_evidence(
                     )
                 )
                 revision += 1
+                for carrier_action in ("hold", "heal"):
+                    for peer_index in range(MODULE.GLOBAL_VALIDATORS):
+                        trial_controls.append(
+                            _consensus_carrier_occurrence(
+                                peer_index, carrier_action, revision
+                            )
+                        )
+                        revision += 1
             else:
                 boundary = trial["boundary"]
                 phase = crash_phases[boundary]
@@ -1145,17 +1253,21 @@ def write_fault_evidence(
                     "receipt_publication",
                 }:
                     expected_after_state = "finalized"
-            controls.append(
-                {
-                    "record": record_id,
-                    "bundle_id": bundle_id,
-                    "participants": participants,
-                    "seed": seed,
-                    "run": run,
-                    "collection": collection,
-                    "trial_index": index,
-                    "controls": trial_controls,
-                }
+            control_row = {
+                "record": record_id,
+                "bundle_id": bundle_id,
+                "participants": participants,
+                "seed": seed,
+                "run": run,
+                "collection": collection,
+                "trial_index": index,
+                "controls": trial_controls,
+            }
+            controls.append(control_row)
+            phase_contract = MODULE._fault_observation_phase_contract(
+                control_row,
+                collection=collection,
+                label=f"fixture.{collection}[{index}]",
             )
             snapshots = []
             full_lock_boundary = collection != "crash_recoveries" or trial[
@@ -1185,28 +1297,72 @@ def write_fault_evidence(
                 )
             continuous_observations = []
             for peer_index in range(peer_count):
-                first_response = snapshots[0]["validators"][peer_index]["response_sha256"]
-                middle_response = snapshots[1]["validators"][peer_index]["response_sha256"]
-                last_response = snapshots[2]["validators"][peer_index]["response_sha256"]
-                continuous_observations.append(
-                    {
-                        "peer_index": peer_index,
-                        "check_count": 3,
-                        "first_response_sha256": first_response,
-                        "last_response_sha256": last_response,
-                        "response_chain_sha256": MODULE.hashlib.sha256(
-                            bytes.fromhex(first_response)
-                            + bytes.fromhex(middle_response)
-                            + bytes.fromhex(last_response)
-                        ).hexdigest(),
-                        "baseline_observations": (
-                            2 if expected_after_state == "finalized" else 3
-                        ),
-                        "finalized_observations": (
-                            1 if expected_after_state == "finalized" else 0
-                        ),
-                    }
-                )
+                baseline_response = snapshots[0]["validators"][peer_index][
+                    "response_hex"
+                ]
+                final_response = snapshots[2]["validators"][peer_index][
+                    "response_hex"
+                ]
+                phase_coverage = []
+                for (
+                    phase_name,
+                    expected_unavailable_peers,
+                    finalization_allowed,
+                    checkpoint_bindings,
+                ) in phase_contract:
+                    expected_unavailable = peer_index in expected_unavailable_peers
+                    if expected_unavailable:
+                        attempts = [
+                            {
+                                "class": "expected_unavailable",
+                                "evidence": MODULE.FAULT_CONTINUOUS_EXPECTED_UNAVAILABLE_CLASS_V1,
+                                "repetitions": 1,
+                            }
+                        ]
+                    else:
+                        terminal_finalized = (
+                            phase_name == "terminal"
+                            and expected_after_state == "finalized"
+                        )
+                        attempts = [
+                            {
+                                "class": (
+                                    "finalized" if terminal_finalized else "baseline"
+                                ),
+                                "evidence": (
+                                    final_response
+                                    if terminal_finalized
+                                    else baseline_response
+                                ),
+                                "repetitions": 2 if phase_name == "preflight" else 1,
+                            }
+                        ]
+                    phase_coverage.append(
+                        {
+                            "phase": phase_name,
+                            "expected_unavailable": expected_unavailable,
+                            "finalization_allowed": finalization_allowed,
+                            "successful_observations": 0,
+                            "poll_failures": 0,
+                            "baseline_observations": 0,
+                            "finalized_observations": 0,
+                            "checkpoint_attempt": 0,
+                            "checkpoint_control_bindings": list(
+                                checkpoint_bindings
+                            ),
+                            "attempt_chain_sha256": "",
+                            "attempts": attempts,
+                        }
+                    )
+                summary = {
+                    "peer_index": peer_index,
+                    "phase_coverage": phase_coverage,
+                }
+                _refresh_fault_observation_summary(summary, bundle_id)
+                continuous_observations.append(summary)
+            continuous_checks = sum(
+                summary["check_count"] for summary in continuous_observations
+            )
             observations.append(
                 {
                     "record": record_id,
@@ -1217,14 +1373,14 @@ def write_fault_evidence(
                     "collection": collection,
                     "trial_index": index,
                     "expected_after_state": expected_after_state,
-                    "continuous_checks": peer_count * 3,
+                    "continuous_checks": continuous_checks,
                     "continuous_observations": continuous_observations,
                     "partial_visibility_observed": False,
                     "partial_spendable_observations": 0,
                     "snapshots": snapshots,
                 }
             )
-            total_checks += peer_count * 3
+            total_checks += continuous_checks
 
     control_path = evidence_dir / MODULE.FAULT_CONTROL_EVIDENCE_FILE
     observation_path = evidence_dir / MODULE.FAULT_OBSERVATION_EVIDENCE_FILE
@@ -1449,34 +1605,285 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
                 evidence / MODULE.FAULT_CONTROL_EVIDENCE_FILE,
                 "fault controls",
             )
+            control_by_record = MODULE.validate_fault_control_records(
+                control_rows, participants=3, seed=7, run=2
+            )
+
+            def validate_observations(candidate: list[dict[str, Any]]) -> None:
+                MODULE.validate_fault_observation_records(
+                    candidate,
+                    participants=3,
+                    seed=7,
+                    run=2,
+                    control_by_record=control_by_record,
+                )
+
             too_short = copy.deepcopy(rows)
             too_short[0]["continuous_observations"][0]["check_count"] = 2
             with self.assertRaisesRegex(MODULE.RunnerError, "lacks a live polling"):
-                MODULE.validate_fault_observation_records(
-                    too_short, participants=3, seed=7, run=2
+                validate_observations(too_short)
+            missing_phase = copy.deepcopy(rows)
+            missing_phase[0]["continuous_observations"][0]["phase_coverage"].pop()
+            with self.assertRaisesRegex(MODULE.RunnerError, "incomplete phase coverage"):
+                validate_observations(missing_phase)
+            carrier_row = next(
+                row
+                for row in rows
+                if row["collection"] == "phase_cut_partitions"
+                and row["trial_index"] == 3
+            )
+            wrong_exemption = copy.deepcopy(rows)
+            wrong_exemption_row = next(
+                row
+                for row in wrong_exemption
+                if row["record"] == carrier_row["record"]
+            )
+            committee_phase = next(
+                phase
+                for phase in wrong_exemption_row["continuous_observations"][1][
+                    "phase_coverage"
+                ]
+                if phase["phase"] == "committee_unavailable"
+            )
+            committee_phase["expected_unavailable"] = True
+            with self.assertRaisesRegex(
+                MODULE.RunnerError, "contradicts authenticated controls"
+            ):
+                validate_observations(wrong_exemption)
+            missing_outage = copy.deepcopy(rows)
+            missing_outage_row = next(
+                row
+                for row in missing_outage
+                if row["record"] == carrier_row["record"]
+            )
+            expected_peer = missing_outage_row["continuous_observations"][4]
+            expected_phase = next(
+                phase
+                for phase in expected_peer["phase_coverage"]
+                if phase["phase"] == "committee_unavailable"
+            )
+            expected_phase["attempts"] = [
+                {
+                    "class": "baseline",
+                    "evidence": missing_outage_row["snapshots"][0]["validators"][4][
+                        "response_hex"
+                    ],
+                    "repetitions": 1,
+                }
+            ]
+            _refresh_fault_observation_row(missing_outage_row)
+            with self.assertRaisesRegex(MODULE.RunnerError, "did not observe.*outage"):
+                validate_observations(missing_outage)
+            unexpected_failure = copy.deepcopy(rows)
+            unexpected_failure_row = next(
+                row
+                for row in unexpected_failure
+                if row["record"] == carrier_row["record"]
+            )
+            available_peer = unexpected_failure_row["continuous_observations"][1]
+            available_phase = next(
+                phase
+                for phase in available_peer["phase_coverage"]
+                if phase["phase"] == "committee_unavailable"
+            )
+            available_phase["attempts"] = [
+                {
+                    "class": "expected_unavailable",
+                    "evidence": MODULE.FAULT_CONTINUOUS_EXPECTED_UNAVAILABLE_CLASS_V1,
+                    "repetitions": 1,
+                }
+            ]
+            _refresh_fault_observation_row(unexpected_failure_row)
+            with self.assertRaisesRegex(
+                MODULE.RunnerError, "unallowlisted poll failure"
+            ):
+                validate_observations(unexpected_failure)
+            raw_poll_error = copy.deepcopy(rows)
+            raw_poll_error[0]["continuous_observations"][0]["phase_coverage"][0][
+                "error"
+            ] = "private endpoint error"
+            with self.assertRaisesRegex(MODULE.RunnerError, "unknown=\\['error'\\]"):
+                validate_observations(raw_poll_error)
+            forged_chain = copy.deepcopy(rows)
+            forged_chain[0]["continuous_observations"][0]["phase_coverage"][0][
+                "attempt_chain_sha256"
+            ] = "f" * 64
+            with self.assertRaisesRegex(MODULE.RunnerError, "attempt stream does not bind"):
+                validate_observations(forged_chain)
+            inflated_stream = copy.deepcopy(rows)
+            inflated_stream[0]["continuous_observations"][0]["phase_coverage"][0][
+                "attempts"
+            ][0]["repetitions"] += 1
+            with self.assertRaisesRegex(MODULE.RunnerError, "attempt stream does not bind"):
+                validate_observations(inflated_stream)
+            deleted_stream = copy.deepcopy(rows)
+            deleted_stream[0]["continuous_observations"][0]["phase_coverage"][0][
+                "attempts"
+            ] = []
+            with self.assertRaisesRegex(MODULE.RunnerError, "no ordered phase attempts"):
+                validate_observations(deleted_stream)
+            adjacent_rle = copy.deepcopy(rows)
+            adjacent_phase = adjacent_rle[0]["continuous_observations"][0][
+                "phase_coverage"
+            ][0]
+            adjacent_phase["attempts"] = [
+                {
+                    **copy.deepcopy(adjacent_phase["attempts"][0]),
+                    "repetitions": 1,
+                },
+                {
+                    **copy.deepcopy(adjacent_phase["attempts"][0]),
+                    "repetitions": 1,
+                },
+            ]
+            _refresh_fault_observation_row(adjacent_rle[0])
+            with self.assertRaisesRegex(MODULE.RunnerError, "non-canonical attempt stream"):
+                validate_observations(adjacent_rle)
+            reordered_stream = copy.deepcopy(rows)
+            reordered_phase = reordered_stream[0]["continuous_observations"][0][
+                "phase_coverage"
+            ][0]
+            original_run = copy.deepcopy(reordered_phase["attempts"][0])
+            nonfinalized_response = reordered_stream[0]["snapshots"][1]["validators"][
+                0
+            ]["response_hex"]
+            reordered_phase["attempts"] = [
+                {**original_run, "repetitions": 1},
+                {
+                    "class": "baseline",
+                    "evidence": nonfinalized_response,
+                    "repetitions": 1,
+                },
+            ]
+            _refresh_fault_observation_row(reordered_stream[0])
+            reordered_phase["attempts"].reverse()
+            with self.assertRaisesRegex(MODULE.RunnerError, "attempt stream does not bind"):
+                validate_observations(reordered_stream)
+            transplanted_peer = copy.deepcopy(rows)
+            transplanted_peer[0]["continuous_observations"][1]["phase_coverage"][0] = (
+                copy.deepcopy(
+                    transplanted_peer[0]["continuous_observations"][0][
+                        "phase_coverage"
+                    ][0]
                 )
+            )
+            with self.assertRaisesRegex(MODULE.RunnerError, "attempt stream does not bind"):
+                validate_observations(transplanted_peer)
+            transplanted_bundle = copy.deepcopy(rows)
+            transplanted_bundle[1]["continuous_observations"][0]["phase_coverage"][0] = (
+                copy.deepcopy(
+                    transplanted_bundle[0]["continuous_observations"][0][
+                        "phase_coverage"
+                    ][0]
+                )
+            )
+            with self.assertRaisesRegex(MODULE.RunnerError, "attempt stream does not bind"):
+                validate_observations(transplanted_bundle)
+            wrong_checkpoint_binding = copy.deepcopy(rows)
+            wrong_checkpoint_binding[0]["continuous_observations"][0][
+                "phase_coverage"
+            ][1]["checkpoint_control_bindings"] = [
+                f"acknowledgement:{'f' * 64}"
+            ]
+            with self.assertRaisesRegex(
+                MODULE.RunnerError, "contradicts authenticated controls"
+            ):
+                validate_observations(wrong_checkpoint_binding)
+            moved_checkpoint = copy.deepcopy(rows)
+            moved_phase = moved_checkpoint[0]["continuous_observations"][0][
+                "phase_coverage"
+            ][1]
+            moved_phase["checkpoint_attempt"] = 1
+            _refresh_fault_observation_row(moved_checkpoint[0])
+            with self.assertRaisesRegex(MODULE.RunnerError, "no post-checkpoint attempt"):
+                validate_observations(moved_checkpoint)
+            private_failure = copy.deepcopy(rows)
+            private_failure_row = next(
+                row
+                for row in private_failure
+                if row["record"] == carrier_row["record"]
+            )
+            private_failure_phase = next(
+                phase
+                for phase in private_failure_row["continuous_observations"][4][
+                    "phase_coverage"
+                ]
+                if phase["phase"] == "committee_unavailable"
+            )
+            private_failure_phase["attempts"][0]["evidence"] = (
+                "private connection detail"
+            )
+            _refresh_fault_observation_row(private_failure_row)
+            with self.assertRaisesRegex(MODULE.RunnerError, "unallowlisted poll failure"):
+                validate_observations(private_failure)
+            malformed_success = copy.deepcopy(rows)
+            malformed_success[0]["continuous_observations"][0]["phase_coverage"][0][
+                "attempts"
+            ][0]["evidence"] = MODULE.canonical_bytes({}).hex()
+            _refresh_fault_observation_row(malformed_success[0])
+            with self.assertRaisesRegex(MODULE.RunnerError, "missing="):
+                validate_observations(malformed_success)
+            premature_finalization = copy.deepcopy(rows)
+            premature_phase = premature_finalization[0]["continuous_observations"][0][
+                "phase_coverage"
+            ][1]
+            premature_phase["attempts"] = [
+                {
+                    "class": "finalized",
+                    "evidence": premature_finalization[0]["snapshots"][2][
+                        "validators"
+                    ][0]["response_hex"],
+                    "repetitions": 1,
+                }
+            ]
+            _refresh_fault_observation_row(premature_finalization[0])
+            with self.assertRaisesRegex(MODULE.RunnerError, "finalized in a disallowed phase"):
+                validate_observations(premature_finalization)
+            finalized_then_baseline = copy.deepcopy(rows)
+            rollback_phase = finalized_then_baseline[0]["continuous_observations"][0][
+                "phase_coverage"
+            ][2]
+            rollback_phase["attempts"] = [
+                {
+                    "class": "finalized",
+                    "evidence": finalized_then_baseline[0]["snapshots"][2][
+                        "validators"
+                    ][0]["response_hex"],
+                    "repetitions": 1,
+                },
+                {
+                    "class": "baseline",
+                    "evidence": finalized_then_baseline[0]["snapshots"][0][
+                        "validators"
+                    ][0]["response_hex"],
+                    "repetitions": 1,
+                },
+            ]
+            _refresh_fault_observation_row(finalized_then_baseline[0])
+            with self.assertRaisesRegex(MODULE.RunnerError, "finalized state rolled back"):
+                validate_observations(finalized_then_baseline)
             unanchored = copy.deepcopy(rows)
             unanchored[0]["continuous_observations"][0][
                 "first_response_sha256"
             ] = "f" * 64
             with self.assertRaisesRegex(MODULE.RunnerError, "exemplar endpoints"):
-                MODULE.validate_fault_observation_records(
-                    unanchored, participants=3, seed=7, run=2
-                )
+                validate_observations(unanchored)
             unclassified = copy.deepcopy(rows)
             unclassified[0]["continuous_observations"][0][
                 "baseline_observations"
             ] -= 1
             with self.assertRaisesRegex(MODULE.RunnerError, "unclassified observation"):
-                MODULE.validate_fault_observation_records(
-                    unclassified, participants=3, seed=7, run=2
-                )
+                validate_observations(unclassified)
+            swapped_aggregates = copy.deepcopy(rows)
+            swapped_summary = swapped_aggregates[0]["continuous_observations"][0]
+            swapped_summary["baseline_observations"] -= 1
+            swapped_summary["finalized_observations"] += 1
+            with self.assertRaisesRegex(MODULE.RunnerError, "phase totals"):
+                validate_observations(swapped_aggregates)
             reused_bundle = copy.deepcopy(rows)
             reused_bundle[1]["bundle_id"] = reused_bundle[0]["bundle_id"]
             with self.assertRaisesRegex(MODULE.RunnerError, "reuses an APS bundle"):
-                MODULE.validate_fault_observation_records(
-                    reused_bundle, participants=3, seed=7, run=2
-                )
+                validate_observations(reused_bundle)
             missing_registration_recovery = copy.deepcopy(rows)
             registration_row = next(
                 row
@@ -1490,9 +1897,7 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 MODULE.RunnerError, "full replicated Prepare lock"
             ):
-                MODULE.validate_fault_observation_records(
-                    missing_registration_recovery, participants=3, seed=7, run=2
-                )
+                validate_observations(missing_registration_recovery)
             mixed_lock_plane = copy.deepcopy(rows)
             mixed_row = next(
                 row
@@ -1505,9 +1910,7 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 MODULE.RunnerError, "full replicated Prepare lock"
             ):
-                MODULE.validate_fault_observation_records(
-                    mixed_lock_plane, participants=3, seed=7, run=2
-                )
+                validate_observations(mixed_lock_plane)
             divergent_replicated_lock = copy.deepcopy(rows)
             divergent_replicated_row = next(
                 row
@@ -1521,9 +1924,7 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 MODULE.RunnerError, "full replicated Prepare lock"
             ):
-                MODULE.validate_fault_observation_records(
-                    divergent_replicated_lock, participants=3, seed=7, run=2
-                )
+                validate_observations(divergent_replicated_lock)
             incomplete_local_lock = copy.deepcopy(rows)
             incomplete_local_row = next(
                 row
@@ -1549,9 +1950,7 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 MODULE.RunnerError, "complete local leg lock"
             ):
-                MODULE.validate_fault_observation_records(
-                    incomplete_local_lock, participants=3, seed=7, run=2
-                )
+                validate_observations(incomplete_local_lock)
             divergent_local_lock = copy.deepcopy(rows)
             divergent_local_row = next(
                 row
@@ -1565,9 +1964,7 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 MODULE.RunnerError, "divergent committee-local locks"
             ):
-                MODULE.validate_fault_observation_records(
-                    divergent_local_lock, participants=3, seed=7, run=2
-                )
+                validate_observations(divergent_local_lock)
             bad_hash_checksum = copy.deepcopy(rows)
             bad_hash_row = next(
                 row
@@ -1585,9 +1982,7 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
                 commitment=invalid_hash,
             )
             with self.assertRaisesRegex(MODULE.RunnerError, "checksum"):
-                MODULE.validate_fault_observation_records(
-                    bad_hash_checksum, participants=3, seed=7, run=2
-                )
+                validate_observations(bad_hash_checksum)
             substituted_control_bundle = copy.deepcopy(control_rows)
             substituted_control_bundle[0]["bundle_id"] = "e" * 64
             with self.assertRaisesRegex(MODULE.RunnerError, "binds another APS bundle"):
@@ -1635,6 +2030,32 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
                     carrier,
                     collection="phase_cut_partitions",
                     trial=payload["phase_cut_partitions"][3],
+                    label="carrier",
+                )
+
+            extra_route_control = copy.deepcopy(
+                by_record["n3:s7:r2:phase_cut_partitions:3"]
+            )
+            extra_route_control["controls"].append(
+                _route_occurrence(
+                    "prepare",
+                    "hold",
+                    99_999,
+                    bundle_id=extra_route_control["bundle_id"],
+                    seed=7,
+                    drop_first=0,
+                    match_limit=1,
+                    matched=1,
+                    passed=0,
+                    dropped=0,
+                    held=1,
+                    released=0,
+                )
+            )
+            with self.assertRaisesRegex(MODULE.RunnerError, "control allowlist"):
+                MODULE._fault_observation_phase_contract(
+                    extra_route_control,
+                    collection="phase_cut_partitions",
                     label="carrier",
                 )
 
@@ -1715,6 +2136,166 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
                     collection="crash_recoveries",
                     trial=payload["crash_recoveries"][8],
                     label="receipt",
+                )
+
+    def test_fault_evidence_cache_binds_capture_to_each_transcript(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            identity = {
+                "record": "n3:s7:r2:loss_trials:0",
+                "participants": 3,
+                "seed": 7,
+                "run": 2,
+                "collection": "loss_trials",
+                "trial_index": 0,
+                "bundle_id": "a" * 64,
+            }
+
+            def write_jsonl(name: str, rows: list[dict[str, Any]]) -> tuple[Path, bytes]:
+                path = root / name
+                payload = b"".join(
+                    MODULE.canonical_bytes(row) + b"\n" for row in rows
+                )
+                path.write_bytes(payload)
+                return path, payload
+
+            transcript_one_path, transcript_one = write_jsonl(
+                "control-one.jsonl", [{**identity, "variant": "one"}]
+            )
+            transcript_two_path, transcript_two = write_jsonl(
+                "control-two.jsonl", [{**identity, "variant": "two"}]
+            )
+            capture_entry = {
+                **identity,
+                "partial_visibility_observed": False,
+                "partial_spendable_observations": 0,
+            }
+            capture_path, capture = write_jsonl("capture.jsonl", [capture_entry])
+            transcript_one_sha = hashlib.sha256(transcript_one).hexdigest()
+            transcript_two_sha = hashlib.sha256(transcript_two).hexdigest()
+            capture_sha = hashlib.sha256(capture).hexdigest()
+
+            def raw_record(transcript_sha: str) -> dict[str, Any]:
+                return {
+                    "participants": 3,
+                    "seed": 7,
+                    "run": 2,
+                    "loss_trials": [
+                        {
+                            "control_transcript_sha256": transcript_sha,
+                            "control_transcript_record": identity["record"],
+                            "observation_capture_sha256": capture_sha,
+                            "observation_capture_record": identity["record"],
+                            "partial_visibility_observed": False,
+                        }
+                    ],
+                    "phase_cut_partitions": [],
+                    "crash_recoveries": [],
+                    "atomicity": {"partial_spendable_observations": 0},
+                }
+
+            raw_one_path, _raw_one = write_jsonl(
+                "raw-one.jsonl", [raw_record(transcript_one_sha)]
+            )
+            raw_two_path, _raw_two = write_jsonl(
+                "raw-two.jsonl", [raw_record(transcript_two_sha)]
+            )
+            artifact = MODULE.release_evidence.Artifact
+            artifacts = [
+                artifact(
+                    kind="operator_log",
+                    path=MODULE.PurePosixPath(transcript_one_path.name),
+                    sha256=transcript_one_sha,
+                    bytes=len(transcript_one),
+                ),
+                artifact(
+                    kind="operator_log",
+                    path=MODULE.PurePosixPath(transcript_two_path.name),
+                    sha256=transcript_two_sha,
+                    bytes=len(transcript_two),
+                ),
+                artifact(
+                    kind="sanitized_capture",
+                    path=MODULE.PurePosixPath(capture_path.name),
+                    sha256=capture_sha,
+                    bytes=len(capture),
+                ),
+            ]
+
+            class FakeValidator:
+                def __init__(self) -> None:
+                    self.capture_transcripts: list[str] = []
+
+                def validate_fault_control_records(
+                    self, records: list[dict[str, Any]], **_kwargs: Any
+                ) -> dict[str, dict[str, Any]]:
+                    return {record["record"]: record for record in records}
+
+                def validate_fault_observation_records(
+                    self,
+                    _records: list[dict[str, Any]],
+                    *,
+                    control_by_record: dict[str, dict[str, Any]],
+                    **_kwargs: Any,
+                ) -> None:
+                    self.capture_transcripts.append(
+                        next(iter(control_by_record.values()))["variant"]
+                    )
+
+                def validate_fault_trial_control_semantics(
+                    self, *_args: Any, **_kwargs: Any
+                ) -> None:
+                    return None
+
+            validator = FakeValidator()
+            with mock.patch.object(
+                MODULE.release_evidence,
+                "_load_fault_evidence_validator",
+                return_value=validator,
+            ):
+                MODULE.release_evidence._validate_fault_trial_evidence_bindings(
+                    [raw_one_path, raw_two_path], artifacts, root
+                )
+            self.assertEqual(validator.capture_transcripts, ["one", "two"])
+
+            mismatched_capture = copy.deepcopy(capture_entry)
+            mismatched_capture["bundle_id"] = "b" * 64
+            _mismatch_path, mismatch_payload = write_jsonl(
+                "capture-mismatch.jsonl", [mismatched_capture]
+            )
+            mismatch_sha = hashlib.sha256(mismatch_payload).hexdigest()
+            mismatch_artifacts = [
+                artifacts[0],
+                artifact(
+                    kind="sanitized_capture",
+                    path=MODULE.PurePosixPath("capture-mismatch.jsonl"),
+                    sha256=mismatch_sha,
+                    bytes=len(mismatch_payload),
+                ),
+            ]
+            mismatch_raw_path, _mismatch_raw = write_jsonl(
+                "raw-mismatch.jsonl",
+                [
+                    {
+                        **raw_record(transcript_one_sha),
+                        "loss_trials": [
+                            {
+                                **raw_record(transcript_one_sha)["loss_trials"][0],
+                                "observation_capture_sha256": mismatch_sha,
+                            }
+                        ],
+                    }
+                ],
+            )
+            with mock.patch.object(
+                MODULE.release_evidence,
+                "_load_fault_evidence_validator",
+                return_value=FakeValidator(),
+            ), self.assertRaisesRegex(
+                MODULE.release_evidence.EvidenceError, "bundle_id"
+            ):
+                MODULE.release_evidence._validate_fault_trial_evidence_bindings(
+                    [mismatch_raw_path], mismatch_artifacts, root
                 )
 
     def test_any_missing_control_acknowledgement_fails_closed(self) -> None:
@@ -2463,6 +3044,22 @@ class PrivateSettlementReleaseRunnerTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(MODULE.RunnerError, "at most"):
             MODULE.verify_seed_policy(tuple(range(MODULE.MAX_FAULT_SEEDS + 1)))
+
+    def test_fault_timeout_covers_activation_and_nonfinalized_expiry_floor(self) -> None:
+        expected_floor = (
+            MODULE.PRIVACY_PROFILE_ACTIVATION_DELAY_BLOCKS
+            + MODULE.FAULT_NONFINALIZED_EXPIRY_TRIALS
+            * (MODULE.FAULT_BUNDLE_EXPIRY_BLOCKS + 1)
+        ) * MODULE.REAL_PROCESS_BLOCK_CADENCE_SECONDS
+        self.assertEqual(MODULE.FAULT_HARNESS_PROTOCOL_FLOOR_SECONDS, expected_floor)
+        self.assertGreater(MODULE.DEFAULT_HARNESS_TIMEOUT_SECONDS, expected_floor)
+
+        with self.assertRaisesRegex(MODULE.RunnerError, "protocol floor"):
+            MODULE.validate_campaign_timeout(
+                [{"kind": "fault"}], expected_floor - 1
+            )
+        MODULE.validate_campaign_timeout([{"kind": "fault"}], expected_floor)
+        MODULE.validate_campaign_timeout([{"kind": "benchmark"}], 1)
         with self.assertRaisesRegex(MODULE.RunnerError, "warmups"):
             MODULE.build_configuration(
                 3,

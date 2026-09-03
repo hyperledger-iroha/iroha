@@ -1624,6 +1624,52 @@ fn recovered_decision_validate_stage_matches(
         .is_some()
 }
 impl DurableValidateReplayEvidenceV1 {
+    /// Classify why a validated carrier can or cannot project a local proposal.
+    ///
+    /// This temporary, non-secret discriminator is used while diagnosing the
+    /// production Store-to-Validate handoff. It intentionally exposes no body,
+    /// account, or transaction material.
+    pub(in crate::sumeragi) fn local_completion_projection_diagnostic(
+        &self,
+        effect: &AdapterEffect,
+        receipt: &DurableBodyReceipt,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> &'static str {
+        match self {
+            Self::Certified(_) => "certified",
+            Self::RemoteProposal(_) => "remote_proposal",
+            Self::RecoveredDecision(_) => "recovered_decision",
+            Self::LocalBody(evidence) => {
+                if !evidence.exactly_matches_validate_pending(effect, receipt, pending) {
+                    "local_body_binding_mismatch"
+                } else if evidence.family.assembled_manifest().is_none() {
+                    "local_body_authenticated_certified"
+                } else {
+                    "local_body_projectable"
+                }
+            }
+            Self::RecoveredStandalone(evidence) => {
+                if !matches!(evidence.source.origin, BodyPipelineOriginV1::LocalBody(_)) {
+                    "recovered_standalone_remote"
+                } else if !evidence.exactly_matches_validate_pending(effect, receipt, pending) {
+                    "recovered_standalone_binding_mismatch"
+                } else {
+                    let reconstructed = PendingRuntimeEffectBinding::from_durable_standalone_validate(
+                        DurableStandaloneValidatePendingMintPermit::new(),
+                        *pending.causal_lifecycle_key(),
+                        effect,
+                        None,
+                    );
+                    if reconstructed.as_ref() != Some(pending) {
+                        "recovered_standalone_reconstruction_mismatch"
+                    } else {
+                        "recovered_standalone_projectable"
+                    }
+                }
+            }
+        }
+    }
+
     /// Compare one installed Validate carrier with its complete reconstructed row.
     pub(super) fn exactly_matches_recovered_record(
         &self,

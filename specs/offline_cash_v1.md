@@ -392,6 +392,48 @@ terminal-nullifier deduplication and the issuer loss policy where compromise
 creates excess claims. Normal and emergency controls operate on profiles and
 issuance, never on the provenance of received funds.
 
+## Mint-finality genesis trust root
+
+The final signed genesis carries
+`ConsensusHandshakeMetadata.offline_cash_mint_finality` as
+`OfflineCashMintFinalityGenesisParametersV1`. It contains one mandatory epoch-zero
+`OfflineCashMintFinalityEpochRosterTemplateV1` and an optional epoch-one template; the latter is
+required only when height one is the epoch-zero boundary and is rejected otherwise. These are
+networkless templates because the final `NetworkId` does not exist until the canonical hash of the
+final signed genesis is known. A template must never contain, guess, or derive a provisional
+network identity.
+
+Core authenticates the signed genesis first, derives
+`NetworkId = hash(final signed genesis)`, and only then binds the templates into
+`OfflineCashMintFinalityEpochRosterV1` values used by the first `HeightContext` and any authenticated
+epoch-one successor snapshot. The closed first-release genesis profile contains exactly four
+validators. Its template must match the frozen Sumeragi roster in exact order and `PeerId` identity
+at all four positions; a reordered, missing, additional, or substituted validator fails closed.
+Each validator's Eq/Fp helper key must decode as a canonical non-identity Pallas point and its Ep/Fq
+helper key as a canonical non-identity Vesta point. Zero, duplicate, non-canonical, and identity
+encodings have no authority.
+
+Provisioning derives the two public keys from a separately provisioned validator-local seed, the
+epoch, and the validator's canonical `PeerId`, with a distinct parity domain for each curve. It
+never derives a Pasta key from the validator's BLS key, and it does not add `NetworkId` to public-key
+derivation because that would reintroduce the genesis fixed point. Every validator must use a seed
+unique to that validator and deployment; deployments must not reuse seeds across networks.
+
+Only the roster templates carried by signed genesis are networkless. A bound runtime roster
+contains the final `NetworkId`, and its `finality_epoch_id` hashes that network, epoch, exact
+ordered identities, and both public keys. `HeightContext` carries the complete bound roster and
+identifier. Every mint-finality seal message binds the same `NetworkId`, `HeightContextId`, block
+height, subject, and execution commitment, while deterministic Schnorr nonce derivation also
+includes `NetworkId`. Consequently a bound roster, seal, or nonce from another deployment cannot
+be replayed.
+
+The templates are deliberately excluded from the secondary Sumeragi consensus-parameters
+fingerprint: their exact bytes are already authenticated beside that fingerprint by the final
+signed genesis. Snapshot reconstruction preserves only the stable three-field
+`SumeragiV2GenesisContextParameters` (`da_layout`, `nexus_amx_context_hash`, and
+`execution_policy_hash`); an authenticated snapshot restores the full network-bound
+`HeightContext` rather than reconstructing networkless genesis templates.
+
 ## Pooled reserve
 
 Each `(network, asset, exact AxtAssetIncarnationV1 token)` has one deterministic

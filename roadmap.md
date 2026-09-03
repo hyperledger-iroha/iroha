@@ -24320,8 +24320,8 @@ feature-independent 8,258-byte raw public-key ceiling covers non-roster
 observers and rotated responders. Configure and open both fail closed when any
 count, byte partition, topic frame, global encrypted frame, or queue owner is
 undersized. Shipping defaults are 17 MiB for global/consensus/block-sync,
-2 MiB for control, `H=2`, 161 ingress entries, a 33 MiB source partition, and
-231 MiB aggregate body ownership. Kagami localnet scales aggregate body bytes
+2 MiB for control, `H=2`, 161 ingress entries, a 34 MiB source partition, and
+1,122 MiB maximum-roster aggregate body ownership. Kagami localnet scales aggregate body bytes
 by `N + H` and rejects validator rosters above the protocol maximum of 31. The
 independent P2P wire-prefix boundary is also closed: the
 wire body has the inclusive `u32::MAX` ceiling, while runtime configuration is

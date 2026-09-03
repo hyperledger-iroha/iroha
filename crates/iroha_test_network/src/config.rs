@@ -32,7 +32,7 @@ use iroha_data_model::{
             OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterTemplateV1,
             OfflineCashMintFinalityGenesisParametersV1,
         },
-        register::{Register, RegisterPeerWithPop},
+        register::Register,
     },
     metadata::Metadata,
     name::Name,
@@ -920,20 +920,21 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
                 (entry.peer.public_key().clone(), pop)
             })
             .collect();
-        // Expand the topology into proof-bearing peer registrations here instead of
-        // `GenesisBuilder::set_topology`, which emits plain registrations.
-        builder = builder.next_transaction();
+        // Keep the proof-bearing topology in the raw manifest until signing. The
+        // signer validates that this exact validator set matches the independently
+        // derived Offline Cash mint-finality authority before lowering the entries
+        // into `RegisterPeerWithPop` instructions.
+        let mut manifest_topology = Vec::with_capacity(topology_vec.len());
         for peer_id in &topology_vec {
             let pop_bytes = pop_map
                 .remove(peer_id.public_key())
                 .unwrap_or_else(|| panic!("missing BLS PoP for peer {}", peer_id.public_key()));
-            let register = RegisterPeerWithPop::new(peer_id.clone(), pop_bytes);
-            let instruction = InstructionBox::from(register);
-            builder = builder.append_instruction(instruction);
+            manifest_topology.push(GenesisTopologyEntry::new(peer_id.clone(), pop_bytes));
         }
         if let Some((dangling_pk, _)) = pop_map.into_iter().next() {
             panic!("topology entry present for peer {dangling_pk} that is absent from topology");
         }
+        builder = builder.next_transaction().set_topology(manifest_topology);
     }
     for tx_instr in post_topology_transactions {
         builder =

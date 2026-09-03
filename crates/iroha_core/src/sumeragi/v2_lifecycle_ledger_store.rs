@@ -2080,6 +2080,7 @@ fn decode_frame(
     }
     Ok(ledger)
 }
+
 fn work_shape_is_valid(
     work_class: LifecycleWorkClass,
     key: LifecycleKey,

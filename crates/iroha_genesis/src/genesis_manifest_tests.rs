@@ -19,6 +19,28 @@ fn manifest_offline_cash_mint_finality_value() -> norito::json::Value {
     )
     .expect("serialize Offline Cash mint-finality genesis parameters")
 }
+fn deterministic_test_topology_entries() -> Vec<GenesisTopologyEntry> {
+    let mut entries = (0_u8..4)
+        .map(|index| {
+            let validator_seed = 0x20_u8.wrapping_add(index);
+            let validator = KeyPair::try_from_seed(vec![validator_seed; 32], Algorithm::BlsNormal)
+                .expect("derive deterministic genesis fixture validator");
+            let pop = iroha_crypto::bls_normal_pop_prove(validator.private_key())
+                .expect("derive deterministic genesis fixture proof of possession");
+            GenesisTopologyEntry::new(PeerId::new(validator.public_key().clone()), pop)
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.peer.cmp(&right.peer));
+    entries
+}
+fn with_deterministic_test_topology(mut manifest: RawGenesisTransaction) -> RawGenesisTransaction {
+    manifest
+        .transactions
+        .first_mut()
+        .expect("test genesis manifest has one transaction")
+        .topology = deterministic_test_topology_entries();
+    manifest
+}
 #[test]
 fn genesis_fixture_key_generation_preserves_algorithms() {
     assert_eq!(
@@ -33,6 +55,43 @@ fn genesis_fixture_key_generation_preserves_algorithms() {
             algorithm
         );
     }
+}
+#[test]
+fn offline_cash_authority_must_match_the_signing_topology() {
+    let manifest = with_deterministic_test_topology(RawGenesisTransaction {
+        chain: ChainId::from("iroha:test:offline-cash-topology-binding"),
+        chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
+        executor: None,
+        ivm_dir: IvmPath::default(),
+        transactions: vec![RawGenesisTx::default()],
+        consensus_mode: SumeragiConsensusMode::Permissioned,
+        wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
+        consensus_fingerprint: None,
+        sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
+        offline_cash_mint_finality:
+            deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+        crypto: ManifestCrypto::default(),
+    });
+    manifest
+        .validate_offline_cash_mint_finality_topology()
+        .expect("the exact canonical fixture topology must match its Pasta authority");
+
+    let mut mismatched = manifest;
+    let foreign = KeyPair::try_from_seed(vec![0x7E; 32], Algorithm::BlsNormal)
+        .expect("derive foreign deterministic validator");
+    let foreign_pop = iroha_crypto::bls_normal_pop_prove(foreign.private_key())
+        .expect("derive foreign validator proof of possession");
+    mismatched.transactions[0].topology[0] =
+        GenesisTopologyEntry::new(PeerId::new(foreign.public_key().clone()), foreign_pop);
+    let error = mismatched
+        .build_and_sign(&checked_genesis_fixture_keypair())
+        .expect_err("a topology substitution must fail before genesis is signed");
+    assert!(
+        error
+            .to_string()
+            .contains("authority differs from the canonical validator topology"),
+        "unexpected topology-binding error: {error:#}"
+    );
 }
 #[test]
 fn with_consensus_meta_adds_fields_and_stable_fingerprint() {
@@ -105,7 +164,7 @@ fn with_consensus_meta_handles_npos_mode() {
     let npos = SumeragiNposParameters::default();
     let mut params = Parameters::default();
     params.set_parameter(Parameter::Custom(npos.clone().into()));
-    let manifest = RawGenesisTransaction {
+    let manifest = with_deterministic_test_topology(RawGenesisTransaction {
         chain,
         chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
         executor: None,
@@ -121,7 +180,7 @@ fn with_consensus_meta_handles_npos_mode() {
         offline_cash_mint_finality:
             deterministic_test_offline_cash_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
-    }
+    })
     .with_consensus_meta();
     assert_eq!(manifest.consensus_mode, SumeragiConsensusMode::Npos);
     assert_eq!(manifest.wire_protocol_version, CONSENSUS_PROTOCOL_VERSION);
@@ -172,7 +231,7 @@ fn with_consensus_meta_respects_block_max_transactions_override() {
         parameters: Some(parameters),
         ..RawGenesisTx::default()
     };
-    let manifest = RawGenesisTransaction {
+    let manifest = with_deterministic_test_topology(RawGenesisTransaction {
         chain: chain.clone(),
         chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
         executor: None,
@@ -185,7 +244,7 @@ fn with_consensus_meta_respects_block_max_transactions_override() {
         offline_cash_mint_finality:
             deterministic_test_offline_cash_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
-    }
+    })
     .with_consensus_meta();
     let params = manifest
         .effective_parameters()
@@ -213,7 +272,7 @@ fn with_consensus_meta_respects_block_max_transactions_override() {
 fn build_and_sign_uses_stable_internal_creation_times() {
     init_instruction_registry();
     let chain = ChainId::from("iroha:test:deterministic");
-    let manifest = RawGenesisTransaction {
+    let manifest = with_deterministic_test_topology(RawGenesisTransaction {
         chain,
         chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
         executor: None,
@@ -226,7 +285,7 @@ fn build_and_sign_uses_stable_internal_creation_times() {
         offline_cash_mint_finality:
             deterministic_test_offline_cash_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
-    };
+    });
     let keypair = checked_genesis_fixture_keypair();
     let genesis = manifest.build_and_sign(&keypair).expect("sign genesis");
     let bytes_a = genesis.0.encode_wire().expect("encode canonical genesis");
@@ -259,7 +318,7 @@ fn build_and_sign_uses_stable_internal_creation_times() {
 #[test]
 fn explicit_creation_time_makes_signed_genesis_reproducible() {
     init_instruction_registry();
-    let manifest = RawGenesisTransaction {
+    let manifest = with_deterministic_test_topology(RawGenesisTransaction {
         chain: ChainId::from("iroha:test:fixed-genesis-time"),
         chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
         executor: None,
@@ -272,7 +331,7 @@ fn explicit_creation_time_makes_signed_genesis_reproducible() {
         offline_cash_mint_finality:
             deterministic_test_offline_cash_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
-    };
+    });
     let keypair = checked_genesis_fixture_keypair();
     let batch_count = u64::try_from(
         manifest
@@ -332,7 +391,7 @@ fn explicit_creation_time_makes_signed_genesis_reproducible() {
 fn build_and_sign_checked_genesis_transaction_signatures_verify() {
     init_instruction_registry();
     let chain = ChainId::from("iroha:test:checked-genesis-sign");
-    let manifest = RawGenesisTransaction {
+    let manifest = with_deterministic_test_topology(RawGenesisTransaction {
         chain,
         chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
         executor: None,
@@ -345,7 +404,7 @@ fn build_and_sign_checked_genesis_transaction_signatures_verify() {
         offline_cash_mint_finality:
             deterministic_test_offline_cash_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
-    };
+    });
     let keypair = checked_genesis_fixture_keypair();
     let genesis = manifest.build_and_sign(&keypair).expect("sign genesis");
     let transactions: Vec<_> = genesis.0.external_transactions().collect();
@@ -385,7 +444,7 @@ fn collect_parameter_instructions_emits_max_clock_drift_update() {
 fn build_and_sign_sets_confidential_digest() {
     init_instruction_registry();
     let chain = ChainId::from("iroha:test:confdigest");
-    let manifest = RawGenesisTransaction {
+    let manifest = with_deterministic_test_topology(RawGenesisTransaction {
         chain,
         chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
         executor: None,
@@ -398,7 +457,7 @@ fn build_and_sign_sets_confidential_digest() {
         offline_cash_mint_finality:
             deterministic_test_offline_cash_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
-    };
+    });
     let keypair = checked_genesis_fixture_keypair();
     let genesis = manifest.build_and_sign(&keypair).expect("sign genesis");
     assert_eq!(
@@ -416,7 +475,7 @@ fn build_and_sign_sets_confidential_digest() {
 fn build_and_sign_sets_explicit_confidential_policy_hash() {
     init_instruction_registry();
     let chain = ChainId::from("iroha:test:confpolicy");
-    let manifest = RawGenesisTransaction {
+    let manifest = with_deterministic_test_topology(RawGenesisTransaction {
         chain,
         chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
         executor: None,
@@ -429,7 +488,7 @@ fn build_and_sign_sets_explicit_confidential_policy_hash() {
         offline_cash_mint_finality:
             deterministic_test_offline_cash_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
-    };
+    });
     let keypair = checked_genesis_fixture_keypair();
     let policy_hash = [0x42; 32];
     let genesis = manifest
@@ -450,7 +509,7 @@ fn build_and_sign_sets_explicit_confidential_policy_hash() {
 fn genesis_canonical_wire_roundtrip_preserves_digest() {
     init_instruction_registry();
     let chain = ChainId::from("iroha:test:wire-digest");
-    let manifest = RawGenesisTransaction {
+    let manifest = with_deterministic_test_topology(RawGenesisTransaction {
         chain,
         chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
         executor: None,
@@ -463,7 +522,7 @@ fn genesis_canonical_wire_roundtrip_preserves_digest() {
         offline_cash_mint_finality:
             deterministic_test_offline_cash_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
-    };
+    });
     let keypair = checked_genesis_fixture_keypair();
     let genesis = manifest.build_and_sign(&keypair).expect("sign genesis");
     let wire = genesis.0.canonical_wire().expect("canonical wire encoding");
@@ -1360,6 +1419,7 @@ fn crypto_manifest_requires_ed25519() {
     .with_offline_cash_mint_finality_genesis_parameters(
         deterministic_test_offline_cash_mint_finality_genesis_parameters(),
     )
+    .set_topology(deterministic_test_topology_entries())
     .build_raw()
     .expect("complete crypto manifest fixture");
     let err = manifest
@@ -1399,6 +1459,7 @@ fn crypto_manifest_requires_sm_defaults_when_sm2_allowed() {
     .with_offline_cash_mint_finality_genesis_parameters(
         deterministic_test_offline_cash_mint_finality_genesis_parameters(),
     )
+    .set_topology(deterministic_test_topology_entries())
     .build_raw()
     .expect("complete crypto manifest fixture");
     let err = manifest
@@ -1427,6 +1488,7 @@ fn crypto_manifest_accepts_valid_sm_configuration() {
     .with_offline_cash_mint_finality_genesis_parameters(
         deterministic_test_offline_cash_mint_finality_genesis_parameters(),
     )
+    .set_topology(deterministic_test_topology_entries())
     .build_raw()
     .expect("complete crypto manifest fixture");
     manifest
@@ -1449,6 +1511,7 @@ fn crypto_manifest_rejects_sm3_hash_without_sm2() {
     .with_offline_cash_mint_finality_genesis_parameters(
         deterministic_test_offline_cash_mint_finality_genesis_parameters(),
     )
+    .set_topology(deterministic_test_topology_entries())
     .build_raw()
     .expect("complete crypto manifest fixture");
     let err = manifest

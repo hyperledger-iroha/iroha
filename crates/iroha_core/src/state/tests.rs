@@ -8648,8 +8648,7 @@ state_test! { sync autoscale_cold_window_stages_irreversible_drain_without_geome
     assert!(drain_state.commitment.is_none());
 }
 state_test! { sync pending_drain_body_and_candidate_use_embedded_close_committee_after_roster_change
-    let (mut state, _kura) = blank_test_state_with_kura();
-    let parent_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 100, 0);
+    let (mut state, kura) = blank_test_state_with_kura();
     install_default_autoscale_test_nexus(&mut state, "install autoscale test nexus");
     state
         .apply_lane_lifecycle_with_options(
@@ -8665,7 +8664,12 @@ state_test! { sync pending_drain_body_and_candidate_use_embedded_close_committee
             true,
         )
         .expect("install drain candidate lane");
-    state.push_block_hash_for_testing(parent_header.hash());
+    let parent = empty_signed_block_after(None, 100);
+    let parent_header = parent.header();
+    store_block_for_state_commit(&kura, &parent);
+    state.push_block_hash_for_testing(parent.hash());
+    state.update_latest_block_header_cache_for_tests(parent_header.clone());
+    seed_empty_transaction_height_for_state_test(&state, 1);
     let lane_id = LaneId::new(1);
     let_row! { incarnation = state .lane_incarnation(lane_id) .expect("drain candidate incarnation") };
     let keypairs = autoscale_drain_keypairs_for_test(4);
@@ -9807,6 +9811,38 @@ fn seed_committed_height_for_state_test(state: &State, height: u64) {
         ));
     }
     block_hashes.commit_for_tests();
+    if height == 0 {
+        return;
+    }
+    let genesis_hash = state
+        .block_hashes
+        .view()
+        .iter()
+        .next()
+        .copied()
+        .expect("a positive committed height has a genesis hash");
+    let revision = MusubiResolverIndexRevisionV1::default();
+    let checkpoint = MusubiRegistrySnapshotV1 {
+        finalized_height: 1,
+        finalized_block_hash: *genesis_hash.as_ref(),
+        index_revision: revision.get(),
+    };
+    checkpoint
+        .validate()
+        .expect("committed-height fixture genesis resolver checkpoint is canonical");
+    let mut world = state.world.block();
+    match world.musubi_resolver_index_checkpoints.get(&revision) {
+        Some(existing) => assert_eq!(
+            existing, &checkpoint,
+            "committed-height fixture must preserve the canonical genesis resolver checkpoint"
+        ),
+        None => {
+            world
+                .musubi_resolver_index_checkpoints
+                .insert(revision, checkpoint);
+        }
+    }
+    world.commit();
 }
 fn seed_autoscale_sample_history_for_snapshot_test(state: &State) {
     let block_hashes: Vec<_> = state.block_hashes.view().iter().copied().collect();
@@ -23703,9 +23739,10 @@ fn finalize_lane_relay_for_state_test(
         .validate()
         .expect("valid relay execution commitment");
     let_row! { round = wire::ConsensusRound { context_id: context.id(), height, view: block.header().view_change_index(), } };
-    let_row! { mut commit_qc = wire::QuorumCertificate { round, proposal_round: round, phase: wire::GlobalPhase::Commit, subject, execution_commitment, signers: (0..validators.len()) .map(|index| u32::try_from(index).expect("relay signer index fits u32")) .collect(), aggregate_signature: vec![1], } };
+    let exact_quorum = crate::sumeragi::network_topology::commit_quorum_from_len(validators.len());
+    let_row! { mut commit_qc = wire::QuorumCertificate { round, proposal_round: round, phase: wire::GlobalPhase::Commit, subject, execution_commitment, signers: (0..exact_quorum) .map(|index| u32::try_from(index).expect("relay signer index fits u32")) .collect(), aggregate_signature: vec![1], } };
     let_row! { preimage = commit_qc .signer_preimage(&context, 0) .expect("derive relay finality signer preimage") };
-    let_row! { signatures = validators .iter() .map(|(_, keypair)| { Signature::try_new(keypair.private_key(), &preimage) .expect("sign relay finality vote") .payload() .to_vec() }) .collect::<Vec<_>>() };
+    let_row! { signatures = validators .iter() .take(exact_quorum) .map(|(_, keypair)| { Signature::try_new(keypair.private_key(), &preimage) .expect("sign relay finality vote") .payload() .to_vec() }) .collect::<Vec<_>>() };
     let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
     commit_qc.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
         .expect("aggregate relay finality votes");

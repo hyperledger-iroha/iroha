@@ -6,6 +6,7 @@
 
 use iroha_crypto::{Algorithm, Hash, Signature};
 use iroha_data_model::{
+    consensus::ConsensusKeyRole,
     nexus::{
         AtomicPrivateSettlementV1, PRIVATE_SETTLEMENT_BLS_BYTES_V1,
         PRIVATE_SETTLEMENT_COMMITTEE_QUORUM_V1, PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1,
@@ -20,7 +21,7 @@ use iroha_data_model::{
 use std::collections::BTreeMap;
 use thiserror::Error;
 
-use crate::state::{LaneAuthorityRoute, StateReadOnly};
+use crate::state::{LaneAuthorityRoute, StateReadOnly, peer_has_live_consensus_key_for_role};
 
 /// Reserved digest carried by Prepare bodies before the all-leg barrier exists.
 pub(crate) fn private_settlement_reserved_prepared_bundle_digest_v1() -> Hash {
@@ -174,8 +175,12 @@ pub struct PrivateSettlementCommitteeAuthorityErrorV1;
 /// keys and proofs of possession, it requires the exact canonical ordered
 /// validator roster resolved for the lane/dataspace route at
 /// `authority_context_height`, the exact active lane incarnation, and the V1
-/// four-validator/`f = 1` geometry. A self-signed caller-selected committee can
-/// therefore never authorize a private state transition.
+/// four-validator/`f = 1` geometry. Every member must also hold a live
+/// purpose-specific [`ConsensusKeyRole::Committee`] key at that height; the
+/// generic participant-lane compatibility fallback to global `Validator` keys
+/// is deliberately forbidden for private settlement. A self-signed
+/// caller-selected or global-validator-only committee can therefore never
+/// authorize a private state transition.
 ///
 /// # Errors
 ///
@@ -206,6 +211,14 @@ pub fn validate_private_settlement_committee_authority_v1(
         || resolved.fault_tolerance() != 1
         || resolved.validators().len() != PRIVATE_SETTLEMENT_COMMITTEE_VALIDATORS_V1
         || resolved.validators() != authority.validators.as_slice()
+        || resolved.validators().iter().any(|validator| {
+            !peer_has_live_consensus_key_for_role(
+                state.world(),
+                validator,
+                authority_context_height,
+                ConsensusKeyRole::Committee,
+            )
+        })
     {
         return Err(PrivateSettlementCommitteeAuthorityErrorV1);
     }

@@ -274,7 +274,7 @@ pub mod isi {
                 trigger_is_enabled,
             },
         },
-        state::derive_validator_key_id,
+        state::{derive_committee_key_id, derive_validator_key_id},
         sumeragi::status::PeerKeyPolicyRejectReason,
         zk::hash_vk,
     };
@@ -16733,7 +16733,230 @@ pub mod isi {
             .cloned()
             .unwrap_or_default()
     }
-    /// Register a peer (BLS-normal with `PoP`)
+    fn peer_key_policy_reason(
+        err: &InstructionExecutionError,
+    ) -> Option<PeerKeyPolicyRejectReason> {
+        let InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(msg)) =
+            err
+        else {
+            return None;
+        };
+        if msg.contains("lead-time policy") {
+            Some(PeerKeyPolicyRejectReason::LeadTimeViolation)
+        } else if msg.contains("activation height cannot be in the past") {
+            Some(PeerKeyPolicyRejectReason::ActivationInPast)
+        } else if msg.contains("expiry must exceed activation height") {
+            Some(PeerKeyPolicyRejectReason::ExpiryBeforeActivation)
+        } else if msg.contains("algorithm") && msg.contains("not allowed") {
+            Some(PeerKeyPolicyRejectReason::DisallowedAlgorithm)
+        } else if msg.contains("identifier collision") {
+            Some(PeerKeyPolicyRejectReason::IdentifierCollision)
+        } else {
+            None
+        }
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn register_peer_identity_with_pop(
+        peer_id: PeerId,
+        pop: Vec<u8>,
+        activation_at: Option<u64>,
+        expiry_at: Option<u64>,
+        role: ConsensusKeyRole,
+        instruction_name: &'static str,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        // Every lane-consensus identity must support BLS batching.
+        if state_transaction.pipeline.signature_batch_max_bls == 0 {
+            iroha_logger::error!(
+                peer = %peer_id,
+                cap = state_transaction.pipeline.signature_batch_max_bls,
+                instruction = instruction_name,
+                "peer registration rejected: signature_batch_max_bls is zero"
+            );
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "signature_batch_max_bls must be > 0 to register a consensus peer".into(),
+                ),
+            ));
+        }
+        if !crate::sumeragi::is_bls_normal_public_key(peer_id.public_key()) {
+            crate::sumeragi::status::record_peer_key_policy_reject(
+                PeerKeyPolicyRejectReason::DisallowedAlgorithm,
+            );
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "peer public_key must use BLS-Normal (BLS-Small unsupported for peers)".into(),
+                ),
+            ));
+        }
+        if let Err(err) = iroha_crypto::bls_normal_pop_verify(peer_id.public_key(), &pop) {
+            iroha_logger::error!(
+                %peer_id,
+                ?err,
+                instruction = instruction_name,
+                "peer registration rejected: invalid BLS PoP"
+            );
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(format!(
+                    "invalid BLS proof-of-possession: {err}"
+                )),
+            ));
+        }
+        let (activation_lead_blocks, sumeragi_params) = {
+            let params = state_transaction.world.parameters.get();
+            (
+                params.sumeragi.key_activation_lead_blocks,
+                params.sumeragi.clone(),
+            )
+        };
+        let is_genesis = state_transaction._curr_block.is_genesis();
+        let world = &mut state_transaction.world;
+        let block_height = state_transaction._curr_block.height().get();
+        let activation_expected = if is_genesis {
+            block_height
+        } else {
+            block_height.saturating_add(activation_lead_blocks)
+        };
+        let activation_height = activation_at.unwrap_or(activation_expected);
+        if activation_height < block_height {
+            crate::sumeragi::status::record_peer_key_policy_reject(
+                PeerKeyPolicyRejectReason::ActivationInPast,
+            );
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "consensus key activation height cannot be in the past".into(),
+                ),
+            ));
+        }
+        if activation_height != activation_expected
+            && !(is_genesis && activation_height == block_height)
+        {
+            crate::sumeragi::status::record_peer_key_policy_reject(
+                PeerKeyPolicyRejectReason::LeadTimeViolation,
+            );
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(format!(
+                    "activation height {activation_height} violates lead-time policy; expected {activation_expected}"
+                )),
+            ));
+        }
+        let status = if activation_height > block_height {
+            ConsensusKeyStatus::Pending
+        } else {
+            ConsensusKeyStatus::Active
+        };
+        let key_label = peer_id.public_key().to_string();
+        let candidate_id = match role {
+            ConsensusKeyRole::Validator => derive_validator_key_id(peer_id.public_key()),
+            ConsensusKeyRole::Committee => derive_committee_key_id(peer_id.public_key()),
+            ConsensusKeyRole::Endorsement => {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "peer registration cannot create an endorsement key".into(),
+                    ),
+                ));
+            }
+        };
+        if world.peers.iter().any(|id| id == &peer_id) {
+            if is_genesis {
+                let exact_duplicate =
+                    world
+                        .consensus_keys
+                        .get(&candidate_id)
+                        .is_some_and(|record| {
+                            record.public_key == *peer_id.public_key()
+                                && record.pop.as_deref() == Some(pop.as_slice())
+                                && record.activation_height == activation_height
+                                && record.expiry_height == expiry_at
+                                && record.status == status
+                        });
+                if exact_duplicate {
+                    iroha_logger::debug!(
+                        %peer_id,
+                        instruction = instruction_name,
+                        "exact duplicate peer registration during genesis; treating as no-op"
+                    );
+                    return Ok(());
+                }
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "duplicate genesis peer registration must match the existing consensus role, proof-of-possession, and lifecycle"
+                            .into(),
+                    ),
+                ));
+            }
+            return Err(RepetitionError {
+                instruction: InstructionType::Register,
+                id: IdBox::PeerId(peer_id),
+            }
+            .into());
+        }
+        if let Some(conflict) = consensus_key_ids_for_public_key(world, &key_label)
+            .into_iter()
+            .find(|id| id != &candidate_id)
+        {
+            crate::sumeragi::status::record_peer_key_policy_reject(
+                PeerKeyPolicyRejectReason::IdentifierCollision,
+            );
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(format!(
+                    "consensus key identifier collision for peer public key; existing id: {conflict}"
+                )),
+            ));
+        }
+        if let Some(existing) = world.consensus_keys.get(&candidate_id)
+            && existing.public_key != *peer_id.public_key()
+        {
+            crate::sumeragi::status::record_peer_key_policy_reject(
+                PeerKeyPolicyRejectReason::IdentifierCollision,
+            );
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "consensus key identifier collision for peer public key".into(),
+                ),
+            ));
+        }
+        let lifecycle_record = ConsensusKeyRecord {
+            id: candidate_id,
+            public_key: peer_id.public_key().clone(),
+            pop: Some(pop),
+            activation_height,
+            expiry_height: expiry_at,
+            replaces: None,
+            status,
+        };
+        if let Err(err) = validate_consensus_key_record(
+            &lifecycle_record,
+            &sumeragi_params,
+            None,
+            block_height,
+            is_genesis,
+        ) {
+            if let Some(reason) = peer_key_policy_reason(&err) {
+                crate::sumeragi::status::record_peer_key_policy_reject(reason);
+            }
+            return Err(err);
+        }
+        if let PushResult::Duplicate(duplicate) = world.peers.push(peer_id.clone()) {
+            if is_genesis {
+                iroha_logger::debug!(
+                    %duplicate,
+                    instruction = instruction_name,
+                    "duplicate peer registration during genesis; treating as no-op"
+                );
+                return Ok(());
+            }
+            return Err(RepetitionError {
+                instruction: InstructionType::Register,
+                id: IdBox::PeerId(duplicate),
+            }
+            .into());
+        }
+        upsert_consensus_key(world, &lifecycle_record.id, lifecycle_record.clone());
+        world.emit_events(Some(PeerEvent::Added(peer_id)));
+        Ok(())
+    }
+    /// Register a global-voter peer (BLS-normal with `PoP`).
     impl Execute for iroha_data_model::isi::register::RegisterPeerWithPop {
         #[metrics(+"register_peer")]
         fn execute(
@@ -16741,190 +16964,34 @@ pub mod isi {
             _authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            fn peer_key_policy_reason(
-                err: &InstructionExecutionError,
-            ) -> Option<PeerKeyPolicyRejectReason> {
-                let InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(msg),
-                ) = err
-                else {
-                    return None;
-                };
-                if msg.contains("lead-time policy") {
-                    Some(PeerKeyPolicyRejectReason::LeadTimeViolation)
-                } else if msg.contains("activation height cannot be in the past") {
-                    Some(PeerKeyPolicyRejectReason::ActivationInPast)
-                } else if msg.contains("expiry must exceed activation height") {
-                    Some(PeerKeyPolicyRejectReason::ExpiryBeforeActivation)
-                } else if msg.contains("algorithm") && msg.contains("not allowed") {
-                    Some(PeerKeyPolicyRejectReason::DisallowedAlgorithm)
-                } else if msg.contains("identifier collision") {
-                    Some(PeerKeyPolicyRejectReason::IdentifierCollision)
-                } else {
-                    None
-                }
-            }
-            // Validators must support BLS batching: require non-zero cap in pipeline config.
-            if state_transaction.pipeline.signature_batch_max_bls == 0 {
-                iroha_logger::error!(
-                    peer = %self.peer,
-                    cap = state_transaction.pipeline.signature_batch_max_bls,
-                    "RegisterPeerWithPop rejected: signature_batch_max_bls is zero"
-                );
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "signature_batch_max_bls must be > 0 to register a validator peer".into(),
-                    ),
-                ));
-            }
-            let peer_id = self.peer.clone();
-            // Enforce BLS-normal only for consensus peers.
-            if !crate::sumeragi::is_bls_normal_public_key(peer_id.public_key()) {
-                crate::sumeragi::status::record_peer_key_policy_reject(
-                    PeerKeyPolicyRejectReason::DisallowedAlgorithm,
-                );
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "peer public_key must use BLS-Normal (BLS-Small unsupported for peers)"
-                            .into(),
-                    ),
-                ));
-            }
-            // Verify PoP
-            if let Err(err) = iroha_crypto::bls_normal_pop_verify(peer_id.public_key(), &self.pop) {
-                iroha_logger::error!(
-                    %peer_id,
-                    ?err,
-                    "RegisterPeerWithPop rejected: invalid BLS PoP"
-                );
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(format!(
-                        "invalid BLS proof-of-possession: {err}"
-                    )),
-                ));
-            }
-            let (activation_lead_blocks, sumeragi_params) = {
-                let params = state_transaction.world.parameters.get();
-                (
-                    params.sumeragi.key_activation_lead_blocks,
-                    params.sumeragi.clone(),
-                )
-            };
-            let world = &mut state_transaction.world;
-            if world.peers.iter().any(|id| id == &peer_id) {
-                if state_transaction._curr_block.is_genesis() {
-                    iroha_logger::debug!(
-                        %peer_id,
-                        "Duplicate RegisterPeerWithPop during genesis; treating as no-op"
-                    );
-                    return Ok(());
-                }
-                return Err(RepetitionError {
-                    instruction: InstructionType::Register,
-                    id: IdBox::PeerId(peer_id),
-                }
-                .into());
-            }
-            let block_height = state_transaction._curr_block.height().get();
-            let activation_expected = if state_transaction._curr_block.is_genesis() {
-                block_height
-            } else {
-                block_height.saturating_add(activation_lead_blocks)
-            };
-            let activation_height = self.activation_at.unwrap_or(activation_expected);
-            if activation_height < block_height {
-                crate::sumeragi::status::record_peer_key_policy_reject(
-                    PeerKeyPolicyRejectReason::ActivationInPast,
-                );
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "consensus key activation height cannot be in the past".into(),
-                    ),
-                ));
-            }
-            if activation_height != activation_expected
-                && !(state_transaction._curr_block.is_genesis()
-                    && activation_height == block_height)
-            {
-                crate::sumeragi::status::record_peer_key_policy_reject(
-                    PeerKeyPolicyRejectReason::LeadTimeViolation,
-                );
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(format!(
-                        "activation height {activation_height} violates lead-time policy; expected {activation_expected}"
-                    )),
-                ));
-            }
-            let status = if activation_height > block_height {
-                ConsensusKeyStatus::Pending
-            } else {
-                ConsensusKeyStatus::Active
-            };
-            let key_label = peer_id.public_key().to_string();
-            let candidate_id = derive_validator_key_id(peer_id.public_key());
-            if let Some(conflict) = consensus_key_ids_for_public_key(world, &key_label)
-                .into_iter()
-                .find(|id| id != &candidate_id)
-            {
-                crate::sumeragi::status::record_peer_key_policy_reject(
-                    PeerKeyPolicyRejectReason::IdentifierCollision,
-                );
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(format!(
-                        "consensus key identifier collision for peer public key; existing id: {conflict}"
-                    )),
-                ));
-            }
-            if let Some(existing) = world.consensus_keys.get(&candidate_id) {
-                if existing.public_key != *peer_id.public_key() {
-                    crate::sumeragi::status::record_peer_key_policy_reject(
-                        PeerKeyPolicyRejectReason::IdentifierCollision,
-                    );
-                    return Err(InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "consensus key identifier collision for peer public key".into(),
-                        ),
-                    ));
-                }
-            }
-            let lifecycle_record = ConsensusKeyRecord {
-                id: candidate_id,
-                public_key: peer_id.public_key().clone(),
-                pop: Some(self.pop.clone()),
-                activation_height,
-                expiry_height: self.expiry_at,
-                replaces: None,
-                status,
-            };
-            if let Err(err) = validate_consensus_key_record(
-                &lifecycle_record,
-                &sumeragi_params,
+            register_peer_identity_with_pop(
+                self.peer,
+                self.pop,
+                self.activation_at,
+                self.expiry_at,
+                ConsensusKeyRole::Validator,
+                "RegisterPeerWithPop",
+                state_transaction,
+            )
+        }
+    }
+    /// Register a non-global-voting participant-lane committee peer (BLS-normal with `PoP`).
+    impl Execute for iroha_data_model::isi::register::RegisterCommitteePeerWithPop {
+        #[metrics(+"register_committee_peer")]
+        fn execute(
+            self,
+            _authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            register_peer_identity_with_pop(
+                self.peer,
+                self.pop,
+                self.activation_at,
                 None,
-                block_height,
-                state_transaction._curr_block.is_genesis(),
-            ) {
-                if let Some(reason) = peer_key_policy_reason(&err) {
-                    crate::sumeragi::status::record_peer_key_policy_reject(reason);
-                }
-                return Err(err);
-            }
-            if let PushResult::Duplicate(duplicate) = world.peers.push(peer_id.clone()) {
-                if state_transaction._curr_block.is_genesis() {
-                    iroha_logger::debug!(
-                        %duplicate,
-                        "Duplicate RegisterPeerWithPop during genesis; treating as no-op"
-                    );
-                    return Ok(());
-                }
-                return Err(RepetitionError {
-                    instruction: InstructionType::Register,
-                    id: IdBox::PeerId(duplicate),
-                }
-                .into());
-            }
-            upsert_consensus_key(world, &lifecycle_record.id, lifecycle_record.clone());
-            world.emit_events(Some(PeerEvent::Added(peer_id)));
-            Ok(())
+                ConsensusKeyRole::Committee,
+                "RegisterCommitteePeerWithPop",
+                state_transaction,
+            )
         }
     }
     impl Execute for Unregister<Peer> {
@@ -16969,32 +17036,30 @@ pub mod isi {
             }
             world.peers.remove(index);
             let key_label = peer_id.public_key().to_string();
-            let candidate_id = derive_validator_key_id(peer_id.public_key());
-            let existing_pop = world
-                .consensus_keys
-                .get(&candidate_id)
-                .and_then(|record| record.pop.clone());
-            let lifecycle_record = ConsensusKeyRecord {
-                id: candidate_id,
-                public_key: peer_id.public_key().clone(),
-                pop: existing_pop,
-                activation_height: block_height,
-                expiry_height: Some(block_height),
-                replaces: None,
-                status: ConsensusKeyStatus::Disabled,
-            };
-            upsert_consensus_key(world, &lifecycle_record.id, lifecycle_record.clone());
             let mut ids = consensus_key_ids_for_public_key(world, &key_label);
-            if !ids.contains(&lifecycle_record.id) {
-                ids.push(lifecycle_record.id.clone());
+            if ids.is_empty() {
+                // Preserve deterministic lifecycle history for legacy fixture
+                // peers that predate proof-bound registration. Never synthesize
+                // this Validator role when a Committee record already exists.
+                let candidate_id = derive_validator_key_id(peer_id.public_key());
+                let lifecycle_record = ConsensusKeyRecord {
+                    id: candidate_id.clone(),
+                    public_key: peer_id.public_key().clone(),
+                    pop: None,
+                    activation_height: block_height,
+                    expiry_height: Some(block_height),
+                    replaces: None,
+                    status: ConsensusKeyStatus::Disabled,
+                };
+                world
+                    .consensus_keys
+                    .insert(candidate_id.clone(), lifecycle_record);
+                ids.push(candidate_id);
             }
             ids.sort();
             ids.dedup();
             world.consensus_keys_by_pk.insert(key_label, ids.clone());
             for id in ids {
-                if id == lifecycle_record.id {
-                    continue;
-                }
                 if let Some(mut record) = world.consensus_keys.get(&id).cloned() {
                     if !matches!(record.status, ConsensusKeyStatus::Disabled) {
                         record.status = ConsensusKeyStatus::Disabled;
@@ -17694,7 +17759,10 @@ pub mod isi {
                         )),
                     ));
                 }
-                if enforce_topology_membership && !topology_peers.contains(peer) {
+                if lane_id == LaneId::SINGLE
+                    && enforce_topology_membership
+                    && !topology_peers.contains(peer)
+                {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(format!(
                             "lane relay emergency peer {} is not in the current commit topology",
@@ -17702,10 +17770,11 @@ pub mod isi {
                         )),
                     ));
                 }
-                if crate::state::live_consensus_key_pop_for_peer(
+                if crate::state::live_consensus_key_pop_for_peer_on_lane(
                     &state_transaction.world,
                     peer,
                     current_height,
+                    lane_id,
                 )
                 .is_none()
                 {
@@ -32092,12 +32161,30 @@ seiyaku GovernanceLifecycle {
                 .insert(account.clone(), BTreeSet::from([permission]));
         }
         fn seed_live_peer(stx: &mut StateTransaction<'_, '_>, keypair: &KeyPair) -> PeerId {
+            seed_live_peer_with_role(stx, keypair, ConsensusKeyRole::Validator)
+        }
+        fn seed_live_peer_with_role(
+            stx: &mut StateTransaction<'_, '_>,
+            keypair: &KeyPair,
+            role: ConsensusKeyRole,
+        ) -> PeerId {
             let peer = PeerId::new(keypair.public_key().clone());
             if stx.world.peers.iter().all(|existing| existing != &peer) {
                 let _ = stx.world.peers.push(peer.clone());
             }
+            let id = match role {
+                ConsensusKeyRole::Validator => {
+                    crate::state::derive_validator_key_id(keypair.public_key())
+                }
+                ConsensusKeyRole::Committee => {
+                    crate::state::derive_committee_key_id(keypair.public_key())
+                }
+                ConsensusKeyRole::Endorsement => {
+                    panic!("lane relay peers cannot use endorsement keys")
+                }
+            };
             let record = ConsensusKeyRecord {
-                id: crate::state::derive_validator_key_id(keypair.public_key()),
+                id,
                 public_key: keypair.public_key().clone(),
                 pop: Some(
                     iroha_crypto::bls_normal_pop_prove(keypair.private_key())
@@ -36259,6 +36346,73 @@ seiyaku GovernanceLifecycle {
                 "topology-mismatched emergency override must not be stored"
             );
         });
+        world_test!(set_participant_lane_relay_emergency_validators_accepts_committee_peer_outside_global_topology {
+            lane_relay_transaction!(state, block, state_block, stx, authority);
+            let participant_lane = LaneId::new(1);
+            configure_active_test_lanes(&mut stx, &[LaneId::SINGLE, participant_lane]);
+            let topology_peer = seed_live_peer(
+                &mut stx,
+                &checked_keypair_with_algorithm(Algorithm::BlsNormal),
+            );
+            let committee_peer = seed_live_peer_with_role(
+                &mut stx,
+                &checked_keypair_with_algorithm(Algorithm::BlsNormal),
+                ConsensusKeyRole::Committee,
+            );
+            *stx.commit_topology.get_mut() = vec![topology_peer];
+
+            SetLaneRelayEmergencyValidators {
+                lane_id: participant_lane,
+                peers: vec![committee_peer.clone()],
+                expires_at_height: Some(12),
+                metadata: Metadata::default(),
+            }
+            .expect_execute(
+                &authority,
+                &mut stx,
+                "participant emergency committee need not join global topology",
+            );
+
+            let stored = stx
+                .world
+                .lane_relay_emergency_validators
+                .get(&participant_lane)
+                .expect("participant emergency override stored");
+            assert_eq!(stored.peers, vec![committee_peer]);
+        });
+        world_test!(set_global_lane_relay_emergency_validators_rejects_committee_only_peer {
+            lane_relay_transaction!(state, block, state_block, stx, authority);
+            let committee_peer = seed_live_peer_with_role(
+                &mut stx,
+                &checked_keypair_with_algorithm(Algorithm::BlsNormal),
+                ConsensusKeyRole::Committee,
+            );
+            *stx.commit_topology.get_mut() = vec![committee_peer.clone()];
+
+            let err = SetLaneRelayEmergencyValidators {
+                lane_id: LaneId::SINGLE,
+                peers: vec![committee_peer],
+                expires_at_height: Some(12),
+                metadata: Metadata::default(),
+            }
+            .expect_execute_err(
+                &authority,
+                &mut stx,
+                "global emergency roster must require a Validator-role key",
+            );
+            let msg = smart_contract_instruction_error_message(err);
+            assert_contains!(
+                msg,
+                "does not have a live consensus key",
+                "unexpected error message: {msg}"
+            );
+            assert!(
+                stx.world
+                    .lane_relay_emergency_validators
+                    .get(&LaneId::SINGLE)
+                    .is_none()
+            );
+        });
         world_test!(set_lane_relay_emergency_validators_requires_expiry_for_non_empty_roster {
             lane_relay_transaction!(state, block, state_block, stx, authority);
             let peer_keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -37006,6 +37160,192 @@ seiyaku GovernanceLifecycle {
                 iroha_data_model::isi::register::RegisterPeerWithPop::new(peer_id.clone(), bad_pop);
             let res = isi_bad.execute(&ALICE_ID, &mut stx);
             assert!(res.is_err(), "invalid PoP must be rejected");
+        });
+        world_test!(register_committee_peer_creates_only_live_unbounded_committee_key {
+            let mut state = blank_state();
+            let mut pipeline = state.view().pipeline().clone();
+            pipeline.signature_batch_max_bls = 4;
+            state.set_pipeline(pipeline);
+            state_transaction!(state, block, state_block, stx);
+            let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let peer_id = crate::PeerId::new(bls.public_key().clone());
+            let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("committee pop");
+            iroha_data_model::isi::register::RegisterCommitteePeerWithPop::new(
+                peer_id.clone(),
+                pop.clone(),
+            )
+            .expect_execute(
+                &ALICE_ID,
+                &mut stx,
+                "register proof-bound committee peer during genesis",
+            );
+
+            assert!(stx.world.peers().iter().any(|peer| peer == &peer_id));
+            let ids = stx
+                .world
+                .consensus_keys_by_pk
+                .get(&peer_id.public_key().to_string())
+                .cloned()
+                .expect("committee key index");
+            assert_eq!(ids.len(), 1);
+            assert_eq!(ids[0].role, ConsensusKeyRole::Committee);
+            let record = stx
+                .world
+                .consensus_keys
+                .get(&ids[0])
+                .expect("committee key record");
+            assert_eq!(record.public_key, *peer_id.public_key());
+            assert_eq!(record.pop.as_deref(), Some(pop.as_slice()));
+            assert_eq!(record.status, ConsensusKeyStatus::Active);
+            assert_eq!(record.activation_height, stx.block_height());
+            assert_eq!(record.expiry_height, None);
+            assert!(crate::state::peer_has_live_consensus_key_for_role(
+                &stx.world,
+                &peer_id,
+                stx.block_height(),
+                ConsensusKeyRole::Committee,
+            ));
+            assert!(!crate::state::peer_has_live_consensus_key_for_role(
+                &stx.world,
+                &peer_id,
+                stx.block_height(),
+                ConsensusKeyRole::Validator,
+            ));
+        });
+        world_test!(register_committee_peer_genesis_duplicate_is_role_sensitive {
+            let mut state = blank_state();
+            let mut pipeline = state.view().pipeline().clone();
+            pipeline.signature_batch_max_bls = 4;
+            state.set_pipeline(pipeline);
+            state_transaction!(state, block, state_block, stx);
+            let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let peer_id = crate::PeerId::new(bls.public_key().clone());
+            let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("committee pop");
+
+            iroha_data_model::isi::register::RegisterCommitteePeerWithPop::new(
+                peer_id.clone(),
+                pop.clone(),
+            )
+            .expect_execute(&ALICE_ID, &mut stx, "register committee peer");
+            iroha_data_model::isi::register::RegisterCommitteePeerWithPop::new(
+                peer_id.clone(),
+                pop.clone(),
+            )
+            .expect_execute(
+                &ALICE_ID,
+                &mut stx,
+                "accept exact duplicate committee registration during genesis",
+            );
+
+            let error = iroha_data_model::isi::register::RegisterPeerWithPop::new(
+                peer_id.clone(),
+                pop,
+            )
+            .expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "reject a duplicate genesis peer under a different consensus role",
+            );
+            assert_contains!(
+                smart_contract_instruction_error_message(error),
+                "duplicate genesis peer registration must match"
+            );
+            let ids = stx
+                .world
+                .consensus_keys_by_pk
+                .get(&peer_id.public_key().to_string())
+                .expect("committee key index");
+            assert_eq!(ids.len(), 1);
+            assert_eq!(ids[0].role, ConsensusKeyRole::Committee);
+        });
+        world_test!(committee_peer_unregister_and_reregister_preserves_committee_role {
+            let mut state = blank_state();
+            let mut pipeline = state.view().pipeline().clone();
+            pipeline.signature_batch_max_bls = 4;
+            state.set_pipeline(pipeline);
+            state_transaction!(state, block, state_block, stx);
+            let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let peer_id = crate::PeerId::new(bls.public_key().clone());
+            let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("committee pop");
+
+            iroha_data_model::isi::register::RegisterCommitteePeerWithPop::new(
+                peer_id.clone(),
+                pop.clone(),
+            )
+            .expect_execute(&ALICE_ID, &mut stx, "register committee peer");
+            Unregister::<Peer>::peer(peer_id.clone()).expect_execute(
+                &ALICE_ID,
+                &mut stx,
+                "unregister committee peer",
+            );
+            let committee_id = derive_committee_key_id(peer_id.public_key());
+            assert_eq!(
+                stx.world
+                    .consensus_keys
+                    .get(&committee_id)
+                    .expect("disabled committee key")
+                    .status,
+                ConsensusKeyStatus::Disabled
+            );
+            assert!(
+                stx.world
+                    .consensus_keys
+                    .get(&derive_validator_key_id(peer_id.public_key()))
+                    .is_none(),
+                "unregistering a Committee-only peer must not synthesize Validator history"
+            );
+
+            iroha_data_model::isi::register::RegisterCommitteePeerWithPop::new(
+                peer_id.clone(),
+                pop,
+            )
+            .expect_execute(&ALICE_ID, &mut stx, "re-register committee peer");
+            let ids = stx
+                .world
+                .consensus_keys_by_pk
+                .get(&peer_id.public_key().to_string())
+                .expect("committee key index");
+            assert_eq!(ids.as_slice(), std::slice::from_ref(&committee_id));
+            assert_eq!(
+                stx.world
+                    .consensus_keys
+                    .get(&committee_id)
+                    .expect("reactivated committee key")
+                    .status,
+                ConsensusKeyStatus::Active
+            );
+        });
+        world_test!(register_committee_peer_rejects_invalid_pop_without_mutation {
+            let mut state = blank_state();
+            let mut pipeline = state.view().pipeline().clone();
+            pipeline.signature_batch_max_bls = 4;
+            state.set_pipeline(pipeline);
+            state_transaction!(state, block, state_block, stx);
+            let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let other = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let peer_id = crate::PeerId::new(bls.public_key().clone());
+            let wrong_pop =
+                iroha_crypto::bls_normal_pop_prove(other.private_key()).expect("mismatched pop");
+            let error = iroha_data_model::isi::register::RegisterCommitteePeerWithPop::new(
+                peer_id.clone(),
+                wrong_pop,
+            )
+            .expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "mismatched committee PoP must reject",
+            );
+            assert_contains!(
+                smart_contract_instruction_error_message(error),
+                "invalid BLS proof-of-possession"
+            );
+            assert!(stx.world.peers().iter().all(|peer| peer != &peer_id));
+            assert!(
+                stx.world
+                    .consensus_keys_by_pk
+                    .get(&peer_id.public_key().to_string())
+                    .is_none()
+            );
         });
         world_test!(register_peer_applies_key_policy_defaults {
             let mut state = blank_state();

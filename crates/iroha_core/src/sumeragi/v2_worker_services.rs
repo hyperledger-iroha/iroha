@@ -50,6 +50,139 @@ pub(crate) struct ProductionV2Services {
     leader_wire_recovery_authority: super::serviced_candidate_store::LeaderWireRecoveryAuthority,
     clean_teardown: bool,
 }
+
+/// Result of linearizing Runtime behind the physical Completion prefix.
+#[must_use = "the cut decision must be consumed before another Runtime turn"]
+pub(in crate::sumeragi) enum V2CompletionRuntimeCutDecisionV1 {
+    /// A physical completion owns the next outer turn.
+    RetryCompletion,
+    /// Runtime owns the cut because the physical completion lane was empty.
+    Runtime(V2CompletionRuntimeCutV1),
+    /// A full runtime FIFO must retire one exact Completion-class owner before
+    /// the blocked physical completion can cross into the reducer.
+    CapacityRelief(V2CompletionCapacityReliefCutV1),
+}
+
+struct V2CompletionRuntimeCutBindingV1 {
+    output_guard: Arc<ConsensusOutputGuard>,
+    context_id: wire::HeightContextId,
+    height: u64,
+    cut_at: Instant,
+    _linearity: V2CompletionRuntimeCutLinearityV1,
+}
+
+struct V2CompletionRuntimeCutLinearityV1;
+
+impl V2CompletionRuntimeCutBindingV1 {
+    fn new(
+        output_guard: Arc<ConsensusOutputGuard>,
+        context_id: wire::HeightContextId,
+        height: u64,
+        cut_at: Instant,
+    ) -> Self {
+        Self {
+            output_guard,
+            context_id,
+            height,
+            cut_at,
+            _linearity: V2CompletionRuntimeCutLinearityV1,
+        }
+    }
+
+    fn consume_for_executor(
+        self,
+        output_guard: &Arc<ConsensusOutputGuard>,
+        context: &wire::HeightContext,
+    ) -> Option<Instant> {
+        (Arc::ptr_eq(&self.output_guard, output_guard)
+            && self.context_id == context.id()
+            && self.height == context.height)
+            .then_some(self.cut_at)
+    }
+}
+
+/// Move-only proof that an empty physical Completion lane precedes Runtime.
+///
+/// The worker records completion ownership and mints this cut under the same
+/// mutex. A worker result retained after this empty observation therefore
+/// cannot claim a timestamp before `cut_at`.
+#[must_use = "the completion cut must be consumed by the matching executor step"]
+pub(in crate::sumeragi) struct V2CompletionRuntimeCutV1 {
+    binding: V2CompletionRuntimeCutBindingV1,
+}
+
+impl V2CompletionRuntimeCutV1 {
+    fn new(
+        output_guard: Arc<ConsensusOutputGuard>,
+        context_id: wire::HeightContextId,
+        height: u64,
+        cut_at: Instant,
+    ) -> Self {
+        Self {
+            binding: V2CompletionRuntimeCutBindingV1::new(
+                output_guard,
+                context_id,
+                height,
+                cut_at,
+            ),
+        }
+    }
+
+    /// Consume the cut only against the exact height executor and fail-stop owner.
+    pub(in crate::sumeragi) fn consume_for_executor(
+        self,
+        output_guard: &Arc<ConsensusOutputGuard>,
+        context: &wire::HeightContext,
+    ) -> Option<Instant> {
+        self.binding.consume_for_executor(output_guard, context)
+    }
+}
+
+/// Move-only proof that a physical completion is blocked by a full runtime FIFO.
+///
+/// This token authorizes only one Completion-class capacity-relief turn. It
+/// carries the blocked worker/local lifecycle ordinal so the runtime cannot
+/// retire a later reducer owner to make room for an earlier physical result.
+#[must_use = "the relief cut must be consumed by the matching Completion-only step"]
+pub(in crate::sumeragi) struct V2CompletionCapacityReliefCutV1 {
+    binding: V2CompletionRuntimeCutBindingV1,
+    blocked_completion_lifecycle_ordinal: u128,
+}
+
+impl V2CompletionCapacityReliefCutV1 {
+    fn new(
+        output_guard: Arc<ConsensusOutputGuard>,
+        context_id: wire::HeightContextId,
+        height: u64,
+        cut_at: Instant,
+        blocked_completion_lifecycle_ordinal: u128,
+    ) -> Option<Self> {
+        (blocked_completion_lifecycle_ordinal != 0).then(|| Self {
+            binding: V2CompletionRuntimeCutBindingV1::new(
+                output_guard,
+                context_id,
+                height,
+                cut_at,
+            ),
+            blocked_completion_lifecycle_ordinal,
+        })
+    }
+
+    /// Consume the cut only against the exact height executor and fail-stop owner.
+    pub(in crate::sumeragi) fn consume_for_executor(
+        self,
+        output_guard: &Arc<ConsensusOutputGuard>,
+        context: &wire::HeightContext,
+    ) -> Option<(Instant, u128)> {
+        let Self {
+            binding,
+            blocked_completion_lifecycle_ordinal,
+        } = self;
+        binding
+            .consume_for_executor(output_guard, context)
+            .map(|cut_at| (cut_at, blocked_completion_lifecycle_ordinal))
+    }
+}
 /// Private move-only permit for unpacking one WAL/registry signed Broadcast.
 pub(in crate::sumeragi) struct RecoveredLifecycleSignBroadcastOutputPermitV1 {
     _linearity: RecoveredLifecycleSignBroadcastOutputPermitLinearityV1,

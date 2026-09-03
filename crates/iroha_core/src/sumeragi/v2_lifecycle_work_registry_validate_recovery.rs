@@ -1633,22 +1633,57 @@ enum ReadyValidateSuccessorIdentityV1 {
 pub(in crate::sumeragi) struct ReadyValidateSuccessorV1 {
     identity: ReadyValidateSuccessorIdentityV1,
     reducer_fence_wait: Option<WaitToken>,
+    physical_completion:
+        Option<crate::sumeragi::v2_worker::LifecycleValidatePhysicalCompletionV1>,
 }
 
 impl ReadyValidateSuccessorV1 {
     /// Consume one successful validation publication into the exact successor token.
-    pub(in crate::sumeragi) const fn from_validated(published: PublishedValidated) -> Self {
+    pub(in crate::sumeragi) const fn from_validated(
+        published: PublishedValidated,
+        physical_completion: crate::sumeragi::v2_worker::LifecycleValidatePhysicalCompletionV1,
+    ) -> Self {
         Self {
             identity: ReadyValidateSuccessorIdentityV1::PublishedValidated(published.location),
             reducer_fence_wait: None,
+            physical_completion: Some(physical_completion),
         }
     }
 
     /// Consume one deterministic rejection publication into the exact successor token.
-    pub(in crate::sumeragi) const fn from_rejected(published: PublishedRejected) -> Self {
+    pub(in crate::sumeragi) const fn from_rejected(
+        published: PublishedRejected,
+        physical_completion: crate::sumeragi::v2_worker::LifecycleValidatePhysicalCompletionV1,
+    ) -> Self {
         Self {
             identity: ReadyValidateSuccessorIdentityV1::PublishedRejected(published.location),
             reducer_fence_wait: None,
+            physical_completion: Some(physical_completion),
+        }
+    }
+
+    /// Build a registry-only fixture which intentionally carries no physical
+    /// worker-completion authority.
+    #[cfg(test)]
+    pub(in crate::sumeragi) const fn from_validated_without_physical_completion_for_test(
+        published: PublishedValidated,
+    ) -> Self {
+        Self {
+            identity: ReadyValidateSuccessorIdentityV1::PublishedValidated(published.location),
+            reducer_fence_wait: None,
+            physical_completion: None,
+        }
+    }
+
+    /// Build a registry-only rejection fixture without worker timing authority.
+    #[cfg(test)]
+    pub(in crate::sumeragi) const fn from_rejected_without_physical_completion_for_test(
+        published: PublishedRejected,
+    ) -> Self {
+        Self {
+            identity: ReadyValidateSuccessorIdentityV1::PublishedRejected(published.location),
+            reducer_fence_wait: None,
+            physical_completion: None,
         }
     }
 
@@ -1669,6 +1704,7 @@ impl ReadyValidateSuccessorV1 {
                 subject,
             },
             reducer_fence_wait: None,
+            physical_completion: None,
         })
     }
 
@@ -1685,6 +1721,14 @@ impl ReadyValidateSuccessorV1 {
         }
     }
 
+    /// Borrow the exact worker-completion timing authority, when this Ready
+    /// carrier was produced directly by a guarded Validate result.
+    pub(in crate::sumeragi) const fn physical_completion(
+        &self,
+    ) -> Option<crate::sumeragi::v2_worker::LifecycleValidatePhysicalCompletionV1> {
+        self.physical_completion
+    }
+
     /// Recheck the complete Ready carrier coordinate against the fresh registry seal.
     pub(super) fn exactly_matches_ready_attestation(
         &self,
@@ -1694,7 +1738,16 @@ impl ReadyValidateSuccessorV1 {
         match &self.identity {
             ReadyValidateSuccessorIdentityV1::PublishedValidated(location)
             | ReadyValidateSuccessorIdentityV1::PublishedRejected(location) => {
+                let physical_completion_is_exact =
+                    self.physical_completion.is_none_or(|completion| {
+                        let completion_key = completion.dispatch_key();
+                        completion_key.owner() == location.address.owner
+                            && completion_key.lifecycle_ordinal() == location.address.ordinal
+                            && completion_key.slot() == location.address.slot
+                            && completion_key.digest() == location.incumbent_digest
+                    });
                 !attestation.requires_io_dispatch()
+                    && physical_completion_is_exact
                     && key.owner() == location.address.owner
                     && key.lifecycle_ordinal() == location.address.ordinal
                     && key.slot() == location.address.slot
@@ -1702,7 +1755,9 @@ impl ReadyValidateSuccessorV1 {
                     && location.incumbent_digest != location.replacement_digest
             }
             ReadyValidateSuccessorIdentityV1::SidecarWake { dispatch_key, .. } => {
-                attestation.requires_io_dispatch() && key == *dispatch_key
+                self.physical_completion.is_none()
+                    && attestation.requires_io_dispatch()
+                    && key == *dispatch_key
             }
         }
     }
@@ -2724,21 +2779,44 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
     ) -> Option<PreparedLifecycleLocalProposalReadyV1> {
         let completion = self.validated_completion()?;
         let validated = completion.outcome.validated_receipt()?;
-        let (replay, manifest) = completion
+        let projection_diagnostic = completion
+            .incumbent
+            .replay_evidence
+            .local_completion_projection_diagnostic(
+                &completion.incumbent.effect,
+                &completion.incumbent.durable_receipt,
+                &completion.incumbent.pending,
+            );
+        let projected = completion
             .incumbent
             .replay_evidence
             .project_local_completion_evidence(
                 &completion.incumbent.effect,
                 &completion.incumbent.durable_receipt,
                 &completion.incumbent.pending,
-            )?;
-        PreparedLifecycleLocalProposalReadyV1::new(
+            );
+        let Some((replay, manifest)) = projected else {
+            iroha_logger::warn!(
+                projection_diagnostic,
+                "TEMP validated lifecycle carrier did not project a local proposal"
+            );
+            return None;
+        };
+        let prepared = PreparedLifecycleLocalProposalReadyV1::new(
             completion.incumbent.effect.clone(),
             manifest,
             validated.clone(),
             self.lease.ordinal(),
             replay,
-        )
+        );
+        if prepared.is_none() {
+            iroha_logger::warn!(
+                projection_diagnostic,
+                lifecycle_ordinal = self.lease.ordinal(),
+                "TEMP local proposal handoff shape rejected a projectable carrier"
+            );
+        }
+        prepared
     }
     fn local_origin_manifest(
         completion: &DurableValidateCompletion,

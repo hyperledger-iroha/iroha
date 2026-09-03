@@ -38,7 +38,6 @@ fn send_tracked_completion_with_lifecycle_ordinal(
     let lifecycle_validate = completion.lifecycle_validate_key();
     let lifecycle_certified_serve = completion.lifecycle_certified_serve_ordinal();
     admission.retain_completion(
-        Instant::now(),
         completion.requires_runtime_capacity(),
         runtime_lifecycle_ordinal,
         lifecycle_decision_apply,
@@ -70,7 +69,6 @@ fn try_send_tracked_completion_with_lifecycle_ordinal(
     let lifecycle_validate = completion.lifecycle_validate_key();
     let lifecycle_certified_serve = completion.lifecycle_certified_serve_ordinal();
     admission.retain_completion(
-        Instant::now(),
         completion.requires_runtime_capacity(),
         runtime_lifecycle_ordinal,
         lifecycle_decision_apply,
@@ -470,6 +468,13 @@ enum LocalCompletion {
         manifest: wire::PayloadManifest,
         body: Arc<[u8]>,
     },
+}
+impl LocalCompletion {
+    const fn runtime_lifecycle_ordinal(&self) -> u128 {
+        match self {
+            Self::Reconstructed { task, .. } => task.lifecycle_ordinal(),
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BodyFetchServiceOwner {

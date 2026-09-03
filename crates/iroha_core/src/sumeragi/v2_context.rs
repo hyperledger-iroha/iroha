@@ -17,7 +17,7 @@ use crate::{
     smartcontracts::isi::staking::validator_election_eligible_at_height,
     state::{
         GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, StateBlock, StateReadOnly, WorldReadOnly,
-        epoch_validator_peer_ids_from_world_with_seed, live_consensus_key_pop_for_peer,
+        epoch_validator_peer_ids_from_world_with_seed, live_consensus_key_pop_for_peer_with_role,
         nexus_active_lane_ids, public_lane_validator_record_matches_key,
     },
 };
@@ -25,6 +25,7 @@ use iroha_crypto::{Algorithm, Hash, HashOf};
 use iroha_data_model::{
     NetworkId,
     block::{SignedBlock, consensus_v2 as wire},
+    consensus::ConsensusKeyRole,
     isi::RegisterBox,
     isi::offline_cash_v1::OfflineCashMintFinalityEpochRosterV1,
     parameter::system::ConsensusHandshakeMetadata,
@@ -299,8 +300,13 @@ pub fn freeze_staged_genesis_v2(
         if !staged_world.peers().iter().any(|peer| peer == voter) {
             return Err(V2GenesisBootstrapError::VoterMissingFromStagedWorld);
         }
-        let staged_pop = live_consensus_key_pop_for_peer(staged_world, voter, 1)
-            .ok_or(V2GenesisBootstrapError::MissingLiveConsensusKey)?;
+        let staged_pop = live_consensus_key_pop_for_peer_with_role(
+            staged_world,
+            voter,
+            1,
+            ConsensusKeyRole::Validator,
+        )
+        .ok_or(V2GenesisBootstrapError::MissingLiveConsensusKey)?;
         if signed_pops.get(voter) != Some(&staged_pop) {
             return Err(V2GenesisBootstrapError::ProofOfPossessionMismatch);
         }
@@ -991,8 +997,13 @@ fn finalized_next_epoch_snapshot_with_roster(
     let validator_set_pops = roster
         .iter()
         .map(|entry| {
-            live_consensus_key_pop_for_peer(state.world(), &entry.validator, successor_height)
-                .ok_or(V2ContextBuildError::MissingNextEpochProofOfPossession)
+            live_consensus_key_pop_for_peer_with_role(
+                state.world(),
+                &entry.validator,
+                successor_height,
+                ConsensusKeyRole::Validator,
+            )
+            .ok_or(V2ContextBuildError::MissingNextEpochProofOfPossession)
         })
         .collect::<Result<Vec<_>, _>>()?;
     wire::finality::verify_validator_power_roster_pops(&roster, &validator_set_pops)
@@ -1101,18 +1112,25 @@ mod tests {
         account::AccountId,
         block::{BlockHeader, SignedBlock},
         consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
-        isi::RegisterPeerWithPop,
+        isi::{RegisterCommitteePeerWithPop, RegisterPeerWithPop, SetParameter},
         metadata::Metadata,
         nexus::{
             DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneId, PublicLaneValidatorRecord,
             PublicLaneValidatorStatus,
         },
-        parameter::system::SumeragiNposParameters,
+        parameter::{
+            Parameter,
+            custom::CustomParameter,
+            system::{
+                ConsensusFingerprint, ConsensusHandshakeMetadata, SumeragiConsensusMode,
+                SumeragiNposParameters, consensus_metadata,
+            },
+        },
         peer::PeerId,
         prelude::{InstructionBox, TransactionBuilder},
     };
     use iroha_genesis::GenesisBlock;
-    use iroha_primitives::numeric::Quantity;
+    use iroha_primitives::{json::Json, numeric::Quantity};
     use std::num::NonZeroU64;
     fn test_network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
@@ -1190,6 +1208,14 @@ mod tests {
         duplicate_first: bool,
         corrupt_first_pop: bool,
     ) -> GenesisBlock {
+        signed_roster_genesis_with_extra(voters, duplicate_first, corrupt_first_pop, Vec::new())
+    }
+    fn signed_roster_genesis_with_extra(
+        voters: &[KeyPair],
+        duplicate_first: bool,
+        corrupt_first_pop: bool,
+        extra_instructions: Vec<InstructionBox>,
+    ) -> GenesisBlock {
         let authority =
             KeyPair::try_from_seed(b"v2-context-genesis-authority".to_vec(), Algorithm::Ed25519)
                 .expect("deterministic genesis authority");
@@ -1214,6 +1240,36 @@ mod tests {
                 PeerId::new(voters[0].public_key().clone()),
                 pop,
             )));
+        }
+        instructions.extend(extra_instructions);
+        if voters.len() == 4 && !duplicate_first && !corrupt_first_pop {
+            let mut roster = voters
+                .iter()
+                .map(|key| wire::ValidatorPower {
+                    validator: PeerId::new(key.public_key().clone()),
+                    power: 1,
+                })
+                .collect::<Vec<_>>();
+            roster.sort_by(|left, right| left.validator.cmp(&right.validator));
+            let metadata = ConsensusHandshakeMetadata {
+                mode: SumeragiConsensusMode::Permissioned,
+                block_cadence_ms: NonZeroU64::new(1_000).expect("non-zero test cadence"),
+                wire_protocol_version: u32::from(wire::PROTOCOL_VERSION),
+                consensus_fingerprint: ConsensusFingerprint::new([0xA5; 32]),
+                offline_cash_mint_finality:
+                    crate::offline_cash_v1_test_fixtures::mint_finality_genesis_parameters(&roster),
+                sumeragi_v2: crate::offline_cash_v1_test_fixtures::genesis_context_parameters(),
+            };
+            metadata
+                .validate()
+                .expect("valid signed genesis consensus metadata fixture");
+            let metadata = norito::json::value::to_value(&metadata)
+                .expect("serialize signed genesis consensus metadata fixture");
+            let metadata = Json::from_norito_value_ref(&metadata)
+                .expect("encode signed genesis consensus metadata fixture");
+            instructions.push(InstructionBox::from(SetParameter::new(Parameter::Custom(
+                CustomParameter::new(consensus_metadata::handshake_meta_id(), metadata),
+            ))));
         }
         let transaction = TransactionBuilder::new_genesis(
             AccountId::new(authority.public_key().clone()),
@@ -1264,6 +1320,42 @@ mod tests {
         assert_eq!(observed.len(), voters.len());
     }
     #[test]
+    fn signed_genesis_roster_ignores_proof_bound_committee_peers() {
+        let voters = [0x61_u8, 0x62, 0x63, 0x64].map(|seed| {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic BLS voter")
+        });
+        let committee = KeyPair::try_from_seed(vec![0x65; 32], Algorithm::BlsNormal)
+            .expect("deterministic BLS committee peer");
+        let committee_peer = PeerId::new(committee.public_key().clone());
+        let committee_pop = iroha_crypto::bls_normal_pop_prove(committee.private_key())
+            .expect("committee PoP fixture");
+        let genesis = signed_roster_genesis_with_extra(
+            &voters,
+            false,
+            false,
+            vec![InstructionBox::from(RegisterCommitteePeerWithPop::new(
+                committee_peer.clone(),
+                committee_pop,
+            ))],
+        );
+
+        let observed = signed_genesis_voting_peers(&genesis).expect("signed global roster");
+        let mut expected = voters
+            .iter()
+            .map(|key| PeerId::new(key.public_key().clone()))
+            .collect::<Vec<_>>();
+        expected.sort();
+        assert_eq!(observed, expected);
+        assert!(!observed.contains(&committee_peer));
+        assert!(
+            !signed_genesis_validator_pops(&genesis)
+                .expect("signed validator PoPs")
+                .contains_key(&committee_peer),
+            "committee peer registrations must never widen the signed global voter roster"
+        );
+    }
+    #[test]
     fn signed_genesis_roster_rejects_duplicate_or_invalid_pop() {
         let voter = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::BlsNormal)
             .expect("deterministic BLS voter");
@@ -1310,11 +1402,13 @@ mod tests {
                         .expect("valid finality PoP")
                 })
                 .collect::<Vec<_>>();
-            let network_id = test_network_id(0x42);
+            let network_id = NetworkId::from_genesis_hash(genesis.0.hash());
             let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
                 crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
                     network_id, 0, &roster,
                 );
+            let signed_parameters =
+                crate::offline_cash_v1_test_fixtures::genesis_context_parameters();
             let context = wire::HeightContext {
                 network_id,
                 protocol_version: wire::PROTOCOL_VERSION,
@@ -1329,16 +1423,9 @@ mod tests {
                 roster,
                 offline_cash_mint_finality_epoch_id,
                 offline_cash_mint_finality_epoch_roster,
-                nexus_amx_context_hash: Hash::new(b"signed genesis finality authority"),
-                execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
-                da_layout: wire::DataAvailabilityLayout {
-                    encoding: wire::PayloadEncoding::ReedSolomon16,
-                    chunk_size_bytes: 1024,
-                    data_shards: 1,
-                    parity_shards: 1,
-                    max_payload_size_bytes: 4096,
-                    max_chunk_count: 8,
-                },
+                nexus_amx_context_hash: Hash::prehashed(signed_parameters.nexus_amx_context_hash),
+                execution_policy_hash: Hash::prehashed(signed_parameters.execution_policy_hash),
+                da_layout: signed_parameters.da_layout,
                 leader_seed: [0xA7; 32],
             };
             (context, validator_set_pops)
@@ -1794,26 +1881,42 @@ mod tests {
         let expiring_view = expiring_state.view();
         let expiring_peer = &roster[0].validator;
         assert!(
-            live_consensus_key_pop_for_peer(expiring_view.world(), expiring_peer, BOUNDARY_HEIGHT)
-                .is_some(),
+            live_consensus_key_pop_for_peer_with_role(
+                expiring_view.world(),
+                expiring_peer,
+                BOUNDARY_HEIGHT,
+                ConsensusKeyRole::Validator,
+            )
+            .is_some(),
             "fixture key must still authenticate the boundary height"
         );
         assert!(
-            live_consensus_key_pop_for_peer(expiring_view.world(), expiring_peer, SUCCESSOR_HEIGHT)
-                .is_none(),
+            live_consensus_key_pop_for_peer_with_role(
+                expiring_view.world(),
+                expiring_peer,
+                SUCCESSOR_HEIGHT,
+                ConsensusKeyRole::Validator,
+            )
+            .is_none(),
             "a key is expired at its exclusive expiry height"
         );
         let scheduled_peer = &roster[1].validator;
         assert!(
-            live_consensus_key_pop_for_peer(expiring_view.world(), scheduled_peer, BOUNDARY_HEIGHT)
-                .is_none(),
+            live_consensus_key_pop_for_peer_with_role(
+                expiring_view.world(),
+                scheduled_peer,
+                BOUNDARY_HEIGHT,
+                ConsensusKeyRole::Validator,
+            )
+            .is_none(),
             "a scheduled key must not activate early"
         );
         assert!(
-            live_consensus_key_pop_for_peer(
+            live_consensus_key_pop_for_peer_with_role(
                 expiring_view.world(),
                 scheduled_peer,
-                SUCCESSOR_HEIGHT
+                SUCCESSOR_HEIGHT,
+                ConsensusKeyRole::Validator,
             )
             .is_some(),
             "Pending is a durable schedule and becomes live at activation height"
