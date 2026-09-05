@@ -489,6 +489,9 @@ impl KagemushaRecursiveVerifierProfileV1 {
 pub struct KagemushaAuthenticatedRecursiveVerifierV1 {
     eq_parameters: halo2_proofs::poly::ipa::commitment::ParamsIPA<EqAffine>,
     ep_parameters: halo2_proofs::poly::ipa::commitment::ParamsIPA<EpAffine>,
+    inner_eq_state_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EqAffine>,
+    inner_ep_state_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EpAffine>,
+    state_checkpoint_artifacts: super::KagemushaRecursionArtifactsV1,
     eq_state_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EqAffine>,
     ep_state_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EpAffine>,
     eq_terminal_authorization_protocol: snark_verifier::verifier::plonk::PlonkProtocol<EqAffine>,
@@ -859,6 +862,9 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
         let verifier = Self {
             eq_parameters,
             ep_parameters,
+            inner_eq_state_protocol,
+            inner_ep_state_protocol,
+            state_checkpoint_artifacts: recursion,
             eq_state_protocol,
             ep_state_protocol,
             eq_terminal_authorization_protocol,
@@ -894,6 +900,34 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
             commit_wrapper_ep_binding: recursion.commit_wrapper_verifying_key_ep,
         };
         Ok(verifier)
+    }
+
+    /// Borrow only immutable, release-authenticated material for private State restoration.
+    pub(super) fn state_checkpoint_material(
+        &self,
+    ) -> super::state_checkpoint::KagemushaStateCheckpointVerifierMaterialV1<'_> {
+        use super::state_checkpoint::{
+            KagemushaStateCheckpointBindingV1, KagemushaStateCheckpointVerifierMaterialV1,
+        };
+        KagemushaStateCheckpointVerifierMaterialV1 {
+            eq_parameters: &self.eq_parameters,
+            ep_parameters: &self.ep_parameters,
+            inner_eq_protocol: &self.inner_eq_state_protocol,
+            inner_ep_protocol: &self.inner_ep_state_protocol,
+            outer_eq_protocol: &self.eq_state_protocol,
+            outer_ep_protocol: &self.ep_state_protocol,
+            binding: KagemushaStateCheckpointBindingV1 {
+                release_id: self.release_id,
+                suite_id: self.suite_id,
+                vk_set_digest: self.vk_set_digest,
+                artifact_manifest_digest: self.artifact_manifest_digest,
+                inner_eq_protocol_digest: self.inner_eq_protocol_digest,
+                inner_ep_protocol_digest: self.inner_ep_protocol_digest,
+                outer_eq_protocol_digest: self.eq_protocol_digest,
+                outer_ep_protocol_digest: self.ep_protocol_digest,
+            },
+            artifacts: self.state_checkpoint_artifacts,
+        }
     }
 
     /// Return the actual Eq state protocol identity derived from its authenticated key.

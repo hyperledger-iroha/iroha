@@ -59,7 +59,9 @@ pub struct PublicIO {
     pub old_root: [u8; 32],
     /// Sparse Merkle tree root after executing the batch.
     pub new_root: [u8; 32],
-    /// Permission table Poseidon commitment for this slot.
+    /// Contextual permission-table commitment supplied for this slot.
+    ///
+    /// Transcript binding does not prove permission membership or authorization.
     pub perm_root: [u8; 32],
     /// Transaction set hash recorded by the scheduler.
     pub tx_set_hash: [u8; 32],
@@ -172,6 +174,11 @@ impl Proof {
     }
 }
 /// Limits applied before FASTPQ V1 proof verification consumes proof-carried openings.
+///
+/// These are independent ceilings, not an admitted workload guarantee. A batch
+/// below the 256-transition default can still exceed the 512-KiB approximate
+/// proof-size ceiling because AIR width, query count, and authentication paths
+/// also contribute to the proof size.
 #[allow(clippy::struct_field_names)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VerifyLimits {
@@ -300,15 +307,24 @@ impl Prover {
     }
     /// Produce a proof for the provided batch.
     ///
+    /// Every returned proof satisfies the same default resource limits as
+    /// [`verify`]. The transition-count and proof-byte ceilings apply together;
+    /// staying below the row ceiling does not guarantee that a proof fits.
+    ///
     /// # Errors
     ///
     /// Returns [`Error::InvalidProofSemantics`] unless the batch is an unchanged empty statement or
-    /// contains only fully witnessed transfers. Other errors propagate from
+    /// contains only fully witnessed transfers, or [`Error::VerifierLimitExceeded`]
+    /// if the batch or generated proof exceeds the paired verifier's default limits.
+    /// Other errors propagate from
     /// [`crate::trace_commitment`]
     /// and the configured backend implementation. The generated proof is verified through the
     /// canonical verifier path before being returned.
     pub fn prove(&self, batch: &TransitionBatch) -> Result<Proof> {
-        self.prove_with_semantics(batch, ProofSemantics::TransferStateTransition)
+        enforce_default_verify_batch_limits(batch)?;
+        let proof = self.prove_with_semantics(batch, ProofSemantics::TransferStateTransition)?;
+        enforce_default_verify_limits(batch, &proof)?;
+        Ok(proof)
     }
 
     pub(crate) fn prove_with_semantics(
@@ -325,6 +341,8 @@ impl Prover {
     /// This escape hatch is available only to unit tests and `dev-tools` builds. It proves byte
     /// and transcript determinism, not that the supplied operations constitute valid state
     /// updates. Production callers must use [`Self::prove`] or an AXT-bound proving wrapper.
+    /// Batch-count and byte limits expand for these developer fixtures; their
+    /// proofs can exceed the default production verifier's resource limits.
     ///
     /// # Errors
     ///
@@ -441,13 +459,16 @@ fn verify_prechecked_with_semantics(
 /// This escape hatch is available only to unit tests and `dev-tools` builds. It checks the proof
 /// protocol and its binding to the supplied batch, but deliberately makes no claim that the batch
 /// operations are valid state updates.
+/// Batch-count and byte limits expand to match developer fixtures, consistently
+/// with [`Prover::prove_raw_statement`]. Production verification retains its
+/// explicit/default limits and must not use this developer-only helper.
 ///
 /// # Errors
 ///
 /// Returns the same cryptographic, encoding, or verifier-limit errors as [`verify_with_limits`].
 #[cfg(any(test, feature = "dev-tools"))]
 pub fn verify_raw_statement(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
-    verify_with_limits_raw(batch, proof, VerifyLimits::default())
+    verify_with_limits_raw(batch, proof, prover_self_check_limits(batch, proof))
 }
 
 fn verify_with_limits_raw(
@@ -582,6 +603,29 @@ fn verify_wire_merkle_path(
     backend::verify_merkle_path_for_role(role, root, leaf, leaf_index, &path)
 }
 
+fn ensure_lde_air_row_binding(
+    query_pos: usize,
+    query_value: u64,
+    row: &[u64],
+    column_mix: &[u64],
+) -> Result<()> {
+    if row.len() != column_mix.len() {
+        return Err(Error::AirOpeningMismatch { index: query_pos });
+    }
+    let modulus = u128::from(GOLDILOCKS_MODULUS);
+    let expected = row
+        .iter()
+        .zip(column_mix)
+        .fold(0_u128, |sum, (&value, &mix)| {
+            let term = (u128::from(value) * u128::from(mix)) % modulus;
+            (sum + term) % modulus
+        });
+    if expected != u128::from(query_value) {
+        return Err(Error::QueryMismatch { index: query_pos });
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)]
 fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
     if proof.protocol_version != PROTOCOL_VERSION {
@@ -641,9 +685,12 @@ fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
         TRANSCRIPT_TAG_INIT,
     )?;
     transcript.append_message(TRANSCRIPT_TAG_TRACE_ROOT, &trace_root.to_le_bytes());
-    for index in 0..trace::column_names_for_batch(batch)?.len() {
-        let _ = transcript.challenge_field(&format!("{TRANSCRIPT_TAG_COLUMN_MIX_PREFIX}:{index}"));
-    }
+    let column_names = trace::column_names_for_batch(batch)?;
+    let column_mix = (0..column_names.len())
+        .map(|index| {
+            transcript.challenge_field(&format!("{TRANSCRIPT_TAG_COLUMN_MIX_PREFIX}:{index}"))
+        })
+        .collect::<Vec<_>>();
     transcript.append_message(
         TRANSCRIPT_TAG_ROOTS,
         &[lde_root.to_le_bytes(), trace_root.to_le_bytes()].concat(),
@@ -733,7 +780,6 @@ fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
             actual: proof.air_openings.len(),
         });
     }
-    let column_names = trace::column_names_for_batch(batch)?;
     let lde_chunk_size = backend::lde_chunk_size(params.fri.arity)?;
     let lde_leaf_count = leaf_count_for_values(lde_domain_size, lde_chunk_size)?;
     let lde_path_len = merkle_path_len_for_leaf_count(lde_leaf_count)?;
@@ -798,6 +844,11 @@ fn verify_after_limits(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
         )? {
             return Err(Error::AirMerklePathMismatch { index: pos });
         }
+        // Both values are authenticated independently above. Bind the mixed
+        // LDE oracle to this AIR row using the post-trace-commitment challenges.
+        // Batch-derived commitment replay remains required for every relation
+        // that the current AIR and opening schema do not express.
+        ensure_lde_air_row_binding(pos, query.value, &air_opening.current_row, &column_mix)?;
         let next_idx = expected_idx
             .checked_add(next_step)
             .ok_or(Error::QueryIndexOverflow {
@@ -1229,6 +1280,10 @@ fn fri_terminal_degree_bound(
     // Every implemented FASTPQ residue is at most quadratic in trace columns.
     // A trace column has degree < trace_len, so 2 * trace_len is a conservative
     // exclusive bound for the unquotiented composition polynomial.
+    // TODO: stop FRI before this bound rounds up and loses the original code
+    // rate, then migrate the complete terminal opening and release fixtures.
+    // The current two-point terminal authenticates degree < domain_size / 2;
+    // full batch-derived commitment reconstruction remains mandatory.
     let mut degree_bound = trace_len
         .checked_mul(backend::AIR_MAX_CONSTRAINT_DEGREE_V1)
         .ok_or(Error::TraceLengthOverflow { rows: trace_len })?;
@@ -1622,6 +1677,9 @@ mod tests {
         batch
     }
     fn sample_proof_with_size(rows: usize) -> (TransitionBatch, Proof) {
+        // Keep ordinary cryptographic-negative fixtures within every default
+        // limit, so preflight does not mask the intended rejection. Sixteen
+        // metadata rows fit; the old 32-row fixtures exceeded the byte ceiling.
         sample_proof_with_size_and_limits(rows, VerifyLimits::default())
     }
     fn sample_proof_with_size_and_limits(
@@ -1999,6 +2057,96 @@ mod tests {
         super::verify(&batch, &proof).expect("strict empty no-op verification");
     }
     #[test]
+    fn public_prover_rejects_default_batch_limits_before_semantics_or_proof_work() {
+        let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
+        let oversized_rows = sample_batch_with_size(DEFAULT_MAX_VERIFY_TRANSITIONS + 1);
+        assert!(matches!(
+            prover.prove(&oversized_rows),
+            Err(Error::VerifierLimitExceeded {
+                limit: "max_transitions",
+                ..
+            })
+        ));
+        let mut oversized_bytes =
+            TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
+        oversized_bytes.metadata.insert(
+            "oversized-test-metadata".into(),
+            vec![0; DEFAULT_MAX_VERIFY_BATCH_BYTES],
+        );
+        assert!(matches!(
+            prover.prove(&oversized_bytes),
+            Err(Error::VerifierLimitExceeded {
+                limit: "max_batch_bytes",
+                ..
+            })
+        ));
+    }
+    #[test]
+    fn default_proof_ceiling_rejects_sixteen_row_transfer_opening_shape() {
+        // Construct only the opening shape, without costly witness generation,
+        // hashing or FRI. Even omitting every key/value column, sixteen transfer
+        // rows require more than the default byte budget in the current wire.
+        let batch = sample_batch_with_size(16);
+        let mut proof = materialise_sample_artifact(sample_backend_artifact()).unwrap();
+        let zero = wire_digest384(0);
+        let columns = 12 + 128;
+        let query_count = 128;
+        proof.lde_domain_size = 128;
+        proof.alphas = vec![0; AIR_COMPOSITION_ALPHA_COUNT];
+        proof.betas = vec![fp4(0); 6];
+        proof.fri_layers = vec![zero; 7];
+        proof.queries = vec![
+            QueryOpening {
+                index: 0,
+                value: 0,
+                chunk_values: vec![0; 64],
+                merkle_path: vec![zero; 1],
+            };
+            query_count
+        ];
+        proof.air_openings = vec![
+            AirConstraintOpening {
+                index: 0,
+                current_row: vec![0; columns],
+                next_row: vec![0; columns],
+                current_row_path: vec![zero; 7],
+                next_row_path: vec![zero; 7],
+                composition_value: 0,
+                composition_path: vec![zero; 7],
+            };
+            query_count
+        ];
+        proof.fri_queries = vec![
+            FriQueryOpening {
+                initial_index: 0,
+                rounds: (0..6)
+                    .map(|round| FriRoundOpening {
+                        round: round as u32,
+                        index: 0,
+                        values: vec![fp4(0); 2],
+                        folded_value: fp4(0),
+                        merkle_path: vec![zero; 6 - round],
+                    })
+                    .collect(),
+                final_index: 0,
+                final_values: vec![fp4(0); 2],
+                final_merkle_path: vec![zero; 1],
+            };
+            query_count
+        ];
+        let bytes = proof_size_hint(&proof);
+        assert!(bytes > VerifyLimits::default().max_proof_bytes);
+        assert!(matches!(
+            enforce_default_verify_limits(&batch, &proof),
+            Err(Error::VerifierLimitExceeded { limit: "max_proof_bytes", actual, .. })
+                if actual == bytes
+        ));
+        // Explicit developer-only diagnostic limits still admit the shape;
+        // this is not a valid cryptographic proof and is never verified here.
+        enforce_verify_limits(&batch, &proof, prover_self_check_limits(&batch, &proof))
+            .expect("diagnostic geometry may exceed production byte limits");
+    }
+    #[test]
     fn full_width_slot_uses_a_canonical_trace_residue() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
         let batch = TransitionBatch::new(
@@ -2220,7 +2368,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_bad_protocol_and_parameter_metadata() {
-        let (batch, proof) = sample_proof_with_size(32);
+        let (batch, proof) = sample_proof_with_size(16);
         assert_verify_rejects(
             &batch,
             &proof,
@@ -2280,7 +2428,7 @@ mod tests {
     }
     #[test]
     fn verify_limits_reject_before_trace_root_binding() {
-        let (batch, mut proof) = sample_proof_with_size(32);
+        let (batch, mut proof) = sample_proof_with_size(16);
         proof.trace_root = wire_digest384(1);
         let limits = verify_limits_with_override(|limits| limits.max_proof_bytes = 0);
         let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
@@ -2297,7 +2445,7 @@ mod tests {
     }
     #[test]
     fn verify_batch_size_limit_rejects_before_trace_root_binding() {
-        let (batch, mut proof) = sample_proof_with_size(32);
+        let (batch, mut proof) = sample_proof_with_size(16);
         proof.trace_root = wire_digest384(1);
         let limits = verify_limits_with_override(|limits| limits.max_batch_bytes = 0);
         let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
@@ -2314,7 +2462,7 @@ mod tests {
     }
     #[test]
     fn verify_query_count_limit_rejects_before_trace_root_binding() {
-        let (batch, mut proof) = sample_proof_with_size(32);
+        let (batch, mut proof) = sample_proof_with_size(16);
         proof.trace_root = wire_digest384(1);
         let limits = verify_limits_with_override(|limits| limits.max_queries = 0);
         let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
@@ -2331,7 +2479,7 @@ mod tests {
     }
     #[test]
     fn verify_transition_limit_rejects_before_trace_root_binding() {
-        let (batch, mut proof) = sample_proof_with_size(32);
+        let (batch, mut proof) = sample_proof_with_size(16);
         proof.trace_root = wire_digest384(1);
         let limits = verify_limits_with_override(|limits| limits.max_transitions = 0);
         let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
@@ -2372,7 +2520,7 @@ mod tests {
     }
     #[test]
     fn verify_fri_layer_limit_rejects_before_trace_root_binding() {
-        let (batch, mut proof) = sample_proof_with_size(32);
+        let (batch, mut proof) = sample_proof_with_size(16);
         proof.trace_root = wire_digest384(1);
         let limits = verify_limits_with_override(|limits| limits.max_fri_layers = 0);
         let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
@@ -2389,7 +2537,7 @@ mod tests {
     }
     #[test]
     fn verify_query_path_limit_rejects_before_trace_root_binding() {
-        let (batch, mut proof) = sample_proof_with_size(32);
+        let (batch, mut proof) = sample_proof_with_size(16);
         proof.trace_root = wire_digest384(1);
         let limits = verify_limits_with_override(|limits| limits.max_query_path_len = 0);
         let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
@@ -2406,7 +2554,7 @@ mod tests {
     }
     #[test]
     fn verify_air_row_limit_rejects_before_trace_root_binding() {
-        let (batch, mut proof) = sample_proof_with_size(32);
+        let (batch, mut proof) = sample_proof_with_size(16);
         proof.trace_root = wire_digest384(1);
         let limits = verify_limits_with_override(|limits| limits.max_air_row_values = 0);
         let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
@@ -2423,7 +2571,7 @@ mod tests {
     }
     #[test]
     fn verify_fri_value_limit_rejects_before_trace_root_binding() {
-        let (batch, mut proof) = sample_proof_with_size(32);
+        let (batch, mut proof) = sample_proof_with_size(16);
         proof.trace_root = wire_digest384(1);
         let limits = verify_limits_with_override(|limits| limits.max_fri_round_values = 0);
         let err = verify_with_limits(&batch, &proof, limits).unwrap_err();
@@ -2440,7 +2588,7 @@ mod tests {
     }
     #[test]
     fn verify_zero_lde_domain_rejects_before_trace_root_binding() {
-        let (batch, mut proof) = sample_proof_with_size(32);
+        let (batch, mut proof) = sample_proof_with_size(16);
         proof.lde_domain_size = 0;
         proof.trace_root = wire_digest384(1);
         let err = verify(&batch, &proof).unwrap_err();
@@ -2501,7 +2649,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_valid_field_lde_root_tamper_after_trace_binding() {
-        let (batch, mut proof) = sample_proof_with_size(32);
+        let (batch, mut proof) = sample_proof_with_size(16);
         proof.lde_root = wire_digest384(42);
         let err = verify(&batch, &proof).unwrap_err();
         assert!(
@@ -2511,7 +2659,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_valid_field_air_trace_root_tamper_after_trace_binding() {
-        let (batch, mut proof) = sample_proof_with_size(32);
+        let (batch, mut proof) = sample_proof_with_size(16);
         proof.air_trace_root = wire_digest384(43);
         let err = verify(&batch, &proof).unwrap_err();
         assert!(
@@ -2521,7 +2669,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_valid_field_air_composition_root_tamper_after_trace_binding() {
-        let (batch, mut proof) = sample_proof_with_size(32);
+        let (batch, mut proof) = sample_proof_with_size(16);
         proof.air_composition_root = wire_digest384(44);
         let err = verify(&batch, &proof).unwrap_err();
         assert!(
@@ -2775,7 +2923,7 @@ mod tests {
     #[test]
     fn verify_rejects_fri_layer_length_mismatch() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(
             proof.fri_layers.len() > 1,
@@ -2787,7 +2935,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_extra_fri_layer_for_domain_schedule() {
-        let (batch, mut proof) = sample_proof_with_size(32);
+        let (batch, mut proof) = sample_proof_with_size(16);
         let terminal = *proof
             .fri_layers
             .last()
@@ -2802,7 +2950,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_empty_fri_layer_roots() {
-        let (batch, proof) = sample_proof_with_size(32);
+        let (batch, proof) = sample_proof_with_size(16);
         assert_verify_rejects(
             &batch,
             &proof,
@@ -2821,7 +2969,7 @@ mod tests {
     #[test]
     fn verify_rejects_fri_layer_mutation() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(
             !proof.fri_layers.is_empty(),
@@ -2834,7 +2982,7 @@ mod tests {
     #[test]
     fn verify_rejects_fri_challenge_length_mismatch() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(!proof.betas.is_empty(), "expected at least one FRI beta");
         proof.betas.pop();
@@ -2844,7 +2992,7 @@ mod tests {
     #[test]
     fn verify_rejects_query_count_mismatch() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(!proof.queries.is_empty(), "expected queries in proof");
         proof.queries.pop();
@@ -2853,7 +3001,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_fri_and_air_vector_count_mismatches() {
-        let (batch, proof) = sample_proof_with_size(32);
+        let (batch, proof) = sample_proof_with_size(16);
         assert_verify_rejects(
             &batch,
             &proof,
@@ -2916,7 +3064,7 @@ mod tests {
     #[test]
     fn verify_rejects_query_opening_permutation() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(proof.queries.len() > 1, "expected multiple query openings");
         proof.queries.swap(0, 1);
@@ -2926,7 +3074,7 @@ mod tests {
     #[test]
     fn verify_rejects_air_opening_permutation() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(
             proof.air_openings.len() > 1,
@@ -2939,7 +3087,7 @@ mod tests {
     #[test]
     fn verify_rejects_fri_query_permutation() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(
             proof.fri_queries.len() > 1,
@@ -2952,7 +3100,7 @@ mod tests {
     #[test]
     fn verify_rejects_duplicate_query_opening_with_preserved_count() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(proof.queries.len() > 1, "expected multiple query openings");
         proof.queries[1] = proof.queries[0].clone();
@@ -2962,7 +3110,7 @@ mod tests {
     #[test]
     fn verify_rejects_wrong_query_value() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let first = proof
             .queries
@@ -2975,7 +3123,7 @@ mod tests {
     #[test]
     fn verify_rejects_wrong_query_chunk_value() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let first = proof
             .queries
@@ -2995,7 +3143,7 @@ mod tests {
     #[test]
     fn verify_rejects_wrong_query_merkle_path() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let first = proof
             .queries
@@ -3011,7 +3159,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_malformed_query_and_air_openings() {
-        let (batch, proof) = sample_proof_with_size(32);
+        let (batch, proof) = sample_proof_with_size(16);
         assert_verify_rejects(
             &batch,
             &proof,
@@ -3093,7 +3241,7 @@ mod tests {
     #[test]
     fn verify_rejects_wrong_air_composition_root() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.air_composition_root = wire_digest384(1);
         let err = verify(&batch, &proof).unwrap_err();
@@ -3102,7 +3250,7 @@ mod tests {
     #[test]
     fn verify_rejects_wrong_air_trace_root() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.air_trace_root = wire_digest384(1);
         let err = verify(&batch, &proof).unwrap_err();
@@ -3111,7 +3259,7 @@ mod tests {
     #[test]
     fn verify_rejects_missing_air_challenges() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.alphas.clear();
         let err = verify(&batch, &proof).unwrap_err();
@@ -3126,7 +3274,7 @@ mod tests {
     #[test]
     fn verify_rejects_extra_air_challenges() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.alphas.push(42);
         let err = verify(&batch, &proof).unwrap_err();
@@ -3140,7 +3288,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_wrong_air_challenge_values() {
-        let (batch, proof) = sample_proof_with_size(32);
+        let (batch, proof) = sample_proof_with_size(16);
         assert_verify_rejects(
             &batch,
             &proof,
@@ -3154,7 +3302,7 @@ mod tests {
     #[test]
     fn verify_rejects_air_opening_index_mismatch() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let first = proof
             .air_openings
@@ -3167,7 +3315,7 @@ mod tests {
     #[test]
     fn verify_rejects_air_opening_count_mismatch() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         assert!(
             !proof.air_openings.is_empty(),
@@ -3221,7 +3369,7 @@ mod tests {
     #[test]
     fn verify_limits_reject_fri_layer_count_limit() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let proof = prover.prove_raw_statement(&batch).unwrap();
         let layer_count = proof.fri_layers.len();
         assert!(layer_count > 0, "proof must carry FRI layer roots");
@@ -3239,7 +3387,7 @@ mod tests {
     #[test]
     fn verify_limits_reject_oversized_air_rows() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let proof = prover.prove_raw_statement(&batch).unwrap();
         let row_len = proof
             .air_openings
@@ -3262,7 +3410,7 @@ mod tests {
     #[test]
     fn verify_limits_reject_query_count_limit() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let proof = prover.prove_raw_statement(&batch).unwrap();
         let query_count = proof.queries.len();
         assert!(query_count > 0, "proof must carry sampled queries");
@@ -3280,7 +3428,7 @@ mod tests {
     #[test]
     fn verify_limits_reject_extra_fri_query_count() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let query_count = proof.queries.len();
         assert!(query_count > 0, "proof must carry sampled queries");
@@ -3304,7 +3452,7 @@ mod tests {
     #[test]
     fn verify_limits_reject_extra_air_opening_count() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let query_count = proof.queries.len();
         assert!(query_count > 0, "proof must carry sampled queries");
@@ -3328,7 +3476,7 @@ mod tests {
     #[test]
     fn verify_limits_reject_oversized_query_chunks() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let proof = prover.prove_raw_statement(&batch).unwrap();
         let chunk_len = proof
             .queries
@@ -3352,7 +3500,7 @@ mod tests {
     #[test]
     fn verify_limits_reject_oversized_query_merkle_path() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let path = &mut proof
             .queries
@@ -3418,7 +3566,7 @@ mod tests {
     #[test]
     fn verify_limits_reject_oversized_proof_payload() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let proof = prover.prove_raw_statement(&batch).unwrap();
         let proof_bytes = proof_size_hint(&proof);
         assert!(proof_bytes > 0, "proof size hint should be non-zero");
@@ -3466,7 +3614,7 @@ mod tests {
     #[test]
     fn verify_limits_reject_oversized_air_merkle_paths() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let proof = prover.prove_raw_statement(&batch).unwrap();
         let path_len = proof
             .air_openings
@@ -3523,7 +3671,7 @@ mod tests {
     #[test]
     fn verify_limits_reject_oversized_final_fri_values() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let values = &mut proof
             .fri_queries
@@ -3548,7 +3696,7 @@ mod tests {
     #[test]
     fn verify_limits_reject_oversized_fri_round_values() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let proof = prover.prove_raw_statement(&batch).unwrap();
         let values_len = proof
             .fri_queries
@@ -3573,7 +3721,7 @@ mod tests {
     #[test]
     fn verify_limits_reject_oversized_final_fri_merkle_path() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let path = &mut proof
             .fri_queries
@@ -3595,7 +3743,7 @@ mod tests {
     #[test]
     fn verify_limits_reject_oversized_fri_round_merkle_path() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let path = &mut proof
             .fri_queries
@@ -3618,7 +3766,7 @@ mod tests {
     #[test]
     fn verify_rejects_wrong_final_fri_merkle_path() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let query = proof
             .fri_queries
@@ -3635,7 +3783,7 @@ mod tests {
     #[test]
     fn verify_rejects_zero_lde_domain_size() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.lde_domain_size = 0;
         let err = verify(&batch, &proof).unwrap_err();
@@ -3647,7 +3795,7 @@ mod tests {
     #[test]
     fn verify_rejects_nonzero_lde_domain_size_tamper() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         proof.lde_domain_size = proof.lde_domain_size.saturating_add(1);
         let err = verify(&batch, &proof).unwrap_err();
@@ -3659,7 +3807,7 @@ mod tests {
     #[test]
     fn verify_rejects_wrong_fri_folded_value() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let round = proof
             .fri_queries
@@ -3673,7 +3821,7 @@ mod tests {
     #[test]
     fn verify_rejects_wrong_final_fri_value() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let value = proof
             .fri_queries
@@ -3689,7 +3837,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_malformed_fri_query_chain() {
-        let (batch, proof) = sample_proof_with_size(32);
+        let (batch, proof) = sample_proof_with_size(16);
         assert_verify_rejects(
             &batch,
             &proof,
@@ -3744,7 +3892,7 @@ mod tests {
     }
     #[test]
     fn verify_rejects_malformed_fri_query_chain_lengths() {
-        let (batch, proof) = sample_proof_with_size(32);
+        let (batch, proof) = sample_proof_with_size(16);
         assert_verify_rejects(
             &batch,
             &proof,
@@ -3824,6 +3972,34 @@ mod tests {
         assert!(matches!(err, Error::FriArity(0)));
     }
     #[test]
+    fn lde_air_row_binding_checks_the_sampled_column_linear_combination() {
+        let row = [GOLDILOCKS_MODULUS - 1, GOLDILOCKS_MODULUS - 2];
+        let mix = [GOLDILOCKS_MODULUS - 1, 2];
+        let expected = GOLDILOCKS_MODULUS - 3;
+        ensure_lde_air_row_binding(7, expected, &row, &mix)
+            .expect("canonical modular linear combination");
+        assert!(matches!(
+            ensure_lde_air_row_binding(7, expected - 1, &row, &mix),
+            Err(Error::QueryMismatch { index: 7 })
+        ));
+        let different_row = [row[0] - 1, row[1]];
+        assert!(matches!(
+            ensure_lde_air_row_binding(7, expected, &different_row, &mix),
+            Err(Error::QueryMismatch { index: 7 })
+        ));
+    }
+    #[test]
+    fn lde_air_row_binding_rejects_truncated_or_extended_oracles() {
+        assert!(matches!(
+            ensure_lde_air_row_binding(3, 12, &[4], &[3, 7]),
+            Err(Error::AirOpeningMismatch { index: 3 })
+        ));
+        assert!(matches!(
+            ensure_lde_air_row_binding(3, 12, &[4, 0], &[3]),
+            Err(Error::AirOpeningMismatch { index: 3 })
+        ));
+    }
+    #[test]
     fn final_v1_binary_fri_schedule_preserves_a_complete_terminal_domain() {
         let params = fastpq_isi::FASTPQ_FINAL_V1;
         let lengths = expected_fri_layer_lengths(
@@ -3835,6 +4011,10 @@ mod tests {
         let expected = (1..=19).rev().map(|log| 1_usize << log).collect::<Vec<_>>();
         assert_eq!(lengths, expected);
         assert_eq!(
+            lengths.last().copied(),
+            Some(fastpq_isi::FASTPQ_FRI_TERMINAL_DOMAIN_SIZE_V1 as usize)
+        );
+        assert_eq!(
             fri_terminal_degree_bound(
                 1usize << params.lde_log_size,
                 params.fri.blowup_factor,
@@ -3843,6 +4023,57 @@ mod tests {
             )
             .expect("final V1 terminal degree bound"),
             1
+        );
+    }
+    #[test]
+    fn current_terminal_schedule_loses_the_claimed_composition_degree_bound() {
+        // This is a diagnostic for a production blocker, not a successful
+        // soundness test: x^3 exceeds the advertised bound < 2 for N_trace=1,
+        // but two binary folds make it constant on the final two-point domain.
+        // Rebuilding every batch-derived root prevents substituting this
+        // polynomial in an otherwise valid complete FASTPQ proof.
+        let params = fastpq_isi::FASTPQ_FINAL_V1;
+        let lengths = expected_fri_layer_lengths(8, params.fri.arity, params.fri.max_reductions)
+            .expect("current three-layer schedule");
+        assert_eq!(lengths, [8, 4, 2]);
+        let mut domain = backend::FriDomain::from_lde_parameters(
+            params.lde_root,
+            params.lde_log_size,
+            8,
+            params.omega_coset,
+        )
+        .expect("canonical eight-point domain");
+        let mut values = (0..8)
+            .map(|index| {
+                let x = domain.point(index);
+                fp4(mul_mod(mul_mod(x, x), x))
+            })
+            .collect::<Vec<_>>();
+        assert!(!domain.evaluations_have_degree_below(&values, 2).unwrap());
+        for beta in [fp4(3), fp4(5)] {
+            let next_len = values.len() / 2;
+            values = (0..next_len)
+                .map(|index| {
+                    fold_fri_values(
+                        &[values[index], values[index + next_len]],
+                        beta,
+                        domain.point(index),
+                        domain.coset_generator(next_len),
+                    )
+                    .expect("binary polynomial fold")
+                })
+                .collect();
+            domain = domain.folded(2);
+        }
+        assert_eq!(values, fp4_values(&[15, 15]));
+        let terminal_bound =
+            fri_terminal_degree_bound(8, params.fri.blowup_factor, params.fri.arity, &lengths)
+                .expect("rounded terminal degree bound");
+        assert_eq!(terminal_bound, 1);
+        assert!(
+            domain
+                .evaluations_have_degree_below(&values, terminal_bound)
+                .unwrap()
         );
     }
     #[test]
@@ -4114,7 +4345,7 @@ mod tests {
     #[test]
     fn verify_rejects_wrong_air_next_row_opening() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let first = proof
             .air_openings
@@ -4134,7 +4365,7 @@ mod tests {
     #[test]
     fn verify_rejects_wrong_air_row_opening() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let first = proof
             .air_openings
@@ -4154,7 +4385,7 @@ mod tests {
     #[test]
     fn verify_rejects_wrong_air_composition_merkle_path() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let first = proof
             .air_openings
@@ -4171,7 +4402,7 @@ mod tests {
     #[test]
     fn verify_rejects_wrong_air_composition_opening() {
         let prover = Prover::canonical("fastpq-state-transition-stark-v1").unwrap();
-        let batch = sample_batch_with_size(32);
+        let batch = sample_batch_with_size(16);
         let mut proof = prover.prove_raw_statement(&batch).unwrap();
         let first = proof
             .air_openings
@@ -4199,7 +4430,10 @@ mod tests {
     #[test]
     fn verify_accepts_large_batch_when_limits_allow() {
         let row_count = DEFAULT_MAX_VERIFY_TRANSITIONS + 1;
-        let limits = verify_limits_with_override(|limits| limits.max_transitions = row_count);
+        let limits = verify_limits_with_override(|limits| {
+            limits.max_transitions = row_count;
+            limits.max_proof_bytes = 2 * 1024 * 1024;
+        });
         let (batch, proof) = sample_proof_with_size_and_limits(row_count, limits);
         verify_with_limits(&batch, &proof, limits).unwrap();
     }

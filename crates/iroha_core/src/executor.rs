@@ -231,6 +231,7 @@ fn native_singular_query_access(query: &SingularQueryBox) -> NativeQueryAccess {
         // through their separate exact-scope gate below, and protected SoraFS records pass
         // through the subsystem-specific gates.
         SingularQueryBox::FindExecutorDataModel(_)
+        | SingularQueryBox::FindRaceById(_)
         | SingularQueryBox::FindParameters(_)
         | SingularQueryBox::FindAccountRecoveryPolicyByAlias(_)
         | SingularQueryBox::FindAccountRecoveryRequestByAlias(_)
@@ -9589,6 +9590,19 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     ) {
         return true;
     }
+    // Native race handlers enforce wallet debits, gameplay signatures and proof settlement.
+    if is_any!(
+        iroha_data_model::isi::race::OpenRaceV1,
+        iroha_data_model::isi::race::JoinRaceV1,
+        iroha_data_model::isi::race::StartRaceV1,
+        iroha_data_model::isi::race::CommitRaceCheckpointV1,
+        iroha_data_model::isi::race::ChallengeRaceV1,
+        iroha_data_model::isi::race::CommitRaceInputsV1,
+        iroha_data_model::isi::race::RevealRaceInputsV1,
+        iroha_data_model::isi::race::AdvanceRaceDeadlineV1,
+        iroha_data_model::isi::race::SubmitRaceProofV1,
+        iroha_data_model::isi::race::ExpireRaceV1,
+    ) { return true; }
     // Admit the complete native VPN escrow lifecycle so every lease retains
     // its settlement and timeout-refund terminal paths.
     if is_any!(

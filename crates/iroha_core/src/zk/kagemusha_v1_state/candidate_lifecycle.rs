@@ -1528,11 +1528,17 @@ impl KagemushaOutgoingCandidateJournalV1 {
         &mut self,
         operation_id: DigestV1,
         authenticated_credential_id: DigestV1,
+        authenticated_core_authorization_key_reference: DigestV1,
         prepared: PreparedOutgoingCandidateV1,
     ) -> Result<KagemushaOutgoingOperationPrepareOutcomeV1, KagemushaStateErrorV1> {
         let (next_index, outcome) = self
             .operation_index
-            .prepare_successor(operation_id, authenticated_credential_id, &prepared)
+            .prepare_successor(
+                operation_id,
+                authenticated_credential_id,
+                authenticated_core_authorization_key_reference,
+                &prepared,
+            )
             .map_err(map_operation_index_error)?;
         let mut next = self.clone();
         next.prepare(prepared)?;

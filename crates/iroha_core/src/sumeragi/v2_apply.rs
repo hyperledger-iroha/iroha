@@ -3924,7 +3924,9 @@ impl V2ApplyService {
             self.kura.as_ref(),
             context,
             body,
-        ) {
+        )
+        .map_err(V2ApplyError::CanonicalStorageRead)?
+        {
             return Ok(());
         }
         let routes = bundle
@@ -4432,10 +4434,10 @@ impl V2ApplyService {
                 decision_height: height.get(),
             });
         }
-        let durable_hash = self.kura.get_durable_block_hash(height);
-        if durable_hash.is_some_and(|hash| hash != task.subject().block_hash) {
-            return Err(V2ApplyError::KuraConflict);
-        }
+        let durable_body = self
+            .kura
+            .read_block_body_with_verified_finality(height, &verified_artifact)
+            .map_err(V2ApplyError::CanonicalStorageRead)?;
         if state_height < height.get() {
             if state_height.saturating_add(1) != height.get() {
                 return Err(V2ApplyError::StateGap {
@@ -4443,10 +4445,25 @@ impl V2ApplyService {
                     decision_height: height.get(),
                 });
             }
-        } else if durable_hash.is_none() {
+        } else if durable_body.is_none() {
             // WSV cannot be ahead of its canonical block log. Continuing here
             // would manufacture a sidecar for state that Kura cannot identify.
             return Err(V2ApplyError::StateAheadOfKura);
+        }
+        if durable_body.is_some() {
+            // An interrupted append can precede finality publication. The
+            // opaque verified decision above has now authenticated the exact
+            // durable execution bytes, including signatures and results.
+            // Complete that publication before recovery consults canonical
+            // lane ownership; ordinary planning sees the post-append frontier.
+            self.kura
+                .store_v2_finality_artifact(artifact)
+                .map_err(|error| {
+                    V2ApplyError::committed_recovery_required(
+                        "recovered pre-WSV finality artifact",
+                        &error,
+                    )
+                })?;
         }
         // The durable CommitQC and exact validated body now identify the only
         // carrier that can ever apply at this height. Keep its immutable
@@ -4500,17 +4517,15 @@ impl V2ApplyService {
                 checked_carrier_applications,
             )?;
             self.kura
-                .get_block(height)
+                .read_block_body(height)
+                .map_err(V2ApplyError::CanonicalStorageRead)?
                 .ok_or(V2ApplyError::StateAheadOfKura)?
         } else {
             // WSV is already committed. The proposal body is deliberately
             // resultless, so recovery must authenticate and retain Kura's
             // canonical result-bearing execution image rather than replacing
             // it with the proposal carrier.
-            let committed = self
-                .kura
-                .get_block(height)
-                .ok_or(V2ApplyError::StateAheadOfKura)?;
+            let committed = durable_body.ok_or(V2ApplyError::StateAheadOfKura)?;
             let committed_wire = committed
                 .encode_wire()
                 .map_err(|error| V2ApplyError::CanonicalBlock(error.to_string()))?;

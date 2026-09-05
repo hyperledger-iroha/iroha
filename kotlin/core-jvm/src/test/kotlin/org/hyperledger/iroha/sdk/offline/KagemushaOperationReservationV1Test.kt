@@ -142,7 +142,7 @@ class KagemushaOperationReservationV1Test {
             return if (substituteId) ByteArray(32) { -1 } else operationId.copyOf()
         }
         override fun acceptQualification(qualification: KagemushaHardwareQualificationV1, hardwarePolicyDigest: ByteArray): Unit = error("unused")
-        override fun acceptAuthenticatedDeviceReply(operation: Int, requestId: ByteArray, canonicalCommand: ByteArray, canonicalReply: ByteArray, qualification: KagemushaHardwareQualificationV1): Unit = error("unused")
+        override fun acceptAuthenticatedDeviceReply(operation: Int, requestId: ByteArray, canonicalCommand: ByteArray, canonicalReply: ByteArray, responseAuthenticator: ByteArray, qualification: KagemushaHardwareQualificationV1): Unit = error("unused")
         override fun beginSenderTransition(operationId: ByteArray, inputs: KagemushaDeviceSenderPublicInputsV1, qualification: KagemushaHardwareQualificationV1): KagemushaNativeSenderPreparationV1 = error("unused")
         override fun provePreparedSenderTransition(preparation: KagemushaNativeSenderPreparationV1, authenticatedPreparationReply: ByteArray): KagemushaNativeSenderCandidateV1 = error("unused")
         override fun terminalEnvelope(candidate: KagemushaNativeSenderCandidateV1, authenticatedCommitReply: ByteArray): ByteArray = error("unused")

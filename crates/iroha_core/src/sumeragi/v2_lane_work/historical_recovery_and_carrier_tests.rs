@@ -203,14 +203,8 @@ fn carrier_replacement_filters_persistence_and_output_sources_together() {
 fn completed_commit_qc_round_robin_does_not_restart_ahead_of_pending_source() {
     let second_lane = LaneId::new(1);
     let second_dataspace = DataSpaceId::new(7);
-    let (mut adapter, keys) = multilane_fixture(
-        wire::ConsensusMode::Permissioned,
-        1,
-        false,
-        None,
-        second_lane,
-        second_dataspace,
-    );
+    let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+    enable_multilane_nexus(&mut adapter, &keys, second_lane, second_dataspace);
     let (_, first_proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
     let (_, second_proposal) = planned_lane_candidate_block_for_route_at_view(
         &adapter,
@@ -258,14 +252,8 @@ fn completed_commit_qc_round_robin_does_not_restart_ahead_of_pending_source() {
 fn committed_lane_output_survives_actual_session_cache_eviction() {
     let second_lane = LaneId::new(1);
     let second_dataspace = DataSpaceId::new(7);
-    let (mut adapter, keys) = multilane_fixture(
-        wire::ConsensusMode::Permissioned,
-        1,
-        false,
-        None,
-        second_lane,
-        second_dataspace,
-    );
+    let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+    enable_multilane_nexus(&mut adapter, &keys, second_lane, second_dataspace);
     let (_, first_proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
     let (_, second_proposal) = planned_lane_candidate_block_for_route_at_view(
         &adapter,
@@ -2854,6 +2842,7 @@ fn decided_mixed_carrier_accepts_canonical_successor_while_local_sidecars_lag() 
         parent
             .state
             .unapplied_lane_block_artifact_heights_snapshot_cached()
+            .expect("read authenticated pending lane frontier")
             .get(&(
                 parent_proposal.descriptor.lane_id,
                 parent_proposal.descriptor.dataspace_id,
@@ -3017,7 +3006,8 @@ fn decided_mixed_carrier_accepts_canonical_successor_while_local_sidecars_lag() 
             successor.state.as_ref(),
             successor.kura.as_ref(),
             &wrong_raw_successor,
-        ),
+        )
+        .expect("read exact canonical lane authority"),
         "raw fallback must reject a mismatched predecessor descriptor"
     );
     let (locked_round, locked_subject) =
@@ -3086,16 +3076,20 @@ fn decided_mixed_carrier_accepts_canonical_successor_while_local_sidecars_lag() 
             successor.kura.as_ref(),
             &successor.context,
             &successor_block,
-        ),
+        )
+        .expect("read exact canonical lane authority"),
         "the strict canonical matcher must retain applied-predecessor semantics"
     );
-    assert!(canonical_v2_lane_payload_matches_kura_inner(
-        successor.state.as_ref(),
-        successor.kura.as_ref(),
-        &successor.context,
-        &successor_block,
-        true,
-    ));
+    assert!(
+        canonical_v2_lane_payload_matches_kura_inner(
+            successor.state.as_ref(),
+            successor.kura.as_ref(),
+            &successor.context,
+            &successor_block,
+            true,
+        )
+        .expect("read exact canonical lane authority")
+    );
     successor
         .retain_merge_sidecars_for_global_view(
             locked_round.view,
@@ -3341,6 +3335,11 @@ fn cold_restart_hydrates_two_link_raw_lane_chain_without_receipts() {
         .kura
         .store_block(first_block.clone())
         .expect("persist first raw lane artifact");
+    let first_finality = verified_finality_artifact_for_block(&first, &keys, &first_block);
+    first
+        .kura
+        .store_v2_finality_artifact(&first_finality)
+        .expect("publish full-wire finality for the first raw predecessor");
     let committed_first = ValidBlock::committed_from_replay_signed_block(first_block.clone());
     commit_test_block_to_state(first.state.as_ref(), &committed_first, &first.context);
     assert!(
@@ -3442,24 +3441,36 @@ fn cold_restart_hydrates_two_link_raw_lane_chain_without_receipts() {
         .kura
         .store_block(second_block.clone())
         .expect("persist second raw lane artifact");
+    let second_finality = verified_finality_artifact_for_block(&second, &keys, &second_block);
+    second
+        .kura
+        .store_v2_finality_artifact(&second_finality)
+        .expect("publish full-wire finality for the second raw predecessor");
     let committed_second = ValidBlock::committed_from_replay_signed_block(second_block.clone());
     commit_test_block_to_state(second.state.as_ref(), &committed_second, &second.context);
-    assert!(canonical_v2_lane_payload_matches_kura_inner(
-        second.state.as_ref(),
-        second.kura.as_ref(),
-        &second.context,
-        &second_block,
-        true,
-    ));
-    assert!(canonical_raw_lane_predecessor_matches_proposal(
-        second.state.as_ref(),
-        second.kura.as_ref(),
-        &second_proposal,
-    ));
+    assert!(
+        canonical_v2_lane_payload_matches_kura_inner(
+            second.state.as_ref(),
+            second.kura.as_ref(),
+            &second.context,
+            &second_block,
+            true,
+        )
+        .expect("read exact canonical lane authority")
+    );
+    assert!(
+        canonical_raw_lane_predecessor_matches_proposal(
+            second.state.as_ref(),
+            second.kura.as_ref(),
+            &second_proposal,
+        )
+        .expect("read exact canonical lane authority")
+    );
     assert_eq!(
         second
             .state
             .unapplied_lane_block_artifact_heights_snapshot_cached()
+            .expect("read authenticated pending lane frontier")
             .get(&(route.lane_id, route.dataspace_id)),
         Some(&second_proposal.descriptor.lane_block_height)
     );

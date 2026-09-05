@@ -1158,7 +1158,7 @@ pub(crate) fn is_native_escrow_custody_asset(
             .world
             .resolve_asset_id_for_current_scope(source_id)?
     };
-    Ok(state_transaction
+    Ok(state_transaction.world.races.iter().any(|(_, race)| race.asset_definition == *resolved_id.definition() && race.custody == *resolved_id.account()) || state_transaction
         .world
         .asset_escrows
         .iter()
@@ -1183,7 +1183,7 @@ pub(crate) fn is_protocol_escrow_custody_account(
     state_transaction: &StateTransaction<'_, '_>,
     account_id: &AccountId,
 ) -> bool {
-    state_transaction
+    state_transaction.world.races.iter().any(|(_, race)| race.custody == *account_id) ||     state_transaction
         .world
         .asset_escrows
         .iter()

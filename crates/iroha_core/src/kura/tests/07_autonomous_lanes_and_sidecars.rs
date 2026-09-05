@@ -226,12 +226,9 @@ pub(crate) fn certified_autonomous_lane_startup_fixture(
         std::path::Path::new("unused-certified-autonomous-lane-startup-root"),
         BLOCKS_IN_MEMORY,
     );
-    let kura = Kura::new_temporary_with_configured_lane_catalog(
-        &config,
-        &lane_config,
-        &lane_catalog,
-    )
-    .expect("initialize authenticated temporary autonomous-lane Kura");
+    let kura =
+        Kura::new_temporary_with_configured_lane_catalog(&config, &lane_config, &lane_catalog)
+            .expect("initialize authenticated temporary autonomous-lane Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     let mut fixture = CertifiedAutonomousLaneStartupFixture { kura, payload };
     fixture.certify_with_hint(
@@ -599,6 +596,7 @@ fn autonomous_claim_startup_inventory_bound_fails_before_temp_reconciliation() {
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
+    install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
     let main = write_autonomous_claim_inventory_fixture(
         temp_dir.path(),
         &payload,

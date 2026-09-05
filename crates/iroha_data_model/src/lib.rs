@@ -85,6 +85,10 @@ pub mod errors;
 pub mod escrow;
 /// Event payloads emitted by the ledger.
 pub mod events;
+/// Native execution-proof statements and deterministic race replay types.
+pub mod execution_proofs;
+/// Canonical execution-witness key namespaces shared by producers and verifiers.
+pub mod execution_witness;
 /// Executor configuration and API types.
 pub mod executor;
 /// FASTPQ-specific transcripts shared between host and prover.
@@ -156,6 +160,8 @@ pub mod qr_stream;
 pub mod query;
 /// Generic hidden-program RAM-LFE program policies and receipts.
 pub mod ram_lfe;
+/// Native trustless racing records and signed gameplay messages.
+pub mod race;
 /// Repo agreement descriptors and governance knobs.
 pub mod repo;
 /// Role-based access control definitions.

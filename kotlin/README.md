@@ -230,9 +230,17 @@ archive, shared with the native outgoing-operation index.
 `KagemushaCoreCoordinatorBridgeV1.open(storagePath)` in `client-android` provides
 the strict schema-2 JNI transport, backed by the pure `core-jvm` frame codec.
 It checks the complete ABI-23 inventory and rejects substituted response bindings;
-missing JNI or an absent qualified native coordinator fails closed. Its opaque
-archives do not implement the typed wallet coordinator: the remaining native-owned
-archive schemas and integration are recorded in [the source contract](../specs/kagemusha_device_bridge_v1.md).
+missing JNI or an absent qualified native coordinator fails closed.
+`KagemushaNativeCoreCoordinatorAdapterV1.open(storagePath)` implements the typed
+wallet coordinator over that transport. Its pure `KagemushaCoreCoordinatorArchiveV1`
+codec handles bounded canonical preparation, candidate, recovery, and redemption
+receipt projections. The adapter checks public-input digests, operation identities,
+qualified creation context, retained recovery scope, and installed aggregate scope.
+Device-reply admission retains the original 64-byte response authenticator so
+native Core independently verifies the exact response transcript.
+Those projections remain selectors: the qualified native backend must authenticate
+the journal, release, Core authorization, and actual recursive proof. No software
+backend or stock provider factory is supplied. See [the source contract](../specs/kagemusha_device_bridge_v1.md).
 
 Online reserve top-ups use the same payer authority as the debit. Build one
 `TopUpKagemushaV1Instruction` from the proof-bearing request, put that sole

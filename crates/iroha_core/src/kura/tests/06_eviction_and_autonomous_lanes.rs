@@ -1366,6 +1366,7 @@ impl DummyBlocks {
     }
 }
 fn store_dummy_blocks(kura: &Arc<Kura>, count: usize) -> Vec<HashOf<BlockHeader>> {
+    establish_dummy_store_primary_anchor(kura);
     let mut blocks = DummyBlocks::new();
     let mut hashes = Vec::with_capacity(count);
     for _ in 0..count {
@@ -2013,32 +2014,85 @@ fn test_kura_with_default_lane_markers(
 }
 
 fn establish_configured_lane_markers_for_test(kura: &Kura, lane_config: &RuntimeLaneConfig) {
-    let configured_catalog_hash = kura
-        .configured_lane_catalog_baseline()
-        .expect("read configured Kura catalog baseline")
-        .expect("configured Kura catalog baseline");
-    for entry in lane_config.entries() {
-        let incarnation = Hash::new(
-            format!(
-                "kura-lane-incarnation:{}:{}",
-                entry.lane_id.as_u32(),
-                entry.dataspace_id.as_u64()
-            )
-            .as_bytes(),
-        );
-        if entry.lane_id == lane_config.primary().lane_id {
-            kura.establish_or_verify_configured_primary_geometry_anchor(
-                entry,
-                incarnation,
-                configured_catalog_hash,
-            )
-            .expect("bind configured primary Kura test geometry");
-        } else {
-            kura.install_lane_incarnation_marker_for_test(entry, incarnation, 0)
-                .expect("install explicit Kura test lane marker");
-        }
-    }
+    publish_initial_configured_lane_geometry_for_test(kura, lane_config, &BTreeMap::new());
     kura.replace_lane_storage_entries_for_test(lane_config);
+}
+
+fn publish_initial_configured_lane_geometry_for_test(
+    kura: &Kura,
+    lane_config: &RuntimeLaneConfig,
+    requested_incarnations: &BTreeMap<LaneId, Hash>,
+) {
+    let (baseline, phases, _) = kura
+        .lane_geometry_journal_state_for_test()
+        .expect("inspect exact fixture geometry journal");
+    if !phases.is_empty() {
+        return;
+    }
+    let baseline = baseline.expect("authenticated fixture catalog baseline");
+    let mut incarnations = BTreeMap::new();
+    let mut activations = BTreeMap::new();
+    for entry in lane_config.entries() {
+        let incarnation = if let Some(incarnation) = requested_incarnations.get(&entry.lane_id) {
+            *incarnation
+        } else {
+            match kura.active_lane_incarnation_marker(entry) {
+                Ok((incarnation, activation)) => {
+                    assert_eq!(
+                        activation, 0,
+                        "initial fixture geometry activates at genesis"
+                    );
+                    incarnation
+                }
+                Err(Error::IO(error, _)) if error.kind() == ErrorKind::NotFound => Hash::new(
+                    format!(
+                        "kura-lane-incarnation:{}:{}",
+                        entry.lane_id.as_u32(),
+                        entry.dataspace_id.as_u64()
+                    )
+                    .as_bytes(),
+                ),
+                Err(error) => panic!("existing fixture lane marker is invalid: {error}"),
+            }
+        };
+        incarnations.insert(entry.lane_id, incarnation);
+        activations.insert(entry.lane_id, 0);
+    }
+    let primary_incarnation = incarnations[&LaneId::SINGLE];
+    kura.establish_or_verify_configured_primary_geometry_anchor(
+        lane_config.primary(),
+        primary_incarnation,
+        baseline,
+    )
+    .expect("anchor the fixture's configured primary");
+    if lane_config.entries().len() == 1 {
+        return;
+    }
+    let initial = RuntimeLaneConfig::default();
+    assert_eq!(
+        initial.primary(),
+        lane_config.primary(),
+        "this fixture publishes secondary lanes from the canonical primary segment"
+    );
+    // Secondary targets must still be absent: the real transition owns their
+    // first files and marker publication, including crash recovery provenance.
+    kura.apply_lane_geometry_transition(
+        &initial,
+        lane_config,
+        &BTreeMap::from([(LaneId::SINGLE, primary_incarnation)]),
+        &incarnations,
+        &BTreeMap::from([(LaneId::SINGLE, 0)]),
+        &activations,
+        &BTreeSet::new(),
+    )
+    .expect("durably apply the fixture's secondary lane geometry");
+    kura.mark_lane_geometry_catalog_published(
+        lane_config,
+        &incarnations,
+        &activations,
+        Some(baseline),
+    )
+    .expect("publish the fixture's exact lane geometry for restart");
 }
 
 fn populate_strict_kura_store(dir: &TempDir, count: usize) {
@@ -2183,18 +2237,24 @@ fn install_autonomous_lane_marker_for_kura(
     lane_config: &RuntimeLaneConfig,
     payload: &LaneExecutablePayloadV1,
 ) {
-    // Authenticated configured-catalog startup deliberately exposes only the
-    // primary storage segment until a production geometry journal publishes
-    // the rest. This isolated fixture explicitly installs its complete test
-    // catalog before binding the requested lane marker.
-    kura.replace_lane_storage_entries_for_test(lane_config);
+    // A configured catalog alone is not committed geometry. Publish its initial
+    // secondary lanes so restart exercises their artifacts and rejects corruption.
     let descriptor = &payload.origin_proposal.descriptor;
+    publish_initial_configured_lane_geometry_for_test(
+        kura,
+        lane_config,
+        &BTreeMap::from([(descriptor.lane_id, descriptor.lane_incarnation)]),
+    );
     let entry = lane_config
         .entry(descriptor.lane_id)
         .expect("autonomous payload lane has configured storage");
+    // Tests that deliberately change only a marker keep that fault injection
+    // explicit; this does not publish a later catalog or replace its journal.
     kura.install_lane_incarnation_marker_for_test(entry, descriptor.lane_incarnation, 0)
         .expect("install authoritative autonomous lane marker");
+    kura.replace_lane_storage_entries_for_test(lane_config);
 }
+
 fn rebind_autonomous_lane_payload_for_kura(
     source: &LaneExecutablePayloadV1,
     lane_id: LaneId,
@@ -2900,4 +2960,50 @@ fn consensus_body_read_rejects_decodable_same_header_wire_substitution() {
         Err(Error::CanonicalBlockWireMismatch { height: 2 })
     ));
     assert!(kura.block_data.lock().cached_body(1).is_some());
+}
+
+#[test]
+fn consensus_body_read_with_verified_finality_authenticates_pending_and_published_wire() {
+    let (_temp_dir, _config, kura) = kura_root_fixture(nonzero!(4_usize));
+    let blocks = store_dummy_block_arcs(&kura, 2);
+    let height = nonzero!(2_usize);
+    let artifacts = v2_finality_artifacts_for_chain(&blocks);
+    let artifact = artifacts.last().expect("height-two exact finality").clone();
+    let authority = crate::block::VerifiedV2FinalityArtifact::verify(artifact.clone())
+        .expect("verify the pending Apply certificate");
+    assert!(matches!(
+        kura.read_block_body(height),
+        Err(Error::MissingV2FinalityArtifact { height: 2 })
+    ));
+    assert_eq!(
+        kura.read_block_body_with_verified_finality(height, &authority)
+            .expect("sealed pending read")
+            .as_deref(),
+        Some(blocks[1].as_ref())
+    );
+    let other = crate::block::VerifiedV2FinalityArtifact::verify(artifacts[0].clone())
+        .expect("verify other height");
+    assert!(
+        kura.read_block_body_with_verified_finality(height, &other)
+            .is_err()
+    );
+    kura.store_v2_finality_artifact(&artifact)
+        .expect("publish exact finality");
+    assert_eq!(
+        kura.read_block_body_with_verified_finality(height, &authority)
+            .expect("exact published read")
+            .as_deref(),
+        Some(blocks[1].as_ref())
+    );
+    let finality_path = kura.v2_finality_artifact_path(2);
+    fs::write(&finality_path, b"corrupt occupied finality").expect("damage published finality");
+    assert!(
+        kura.read_block_body_with_verified_finality(height, &authority)
+            .is_err(),
+        "an owned certificate cannot bypass corrupt existing published evidence"
+    );
+    assert_eq!(
+        fs::read(finality_path).unwrap(),
+        b"corrupt occupied finality"
+    );
 }

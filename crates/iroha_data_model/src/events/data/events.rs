@@ -96,6 +96,8 @@ mod model {
         Social(super::social::SocialEvent),
         /// Bridge event
         Bridge(bridge::BridgeEvent),
+        /// Native race lifecycle transition.
+        Race(super::race::RaceEventV1),
     }
 }
 #[cfg(feature = "json")]

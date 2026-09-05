@@ -51,9 +51,7 @@ pub const VALIDATION_FEE_REGISTRY_SNAPSHOT_HASH_DOMAIN: &[u8] =
 pub const VALIDATION_FEE_POLICY_SNAPSHOT_VERSION_V1: u16 = 1;
 /// Exact sparse-tree depth of the execution-witness proof.
 pub const VALIDATION_FEE_POLICY_WITNESS_SIBLINGS_V1: usize = 256;
-/// Fixed synthetic execution-witness key committed by every block.
-pub const VALIDATION_FEE_POLICY_WITNESS_KEY_V1: &[u8] =
-    b"\xd4iroha:validation-fee:policy-registry:v1";
+pub use crate::execution_witness::VALIDATION_FEE_POLICY_WITNESS_KEY_V1;
 /// Retired custom-parameter identifier for the pre-release governance keyset.
 pub const RETIRED_VALIDATION_FEE_GOVERNANCE_KEYSET_PARAMETER_ID: &str =
     "iroha:validation_fee_governance_keyset_v1";

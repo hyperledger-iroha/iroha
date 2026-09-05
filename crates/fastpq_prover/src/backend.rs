@@ -103,7 +103,8 @@ const AIR_STABLE_RESIDUE_COUNT: usize = crate::trace::METADATA_COMMITMENT_LIMBS 
 pub const AIR_COMPOSITION_ALPHA_COUNT: usize =
     AIR_BOOLEAN_RESIDUE_COUNT + AIR_RELATION_RESIDUE_COUNT + AIR_STABLE_RESIDUE_COUNT;
 /// Maximum algebraic degree of every implemented V1 AIR residue in trace columns.
-pub const AIR_MAX_CONSTRAINT_DEGREE_V1: usize = 2;
+pub const AIR_MAX_CONSTRAINT_DEGREE_V1: usize =
+    fastpq_isi::FASTPQ_COMPOSITION_DEGREE_EXPANSION_V1 as usize;
 /// Configuration for the FASTPQ backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionMode {

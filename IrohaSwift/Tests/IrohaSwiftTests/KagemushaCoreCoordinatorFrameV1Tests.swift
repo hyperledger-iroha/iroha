@@ -61,6 +61,25 @@ final class KagemushaCoreCoordinatorFrameV1Tests: XCTestCase {
     XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.decodeRequest(.reserveOperationID, frame: Data(repeating: 0, count: 262145)))
   }
 
+  func testAuthenticatedReplyRequiresFullLowSAuthenticatorAndRetiresNineFields() throws {
+    let id = Data(repeating: 7, count: 32)
+    var scalar = Data(repeating: 0, count: 32)
+    scalar[31] = 1
+    let signature = scalar + scalar
+    let fields = [KagemushaCoreCoordinatorFrameV1.u32(5), id, Data([1]), Data([2]), signature,
+      KagemushaCoreCoordinatorFrameV1.u32(1), id, Data([3]), Data([4]), KagemushaCoreCoordinatorFrameV1.u32(0xffff)]
+    let frame = try KagemushaCoreCoordinatorFrameV1.encodeRequest(.acceptAuthenticatedReply, fields: fields)
+    XCTAssertEqual(try KagemushaCoreCoordinatorFrameV1.decodeRequest(.acceptAuthenticatedReply, frame: frame)[4], signature)
+    var retired = fields
+    retired.remove(at: 4)
+    XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeRequest(.acceptAuthenticatedReply, fields: retired))
+    for invalid in [Data(), Data(repeating: 1, count: 63), Data(repeating: 0, count: 64), Data(repeating: 0xff, count: 64)] {
+      var mutation = fields
+      mutation[4] = invalid
+      XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeRequest(.acceptAuthenticatedReply, fields: mutation))
+    }
+  }
+
   private struct Fixture {
     let name: String
     let method: KagemushaCoreCoordinatorMethodV1

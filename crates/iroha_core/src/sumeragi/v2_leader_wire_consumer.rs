@@ -28,7 +28,7 @@ pub(crate) fn vote_statement_hash(
     subject: wire::BlockSubject,
     execution_commitment: &wire::ExecutionCommitment,
 ) -> Hash {
-    Hash::new((proposal_round, subject, execution_commitment).encode())
+    Hash::new((proposal_round, subject, *execution_commitment).encode())
 }
 
 impl LeaderWireRecoveryAuthority {
@@ -99,6 +99,14 @@ impl LeaderWireRecoveryAuthority {
     }
     pub(crate) const fn consumer_tag(self) -> reducer::EventTag {
         self.consumer_tag
+    }
+    /// Verify the exact view and body owner already published from the WAL.
+    pub(crate) fn matches_entered_view(
+        self,
+        tag: reducer::EventTag,
+        protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,
+    ) -> bool {
+        self.consumer_tag == tag && self.protected_lock == protected_lock
     }
     fn protects_commit_vote(self, identity: &FairV2IngressLeaderWireIdentity) -> bool {
         identity.phase == Phase::CommitVote

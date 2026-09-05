@@ -26,14 +26,25 @@ fn autonomous_test_fixture(
     author: bool,
 ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
     let local_validator_index = if author { 0 } else { 1 };
-    fixture_at_height_inner_with_kura_and_local_index(
+    let (mut observer, keys) = fixture_at_height_inner_with_kura_and_local_index(
         mode,
         9,
         true,
         locked_lane_work_test_kura(iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY),
         Some(local_validator_index),
-        true,
-    )
+        false,
+    );
+    // Complete the static authority before opening any voting journal. A
+    // journal opened before these context hashes change cannot be replayed
+    // under the finished lane geometry at the same height.
+    enable_multilane_nexus(&mut observer, &keys, LaneId::new(1), DataSpaceId::new(7));
+    let context = observer.context.clone();
+    let restart = LaneAdapterRestartParts::capture(&observer);
+    drop(observer);
+    let adapter = restart
+        .reopen_isolated(context, true)
+        .expect("open autonomous voting journals under the completed lane context");
+    (adapter, keys)
 }
 
 fn assert_autonomous_test_role(
@@ -1451,6 +1462,11 @@ fn voting_validator_outside_lane_committee_skips_private_new_view_cursor_restore
         "signed autonomous payload",
     );
     let (locked_round, _) = mark_global_body_locked_for_block(&mut adapter, &block);
+    assert_ne!(
+        adapter.bind_locked_global_body(&block),
+        V2LaneIngressOutcome::Rejected,
+        "the exact protected carrier installs its lane session before READY verification"
+    );
     let protected_hint = proposal
         .payload_block_hint
         .expect("autonomous proposal carries its candidate binding");
@@ -1715,7 +1731,10 @@ fn authorized_ready_session_without_one_shot_token_fails_stop() {
         "the regression fixture deliberately models the consumed-token failure window"
     );
 
-    adapter.drive_lane_sessions();
+    assert!(matches!(
+        adapter.sign_lane_vote(&proposal, CertPhase::Prepare),
+        Err(V2LaneWorkError::SigningGuard(_))
+    ));
 
     assert!(
         adapter.output_guard.restart_required(),
@@ -1812,6 +1831,11 @@ fn autonomous_producer_retries_after_predecessor_application_receipt_arrives() {
         .kura
         .store_block(predecessor_block.clone())
         .expect("persist the raw canonical predecessor");
+    let finality = verified_finality_artifact_for_block(&parent, &keys, &predecessor_block);
+    parent
+        .kura
+        .store_v2_finality_artifact(&finality)
+        .expect("publish the finalized predecessor's complete-wire authority");
     let committed_predecessor =
         ValidBlock::committed_from_replay_signed_block(predecessor_block.clone());
     commit_test_block_to_state(
@@ -1823,6 +1847,7 @@ fn autonomous_producer_retries_after_predecessor_application_receipt_arrives() {
         parent
             .state
             .unapplied_lane_block_artifact_heights_snapshot_cached()
+            .expect("read authenticated pending lane frontier")
             .get(&(lane_id, dataspace_id)),
         Some(&predecessor_proposal.descriptor.lane_block_height),
         "the raw predecessor must block a successor reservation until its exact receipt exists"
@@ -1921,6 +1946,7 @@ fn autonomous_producer_retries_after_predecessor_application_receipt_arrives() {
         !adapter
             .state
             .unapplied_lane_block_artifact_heights_snapshot_cached()
+            .expect("read authenticated pending lane frontier")
             .contains_key(&route)
     );
     let recovered_slot = plan_autonomous_lane_reservation_slot(
@@ -4392,6 +4418,11 @@ fn recovered_autonomous_certificate_repairs_ready_before_certified_publication()
         .kura
         .store_block(block.clone())
         .expect("persist autonomous recovery carrier");
+    let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
+    adapter
+        .kura
+        .store_v2_finality_artifact(&finality)
+        .expect("publish complete-wire authority for historical READY recovery");
     let proposal_block = block.canonical_resultless_proposal();
     let (_locked_round, _locked_subject) =
         mark_global_body_locked_for_block(&mut adapter, &proposal_block);

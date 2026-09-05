@@ -42,18 +42,22 @@ fn lane_block_artifacts_snapshot_returns_all_valid_artifacts_in_replay_order() {
         })
         .collect::<Vec<_>>();
     assert_eq!(replay_keys, vec![(1, 0), (1, 1), (3, 1)]);
-    let at_height_two =
-        kura.canonical_lane_block_artifacts_at_proposal_height_matching(2, 8, |_| true);
+    finalize_chain_through_for_eviction(&kura, nonzero!(2_usize));
+    let at_height_two = kura
+        .canonical_lane_block_artifacts_at_proposal_height_matching(2, 8, |_| true)
+        .expect("authenticate finalized carrier projection");
     assert_eq!(at_height_two.len(), 1);
     assert_eq!(at_height_two[0].ownership.lane_id, lane0);
     assert_eq!(at_height_two[0].ownership.proposal_height, 2);
     assert!(
         kura.canonical_lane_block_artifacts_at_proposal_height_matching(2, 0, |_| true)
+            .expect("zero projection budget")
             .is_empty(),
         "a zero recovery budget must not scan or hydrate artifacts"
     );
     assert!(
         kura.canonical_lane_block_artifacts_at_proposal_height_matching(99, 8, |_| true)
+            .expect("uncommitted projection height")
             .is_empty(),
         "a missing global height must return no canonical artifacts"
     );
@@ -2791,4 +2795,70 @@ fn consensus_lane_frontier_authenticates_empty_private_directory_and_active_mark
         .join(".lane-incarnation.norito");
     fs::write(&marker, b"corrupt active marker").expect("damage geometry marker");
     assert!(kura.latest_lane_block_artifact(lane_id).is_err());
+}
+
+#[test]
+fn canonical_height_projection_and_recovery_reject_corrupt_occupied_sidecar() {
+    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
+    let lane_id = LaneId::from(1);
+    let lane = lane_config.entry(lane_id).expect("lane entry");
+    let block = dummy_block_with_lane_payload_ownership(lane_id, lane.dataspace_id, 1);
+    let height =
+        NonZeroUsize::new(usize::try_from(block.header().height().get()).expect("height fits"))
+            .expect("positive height");
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+    kura.store_block(Arc::clone(&block))
+        .expect("store canonical carrier");
+    finalize_chain_through_for_eviction(&kura, height);
+    assert_eq!(kura.get_block(height).as_deref(), Some(block.as_ref()));
+    assert_eq!(
+        kura.canonical_lane_block_artifacts_at_proposal_height_matching(
+            height.get() as u64,
+            8,
+            |_| true
+        )
+        .expect("authenticated projection")
+        .len(),
+        1
+    );
+    let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(lane, temp_dir.path());
+    fs::write(&data_path, b"corrupt occupied canonical lane sidecar")
+        .expect("damage actual sidecar");
+    let before = (
+        fs::read(&data_path).unwrap(),
+        fs::read(&index_path).unwrap(),
+    );
+    assert!(
+        kura.canonical_lane_block_artifacts_at_proposal_height_matching(
+            height.get() as u64,
+            8,
+            |_| true
+        )
+        .is_err()
+    );
+    assert!(
+        kura.canonical_lane_block_artifacts_at_proposal_height_matching(
+            height.get() as u64,
+            8,
+            |_| false
+        )
+        .is_err(),
+        "a filter cannot hide local occupied corruption"
+    );
+    assert!(
+        kura.recover_canonical_lane_block_artifacts_at_proposal_height_matching(
+            height.get() as u64,
+            8,
+            |_| true
+        )
+        .is_err()
+    );
+    assert_eq!(
+        (
+            fs::read(&data_path).unwrap(),
+            fs::read(&index_path).unwrap()
+        ),
+        before,
+        "strict rejection must not repair or overwrite corrupt evidence"
+    );
 }

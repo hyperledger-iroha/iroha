@@ -1,5 +1,6 @@
 //! This module provides the [`State`] — an in-memory representation of the current blockchain state.
 #![allow(clippy::items_after_statements, clippy::used_underscore_binding)]
+use iroha_data_model::race::RaceRecordV1;
 use crate::governance::parliament::{ParliamentDecisionModeV1, ParliamentReducerErrorV1};
 use crate::private_settlement::{
     carrier::{PrivateSettlementCarrierBindingErrorV1, PrivateSettlementCarrierBindingV1},
@@ -1223,6 +1224,7 @@ macro_rules! with_world_overlay_fields {
             asset_escrows_by_seller,
             asset_escrows_by_buyer,
             asset_escrows_by_status,
+            races,
             vpn_leases,
             vpn_active_lease_by_account,
             vpn_active_lease_by_address_slot,
@@ -4477,6 +4479,8 @@ pub struct World {
     #[norito(skip)]
     pub(crate) asset_escrows_by_status: Storage<AssetEscrowStatus, BTreeSet<EscrowId>>,
     /// Native SoraNet VPN lease escrows keyed by lease identifier.
+    pub(crate) races: Storage<Hash, RaceRecordV1>,
+    /// Native SoraNet VPN leases.
     pub(crate) vpn_leases: Storage<[u8; 32], VpnLeaseRecordV1>,
     /// Exact active VPN lease claim held by each client account.
     #[norito(skip)]
@@ -5232,6 +5236,8 @@ pub struct WorldBlock<'world> {
     #[norito(skip)]
     pub(crate) asset_escrows_by_status: StorageBlock<'world, AssetEscrowStatus, BTreeSet<EscrowId>>,
     /// Native SoraNet VPN lease escrows keyed by lease identifier.
+    pub(crate) races: StorageBlock<'world, Hash, RaceRecordV1>,
+    /// Native SoraNet VPN leases.
     pub(crate) vpn_leases: StorageBlock<'world, [u8; 32], VpnLeaseRecordV1>,
     /// Exact active VPN lease claim held by each client account.
     #[norito(skip)]
@@ -6268,6 +6274,7 @@ impl WorldBlock<'_> {
             asset_escrows_by_seller,
             asset_escrows_by_buyer,
             asset_escrows_by_status,
+            races,
             vpn_leases,
             vpn_active_lease_by_account,
             vpn_active_lease_by_address_slot,
@@ -6662,6 +6669,8 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) asset_escrows_by_status:
         StorageTransaction<'block, 'world, AssetEscrowStatus, BTreeSet<EscrowId>>,
     /// Native SoraNet VPN lease escrows keyed by lease identifier.
+    pub(crate) races: StorageTransaction<'block, 'world, Hash, RaceRecordV1>,
+    /// Native SoraNet VPN leases.
     pub(crate) vpn_leases: StorageTransaction<'block, 'world, [u8; 32], VpnLeaseRecordV1>,
     /// Exact active VPN lease claim held by each client account.
     pub(crate) vpn_active_lease_by_account: StorageTransaction<'block, 'world, AccountId, [u8; 32]>,
@@ -8849,6 +8858,8 @@ pub struct WorldView<'world> {
     /// Native asset escrows grouped by lifecycle status.
     pub(crate) asset_escrows_by_status: StorageView<'world, AssetEscrowStatus, BTreeSet<EscrowId>>,
     /// Native SoraNet VPN lease escrows keyed by lease identifier.
+    pub(crate) races: StorageView<'world, Hash, RaceRecordV1>,
+    /// Native SoraNet VPN leases.
     pub(crate) vpn_leases: StorageView<'world, [u8; 32], VpnLeaseRecordV1>,
     /// Exact active VPN lease claim held by each client account.
     pub(crate) vpn_active_lease_by_account: StorageView<'world, AccountId, [u8; 32]>,
@@ -20088,6 +20099,8 @@ macro_rules! world_ro_accessors {
             /// Native asset escrow ids grouped by lifecycle status.
             storage asset_escrows_by_status: AssetEscrowStatus => BTreeSet<EscrowId>;
             /// Native SoraNet VPN lease escrow records keyed by lease identifier.
+            storage races: Hash => RaceRecordV1;
+            /// Native VPN leases.
             storage vpn_leases: [u8; 32] => VpnLeaseRecordV1;
             /// Active VPN lease id claimed by each client account.
             storage vpn_active_lease_by_account: AccountId => [u8; 32];
@@ -21896,6 +21909,7 @@ impl<'world> WorldBlock<'world> {
             asset_escrows_by_seller,
             asset_escrows_by_buyer,
             asset_escrows_by_status,
+            races,
             vpn_leases,
             vpn_active_lease_by_account,
             vpn_active_lease_by_address_slot,
@@ -22286,6 +22300,7 @@ impl<'world> WorldBlock<'world> {
         asset_escrows_by_seller.commit();
         asset_escrows_by_buyer.commit();
         asset_escrows_by_status.commit();
+        races.commit();
         vpn_leases.commit();
         vpn_active_lease_by_account.commit();
         vpn_active_lease_by_address_slot.commit();
@@ -24573,6 +24588,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             asset_escrows_by_seller,
             asset_escrows_by_buyer,
             asset_escrows_by_status,
+            races,
             vpn_leases,
             vpn_active_lease_by_account,
             vpn_active_lease_by_address_slot,
@@ -24975,6 +24991,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         asset_escrows_by_seller.apply();
         asset_escrows_by_buyer.apply();
         asset_escrows_by_status.apply();
+        races.apply();
         vpn_leases.apply();
         vpn_active_lease_by_account.apply();
         vpn_active_lease_by_address_slot.apply();

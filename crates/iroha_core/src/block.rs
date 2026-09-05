@@ -6494,6 +6494,24 @@ pub(crate) mod valid {
                 }
             }
         }
+        // TODO: admit remote spend only after the exact intent, proof and effective
+        // amount are authenticated against finalized source roots and transaction
+        // set. Reusable capability authentication and witness replay do not supply
+        // those missing facts. This also covers blocks constructed outside CoreHost.
+        if block.axt_envelopes().is_some_and(|envelopes| {
+            envelopes
+                .iter()
+                .any(|envelope| !envelope.handles.is_empty())
+        }) {
+            return Err(make_axt_error_with(
+                AxtRejectReason::Proof,
+                crate::fastpq::AXT_UNANCHORED_REMOTE_SPEND_REJECTION,
+                None,
+                None,
+                None,
+                None,
+            ));
+        }
         Ok(())
     }
     /// Counts of signatures attached to a block.
@@ -9297,9 +9315,9 @@ pub(crate) mod valid {
             ownership: &iroha_data_model::block::consensus::SumeragiLanePayloadOwnership,
             declared_predecessor_hash: Hash,
             validation_profile: &ConsensusValidationProfile,
-        ) -> bool {
+        ) -> Result<bool, BlockValidationError> {
             let Some(context) = validation_profile.v2_context() else {
-                return false;
+                return Ok(false);
             };
             let proposal_height = block.header().height().get();
             let previous_height = ownership.previous_lane_block_height;
@@ -9309,13 +9327,18 @@ pub(crate) mod valid {
                 || previous_height.checked_add(1) != Some(ownership.lane_block_height)
                 || ownership.previous_lane_block_descriptor_hash != Some(declared_predecessor_hash)
             {
-                return false;
+                return Ok(false);
             }
             let Some(artifact) = state
                 .kura()
-                .read_lane_block_artifact(ownership.lane_id, previous_height)
+                .read_lane_block_artifact_read_only(ownership.lane_id, previous_height)
+                .map_err(|error| {
+                    Self::execution_context_error(format!(
+                        "canonical lane predecessor is unreadable: {error}"
+                    ))
+                })?
             else {
-                return false;
+                return Ok(false);
             };
             let predecessor = &artifact.ownership;
             if predecessor.lane_id != ownership.lane_id
@@ -9326,17 +9349,17 @@ pub(crate) mod valid {
                 || predecessor.proposal_height >= proposal_height
                 || predecessor.lane_block_descriptor_hash != Some(declared_predecessor_hash)
             {
-                return false;
+                return Ok(false);
             }
             let Some(predecessor_index) = predecessor
                 .proposal_height
                 .checked_sub(1)
                 .and_then(|height| usize::try_from(height).ok())
             else {
-                return false;
+                return Ok(false);
             };
             if state.block_hashes().get(predecessor_index) != Some(&artifact.proposal_block_hash) {
-                return false;
+                return Ok(false);
             }
             let canonical = state
                 .kura()
@@ -9344,8 +9367,13 @@ pub(crate) mod valid {
                     predecessor.proposal_height,
                     2,
                     |candidate| candidate == predecessor,
-                );
-            canonical.as_slice() == [artifact]
+                )
+                .map_err(|error| {
+                    Self::execution_context_error(format!(
+                        "canonical lane predecessor carrier is unreadable: {error}"
+                    ))
+                })?;
+            Ok(canonical.as_slice() == [artifact])
         }
         fn validate_execution_context_lane_payload_artifacts(
             block: &SignedBlock,
@@ -9422,7 +9450,7 @@ pub(crate) mod valid {
                         ownership,
                         declared_predecessor_hash,
                         validation_profile,
-                    ) {
+                    )? {
                         continue;
                     }
                     return Err(Self::execution_context_error(format!(
@@ -23467,7 +23495,7 @@ pub(crate) mod valid {
             topology: Topology,
             block_time_source: TimeSource,
             block: SignedBlock,
-            signed_hash: HashOf<SignedTransaction>,
+            stateless_cache_key: crate::tx::StatelessValidationCacheKey,
         }
         #[allow(clippy::too_many_arguments)]
         fn queue_plan_ttl_fixture(
@@ -23553,7 +23581,7 @@ pub(crate) mod valid {
                 let (forged_authority, _) = gen_account_in(&format!("{label}-forged"));
                 signed = signed.with_authority(forged_authority);
             }
-            let signed_hash = signed.hash();
+            let stateless_cache_key = crate::tx::StatelessValidationCacheKey::new(&signed);
             let entrypoint = TransactionEntrypoint::External(signed.clone());
             let routing_plan = crate::queue::RoutingPlan::single(
                 crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -23662,7 +23690,7 @@ pub(crate) mod valid {
                 topology,
                 block_time_source,
                 block,
-                signed_hash,
+                stateless_cache_key,
             }
         }
         fn validate_queue_plan_ttl_fixture(
@@ -23710,7 +23738,7 @@ pub(crate) mod valid {
                     .state
                     .stateless_validation_cache()
                     .lock()
-                    .contains_key(&fixture.signed_hash),
+                    .contains_key(&fixture.stateless_cache_key),
                 "rejected QueuePlan authority must not become a generic cache entry"
             );
         }
@@ -25458,6 +25486,13 @@ mod commit {
                 other => panic!("unexpected error: {other:?}"),
             }
         }
+        fn expect_unanchored_axt_spend_rejection(result: Result<(), BlockValidationError>) {
+            expect_axt_error(
+                result.expect_err("unanchored remote spend must remain unavailable"),
+                AxtRejectReason::Proof,
+                crate::fastpq::AXT_UNANCHORED_REMOTE_SPEND_REJECTION,
+            );
+        }
         fn expect_axt_envelope_error(
             state: &State,
             envelope: AxtEnvelopeRecord,
@@ -26235,7 +26270,7 @@ mod commit {
                 executed.apply();
             }
             let result = validate_axt_envelopes(&block, &state_block);
-            assert!(result.is_ok(), "unexpected validation error: {result:?}");
+            expect_unanchored_axt_spend_rejection(result);
         }
         #[test]
         fn axt_validation_reuses_one_dataspace_proof_for_two_bound_intents() {
@@ -26320,8 +26355,7 @@ mod commit {
                 executed.apply();
             }
             reset_axt_fastpq_proof_verification_count();
-            validate_axt_envelopes(&block, &state_block)
-                .expect("one proof may authorize two exact same-dataspace intents");
+            expect_unanchored_axt_spend_rejection(validate_axt_envelopes(&block, &state_block));
             assert_eq!(
                 axt_fastpq_proof_verification_count(),
                 1,
@@ -26348,8 +26382,10 @@ mod commit {
                 executed.apply();
             }
             reset_axt_fastpq_proof_verification_count();
-            validate_axt_envelopes(&attached_block, &attached_state_block)
-                .expect("two exact attached proof values may authorize their bound intents");
+            expect_unanchored_axt_spend_rejection(validate_axt_envelopes(
+                &attached_block,
+                &attached_state_block,
+            ));
             assert_eq!(
                 axt_fastpq_proof_verification_count(),
                 1,
@@ -26524,8 +26560,10 @@ mod commit {
                     .expect("current-incarnation control must execute");
                 executed.apply();
             }
-            validate_axt_envelopes(&current_block, &current_state_block)
-                .expect("an exact current, block-start, and signed incarnation must validate");
+            expect_unanchored_axt_spend_rejection(validate_axt_envelopes(
+                &current_block,
+                &current_state_block,
+            ));
             drop(current_state_block);
 
             let stale_incarnation = iroha_data_model::nexus::AxtAssetIncarnationV1::derive(
@@ -26704,8 +26742,7 @@ mod commit {
                     .expect("current-incarnation proof control must execute");
                 executed.apply();
             }
-            validate_axt_envelopes(&block, &state_block)
-                .expect("proof and handle from the exact current incarnation must validate");
+            expect_unanchored_axt_spend_rejection(validate_axt_envelopes(&block, &state_block));
         }
         #[test]
         fn axt_validation_rejects_proof_reused_for_another_remote_spend_recipient() {
@@ -26944,8 +26981,7 @@ mod commit {
                     .expect("cross-dataspace replay-scope control must execute");
                 executed.apply();
             }
-            validate_axt_envelopes(&block, &state_block)
-                .expect("distinct dataspaces must scope identical replay tuples independently");
+            expect_unanchored_axt_spend_rejection(validate_axt_envelopes(&block, &state_block));
         }
         #[test]
         fn axt_validation_rejects_raw_manifest_root_proof() {
@@ -27274,7 +27310,7 @@ mod commit {
                     .expect("authenticated block-snapshot control must execute");
                 executed.apply();
             }
-            assert!(validate_axt_envelopes(&block, &state_block).is_ok());
+            expect_unanchored_axt_spend_rejection(validate_axt_envelopes(&block, &state_block));
         }
         #[test]
         fn axt_validation_uses_policy_slot_per_dataspace() {
@@ -27354,7 +27390,7 @@ mod commit {
                 executed.apply();
             }
             let result = validate_axt_envelopes(&block, &state_block);
-            assert!(result.is_ok(), "unexpected validation error: {result:?}");
+            expect_unanchored_axt_spend_rejection(result);
         }
         #[test]
         fn axt_validation_rejects_empty_policy_snapshot() {
@@ -27462,7 +27498,7 @@ mod commit {
             );
         }
         #[test]
-        fn axt_validation_accepts_hidden_amount_commitment() {
+        fn axt_validation_rejects_unanchored_hidden_amount_commitment() {
             let (state, envelope) = hidden_amount_fixture(61, 0x61, b"hidden-amount");
             let mut snapshot = axt_policy_snapshot_for_validation_test(&state);
             snapshot.entries[0].policy.next_handle_counter = 2;
@@ -27477,7 +27513,7 @@ mod commit {
                 executed.apply();
             }
             let result = validate_axt_envelopes(&block, &state_block);
-            assert!(result.is_ok(), "unexpected validation error: {result:?}");
+            expect_unanchored_axt_spend_rejection(result);
         }
         #[test]
         fn axt_validation_rejects_hidden_amount_commitment_mismatch() {

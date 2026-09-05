@@ -175,6 +175,11 @@ pub(crate) fn reviewed_v2_adapter_source_for_test() -> &'static str {
         .get_or_init(|| {
             include_str!("v2.rs")
                 .replacen(
+                    "mod leader_wire_consumer;\n",
+                    include_str!("v2_leader_wire_consumer.rs"),
+                    1,
+                )
+                .replacen(
                     "include!(\"v2_adapter_persistence_and_wal_types.rs\");\n",
                     include_str!("v2_adapter_persistence_and_wal_types.rs"),
                     1,

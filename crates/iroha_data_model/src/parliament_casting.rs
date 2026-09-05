@@ -22,9 +22,7 @@ pub const PARLIAMENT_TIMED_OVN_CASTING_COMMITMENT_VERSION_V1: u16 = 1;
 pub const MAX_PARLIAMENT_CONCURRENT_CASTING_CONTEXTS_V1: u32 = 1_000;
 /// Exact sparse-tree depth of the execution-witness proof.
 pub const PARLIAMENT_TIMED_OVN_CASTING_WITNESS_SIBLINGS_V1: usize = 256;
-/// Fixed synthetic execution-witness key committed by every non-replay block.
-pub const PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1: &[u8] =
-    b"\xd5iroha:parliament:timed-ovn:casting-contexts:v1";
+pub use crate::execution_witness::PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1;
 
 /// Return whether one more cast-capable context fits the protocol maximum.
 ///

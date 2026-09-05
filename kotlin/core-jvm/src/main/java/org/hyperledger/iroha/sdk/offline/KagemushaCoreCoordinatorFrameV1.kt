@@ -116,8 +116,10 @@ object KagemushaCoreCoordinatorFrameV1 {
                 count(fields, 6); qualification(fields, 0); digest(fields, 5)
             }
             KagemushaCoreCoordinatorMethodV1.ACCEPT_AUTHENTICATED_REPLY -> {
-                count(fields, 9); operation(fields, 0); digest(fields, 1)
-                nonempty(fields, 2); nonempty(fields, 3); qualification(fields, 4)
+                count(fields, 10); operation(fields, 0); digest(fields, 1)
+                nonempty(fields, 2); nonempty(fields, 3)
+                KagemushaP256Codec.requireRawLowSSignature(field(fields, 4))
+                qualification(fields, 5)
             }
             KagemushaCoreCoordinatorMethodV1.BEGIN_SENDER_TRANSITION -> {
                 digest(fields, 0)

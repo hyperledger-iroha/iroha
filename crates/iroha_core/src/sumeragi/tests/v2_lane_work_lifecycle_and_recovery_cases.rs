@@ -264,12 +264,20 @@ fn enabled_nexus_binds_independent_lane_author_distinct_from_global_leader() {
         .kura
         .store_block(block.clone())
         .expect("persist exact enabled-Nexus recovery body");
-    assert!(canonical_v2_lane_payload_matches_kura(
-        adapter.state.as_ref(),
-        adapter.kura.as_ref(),
-        &adapter.context,
-        &block,
-    ));
+    let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
+    adapter
+        .kura
+        .store_v2_finality_artifact(&finality)
+        .expect("publish exact fixture finality before canonical recovery");
+    assert!(
+        canonical_v2_lane_payload_matches_kura(
+            adapter.state.as_ref(),
+            adapter.kura.as_ref(),
+            &adapter.context,
+            &block,
+        )
+        .expect("read exact canonical lane authority")
+    );
 }
 #[test]
 fn canonical_kura_recovery_accepts_global_view_one_with_fresh_lane_view() {
@@ -282,12 +290,20 @@ fn canonical_kura_recovery_accepts_global_view_one_with_fresh_lane_view() {
         .kura
         .store_block(block.clone())
         .expect("persist planner-produced canonical recovery body");
-    assert!(canonical_v2_lane_payload_matches_kura(
-        adapter.state.as_ref(),
-        adapter.kura.as_ref(),
-        &adapter.context,
-        &block,
-    ));
+    let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
+    adapter
+        .kura
+        .store_v2_finality_artifact(&finality)
+        .expect("publish exact fixture finality before canonical recovery");
+    assert!(
+        canonical_v2_lane_payload_matches_kura(
+            adapter.state.as_ref(),
+            adapter.kura.as_ref(),
+            &adapter.context,
+            &block,
+        )
+        .expect("read exact canonical lane authority")
+    );
     assert!(
         adapter.canonical_anchor_for_proposal(&proposal).is_some(),
         "the exact ownership/header global view must authenticate the lane-local proposal"
@@ -319,13 +335,19 @@ fn canonical_kura_recovery_rejects_nonzero_planner_origin_lane_view() {
         .kura
         .store_block(block.clone())
         .expect("persist adversarial nonzero lane-view body");
+    let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
+    adapter
+        .kura
+        .store_v2_finality_artifact(&finality)
+        .expect("publish exact fixture finality before canonical recovery");
     assert!(
         !canonical_v2_lane_payload_matches_kura(
             adapter.state.as_ref(),
             adapter.kura.as_ref(),
             &adapter.context,
             &block,
-        ),
+        )
+        .expect("read exact canonical lane authority"),
         "canonical recovery must enforce the planner-origin lane-view invariant"
     );
 }
@@ -756,7 +778,8 @@ fn autonomous_payload_and_new_view_ingress_are_exact_and_contiguous() {
     let mut adapter = boundary_restart
         .reopen_isolated(boundary_context, true)
         .expect("reopen the adapter under the authenticated boundary context");
-    let (source_block, mut proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+    let (source_block, mut proposal) =
+        planned_autonomous_lane_candidate_block_at_view(&adapter, &keys, 0);
     proposal.payload_block_hint = None;
     let entrypoint = source_block
         .external_entrypoints_cloned()

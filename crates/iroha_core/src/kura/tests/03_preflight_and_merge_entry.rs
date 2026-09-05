@@ -294,6 +294,13 @@ fn configured_catalog_preflight_rejects_existing_journal_without_baseline() {
     assert_catalog_paths_absent(dir.path(), &configured_b);
 }
 fn populate_store(dir: &TempDir, count: usize) {
+    let config = kura_config_for_dir(dir, BLOCKS_IN_MEMORY);
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
+    let _ = store_dummy_block_arcs(&kura, count);
+}
+
+// BlockStore-only tests deliberately exercise journals without opening a node.
+fn populate_raw_block_store(dir: &TempDir, count: usize) {
     let blocks_dir = primary_blocks_dir(dir);
     let mut block_store = BlockStore::new(&blocks_dir);
     block_store.create_files_if_they_do_not_exist().unwrap();
@@ -392,6 +399,7 @@ fn unknown_hash_has_no_body_status_or_durable_payload_len() {
     );
 }
 fn store_dummy_block_arcs(kura: &Kura, count: usize) -> Vec<Arc<SignedBlock>> {
+    establish_dummy_store_primary_anchor(kura);
     let mut generator = DummyBlocks::new();
     let blocks: Vec<_> = (0..count).map(|_| generator.next()).collect();
     for block in &blocks {
@@ -399,6 +407,35 @@ fn store_dummy_block_arcs(kura: &Kura, count: usize) -> Vec<Arc<SignedBlock>> {
             .expect("store dummy block through durable Kura path");
     }
     blocks
+}
+
+fn establish_dummy_store_primary_anchor(kura: &Kura) {
+    let Some(baseline) = kura
+        .configured_lane_catalog_baseline()
+        .expect("read dummy store's configured baseline")
+    else {
+        // The isolated blank constructor is not a persistent startup fixture.
+        return;
+    };
+    let primary = kura
+        .lane_storage_entry(LaneId::SINGLE)
+        .expect("dummy store has canonical primary storage");
+    let incarnation = Hash::new(
+        format!(
+            "kura-lane-incarnation:{}:{}",
+            primary.lane_id.as_u32(),
+            primary.dataspace_id.as_u64()
+        )
+        .as_bytes(),
+    );
+    kura.install_lane_incarnation_marker_if_missing_for_test(&primary, incarnation, 0)
+        .expect("initialize missing dummy primary marker");
+    let (incarnation, activation) = kura
+        .active_lane_incarnation_marker(&primary)
+        .expect("authenticate existing dummy primary marker");
+    assert_eq!(activation, 0, "the physical primary is active at genesis");
+    kura.establish_or_verify_configured_primary_geometry_anchor(&primary, incarnation, baseline)
+        .expect("bind dummy blocks to the durable configured primary");
 }
 fn finalize_chain_through_for_eviction(kura: &Kura, height: NonZeroUsize) {
     let target_height = u64::try_from(height.get()).expect("fixture height fits u64");

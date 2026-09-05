@@ -98,6 +98,14 @@ fn core_context_rejects_same_label_foreign_genesis_network() {
     let canonical = context();
     let mut foreign = canonical.clone();
     foreign.network_id = test_network_id(0x7B);
+    (
+        foreign.kagemusha_mint_finality_epoch_id,
+        foreign.kagemusha_mint_finality_epoch_roster,
+    ) = crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
+        foreign.network_id,
+        foreign.epoch,
+        &foreign.roster,
+    );
     foreign
         .validate()
         .expect("foreign context remains structural");

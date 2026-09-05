@@ -281,6 +281,17 @@ impl_direct_instruction_box!(crate::isi::endorsement::SubmitDomainEndorsement);
 impl_direct_instruction_box!(crate::isi::social::ClaimTwitterFollowReward);
 impl_direct_instruction_box!(crate::isi::social::SendToTwitter);
 impl_direct_instruction_box!(crate::isi::social::CancelTwitterEscrow);
+// Native race lifecycle is a public consensus-owned instruction surface.
+impl_direct_instruction_box!(crate::isi::race::OpenRaceV1);
+impl_direct_instruction_box!(crate::isi::race::JoinRaceV1);
+impl_direct_instruction_box!(crate::isi::race::StartRaceV1);
+impl_direct_instruction_box!(crate::isi::race::CommitRaceCheckpointV1);
+impl_direct_instruction_box!(crate::isi::race::ChallengeRaceV1);
+impl_direct_instruction_box!(crate::isi::race::CommitRaceInputsV1);
+impl_direct_instruction_box!(crate::isi::race::RevealRaceInputsV1);
+impl_direct_instruction_box!(crate::isi::race::AdvanceRaceDeadlineV1);
+impl_direct_instruction_box!(crate::isi::race::SubmitRaceProofV1);
+impl_direct_instruction_box!(crate::isi::race::ExpireRaceV1);
 // Allow direct boxing of native asset escrow instructions.
 impl_direct_instruction_box!(crate::isi::escrow::OpenAssetEscrow);
 impl_direct_instruction_box!(crate::isi::escrow::AcceptAssetEscrow);
@@ -1903,6 +1914,9 @@ pub use staking::*;
 pub use transfer::*;
 pub use transparent::*;
 pub use vpn::*;
+/// Native race lifecycle instructions.
+pub mod race;
+pub use race::*;
 pub use zk::*;
 isi_box! {
     /// Enum with all supported [`SetKeyValue`] instructions.

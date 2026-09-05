@@ -266,6 +266,8 @@ mod model {
         SorafsModerationNoShow(String),
         /// Failed to find authoritative `SoraFS` moderation status
         SorafsModerationStatus,
+            /// Native race `{0}` not found
+        Race(iroha_crypto::Hash),
     }
 }
 

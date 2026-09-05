@@ -48,6 +48,7 @@ import {
   parseStrictGovernanceInstructionJson,
 } from "./noritoGovernanceBoundary.js";
 import { computeHashLiteralCrc } from "./hashLiteralCrc.js";
+import { createNoritoRaceCodecs, RACE_INSTRUCTION_NAMES_V1, RACE_INSTRUCTION_WIRE_IDS_V1 } from "./noritoRaceCodecs.js";
 import { KotodamaQuantity, NumericV1 } from "./numericV1.js";
 import {
   PRIVACY_EXACT12_TRANSACTION_PAYLOAD_FIELD_NAMES_V1,
@@ -335,6 +336,7 @@ const KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeNa
 const KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES = 16 * 1024;
 const KAGEMUSHA_TOP_UP_REQUEST_HEADER_PADDING = 8;
 const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
+  ...Object.fromEntries(RACE_INSTRUCTION_NAMES_V1.map((name, index) => [RACE_INSTRUCTION_WIRE_IDS_V1[index], `iroha_data_model::isi::race::${name}`])),
   "iroha.mint": "iroha_data_model::isi::mint_burn::MintBox",
   "iroha.burn": "iroha_data_model::isi::mint_burn::BurnBox",
   "iroha.register": "iroha_data_model::isi::register::RegisterBox",
@@ -2756,6 +2758,12 @@ function decodeTopUpKagemushaInstructionPayload(payload, innerFlags) {
 }
 
 function encodePureJsInstructionPayload(instruction) {
+  const raceNames = RACE_INSTRUCTION_NAMES_V1.filter((name) => Object.prototype.hasOwnProperty.call(instruction, name));
+  if (raceNames.length > 0) {
+    assertExactObjectKeys(instruction, [raceNames[0]], "instruction");
+    const name = raceNames[0];
+    return encodeInstructionEnvelope(RACE_INSTRUCTION_WIRE_IDS_V1[RACE_INSTRUCTION_NAMES_V1.indexOf(name)], raceCodecsV1.encode(name, instruction[name]));
+  }
   if (!isPlainObject(instruction)) {
     throw new TypeError("instruction must be a JSON object");
   }
@@ -3044,6 +3052,11 @@ function decodePureJsInstruction(buffer) {
 }
 
 function decodePureJsInstructionPayload(wireId, payload, innerFlags) {
+  const raceIndex = RACE_INSTRUCTION_WIRE_IDS_V1.indexOf(wireId);
+  if (raceIndex >= 0) {
+    const name = RACE_INSTRUCTION_NAMES_V1[raceIndex];
+    return { [name]: raceCodecsV1.decode(name, payload) };
+  }
   switch (wireId) {
     case "iroha.mint":
       return { Mint: decodeMintPayload(payload) };
@@ -8806,6 +8819,34 @@ const [
   encodeU8Value, isPlainObject, parsePublicKeyLiteral,
   publicKeyLiteralFromParts, readNoritoField,
 );
+const raceCodecsV1 = /* @__PURE__ */ createNoritoRaceCodecs({
+  encodeStructValue, decodeStructFields, encodeNoritoVec, decodeNoritoVec,
+  encodeEscrowIdValue, decodeEscrowIdValue,
+  encodeAssetDefinitionIdValue, decodeAssetDefinitionIdValue,
+  encodeQuantityValue, decodeQuantityValue, encodeBoolValue, decodeBoolValue,
+  encodeU8Value, encodeU16Value, encodeU32Value, encodeU64Value,
+  decodeU8Value, decodeU16Value, decodeU32Value, decodeU64Value,
+  encodePublicKeyValue, decodePublicKeyValue, parsePublicKeyLiteral, publicKeyLiteralFromParts,
+  encodeConstVecU8Value, decodeConstVecU8Value, encodeByteVecValue, decodeByteVecValue,
+  encodeOptionValue, decodeOptionValue,
+});
+
+/** Encode one exact native Race V1 value with the consensus bare compact layout. */
+export function noritoEncodeRaceValueV1(name, value) {
+  return withNoritoLengthFlags(COMPACT_LEN_FLAG, () => raceCodecsV1.encode(name, value));
+}
+
+/** Decode an exact native Race V1 value and reject noncanonical byte encodings. */
+export function noritoDecodeRaceValueV1(name, value) {
+  const bytes = toBuffer(value);
+  if (bytes.length > 1024 * 1024) throw new RangeError("native race value exceeds 1 MiB");
+  return withNoritoLengthFlags(COMPACT_LEN_FLAG, () => {
+    const decoded = raceCodecsV1.decode(name, bytes);
+    if (!raceCodecsV1.encode(name, decoded).equals(bytes)) throw new TypeError("native race value is not byte-canonical");
+    return decoded;
+  });
+}
+
 function encodeEventFilterBoxFramePayload(value, context) {
   const frameBytes = decodeExactStandardBase64(value, context);
   const frame = decodeNoritoFrame(frameBytes, context, EVENT_FILTER_BOX_SCHEMA_HASH);

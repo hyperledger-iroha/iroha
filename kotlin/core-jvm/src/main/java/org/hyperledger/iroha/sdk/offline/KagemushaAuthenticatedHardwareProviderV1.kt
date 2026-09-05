@@ -76,7 +76,7 @@ interface KagemushaNativeAuthenticatedDeviceTransportV1 {
     ): KagemushaAuthenticatedDeviceResponseV1
 }
 
-/** A sender transition prepared under one durable native-Core operation identity. */
+/** Public preparation selector. Native Core must authenticate its durable operation identity. */
 class KagemushaNativeSenderPreparationV1(
     operationId: ByteArray,
     @JvmField val context: KagemushaDeviceSenderWalletContextV1,
@@ -88,7 +88,7 @@ class KagemushaNativeSenderPreparationV1(
     fun inputsDigest(): ByteArray = inputsDigestValue.copyOf()
 }
 
-/** Native-Core proof material admitted after the authenticated operation-5/6 reply. */
+/** Public candidate selector; serialized bytes never reconstruct native proof or journal authority. */
 class KagemushaNativeSenderCandidateV1(
     @JvmField val preparation: KagemushaNativeSenderPreparationV1,
     @JvmField val selector: KagemushaDeviceSenderPreparationSelectorV1,
@@ -105,7 +105,7 @@ class KagemushaNativeSenderCandidateV1(
     fun hardwareCommitAuthorization(): ByteArray = commitAuthorization.copyOf()
 }
 
-/** Native-Core lookup state for byte-identical operation-10 recovery. */
+/** Public selector for native operation-10 recovery; only the backend authenticates retained state. */
 class KagemushaNativeSenderRecoveryV1(
     operationId: ByteArray,
     terminalId: ByteArray,
@@ -212,10 +212,11 @@ enum class KagemushaNativeSenderKindV1 { PAYMENT, REDEMPTION }
 /**
  * Audited native Core authority required by [KagemushaAuthenticatedHardwareProviderV1].
  *
- * This interface intentionally has no stock implementation. It owns durable operation IDs,
+ * The Android native adapter forwards this contract to the qualified native backend. Core owns durable operation IDs,
  * signed release-catalog membership, recursive proof generation/verification, sender typestate,
  * and byte-identical terminal recovery. A service loaded factory must fail closed when exactly one
- * implementation is not installed by the qualified device/runtime package.
+ * implementation is not installed by the qualified device/runtime package. The adapter supplies
+ * neither a software backend nor a stock factory; an absent qualified backend fails closed.
  */
 interface KagemushaNativeCoreCoordinatorV1 {
     /** Fsync the caller's already durable action binding and echo its exact non-zero ID. */
@@ -227,12 +228,13 @@ interface KagemushaNativeCoreCoordinatorV1 {
         hardwarePolicyDigest: ByteArray,
     )
 
-    /** Admit one already P-256-authenticated canonical device reply into Core's typestate. */
+    /** Retain the original device authenticator so native Core independently verifies this reply. */
     fun acceptAuthenticatedDeviceReply(
         operation: Int,
         requestId: ByteArray,
         canonicalCommand: ByteArray,
         canonicalReply: ByteArray,
+        responseAuthenticator: ByteArray,
         qualification: KagemushaHardwareQualificationV1,
     )
 
@@ -409,6 +411,7 @@ class KagemushaAuthenticatedDeviceClientV1(
             requestId,
             command,
             reply.canonicalArchive(),
+            response.authenticator(),
             qualification,
         )
         return Session(qualification, responseKey).also { session = it }
@@ -450,6 +453,7 @@ class KagemushaAuthenticatedDeviceClientV1(
             requestId,
             command,
             archive,
+            response.authenticator(),
             accepted.qualification,
         )
         return AuthenticatedCall(operation, response.status, command, reply, archive)
@@ -728,14 +732,25 @@ class KagemushaAuthenticatedHardwareProviderV1(
             terminalReceipt,
             qualified,
         )
-        require(
-            release.context.devicePolicyBinding.hardwarePolicyId()
-                .contentEquals(qualified.hardwarePolicyDigest()),
-        ) { "outbox release hardware-policy scope mismatch" }
-        require(
-            release.context.coreAuthorizationKeyReference()
-                .contentEquals(qualified.coreAuthorizationKeyReference()),
-        ) { "outbox release Core authorization key mismatch" }
+        // Native Core resolves and authenticates the original record and release authorization.
+        // The op12 command retains its creation policy/key; its response is authenticated with
+        // the active device key. Re-pinning creation authority would strand outboxes after rotation.
+        require(KagemushaDeviceOperationCodecV1.encodeSenderPublicInputs(release.inputs).contentEquals(
+            KagemushaDeviceOperationCodecV1.encodeSenderPublicInputs(inputs))) { "outbox release substituted public inputs" }
+        require(release.canonicalEnvelope().contentEquals(canonicalPayment)) { "outbox release substituted payment" }
+        require(release.inputsDigest().contentEquals(KagemushaCoreCoordinatorArchiveV1.inputsDigestShape(
+            release.operationId(), release.context, inputs))) { "outbox release input digest mismatch" }
+        require(release.envelopeDigest().contentEquals(KagemushaCoreCoordinatorArchiveV1.terminalEnvelopeDigestShape(
+            canonicalPayment))) { "outbox release envelope digest mismatch" }
+        val creation = release.context
+        val active = qualified.credential
+        val generation = BigInteger(java.lang.Long.toUnsignedString(active.hardwareEpochGeneration))
+        require(creation.lane.networkId().contentEquals(active.networkId.bytes()) &&
+            creation.lane.deviceLaneId().contentEquals(active.laneCommitment()) &&
+            creation.hardwareEpoch.generation <= generation &&
+            (creation.hardwareEpoch.generation != generation || creation.hardwareEpoch.epochId().contentEquals(active.hardwareEpochId()))) {
+            "outbox release retained context mismatch"
+        }
         val command = KagemushaDeviceSenderCommandV1(
             operation = 12,
             operationId = release.operationId(),

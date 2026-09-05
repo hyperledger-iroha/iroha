@@ -1440,6 +1440,8 @@ mod model {
         #[cfg(test)]
         #[doc(hidden)]
         __TestFallback,
+            /// Read one consensus-owned race.
+        FindRaceById(race::FindRaceById),
     }
     /// An enum of all possible singular query outputs
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema, FromVariant)]
@@ -1650,6 +1652,8 @@ mod model {
         Domain(crate::domain::Domain),
         /// Non-fungible asset payload.
         Nft(crate::nft::Nft),
+            /// Native race state and terminal receipt.
+        RaceRecord(crate::race::RaceRecordV1),
     }
     /// The results of a single iterable query request.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
@@ -4290,6 +4294,7 @@ impl_iter_queries! {
     oracle::prelude::FindDefiOracleAttestationsByKey => crate::oracle::DefiOracleAttestation,
 }
 impl_singular_queries! {
+    race::FindRaceById => crate::race::RaceRecordV1,
     FindParameters => crate::parameter::Parameters,
     FindExecutorDataModel => crate::executor::ExecutorDataModel,
     account::prelude::FindAccountById => crate::account::Account,

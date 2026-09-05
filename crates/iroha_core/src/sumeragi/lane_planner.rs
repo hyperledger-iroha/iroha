@@ -2710,11 +2710,17 @@ fn prepare_v2_lane_payload_plan_inner(
             // A matching global block hash is not enough: bind the raw
             // sidecar to the exact ownership embedded in that canonical
             // block body before it can affect deterministic planning.
-            let canonical = kura.canonical_lane_block_artifacts_at_proposal_height_matching(
-                artifact.ownership.proposal_height,
-                1,
-                |ownership| ownership == &artifact.ownership,
-            );
+            let canonical = kura
+                .canonical_lane_block_artifacts_at_proposal_height_matching(
+                    artifact.ownership.proposal_height,
+                    1,
+                    |ownership| ownership == &artifact.ownership,
+                )
+                .map_err(|error| {
+                    V2LanePayloadPlanError::new(format!(
+                        "canonical lane carrier is unreadable: {error}"
+                    ))
+                })?;
             if canonical.first() != Some(&artifact) || canonical.len() != 1 {
                 return Err(V2LanePayloadPlanError::new(
                     "canonical lane frontier does not match exact block ownership",

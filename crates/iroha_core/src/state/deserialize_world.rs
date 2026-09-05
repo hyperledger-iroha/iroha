@@ -7839,6 +7839,7 @@ fn parse_world(
     let content_bundles = take_required(&mut map, "content_bundles")?;
     let content_chunks = take_required(&mut map, "content_chunks")?;
     let asset_escrows = take_required(&mut map, "asset_escrows")?;
+    let races = take_optional(&mut map, "races")?.unwrap_or_default();
     let vpn_leases = take_required(&mut map, "vpn_leases")?;
     let merge_hint_roots: Cell<Vec<Hash>> = take_required(&mut map, "merge_hint_roots")?;
     let merge_global_state_root: Cell<Option<Hash>> =
@@ -7916,6 +7917,7 @@ fn parse_world(
         asset_escrows_by_seller: Storage::default(),
         asset_escrows_by_buyer: Storage::default(),
         asset_escrows_by_status: Storage::default(),
+        races,
         vpn_leases,
         vpn_active_lease_by_account: Storage::default(),
         vpn_active_lease_by_address_slot: Storage::default(),

@@ -515,8 +515,7 @@ v2_apply_test!(
             .kura
             .persist_lane_executable_payload(&payload, payload.network_id, payload.epoch)
             .expect("persist missing-Queue-owner payload");
-        let lifecycle_group =
-            install_autonomous_crash_live_cursor(&fixture, &payload, &producer);
+        let lifecycle_group = install_autonomous_crash_live_cursor(&fixture, &payload, &producer);
         assert_eq!(
             lifecycle_group,
             lane_queue_reservation_group_binding_from_ordered_keys(payload.reservation_keys.iter())
@@ -1117,10 +1116,16 @@ v2_apply_test!(
             .store_block(conflicting)
             .expect("persist conflicting canonical block");
         let mut store = fixture.reopen_body_store();
+        let error = fixture
+            .execute(&mut store)
+            .expect_err("conflicting canonical storage");
         assert!(matches!(
-            fixture.execute(&mut store),
-            Err(V2ApplyError::KuraConflict)
+            &error,
+            V2ApplyError::CanonicalStorageRead(crate::kura::Error::CanonicalBlockWireMismatch {
+                height: 1
+            })
         ));
+        assert!(error.requires_restart_recovery());
         assert_eq!(fixture.state.committed_height(), 0);
         fixture.assert_no_post_apply_sidecars();
     }
@@ -1149,10 +1154,11 @@ v2_apply_test!(wsv_without_its_canonical_kura_block_fails_closed, {
     assert_eq!(fixture.state.committed_height(), 1);
     assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 0);
     let mut store = fixture.reopen_body_store();
-    assert!(matches!(
-        fixture.execute(&mut store),
-        Err(V2ApplyError::StateAheadOfKura)
-    ));
+    let error = fixture
+        .execute(&mut store)
+        .expect_err("WSV cannot outrun canonical storage");
+    assert!(matches!(&error, V2ApplyError::StateAheadOfKura));
+    assert!(error.requires_restart_recovery());
     fixture.assert_no_post_apply_sidecars();
 });
 v2_apply_test!(
@@ -1189,13 +1195,14 @@ v2_apply_test!(
     fresh_apply_recomputes_and_rejects_a_consistently_forged_marker_and_qc,
     {
         let fixture = ApplyFixture::new();
-        let forged_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-            Hash::new(b"forged parent state"),
-            Hash::new(b"forged post state"),
-            Hash::new(b"forged ordinary writes"),
-            1,
-            Hash::new(b"forged executed block wire"),
-        );
+        let forged_commitment =
+            wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                Hash::new(b"forged parent state"),
+                Hash::new(b"forged post state"),
+                Hash::new(b"forged ordinary writes"),
+                1,
+                Hash::new(b"forged executed block wire"),
+            );
         let mut certificate = fixture.task.certificate().clone();
         certificate.execution_commitment = forged_commitment;
         let mut keys = (1_u8..=4)

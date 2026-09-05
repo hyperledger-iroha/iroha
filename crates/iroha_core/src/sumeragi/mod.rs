@@ -4653,7 +4653,7 @@ impl FairV2Ingress {
     /// Apply a live safety-WAL recovery cut to carrierless leader-wire owners.
     ///
     /// Production ingress holds this mirror lock while the durable gate
-    /// publishes first. Only restart-restored Dormant records can disappear;
+    /// publishes first. Carrierless records retire or reopen for a new consumer;
     /// Ingress and Runtime records retain their physical/consumer ownership
     /// until their ordinary terminal path completes.
     pub(crate) fn advance_leader_wire_recovery_cut(

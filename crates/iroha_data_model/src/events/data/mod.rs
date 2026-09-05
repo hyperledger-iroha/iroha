@@ -18,6 +18,8 @@ pub mod governance;
 pub mod musubi;
 pub mod oracle;
 pub mod proof;
+/// Native race transition events.
+pub mod race;
 pub mod runtime_upgrade;
 pub mod smart_contract;
 pub mod social;

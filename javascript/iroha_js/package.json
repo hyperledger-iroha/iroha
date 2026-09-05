@@ -123,6 +123,11 @@
       "types": "./kotodama-compiler.d.ts",
       "browser": "./dist/kotodamaCompiler/browser.js",
       "import": "./dist/kotodamaCompiler/index.js"
+    },
+    "./race": {
+      "browser": "./dist/race.js",
+      "import": "./dist/race.js",
+      "types": "./race.d.ts"
     }
   },
   "typesVersions": {
@@ -198,6 +203,9 @@
       ],
       "kotodama-compiler": [
         "./kotodama-compiler.d.ts"
+      ],
+      "race": [
+        "./race.d.ts"
       ]
     }
   },
@@ -277,7 +285,8 @@
     "native/iroha_js_host.checksums.json",
     "dist",
     "recipes/iso_bridge_builder.mjs",
-    "recipes/nexus_app_transfer.mjs"
+    "recipes/nexus_app_transfer.mjs",
+    "race.d.ts"
   ],
   "browser": {
     "./dist/authenticatedBlockProofs.js": "./dist/authenticatedBlockProofs.browser.js",

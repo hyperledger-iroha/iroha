@@ -242,6 +242,65 @@ fn fixture_world(
     }
     world
 }
+fn install_fixture_projection_policy_baseline(
+    state: &State,
+    authority: &AccountId,
+    custody_account: &AccountId,
+    treasury_account: &AccountId,
+) {
+    // Archive tests start from an already-configured policy world. Execute the
+    // real Core handlers with their registered authority and exact permissions;
+    // this setup does not claim Initial-executor policy admission coverage.
+    let mut block = state.block(BlockHeader::new(
+        NonZeroU64::new(1).expect("non-zero fixture setup height"),
+        None,
+        None,
+        None,
+        1_000,
+        0,
+    ));
+    let mut transaction = block.transaction();
+    let reputation_policy = ReputationJournalAuthorityPolicyV1 {
+        version: REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
+        revision: 1,
+        predecessor_policy_digest: None,
+        por_recorder_authority: authority.clone(),
+        dispute_recorder_authority: authority.clone(),
+        token_recorder_authority: authority.clone(),
+        max_source_age_ms: REPUTATION_JOURNAL_MAX_SOURCE_AGE_MS_V1,
+    };
+    crate::smartcontracts::Execute::execute(
+        SetSorafsReputationJournalAuthorityPolicy::new(reputation_policy),
+        authority,
+        &mut transaction,
+    )
+    .expect("activate fixture reputation policy through its authority-checked Core handler");
+    crate::smartcontracts::Execute::execute(
+        SetSorafsOrderbookPolicy::new(fixture_orderbook_policy(authority)),
+        authority,
+        &mut transaction,
+    )
+    .expect("activate fixture orderbook policy through its authority-checked Core handler");
+    crate::smartcontracts::Execute::execute(
+        SetSorafsReservePolicy::new(fixture_reserve_policy(
+            authority,
+            custody_account.clone(),
+            treasury_account.clone(),
+        )),
+        authority,
+        &mut transaction,
+    )
+    .expect("activate fixture reserve policy through its authority-checked Core handler");
+    transaction.apply();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit only the archive fixture's policy world baseline");
+    assert_eq!(
+        state.committed_height(),
+        0,
+        "fixture policy setup does not finalize a block"
+    );
+}
 fn install_fixture_validator_authority(
     state: &State,
     context: &wire::HeightContext,
@@ -426,9 +485,7 @@ impl ApplyFixture {
             .collect::<Vec<_>>();
         let network_id = crate::sumeragi::synthetic_network_id("sumeragi-v2-apply-crash-test");
         let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                network_id, 0, &roster,
-            );
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
         let mut context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
@@ -489,6 +546,14 @@ impl ApplyFixture {
                     .expect("fixture validator PoP")
             })
             .collect::<Vec<_>>();
+        if include_projection_policies {
+            install_fixture_projection_policy_baseline(
+                &state,
+                &transaction_authority,
+                &custody_account,
+                &treasury_account,
+            );
+        }
         install_fixture_validator_authority(&state, &context, &validator_set_pops);
         if include_native_lane {
             install_fixture_native_lane(&mut state, &mut context);
@@ -574,35 +639,10 @@ impl ApplyFixture {
                     .expect("sign valid genesis fixture body")
                     .canonical_resultless_proposal()
             };
-        let reputation_policy = ReputationJournalAuthorityPolicyV1 {
-            version: REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
-            revision: 1,
-            predecessor_policy_digest: None,
-            por_recorder_authority: transaction_authority.clone(),
-            dispute_recorder_authority: transaction_authority.clone(),
-            token_recorder_authority: transaction_authority.clone(),
-            max_source_age_ms: REPUTATION_JOURNAL_MAX_SOURCE_AGE_MS_V1,
-        };
         let transaction_instructions = || {
-            let mut instructions = vec![InstructionBox::from(SetParameter::new(
+            vec![InstructionBox::from(SetParameter::new(
                 Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(100)),
-            ))];
-            if include_projection_policies {
-                instructions.push(InstructionBox::from(
-                    SetSorafsReputationJournalAuthorityPolicy::new(reputation_policy.clone()),
-                ));
-                instructions.push(InstructionBox::from(SetSorafsOrderbookPolicy::new(
-                    fixture_orderbook_policy(&transaction_authority),
-                )));
-                instructions.push(InstructionBox::from(SetSorafsReservePolicy::new(
-                    fixture_reserve_policy(
-                        &transaction_authority,
-                        custody_account.clone(),
-                        treasury_account.clone(),
-                    ),
-                )));
-            }
-            instructions
+            ))]
         };
         let body = if include_lane_payload {
             let transaction = TransactionBuilder::new_genesis(
@@ -763,6 +803,14 @@ impl ApplyFixture {
             LiveQueryStore::start_test(),
             self.service.state.chain_id.clone(),
         ));
+        if self.include_projection_policies {
+            install_fixture_projection_policy_baseline(
+                &state,
+                &authority,
+                &self.custody_account,
+                &self.treasury_account,
+            );
+        }
         install_fixture_validator_authority(
             &state,
             &self.context,

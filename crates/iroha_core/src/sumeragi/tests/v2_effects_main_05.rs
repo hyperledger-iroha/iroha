@@ -617,7 +617,11 @@ fn apply_barrier_handoff_retires_exact_live_proposal_and_lane_losers() {
             started,
         )
         .expect("arm the production serialized runtime");
-    assert!(!fixture.executor.has_pending_runner_decision_cleanup_for_test());
+    assert!(
+        !fixture
+            .executor
+            .has_pending_runner_decision_cleanup_for_test()
+    );
 
     let pre_decision_directive = fixture
         .executor
@@ -632,9 +636,7 @@ fn apply_barrier_handoff_retires_exact_live_proposal_and_lane_losers() {
     let mut lane_work =
         super::super::v2_lane_work::tests::runner_handoff_losing_merge_fixture_for_test();
     assert_eq!(
-        super::super::v2_lane_work::tests::runner_handoff_losing_merge_counts_for_test(
-            &lane_work,
-        ),
+        super::super::v2_lane_work::tests::runner_handoff_losing_merge_counts_for_test(&lane_work,),
         (1, 1)
     );
 
@@ -647,9 +649,7 @@ fn apply_barrier_handoff_retires_exact_live_proposal_and_lane_losers() {
         commit.execution_commitment,
     );
     let message =
-        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
-            commit,
-        ));
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(commit));
     let sender = PeerId::new(fixture.validator_keys[0].public_key().clone());
     let ownership = fair_transport_ingress_ownership(message.clone(), sender);
     let _admission = fixture
@@ -663,7 +663,10 @@ fn apply_barrier_handoff_retires_exact_live_proposal_and_lane_losers() {
             .executor
             .step(Instant::now(), &mut services)
             .expect("advance the authenticated live CommitQC");
-        if fixture.executor.has_pending_runner_decision_cleanup_for_test() {
+        if fixture
+            .executor
+            .has_pending_runner_decision_cleanup_for_test()
+        {
             break;
         }
     }
@@ -680,9 +683,10 @@ fn apply_barrier_handoff_retires_exact_live_proposal_and_lane_losers() {
     assert!(services.apply_tasks.is_empty());
     assert!(local_proposal.already_attempted(pre_decision_directive));
 
-    let permit = super::super::v2_runner::LifecycleProducerClaimDispositionV1::AwaitingApplyCompletion
-        .decided_lane_recovery_permit()
-        .expect("the typed Apply barrier mints only decided-lane authority");
+    let permit =
+        super::super::v2_runner::LifecycleProducerClaimDispositionV1::AwaitingApplyCompletion
+            .decided_lane_recovery_permit()
+            .expect("the typed Apply barrier mints only decided-lane authority");
     super::super::v2_runner::lifecycle_run_inner::settle_apply_barrier_runner_decision_handoff(
         &mut fixture.executor,
         &mut services,
@@ -692,13 +696,15 @@ fn apply_barrier_handoff_retires_exact_live_proposal_and_lane_losers() {
         &permit,
     )
     .expect("retire the exact live Decision handoff behind Apply");
-    assert!(!fixture.executor.has_pending_runner_decision_cleanup_for_test());
+    assert!(
+        !fixture
+            .executor
+            .has_pending_runner_decision_cleanup_for_test()
+    );
     assert!(local_proposal.is_pristine_for_test());
     assert!(!local_proposal.already_attempted(pre_decision_directive));
     assert_eq!(
-        super::super::v2_lane_work::tests::runner_handoff_losing_merge_counts_for_test(
-            &lane_work,
-        ),
+        super::super::v2_lane_work::tests::runner_handoff_losing_merge_counts_for_test(&lane_work,),
         (0, 0)
     );
     assert!(!output_guard.restart_required());
@@ -1362,13 +1368,14 @@ fn decision_commitment_mismatch_fails_closed_before_apply() {
         )
         .expect("start exact local proposal");
     complete_local_proposal_fixture(&mut executor, &mut services);
-    let conflicting_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-        Hash::new(b"Decision conflict parent state"),
-        Hash::new(b"Decision conflict post state"),
-        Hash::new(b"Decision conflict ordinary writes"),
-        1,
-        Hash::new(b"Decision conflict executed block"),
-    );
+    let conflicting_commitment =
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"Decision conflict parent state"),
+            Hash::new(b"Decision conflict post state"),
+            Hash::new(b"Decision conflict ordinary writes"),
+            1,
+            Hash::new(b"Decision conflict executed block"),
+        );
     assert_ne!(conflicting_commitment, fixture_execution_commitment());
     executor.runtime.decided_body = Some((
         fixture.manifest.round,
@@ -2389,13 +2396,14 @@ fn missing_replay_validate_rejects_mismatched_durable_prepare_commitment() {
     let (key, _) = install_exact_recovered_body_without_lifecycle_replay(&mut executor, &fixture);
     let (prepare, effect, ownership) = protected_prepare_validate_fixture(&fixture, 9_103);
     let mut mismatched = prepare;
-    mismatched.execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-        Hash::new(b"foreign protected-lock parent state"),
-        Hash::new(b"foreign protected-lock post state"),
-        Hash::new(b"foreign protected-lock ordinary writes"),
-        1,
-        Hash::new(b"foreign protected-lock executed block"),
-    );
+    mismatched.execution_commitment =
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"foreign protected-lock parent state"),
+            Hash::new(b"foreign protected-lock post state"),
+            Hash::new(b"foreign protected-lock ordinary writes"),
+            1,
+            Hash::new(b"foreign protected-lock executed block"),
+        );
     assert!(mismatched.validate(&fixture.context).is_ok());
     executor.protected_lock = Some(key);
     executor.runtime.locked_body = Some(key);
@@ -2849,12 +2857,14 @@ fn live_validate_successor_refines_only_the_same_attested_row() {
     assert!(true_owner.can_refine_to(&validated));
     assert!(true_owner.can_refine_to(&rejected));
     assert!(!rejected.can_refine_to(&validated));
-    assert!(!rejected.can_refine_to(&LiveLifecycleValidateSuccessorOwnerV1 {
-        dispatch_key: key(0x41, ordinal, ordinal, 0, 0x54),
-        round,
-        subject,
-        apply_is_authorized: false,
-    }));
+    assert!(
+        !rejected.can_refine_to(&LiveLifecycleValidateSuccessorOwnerV1 {
+            dispatch_key: key(0x41, ordinal, ordinal, 0, 0x54),
+            round,
+            subject,
+            apply_is_authorized: false,
+        })
+    );
 
     let mut foreign_round = round;
     foreign_round.view = foreign_round.view.saturating_add(1);
@@ -3119,13 +3129,14 @@ fn recovered_validate_retry_frontier_is_monotonic_and_keeps_its_physical_owner()
     assert_eq!(executor.durable_validate_retry_seals[&key], accepted);
 
     let mut conflicting = prepare;
-    conflicting.execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-        Hash::new(b"foreign recovered retry parent state"),
-        Hash::new(b"foreign recovered retry post state"),
-        Hash::new(b"foreign recovered retry writes"),
-        1,
-        Hash::new(b"foreign recovered retry block"),
-    );
+    conflicting.execution_commitment =
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"foreign recovered retry parent state"),
+            Hash::new(b"foreign recovered retry post state"),
+            Hash::new(b"foreign recovered retry writes"),
+            1,
+            Hash::new(b"foreign recovered retry block"),
+        );
     let conflicting_effect = AdapterEffect::ValidateBody {
         tag: tag(4),
         round: fixture.manifest.round,
@@ -3147,13 +3158,14 @@ fn recovered_validate_retry_frontier_is_monotonic_and_keeps_its_physical_owner()
 fn recovered_validate_retry_later_marker_and_decision_joins_are_atomic() {
     let fixture = Fixture::new();
     let commitment = fixture.qc(wire::GlobalPhase::Commit).execution_commitment;
-    let conflicting_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-        Hash::new(b"late cold fact parent state"),
-        Hash::new(b"late cold fact post state"),
-        Hash::new(b"late cold fact writes"),
-        1,
-        Hash::new(b"late cold fact block"),
-    );
+    let conflicting_commitment =
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"late cold fact parent state"),
+            Hash::new(b"late cold fact post state"),
+            Hash::new(b"late cold fact writes"),
+            1,
+            Hash::new(b"late cold fact block"),
+        );
 
     let mut marker_executor = fixture.executor(EffectQueueConfig::default());
     let (key, _, durable) =
@@ -3973,13 +3985,14 @@ fn admitted_validate_retry_seal_coalesces_exact_authority_upgrade_without_replay
     let accepted_seal = executor.durable_validate_retry_seals[&key].clone();
 
     let mut conflicting = prepare;
-    conflicting.execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-        Hash::new(b"conflicting sealed Validate parent state"),
-        Hash::new(b"conflicting sealed Validate post state"),
-        Hash::new(b"conflicting sealed Validate ordinary writes"),
-        1,
-        Hash::new(b"conflicting sealed Validate executed block"),
-    );
+    conflicting.execution_commitment =
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"conflicting sealed Validate parent state"),
+            Hash::new(b"conflicting sealed Validate post state"),
+            Hash::new(b"conflicting sealed Validate ordinary writes"),
+            1,
+            Hash::new(b"conflicting sealed Validate executed block"),
+        );
     let conflicting_fetch = AdapterEffect::FetchBody {
         tag: tag(0),
         round: conflicting.proposal_round,
@@ -4417,9 +4430,11 @@ fn terminal_published_validate_retry_requires_live_wal_apply_admission() {
     assert_eq!(executor.protected_decision, Some(decision));
     assert!(executor.retained_effect_batch.is_none());
     assert!(executor.parked_effect_batch.is_none());
-    assert!(executor
-        .published_lifecycle_validate_retry_markers
-        .contains_key(&key));
+    assert!(
+        executor
+            .published_lifecycle_validate_retry_markers
+            .contains_key(&key)
+    );
     assert!(executor.pending_released_lifecycle_validate_apply.is_some());
     assert!(executor.pending_durable_validate_admissions.is_empty());
     assert!(executor.durable_validate_retry_seals.is_empty());
@@ -4467,10 +4482,8 @@ fn terminal_published_validate_retry_requires_live_wal_apply_admission() {
     assert!(executor.pending_durable_validate_admissions.is_empty());
     assert!(executor.durable_validate_retry_seals.is_empty());
 
-    executor.runtime.exact_effect_ownership = Some((
-        current_validate.clone(),
-        current_validate_ownership.clone(),
-    ));
+    executor.runtime.exact_effect_ownership =
+        Some((current_validate.clone(), current_validate_ownership.clone()));
     assert_eq!(
         executor
             .consume_effects(vec![current_validate.clone()], &mut services)
@@ -4479,11 +4492,15 @@ fn terminal_published_validate_retry_requires_live_wal_apply_admission() {
     );
     assert!(executor.retained_effect_batch.is_none());
     assert!(executor.parked_effect_batch.is_none());
-    assert!(!executor
-        .published_lifecycle_validate_retry_markers
-        .contains_key(&key));
-    assert!(executor.pending_durable_validate_admissions[&key]
-        .exactly_matches_retry(&current_validate, &current_validate_ownership));
+    assert!(
+        !executor
+            .published_lifecycle_validate_retry_markers
+            .contains_key(&key)
+    );
+    assert!(
+        executor.pending_durable_validate_admissions[&key]
+            .exactly_matches_retry(&current_validate, &current_validate_ownership)
+    );
     assert!(matches!(
         executor.durable_validate_retry_seals.get(&key),
         Some(DurableValidateRetrySealV1::Live {
@@ -5711,13 +5728,14 @@ fn decision_body_stage_adoption_rejects_commitment_drift() {
     };
     let incumbent = bound_test_effect_ownership(&store, tag(0), 9_020);
     let mut conflicting = commit.clone();
-    conflicting.execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-        Hash::new(b"conflicting Decision parent state"),
-        Hash::new(b"conflicting Decision post state"),
-        Hash::new(b"conflicting Decision ordinary writes"),
-        1,
-        Hash::new(b"conflicting Decision executed block"),
-    );
+    conflicting.execution_commitment =
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"conflicting Decision parent state"),
+            Hash::new(b"conflicting Decision post state"),
+            Hash::new(b"conflicting Decision ordinary writes"),
+            1,
+            Hash::new(b"conflicting Decision executed block"),
+        );
     assert_ne!(
         conflicting.execution_commitment,
         commit.execution_commitment

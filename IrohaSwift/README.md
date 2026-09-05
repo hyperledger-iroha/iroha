@@ -48,9 +48,16 @@ archive, shared with the native outgoing-operation index.
 `KagemushaCoreCoordinatorBridgeV1.open(storagePath:)` provides the strict native
 schema-2 transport. It checks the complete ABI-23 inventory and correlates method
 responses with the caller's request. It fails closed when the native coordinator
-is unavailable. Embedded preparation/candidate/recovery archives remain opaque;
-the typed wallet coordinator integration still requires the canonical native
-archive codecs described in [the source contract](../specs/kagemusha_device_bridge_v1.md).
+is unavailable. `KagemushaNativeCoreCoordinatorAdapterV1.open(storagePath:)`
+implements the wallet coordinator interface over that transport and the exact
+`KagemushaCoreCoordinatorArchiveV1` codecs. It binds preparations to the caller,
+original public inputs, and qualification; candidates retain that exact preparation.
+Recovery and release retain the creation context across ordinary epoch rotation.
+Archive parsing proves canonical shape, while native Core must resolve each selector
+against its authenticated durable journal and verify proof and hardware authority.
+Authenticated reply admission carries the original full 64-byte low-S P-256
+response authenticator so native Core can independently authenticate the transcript.
+The adapter supplies no software monetary backend. See [the source contract](../specs/kagemusha_device_bridge_v1.md).
 
 Online top-up is payer-signed. Build a transaction containing exactly one
 `KagemushaNoritoV1.topUpInstructionFrame(_:)` result with `QueuePlanSynced`

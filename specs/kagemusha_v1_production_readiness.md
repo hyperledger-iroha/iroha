@@ -63,7 +63,7 @@ and [device bridge contract](kagemusha_device_bridge_v1.md).
   correction now constrains the recipient and opening bytes and routes State SHA
   messages through the mandatory authenticated ordered claim fold. Focused Rust
   checks and actual artifact/resource gates are still required before closure.
-  Sources: [recipient/opening constraint](../crates/iroha_core/src/zk/kagemusha_v1_recursion/composite.rs#L2624)
+  Sources: [recipient/opening constraint](../crates/iroha_core/src/zk/kagemusha_v1_recursion/composite.rs#L2612)
   and [claim consumer](../crates/iroha_core/src/zk/kagemusha_v1_recursion/composite.rs#L1705).
 - **KGM-02 — High, operation recovery integration incomplete.** Swift exposed
   operations still allocated retry identities internally while Core had moved to
@@ -79,8 +79,9 @@ and [device bridge contract](kagemusha_device_bridge_v1.md).
   structurally valid response for a different canonical installed envelope.
   Match the exact request envelope before returning backend results and preserve
   cleared C outputs on rejection. The fix and regressions are implemented; Rust
-  execution awaits resolution of the current workspace compilation errors.
-  Source: [native response validation](../crates/connect_norito_bridge/src/kagemusha_core_coordinator_v1.rs#L553).
+  passed in the initial 20-test native coordinator suite. The expanded typed
+  archive/input/receipt boundary is undergoing a new Rust regression run.
+  Source: [native response validation](../crates/connect_norito_bridge/src/kagemusha_core_coordinator_v1.rs#L552).
 - **KGM-04 — Medium, physical clock rollback evidence missing.** The physical
   transcript could pass without exercising a host clock rollback and rejection
   of an expired request. The verifier now requires four explicit boundaries and
@@ -93,15 +94,41 @@ and [device bridge contract](kagemusha_device_bridge_v1.md).
   authenticates and reruns the fixed physical checker, binds the exact candidate
   and OEM challenge, and rejects changed sources before publication. Focused
   substitution tests and the isolated projector test pass; the stable-source
-  combined run is being validated. Actual admitted OEM verifiers, roots and
+  combined run passed 162 tests and 46 subtests. Actual admitted OEM verifiers, roots and
   physical runs remain required for every enabled profile. See the
   [exact closure contract](kagemusha_v1_physical_evidence.md) and
-  [release verifier](../scripts/verify_kagemusha_v1_release_evidence.py#L2117).
+  [release verifier](../scripts/verify_kagemusha_v1_release_evidence.py#L2109).
 - **KGM-06 — Medium, JavaScript model mutation.** A public internal-value getter
   exposed mutable WeakMap backing data behind frozen canonical models. The
   getter is removed and only internal encoders access backing values. Public
   projections are defensive, with nested mutation/canonical byte regressions
-  passing. Source: [model backing boundary](../javascript/iroha_js/src/kagemusha.js).
+  passing. Source: [model backing boundary](../javascript/iroha_js/src/kagemusha.js#L195).
+- **KGM-07 — High, sender-context and response-evidence integration.** Core and
+  the bridge used the same sender-context schema name for different field sets,
+  so full public-input digests disagreed; the coordinator also discarded the
+  device response's original signature. Core now owns the shared context,
+  including its authenticated Core key reference, and method 3 carries the
+  original low-S signature as its fifth field. The new ten-field contract rejects
+  the retired projection. Rust canonical fixtures pass Kotlin/Java parity and
+  full provider tests retain the original authenticator. Native session admission
+  and fresh Rust Core regression execution remain required before closure.
+- **KGM-08 — Medium, canonical SDK and retained-operation boundaries.** Existing
+  mobile context/receipt codecs differed from Rust's declared alias-field layout.
+  Actual Rust archive fixtures exposed and corrected the mismatch. The native
+  boundary now rejects opaque/wrong-schema archives, changed nested preparation
+  or recovery IDs, mismatched input digests, and invalid complete signed release
+  commands. Android terminal-envelope bounds and historical policy/key rotation
+  cleanup passed focused Kotlin/Java tests. Native recovery now requires the exact
+  installed bytes and terminal identity selected by its canonical device reply;
+  current Rust execution of those new checks is pending. Public archive validity
+  never grants a durable operation, admitted signing key or finality capability.
+
+The remaining native coordinator dependencies are concrete: a complete recursive
+State checkpoint, a qualified service that seals one atomic latest checkpoint
+across state/proofs/WAL/accepted replies, native response admission and challenge
+consumption, production credential/Guard proof adapters, and finality resolution.
+The current stock backend intentionally reports unavailable. These are outstanding
+implementation and qualification goals, not deployment switches.
 
 Concrete source locations and completed test results are recorded with the
 implementation in `status.md`. No active exploitation or qualified production

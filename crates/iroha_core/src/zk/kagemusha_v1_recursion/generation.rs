@@ -5147,6 +5147,10 @@ pub fn generate_kagemusha_recursive_state_artifacts_v1(
             reason: error.to_string(),
         }
     })?;
+    // Key generation only borrows the Base graph. Release it before allocating the other key
+    // and the final audit/proof graphs below.
+    drop(eq_circuit);
+    halo2_proofs::release_allocator_slack();
     let ep_vk = keygen_vk(&ep_parameters, &ep_circuit).map_err(|error| {
         KagemushaArtifactGenerationErrorV1::KeyGeneration {
             parity: KagemushaPastaParityV1::Ep,
@@ -5161,6 +5165,8 @@ pub fn generate_kagemusha_recursive_state_artifacts_v1(
             reason: error.to_string(),
         }
     })?;
+    drop(ep_circuit);
+    halo2_proofs::release_allocator_slack();
     let eq_protocol = compile(
         &eq_parameters,
         &eq_vk,

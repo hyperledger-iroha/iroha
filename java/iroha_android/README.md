@@ -169,8 +169,14 @@ archive, shared with the native outgoing-operation index.
 
 `KagemushaCoreCoordinatorFrameV1` mirrors Kotlin's strict schema-2 codec, and the
 Android `KagemushaCoreCoordinatorBridgeV1` facade delegates native open/invoke to
-Kotlin. Missing native authority remains unavailable; opaque preparation,
-candidate, and recovery archives are not a typed monetary coordinator. See the
+Kotlin. `KagemushaNativeCoreCoordinatorAdapterV1.open(storagePath)` implements the
+typed coordinator through the same Kotlin native adapter and context checks.
+`KagemushaCoreCoordinatorArchiveV1` mirrors the pure canonical projection codecs.
+Public selectors never recreate verified native capabilities; the qualified backend
+must authenticate the journal, release and actual proof. Device-reply admission
+retains its original response authenticator for independent native verification.
+Missing native authority remains unavailable, and no software backend or stock
+factory is supplied. See the
 [native integration contract](../../specs/kagemusha_device_bridge_v1.md).
 
 `KagemushaWalletV1` mirrors the canonical Kotlin aggregate wallet. It requires an

@@ -5,13 +5,14 @@ boundary. V1 deliberately exposes only witnessed transfers and opaque metadata
 carriers; unsupported supply, permission, and non-membership variants are not
 retained in the wire or trace schema.
 
-Cryptographic qualification note (2026-08-29): the sole canonical parameter
-record targets 128-bit aggregate qROM security with six independently generated
-Goldilocks digest lanes, degree-four FRI challenges, binary folds, and 136
-queries. The exact arithmetic calculator meets that target, but arithmetic is
-not a production qualification claim: the protocol-specific qROM reduction and
-the final-artifact multi-target digest review remain mandatory. Appendix A
-records the calculation and blockers.
+Cryptographic qualification note (2026-09-05): production qualification is
+unavailable. The current 136-query record does not meet even the corrected
+arithmetic model after accounting for quadratic composition degree and terminal
+FRI rounding. The selected completion target is succinct verification; full
+replay must remain until all transfer semantics and quotient/degree relations
+are constrained. See [the production readiness goals](fastpq_production_readiness.md)
+and Appendix A. Independent protocol-specific qROM and final-artifact digest
+review remain mandatory.
 
 ## Implemented release boundary
 
@@ -53,8 +54,8 @@ records the calculation and blockers.
   match with real transfer transcripts across handle identity, dataspace,
   asset, accounts, amount, and cardinality. The issuer signature authenticates
   the capability/asset fields, not the intent, proof, or amount, so this
-  specialized path remains outside release qualification while those exact
-  facts are not authenticated. Finalized lane-relay and authoritative fee-vault
+  specialized path is rejected by production host and block admission while
+  those exact facts and authoritative source-state anchors are not authenticated. Finalized lane-relay and authoritative fee-vault
   paths retain their separate state anchors.
 - Test/dev-tools raw-statement helpers check cryptographic transcript and byte
   determinism only. They make no state-validity claim and are absent from normal
@@ -81,7 +82,7 @@ records the calculation and blockers.
   - `key_limbs[i]`: base-256 limbs (7 bytes, little-endian) of the canonical key path.
   - `value_old_limbs[i]`, `value_new_limbs[i]`: same packing for pre/post values.
   - Selector columns: `s_active`, `s_transfer`, `s_meta_set`.
-  - Auxiliary columns: `delta = value_new - value_old` on transfer rows and `metadata_hash_limb_0` through `metadata_hash_limb_7`.
+  - Auxiliary columns: `delta = value_new - value_old` on transfer rows and `metadata_hash_limb_0` through `metadata_hash_limb_5`.
   - Transfer witness projection columns per level `ℓ`: `path_bit_ℓ`, `sibling_ℓ`, `node_in_ℓ`, `node_out_ℓ`. These columns exist only when the batch contains a Transfer row; metadata-only proofs do not allocate or commit 128 zero SMT columns.
   - Metadata columns: `dsid`, `slot`.
 - **Deterministic ordering.** Stable-sort rows lexicographically by
@@ -104,19 +105,17 @@ records the calculation and blockers.
 | Activity          | `s_active`                                                                               | 1 for real rows, 0 for padding.                                                                                       |
 | Main              | `key_limbs[i]`, `value_old_limbs[i]`, `value_new_limbs[i]`                               | Packed Goldilocks elements (little-endian, 7-byte limbs).                                                             |
 | Selectors         | `s_transfer`, `s_meta_set`                                                                | 0/1. `s_active` equals their sum.                                                                                      |
-| Auxiliary         | `delta`, `metadata_hash_limb_0..7`                                                       | Transfer delta and stable metadata are constrained.                                                                   |
+| Auxiliary         | `delta`, `metadata_hash_limb_0..5`                                                       | Transfer delta and stable metadata are constrained.                                                                   |
 | SMT               | `path_bit_ℓ`, `sibling_ℓ`, `node_in_ℓ`, `node_out_ℓ`                                    | Transfer-batch-only projection of validated witnesses; generic AIR hashing/non-membership is not implemented.         |
 | Metadata          | `dsid`, `slot`                                                                           | Constant across rows.                                                                                                 |
 
-The metadata map is canonically Norito-encoded and committed with raw
-Blake2b-256 over `u64_le(domain_len) || domain || u64_le(metadata_len) ||
-metadata`, using the domain `fastpq:v1:metadata-commitment:blake2b-256`.
-The 32 digest bytes are injected without field reduction as eight little-endian
-`u32` limbs, and every limb is constrained to remain constant across the trace.
-This replaces the collision-prone single Goldilocks-field projection. Because
-the trace schema and commitments change, this is a first-release hard cut:
-proofs and binary/golden proof artifacts produced with the single
-`metadata_hash` column must be regenerated.
+The metadata map is canonically Norito-encoded and committed with
+`hash_bytes_384_v1` using catalog `iroha-privacy-exact12-v1`, protocol and
+profile `fastpq-state-transition-stark-v1`, role `fastpq:v1:trace-metadata`,
+phase `commitment`, and zero level/index/counter. All six canonical Goldilocks
+output words are carried as `metadata_hash_limb_0` through
+`metadata_hash_limb_5`, and every word is constrained to remain constant across
+the trace. This commits the metadata bytes; it does not prove their semantics.
 
 ### Implemented math and deferred constraints
 - **Field packing:** bytes are chunked into 7-byte limbs (little-endian). Each limb `limb_j = Σ_{k=0}^{6} byte_{7j+k} * 256^k`; reject limbs ≥ Goldilocks modulus.
@@ -136,7 +135,7 @@ proofs and binary/golden proof artifacts produced with the single
   `N_eval`, and `o = omega_coset` is the pinned nonzero offset outside that
   subgroup. The sole compiled parameter record fixes this geometry; the
   parameter identifier is bound into transcript initialization.
-- Composition commitment: combine the 16 implemented residues with 16
+- Composition commitment: combine the 14 implemented residues with 14
   independently sampled coefficients. Proving and verifier-side derivation
   first require every residue to vanish on the canonical base trace; the raw
   LDE composition is then committed for low-degree testing.
@@ -232,9 +231,9 @@ proofs and binary/golden proof artifacts produced with the single
 | Selector relations | 1 | Active equals the Transfer-plus-MetaSet selector sum. |
 | Active prefix | 1 | An inactive row cannot be followed by an active row. |
 | Transfer delta | 1 | Full fixed-width post-minus-pre value on Transfer rows. |
-| Stable statement data | 10 | Eight metadata commitment limbs, `dsid`, and `slot` remain stable. |
+| Stable statement data | 8 | Six metadata commitment limbs, `dsid`, and `slot` remain stable. |
 
-The 16 residues above are the complete implemented AIR composition schema.
+The 14 residues above are the complete implemented AIR composition schema.
 They do not constrain generic SMT node hashing/non-membership or old/new-root
 boundary totals; V1 transfer verification deterministically replays those
 witness checks from the caller-carried batch.
@@ -320,7 +319,7 @@ above is what prevents unsupported operations from reaching production proof
 acceptance.
 | N_trace | blowup | FRI arity | layers | queries | aggregate arithmetic target | Proof size (≤) | RAM (≤) | P95 latency (≤) |
 | ------- | ------ | --------- | ------ | ------- | --------------------------- | --------------- | ------- | ---------------- |
-| 2^16    | 8      | 2         | ≤18    | 136     | 128 bits met; qualification blocked pending review | measured by release fixture | measured by release run | measured by release run |
+| 2^16    | 8      | 2         | ≤18    | 136     | 128-bit target unmet; qualification blocked | measured by release fixture | measured by release run | measured by release run |
 
 Derivations follow Appendix A. Deterministic verifier-negative tests cover
 malformed proofs, and the sole V1 parameter record fixes the domain geometry,
@@ -369,7 +368,7 @@ proof semantics profile.
     the 128-bit aggregate arithmetic target, while production qualification
     remains unavailable until independent review is registered. Proof
     size/RAM/latency must be measured from release runs.
-    **TODO:** land the empirical 16-residue Monte Carlo characterization described in Appendix A.
+    **TODO:** land the empirical 14-residue Monte Carlo characterization described in Appendix A.
 - **Stage 3 DoD**
   - Scheduler API (`SubmitProofRequest`, `ProofResult`) documented with idempotency keys.
   - Proof artifacts stored content-addressably with retry/backoff.
@@ -1103,49 +1102,51 @@ This appendix records the exact aggregate arithmetic implemented by
 `fastpq_isi`. It is a deterministic parameter-selection calculation, not by
 itself a security or production-qualification claim.
 
-Implementation qualification gap (2026-08-29): native-STARK commitments and
-Fiat--Shamir state use six independently domain-separated Goldilocks lanes, for
-a canonical 384-bit encoding. FRI challenges, opened values, and folds use
-`GoldilocksFp4V1 = Goldilocks[X]/(X^4 - 7)`. The frozen arithmetic inputs meet
-the declared 128-bit target, but the result remains
-`Unavailable(MissingProtocolSpecificQromReduction)`. An independently reviewed
-reduction connecting this accounting to the complete FASTPQ adversary and a
-multi-target review tied to final artifact digests are still required.
+Implementation qualification gap (2026-09-05): commitments and Fiat--Shamir
+state use six independently domain-separated Goldilocks lanes, and FRI uses
+`GoldilocksFp4V1 = Goldilocks[X]/(X^4 - 7)`. The current 136-query record now
+reports `Unavailable(ArithmeticTargetNotMet)`. The production verifier still
+reconstructs the complete canonical batch and commitments; this replay must not
+be removed based on the FRI-only diagnostic model below.
 
 ### Notation
-- `N_trace = 2^k` — trace length after sorting and padding to a power of two.
-- `b = 8` — blowup factor (`N_eval = N_trace × b`).
-- `r = 2` — sole V1 FRI folding arity.
-- `ℓ ≤ 18` — maximum number of binary FRI reductions.
-- `q = 136` — deduplicated verifier queries selected by the calculator.
-- `T = 54` — portable release proof targets included in the union bound.
-- `Q ≤ 2^32` — declared quantum random-oracle query bound.
-- `n = 384` — combined width of the six independent digest lanes.
 
-The current protocol declares zero grinding bits. That fact is explicit in the
-sole parameter record and contributes no hidden margin to the calculation.
+- `N_trace = 2^k`; `N_eval = 8 * N_trace`.
+- Intended exclusive composition degree: `2 * N_trace`.
+- Current binary schedule terminates at two evaluations, rounding the reduced
+  exclusive degree bound to one. Its effective inverse code rate is therefore
+  `min(8 / 2, 2) = 2`.
+- `q = 136` is the current wire query count; zero grinding is declared.
+- `T = 54` proof targets and `Q <= 2^32` quantum oracle queries.
+- `n = 384` is the idealized width used by the diagnostic collision model;
+  canonical Goldilocks outputs actually range over `p^6` possibilities.
 
-### Analytic bound
-
-For a candidate query count, the implemented exact dyadic upper bound is
+### Diagnostic arithmetic bound
 
 ```
-p_sampling  = T × Q^2 / 2^(q × log2(b) / 2)
-p_collision = T^2 × Q^3 / 2^n
+effective_inverse_rate = min(blowup_factor / composition_degree_expansion,
+                             terminal_domain_size)
+p_sampling  = T * Q^2 / 2^(q * log2(effective_inverse_rate) / 2)
+p_collision = T^2 * Q^3 / 2^n
 p_total     = p_sampling + p_collision
 ```
 
-The calculator requires `p_total < 2^-128` using integer arithmetic only. For
-the frozen inputs and `q = 136`, the sampling denominator exponent is `204`,
-its numerator is `54 × 2^64`, and the collision term is
-`54^2 × 2^96 / 2^384`. Query count 136 is the least admitted multiple of eight
-that passes; 128 queries fail the same exact comparison. This calculation is
-necessary parameter evidence, but it does not discharge the independent
-protocol-specific reduction or digest review.
+With the current 136 queries the sampling denominator exponent is 68, so
+`p_sampling = 54 * 2^64 / 2^68`, already above the target. The corrected
+calculator selects 400 as the least admitted multiple of eight whose exact sum
+is below `2^-128`; 392 fails. A four-evaluation terminal would avoid the
+additional rounding loss and select 200 in this model, but neither changing the
+query count nor this arithmetic establishes complete protocol soundness.
+The wire count remains unchanged pending the coherent succinct-proof migration.
+
+All integer overflow and zero-target accounting fail closed. An independently
+reviewed reduction for the complete protocol, exact field/commitment widths and
+final multi-target artifacts is still required. See the
+[acceptance contract](fastpq_production_readiness.md#succinct-proof-acceptance-contract).
 
 ### Rejection-sampling follow-up
 
-**TODO:** add the planned Monte Carlo harness for the implemented 16-residue
+**TODO:** add the planned Monte Carlo harness for the implemented 14-residue
 composition and report its measured behavior as diagnostic evidence. It does
 not replace the exact aggregate calculator or independent qualification.
 Semantic adversarial coverage is deterministic instead: unsupported
@@ -1245,7 +1246,7 @@ The Stage 7 capture tooling already handles CUDA: wrap every `fastpq_cuda_benc
 The hashing pipeline consumes columns in this deterministic order:
 1. Selector flags: `s_active`, `s_transfer`, `s_meta_set`.
 2. Packed limb columns (each zero-padded to the trace length): `key_limb_{i}`, `value_old_limb_{i}`, `value_new_limb_{i}`.
-3. Auxiliary scalars: `delta`, `metadata_hash_limb_0` through `metadata_hash_limb_7`, `dsid`, `slot`.
+3. Auxiliary scalars: `delta`, `metadata_hash_limb_0` through `metadata_hash_limb_5`, `dsid`, `slot`.
 4. For batches containing Transfer rows, sparse Merkle witnesses for every level `ℓ ∈ [0, SMT_HEIGHT)`: `path_bit_ℓ`, `sibling_ℓ`, `node_in_ℓ`, `node_out_ℓ`. This group is absent for metadata-only batches.
 
 `trace::column_hashes` walks the columns in exactly this order. Any schema or
@@ -1261,7 +1262,7 @@ V1 fixes the Fiat–Shamir catalog below to keep challenge generation determinis
 | `fastpq:v1:trace_root` | Commit the trace Merkle root before column-mix challenges. |
 | `fastpq:v1:column_mix:<i>` | Sample one base-field LDE column-mix coefficient per trace column. |
 | `fastpq:v1:roots` | Commit the LDE and trace Merkle roots, in that order. |
-| `fastpq:v1:alpha:<i>` | Sample one composition-polynomial challenge for each of the 16 residues (`i = 0..15`). |
+| `fastpq:v1:alpha:<i>` | Sample one composition-polynomial challenge for each of the 14 residues (`i = 0..13`). |
 | `fastpq:v1:air_roots` | Commit the AIR-trace and AIR-composition roots, in that order. |
 | `fastpq:v1:beta:<round>` | Sample the folding challenge for each FRI round. |
 | `fastpq:v1:fri_layer:<round>` | Commit the Merkle root for each FRI layer. |

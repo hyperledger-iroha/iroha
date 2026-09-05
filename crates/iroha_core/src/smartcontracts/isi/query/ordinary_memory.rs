@@ -1041,6 +1041,11 @@ pub(super) fn preflight_server_singular_source_materialization(
                 charge(model, &mut remaining)?;
             }
         }
+        SingularQueryBox::FindRaceById(query) => {
+            if let Some(race) = world.races().get(&query.race_id) {
+                charge(race, &mut remaining)?;
+            }
+        }
         SingularQueryBox::FindParameters(_) => charge(world.parameters(), &mut remaining)?,
         SingularQueryBox::FindAccountById(query) => {
             if let Some((account_id, account_value)) =

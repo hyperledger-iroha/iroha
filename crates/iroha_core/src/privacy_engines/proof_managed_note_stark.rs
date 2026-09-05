@@ -21,8 +21,8 @@ use super::{
     },
 };
 #[cfg(test)]
-use iroha_data_model::privacy::PrivacyProtocolIdV1;
-use iroha_data_model::privacy::TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1;
+use iroha_data_model::privacy::{PrivacyProtocolIdV1, TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1};
+
 use rand::TryRngCore;
 use rayon::prelude::*;
 use std::collections::BTreeSet;
@@ -337,8 +337,7 @@ impl ProofManagedNoteStarkProtocolV1 {
             self.parameters.query_count,
         )
         .map_err(map_transparent_error_v1)?;
-        let consensus_proof_cap = usize::try_from(TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1)
-            .map_err(|_| ProofManagedNoteStarkErrorV1::InvalidProfile)?;
+        let consensus_proof_cap = self.domains.digest_context.maximum_proof_bytes_v1();
         let _combined_profile_digest =
             proof_managed_note_stark_profile_digest_v1(self.domains, self.profile_descriptor)?;
         if self.parameters.security_lanes != PROOF_MANAGED_NOTE_SECURITY_LANES_V1

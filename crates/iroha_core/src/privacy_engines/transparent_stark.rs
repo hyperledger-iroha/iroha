@@ -68,13 +68,32 @@ const GOLDILOCKS_FP4_NONRESIDUE_V1: GoldilocksFieldV1 = GoldilocksFieldV1(GOLDIL
 /// fields and never concatenated into an ambiguous free-form domain string.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TransparentStarkDigestContextV1 {
-    protocol: PrivacyProtocolIdV1,
+    protocol: Option<PrivacyProtocolIdV1>,
     profile: &'static [u8],
 }
 impl TransparentStarkDigestContextV1 {
     /// Construct a typed context for one final protocol/profile pair.
     pub(crate) const fn new(protocol: PrivacyProtocolIdV1, profile: &'static [u8]) -> Self {
-        Self { protocol, profile }
+        Self { protocol: Some(protocol), profile }
+    }
+    /// Native execution proofs occupy a separate catalog and protocol namespace.
+    pub(crate) const fn execution_v1(profile: &'static [u8]) -> Self {
+        Self { protocol: None, profile }
+    }
+    /// Proof byte ceiling is an admission bound, independent of cryptographic geometry.
+    pub(crate) fn maximum_proof_bytes_v1(self) -> usize {
+        if self.protocol.is_some() {
+            iroha_data_model::privacy::TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1 as usize
+        } else {
+            32 * 1024 * 1024
+        }
+    }
+    fn catalog_v1(self) -> [u8; 48] {
+        if self.protocol.is_some() { exact12_catalog_commitment_bytes_v1() }
+        else { sha2::Sha384::digest(b"iroha:execution:catalog:v1:race-v1").into() }
+    }
+    fn protocol_label_v1(self) -> &'static [u8] {
+        self.protocol.map_or(b"native-execution-v1", |protocol| protocol.canonical_label().as_bytes())
     }
     pub(crate) fn validate(self) -> Result<(), TransparentStarkErrorV1> {
         if self.profile.is_empty() || u16::try_from(self.profile.len()).is_err() {
@@ -1063,11 +1082,11 @@ pub(crate) fn goldilocks_digest384_frame_v1(
     {
         return Err(TransparentStarkErrorV1::InvalidDigestDomain);
     }
-    let catalog = exact12_catalog_commitment_bytes_v1();
+    let catalog = context.catalog_v1();
     hash_bytes_384_v1(
         GoldilocksDigestDomainV1 {
             catalog: &catalog,
-            protocol: context.protocol.canonical_label().as_bytes(),
+            protocol: context.protocol_label_v1(),
             profile: context.profile,
             role,
             phase,
@@ -1100,11 +1119,11 @@ pub(crate) fn goldilocks_digest384_last_field_stream_v1(
     {
         return Err(TransparentStarkErrorV1::InvalidDigestDomain);
     }
-    let catalog = exact12_catalog_commitment_bytes_v1();
+    let catalog = context.catalog_v1();
     GoldilocksDigest384LastFieldStreamV1::new(
         GoldilocksDigestDomainV1 {
             catalog: &catalog,
-            protocol: context.protocol.canonical_label().as_bytes(),
+            protocol: context.protocol_label_v1(),
             profile: context.profile,
             role,
             phase,

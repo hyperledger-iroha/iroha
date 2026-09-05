@@ -858,6 +858,7 @@ fn autonomous_payload_slot_is_bound_to_the_active_incarnation_marker() {
             .is_err(),
         "an executable payload must not define an uninitialized storage incarnation"
     );
+    install_autonomous_lane_marker_for_kura(&kura, &lane_config, &first);
     kura.install_lane_incarnation_marker_for_test(
         lane_entry,
         first.origin_proposal.descriptor.lane_incarnation,
@@ -1214,6 +1215,7 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
         .expect("install first active marker");
     kura.store_block(Arc::clone(&first))
         .expect("store first-incarnation ownership");
+    finalize_chain_through_for_eviction(&kura, nonzero!(1_usize));
     assert_eq!(
         kura.read_lane_block_artifact(lane_id, lane_block_height),
         Some(first_artifact.clone())
@@ -1237,11 +1239,13 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
             8,
             |_| true,
         )
+        .expect("authenticate retired canonical ownership")
         .is_empty(),
         "canonical recovery must not hydrate retired ownership into a recreated lane",
     );
     kura.store_block(Arc::clone(&second))
         .expect("recreated lane may replace the retired canonical slot");
+    finalize_chain_through_for_eviction(&kura, nonzero!(2_usize));
     assert_eq!(
         kura.read_lane_block_artifact(lane_id, lane_block_height),
         Some(second_artifact.clone())
@@ -1251,7 +1255,8 @@ fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_hist
             second_artifact.ownership.proposal_height,
             8,
             |_| true,
-        ),
+        )
+        .expect("authenticate recreated canonical ownership"),
         vec![second_artifact.clone()],
     );
     assert!(
@@ -1584,7 +1589,7 @@ fn lane_block_payload_availability_rebuilds_missing_artifact_sidecar_from_canoni
     );
 }
 #[test]
-fn canonical_height_recovery_applies_lifecycle_filter_before_sidecar_write() {
+fn canonical_height_projection_is_read_only_and_explicit_recovery_publishes_absence() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = two_lane_runtime_config();
@@ -1595,6 +1600,11 @@ fn canonical_height_recovery_applies_lifecycle_filter_before_sidecar_write() {
     let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
     kura.store_block(block)
         .expect("store block with lane artifact");
+    finalize_chain_through_for_eviction(
+        &kura,
+        NonZeroUsize::new(usize::try_from(proposal_height).expect("height fits"))
+            .expect("positive height"),
+    );
     let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(lane_entry, temp_dir.path());
     std::fs::remove_file(&data_path).expect("remove lane artifact data sidecar");
     std::fs::remove_file(&index_path).expect("remove lane artifact index sidecar");
@@ -1602,6 +1612,7 @@ fn canonical_height_recovery_applies_lifecycle_filter_before_sidecar_write() {
         kura.canonical_lane_block_artifacts_at_proposal_height_matching(proposal_height, 8, |_| {
             false
         },)
+            .expect("authenticate rejected projection")
             .is_empty()
     );
     assert!(
@@ -1612,10 +1623,29 @@ fn canonical_height_recovery_applies_lifecycle_filter_before_sidecar_write() {
         kura.canonical_lane_block_artifacts_at_proposal_height_matching(proposal_height, 8, |_| {
             true
         },)
+            .expect("authenticate accepted projection")
             .len(),
         1
     );
-    assert!(kura.read_lane_block_artifact(lane_id, 1).is_some());
+    assert!(
+        !data_path.exists() && !index_path.exists(),
+        "pure projection never publishes missing sidecars"
+    );
+    assert_eq!(
+        kura.recover_canonical_lane_block_artifacts_at_proposal_height_matching(
+            proposal_height,
+            8,
+            |_| true
+        )
+        .expect("explicit owned recovery")
+        .len(),
+        1
+    );
+    assert!(
+        kura.read_lane_block_artifact_read_only(lane_id, 1)
+            .expect("strict recovered slot")
+            .is_some()
+    );
 }
 #[test]
 fn lane_block_payload_availability_rejects_ownership_from_wrong_global_height() {

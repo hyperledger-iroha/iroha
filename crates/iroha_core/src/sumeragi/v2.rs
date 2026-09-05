@@ -9441,6 +9441,8 @@ pub(crate) struct SumeragiV2Adapter {
     /// terminal retirements restored from the adjacent snapshot and volatile
     /// successful services whose reducer state must be rebuilt after restart.
     serviced_candidates: BTreeMap<ServicedCandidateKey, wire::View>,
+    /// Actual consumer epoch for process-only service, never snapshot authority.
+    serviced_candidate_consumers: BTreeMap<ServicedCandidateKey, reducer::EventTag>,
     /// Restart-stable subset of `serviced_candidates`.
     ///
     /// Only a drained, terminally discarded lifecycle enters this map.
@@ -9923,6 +9925,7 @@ impl SumeragiV2Adapter {
             wal,
             serviced_candidate_store,
             serviced_candidates: restored_records.clone(),
+            serviced_candidate_consumers: BTreeMap::new(),
             durable_serviced_candidates: restored_records,
             serviced_candidate_capacity,
             producer_continuations: restored_producer_continuations.clone(),
@@ -11838,6 +11841,7 @@ impl SumeragiV2Adapter {
     ) -> Result<(Option<AdapterOutcome>, Option<IngressAdmission>), AdapterError> {
         let current_tag = self.reducer.current_tag();
         let current_view = current_tag.view();
+        self.reclaim_serviced_candidates()?;
         self.prune_ingress_records();
         let locked_commit_progress = match payload {
             wire::ConsensusMessageV2Payload::Vote(vote) => self.is_exact_locked_commit_vote(vote),
@@ -16134,6 +16138,8 @@ impl SumeragiV2Adapter {
         }
         if !process_marker_exists {
             assert_eq!(self.serviced_candidates.insert(key, service_view), None);
+            self.serviced_candidate_consumers
+                .insert(key, self.reducer.current_tag());
         }
         let Some(reservation) = producer_reservation else {
             if !durable_terminal_retirement || self.durable_serviced_candidates.contains_key(&key) {
@@ -16142,6 +16148,7 @@ impl SumeragiV2Adapter {
             if self.durable_serviced_candidates.len() >= capacity {
                 if !process_marker_exists {
                     self.serviced_candidates.remove(&key);
+                    self.serviced_candidate_consumers.remove(&key);
                 }
                 return Err(self.fail_serviced_candidate_store(format!(
                     "derived durable serviced-candidate capacity {capacity} is exhausted"
@@ -16162,6 +16169,7 @@ impl SumeragiV2Adapter {
                 self.durable_serviced_candidates.remove(&key);
                 if !process_marker_exists {
                     self.serviced_candidates.remove(&key);
+                    self.serviced_candidate_consumers.remove(&key);
                 }
                 return Err(self.fail_serviced_candidate_store(reason));
             }
@@ -16358,11 +16366,13 @@ impl SumeragiV2Adapter {
         self.pending_producer_handoffs.remove(&address);
         self.restored_dormant_producer_continuations
             .remove(&address);
-        terminal.terminal_token().ok_or_else(|| {
+        let terminal = terminal.terminal_token().ok_or_else(|| {
             self.fail_serviced_candidate_store(
                 "producer handoff did not produce an exact terminal token".to_owned(),
             )
-        })
+        })?;
+        self.reclaim_serviced_candidates()?;
+        Ok(terminal)
     }
     /// Return the safety-WAL replay cut used to reconcile generic ingress.
     ///
@@ -16498,22 +16508,35 @@ impl SumeragiV2Adapter {
     /// Reclaim only epochs made obsolete by a strict certified view advance
     /// or by the first durable Decision in this height.
     fn reclaim_serviced_candidates(&mut self) -> Result<(), AdapterError> {
-        let current_view = self.reducer.current_tag().view();
+        let current_tag = self.reducer.current_tag();
+        let current_view = current_tag.view();
         let decision_durable = self.reducer.durable_state().decision().is_some();
         if self.serviced_candidates_decision_reclaimed && !decision_durable {
             return Err(self.fail_serviced_candidate_store(
                 "snapshot claims durable-Decision reclamation before a durable Decision".to_owned(),
             ));
         }
-        let retired_process_candidates = self
+        let mut retired_process_candidates = self
             .serviced_candidates
             .iter()
             .filter_map(|(candidate, service_view)| {
                 (*service_view < current_view).then_some(*candidate)
             })
             .collect::<BTreeSet<_>>();
+        // Immutable semantic identities outlive volatile reducer consumers.
+        // A strict same-round TC changes the generation while keeping its
+        // view, and clears proposal/vote/body work just like a view advance.
+        // Durable terminals remain authoritative; every volatile phase shares
+        // this one actual-consumer rule.
+        retired_process_candidates.extend(self.serviced_candidate_consumers.iter().filter_map(
+            |(key, consumed_by)| {
+                (current_tag.strictly_advances(*consumed_by)
+                    && !self.durable_serviced_candidates.contains_key(key))
+                .then_some(*key)
+            },
+        ));
         self.serviced_candidates
-            .retain(|_, service_view| *service_view >= current_view);
+            .retain(|key, _| !retired_process_candidates.contains(key));
         let previous_durable_len = self.durable_serviced_candidates.len();
         let previous_durable_producer_len = self.durable_producer_continuations.len();
         self.durable_serviced_candidates
@@ -16548,10 +16571,21 @@ impl SumeragiV2Adapter {
                     || !retired_process_candidates.contains(&record.identity().candidate())
             });
         }
+        // Retain the old epoch until its last live producer acknowledges its
+        // handoff. Otherwise a late Terminal would lose the evidence needed
+        // to retire its process-only half before the exact identity retries.
+        self.serviced_candidate_consumers.retain(|key, _| {
+            !retired_process_candidates.contains(key)
+                || self.producer_continuations.values().any(|record| {
+                    record.identity().candidate() == *key
+                        && record.status() != ProducerContinuationStatus::Terminal
+                })
+        });
         let mut durable_changed = self.durable_serviced_candidates.len() != previous_durable_len
             || self.durable_producer_continuations.len() != previous_durable_producer_len;
         if decision_durable && !self.serviced_candidates_decision_reclaimed {
             self.serviced_candidates.clear();
+            self.serviced_candidate_consumers.clear();
             self.durable_serviced_candidates.clear();
             self.producer_continuations.clear();
             self.durable_producer_continuations.clear();
@@ -16764,6 +16798,7 @@ impl SumeragiV2Adapter {
         publish_status: bool,
     ) -> Result<DeferPolicyOutcome, AdapterError> {
         self.ensure_ingress()?;
+        self.reclaim_serviced_candidates()?;
         let queued = event.clone();
         let serviced_candidate = self.serviced_candidate(
             &queued,

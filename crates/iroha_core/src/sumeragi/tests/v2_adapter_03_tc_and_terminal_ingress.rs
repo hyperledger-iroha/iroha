@@ -36,12 +36,10 @@ fn prelock_current_commit_is_readmitted_with_priority_neutral_service_identity()
         phase: wire::GlobalPhase::Commit,
         signer: 1,
     };
-    let delivered = adapter
-        .ingress_deliveries
-        .get(&key)
-        .expect("the pre-lock reducer delivery is recorded");
-    assert_eq!(delivered.consumer_tag, consumer_tag);
-    assert!(!delivered.locked_commit_progress);
+    assert!(
+        !adapter.ingress_deliveries.contains_key(&key),
+        "a pre-lock Commit has no consumer and cannot allocate duplicate history"
+    );
     assert_eq!(
         adapter.serviced_candidate_count_for_test(),
         serviced_before,

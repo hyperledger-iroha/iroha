@@ -5,7 +5,7 @@ use crate::{
     isi::{
         InstructionRegistry, account_recovery, alias_setup, asset_alias, asset_transfer_control,
         bridge, confidential, consensus_keys, content, contract_alias, defi, endorsement, escrow,
-        identifier, kaigi, ministry, musubi, nexus, oracle, privacy, ram_lfe, repo,
+        identifier, kaigi, ministry, musubi, nexus, oracle, privacy, race, ram_lfe, repo,
         runtime_upgrade, rwa, settlement, smart_contract_code, social, soracloud, soradns, sorafs,
         space_directory,
         transparent::{

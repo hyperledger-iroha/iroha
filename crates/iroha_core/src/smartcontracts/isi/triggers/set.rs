@@ -170,6 +170,7 @@ enum DataTriggerFamily {
     Social,
     Bridge,
     Governance,
+    Race,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -184,6 +185,7 @@ enum DataTriggerSubjectKind {
     Nft,
     Rwa,
     Trigger,
+    Race,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -293,6 +295,10 @@ fn data_trigger_filter_index_keys(filter: &DataEventFilter) -> Vec<DataTriggerIn
     let family = |family| vec![DataTriggerIndexKey::Family(family)];
     match filter {
         DataEventFilter::Any => vec![DataTriggerIndexKey::Any],
+        DataEventFilter::Race(id) => id.as_ref().map_or_else(
+            || family(DataTriggerFamily::Race),
+            |id| vec![data_trigger_subject_key(DataTriggerSubjectKind::Race, id)],
+        ),
         DataEventFilter::Peer(_) => family(DataTriggerFamily::Peer),
         DataEventFilter::Domain(filter) => filter.id_matcher().as_ref().map_or_else(
             || family(DataTriggerFamily::Domain),
@@ -405,6 +411,10 @@ fn add_asset_event_index_keys(keys: &mut BTreeSet<DataTriggerIndexKey>, event: &
 fn data_event_index_keys(event: &DataEvent) -> BTreeSet<DataTriggerIndexKey> {
     let mut keys = BTreeSet::from([DataTriggerIndexKey::Any]);
     match event {
+        DataEvent::Race(event) => {
+            keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Race));
+            keys.insert(data_trigger_subject_key(DataTriggerSubjectKind::Race, &event.race_id));
+        }
         DataEvent::Peer(_) => {
             keys.insert(DataTriggerIndexKey::Family(DataTriggerFamily::Peer));
         }

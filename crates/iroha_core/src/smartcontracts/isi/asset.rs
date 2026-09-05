@@ -1757,6 +1757,8 @@ pub mod isi {
         },
         /// Fund a native escrow retained record.
         NativeEscrow(Vec<u8>),
+        /// Fund an exact native racing seat.
+        Race(Vec<u8>),
         /// Fund a VPN lease retained record.
         VpnLease(Vec<u8>),
         /// Lock one user's outbound transfer in an exact governed SCCP route escrow.
@@ -1799,6 +1801,8 @@ pub mod isi {
         CitizenshipRelease(Vec<u8>),
         /// Move value according to an exact native escrow record.
         NativeEscrow(Vec<u8>),
+        /// Settle or refund an exact native racing liability.
+        Race(Vec<u8>),
         /// Move value according to an exact VPN lease record.
         VpnLease(Vec<u8>),
         /// Release one exact approved SoraFS reserve withdrawal.
@@ -1918,6 +1922,11 @@ pub mod isi {
                 EmbeddedNumericAssetMovementPurpose::NativeEscrow(binding) => (
                     NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
                     "native-escrow-funding",
+                    binding,
+                ),
+                EmbeddedNumericAssetMovementPurpose::Race(binding) => (
+                    NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
+                    "race-seat-funding",
                     binding,
                 ),
                 EmbeddedNumericAssetMovementPurpose::VpnLease(binding) => (
@@ -2051,6 +2060,12 @@ pub mod isi {
                 ),
                 RetainedNumericAssetMovementPurpose::NativeEscrow(binding) => (
                     "native-escrow-retained",
+                    binding,
+                    NumericAssetTransferSourcePolicy::NativeEscrowCustody,
+                    NumericAssetTransferControlPolicy::Enforce,
+                ),
+                RetainedNumericAssetMovementPurpose::Race(binding) => (
+                    "race-proof-settlement",
                     binding,
                     NumericAssetTransferSourcePolicy::NativeEscrowCustody,
                     NumericAssetTransferControlPolicy::Enforce,
@@ -3865,6 +3880,54 @@ pub mod isi {
                 movement.destination_id,
                 movement.amount,
             );
+        }
+        Ok(())
+    }
+    /// Consume a one-shot capability selected by native race state and proof validation.
+    pub(in crate::smartcontracts::isi) fn execute_verified_race_movement(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authorization: crate::smartcontracts::isi::race::VerifiedRaceMovement,
+    ) -> Result<(), Error> {
+        let (race_id, authority, funding, legs) = authorization.into_parts();
+        let race = state_transaction.world.races.get(&race_id)
+            .ok_or_else(|| InstructionExecutionError::InvariantViolation("race movement has no retained race".into()))?;
+        let expected_custody = crate::smartcontracts::isi::race::race_custody_account_v1(
+            state_transaction.network_id(), &race_id, &race.asset_definition,
+        );
+        if race.custody != expected_custody || legs.len() > 8 {
+            return Err(InstructionExecutionError::InvariantViolation("race custody or movement bounds invalid".into()));
+        }
+        let custody_asset = AssetId::new(race.asset_definition.clone(), expected_custody);
+        let binding = canonical_numeric_movement_binding(&(race_id, race.revision, legs.clone()))?;
+        let movement = if funding {
+            if legs.as_slice() != [(AssetId::new(race.asset_definition.clone(), authority.clone()), custody_asset, race.stake.clone())]
+                || race.phase != iroha_data_model::race::RacePhaseV1::Lobby
+                || race.participants.iter().any(|participant| participant.account == authority)
+            {
+                return Err(InstructionExecutionError::InvariantViolation("race funding differs from exact wallet-authorized seat".into()));
+            }
+            NumericAssetMovementAuthorization::embedded_user(&authority, EmbeddedNumericAssetMovementPurpose::Race(binding))
+        } else {
+            if authority != race.custody || matches!(race.phase, iroha_data_model::race::RacePhaseV1::Settled | iroha_data_model::race::RacePhaseV1::Cancelled) {
+                return Err(InstructionExecutionError::InvariantViolation("race custody has already settled".into()));
+            }
+            let mut total = Quantity::zero();
+            for (source, destination, amount) in &legs {
+                if source != &custody_asset || destination.definition() != &race.asset_definition
+                    || !race.participants.iter().any(|participant| &participant.account == destination.account())
+                {
+                    return Err(InstructionExecutionError::InvariantViolation("race payout differs from immutable roster".into()));
+                }
+                total = total.checked_add(amount).map_err(|_| MathError::Overflow)?;
+            }
+            if total != race.liability {
+                return Err(InstructionExecutionError::InvariantViolation("race payout must consume exact retained liability".into()));
+            }
+            NumericAssetMovementAuthorization::retained(&authority, RetainedNumericAssetMovementPurpose::Race(binding))
+        };
+        let applied = PreparedNumericAssetMovementBatch::prepare_with_authorization(state_transaction, &legs, movement)?.apply(state_transaction)?;
+        for movement in applied {
+            emit_numeric_asset_transfer_events(state_transaction, movement.source_id, movement.destination_id, movement.amount);
         }
         Ok(())
     }

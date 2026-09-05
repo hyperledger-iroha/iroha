@@ -457,6 +457,11 @@ fn rekey_account_id(
             .into(),
         ));
     }
+    if let Some(race) = super::race::retained_race_account(state_transaction.world(), old_account) {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!("cannot rekey account {old_account}: it is retained by native race {race}").into(),
+        ));
+    }
     if let Some(reference) =
         crate::smartcontracts::isi::sorafs_moderation::retained_moderation_account_reference(
             state_transaction.world(),

@@ -371,6 +371,19 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
     // Downcast by visiting known grouped enums first, then concrete types.
     // Unclassified instructions use the fixed first-release base cost.
     let any = instr.as_any();
+    // Native race charges reserve bounded record traversal and crypto before execution.
+    if let Some(proof) = any.downcast_ref::<dm_isi::race::SubmitRaceProofV1>() {
+        return 250_000_u64.saturating_add((proof.proof.proof_bytes.len() as u64).saturating_mul(5));
+    }
+    if let Some(checkpoint) = any.downcast_ref::<dm_isi::race::CommitRaceCheckpointV1>() {
+        return 40_000_u64.saturating_add((checkpoint.encode().len() as u64).saturating_mul(5));
+    }
+    if any.is::<dm_isi::race::OpenRaceV1>() || any.is::<dm_isi::race::JoinRaceV1>()
+        || any.is::<dm_isi::race::StartRaceV1>() || any.is::<dm_isi::race::ChallengeRaceV1>()
+        || any.is::<dm_isi::race::CommitRaceInputsV1>() || any.is::<dm_isi::race::RevealRaceInputsV1>()
+        || any.is::<dm_isi::race::AdvanceRaceDeadlineV1>() || any.is::<dm_isi::race::ExpireRaceV1>() {
+        return 32_000;
+    }
     // Register
     if let Some(reg) = any.downcast_ref::<dm_isi::register::RegisterBox>() {
         return match reg {

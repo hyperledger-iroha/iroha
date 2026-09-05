@@ -78,6 +78,7 @@ mod push;
 pub mod query_load_profiles;
 #[cfg(feature = "app_api")]
 mod validation_fee_api;
+mod race;
 mod vpn;
 #[cfg(test)]
 use ledger_state_finality::StateFinalityResponse;
@@ -18217,6 +18218,32 @@ async fn handler_get_configuration(
     let remote_ip = remote.ip();
     check_operator_rate_limit(&app, &headers, Some(remote_ip), "v1/configuration", true).await?;
     routing::handle_get_configuration(app.kiso.clone()).await
+}
+/// Public native race profile and proof qualification.
+async fn handler_race_capabilities(
+    State(app): State<SharedAppState>, headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<Response, Error> {
+    check_access(&app,&headers,Some(remote.ip()),"v1/races/capabilities").await?;
+    race::capabilities(&app)
+}
+/// Bounded public native race discovery.
+async fn handler_race_list(
+    State(app): State<SharedAppState>, headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    NoritoQuery(params): NoritoQuery<race::RaceListParams>,
+) -> Result<Response, Error> {
+    check_access(&app,&headers,Some(remote.ip()),"v1/races").await?;
+    race::list(&app,params)
+}
+/// Public exact native race state.
+async fn handler_race_get(
+    State(app): State<SharedAppState>, headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Response, Error> {
+    check_access(&app,&headers,Some(remote.ip()),"v1/races/by-id").await?;
+    race::get(&app,&id)
 }
 /// GET /v1/vpn/profile — public Sora VPN profile snapshot for wallet clients.
 async fn handler_get_vpn_profile(
@@ -50098,6 +50125,9 @@ impl Torii {
             READYZ => unauthenticated_get(handler_readyz);
             LIVEZ => unauthenticated_get(handler_livez);
             NEXUS_LIFECYCLE_GET => public_get(handler_get_nexus_lane_lifecycle);
+            RACE_CAPABILITIES => public_get(handler_race_capabilities);
+            RACE_LIST => public_get(handler_race_list);
+            RACE_GET => public_get(handler_race_get);
             VPN_PROFILE => public_get(handler_get_vpn_profile);
             VPN_QUOTE_CREATE => limited_canonical_signature_post(handler_create_vpn_quote, vpn::VPN_MUTATION_REQUEST_MAX_BYTES_V1);
             VPN_SESSION_CREATE => limited_canonical_signature_post(handler_create_vpn_session, vpn::VPN_MUTATION_REQUEST_MAX_BYTES_V1);

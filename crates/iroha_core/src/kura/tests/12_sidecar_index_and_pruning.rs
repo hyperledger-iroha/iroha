@@ -516,7 +516,7 @@ fn hash_only_snapshot_rejects_shorter_existing_prefix() {
 #[test]
 fn data_backed_count_preserves_hash_only_tail_for_hard_fork_bootstrap() {
     let temp_dir = TempDir::new().unwrap();
-    populate_store(&temp_dir, 2);
+    populate_raw_block_store(&temp_dir, 2);
     let mut store = new_block_store(&temp_dir);
     let snapshot_tail_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x8a; 32]));
@@ -964,7 +964,7 @@ fn malformed_verified_snapshot_tail_marker_is_pruned() {
 #[test]
 fn commit_marker_reconciliation_caps_durable_count_to_hash_journal() {
     let temp_dir = TempDir::new().unwrap();
-    populate_store(&temp_dir, 4);
+    populate_raw_block_store(&temp_dir, 4);
     let mut store = new_block_store(&temp_dir);
     store.truncate_hashes_to_count(3).unwrap();
     let mut reopened = new_block_store(&temp_dir);

@@ -34,7 +34,13 @@ fn historical_request_detects_durable_body_corruption_with_warm_cache() {
         adapter.kura.get_block(height).is_some(),
         "warm the body cache"
     );
-    corrupt_durable_file_for_test(&adapter.kura.store_root().join("blocks.data"));
+    let primary_blocks = adapter
+        .state
+        .nexus_snapshot()
+        .lane_config
+        .primary()
+        .blocks_dir(adapter.kura.store_root());
+    corrupt_durable_file_for_test(&primary_blocks.join("blocks.data"));
     let inbound = fair_v2_ingress_admit_for_test(InboundBlockMessage::from_authenticated_peer(
         BlockMessage::LaneHistoricalRecoveryRequest(Box::new(request)),
         sender,
@@ -163,7 +169,13 @@ fn canonical_chunk_recovery_corrupt_body_requires_restart_and_retains_need() {
         vec![need],
     )
     .expect("install one retained canonical repair need");
-    corrupt_durable_file_for_test(&adapter.kura.store_root().join("blocks.data"));
+    let primary_blocks = adapter
+        .state
+        .nexus_snapshot()
+        .lane_config
+        .primary()
+        .blocks_dir(adapter.kura.store_root());
+    corrupt_durable_file_for_test(&primary_blocks.join("blocks.data"));
     let sender = request.requester.clone();
     let inbound = fair_v2_ingress_admit_for_test(InboundBlockMessage::from_authenticated_peer(
         BlockMessage::LaneHistoricalRecoveryRequest(Box::new(request)),
@@ -176,4 +188,104 @@ fn canonical_chunk_recovery_corrupt_body_requires_restart_and_retains_need() {
     assert!(adapter.output_guard.restart_required());
     assert_eq!(recovery.needs.front(), Some(&need));
     assert!(recovery.effects.is_empty());
+}
+
+#[test]
+fn hydration_rejects_corrupt_raw_sidecar_without_repairing_occupied_slot() {
+    let (mut adapter, _, request) = self_contained_historical_recovery_request_fixture();
+    let proposal = &request
+        .certificate
+        .as_ref()
+        .expect("historical certificate")
+        .proposal;
+    let descriptor = &proposal.descriptor;
+    assert!(
+        adapter
+            .kura
+            .read_lane_block_artifact_read_only(descriptor.lane_id, descriptor.lane_block_height,)
+            .expect("read exact existing raw artifact")
+            .is_some()
+    );
+    let snapshot = adapter.state.nexus_snapshot();
+    let blocks = snapshot
+        .lane_config
+        .entry(descriptor.lane_id)
+        .expect("configured historical lane")
+        .blocks_dir(adapter.kura.store_root());
+    let path = blocks.join("lane_artifacts").join("ownerships.norito");
+    corrupt_durable_file_for_test(&path);
+    assert!(matches!(
+        adapter.hydrate_canonical_lane_artifacts(),
+        Err(V2LaneWorkError::Persistence(_))
+    ));
+    assert!(adapter.output_guard.restart_required());
+    assert_eq!(
+        std::fs::metadata(&path)
+            .expect("read corrupt slot file metadata")
+            .len(),
+        0,
+        "a typed storage failure must not repair or overwrite an occupied corrupt slot"
+    );
+}
+
+#[test]
+fn historical_anchor_storage_errors_retain_recovery_instead_of_superseding() {
+    let (mut adapter, _, request) = self_contained_historical_recovery_request_fixture();
+    let certificate = request
+        .certificate
+        .as_ref()
+        .expect("historical certificate");
+    let proposal = &certificate.proposal;
+    assert!(
+        adapter
+            .historical_proposal_has_exact_canonical_anchor(proposal)
+            .expect("authenticate initial carrier")
+    );
+    assert!(
+        adapter
+            .proposal_anchor_is_committed_in_state(proposal)
+            .expect("authenticate initial State anchor")
+    );
+    let session = CommittedLaneBlockSession {
+        proposal: proposal.clone(),
+        prepare_qc: certificate.prepare_qc.clone(),
+        commit_qc: certificate.commit_qc.clone(),
+    };
+    adapter
+        .historical_recovery_sessions
+        .push_back(session.clone());
+    let height = NonZeroUsize::new(1).expect("height");
+    assert!(
+        adapter.kura.get_block(height).is_some(),
+        "warm the old body cache"
+    );
+    let blocks = adapter
+        .state
+        .nexus_snapshot()
+        .lane_config
+        .primary()
+        .blocks_dir(adapter.kura.store_root());
+    corrupt_durable_file_for_test(&blocks.join("blocks.data"));
+    assert!(
+        adapter
+            .historical_proposal_has_exact_canonical_anchor(proposal)
+            .is_err()
+    );
+    assert!(
+        adapter
+            .proposal_anchor_is_committed_in_state(proposal)
+            .is_err()
+    );
+    assert!(
+        adapter
+            .service_next_historical_recovery_at(Instant::now())
+            .is_err()
+    );
+    assert_eq!(adapter.historical_recovery_sessions.front(), Some(&session));
+    assert!(
+        adapter
+            .retired_historical_recovery_request_hashes
+            .is_empty()
+    );
+    assert!(adapter.output_guard.restart_required());
 }

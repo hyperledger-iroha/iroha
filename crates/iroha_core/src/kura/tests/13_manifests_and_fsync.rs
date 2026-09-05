@@ -702,7 +702,7 @@ fn fast_init_rejects_an_unmarked_tip_hash_without_mutation() {
 #[test]
 fn hash_journal_reader_rejects_an_unmarked_entry() {
     let temp_dir = TempDir::new().unwrap();
-    populate_store(&temp_dir, 2);
+    populate_raw_block_store(&temp_dir, 2);
     let hash_path = primary_blocks_dir(&temp_dir).join(HASHES_FILE_NAME);
     let mut hash_bytes = std::fs::read(&hash_path).expect("read committed hash journal");
     hash_bytes[Hash::LENGTH - 1] &= !1;

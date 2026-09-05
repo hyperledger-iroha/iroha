@@ -728,8 +728,12 @@ fn lane_block_application_receipt_reader_rejects_pre_release_omitted_merge_evide
 #[test]
 fn autonomous_execution_input_uses_one_exact_typed_source_binding() {
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (network_id, epoch, payload) =
+    let (network_id, epoch, mut payload) =
         autonomous_lane_payload_for_kura(LaneId::new(1), DataSpaceId::new(2), 1, &signer);
+    payload.origin_proposal.payload_block_hint = None;
+    payload
+        .validate(network_id, epoch)
+        .expect("authenticated hint-free payload");
     assert!(
         payload.origin_proposal.payload_block_hint.is_none(),
         "fixture must exercise hint-free autonomous execution"

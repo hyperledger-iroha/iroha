@@ -27,6 +27,16 @@ profile and never permits software fallback.
   constructor to the product coordinator's private state/snapshot lifecycle.
   Reconcile retained speculative operations against current authenticated hardware
   state before resolving them; retained journal evidence is not monetary authority.
+- Complete a bounded recursive State checkpoint and revalidate its actual inner
+  proofs, public columns and histories against authenticated release artifacts.
+  Atomically seal its identity with the Core snapshot, operation-WAL head and
+  authenticated-response-journal head under one fresh hardware checkpoint anchor.
+  A collection of independently encrypted sidecars is not rollback protection.
+- Implement pending qualification, native signature admission and durable response
+  lookup behind the typed coordinator. Reserved/Intent recovery must return a
+  closed recovery-required result, never a fabricated terminal archive or missing
+  operation. Extract production credential/Guard proof services; reject-all and
+  test accepting verifiers cannot enable monetary profiles.
 - Complete sealed sender preparation, real recursive witness/proof generation,
   candidate persistence, hardware commit authorization, and mint/redemption finality
   coordination. Rebuild and qualify mobile native artifacts after that integration;
@@ -50,8 +60,8 @@ profile and never permits software fallback.
 - Connect the now-validated Swift/Kotlin bootstrap and recovery ordering to the
   qualified native service, then rebuild mobile artifacts from the settled
   source. Caller-persisted operation identities and canonical reservation bindings
-  now have focused SDK coverage. Finish authenticated lookup after a lost native
-  return, canonical Core archive schemas, real native coordinator integration and
+  and actual Rust canonical Core archives now have focused SDK coverage. Finish
+  authenticated lookup after a lost native return, real native coordinator integration and
   revision-consistent outbox discovery before complete customer flows can ship.
 - Qualify the requested iPhone, Samsung, Huawei, Google and Meizu device families
   by exact model/OS/firmware/provider profile. Establish an authorized service
@@ -926,38 +936,32 @@ profile and never permits software fallback.
 
 ## ZK algorithm release qualification
 
-- Resolve FASTPQ's verifier architecture before qualification. The current
-  verifier deterministically rebuilds the full trace, FFT/LDE data, row hashes,
-  AIR composition, and roots from the supplied batch while also authenticating
-  an unquotiented FRI composition polynomial. That is prover-scale replay with
-  redundant probabilistic proof plumbing, not succinct verification. Either
-  implement the quotient/zerofier and degree argument needed to verify from
-  bounded openings without replay, or deliberately reduce the format to one
-  clearly documented full-replay artifact; benchmark the chosen single path.
-- Keep FASTPQ ledger qualification blocked until independent review connects
-  the implemented arithmetic bound to the complete protocol adversary and
-  validates the final-artifact multi-target digest accounting. V1 now pins six
-  independently domain-separated Poseidon-x7 Goldilocks lanes for 384-bit
-  commitments/transcript state, degree-four FRI challenges, binary folds, an
-  eightfold LDE, zero grinding, and 136 queries. Its exact dyadic qROM
-  calculator passes the 128-bit aggregate target across 54 release artifacts
-  under the declared `Q ≤ 2^32` oracle-query bound, but intentionally reports
-  production qualification unavailable until the protocol-specific reduction
-  is reviewed. Cross-check the dense-MDS permutation and six-lane construction
-  against an independent implementation and bind that review to final artifact
-  digests before clearing the gate.
-- Qualify the simplified accelerator boundary on release-class Apple and NVIDIA
-  hardware. Compile the native Metal and CUDA sources, inject copy, launch,
-  event, stream, and timeout failures to confirm process-lifetime quarantine,
-  and archive CPU/Metal/CUDA root parity plus throughput and peak-memory results.
-  A Rust feature build that selects runtime Metal source fallback does not
-  replace native shader compilation or an `nvcc` build.
-- Keep non-null IVM `AXT_VERIFY_DS_PROOF` admission fail closed until the exact
-  source roots and transaction set are matched to an authoritative finalized/QC
-  source-state statement. Before releasing handle-backed remote spend, either
-  make the issuer authentication cover the exact intent, proof, and effective
-  amount or give those facts an independently anchored binding. Commitment
-  width cannot compensate for facts omitted from the authenticated statement.
+- Complete FASTPQ succinct verification under the selected
+  [production goals and acceptance contract](specs/fastpq_production_readiness.md).
+  Constrain all transfer semantics, full-width SMT hash/root relations, canonical
+  integer/byte encodings, ordering and authenticated public boundaries; add
+  quotient/zerofier relations and fix FRI terminal degree rounding before removing
+  deterministic full replay. Benchmark bounded verification and end-to-end proof
+  generation from execution-captured workloads.
+- Migrate FASTPQ parameters, profile identity, fixtures and verifier limits
+  together after the succinct design is fixed. The corrected diagnostic model
+  accounts for quadratic composition and terminal rounding; the current 136-query
+  profile fails its 128-bit arithmetic target. The same model selects 400 for
+  the current schedule or 200 with a four-evaluation terminal, neither of which
+  supplies the missing protocol-specific soundness argument or digest review.
+- Keep FASTPQ ledger qualification blocked until independent review covers the
+  complete protocol adversary, canonical field output space, 32-byte external
+  commitments and final-artifact multi-target accounting. Independent constants
+  and vector reproduction is regression evidence, not that security review.
+- Qualify actual CPU/Metal/CUDA parity, native compilation, failure quarantine,
+  latency, memory and proof sizes on release-class hardware. Require authenticated
+  manifests from independently trusted release keys and actual measured captures.
+  Feature builds and skipped hardware tests cannot qualify accelerator execution.
+- Complete authoritative finalized/QC source roots and transaction-set anchoring
+  plus exact intent/proof/effective-amount issuer authentication before enabling
+  handle-backed remote spending. CoreHost and block validation now reject this
+  unanchored path; retain that gate and non-null standalone AXT proof rejection
+  until end-to-end authorization tests and independent review pass.
 - Keep ZK-ACE proving, verification, and activation unavailable until its four
   public commitment words come from independent domain-separated invocations
   (or an equivalently strong replacement) with at least 128-bit collision

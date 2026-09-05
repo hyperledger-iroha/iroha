@@ -140,6 +140,7 @@ fn intent(
             credential_id,
             hardware_epoch: machine.state.hardware_epoch,
             device_policy_binding: machine.state.device_policy_binding,
+            core_authorization_key_reference: id(70),
         },
         inputs: KagemushaOutgoingPublicInputsV1::RedeemSplit {
             amount: 20,
@@ -150,7 +151,10 @@ fn intent(
 fn binding(intent: &KagemushaOutgoingPublicInputPreimageV1) -> Vec<u8> {
     norito::encode_canonical(&intent.inputs).unwrap()
 }
-fn prepare(machine: &mut Machine, intent: &KagemushaOutgoingPublicInputPreimageV1) {
+fn candidate(
+    machine: &Machine,
+    intent: &KagemushaOutgoingPublicInputPreimageV1,
+) -> PreparedOutgoingCandidateV1 {
     let KagemushaOutgoingPublicInputsV1::RedeemSplit {
         amount,
         beneficiary,
@@ -158,7 +162,7 @@ fn prepare(machine: &mut Machine, intent: &KagemushaOutgoingPublicInputPreimageV
     else {
         panic!("test redemption")
     };
-    let candidate = machine
+    machine
         .prepare_redeem_split(RedeemSplitPreparationV1 {
             amount: *amount,
             beneficiary: beneficiary.clone(),
@@ -182,11 +186,15 @@ fn prepare(machine: &mut Machine, intent: &KagemushaOutgoingPublicInputPreimageV
             sealed_transition_inputs: vec![67],
             sealed_recovery_seeds: vec![68],
         })
-        .unwrap();
+        .unwrap()
+}
+fn prepare(machine: &mut Machine, intent: &KagemushaOutgoingPublicInputPreimageV1) {
+    let candidate = candidate(machine, intent);
     machine
         .prepare_indexed_outgoing_candidate(
             intent.operation_id,
             intent.context.credential_id,
+            intent.context.core_authorization_key_reference,
             candidate,
         )
         .unwrap();
@@ -435,6 +443,84 @@ fn operation_store_intent_crash_recovery_never_becomes_prepared_or_absent() {
         restored.begin_coordinator_sender_intent(&mut store, &conflict),
         Err(StoreError::Conflict)
     );
+}
+
+#[test]
+fn operation_store_authorization_key_substitution_conflicts_across_reopen() {
+    let (mut machine, credential, account) = machine();
+    let (_root, path) = location();
+    let mut store = machine
+        .create_coordinator_operation_store(&path, CAPACITY)
+        .unwrap();
+    let intent = intent(&machine, credential, account, id(71));
+    machine
+        .reserve_coordinator_operation(&mut store, intent.operation_id, 5, &binding(&intent))
+        .unwrap();
+    let mut substituted = intent.clone();
+    substituted.context.core_authorization_key_reference = [0; 32];
+    assert_eq!(
+        machine.begin_coordinator_sender_intent(&mut store, &substituted),
+        Err(StoreError::InvalidBinding),
+    );
+    machine
+        .begin_coordinator_sender_intent(&mut store, &intent)
+        .unwrap();
+    substituted.context.core_authorization_key_reference = id(72);
+    assert_ne!(
+        intent.canonical_digest().unwrap(),
+        substituted.canonical_digest().unwrap(),
+    );
+    assert_eq!(
+        machine.begin_coordinator_sender_intent(&mut store, &substituted),
+        Err(StoreError::Conflict),
+    );
+    let prepared = candidate(&machine, &intent);
+    assert!(
+        machine
+            .prepare_indexed_outgoing_candidate(
+                intent.operation_id,
+                credential,
+                [0; 32],
+                prepared.clone(),
+            )
+            .is_err()
+    );
+    assert!(machine.outgoing_operation_index().is_empty());
+    machine
+        .prepare_indexed_outgoing_candidate(
+            intent.operation_id,
+            credential,
+            intent.context.core_authorization_key_reference,
+            prepared.clone(),
+        )
+        .unwrap();
+    assert!(
+        machine
+            .prepare_indexed_outgoing_candidate(
+                intent.operation_id,
+                credential,
+                substituted.context.core_authorization_key_reference,
+                prepared,
+            )
+            .is_err()
+    );
+    drop(store);
+    let restored = restored(&machine);
+    let mut store = restored.open_coordinator_operation_store(&path, 0).unwrap();
+    restored
+        .begin_coordinator_sender_intent(&mut store, &intent)
+        .unwrap();
+    assert_eq!(
+        restored.begin_coordinator_sender_intent(&mut store, &substituted),
+        Err(StoreError::Conflict),
+    );
+    let Recovery::Indexed(record) = restored
+        .recover_coordinator_sender_intent(&store, intent.operation_id)
+        .unwrap()
+    else {
+        panic!("restored Core preparation must retain its exact index record")
+    };
+    assert_eq!(record.context, intent.context);
 }
 
 #[test]

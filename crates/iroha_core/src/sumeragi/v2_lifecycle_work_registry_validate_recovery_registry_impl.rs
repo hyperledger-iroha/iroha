@@ -1438,37 +1438,9 @@ impl ConcreteLifecycleWorkRegistry {
         InstalledRecoveredWalControlSignRegistryCut<'registry>,
         RecoveredWalControlSignInstallError,
     > {
-        if !self.entries.is_empty()
-            || !projection.is_exact(verified)
-            || !store.load().is_ok_and(|opened| opened == *ledger)
-        {
-            return Err(RecoveredWalControlSignInstallError {
-                failure: RecoveredWalControlSignInstallFailure::Projection {
-                    _projection: projection,
-                },
-            });
-        }
-        let records = ledger
-            .records()
-            .iter()
-            .filter(|record| projection.names_record(record))
-            .collect::<Vec<_>>();
-        let [record] = records.as_slice() else {
-            return Err(RecoveredWalControlSignInstallError {
-                failure: RecoveredWalControlSignInstallFailure::Projection {
-                    _projection: projection,
-                },
-            });
-        };
-        if !projection.exactly_matches_record(record) {
-            return Err(RecoveredWalControlSignInstallError {
-                failure: RecoveredWalControlSignInstallFailure::Projection {
-                    _projection: projection,
-                },
-            });
-        }
-        let slot = PhysicalSlotId::for_capacity(CapacityClass::Effect, 0);
-        let Some(address) = ConcreteWorkAddress::new(record.owner(), record.ordinal(), slot) else {
+        let Some(address) =
+            self.recovered_wal_control_sign_address(verified, store, ledger, &projection)
+        else {
             return Err(RecoveredWalControlSignInstallError {
                 failure: RecoveredWalControlSignInstallFailure::Projection {
                     _projection: projection,
@@ -1486,12 +1458,55 @@ impl ConcreteLifecycleWorkRegistry {
                     });
                 }
             };
-        let digest = carrier.installed_digest();
         if !carrier.validates_in_store(store) || self.entries.contains_key(&address) {
             return Err(RecoveredWalControlSignInstallError {
                 failure: RecoveredWalControlSignInstallFailure::Carrier { _carrier: carrier },
             });
         }
+        Ok(self.insert_recovered_wal_control_sign(address, carrier))
+    }
+    /// Check the complete durable projection while borrowing its sole owner.
+    ///
+    /// Keep nested canonical decoding outside the construction frame for the
+    /// large inline work enum and fail-stop error carriers. The returned
+    /// address confers no authority; installation still consumes and validates
+    /// the original projection's durable carrier before any registry mutation.
+    #[inline(never)]
+    fn recovered_wal_control_sign_address(
+        &self,
+        verified: &VerifiedHeightContext,
+        store: &super::ledger::LifecycleLedgerStoreV1,
+        ledger: &super::ledger::LifecycleLedgerV1,
+        projection: &AuthenticatedRecoveredWalControlProjection,
+    ) -> Option<ConcreteWorkAddress> {
+        if !self.entries.is_empty()
+            || !projection.is_exact(verified)
+            || !store.load().is_ok_and(|opened| opened == *ledger)
+        {
+            return None;
+        }
+        let mut records = ledger
+            .records()
+            .iter()
+            .filter(|record| projection.names_record(record));
+        let record = records.next()?;
+        if records.next().is_some() || !projection.exactly_matches_record(record) {
+            return None;
+        }
+        let slot = PhysicalSlotId::for_capacity(CapacityClass::Effect, 0);
+        ConcreteWorkAddress::new(record.owner(), record.ordinal(), slot)
+    }
+    /// Move a preflighted control carrier into the sole vacant registry slot.
+    ///
+    /// This separate construction frame preserves inline ownership without
+    /// reserving all work-enum temporaries during the fallible decode phase.
+    #[inline(never)]
+    fn insert_recovered_wal_control_sign(
+        &mut self,
+        address: ConcreteWorkAddress,
+        carrier: DurableRecoveredWalControlSignCarrierV1,
+    ) -> InstalledRecoveredWalControlSignRegistryCut<'_> {
+        let digest = carrier.installed_digest();
         let work = ConcreteLifecycleWork {
             digest,
             kind: ConcreteLifecycleWorkKind::DurableRecoveredWalControlSign(
@@ -1505,13 +1520,13 @@ impl ConcreteLifecycleWorkRegistry {
         debug_assert!(work.validates_at(address));
         let previous = self.entries.insert(address, work);
         debug_assert!(previous.is_none());
-        Ok(InstalledRecoveredWalControlSignRegistryCut {
+        InstalledRecoveredWalControlSignRegistryCut {
             registry: self,
             address,
             digest,
             next_sign: None,
             pair: None,
-        })
+        }
     }
     /// Consume one exact Advanced control Sign and its live Broadcast child.
     ///

@@ -2401,14 +2401,16 @@ where
 
     /// Atomically bind a caller ID, reserve sender bytes, and prepare the exact transition.
     ///
-    /// `authenticated_credential_id` must come from a qualified native session. Core binds it
-    /// immutably but does not authenticate arbitrary host-supplied credential IDs. Call
+    /// Both authenticated identity arguments must come from a qualified native session. Core
+    /// binds them immutably but does not authenticate host-supplied credentials or Core
+    /// authorization keys. Call
     /// [`Self::classify_outgoing_operation_prepare`] before deriving a new candidate so a lost
     /// response recovers an existing operation at any phase without invoking preparation again.
     pub fn prepare_indexed_outgoing_candidate(
         &mut self,
         operation_id: DigestV1,
         authenticated_credential_id: DigestV1,
+        authenticated_core_authorization_key_reference: DigestV1,
         prepared: PreparedOutgoingCandidateV1,
     ) -> Result<
         (
@@ -2429,8 +2431,12 @@ where
         let reservation = prepared.outbox_reservation;
         let mut next_outbox = self.sender_outbox_capacity.clone();
         let mut next_journal = self.outgoing_candidate_journal.clone();
-        let indexed_outcome =
-            next_journal.prepare_indexed(operation_id, authenticated_credential_id, prepared)?;
+        let indexed_outcome = next_journal.prepare_indexed(
+            operation_id,
+            authenticated_credential_id,
+            authenticated_core_authorization_key_reference,
+            prepared,
+        )?;
         let reservation_outcome = next_outbox.reserve(reservation, &next_journal)?;
         self.sender_outbox_capacity = next_outbox;
         self.outgoing_candidate_journal = next_journal;

@@ -1295,6 +1295,11 @@ pub mod isi {
                 )
                 .into());
             }
+            if let Some(race) = crate::smartcontracts::isi::race::retained_race_account(state_transaction.world(), &account_id) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!("cannot unregister account {account_id}: it is retained by native race {race}").into(),
+                ).into());
+            }
             if let Some(reference) =
                 crate::smartcontracts::isi::sorafs_moderation::retained_moderation_account_reference(
                     state_transaction.world(),
@@ -2581,6 +2586,11 @@ pub mod isi {
                     .into(),
                 )
                 .into());
+            }
+            if let Some(race) = crate::smartcontracts::isi::race::retained_race_asset(state_transaction.world(), &asset_definition_id) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!("cannot unregister asset definition {asset_definition_id}: it secures native race {race}").into(),
+                ).into());
             }
             if asset_definition_id == state_transaction.oracle.economics.reward_asset {
                 return Err(InstructionExecutionError::InvariantViolation(

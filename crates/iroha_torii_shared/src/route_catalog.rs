@@ -1619,6 +1619,18 @@ pub mod core {
     )
     .with_feature_gate(FeatureGate::Feature("connect"))
     .with_authentication(AuthenticationPolicy::IdentityBoundSignature);
+    /// Read native race state or verifier qualification.
+    pub const RACE_CAPABILITIES: RouteDescriptor = RouteDescriptor::new(
+        "race.capabilities",HttpMethod::Get,"/v1/races/capabilities",ApiSurface::Public,Listener::Torii,RouteEffect::ReadOnly,AdmissionPolicy::Public,
+    ).with_projections(RouteProjections::OPENAPI_AND_SDK).with_cors_options(true);
+    /// Read native race state or verifier qualification.
+    pub const RACE_LIST: RouteDescriptor = RouteDescriptor::new(
+        "race.list",HttpMethod::Get,"/v1/races",ApiSurface::Public,Listener::Torii,RouteEffect::ReadOnly,AdmissionPolicy::Public,
+    ).with_projections(RouteProjections::OPENAPI_AND_SDK).with_cors_options(true);
+    /// Read native race state or verifier qualification.
+    pub const RACE_GET: RouteDescriptor = RouteDescriptor::new(
+        "race.get",HttpMethod::Get,"/v1/races/{race_id}",ApiSurface::Public,Listener::Torii,RouteEffect::ReadOnly,AdmissionPolicy::Public,
+    ).with_projections(RouteProjections::OPENAPI_AND_SDK).with_cors_options(true);
     /// Read the VPN client profile.
     pub const VPN_PROFILE: RouteDescriptor = RouteDescriptor::new(
         "vpn.profile",
@@ -1735,6 +1747,9 @@ pub mod core {
         LEDGER_EXECUTED_BLOCK_WIRE,
         LEDGER_BLOCK_PROOF,
         INTERNAL_PROXY,
+        RACE_CAPABILITIES,
+        RACE_LIST,
+        RACE_GET,
         VPN_PROFILE,
         VPN_QUOTE_CREATE,
         VPN_SESSION_CREATE,

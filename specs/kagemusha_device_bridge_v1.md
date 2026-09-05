@@ -453,12 +453,33 @@ transport layers, not implementations of `KagemushaNativeCoreCoordinatorV1`.
 The shared `fixtures/offline/kagemusha_core_coordinator_frame_v1.tsv` corpus
 covers every method, both sender kinds, both recovery selectors, and missing
 recovery; its opaque archive strings do not represent valid proofs or credentials.
-TODO: connect the typed SDK coordinator to the native-owned, canonical Norito
-preparation (operation ID, wallet context, inputs digest), candidate (preparation,
-selector, candidate digest, commit authorization), and recovery (operation ID,
-terminal ID, wallet context, inputs digest) archives once their exact native
-schemas and fixtures are available. No SDK decoder may infer those schemas
-from nonempty frame fields or treat structural validation as journal authority.
+`KagemushaNativeCoreCoordinatorAdapterV1` supplies the typed Swift and Kotlin
+adapter, with a mirrored Java facade. Native-owned canonical Norito archives
+are version 1 and bounded to 16 KiB each:
+
+| Schema suffix under `iroha.kagemusha.core.v1.` | Ordered fields |
+| --- | --- |
+| `sender-preparation` | version, operation ID, immutable wallet context, inputs digest |
+| `sender-candidate` | version, preparation, hardware preparation selector, candidate digest, canonical commit authorization |
+| `sender-recovery` | version, operation ID, terminal ID, original wallet context, inputs digest |
+
+The shared `fixtures/offline/kagemusha_core_coordinator_archives_v1.json` corpus
+contains actual Rust canonical bytes, including the compact redemption receipt.
+The bridge aliases Core's sender-context type, including the authenticated Core
+authorization-key reference. Norito alias fields and literal byte-array fields
+retain their exact declared layouts. Both mobile SDKs check the same fixture
+and complete public-input digest. The C/JNI boundary separately rejects opaque,
+wrong-schema and noncanonical archives, nested identity substitution and
+candidate preparation changes. Structural validation grants no journal authority;
+every retained context must resolve against the backend's authenticated creation
+record. The stock build still supplies no qualified coordinator backend.
+
+Method 9 admits only a canonical operation-10 installed lookup reply for the
+recovery archive's original operation, full context, input digest and terminal ID.
+The returned envelope must exactly equal that reply's retained bytes. Missing,
+non-installed, trailing or substituted replies fail. The qualified backend must
+also resolve the exact reply through its previously authenticated method-3 journal;
+a self-consistent public reply cannot establish device authority.
 
 Schema 2 is the sole coordinator frame schema. Reservation method 1 takes
 `operation:u32`, the caller-persisted nonzero 32-byte operation ID, and the exact
@@ -470,11 +491,36 @@ Untagged request bytes or concatenated amount/account bytes are invalid. The Cor
 operation journal checks canonical nested payment-request shape before reserving
 capacity. A reservation is retry material, not authenticated monetary authority.
 
+Method 3 has exactly ten fields: device operation `u32`, request ID, canonical
+command, canonical reply, original 64-byte low-S P-256 response authenticator,
+then the five qualification fields (protocol version, release ID, profile,
+credential, capability mask). The retired nine-field projection is rejected.
+The native backend verifies the complete response transcript using its admitted
+device key, hardware-policy ID and qualification-report digest; a caller's
+qualification projection or a well-formed signature alone provides no authority.
+Method 2 remains pending until the matching qualification reply is authenticated.
+
+Sender input fields use a closed `u32` kind. Send carries the complete canonical
+payment request. Redemption carries a positive 16-byte little-endian amount and
+the canonical bare AccountId payload under the fixed V1 `COMPACT_LEN` layout,
+bounded to 512 bytes. Method 10's receipt is `kind:u32LE || canonical receipt`:
+kind 0 carries the complete ACK archive; kind 1 carries the complete
+`iroha.kagemusha.device.v1.redemption-terminal-receipt` archive. It does not carry
+another nested sender-terminal-receipt enum archive.
+
 Release method 10 returns the retained operation ID, preparation, envelope digest,
-exact installed envelope, and hardware release authorization. The frame boundary
+exact installed envelope, and hardware release authorization. The C/JNI boundary
 requires the returned envelope bytes to equal the supplied envelope for both send
-and redemption. Qualified Core still verifies the terminal identity, public-input
-binding, envelope digest, receipt and hardware authorization before release.
+and redemption, recomputes the full preparation input and envelope digests, and
+applies the existing hardware operation-12 public validation to the complete
+context, terminal identity, receipt and signed release authorization. The native
+backend additionally resolves the exact durable operation, admitted historical
+key and, for redemption, the nonserializable verified finality capability.
+Retained outbox cleanup preserves its original creation policy and Core key
+through authorized epoch rotation; the new device reply is authenticated under
+the current qualified device session. Terminal envelope byte limits remain
+7,552 for payment and 7,936 for redemption; a kind-independent transport bound
+uses their maximum, 7,936, rather than the coordinator archive limit.
 
 The generic bridge installs no qualified durable coordinator. It validates
 storage paths, method codes, and complete frames, clears outputs, and returns

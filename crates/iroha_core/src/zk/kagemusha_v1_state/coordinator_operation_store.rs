@@ -408,8 +408,9 @@ where
     }
 
     /// Durably bind one sender intent before hardware preparation. Exact retries do not append.
-    /// Credential identity must already be authenticated by the native owner, as for existing Core
-    /// preparation APIs; a raw credential ID or this return value is never an authentication token.
+    /// Credential identity and the Core authorization key reference must already be authenticated
+    /// by the native owner, as for existing Core preparation APIs. A raw identifier or this return
+    /// value is never an authentication token.
     pub fn begin_coordinator_sender_intent(
         &self,
         store: &mut KagemushaCoordinatorOperationStoreV1,

@@ -801,6 +801,7 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindAssetDefinitionById(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
+            SingularQueryBox::FindRaceById(q) => { Ok(SingularQueryOutputBox::from(q.execute(state)?)) }
             SingularQueryBox::FindAssetEscrowById(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }

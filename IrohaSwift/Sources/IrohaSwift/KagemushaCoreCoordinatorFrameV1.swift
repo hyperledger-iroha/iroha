@@ -105,8 +105,10 @@ public enum KagemushaCoreCoordinatorFrameV1 {
     case .acceptQualification:
       try count(fields, 6); try qualification(fields, 0); try digest(fields, 5)
     case .acceptAuthenticatedReply:
-      try count(fields, 9); try operation(fields, 0); try digest(fields, 1)
-      try nonempty(fields, 2); try nonempty(fields, 3); try qualification(fields, 4)
+      try count(fields, 10); try operation(fields, 0); try digest(fields, 1)
+      try nonempty(fields, 2); try nonempty(fields, 3)
+      _ = try KagemushaDeviceSignatureV1(rawBytes: fields[4])
+      try qualification(fields, 5)
     case .beginSenderTransition:
       try digest(fields, 0)
       let end = try senderInputs(fields, 1)

@@ -73,8 +73,9 @@ pub type KagemushaOutgoingOperationIndexResultV1<T> =
 /// Identity and release context authenticated by a qualified device session.
 ///
 /// The credential ID is intentionally not derived from receiver material. Core
-/// currently has no credential registry, so the qualified native session must
-/// authenticate `credential_id` before asking Core to bind a new operation.
+/// currently has no credential registry, so the qualified native session must authenticate
+/// `credential_id` and `core_authorization_key_reference` before binding a new operation.
+/// Nonzero shape and a caller-supplied key reference do not establish that authority.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(schema_name = "iroha.kagemusha.device.v1.sender-wallet-context")]
 pub struct KagemushaOutgoingOperationContextV1 {
@@ -88,19 +89,22 @@ pub struct KagemushaOutgoingOperationContextV1 {
     pub hardware_epoch: HardwareEpochV1,
     /// Device key and hardware policy which own the operation predecessor.
     pub device_policy_binding: DevicePolicyBindingV1,
+    /// Release/profile-governed Core authorization key authenticated by the native session.
+    pub core_authorization_key_reference: DigestV1,
 }
 
 impl KagemushaOutgoingOperationContextV1 {
     /// Derive all Core-owned fields from the actual prepared predecessor.
     ///
-    /// Supplying `credential_id` does not authenticate it. This constructor is
-    /// therefore private to the state module and must be called only after a
-    /// qualified native session has authenticated that credential.
+    /// Supplying either the credential or authorization key reference does not authenticate it.
+    /// This constructor is private to the state module and requires prior qualified native-session
+    /// authentication of both identities; their nonzero shape only rejects invalid sentinels.
     pub(super) fn from_prepared(
         credential_id: DigestV1,
+        core_authorization_key_reference: DigestV1,
         prepared: &PreparedOutgoingCandidateV1,
     ) -> KagemushaOutgoingOperationIndexResultV1<Self> {
-        if credential_id == [0; 32] {
+        if credential_id == [0; 32] || core_authorization_key_reference == [0; 32] {
             return Err(KagemushaOutgoingOperationIndexErrorV1::InvalidBinding);
         }
         let predecessor = prepared.private_state_link().0;
@@ -110,6 +114,7 @@ impl KagemushaOutgoingOperationContextV1 {
             credential_id,
             hardware_epoch: predecessor.hardware_epoch,
             device_policy_binding: predecessor.device_policy_binding,
+            core_authorization_key_reference,
         };
         context.validate_against_prepared(prepared)?;
         Ok(context)
@@ -128,6 +133,7 @@ impl KagemushaOutgoingOperationContextV1 {
             || self.release.policy_epoch == 0
             || self.release.asset_incarnation.validate().is_err()
             || self.credential_id == [0; 32]
+            || self.core_authorization_key_reference == [0; 32]
             || self.hardware_epoch.generation == 0
             || self.hardware_epoch.epoch_id == [0; 32]
             || self.device_policy_binding.device_key_reference == [0; 32]
@@ -556,6 +562,7 @@ impl KagemushaOutgoingOperationRecordV1 {
         self.validate()?;
         let context = KagemushaOutgoingOperationContextV1::from_prepared(
             self.context.credential_id,
+            self.context.core_authorization_key_reference,
             prepared,
         )?;
         let (inputs, outcome_id) =
@@ -738,6 +745,7 @@ impl KagemushaOutgoingOperationIndexV1 {
         &self,
         operation_id: DigestV1,
         authenticated_credential_id: DigestV1,
+        authenticated_core_authorization_key_reference: DigestV1,
         prepared: &PreparedOutgoingCandidateV1,
     ) -> KagemushaOutgoingOperationIndexResultV1<(Self, KagemushaOutgoingOperationPrepareOutcomeV1)>
     {
@@ -746,6 +754,7 @@ impl KagemushaOutgoingOperationIndexV1 {
         }
         let context = KagemushaOutgoingOperationContextV1::from_prepared(
             authenticated_credential_id,
+            authenticated_core_authorization_key_reference,
             prepared,
         )?;
         let (inputs, outcome_id) =
@@ -1232,6 +1241,7 @@ mod tests {
                     device_key_reference: [0x3a; 32],
                     hardware_policy_id: [0x3b; 32],
                 },
+                core_authorization_key_reference: [0x44; 32],
             },
             inputs_digest: [0x3c; 32],
             operation_kind: KagemushaOperationKindV1::RedeemSplit,
@@ -1253,6 +1263,31 @@ mod tests {
             reserved_bytes: u64::MAX,
             records,
         }
+    }
+
+    #[test]
+    fn outgoing_context_authorization_key_requires_shape_and_exact_native_binding() {
+        let index = released_redemption_index();
+        let context = index.records.values().next().unwrap().context.clone();
+        context.validate_shape().unwrap();
+        let mut substituted = context.clone();
+        substituted.core_authorization_key_reference[0] ^= 1;
+        assert_eq!(substituted.validate_shape(), Ok(()));
+        assert_eq!(
+            substituted.validate_against_native(&context),
+            Err(KagemushaOutgoingOperationIndexErrorV1::InvalidBinding),
+        );
+        // Retained-context validation deliberately checks scope only. Authentication of the
+        // historical key still comes from guarded snapshot recovery and the native session.
+        assert_eq!(
+            substituted.validate_retained_against_native(&context),
+            Ok(())
+        );
+        substituted.core_authorization_key_reference = [0; 32];
+        assert_eq!(
+            substituted.validate_shape(),
+            Err(KagemushaOutgoingOperationIndexErrorV1::InvalidBinding),
+        );
     }
 
     #[test]

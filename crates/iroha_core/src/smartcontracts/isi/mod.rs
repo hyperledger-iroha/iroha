@@ -28,6 +28,8 @@ pub mod privacy;
 /// Atomic private cross-dataspace settlement carrier execution.
 pub mod private_settlement;
 pub mod query;
+/// Native race custody and proof settlement transitions.
+pub mod race;
 pub mod ram_lfe;
 pub mod repo;
 pub mod rwa;
@@ -119,6 +121,17 @@ macro_rules! define_instruction_handlers {
     };
 }
 define_instruction_handlers! {
+    dispatch_instruction::<iroha_data_model::isi::race::OpenRaceV1>,
+    dispatch_instruction::<iroha_data_model::isi::race::JoinRaceV1>,
+    dispatch_instruction::<iroha_data_model::isi::race::StartRaceV1>,
+    dispatch_instruction::<iroha_data_model::isi::race::CommitRaceCheckpointV1>,
+    dispatch_instruction::<iroha_data_model::isi::race::ChallengeRaceV1>,
+    dispatch_instruction::<iroha_data_model::isi::race::CommitRaceInputsV1>,
+    dispatch_instruction::<iroha_data_model::isi::race::RevealRaceInputsV1>,
+    dispatch_instruction::<iroha_data_model::isi::race::AdvanceRaceDeadlineV1>,
+    dispatch_instruction::<iroha_data_model::isi::race::SubmitRaceProofV1>,
+    dispatch_instruction::<iroha_data_model::isi::race::ExpireRaceV1>,
+
     dispatch_instruction::<RegisterPeerWithPop>,
     dispatch_instruction::<RegisterBox>,
     dispatch_instruction::<UnregisterBox>,

@@ -46,10 +46,9 @@ pub const KAGEMUSHA_REDEMPTION_REQUEST_SCHEMA_NAME_V1: &str =
     "iroha.torii.v1.kagemusha.redeem.request";
 /// Exact number of siblings in a proof against the ordinary-write sparse tree.
 pub const KAGEMUSHA_RESERVE_RECEIPT_WITNESS_SIBLINGS_V1: usize = 256;
-/// Reserved ordinary-write key tag for a finalized KAGEMUSHA operation.
-pub const KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1: u8 = 0xD5;
-/// Exact tagged key length: one tag byte followed by the operation identifier.
-pub const KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_BYTES_V1: usize = 33;
+pub use crate::execution_witness::{
+    KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_BYTES_V1, KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1,
+};
 
 const TOP_UP_ISSUANCE_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:top-up-issuance";
 const TOP_UP_REQUEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:top-up-request";
@@ -1489,7 +1488,7 @@ impl KagemushaMintFinalitySealBundleV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaReserveReceiptWitnessV1 {
-    /// Exact `0xD5 || operation_id` execution-witness key.
+    /// Exact `0xD6 || operation_id` execution-witness key.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub key: Vec<u8>,
     /// Typed canonical value stored under `key`.
@@ -1502,10 +1501,7 @@ impl KagemushaReserveReceiptWitnessV1 {
     /// Derive the sole ordinary-write key for an operation.
     #[must_use]
     pub fn expected_key(operation_id: [u8; 32]) -> Vec<u8> {
-        let mut key = Vec::with_capacity(KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_BYTES_V1);
-        key.push(KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1);
-        key.extend_from_slice(&operation_id);
-        key
+        crate::execution_witness::kagemusha_reserve_receipt_witness_key_v1(operation_id).to_vec()
     }
 
     /// Reconstruct the ordinary-write sparse-Merkle root.
@@ -3173,10 +3169,20 @@ mod tests {
         };
         let root = witness.reconstructed_root().expect("reconstruct root");
         assert!(witness.verify(root));
+        assert_eq!(witness.key[0], 0xD6);
+        let encoded = norito::encode_canonical(&witness).expect("encode receipt witness");
+        let decoded: KagemushaReserveReceiptWitnessV1 =
+            norito::decode_canonical(&encoded).expect("decode receipt witness");
+        assert_eq!(decoded, witness);
 
-        let mut wrong_key = witness.clone();
-        wrong_key.key[0] ^= 1;
-        assert!(!wrong_key.verify(root));
+        for wrong_tag in [
+            crate::execution_witness::VALIDATION_FEE_POLICY_WITNESS_KEY_V1[0],
+            crate::execution_witness::PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1[0],
+        ] {
+            let mut wrong_key = witness.clone();
+            wrong_key.key[0] = wrong_tag;
+            assert!(!wrong_key.verify(root));
+        }
 
         let mut short = witness;
         short.siblings.pop();

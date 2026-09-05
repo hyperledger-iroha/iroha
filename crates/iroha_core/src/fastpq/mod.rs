@@ -1,10 +1,9 @@
 //! FASTPQ-specific transcript helpers shared across the host.
 pub mod lane;
 use fastpq_prover::{
-    Bn254PoseidonBatchSlice, OperationKind, PendingBn254PoseidonWordBatch, PoseidonSponge,
-    PublicInputs, StateTransition, TransitionBatch,
-    gadgets::transfer::attach_transfer_smt_witnesses, try_hash_bn254_poseidon_word_batches,
-    try_submit_bn254_poseidon_word_batches,
+    Bn254PoseidonBatchSlice, OperationKind, PendingBn254PoseidonWordBatch, PublicInputs,
+    StateTransition, TransitionBatch, gadgets::transfer::attach_transfer_smt_witnesses,
+    try_hash_bn254_poseidon_word_batches, try_submit_bn254_poseidon_word_batches,
 };
 #[cfg(test)]
 use iroha_config::parameters::actual::FastpqExecutionMode;
@@ -34,13 +33,15 @@ use std::{
 use thiserror::Error;
 const AUTHORITY_DIGEST_DOMAIN: &[u8] = b"iroha:fastpq:v1:authority|";
 const TX_SET_HASH_DOMAIN: &[u8] = b"fastpq:v1:tx_set";
-const PERMISSION_TABLE_NODE_DOMAIN: &[u8] = b"fastpq:v1:poseidon_node";
+const PERMISSION_TABLE_ROOT_DOMAIN: &[u8] = b"fastpq:v1:permission-table:blake2b-256";
 /// Metadata key storing the originating entry hash for a batch.
 pub const ENTRY_HASH_METADATA_KEY: &str = "entry_hash";
 /// Metadata key storing the transcript count embedded in a batch.
 pub const TRANSCRIPT_COUNT_METADATA_KEY: &str = "transcript_count";
 /// Canonical FASTPQ parameter name used across the host and CLI helpers.
 pub const FASTPQ_CANONICAL_PARAMETER_SET: &str = fastpq_prover::fastpq_isi_v1::FASTPQ_FINAL_V1_ID;
+/// Production rejection shared by host and block admission for unanchored remote spends.
+pub(crate) const AXT_UNANCHORED_REMOTE_SPEND_REJECTION: &str = "handle-backed FASTPQ remote spend is unavailable until authoritative finalized source roots and transaction set, and fresh issuer authorization of the exact intent, proof, and effective amount, are authenticated";
 const DIGEST_FINALIZE_PARALLEL_THRESHOLD: usize = 32;
 const DIGEST_FINALIZE_GPU_THRESHOLD: usize = 64;
 const POSEIDON_DIGEST_WORDS_PER_TRANSCRIPT_HINT: usize = 24;
@@ -680,8 +681,23 @@ where
             right.epoch_bytes,
         ))
     });
-    let hashes: Vec<u64> = entries.iter().map(permission_hash_from_entry).collect();
-    field_element_bytes(poseidon_merkle_root(&hashes))
+    // Every entry has the fixed width 32 + 32 + 8. Bind the number of entries
+    // as well as their order, without a scalar-field projection or duplicate-last
+    // Merkle padding. This is contextual public input; the transfer AIR does not
+    // establish permission membership or authorization from this commitment.
+    let mut payload = Vec::new();
+    payload.extend_from_slice(PERMISSION_TABLE_ROOT_DOMAIN);
+    payload.extend_from_slice(
+        &u64::try_from(entries.len())
+            .expect("permission entry count fits u64")
+            .to_le_bytes(),
+    );
+    for entry in entries {
+        payload.extend_from_slice(&entry.role_bytes);
+        payload.extend_from_slice(&entry.permission_bytes);
+        payload.extend_from_slice(&entry.epoch_bytes);
+    }
+    Hash::new(payload).into()
 }
 #[derive(Debug, Clone, Copy)]
 #[allow(clippy::struct_field_names)]
@@ -693,53 +709,6 @@ struct PermissionTableEntry {
 fn hash_encoded<T: NoritoEncode>(value: &T) -> [u8; 32] {
     let hash = Hash::new(value.encode());
     hash.into()
-}
-fn permission_hash_from_entry(entry: &PermissionTableEntry) -> u64 {
-    let mut payload = Vec::with_capacity(32 + 32 + 8);
-    payload.extend_from_slice(&entry.role_bytes);
-    payload.extend_from_slice(&entry.permission_bytes);
-    payload.extend_from_slice(&entry.epoch_bytes);
-    let packed = fastpq_prover::pack_bytes(&payload);
-    fastpq_prover::hash_field_elements(&packed.limbs)
-}
-fn poseidon_merkle_root(leaves: &[u64]) -> u64 {
-    if leaves.is_empty() {
-        return 0;
-    }
-    let mut current = leaves.to_vec();
-    while current.len() > 1 {
-        if current.len() % 2 == 1 {
-            let last = *current.last().expect("non-empty vector");
-            current.push(last);
-        }
-        let mut next = Vec::with_capacity(current.len() / 2);
-        for pair in current.chunks(2) {
-            next.push(hash_field_with_domain(
-                PERMISSION_TABLE_NODE_DOMAIN,
-                &[pair[0], pair[1]],
-            ));
-        }
-        current = next;
-    }
-    current[0]
-}
-fn hash_field_with_domain(domain: &[u8], values: &[u64]) -> u64 {
-    let mut sponge = PoseidonSponge::new();
-    sponge.absorb(domain_seed(domain));
-    sponge.absorb_slice(values);
-    sponge.squeeze()
-}
-fn domain_seed(domain: &[u8]) -> u64 {
-    let digest = Hash::new(domain);
-    let bytes = digest.as_ref();
-    let raw = u64_from_le_bytes(bytes);
-    let reduced = u128::from(raw) % u128::from(fastpq_prover::FIELD_MODULUS);
-    u64::try_from(reduced).expect("modulus reduction fits u64")
-}
-fn field_element_bytes(value: u64) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    out[..8].copy_from_slice(&value.to_le_bytes());
-    out
 }
 fn public_inputs_from_template(
     template: FastpqPublicInputsTemplate,
@@ -1409,6 +1378,21 @@ mod tests {
         let root_second = permission_table_root(second.iter().map(|(id, role)| (id, role)));
         assert_eq!(root_first, root_second);
         assert_ne!(root_first, [0u8; 32]);
+    }
+    #[test]
+    fn permission_table_root_preserves_full_digest_width_and_cardinality() {
+        let role_id: RoleId = "width_test".parse().expect("role id");
+        let role = Role::new(role_id.clone(), (*ALICE_ID).clone())
+            .add_permission(Permission::new("permission".to_owned(), Json::new(())))
+            .build(&ALICE_ID);
+        let three = permission_table_root(std::iter::repeat_n((&role_id, &role), 3));
+        let four = permission_table_root(std::iter::repeat_n((&role_id, &role), 4));
+        assert_ne!(three[8..], [0; 24], "the root must not be a padded u64");
+        assert_ne!(
+            three, four,
+            "duplicate-last tree padding must not alias cardinality"
+        );
+        assert_eq!(permission_table_root(std::iter::empty()), [0; 32]);
     }
     #[test]
     fn permission_table_root_tracks_permission_epochs() {

@@ -286,6 +286,7 @@ private final class RecordingNativeCore: KagemushaNativeCoreCoordinatorV1 {
     requestID _: Data,
     canonicalCommand _: Data,
     canonicalReply _: Data,
+    responseAuthenticator _: Data,
     qualification _: KagemushaHardwareQualificationV1
   ) throws { throw TestFailure.unused }
 

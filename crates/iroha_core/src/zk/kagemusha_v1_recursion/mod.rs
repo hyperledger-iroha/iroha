@@ -32,6 +32,8 @@ mod mint_helper;
 mod mint_transport_decider;
 mod native_backend;
 mod relation;
+#[cfg(feature = "zk-halo2-ipa")]
+mod state_checkpoint;
 mod state_relation;
 mod terminal_authorization;
 mod transport_decider;
@@ -155,6 +157,8 @@ pub use relation::{
     KagemushaOperationRelationCircuitV1, KagemushaOperationRelationConfigV1,
     KagemushaOperationRelationWitnessV1,
 };
+#[cfg(feature = "zk-halo2-ipa")]
+pub use state_checkpoint::{KagemushaRecursiveStateCheckpointV1, KagemushaStateCheckpointErrorV1};
 pub use state_relation::{
     KagemushaReceiveFoldCreditV1, KagemushaStateRelationCircuitV1,
     KagemushaStateRelationPublicInputsV1, KagemushaStateRelationWitnessV1,

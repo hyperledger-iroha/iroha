@@ -26,6 +26,7 @@ import {
   NumericV1Error,
 } from "./numericV1.js";
 import { networkIdBytes } from "./networkId.js";
+import { RACE_INSTRUCTION_WIRE_IDS_V1 } from "./noritoRaceCodecs.js";
 
 const COMPACT_LEN_FLAG = 0x02;
 const MALFORMED_PAYLOAD = "malformed_payload";
@@ -101,6 +102,7 @@ const DEFAULT_TRANSACTION_TTL_MS = 100_000;
 const TRANSACTION_ADMISSION_ORDINARY_TAG = 0;
 const TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG = 1;
 const SUPPORTED_BROWSER_INSTRUCTION_WIRE_IDS = new Set([
+  ...RACE_INSTRUCTION_WIRE_IDS_V1,
   "iroha.instruction.v1::smart_contract_code::UploadSmartContractCodeChunk",
   "iroha.instruction.v1::smart_contract_code::FinalizeSmartContractCodeUpload",
   "iroha.instruction.v1::smart_contract_code::CancelSmartContractCodeUpload",

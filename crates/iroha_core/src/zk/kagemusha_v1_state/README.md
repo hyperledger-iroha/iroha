@@ -21,6 +21,11 @@ Core-injected profile/epoch credential history. The current state must match its
 exact hardware epoch and device-key reference. No signing keys, generated keys,
 software monetary authority, or caller-controlled credential discovery are added.
 
+The bridge aliases Core's sender creation context, including the native-authenticated
+Core authorization key reference. Canonical input digests and guarded operation records
+bind that reference exactly. Nonzero shape checks do not authenticate a key, and retained
+context checks still establish scope only; the native session owns credential/key admission.
+
 Snapshots now include a deterministic recovery commitment over successful history
 operations. It is part of the existing hardware-sealed snapshot commitment and
 covers prepared work and abort tombstones even when both committed roots remain

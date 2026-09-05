@@ -268,10 +268,11 @@ public enum KagemushaNativeSenderKindV1: Equatable, Sendable {
 
 /// Audited native Core authority required by `KagemushaAuthenticatedHardwareProviderV1`.
 ///
-/// This protocol intentionally has no stock implementation. It owns durable operation IDs,
+/// The native authority behind this protocol owns durable operation IDs,
 /// signed release-catalog membership, recursive proof generation and verification, sender
 /// typestate, and byte-identical terminal recovery. A production factory must fail closed unless
-/// the signed app contains exactly one qualified implementation.
+/// the signed app contains exactly one qualified implementation. The SDK's native adapter
+/// translates canonical selectors; it does not implement that monetary authority in Swift.
 public protocol KagemushaNativeCoreCoordinatorV1: AnyObject {
   /// Admit and persist the caller's exact durable intent ID before any device mutation.
   /// An identical retry returns the same ID; an ID cannot be rebound to another action.
@@ -283,12 +284,13 @@ public protocol KagemushaNativeCoreCoordinatorV1: AnyObject {
     hardwarePolicyDigest: Data
   ) throws
 
-  /// Admit one already P-256-authenticated canonical device reply into Core's typestate.
+  /// Admit a canonical reply with its original P-256 authenticator for independent native verification.
   func acceptAuthenticatedDeviceReply(
     operation: UInt8,
     requestID: Data,
     canonicalCommand: Data,
     canonicalReply: Data,
+    responseAuthenticator: Data,
     qualification: KagemushaHardwareQualificationV1
   ) throws
 
@@ -548,6 +550,7 @@ public final class KagemushaAuthenticatedDeviceClientV1: @unchecked Sendable {
       requestID: requestID,
       canonicalCommand: command,
       canonicalReply: reply.canonicalArchive,
+      responseAuthenticator: response.authenticator,
       qualification: qualification
     )
     let accepted = Session(qualification: qualification, responseKey: responseKey)
@@ -615,6 +618,7 @@ public final class KagemushaAuthenticatedDeviceClientV1: @unchecked Sendable {
       requestID: requestID,
       canonicalCommand: command,
       canonicalReply: response.canonicalReply,
+      responseAuthenticator: response.authenticator,
       qualification: accepted.qualification
     )
     return AuthenticatedCall(
@@ -1016,11 +1020,20 @@ public final class KagemushaAuthenticatedHardwareProviderV1: KagemushaHardwarePr
         terminalReceipt: terminalReceipt,
         qualification: qualified
       )
-      guard release.context.devicePolicyBinding.hardwarePolicyID
-        == qualified.hardwarePolicyDigest,
-        release.context.coreAuthorizationKeyReference
-          == qualified.coreAuthorizationKeyReference
+      let credential = qualified.credential
+      let generation = KagemushaUInt128V1(credential.hardwareEpochGeneration)
+      guard release.inputs == inputs, release.canonicalEnvelope == canonicalPayment,
+        release.inputsDigest == (try KagemushaCoreCoordinatorArchiveV1.senderInputsDigestShape(
+          operationID: release.operationID, context: release.context, inputs: inputs)),
+        release.envelopeDigest == (try KagemushaCoreCoordinatorArchiveV1.terminalEnvelopeDigestShape(canonicalPayment)),
+        release.context.lane.networkID == credential.networkID,
+        release.context.lane.deviceLaneID == credential.laneCommitment,
+        release.context.hardwareEpoch.generation.isLessThanOrEqual(to: generation),
+        release.context.hardwareEpoch.generation != generation
+          || release.context.hardwareEpoch.epochID == credential.hardwareEpochID
       else { throw authenticatedProviderInvalid("outbox release authorization scope mismatch") }
+      // The native journal and hardware verify the original creation policy and Core key.
+      // Ordinary rotation must not strand an authenticated historical outbox entry.
       let command = try KagemushaDeviceSenderCommandV1(
         operation: 12,
         operationID: release.operationID,

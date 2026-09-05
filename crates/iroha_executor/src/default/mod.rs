@@ -1026,6 +1026,17 @@ impl InstructionDispatch for InstructionBox {
         if let Some(isi) = any.downcast_ref::<RedeemKagemushaV1>() {
             execute!(executor, isi);
         }
+        // Native races enforce every signature, deadline and custody effect in Core.
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::race::OpenRaceV1>() { execute!(executor, isi); }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::race::JoinRaceV1>() { execute!(executor, isi); }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::race::StartRaceV1>() { execute!(executor, isi); }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::race::CommitRaceCheckpointV1>() { execute!(executor, isi); }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::race::ChallengeRaceV1>() { execute!(executor, isi); }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::race::CommitRaceInputsV1>() { execute!(executor, isi); }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::race::RevealRaceInputsV1>() { execute!(executor, isi); }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::race::AdvanceRaceDeadlineV1>() { execute!(executor, isi); }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::race::SubmitRaceProofV1>() { execute!(executor, isi); }
+        if let Some(isi) = any.downcast_ref::<iroha_data_model::isi::race::ExpireRaceV1>() { execute!(executor, isi); }
         // Core owns the signature, chain/client binding, canonical policy,
         // active-account, address-slot, escrow, and lifecycle invariants. The
         // three VPN instructions form one indivisible native surface and must

@@ -77,6 +77,8 @@ pub mod compliance;
 pub mod da;
 /// Runtime executor integration and helpers.
 pub mod executor;
+/// Native transparent execution proofs and bounded deterministic race relations.
+pub mod execution_proofs;
 /// FASTPQ transcript helpers and host plumbing.
 pub mod fastpq;
 /// Unified settlement fee evidence structures.

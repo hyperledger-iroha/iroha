@@ -893,7 +893,8 @@ fn persist_and_evict_native_body(
     let (carrier_height, payload_len) = adapter
         .kura
         .durable_block_payload_len_by_hash(carrier.hash())
-        .expect("inspect durable carrier payload");
+        .expect("inspect durable carrier payload")
+        .expect("authenticated carrier payload is present");
     let height = NonZeroUsize::new(usize::try_from(carrier_height).expect("height fits usize"))
         .expect("non-zero carrier height");
     assert_eq!(

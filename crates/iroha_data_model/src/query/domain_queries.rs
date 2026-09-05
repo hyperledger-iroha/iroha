@@ -2085,3 +2085,20 @@ impl_sorafs_orderbook_singular_query!(
     sorafs::prelude::FindSorafsModerationEvents
         => crate::sorafs::moderation_ledger::ModerationFinalizedEventPageV1
 );
+
+/// Native race query definitions.
+pub mod race {
+    use derive_more::Display;
+    queries! {
+        /// Read one race including certified frontier and terminal receipt.
+        #[derive(Display)]
+        #[display("Find native race `{race_id}`")]
+        #[repr(transparent)]
+        pub struct FindRaceById {
+            /// Immutable race identifier.
+            pub race_id: iroha_crypto::Hash,
+        }
+    }
+    /// Native race query exports.
+    pub mod prelude { pub use super::FindRaceById; }
+}
