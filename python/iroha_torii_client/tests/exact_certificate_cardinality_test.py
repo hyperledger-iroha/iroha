@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import iroha_torii_client.client as client_module
 import pytest
 from client_test_support import canonical_hash
 from iroha_torii_client.client import _SumeragiV2StatusParser
@@ -17,8 +16,8 @@ def _execution_commitment() -> dict[str, object]:
         "parent_state_root": canonical_hash(0x61),
         "post_state_root": canonical_hash(0x62),
         "ordinary_writes_root": canonical_hash(0x63),
-        "offline_cash_top_up_root": None,
-        "offline_cash_top_up_count": 0,
+        "kagemusha_top_up_root": None,
+        "kagemusha_top_up_count": 0,
         "native_amx_application_manifest_version": 1,
         "native_amx_application_manifest_root": _EMPTY_NATIVE_MANIFEST_ROOT,
         "native_amx_application_manifest_count": 0,
@@ -29,13 +28,8 @@ def _execution_commitment() -> dict[str, object]:
     }
 
 
-def _parse_execution_commitments(payload: dict[str, object]) -> tuple[object, object]:
-    return (
-        _SumeragiV2StatusParser._execution_commitment(payload, context="status"),
-        client_module._offline_top_up_finality_execution_commitment(
-            payload, "offline", require_topup=False
-        ),
-    )
+def _parse_execution_commitment(payload: dict[str, object]) -> object:
+    return _SumeragiV2StatusParser._execution_commitment(payload, context="status")
 
 
 def _committed_lane_block(**overrides: object) -> dict[str, object]:
@@ -86,17 +80,14 @@ def test_committed_lane_block_rejects_retired_direct_wsv_status() -> None:
 
 def test_execution_commitment_preserves_exact_lane_finality_manifest() -> None:
     payload = _execution_commitment()
-    assert all(
-        commitment.lane_finality_manifest is None
-        for commitment in _parse_execution_commitments(payload)
-    )
+    assert _parse_execution_commitment(payload).lane_finality_manifest is None
     payload["lane_finality_manifest"] = {
         "root": canonical_hash(0x65),
         "leaf_count": 1024,
     }
-    for commitment in _parse_execution_commitments(payload):
-        assert commitment.lane_finality_manifest.root == canonical_hash(0x65)
-        assert commitment.lane_finality_manifest.leaf_count == 1024
+    commitment = _parse_execution_commitment(payload)
+    assert commitment.lane_finality_manifest.root == canonical_hash(0x65)
+    assert commitment.lane_finality_manifest.leaf_count == 1024
 
 
 def test_execution_commitment_rejects_noncanonical_lane_finality_manifest() -> None:
@@ -117,4 +108,4 @@ def test_execution_commitment_rejects_noncanonical_lane_finality_manifest() -> N
         invalid_payloads.append(payload)
     for payload in invalid_payloads:
         with pytest.raises((RuntimeError, TypeError, ValueError)):
-            _parse_execution_commitments(payload)
+            _parse_execution_commitment(payload)

@@ -176,10 +176,10 @@ pub struct PrivateSettlementTestNetworkStateEvidenceResponseV1 {
     /// Exact public-map count vector.
     pub counts: PrivateSettlementTestNetworkStateCountsV1,
 }
-pub use iroha_torii_shared::offline_api::{
-    OFFLINE_CASH_OPERATION_STATUS_JSON_MAX_BYTES_V1, OFFLINE_CASH_OPERATION_STATUS_MAX_BYTES_V1,
-    OfflineCashFinalityTrustAnchorV1, OfflineCashOperationStatusV1, OfflineCashReadinessV1,
-    OfflineCashRedemptionRequestV1, OfflineCashTopUpRequestV1,
+pub use iroha_torii_shared::kagemusha_api::{
+    KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1, KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V1,
+    KagemushaFinalityTrustAnchorV1, KagemushaOperationStatusV1, KagemushaReadinessV1,
+    KagemushaRedemptionRequestV1, KagemushaTopUpRequestV1, UnverifiedKagemushaOperationStatusV1,
 };
 pub use iroha_torii_shared::sorafs_hedging_billing_api::BillingAcknowledgementProofV1 as SorafsBillingAcknowledgementProof;
 pub use iroha_torii_shared::sumeragi_evidence_api::{
@@ -207,9 +207,12 @@ use iroha_torii_shared::{
     FeeSponsorProgramByIdRequest, NORITO_V1_WEBSOCKET_SUBPROTOCOL,
     PipelineTransactionDetailsResponse, PipelineTransactionStatusResponse,
     TriggerCompletionListResponse,
-    offline_api::{
-        OFFLINE_CASH_OPERATION_STATUS_ROUTE_PREFIX_V1, OFFLINE_CASH_READINESS_MAX_BYTES_V1,
-        OfflineCashOperationKindV1, OfflineCashOperationStateV1,
+    kagemusha_api::{
+        KAGEMUSHA_OPERATION_STATUS_ROUTE_PREFIX_V1, KAGEMUSHA_READINESS_MAX_BYTES_V1,
+        KagemushaOperationKindV1, KagemushaOperationStateV1,
+        decode_unverified_kagemusha_operation_status_json_v1,
+        decode_unverified_kagemusha_operation_status_v1,
+        validate_kagemusha_top_up_signed_transaction_v1,
     },
     uri as torii_uri,
 };
@@ -9585,18 +9588,18 @@ impl Client {
             "{context}: invalid content-type `{content_type}` (expected application/json or application/x-norito)"
         ))
     }
-    fn ensure_offline_operation_status_response_size(response: &Response<Vec<u8>>) -> Result<()> {
+    fn ensure_kagemusha_operation_status_response_size(response: &Response<Vec<u8>>) -> Result<()> {
         let content_type = Self::response_content_type(response);
         let (representation, maximum_bytes) = if Self::is_json_content_type(content_type) {
-            ("JSON", OFFLINE_CASH_OPERATION_STATUS_JSON_MAX_BYTES_V1)
+            ("JSON", KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1)
         } else if Self::is_norito_content_type(content_type) {
-            ("Norito", OFFLINE_CASH_OPERATION_STATUS_MAX_BYTES_V1)
+            ("Norito", KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V1)
         } else {
             return Ok(());
         };
         if response.body().len() > maximum_bytes {
             return Err(eyre!(
-                "Failed to fetch offline operation: {representation} response exceeds the {maximum_bytes}-byte limit"
+                "Failed to fetch KAGEMUSHA operation: {representation} response exceeds the {maximum_bytes}-byte limit"
             ));
         }
         Ok(())
@@ -9679,48 +9682,128 @@ impl Client {
         }
         Ok(())
     }
-    fn validate_offline_cash_submission(
+    fn validate_kagemusha_submission(
         response: &Response<Vec<u8>>,
-        status: &OfflineCashOperationStatusV1,
+        status: &UnverifiedKagemushaOperationStatusV1,
         operation_id: [u8; 32],
-        kind: OfflineCashOperationKindV1,
+        kind: KagemushaOperationKindV1,
     ) -> Result<()> {
-        status
-            .validate()
-            .map_err(|error| eyre!("invalid Offline Cash V1 operation status: {error}"))?;
-        if status.operation_id != operation_id
-            || status.kind != kind
-            || status.state != OfflineCashOperationStateV1::Pending
-        {
+        if status.operation_id() != operation_id || status.kind() != kind {
             return Err(eyre!(
-                "accepted Offline Cash V1 response is not the request-bound pending operation"
+                "KAGEMUSHA V1 submission response is not bound to the requested operation"
             ));
         }
         let expected_status_uri = format!(
-            "{OFFLINE_CASH_OPERATION_STATUS_ROUTE_PREFIX_V1}{}",
+            "{KAGEMUSHA_OPERATION_STATUS_ROUTE_PREFIX_V1}{}",
             hex::encode(operation_id)
         );
-        let location = response
-            .headers()
-            .get(http::header::LOCATION)
+        let location_values = response.headers().get_all(http::header::LOCATION);
+        let mut locations = location_values.iter();
+        let location = locations
+            .next()
             .and_then(|value| value.to_str().ok())
-            .ok_or_else(|| eyre!("offline operation response is missing Location"))?;
-        if location != expected_status_uri {
+            .ok_or_else(|| eyre!("KAGEMUSHA operation response is missing Location"))?;
+        if locations.next().is_some() {
             return Err(eyre!(
-                "offline operation Location does not match the typed status URI"
+                "KAGEMUSHA operation response must include exactly one Location"
             ));
         }
-        let retry_after = response
-            .headers()
-            .get(http::header::RETRY_AFTER)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<u64>().ok())
-            .filter(|seconds| *seconds > 0)
-            .ok_or_else(|| eyre!("offline operation response has no valid Retry-After"))?;
-        let _ = retry_after;
-        Ok(())
+        if location != expected_status_uri {
+            return Err(eyre!(
+                "KAGEMUSHA operation Location does not match the typed status URI"
+            ));
+        }
+        match (response.status(), status.state()) {
+            (StatusCode::ACCEPTED, KagemushaOperationStateV1::Pending) => {
+                let retry_after_headers = response.headers().get_all(http::header::RETRY_AFTER);
+                let mut retry_after_values = retry_after_headers.iter();
+                retry_after_values
+                    .next()
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .filter(|seconds| *seconds > 0)
+                    .ok_or_else(|| {
+                        eyre!("pending KAGEMUSHA operation response has no valid Retry-After")
+                    })?;
+                if retry_after_values.next().is_some() {
+                    return Err(eyre!(
+                        "pending KAGEMUSHA operation response must include exactly one Retry-After"
+                    ));
+                }
+                Ok(())
+            }
+            (
+                StatusCode::OK,
+                KagemushaOperationStateV1::Applied | KagemushaOperationStateV1::Rejected,
+            ) => {
+                if response.headers().contains_key(http::header::RETRY_AFTER) {
+                    return Err(eyre!(
+                        "terminal KAGEMUSHA operation response must not include Retry-After"
+                    ));
+                }
+                Ok(())
+            }
+            (StatusCode::ACCEPTED, _) => Err(eyre!(
+                "accepted KAGEMUSHA operation response must be pending"
+            )),
+            (StatusCode::OK, _) => Err(eyre!(
+                "successful KAGEMUSHA operation replay response must be terminal"
+            )),
+            _ => Err(
+                ResponseReport::with_msg("Failed to submit KAGEMUSHA operation", response)
+                    .unwrap_or_else(core::convert::identity)
+                    .into(),
+            ),
+        }
     }
-    /// Discover the universally compiled offline cash-handoff capability.
+
+    fn parse_unverified_kagemusha_submission_response(
+        response: &Response<Vec<u8>>,
+        preference: WireFormatPreference,
+    ) -> Result<UnverifiedKagemushaOperationStatusV1> {
+        const CONTEXT: &str = "Failed to submit KAGEMUSHA operation";
+        if response.status() != StatusCode::OK && response.status() != StatusCode::ACCEPTED {
+            return Err(ResponseReport::with_msg(CONTEXT, response)
+                .unwrap_or_else(core::convert::identity)
+                .into());
+        }
+        let content_type = Self::response_content_type(response);
+        let media_type = content_type
+            .split(';')
+            .next()
+            .map(str::trim)
+            .unwrap_or_default();
+        let is_json = Self::is_json_content_type(content_type);
+        let is_norito = media_type.eq_ignore_ascii_case(APPLICATION_NORITO);
+        match preference {
+            WireFormatPreference::NoritoOnly if !is_norito => {
+                return Err(eyre!(
+                    "{CONTEXT}: response violates NoritoOnly: expected content-type `{APPLICATION_NORITO}`"
+                ));
+            }
+            WireFormatPreference::JsonOnly if !is_json => {
+                return Err(eyre!(
+                    "{CONTEXT}: response violates JsonOnly: expected content-type `{APPLICATION_JSON}`"
+                ));
+            }
+            WireFormatPreference::NoritoPreferred
+            | WireFormatPreference::JsonPreferred
+            | WireFormatPreference::NoritoOnly
+            | WireFormatPreference::JsonOnly => {}
+        }
+        if is_json {
+            return decode_unverified_kagemusha_operation_status_json_v1(response.body())
+                .map_err(|error| eyre!("{CONTEXT}: failed to decode JSON payload: {error}"));
+        }
+        if is_norito {
+            return decode_unverified_kagemusha_operation_status_v1(response.body())
+                .map_err(|error| eyre!("{CONTEXT}: failed to decode Norito payload: {error}"));
+        }
+        Err(eyre!(
+            "{CONTEXT}: invalid content-type `{content_type}` (expected application/json or application/x-norito)"
+        ))
+    }
+    /// Discover the universally compiled KAGEMUSHA-handoff capability.
     ///
     /// The capability is independent of backend configuration, asset catalogs,
     /// and dataspace routing, so this request never includes an asset selector.
@@ -9728,149 +9811,166 @@ impl Client {
     /// # Errors
     /// Returns an error for transport failures, non-success responses, malformed
     /// negotiated representations, or a response that does not describe the
-    /// exact four-field first-release `cash_handoff_v1` capability.
-    pub fn get_offline_capability(&self) -> Result<OfflineCashReadinessV1> {
-        let url = join_torii_url(&self.torii_url, torii_uri::OFFLINE_READINESS);
+    /// exact four-field first-release `kagemusha_handoff_v1` capability.
+    pub fn get_kagemusha_readiness(&self) -> Result<KagemushaReadinessV1> {
+        let url = join_torii_url(&self.torii_url, torii_uri::KAGEMUSHA_READINESS);
         let response = self.send_builder(
             self.default_request(HttpMethod::GET, url)
                 .header("Accept", self.wire_format_preference.accept_header())
-                .max_response_bytes(OFFLINE_CASH_READINESS_MAX_BYTES_V1),
+                .max_response_bytes(KAGEMUSHA_READINESS_MAX_BYTES_V1),
         )?;
-        let status: OfflineCashReadinessV1 = Self::parse_negotiated_typed_response(
+        let status: KagemushaReadinessV1 = Self::parse_negotiated_typed_response(
             &response,
             StatusCode::OK,
-            "Failed to discover offline capability",
+            "Failed to discover KAGEMUSHA readiness",
             self.wire_format_preference,
         )?;
         status
             .validate()
-            .map_err(|error| eyre!("invalid Offline Cash V1 readiness response: {error}"))?;
+            .map_err(|error| eyre!("invalid KAGEMUSHA V1 readiness response: {error}"))?;
         Ok(status)
     }
-    /// Submit a signed online-to-offline top-up operation.
+    /// Submit a signed KAGEMUSHA top-up operation.
     ///
     /// The signed operation ID is also sent as the HTTP idempotency key. Identical retries return
     /// the original operation resource; a changed request under that key is rejected by Torii.
+    /// The returned wrapper exposes only identity and lifecycle state until an Applied result is
+    /// authenticated against a caller-pinned finality anchor.
     ///
     /// # Errors
     /// Returns an error when local request binding validation, encoding, transport, response
     /// decoding, or response-to-request binding validation fails.
-    pub fn submit_offline_top_up(
+    pub fn submit_kagemusha_top_up(
         &self,
-        request: &OfflineCashTopUpRequestV1,
-    ) -> Result<OfflineCashOperationStatusV1> {
-        request
-            .validate_shape()
-            .wrap_err("invalid Offline Cash V1 top-up request")?;
-        self.submit_offline_operation(
-            torii_uri::OFFLINE_TOP_UP,
-            request,
+        transaction: &SignedTransaction,
+    ) -> Result<UnverifiedKagemushaOperationStatusV1> {
+        let request =
+            validate_kagemusha_top_up_signed_transaction_v1(&self.network_id, transaction)
+                .wrap_err("invalid payer-signed KAGEMUSHA V1 top-up transaction")?;
+        self.submit_kagemusha_operation_body(
+            torii_uri::KAGEMUSHA_TOP_UP,
+            transaction.encode_versioned(),
             request.operation_id,
-            OfflineCashOperationKindV1::TopUp,
+            KagemushaOperationKindV1::TopUp,
         )
     }
-    /// Submit a signed offline redemption operation.
+    /// Submit a signed KAGEMUSHA redemption operation.
     ///
     /// The signed operation ID is also sent as the HTTP idempotency key. Identical retries return
     /// the original operation resource; a changed request under that key is rejected by Torii.
+    /// The returned wrapper exposes only identity and lifecycle state until an Applied result is
+    /// authenticated against a caller-pinned finality anchor.
     ///
     /// # Errors
     /// Returns an error when local request binding validation, encoding, transport, response
     /// decoding, or response-to-request binding validation fails.
-    pub fn submit_offline_redeem(
+    pub fn submit_kagemusha_redeem(
         &self,
-        request: &OfflineCashRedemptionRequestV1,
-    ) -> Result<OfflineCashOperationStatusV1> {
+        request: &KagemushaRedemptionRequestV1,
+    ) -> Result<UnverifiedKagemushaOperationStatusV1> {
         request
             .validate_shape()
-            .wrap_err("invalid Offline Cash V1 redemption request")?;
-        self.submit_offline_operation(
-            torii_uri::OFFLINE_REDEEM,
+            .wrap_err("invalid KAGEMUSHA V1 redemption request")?;
+        self.submit_kagemusha_operation(
+            torii_uri::KAGEMUSHA_REDEEM,
             request,
             request.operation_id,
-            OfflineCashOperationKindV1::Redemption,
+            KagemushaOperationKindV1::Redemption,
         )
     }
-    fn submit_offline_operation<T>(
+    fn submit_kagemusha_operation<T>(
         &self,
         path: &str,
         request: &T,
         operation_id: [u8; 32],
-        kind: OfflineCashOperationKindV1,
-    ) -> Result<OfflineCashOperationStatusV1>
+        kind: KagemushaOperationKindV1,
+    ) -> Result<UnverifiedKagemushaOperationStatusV1>
     where
         T: norito::NoritoSerialize,
     {
-        let body = to_bytes(request).wrap_err("failed to encode offline request as Norito")?;
+        let body = to_bytes(request).wrap_err("failed to encode KAGEMUSHA request as Norito")?;
+        self.submit_kagemusha_operation_body(path, body, operation_id, kind)
+    }
+    fn submit_kagemusha_operation_body(
+        &self,
+        path: &str,
+        body: Vec<u8>,
+        operation_id: [u8; 32],
+        kind: KagemushaOperationKindV1,
+    ) -> Result<UnverifiedKagemushaOperationStatusV1> {
         let url = join_torii_url(&self.torii_url, path);
+        let max_response_bytes = match self.wire_format_preference {
+            WireFormatPreference::NoritoOnly => KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V1,
+            WireFormatPreference::NoritoPreferred
+            | WireFormatPreference::JsonPreferred
+            | WireFormatPreference::JsonOnly => KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
+        };
         let response = self.send_builder(
             self.default_request(HttpMethod::POST, url)
                 .header("Content-Type", APPLICATION_NORITO)
                 .header("Accept", self.wire_format_preference.accept_header())
                 .header("Idempotency-Key", &hex::encode(operation_id))
-                .max_response_bytes(OFFLINE_CASH_OPERATION_STATUS_MAX_BYTES_V1)
+                .max_response_bytes(max_response_bytes)
                 .body(body),
         )?;
-        Self::ensure_offline_operation_status_response_size(&response)?;
-        let status: OfflineCashOperationStatusV1 = Self::parse_negotiated_typed_response(
+        Self::ensure_kagemusha_operation_status_response_size(&response)?;
+        let status = Self::parse_unverified_kagemusha_submission_response(
             &response,
-            StatusCode::ACCEPTED,
-            "Failed to submit offline operation",
             self.wire_format_preference,
         )?;
-        Self::validate_offline_cash_submission(&response, &status, operation_id, kind)?;
+        Self::validate_kagemusha_submission(&response, &status, operation_id, kind)?;
         Ok(status)
     }
-    /// Poll one Offline Cash V1 operation.
+    /// Poll one KAGEMUSHA V1 operation.
     ///
     /// # Errors
     /// Applied results require a caller-pinned finality anchor. Pending and
     /// rejected responses are validated without one.
-    pub fn poll_offline_operation_status(
+    pub fn poll_kagemusha_operation_status(
         &self,
         operation_id: [u8; 32],
-        trust_anchor: Option<&OfflineCashFinalityTrustAnchorV1>,
-    ) -> Result<OfflineCashOperationStatusV1> {
+        trust_anchor: Option<&KagemushaFinalityTrustAnchorV1>,
+    ) -> Result<KagemushaOperationStatusV1> {
         if operation_id == [0; 32] {
-            return Err(eyre!("Offline Cash V1 operation id must be non-zero"));
+            return Err(eyre!("KAGEMUSHA V1 operation id must be non-zero"));
         }
         let operation_id_text = hex::encode(operation_id);
-        let path = torii_uri::OFFLINE_OPERATION.replace("{operation_id}", &operation_id_text);
+        let path = torii_uri::KAGEMUSHA_OPERATION.replace("{operation_id}", &operation_id_text);
         let url = join_torii_url(&self.torii_url, &path);
         let max_response_bytes = match self.wire_format_preference {
-            WireFormatPreference::NoritoOnly => OFFLINE_CASH_OPERATION_STATUS_MAX_BYTES_V1,
+            WireFormatPreference::NoritoOnly => KAGEMUSHA_OPERATION_STATUS_MAX_BYTES_V1,
             WireFormatPreference::NoritoPreferred
             | WireFormatPreference::JsonPreferred
-            | WireFormatPreference::JsonOnly => OFFLINE_CASH_OPERATION_STATUS_JSON_MAX_BYTES_V1,
+            | WireFormatPreference::JsonOnly => KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
         };
         let response = self.send_builder(
             self.default_request(HttpMethod::GET, url)
                 .header("Accept", self.wire_format_preference.accept_header())
                 .max_response_bytes(max_response_bytes),
         )?;
-        Self::ensure_offline_operation_status_response_size(&response)?;
-        let status: OfflineCashOperationStatusV1 = Self::parse_negotiated_typed_response(
+        Self::ensure_kagemusha_operation_status_response_size(&response)?;
+        let status: KagemushaOperationStatusV1 = Self::parse_negotiated_typed_response(
             &response,
             StatusCode::OK,
-            "Failed to fetch offline operation",
+            "Failed to fetch KAGEMUSHA operation",
             self.wire_format_preference,
         )?;
         if status.operation_id != operation_id {
             return Err(eyre!(
-                "Offline Cash V1 operation status is bound to a different operation id"
+                "KAGEMUSHA V1 operation status is bound to a different operation id"
             ));
         }
-        if status.state == OfflineCashOperationStateV1::Applied {
+        if status.state == KagemushaOperationStateV1::Applied {
             let trust_anchor = trust_anchor.ok_or_else(|| {
-                eyre!("applied Offline Cash V1 status requires a caller-pinned finality anchor")
+                eyre!("applied KAGEMUSHA V1 status requires a caller-pinned finality anchor")
             })?;
             status
                 .validate_against(trust_anchor)
-                .map_err(|error| eyre!("untrusted Offline Cash V1 applied status: {error}"))?;
+                .map_err(|error| eyre!("untrusted KAGEMUSHA V1 applied status: {error}"))?;
         } else {
             status
                 .validate()
-                .map_err(|error| eyre!("invalid Offline Cash V1 operation status: {error}"))?;
+                .map_err(|error| eyre!("invalid KAGEMUSHA V1 operation status: {error}"))?;
         }
         Ok(status)
     }
@@ -10268,68 +10368,282 @@ fn mk_response(status: StatusCode, body: Vec<u8>, content_type: Option<&str>) ->
     builder.body(body).unwrap()
 }
 #[cfg(test)]
-mod offline_cash_v1_client_tests {
+mod kagemusha_v1_client_tests {
     use super::*;
+    use iroha_torii_shared::kagemusha_api::{
+        KagemushaOperationRejectionCodeV1, KagemushaOperationRejectionV1,
+    };
 
     fn pending_status(
         operation_id: [u8; 32],
-        kind: OfflineCashOperationKindV1,
-    ) -> OfflineCashOperationStatusV1 {
-        OfflineCashOperationStatusV1 {
-            version: iroha_torii_shared::offline_api::OFFLINE_CASH_CHAIN_VERSION_V1,
+        kind: KagemushaOperationKindV1,
+    ) -> KagemushaOperationStatusV1 {
+        KagemushaOperationStatusV1 {
+            version: iroha_torii_shared::kagemusha_api::KAGEMUSHA_CHAIN_VERSION_V1,
             operation_id,
             kind,
-            state: OfflineCashOperationStateV1::Pending,
+            state: KagemushaOperationStateV1::Pending,
             result: None,
             rejection: None,
         }
     }
 
+    fn rejected_status(
+        operation_id: [u8; 32],
+        kind: KagemushaOperationKindV1,
+    ) -> KagemushaOperationStatusV1 {
+        KagemushaOperationStatusV1 {
+            version: iroha_torii_shared::kagemusha_api::KAGEMUSHA_CHAIN_VERSION_V1,
+            operation_id,
+            kind,
+            state: KagemushaOperationStateV1::Rejected,
+            result: None,
+            rejection: Some(KagemushaOperationRejectionV1 {
+                code: KagemushaOperationRejectionCodeV1::InvalidRequest,
+                detail_digest: [0x31; 32],
+            }),
+        }
+    }
+
+    fn unverified_status(
+        status: &KagemushaOperationStatusV1,
+    ) -> UnverifiedKagemushaOperationStatusV1 {
+        let encoded = norito::encode_canonical(status).expect("encode operation status");
+        decode_unverified_kagemusha_operation_status_v1(&encoded)
+            .expect("decode unverified operation status")
+    }
+
     #[test]
     fn accepted_status_must_match_operation_kind_and_location() {
         let operation_id = [0x41; 32];
-        let status = pending_status(operation_id, OfflineCashOperationKindV1::TopUp);
+        let status = pending_status(operation_id, KagemushaOperationKindV1::TopUp);
+        let status = unverified_status(&status);
         let response = Response::builder()
             .status(StatusCode::ACCEPTED)
             .header(
                 http::header::LOCATION,
                 format!(
-                    "{OFFLINE_CASH_OPERATION_STATUS_ROUTE_PREFIX_V1}{}",
+                    "{KAGEMUSHA_OPERATION_STATUS_ROUTE_PREFIX_V1}{}",
                     hex::encode(operation_id)
                 ),
             )
             .header(http::header::RETRY_AFTER, "1")
             .body(Vec::new())
             .expect("response");
-        Client::validate_offline_cash_submission(
+        Client::validate_kagemusha_submission(
             &response,
             &status,
             operation_id,
-            OfflineCashOperationKindV1::TopUp,
+            KagemushaOperationKindV1::TopUp,
         )
         .expect("request-bound pending status");
         assert!(
-            Client::validate_offline_cash_submission(
+            Client::validate_kagemusha_submission(
                 &response,
                 &status,
                 operation_id,
-                OfflineCashOperationKindV1::Redemption,
+                KagemushaOperationKindV1::Redemption,
+            )
+            .is_err()
+        );
+
+        let wrong_location = Response::builder()
+            .status(StatusCode::ACCEPTED)
+            .header(http::header::LOCATION, "/v1/kagemusha/operations/invalid")
+            .header(http::header::RETRY_AFTER, "1")
+            .body(Vec::new())
+            .expect("response");
+        assert!(
+            Client::validate_kagemusha_submission(
+                &wrong_location,
+                &status,
+                operation_id,
+                KagemushaOperationKindV1::TopUp,
+            )
+            .is_err()
+        );
+
+        let missing_retry = Response::builder()
+            .status(StatusCode::ACCEPTED)
+            .header(
+                http::header::LOCATION,
+                format!(
+                    "{KAGEMUSHA_OPERATION_STATUS_ROUTE_PREFIX_V1}{}",
+                    hex::encode(operation_id)
+                ),
+            )
+            .body(Vec::new())
+            .expect("response");
+        assert!(
+            Client::validate_kagemusha_submission(
+                &missing_retry,
+                &status,
+                operation_id,
+                KagemushaOperationKindV1::TopUp,
             )
             .is_err()
         );
     }
 
     #[test]
-    fn readiness_uses_only_the_offline_cash_v1_contract() {
-        let readiness = OfflineCashReadinessV1 {
-            cash_handoff_capability: iroha_data_model::offline::OFFLINE_CASH_HANDOFF_CAPABILITY_V1
-                .to_owned(),
-            wire_version: iroha_data_model::offline::OFFLINE_CASH_WIRE_VERSION_V1,
+    fn terminal_replay_status_uses_ok_location_without_retry_after() {
+        let operation_id = [0x42; 32];
+        let status = rejected_status(operation_id, KagemushaOperationKindV1::TopUp);
+        let status = unverified_status(&status);
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header(
+                http::header::LOCATION,
+                format!(
+                    "{KAGEMUSHA_OPERATION_STATUS_ROUTE_PREFIX_V1}{}",
+                    hex::encode(operation_id)
+                ),
+            )
+            .body(Vec::new())
+            .expect("response");
+        Client::validate_kagemusha_submission(
+            &response,
+            &status,
+            operation_id,
+            KagemushaOperationKindV1::TopUp,
+        )
+        .expect("request-bound terminal status");
+
+        let response_with_retry = Response::builder()
+            .status(StatusCode::OK)
+            .header(
+                http::header::LOCATION,
+                format!(
+                    "{KAGEMUSHA_OPERATION_STATUS_ROUTE_PREFIX_V1}{}",
+                    hex::encode(operation_id)
+                ),
+            )
+            .header(http::header::RETRY_AFTER, "1")
+            .body(Vec::new())
+            .expect("response");
+        assert!(
+            Client::validate_kagemusha_submission(
+                &response_with_retry,
+                &status,
+                operation_id,
+                KagemushaOperationKindV1::TopUp,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn submission_http_status_must_match_operation_state() {
+        let operation_id = [0x43; 32];
+        let location = format!(
+            "{KAGEMUSHA_OPERATION_STATUS_ROUTE_PREFIX_V1}{}",
+            hex::encode(operation_id)
+        );
+        let pending = pending_status(operation_id, KagemushaOperationKindV1::TopUp);
+        let pending = unverified_status(&pending);
+        let ok_pending = Response::builder()
+            .status(StatusCode::OK)
+            .header(http::header::LOCATION, location.as_str())
+            .body(Vec::new())
+            .expect("response");
+        assert!(
+            Client::validate_kagemusha_submission(
+                &ok_pending,
+                &pending,
+                operation_id,
+                KagemushaOperationKindV1::TopUp,
+            )
+            .is_err()
+        );
+
+        let rejected = rejected_status(operation_id, KagemushaOperationKindV1::TopUp);
+        let rejected = unverified_status(&rejected);
+        let accepted_rejected = Response::builder()
+            .status(StatusCode::ACCEPTED)
+            .header(http::header::LOCATION, location.as_str())
+            .header(http::header::RETRY_AFTER, "1")
+            .body(Vec::new())
+            .expect("response");
+        assert!(
+            Client::validate_kagemusha_submission(
+                &accepted_rejected,
+                &rejected,
+                operation_id,
+                KagemushaOperationKindV1::TopUp,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn submission_parser_accepts_bounded_norito_and_json_for_ok_or_accepted() {
+        let operation_id = [0x44; 32];
+        let pending = pending_status(operation_id, KagemushaOperationKindV1::TopUp);
+        let pending_response = Response::builder()
+            .status(StatusCode::ACCEPTED)
+            .header(http::header::CONTENT_TYPE, APPLICATION_NORITO)
+            .body(norito::encode_canonical(&pending).expect("encode pending status"))
+            .expect("response");
+        let decoded = Client::parse_unverified_kagemusha_submission_response(
+            &pending_response,
+            WireFormatPreference::NoritoOnly,
+        )
+        .expect("decode accepted Norito status");
+        assert_eq!(decoded.operation_id(), operation_id);
+        assert_eq!(decoded.state(), KagemushaOperationStateV1::Pending);
+
+        let rejected = rejected_status(operation_id, KagemushaOperationKindV1::TopUp);
+        let rejected_response = Response::builder()
+            .status(StatusCode::OK)
+            .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+            .body(norito::json::to_vec(&rejected).expect("encode rejected status"))
+            .expect("response");
+        let decoded = Client::parse_unverified_kagemusha_submission_response(
+            &rejected_response,
+            WireFormatPreference::JsonOnly,
+        )
+        .expect("decode replayed JSON status");
+        assert_eq!(decoded.operation_id(), operation_id);
+        assert_eq!(decoded.state(), KagemushaOperationStateV1::Rejected);
+    }
+
+    #[test]
+    fn readiness_uses_only_the_kagemusha_v1_contract() {
+        let readiness = KagemushaReadinessV1 {
+            kagemusha_handoff_capability:
+                iroha_data_model::kagemusha::KAGEMUSHA_HANDOFF_CAPABILITY_V1.to_owned(),
+            wire_version: iroha_data_model::kagemusha::KAGEMUSHA_WIRE_VERSION_V1,
             device_lifecycle_version:
-                iroha_data_model::offline::OFFLINE_CASH_DEVICE_LIFECYCLE_VERSION_V1,
+                iroha_data_model::kagemusha::KAGEMUSHA_DEVICE_LIFECYCLE_VERSION_V1,
             ready: true,
         };
         readiness.validate().expect("exact V1 readiness");
+    }
+
+    #[test]
+    fn top_up_submission_rejects_anything_but_one_payer_signed_native_instruction() {
+        let client = super::evidence_http_tests::client_with_base_url(
+            super::evidence_http_tests::base_url(),
+        );
+        let transaction = TransactionBuilder::new(
+            client.network_id,
+            client.account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "not a KAGEMUSHA top-up".to_owned())])
+        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+        .try_sign(client.key_pair.private_key())
+        .expect("sign wrong-instruction fixture");
+
+        let error = client
+            .submit_kagemusha_top_up(&transaction)
+            .err()
+            .expect("wrong native instruction must fail before transport");
+        assert!(
+            error
+                .to_string()
+                .contains("invalid payer-signed KAGEMUSHA V1 top-up transaction")
+        );
     }
 }
 #[cfg(test)]
@@ -13227,14 +13541,13 @@ mod evidence_http_tests {
             height: context.height,
             view: 3,
         };
-        let execution_commitment =
-            ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
-                Hash::new(b"client evidence parent state"),
-                Hash::new(b"client evidence post state"),
-                Hash::new(b"client evidence ordinary writes"),
-                1,
-                Hash::new(b"client evidence block"),
-            );
+        let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"client evidence parent state"),
+            Hash::new(b"client evidence post state"),
+            Hash::new(b"client evidence ordinary writes"),
+            1,
+            Hash::new(b"client evidence block"),
+        );
         let vote = |seed: u8| Vote {
             round,
             proposal_round: round,
@@ -35302,14 +35615,13 @@ mod tests {
                 )),
                 payload_hash: Hash::new(b"client-qc-payload"),
             },
-            execution_commitment:
-                ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
-                    Hash::new(b"client-qc-parent-state"),
-                    Hash::new(b"client-qc-post-state"),
-                    Hash::new(b"client-qc-writes"),
-                    1,
-                    Hash::new(b"client-qc-executed-wire"),
-                ),
+            execution_commitment: ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                Hash::new(b"client-qc-parent-state"),
+                Hash::new(b"client-qc-post-state"),
+                Hash::new(b"client-qc-writes"),
+                1,
+                Hash::new(b"client-qc-executed-wire"),
+            ),
         };
         let response = SumeragiV2QcResponse {
             highest_prepare_qc: Some(certificate),

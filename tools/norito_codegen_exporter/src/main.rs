@@ -987,8 +987,8 @@ mod tests {
             );
         }
         for specialized_type in [
-            std::any::type_name::<iroha_data_model::isi::offline_cash_v1::TopUpOfflineCashV1>(),
-            std::any::type_name::<iroha_data_model::isi::offline_cash_v1::RedeemOfflineCashV1>(),
+            std::any::type_name::<iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1>(),
+            std::any::type_name::<iroha_data_model::isi::kagemusha_v1::RedeemKagemushaV1>(),
         ] {
             assert!(
                 registry.wire_id(specialized_type).is_some(),

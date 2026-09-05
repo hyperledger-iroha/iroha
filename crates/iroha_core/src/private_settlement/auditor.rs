@@ -25,90 +25,7 @@ use iroha_data_model::{
     },
 };
 use thiserror::Error;
-use zeroize::{Zeroize as _, Zeroizing};
-
-struct ZeroizingPrivateSettlementAuditPlaintextV1(PrivateSettlementAuditPlaintextV1);
-
-impl core::ops::Deref for ZeroizingPrivateSettlementAuditPlaintextV1 {
-    type Target = PrivateSettlementAuditPlaintextV1;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl Drop for ZeroizingPrivateSettlementAuditPlaintextV1 {
-    fn drop(&mut self) {
-        zeroize_private_settlement_audit_plaintext_v1(&mut self.0);
-    }
-}
-
-fn zeroize_private_settlement_audit_plaintext_v1(
-    plaintext: &mut PrivateSettlementAuditPlaintextV1,
-) {
-    plaintext.payer.zeroize_for_confidential_discard();
-    plaintext.recipient.zeroize_for_confidential_discard();
-    plaintext.sponsor.zeroize_for_confidential_discard();
-    plaintext.asset_definition_id.aid_bytes.zeroize();
-    plaintext.asset_binding_salt.zeroize();
-    plaintext.amount.zeroize();
-    plaintext.sponsor_reimbursement_amount.zeroize();
-    plaintext.reimbursement_terms_salt.zeroize();
-    plaintext.memo.zeroize();
-    for policy_reference in &mut plaintext.policy_references {
-        *policy_reference = iroha_crypto::Hash::prehashed([0; iroha_crypto::Hash::LENGTH]);
-    }
-    plaintext.policy_references.clear();
-    plaintext
-        .payer_authorization
-        .body
-        .payer
-        .zeroize_for_confidential_discard();
-    for input in &mut plaintext.payer_authorization.body.inputs {
-        input.note_spending_authority.zeroize();
-    }
-    for signature in &mut plaintext.payer_authorization.signatures {
-        signature.signer.zeroize();
-        signature.signature.zeroize();
-    }
-    for input in &mut plaintext.inputs {
-        zeroize_note_opening_v1(input);
-    }
-    for output in &mut plaintext.outputs {
-        output.recipient_view_key.zeroize();
-        output
-            .view_key_authorization
-            .body
-            .recipient_view_key
-            .zeroize();
-        output
-            .view_key_authorization
-            .body
-            .note_spending_authority
-            .zeroize();
-        output
-            .view_key_authorization
-            .body
-            .authorized_account
-            .zeroize_for_confidential_discard();
-        for signature in &mut output.view_key_authorization.signatures {
-            signature.signer.zeroize();
-            signature.signature.zeroize();
-        }
-        output.encryption_opening.ephemeral_secret.zeroize();
-        zeroize_note_opening_v1(&mut output.note);
-    }
-}
-
-fn zeroize_note_opening_v1(
-    opening: &mut iroha_data_model::nexus::PrivateSettlementAuditNoteOpeningV1,
-) {
-    opening.value.zeroize();
-    opening.spending_authority.zeroize();
-    opening.rho.zeroize();
-    opening.blinding.zeroize();
-    opening.memo_digest.zeroize();
-}
+use zeroize::Zeroizing;
 
 /// Private context presented to one configured local policy evaluator.
 #[derive(Clone, Copy)]
@@ -492,12 +409,10 @@ pub fn approve_private_settlement_leg_with_provider_v1<
     let canonical_plaintext = credentials
         .open_capsule(&view.audit_capsule, &view.policy, auditor_id)
         .map_err(|_| PrivateSettlementAuditorApprovalErrorV1::CapsuleAuthenticationFailed)?;
-    let plaintext = ZeroizingPrivateSettlementAuditPlaintextV1(
-        norito::decode_canonical::<PrivateSettlementAuditPlaintextV1>(
-            canonical_plaintext.as_slice(),
-        )
-        .map_err(|_| PrivateSettlementAuditorApprovalErrorV1::InvalidPlaintext)?,
-    );
+    let plaintext = norito::decode_canonical::<PrivateSettlementAuditPlaintextV1>(
+        canonical_plaintext.as_slice(),
+    )
+    .map_err(|_| PrivateSettlementAuditorApprovalErrorV1::InvalidPlaintext)?;
     pool_governance
         .validate_asset_opening(
             plaintext.route,
@@ -1006,86 +921,6 @@ mod tests {
             )
             .is_err()
         );
-    }
-
-    #[test]
-    fn decoded_plaintext_scrubs_representable_secret_fields() {
-        let mut plaintext = sidecar_fixture().plaintext;
-        let original_payer = plaintext.payer.clone();
-        let original_recipient = plaintext.recipient.clone();
-        let original_sponsor = plaintext.sponsor.clone();
-        zeroize_private_settlement_audit_plaintext_v1(&mut plaintext);
-
-        assert_ne!(plaintext.payer, original_payer);
-        assert_ne!(plaintext.recipient, original_recipient);
-        assert_ne!(plaintext.sponsor, original_sponsor);
-        assert_eq!(plaintext.asset_definition_id.aid_bytes, [0; 16]);
-        assert_eq!(plaintext.asset_binding_salt, [0; 32]);
-        assert_eq!(plaintext.amount, 0);
-        assert_eq!(plaintext.sponsor_reimbursement_amount, 0);
-        assert_eq!(plaintext.reimbursement_terms_salt, [0; 32]);
-        assert!(plaintext.memo.is_empty());
-        assert!(plaintext.policy_references.is_empty());
-        assert_ne!(plaintext.payer_authorization.body.payer, original_payer);
-        assert!(
-            plaintext
-                .payer_authorization
-                .signatures
-                .iter()
-                .all(|entry| {
-                    entry.signature.payload().iter().all(|byte| *byte == 0)
-                        && entry
-                            .signer
-                            .try_to_bytes()
-                            .map_or(true, |(_, payload)| payload.iter().all(|byte| *byte == 0))
-                })
-        );
-        assert!(
-            plaintext
-                .payer_authorization
-                .body
-                .inputs
-                .iter()
-                .all(|input| input.note_spending_authority == [0; 32])
-        );
-        assert!(plaintext.inputs.iter().all(|input| {
-            input.value == 0
-                && input.spending_authority == [0; 32]
-                && input.rho == [0; 32]
-                && input.blinding == [0; 32]
-                && input.memo_digest == [0; 32]
-        }));
-        assert!(plaintext.outputs.iter().all(|output| {
-            output.recipient_view_key == [0; 32]
-                && output.view_key_authorization.body.recipient_view_key == [0; 32]
-                && output.view_key_authorization.body.note_spending_authority == [0; 32]
-                && output
-                    .view_key_authorization
-                    .body
-                    .authorized_account
-                    .try_signatory()
-                    .is_some_and(|key| {
-                        key.try_to_bytes()
-                            .map_or(true, |(_, payload)| payload.iter().all(|byte| *byte == 0))
-                    })
-                && output
-                    .view_key_authorization
-                    .signatures
-                    .iter()
-                    .all(|entry| {
-                        entry.signature.payload().iter().all(|byte| *byte == 0)
-                            && entry
-                                .signer
-                                .try_to_bytes()
-                                .map_or(true, |(_, payload)| payload.iter().all(|byte| *byte == 0))
-                    })
-                && output.encryption_opening.ephemeral_secret == [0; 32]
-                && output.note.value == 0
-                && output.note.spending_authority == [0; 32]
-                && output.note.rho == [0; 32]
-                && output.note.blinding == [0; 32]
-                && output.note.memo_digest == [0; 32]
-        }));
     }
 
     #[test]

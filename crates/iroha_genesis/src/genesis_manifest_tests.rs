@@ -13,11 +13,9 @@ fn manifest_v2_context_value() -> norito::json::Value {
     norito::json::value::to_value(&SumeragiV2GenesisContextParameters::recommended())
         .expect("serialize v2 genesis context")
 }
-fn manifest_offline_cash_mint_finality_value() -> norito::json::Value {
-    norito::json::value::to_value(
-        &deterministic_test_offline_cash_mint_finality_genesis_parameters(),
-    )
-    .expect("serialize Offline Cash mint-finality genesis parameters")
+fn manifest_kagemusha_mint_finality_value() -> norito::json::Value {
+    norito::json::value::to_value(&deterministic_test_kagemusha_mint_finality_genesis_parameters())
+        .expect("serialize KAGEMUSHA mint-finality genesis parameters")
 }
 fn deterministic_test_topology_entries() -> Vec<GenesisTopologyEntry> {
     let mut entries = (0_u8..4)
@@ -57,9 +55,9 @@ fn genesis_fixture_key_generation_preserves_algorithms() {
     }
 }
 #[test]
-fn offline_cash_authority_must_match_the_signing_topology() {
+fn kagemusha_authority_must_match_the_signing_topology() {
     let manifest = with_deterministic_test_topology(RawGenesisTransaction {
-        chain: ChainId::from("iroha:test:offline-cash-topology-binding"),
+        chain: ChainId::from("iroha:test:kagemusha-topology-binding"),
         chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
         executor: None,
         ivm_dir: IvmPath::default(),
@@ -68,12 +66,11 @@ fn offline_cash_authority_must_match_the_signing_topology() {
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
         sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
-        offline_cash_mint_finality:
-            deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+        kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     });
     manifest
-        .validate_offline_cash_mint_finality_topology()
+        .validate_kagemusha_mint_finality_topology()
         .expect("the exact canonical fixture topology must match its Pasta authority");
 
     let mut mismatched = manifest;
@@ -106,8 +103,7 @@ fn with_consensus_meta_adds_fields_and_stable_fingerprint() {
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
         sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
-        offline_cash_mint_finality:
-            deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+        kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     };
     let tx2 = tx.clone().with_consensus_meta();
@@ -150,8 +146,8 @@ fn with_consensus_meta_adds_fields_and_stable_fingerprint() {
                 "handshake payload missing fingerprint"
             );
             assert!(
-                parsed.get("offline_cash_mint_finality").is_some(),
-                "handshake payload missing Offline Cash mint-finality genesis authority"
+                parsed.get("kagemusha_mint_finality").is_some(),
+                "handshake payload missing KAGEMUSHA mint-finality genesis authority"
             );
             saw_handshake = true;
         }
@@ -177,8 +173,7 @@ fn with_consensus_meta_handles_npos_mode() {
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
         sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
-        offline_cash_mint_finality:
-            deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+        kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     })
     .with_consensus_meta();
@@ -241,8 +236,7 @@ fn with_consensus_meta_respects_block_max_transactions_override() {
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
         sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
-        offline_cash_mint_finality:
-            deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+        kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     })
     .with_consensus_meta();
@@ -282,8 +276,7 @@ fn build_and_sign_uses_stable_internal_creation_times() {
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
         sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
-        offline_cash_mint_finality:
-            deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+        kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     });
     let keypair = checked_genesis_fixture_keypair();
@@ -328,8 +321,7 @@ fn explicit_creation_time_makes_signed_genesis_reproducible() {
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
         sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
-        offline_cash_mint_finality:
-            deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+        kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     });
     let keypair = checked_genesis_fixture_keypair();
@@ -401,8 +393,7 @@ fn build_and_sign_checked_genesis_transaction_signatures_verify() {
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
         sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
-        offline_cash_mint_finality:
-            deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+        kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     });
     let keypair = checked_genesis_fixture_keypair();
@@ -454,8 +445,7 @@ fn build_and_sign_sets_confidential_digest() {
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
         sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
-        offline_cash_mint_finality:
-            deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+        kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     });
     let keypair = checked_genesis_fixture_keypair();
@@ -485,8 +475,7 @@ fn build_and_sign_sets_explicit_confidential_policy_hash() {
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
         sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
-        offline_cash_mint_finality:
-            deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+        kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     });
     let keypair = checked_genesis_fixture_keypair();
@@ -519,8 +508,7 @@ fn genesis_canonical_wire_roundtrip_preserves_digest() {
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
         sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
-        offline_cash_mint_finality:
-            deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+        kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     });
     let keypair = checked_genesis_fixture_keypair();
@@ -570,8 +558,7 @@ fn programmatic_raw_genesis_rejects_explicit_set_parameter_instructions() {
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
         sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
-        offline_cash_mint_finality:
-            deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+        kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     };
     let error = manifest
@@ -606,8 +593,7 @@ fn transaction_replacement_rejects_explicit_set_parameter_instructions() {
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
         sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
-        offline_cash_mint_finality:
-            deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+        kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     };
     let set_parameter = InstructionBox::from(SetParameter::new(Parameter::Sumeragi(
@@ -632,8 +618,8 @@ fn genesis_builder_rejects_set_parameter_as_generic_instruction() {
     use iroha_data_model::parameter::system::SumeragiParameter;
     let _ = GenesisBuilder::new_without_executor(ChainId::from("iroha:test:paramagg-builder"), ".")
         .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
-        .with_offline_cash_mint_finality_genesis_parameters(
-            deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+        .with_kagemusha_mint_finality_genesis_parameters(
+            deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         )
         .append_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::MaxClockDriftMs(333),
@@ -668,8 +654,7 @@ fn multiple_structured_parameter_blocks_are_rejected_as_ambiguous_snapshots() {
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
         sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
-        offline_cash_mint_finality:
-            deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+        kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     };
     let error = manifest
@@ -827,8 +812,8 @@ fn set_parameter_inside_instructions_is_rejected() {
     );
     manifest_fields.insert("sumeragi_v2".to_string(), manifest_v2_context_value());
     manifest_fields.insert(
-        "offline_cash_mint_finality".to_string(),
-        manifest_offline_cash_mint_finality_value(),
+        "kagemusha_mint_finality".to_string(),
+        manifest_kagemusha_mint_finality_value(),
     );
     manifest_fields.insert(
         "transactions".to_string(),
@@ -890,8 +875,8 @@ fn raw_genesis_requires_chain_discriminant() {
     );
     manifest_fields.insert("sumeragi_v2".to_string(), manifest_v2_context_value());
     manifest_fields.insert(
-        "offline_cash_mint_finality".to_string(),
-        manifest_offline_cash_mint_finality_value(),
+        "kagemusha_mint_finality".to_string(),
+        manifest_kagemusha_mint_finality_value(),
     );
     manifest_fields.insert(
         "transactions".to_string(),
@@ -914,8 +899,8 @@ fn raw_genesis_roundtrip_uses_manifest_chain_discriminant_for_account_literals()
         PathBuf::from("."),
     )
     .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
-    .with_offline_cash_mint_finality_genesis_parameters(
-        deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+    .with_kagemusha_mint_finality_genesis_parameters(
+        deterministic_test_kagemusha_mint_finality_genesis_parameters(),
     )
     .build_raw()
     .expect("complete test genesis builder")
@@ -965,8 +950,8 @@ fn topology_entries_parse_with_pop_hex() {
     );
     manifest_fields.insert("sumeragi_v2".to_string(), manifest_v2_context_value());
     manifest_fields.insert(
-        "offline_cash_mint_finality".to_string(),
-        manifest_offline_cash_mint_finality_value(),
+        "kagemusha_mint_finality".to_string(),
+        manifest_kagemusha_mint_finality_value(),
     );
     manifest_fields.insert(
         "transactions".to_string(),
@@ -1032,8 +1017,8 @@ fn topology_entries_allow_missing_pop_hex() {
     );
     manifest_fields.insert("sumeragi_v2".to_string(), manifest_v2_context_value());
     manifest_fields.insert(
-        "offline_cash_mint_finality".to_string(),
-        manifest_offline_cash_mint_finality_value(),
+        "kagemusha_mint_finality".to_string(),
+        manifest_kagemusha_mint_finality_value(),
     );
     manifest_fields.insert(
         "transactions".to_string(),
@@ -1078,8 +1063,8 @@ fn topology_entries_reject_peer_value() {
     );
     manifest_fields.insert("sumeragi_v2".to_string(), manifest_v2_context_value());
     manifest_fields.insert(
-        "offline_cash_mint_finality".to_string(),
-        manifest_offline_cash_mint_finality_value(),
+        "kagemusha_mint_finality".to_string(),
+        manifest_kagemusha_mint_finality_value(),
     );
     manifest_fields.insert(
         "transactions".to_string(),
@@ -1103,8 +1088,8 @@ fn clear_topology_removes_all_entries() {
         .next_transaction()
         .set_topology(vec![peer_b])
         .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
-        .with_offline_cash_mint_finality_genesis_parameters(
-            deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+        .with_kagemusha_mint_finality_genesis_parameters(
+            deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         )
         .build_raw()
         .expect("complete test genesis builder")
@@ -1130,8 +1115,7 @@ fn builder_preserves_consensus_metadata() {
         wire_protocol_version: 1,
         consensus_fingerprint: Some(ConsensusFingerprint::new([0xAB; 32])),
         sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
-        offline_cash_mint_finality:
-            deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+        kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     };
     let rebuilt = manifest
@@ -1152,8 +1136,8 @@ fn builder_preserves_consensus_metadata() {
     );
     assert_eq!(rebuilt.sumeragi_v2, manifest.sumeragi_v2);
     assert_eq!(
-        rebuilt.offline_cash_mint_finality,
-        manifest.offline_cash_mint_finality
+        rebuilt.kagemusha_mint_finality,
+        manifest.kagemusha_mint_finality
     );
 }
 #[test]
@@ -1168,8 +1152,7 @@ fn raw_v2_genesis_requires_signed_context_parameters() {
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
         sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
-        offline_cash_mint_finality:
-            deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+        kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     };
     let mut value = norito::json::value::to_value(&manifest).expect("serialize manifest");
@@ -1188,11 +1171,11 @@ fn raw_v2_genesis_requires_signed_context_parameters() {
     value
         .as_object_mut()
         .expect("manifest object")
-        .remove("offline_cash_mint_finality");
+        .remove("kagemusha_mint_finality");
     let error = RawGenesisTransaction::from_json_value(value)
-        .expect_err("Offline Cash mint-finality genesis parameters are required");
+        .expect_err("KAGEMUSHA mint-finality genesis parameters are required");
     assert!(
-        error.to_string().contains("offline_cash_mint_finality"),
+        error.to_string().contains("kagemusha_mint_finality"),
         "unexpected error: {error}"
     );
 }
@@ -1203,8 +1186,8 @@ fn raw_genesis_rejects_retired_and_malformed_consensus_manifest_shapes() {
         ".",
     )
     .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
-    .with_offline_cash_mint_finality_genesis_parameters(
-        deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+    .with_kagemusha_mint_finality_genesis_parameters(
+        deterministic_test_kagemusha_mint_finality_genesis_parameters(),
     )
     .build_raw()
     .expect("complete strict manifest fixture")
@@ -1268,8 +1251,7 @@ fn normalize_exposes_instruction_batches() {
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
         sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
-        offline_cash_mint_finality:
-            deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+        kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     };
     let normalized = manifest.normalize().expect("normalize");
@@ -1344,8 +1326,8 @@ fn with_consensus_meta_uses_npos_custom_parameter() {
             wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
             consensus_fingerprint: None,
             sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
-            offline_cash_mint_finality:
-                deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+            kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(
+            ),
             crypto: ManifestCrypto::default(),
         }
     }
@@ -1389,8 +1371,7 @@ fn permissioned_genesis_rejects_npos_parameters() {
         wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
         consensus_fingerprint: None,
         sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
-        offline_cash_mint_finality:
-            deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+        kagemusha_mint_finality: deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         crypto: ManifestCrypto::default(),
     };
     let error = manifest
@@ -1416,8 +1397,8 @@ fn crypto_manifest_requires_ed25519() {
     )
     .with_crypto(crypto)
     .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
-    .with_offline_cash_mint_finality_genesis_parameters(
-        deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+    .with_kagemusha_mint_finality_genesis_parameters(
+        deterministic_test_kagemusha_mint_finality_genesis_parameters(),
     )
     .set_topology(deterministic_test_topology_entries())
     .build_raw()
@@ -1456,8 +1437,8 @@ fn crypto_manifest_requires_sm_defaults_when_sm2_allowed() {
     )
     .with_crypto(crypto)
     .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
-    .with_offline_cash_mint_finality_genesis_parameters(
-        deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+    .with_kagemusha_mint_finality_genesis_parameters(
+        deterministic_test_kagemusha_mint_finality_genesis_parameters(),
     )
     .set_topology(deterministic_test_topology_entries())
     .build_raw()
@@ -1485,8 +1466,8 @@ fn crypto_manifest_accepts_valid_sm_configuration() {
     )
     .with_crypto(crypto)
     .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
-    .with_offline_cash_mint_finality_genesis_parameters(
-        deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+    .with_kagemusha_mint_finality_genesis_parameters(
+        deterministic_test_kagemusha_mint_finality_genesis_parameters(),
     )
     .set_topology(deterministic_test_topology_entries())
     .build_raw()
@@ -1508,8 +1489,8 @@ fn crypto_manifest_rejects_sm3_hash_without_sm2() {
     )
     .with_crypto(crypto)
     .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
-    .with_offline_cash_mint_finality_genesis_parameters(
-        deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+    .with_kagemusha_mint_finality_genesis_parameters(
+        deterministic_test_kagemusha_mint_finality_genesis_parameters(),
     )
     .set_topology(deterministic_test_topology_entries())
     .build_raw()

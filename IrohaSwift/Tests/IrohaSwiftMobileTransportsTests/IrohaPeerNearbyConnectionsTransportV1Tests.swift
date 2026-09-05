@@ -40,19 +40,19 @@ final class IrohaPeerNearbyDeliveryBarrierV1Tests: XCTestCase {
 
     func testRepeatedAndConflictingStartsPreserveLiveOperation() throws {
         let receiver = try IrohaPeerNearbyDiscoveryContextV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             role: .receiver,
             sessionID: Data(repeating: 1, count: 16),
             requestCanonicalHash: Data(repeating: 2, count: 32)
         )
         let otherReceiver = try IrohaPeerNearbyDiscoveryContextV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             role: .receiver,
             sessionID: Data(repeating: 3, count: 16),
             requestCanonicalHash: Data(repeating: 4, count: 32)
         )
         let sender = try IrohaPeerNearbyDiscoveryContextV1.senderBootstrap(
-            profile: .offlineCashV1
+            profile: .kagemushaV1
         )
 
         XCTAssertEqual(

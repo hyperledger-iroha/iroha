@@ -340,7 +340,7 @@ fn queued_fetch_completion_keeps_incumbent_and_rejects_conflicting_authority() {
     );
     let mut conflicting_prepare = prepare;
     conflicting_prepare.execution_commitment =
-        wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"conflicting queued parent state"),
             Hash::new(b"conflicting queued post state"),
             Hash::new(b"conflicting queued writes"),
@@ -707,7 +707,7 @@ fn busy_deferred_store_completion_keeps_incumbent_and_rejects_conflicting_author
     assert!(!runtime.fail_closed);
     let mut conflicting_prepare = prepare;
     conflicting_prepare.execution_commitment =
-        wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"conflicting deferred parent state"),
             Hash::new(b"conflicting deferred post state"),
             Hash::new(b"conflicting deferred writes"),
@@ -1337,13 +1337,14 @@ fn network_admission_uses_exact_normal_and_progress_reservations() {
         block_hash: HashOf::from_untyped_unchecked(Hash::new(b"runtime-test-block")),
         payload_hash: Hash::new(b"runtime-test-payload"),
     };
-    let execution_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
-        Hash::new(b"runtime parent state"),
-        Hash::new(b"runtime post state"),
-        Hash::new(b"runtime ordinary writes"),
-        1,
-        Hash::new(b"runtime executed block wire"),
-    );
+    let execution_commitment =
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"runtime parent state"),
+            Hash::new(b"runtime post state"),
+            Hash::new(b"runtime ordinary writes"),
+            1,
+            Hash::new(b"runtime executed block wire"),
+        );
     let vote = wire::ConsensusMessageV2Payload::Vote(wire::Vote {
         round,
         proposal_round: round,
@@ -1753,6 +1754,89 @@ fn interrupted_tip_recovery_is_rejected_after_live_clock_arm() {
         runtime.step_recovery(start),
         Err(RuntimeError::RecoveryAfterClocksArmed)
     ));
+}
+#[test]
+fn pre_apply_scheduler_owner_rejects_a_different_apply_bound() {
+    let start = Instant::now();
+    let initial = tag(0);
+    let mut runtime = runtime(
+        FakeDriver::new(initial),
+        start,
+        RuntimeQueueConfig::new(5, 1, 1),
+    );
+    enqueue_fake(
+        &mut runtime,
+        initial,
+        CommandClass::Normal,
+        FakeCommand::record(1),
+    )
+    .expect("admit one pre-Apply FIFO owner");
+    let apply_ordinal = runtime
+        .ingress
+        .ownership_snapshot()
+        .maximum_lifecycle_ordinal
+        .and_then(|ordinal| ordinal.checked_add(1))
+        .expect("the queued predecessor leaves a representable Apply ordinal");
+    assert!(matches!(
+        runtime
+            .try_step_owed_fifo_predecessor(start, apply_ordinal)
+            .expect("dispatch the sealed pre-Apply predecessor"),
+        Some(RuntimeStep::Advanced(_))
+    ));
+    assert_eq!(
+        runtime.take_lifecycle_apply_predecessor_scheduler_ownership(
+            apply_ordinal
+                .checked_add(1)
+                .expect("the deliberately wrong Apply ordinal is representable"),
+        ),
+        Err(RuntimeSchedulerEvidenceError::InvalidProjection),
+        "the consumer must bind the queue seal to the exact attested Apply ordinal"
+    );
+    assert!(
+        runtime.take_last_scheduler_ownership().is_none(),
+        "the mismatched affine scheduler owner is consumed fail-closed"
+    );
+}
+#[test]
+fn pre_apply_scheduler_drains_every_older_fifo_owner_under_one_exact_bound() {
+    let start = Instant::now();
+    let initial = tag(0);
+    let mut runtime = runtime(
+        FakeDriver::new(initial),
+        start,
+        RuntimeQueueConfig::new(6, 1, 1),
+    );
+    for value in 1..=2 {
+        enqueue_fake(
+            &mut runtime,
+            initial,
+            CommandClass::Normal,
+            FakeCommand::record(value),
+        )
+        .expect("admit an ordered pre-Apply FIFO owner");
+    }
+    let apply_ordinal = runtime
+        .ingress
+        .ownership_snapshot()
+        .maximum_lifecycle_ordinal
+        .and_then(|ordinal| ordinal.checked_add(1))
+        .expect("the complete older queue leaves a representable Apply ordinal");
+    for value in 1..=2 {
+        let Some(RuntimeStep::Advanced(effects)) = runtime
+            .try_step_owed_fifo_predecessor(start, apply_ordinal)
+            .expect("dispatch one bounded pre-Apply predecessor")
+        else {
+            panic!("pre-Apply predecessor {value} unexpectedly idled")
+        };
+        runtime
+            .take_lifecycle_apply_predecessor_scheduler_ownership(apply_ordinal)
+            .expect("consume the scheduler owner under the attested Apply bound");
+        runtime
+            .take_effect_ownership(effects.len())
+            .expect("consume the exact predecessor effect sidecar");
+    }
+    assert_eq!(runtime.driver.delivered, vec![(initial, 1), (initial, 2)]);
+    assert_eq!(runtime.queued_commands(), 0);
 }
 #[test]
 fn adapter_failure_closes_runtime_permanently() {

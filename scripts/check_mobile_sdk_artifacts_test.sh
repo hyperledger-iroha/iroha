@@ -46,45 +46,65 @@ bash -n "$CHECK_SCRIPT"
 "$CHECK_SCRIPT" --help >/dev/null
 
 expected_symbols=(
-  connect_norito_offline_cash_v1_payment_request_validate
-  connect_norito_offline_cash_v1_acceptance_intent_authorization_validate
-  connect_norito_offline_cash_v1_acceptance_ticket_validate
-  connect_norito_offline_cash_v1_no_commit_closure_validate
-  connect_norito_offline_cash_v1_payment_validate
-  connect_norito_offline_cash_v1_acknowledgement_validate
-  connect_norito_offline_cash_v1_complete_exchange_validate
-  connect_norito_offline_cash_v1_mint_authorization_validate
-  connect_norito_offline_cash_v1_mint_credit_validate
-  connect_norito_offline_cash_v1_mint_credit_against_authorization_validate
-  connect_norito_offline_cash_v1_redemption_voucher_validate
-  connect_norito_offline_cash_v1_payment_request_text_validate
-  connect_norito_offline_cash_v1_acceptance_intent_authorization_text_validate
-  connect_norito_offline_cash_v1_acceptance_ticket_text_validate
-  connect_norito_offline_cash_v1_no_commit_closure_text_validate
-  connect_norito_offline_cash_v1_payment_text_validate
-  connect_norito_offline_cash_v1_acknowledgement_text_validate
-  connect_norito_offline_cash_v1_complete_exchange_text_validate
-  connect_norito_offline_cash_v1_mint_authorization_text_validate
-  connect_norito_offline_cash_v1_mint_credit_text_validate
-  connect_norito_offline_cash_v1_mint_credit_against_authorization_text_validate
-  connect_norito_offline_cash_v1_redemption_voucher_text_validate
-  connect_norito_offline_cash_device_capabilities_v1
-  connect_norito_offline_cash_device_execute_v1
+  connect_norito_kagemusha_v1_payment_request_validate
+  connect_norito_kagemusha_v1_payment_validate
+  connect_norito_kagemusha_v1_acknowledgement_validate
+  connect_norito_kagemusha_v1_complete_exchange_validate
+  connect_norito_kagemusha_v1_mint_authorization_validate
+  connect_norito_kagemusha_v1_mint_credit_validate
+  connect_norito_kagemusha_v1_mint_credit_against_authorization_validate
+  connect_norito_kagemusha_v1_redemption_voucher_validate
+  connect_norito_kagemusha_v1_payment_request_text_validate
+  connect_norito_kagemusha_v1_payment_text_validate
+  connect_norito_kagemusha_v1_acknowledgement_text_validate
+  connect_norito_kagemusha_v1_complete_exchange_text_validate
+  connect_norito_kagemusha_v1_mint_authorization_text_validate
+  connect_norito_kagemusha_v1_mint_credit_text_validate
+  connect_norito_kagemusha_v1_mint_credit_against_authorization_text_validate
+  connect_norito_kagemusha_v1_redemption_voucher_text_validate
+  connect_norito_kagemusha_device_mint_stage_command_v1_validate
+  connect_norito_kagemusha_device_mint_stage_result_v1_validate
+  connect_norito_kagemusha_device_capabilities_v1
+  connect_norito_kagemusha_device_execute_v1
 )
+[[ "${#expected_symbols[@]}" == "20" ]] \
+  || fail "artifact checker test must pin exactly 20 KAGEMUSHA exports"
 
 for symbol in "${expected_symbols[@]}"; do
   [[ "$(grep -Fc -- "$symbol" "$CHECK_SCRIPT")" == "1" ]] \
     || fail "artifact checker must require $symbol exactly once"
 done
 
-retired_symbol=connect_norito_private_settlement_auditor_capsule_response_verify_v1
-required_block="$(sed -n '/^OFFLINE_CASH_C_SYMBOLS=(/,/^)/p' "$CHECK_SCRIPT")"
-retired_block="$(sed -n '/^RETIRED_PROTOCOL_C_SYMBOLS=(/,/^)/p' "$CHECK_SCRIPT")"
-if grep -Fq -- "$retired_symbol" <<<"$required_block"; then
-  fail "artifact checker still requires the retired fail-closed auditor verifier"
-fi
-grep -Fq -- "$retired_symbol" <<<"$retired_block" \
-  || fail "artifact checker does not reject the retired fail-closed auditor verifier"
+required_protocol_symbols=(
+  connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1
+)
+required_protocol_block="$(sed -n '/^REQUIRED_PROTOCOL_C_SYMBOLS=(/,/^)/p' "$CHECK_SCRIPT")"
+for symbol in "${required_protocol_symbols[@]}"; do
+  [[ "$(grep -Fc -- "$symbol" <<<"$required_protocol_block")" == "1" ]] \
+    || fail "artifact checker must require $symbol exactly once"
+done
+
+retired_auditor_capsule_verify_parts=(
+  connect_norito_private_settlement_auditor_capsule_response
+  verify
+  v1
+)
+retired_symbols=(
+  "${retired_auditor_capsule_verify_parts[0]}_${retired_auditor_capsule_verify_parts[1]}_${retired_auditor_capsule_verify_parts[2]}"
+)
+grep -Fq -- "RETIRED_KAGEMUSHA_C_PREFIX" "$CHECK_SCRIPT" \
+  || fail "artifact checker does not reject the retired KAGEMUSHA C namespace"
+required_block="$(sed -n '/^KAGEMUSHA_C_SYMBOLS=(/,/^)/p' "$CHECK_SCRIPT")"
+for symbol in "${retired_symbols[@]}"; do
+  if grep -Fq -- "$symbol" <<<"$required_block"; then
+    fail "artifact checker still requires retired symbol $symbol"
+  fi
+  if grep -Fq -- "$symbol" "$CHECK_SCRIPT"; then
+    fail "artifact checker must construct retired symbols without publishing them literally"
+  fi
+done
+grep -Fq -- 'RETIRED_AUDITOR_CAPSULE_VERIFY_PARTS' "$CHECK_SCRIPT" \
+  || fail "artifact checker does not retain the retired auditor-capsule symbol guard"
 grep -Fq -- '--verify-repository-provenance' "$CHECK_SCRIPT" \
   || fail "artifact checker does not require repository provenance verification"
 

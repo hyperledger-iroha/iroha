@@ -46,12 +46,12 @@ use std::{
 pub mod confidential_v2;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod halo2_backend;
-/// Shared paired field-native Poseidon relations for Offline Cash V1.
-pub(crate) mod offline_cash_v1_poseidon;
-/// Fixed-profile paired-Pasta recursion and native accumulator decisions for Offline Cash V1.
-pub mod offline_cash_v1_recursion;
-/// Aggregate, hardware-guarded Offline Cash V1 host state machine.
-pub mod offline_cash_v1_state;
+/// Shared paired field-native Poseidon relations for Kagemusha V1.
+pub(crate) mod kagemusha_v1_poseidon;
+/// Fixed-profile paired-Pasta recursion and native accumulator decisions for Kagemusha V1.
+pub mod kagemusha_v1_recursion;
+/// Aggregate, hardware-guarded Kagemusha V1 host state machine.
+pub mod kagemusha_v1_state;
 /// Fixed opposite-field Pasta instructions used by paired Pasta recursion.
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod pasta_cycle_loader;
@@ -63,7 +63,8 @@ pub(crate) mod pasta_ipa_recursion;
 /// Exact row-bounded SHA-256 used by the generic Pasta cycle loader.
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod pasta_sha256;
-pub(crate) mod pasta_sha256_table16;
+/// Base-only SHA-256 compression candidate for resource-qualified internal hash proofs.
+pub(crate) mod pasta_sha256_table8;
 /// Core-owned authenticated confidential-spool adapter for MKHE RNS-native sources.
 pub mod rns_native_source_v1;
 #[cfg(feature = "zk-preverify")]

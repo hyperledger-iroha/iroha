@@ -3455,6 +3455,126 @@ fn globally_connected_lane_quorum_key<'a>(
 }
 
 #[test]
+fn finalized_public_autonomous_certificate_is_served_across_disjoint_rosters() {
+    let NonmemberCanonicalReplicaPreQcFixture {
+        mut adapter,
+        global_keys: _,
+        lane_keys,
+        lane_id: _,
+        proposal,
+        payload,
+        key: _,
+        locked_round,
+        decided,
+        finality: _,
+        successor_context: _,
+    } = nonmember_canonical_replica_pre_qc_fixture();
+    let public_payload = attach_finalized_nonmember_public_payload(
+        &adapter,
+        &proposal,
+        payload,
+        &locked_round,
+        &decided,
+    );
+    let public_proposal = public_payload.origin_proposal.clone();
+    let session = CommittedLaneBlockSession {
+        proposal: public_proposal.clone(),
+        prepare_qc: finalized_nonmember_prepare_qc(
+            &public_proposal,
+            &public_payload,
+            &lane_keys,
+        ),
+        commit_qc: lane_qc_for_phase(&public_proposal, &lane_keys[..3], CertPhase::Commit),
+    };
+    adapter
+        .kura
+        .persist_lane_executable_payload(
+            &public_payload,
+            adapter.native_network_id(),
+            adapter.context.epoch,
+        )
+        .expect("persist committee-owned autonomous payload source");
+    let execution_input = adapter
+        .kura
+        .recover_autonomous_lane_block_payload(
+            &public_proposal,
+            adapter.native_network_id(),
+            adapter.context.epoch,
+        )
+        .expect("recover committee-owned autonomous execution input");
+    adapter
+        .kura
+        .persist_lane_block_execution_input(&execution_input)
+        .expect("persist committee-owned autonomous execution input");
+    adapter
+        .persist_autonomous_prepare_availability(&public_proposal, &session.prepare_qc)
+        .expect("persist committee-owned READY source");
+    let pops = adapter.pops_for_lane_session(&session);
+    adapter
+        .kura
+        .persist_committed_lane_block_session(&session, &pops)
+        .expect("persist finalized public autonomous certificate source");
+    adapter.effects.clear();
+    adapter.effect_keys.clear();
+
+    let requester = PeerId::new(
+        KeyPair::try_from_seed(vec![0xE8; 32], Algorithm::BlsNormal)
+            .expect("disjoint-roster requester key")
+            .public_key()
+            .clone(),
+    );
+    assert!(
+        !adapter
+            .context
+            .roster
+            .iter()
+            .any(|entry| entry.validator == requester)
+    );
+    assert!(!session.commit_qc.validator_set.contains(&requester));
+    let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
+    let reply_route = routes.mint(requester.clone());
+    assert_eq!(
+        adapter.accept_lane_message(
+            InboundBlockMessage::try_from_transport_with_reply_route(
+                BlockMessage::LaneBlockProposal(public_proposal.clone()),
+                requester.clone(),
+                requester.clone(),
+                reply_route.clone(),
+            )
+            .expect("authenticated disjoint-roster recovery route"),
+            locked_round.view,
+        ),
+        V2LaneIngressOutcome::Inserted,
+        "verified public finality must authorize exact cross-roster certificate recovery"
+    );
+    assert!(matches!(
+        adapter.drain_effects(1).as_slice(),
+        [V2LaneWorkEffect::PostDurableLaneCertificate {
+            peer,
+            reply_routes: Some(emitted_routes),
+            certificate,
+            ..
+        }] if peer == &requester
+            && emitted_routes.len() == 1
+            && emitted_routes
+                .iter()
+                .any(|emitted_route| emitted_route.same_delivery(&reply_route))
+            && certificate.proposal == session.proposal
+            && certificate.prepare_qc == session.prepare_qc
+            && certificate.commit_qc == session.commit_qc
+    ));
+
+    let mut noncanonical = public_proposal;
+    noncanonical.payload_block_hint = None;
+    noncanonical.proposal_hash = noncanonical.computed_proposal_hash();
+    assert_eq!(
+        adapter.reconstruct_durable_lane_certificate(&noncanonical, &requester),
+        Ok(None),
+        "a different or unanchored proposal must not inherit public-carrier authority"
+    );
+}
+
+#[test]
 fn finalized_carrier_nonmember_cache_saturated_capacity_replaces_uncommitted_conflict() {
     let NonmemberCanonicalReplicaPreQcFixture {
         mut adapter,

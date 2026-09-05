@@ -37,7 +37,7 @@ final class IrohaPeerNfcV1AdversarialTests: XCTestCase {
     }
 
     func testHashCorrectWrongPhaseHeaderAndExtremeOffsetsLeaveReceiverUnchanged() throws {
-        let request = try message(kind: .receiveRequest, byte: 0x41, count: 180)
+        let request = try message(kind: .request, byte: 0x41, count: 180)
         let payment = try message(kind: .payment, byte: 0x42, count: 300)
         let acknowledgement = try message(kind: .acknowledgement, byte: 0x43, count: 120)
         var receiver = try IrohaPeerNfcReceiverSessionV1(
@@ -109,7 +109,7 @@ final class IrohaPeerNfcV1AdversarialTests: XCTestCase {
     }
 
     func testPeerAdvertisementsAndPersistedU32LengthsRespectLocalBounds() throws {
-        let request = try message(kind: .receiveRequest, byte: 0x51, count: 300)
+        let request = try message(kind: .request, byte: 0x51, count: 300)
         let payment = try message(kind: .payment, byte: 0x52, count: 300)
         let identity = try IrohaPeerNfcRequestIdentityV1(
             profile: request.profile,
@@ -160,7 +160,7 @@ final class IrohaPeerNfcV1AdversarialTests: XCTestCase {
     }
 
     func testReaderRejectsOversizeRequestBeforeReadOrValueCreation() async throws {
-        let request = try message(kind: .receiveRequest, byte: 0x61, count: 300)
+        let request = try message(kind: .request, byte: 0x61, count: 300)
         let identity = try IrohaPeerNfcRequestIdentityV1(
             profile: request.profile,
             sessionID: sessionID,
@@ -184,7 +184,7 @@ final class IrohaPeerNfcV1AdversarialTests: XCTestCase {
 
         do {
             _ = try await IrohaPeerNfcReaderExchangeV1.run(
-                profilePolicy: .sameProfile(.offlineCashV1),
+                profilePolicy: .sameProfile(.kagemushaV1),
                 limits: local,
                 transceive: { command in
                     observed.append(command)
@@ -223,7 +223,7 @@ final class IrohaPeerNfcV1AdversarialTests: XCTestCase {
         let observed = LockedCommands()
         do {
             _ = try await IrohaPeerNfcReaderExchangeV1.run(
-                profilePolicy: .sameProfile(.offlineCashV1),
+                profilePolicy: .sameProfile(.kagemushaV1),
                 transceive: { command in
                     observed.append(command)
                     return IrohaPeerNfcAPDUResponseV1(
@@ -242,7 +242,7 @@ final class IrohaPeerNfcV1AdversarialTests: XCTestCase {
     }
 
     func testReaderRejectsResponseLongerThanRequestedRead() async throws {
-        let request = try message(kind: .receiveRequest, byte: 0x71, count: 120)
+        let request = try message(kind: .request, byte: 0x71, count: 120)
         let identity = try IrohaPeerNfcRequestIdentityV1(
             profile: request.profile,
             sessionID: sessionID,
@@ -260,7 +260,7 @@ final class IrohaPeerNfcV1AdversarialTests: XCTestCase {
         let observed = LockedCommands()
         do {
             _ = try await IrohaPeerNfcReaderExchangeV1.run(
-                profilePolicy: .sameProfile(.offlineCashV1),
+                profilePolicy: .sameProfile(.kagemushaV1),
                 transceive: { command in
                     observed.append(command)
                     switch command {
@@ -296,10 +296,10 @@ final class IrohaPeerNfcV1AdversarialTests: XCTestCase {
         count: Int
     ) throws -> IrohaPeerWireMessageV1 {
         try IrohaPeerWireMessageV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             kind: kind,
             schemaVersion: 1,
-            canonicalPayload: irohaPeerOfflineCashStructuralArchiveV1(
+            canonicalPayload: irohaPeerKagemushaStructuralArchiveV1(
                 kind: kind,
                 payload: Data(repeating: byte, count: count)
             )

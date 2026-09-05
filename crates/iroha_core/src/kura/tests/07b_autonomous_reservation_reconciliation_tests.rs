@@ -1085,8 +1085,8 @@ fn historical_autonomous_recovery_record_for_kura(
     }
     roster.sort_by(|left, right| left.validator.cmp(&right.validator));
     let network_id = crate::sumeragi::synthetic_network_id("kura-autonomous-chain");
-    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
             network_id,
             payload.epoch,
             &roster,
@@ -1118,8 +1118,8 @@ fn historical_autonomous_recovery_record_for_kura(
         ),
         quorum: DualQuorum::from_roster(&roster).expect("historical recovery fixture quorum"),
         roster,
-        offline_cash_mint_finality_epoch_id,
-        offline_cash_mint_finality_epoch_roster,
+        kagemusha_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster,
         nexus_amx_context_hash: Hash::new_from_chunks(&[
             b"kura:test:historical-recovery:nexus:v1\0",
             fixture_tag,
@@ -1150,7 +1150,7 @@ fn historical_autonomous_recovery_record_for_kura(
     let executed_block_wire_len =
         u64::try_from(executed_wire.len()).expect("fixture wire length fits u64");
     let executed_block_wire_hash = Hash::new(&executed_wire);
-    let execution_commitment = ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+    let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new_from_chunks(&[
             b"kura:test:historical-recovery:parent-state:v1\0",
             fixture_tag,

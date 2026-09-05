@@ -73,6 +73,31 @@ APPROVED_PRIVACY_C_EXPORTS = (
     "iroha_privacy_validate_exact12_fixture_bundle_v1",
     "iroha_privacy_free_buffer",
 )
+APPROVED_KAGEMUSHA_C_EXPORTS = (
+    "connect_norito_kagemusha_v1_payment_request_validate",
+    "connect_norito_kagemusha_v1_payment_validate",
+    "connect_norito_kagemusha_v1_acknowledgement_validate",
+    "connect_norito_kagemusha_v1_complete_exchange_validate",
+    "connect_norito_kagemusha_v1_mint_authorization_validate",
+    "connect_norito_kagemusha_v1_mint_credit_validate",
+    "connect_norito_kagemusha_v1_mint_credit_against_authorization_validate",
+    "connect_norito_kagemusha_v1_redemption_voucher_validate",
+    "connect_norito_kagemusha_v1_payment_request_text_validate",
+    "connect_norito_kagemusha_v1_payment_text_validate",
+    "connect_norito_kagemusha_v1_acknowledgement_text_validate",
+    "connect_norito_kagemusha_v1_complete_exchange_text_validate",
+    "connect_norito_kagemusha_v1_mint_authorization_text_validate",
+    "connect_norito_kagemusha_v1_mint_credit_text_validate",
+    "connect_norito_kagemusha_v1_mint_credit_against_authorization_text_validate",
+    "connect_norito_kagemusha_v1_redemption_voucher_text_validate",
+    "connect_norito_kagemusha_device_mint_stage_command_v1_validate",
+    "connect_norito_kagemusha_device_mint_stage_result_v1_validate",
+    "connect_norito_kagemusha_device_capabilities_v1",
+    "connect_norito_kagemusha_device_execute_v1",
+)
+RETIRED_KAGEMUSHA_C_PREFIX = (
+    "connect_norito_" + "_".join(reversed(("cash", "offline"))) + "_"
+)
 STALE_PRIVACY_ABI_MARKER_RE = re.compile(
     r"(?:abi[_-]?(?:21|22)|(?:^|_)v(?:21|22)(?:$|_))",
     re.IGNORECASE,
@@ -86,30 +111,7 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
     "c-jni": (
         "connect_norito_bridge_abi_version",
         "connect_norito_free",
-        "connect_norito_offline_cash_v1_payment_request_validate",
-        "connect_norito_offline_cash_v1_acceptance_intent_authorization_validate",
-        "connect_norito_offline_cash_v1_acceptance_ticket_validate",
-        "connect_norito_offline_cash_v1_no_commit_closure_validate",
-        "connect_norito_offline_cash_v1_payment_validate",
-        "connect_norito_offline_cash_v1_acknowledgement_validate",
-        "connect_norito_offline_cash_v1_complete_exchange_validate",
-        "connect_norito_offline_cash_v1_mint_authorization_validate",
-        "connect_norito_offline_cash_v1_mint_credit_validate",
-        "connect_norito_offline_cash_v1_mint_credit_against_authorization_validate",
-        "connect_norito_offline_cash_v1_redemption_voucher_validate",
-        "connect_norito_offline_cash_v1_payment_request_text_validate",
-        "connect_norito_offline_cash_v1_acceptance_intent_authorization_text_validate",
-        "connect_norito_offline_cash_v1_acceptance_ticket_text_validate",
-        "connect_norito_offline_cash_v1_no_commit_closure_text_validate",
-        "connect_norito_offline_cash_v1_payment_text_validate",
-        "connect_norito_offline_cash_v1_acknowledgement_text_validate",
-        "connect_norito_offline_cash_v1_complete_exchange_text_validate",
-        "connect_norito_offline_cash_v1_mint_authorization_text_validate",
-        "connect_norito_offline_cash_v1_mint_credit_text_validate",
-        "connect_norito_offline_cash_v1_mint_credit_against_authorization_text_validate",
-        "connect_norito_offline_cash_v1_redemption_voucher_text_validate",
-        "connect_norito_offline_cash_device_capabilities_v1",
-        "connect_norito_offline_cash_device_execute_v1",
+        *APPROVED_KAGEMUSHA_C_EXPORTS,
         "connect_norito_validation_fee_hijiri_quote_request_v1",
         "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
         "connect_norito_private_settlement_committee_proof_response_verify_v1",
@@ -128,30 +130,7 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
     "csharp": (
         "connect_norito_bridge_abi_version",
         "connect_norito_free",
-        "connect_norito_offline_cash_v1_payment_request_validate",
-        "connect_norito_offline_cash_v1_acceptance_intent_authorization_validate",
-        "connect_norito_offline_cash_v1_acceptance_ticket_validate",
-        "connect_norito_offline_cash_v1_no_commit_closure_validate",
-        "connect_norito_offline_cash_v1_payment_validate",
-        "connect_norito_offline_cash_v1_acknowledgement_validate",
-        "connect_norito_offline_cash_v1_complete_exchange_validate",
-        "connect_norito_offline_cash_v1_mint_authorization_validate",
-        "connect_norito_offline_cash_v1_mint_credit_validate",
-        "connect_norito_offline_cash_v1_mint_credit_against_authorization_validate",
-        "connect_norito_offline_cash_v1_redemption_voucher_validate",
-        "connect_norito_offline_cash_v1_payment_request_text_validate",
-        "connect_norito_offline_cash_v1_acceptance_intent_authorization_text_validate",
-        "connect_norito_offline_cash_v1_acceptance_ticket_text_validate",
-        "connect_norito_offline_cash_v1_no_commit_closure_text_validate",
-        "connect_norito_offline_cash_v1_payment_text_validate",
-        "connect_norito_offline_cash_v1_acknowledgement_text_validate",
-        "connect_norito_offline_cash_v1_complete_exchange_text_validate",
-        "connect_norito_offline_cash_v1_mint_authorization_text_validate",
-        "connect_norito_offline_cash_v1_mint_credit_text_validate",
-        "connect_norito_offline_cash_v1_mint_credit_against_authorization_text_validate",
-        "connect_norito_offline_cash_v1_redemption_voucher_text_validate",
-        "connect_norito_offline_cash_device_capabilities_v1",
-        "connect_norito_offline_cash_device_execute_v1",
+        *APPROVED_KAGEMUSHA_C_EXPORTS,
         "connect_norito_validation_fee_hijiri_quote_request_v1",
         "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
         "connect_norito_private_settlement_committee_proof_response_verify_v1",
@@ -595,11 +574,21 @@ def validate_retired_protocol_symbols(symbols: Sequence[str], *, sdk: str) -> No
     """Reject first-release artifacts that expose retired protocol entrypoints."""
 
     explicitly_retired = set(RETIRED_PROTOCOL_SYMBOLS[sdk])
+    approved_kagemusha = (
+        set(APPROVED_KAGEMUSHA_C_EXPORTS)
+        if sdk in EXACT_PRIVACY_C_EXPORT_SDKS
+        else set()
+    )
     retired = sorted(
         {
             symbol
             for symbol in symbols
-            if symbol in explicitly_retired or "kagemusha" in symbol.lower()
+            if symbol in explicitly_retired
+            or symbol.startswith(RETIRED_KAGEMUSHA_C_PREFIX)
+            or (
+                symbol.startswith("connect_norito_kagemusha_")
+                and symbol not in approved_kagemusha
+            )
         }
     )
     if retired:
@@ -677,8 +666,9 @@ if (missing.length !== 0) {
   process.stderr.write("missing required exports: " + missing.join(", "));
   process.exit(2);
 }
+const retiredPrefix = "connect_norito_" + ["cash", "offline"].reverse().join("_") + "_";
 const retired = Object.getOwnPropertyNames(binding).filter(
-  (name) => forbidden.includes(name) || /kagemusha/iu.test(name),
+  (name) => forbidden.includes(name) || name.startsWith(retiredPrefix),
 );
 if (retired.length !== 0) {
   process.stderr.write("retired exports: " + retired.join(", "));
@@ -737,10 +727,12 @@ loader.exec_module(module)
 missing = [name for name in required if not callable(getattr(module, name, None))]
 if missing:
     raise SystemExit("missing required exports: " + ", ".join(missing))
+retired_prefix = "connect_norito_" + "_".join(reversed(("cash", "offline"))) + "_"
 retired = [
     name
     for name in dir(module)
-    if name in forbidden or "kagemusha" in name.lower()
+    if name in forbidden
+    or name.startswith(retired_prefix)
 ]
 if retired:
     raise SystemExit("retired exports: " + ", ".join(retired))

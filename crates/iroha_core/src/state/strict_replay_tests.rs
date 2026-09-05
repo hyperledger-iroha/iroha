@@ -270,10 +270,8 @@ impl StrictReplayFixture {
                 power: 1,
             })
             .collect::<Vec<_>>();
-        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
-                network_id, 0, &roster,
-            );
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
         let mut context = wire::HeightContext {
             network_id: network_id.clone(),
             protocol_version: wire::PROTOCOL_VERSION,
@@ -286,8 +284,8 @@ impl StrictReplayFixture {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("derive fixture quorum"),
             roster,
-            offline_cash_mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"strict replay fixture pending state"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
@@ -482,10 +480,10 @@ impl StrictReplayFixture {
             snapshot_bootstrap: None,
             quorum: self.context.quorum,
             roster: self.context.roster.clone(),
-            offline_cash_mint_finality_epoch_id: self.context.offline_cash_mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster: self
+            kagemusha_mint_finality_epoch_id: self.context.kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster: self
                 .context
-                .offline_cash_mint_finality_epoch_roster
+                .kagemusha_mint_finality_epoch_roster
                 .clone(),
             nexus_amx_context_hash: crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(
                 self.materialized_state.as_ref(),

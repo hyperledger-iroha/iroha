@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Check or externally project the three generated NoritoBridge Swift hashes."""
+"""Check or externally project authenticated NoritoBridge Swift hashes.
+
+Dirty-source artifacts require explicit local-only allowance; repository and tool
+provenance verification remains mandatory in both check and output modes.
+"""
 
 from __future__ import annotations
 
@@ -211,7 +215,13 @@ def _regular_loader(path: Path) -> tuple[os.stat_result, bytes]:
         os.close(descriptor)
 
 
-def _project(root: Path, artifact_dir: Path, contents: bytes) -> bytes:
+def _project(
+    root: Path,
+    artifact_dir: Path,
+    contents: bytes,
+    *,
+    allow_dirty_source: bool = False,
+) -> bytes:
     validator = _load_module(
         root / "scripts/validate_norito_bridge_xcframework.py",
         "norito_bridge_artifact_validator_for_pin_owner",
@@ -228,6 +238,7 @@ def _project(root: Path, artifact_dir: Path, contents: bytes) -> bytes:
             expected_link_target="NoritoBridge.xcframework/NoritoBridge.artifacts.json",
             swift_loader=None,
             verify_repository_provenance=True,
+            allow_dirty_source=allow_dirty_source,
         )
     except (OSError, validator.ValidationError) as error:
         raise PinOwnerError(str(error)) from error
@@ -395,6 +406,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", required=True, type=Path)
     parser.add_argument("--artifact-dir", required=True, type=Path)
+    parser.add_argument(
+        "--allow-dirty-source",
+        action="store_true",
+        help="allow fingerprint-bound local integration artifacts; never release evidence",
+    )
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument(
         "--check",
@@ -429,7 +445,12 @@ def main() -> int:
                     "Swift pin target preimage differs from --expected-preimage-sha256"
                 )
         with _artifact_lock(artifact_dir) as artifact_lock:
-            projected = _project(root, artifact_dir, preimage)
+            projected = _project(
+                root,
+                artifact_dir,
+                preimage,
+                allow_dirty_source=arguments.allow_dirty_source,
+            )
             artifact_lock.assert_held()
             if arguments.check:
                 _assert_loader_preimage(loader, metadata, preimage)

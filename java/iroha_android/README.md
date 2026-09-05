@@ -59,6 +59,17 @@ when publishing a new compatible Kotlin transport release. An explicit
 specific properties are absent. Composite builds substitute the in-tree
 Kotlin projects while preserving these exact coordinates in generated POMs.
 
+KAGEMUSHA reserve top-ups are payer-signed transactions. Construct the sole
+transaction instruction with `TopUpKagemushaV1Instruction`, sign the
+transaction through `TransactionBuilder` (which always binds the mandatory
+`QueuePlanSynced` admission intent), then call
+`KagemushaToriiClientV1.submitTopUp(signedTransaction, operationId)` with the
+embedded request's exact nonzero 32-byte operation ID. The client forwards the
+canonical versioned signed bytes unchanged to `/v1/kagemusha/top-up` and uses
+the lowercase operation ID as `Idempotency-Key`. No unsigned or request-only
+top-up API exists. `KagemushaNoritoV1` enforces the 16 KiB embedded-request
+ceiling needed by the maximum fixed-shape paired proof.
+
 ## DA commitment and pin-intent proofs
 
 `HttpClientTransport.newDaToriiClient()` returns the Java typed DA client. It
@@ -136,26 +147,38 @@ fields and tags, and current Native AMX V2 evidence. The parsers reject
 status/diagnostics swaps, legacy receipt shapes, unordered or oversized Native
 participant rows, and inconsistent carrier identities.
 
-## Offline Cash V1 (Java)
+## KAGEMUSHA V1 (Java)
 
-`OfflineCashV1` is the only offline-payment API. Java and Kotlin encode
-identical payment request, payment, acknowledgement, mint credit, and
-redemption voucher archives, with `oc1:` as the sole text transport. QR,
-NFC, and Nearby consume `../../fixtures/offline/offline_cash_v1.json`.
+`KagemushaNoritoV1` delegates to the canonical Kotlin KAGEMUSHA wire codec. Both SDKs encode
+the same three-message payment exchange—request, payment, and acknowledgement—with `kgm1:`
+as the sole text transport. The signed request fixes the exact amount and fresh recipient
+encryption key; payment carries the commit certificate and post-commit paired proof. Mint
+authorization, mint credit, and redemption vouchers are independently framed archives. QR,
+NFC, and Nearby consume
+`../../fixtures/offline/kagemusha_v1.json`.
 Public wire size and verification work do not grow with balance history.
 
-`OfflineCashWalletV1` mirrors the canonical Kotlin aggregate wallet. It requires an
-`OfflineCashHardwareProviderV1` implementing the complete non-forking journal, exact-next counter,
+`KagemushaWalletV1` mirrors the canonical Kotlin aggregate wallet. It requires an
+`KagemushaHardwareProviderV1` implementing the complete non-forking journal, exact-next counter,
 trusted-time, recovery, inbox, outbox, and rotation contract. Staging returns a durable ACK, sends
-and redemptions synchronously fold every pending credit, and missing ACKs leave only a byte-identical
-retry record while the sender successor stays usable. Stock platform keystores are online-only and
+and redemptions require the native provider to fold only the staged credits needed to cover the
+amount. Unrelated backlog must not delay an already-covered spend. Exact-credit and stable-
+snapshot drain APIs impose no cumulative count limit; continuous background scheduling remains
+an integration requirement. A drain releases the lane after each credit for queued foreground work;
+concurrent epoch rotation interrupts it and requires a new pass with a fresh watermark.
+Missing ACKs leave only a byte-identical retry record while the sender
+successor stays usable. Stock platform keystores are online-only and
 never trigger a software fallback.
-Managed Offline Cash X25519 types enforce only the canonical 32-byte nonzero wire shape. They do
+Staging advances native inbox bookkeeping, not the monetary-state journal. Core's typed mint
+reservation/inbox implementation is under validation; its SDK-to-OEM operation-16 adapter is
+still required. A completed MintFold is a separate proved transition, not a staging result.
+Managed KAGEMUSHA X25519 types enforce only the canonical 32-byte nonzero wire shape. They do
 not perform scalar multiplication or low-order probing; the shared native core authenticates
-canonical X25519 elements during object and complete-exchange validation before monetary use.
+canonical X25519 elements during object and complete three-message exchange validation before monetary use.
 Both the logical sequence and hardware journal revision are per epoch. Exact-successor rotation
 carries balance and replay state, replaces the device-policy binding, resets both counters to zero,
-and is invoked automatically before either `u128` counter overflows.
+and remains callable with saturated counters and pending receipts. The native provider must
+arrange rollover before counter exhaustion; the managed wallet does not schedule automatic rotation.
 
 ## Fee quotes and sponsorship
 

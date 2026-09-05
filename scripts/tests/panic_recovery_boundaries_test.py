@@ -67,8 +67,8 @@ def test_stable_inventory_read_rejects_hardlinks_and_shared_writes(
     (
         "crates/iroha_core/src/executor.rs",
         "crates/iroha_core/src/zk.rs",
-        "crates/iroha_core/src/zk/offline_cash_v1_recursion/accumulation.rs",
-        "crates/iroha_core/src/zk/offline_cash_v1_recursion/native_backend.rs",
+        "crates/iroha_core/src/zk/kagemusha_v1_recursion/accumulation.rs",
+        "crates/iroha_core/src/zk/kagemusha_v1_recursion/native_backend.rs",
     ),
 )
 @pytest.mark.parametrize(

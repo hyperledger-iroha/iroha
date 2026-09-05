@@ -17193,6 +17193,155 @@
           "null"
         ]
       },
+      "KagemushaBytes32V1": {
+        "description": "Exactly 32 unsigned bytes.",
+        "items": {
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maxItems": 32,
+        "minItems": 32,
+        "type": "array"
+      },
+      "KagemushaOperationKindV1": {
+        "enum": [
+          "top_up",
+          "redemption"
+        ],
+        "type": "string"
+      },
+      "KagemushaOperationRejectionCodeV1": {
+        "enum": [
+          "invalid_request",
+          "unauthorized",
+          "insufficient_online_balance",
+          "invalid_proof",
+          "hardware_policy_rejected",
+          "identity_conflict",
+          "reserve_underflow",
+          "arithmetic_overflow",
+          "internal_failure"
+        ],
+        "type": "string"
+      },
+      "KagemushaOperationRejectionV1": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/KagemushaOperationRejectionCodeV1"
+          },
+          "detail_digest": {
+            "$ref": "#/components/schemas/KagemushaBytes32V1"
+          }
+        },
+        "required": [
+          "code",
+          "detail_digest"
+        ],
+        "type": "object"
+      },
+      "KagemushaOperationResultV1": {
+        "additionalProperties": false,
+        "description": "A constant-shape top-up or redemption result carrying its exact request, pooled-reserve receipt, consensus finality, and—only for top-up—the byte-identical mint credit.",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/KagemushaOperationKindV1"
+          },
+          "result": {
+            "description": "The canonical typed KagemushaTopUpResultV1 or KagemushaRedemptionResultV1 value.",
+            "format": "byte",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "result"
+        ],
+        "type": "object"
+      },
+      "KagemushaOperationStateV1": {
+        "enum": [
+          "pending",
+          "applied",
+          "rejected"
+        ],
+        "type": "string"
+      },
+      "KagemushaOperationStatusV1": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/KagemushaOperationKindV1"
+          },
+          "operation_id": {
+            "$ref": "#/components/schemas/KagemushaBytes32V1"
+          },
+          "rejection": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/KagemushaOperationRejectionV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "result": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/KagemushaOperationResultV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/KagemushaOperationStateV1"
+          },
+          "version": {
+            "const": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "operation_id",
+          "kind",
+          "state",
+          "result",
+          "rejection"
+        ],
+        "type": "object"
+      },
+      "KagemushaReadinessV1": {
+        "additionalProperties": false,
+        "properties": {
+          "device_lifecycle_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "kagemusha_handoff_capability": {
+            "const": "kagemusha_handoff_v1",
+            "type": "string"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "wire_version": {
+            "const": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kagemusha_handoff_capability",
+          "wire_version",
+          "device_lifecycle_version",
+          "ready"
+        ],
+        "type": "object"
+      },
       "KaigiId": {
         "additionalProperties": false,
         "properties": {
@@ -24102,155 +24251,6 @@
             "type": "object"
           }
         ]
-      },
-      "OfflineCashBytes32V1": {
-        "description": "Exactly 32 unsigned bytes.",
-        "items": {
-          "maximum": 255,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "maxItems": 32,
-        "minItems": 32,
-        "type": "array"
-      },
-      "OfflineCashOperationKindV1": {
-        "enum": [
-          "top_up",
-          "redemption"
-        ],
-        "type": "string"
-      },
-      "OfflineCashOperationRejectionCodeV1": {
-        "enum": [
-          "invalid_request",
-          "unauthorized",
-          "insufficient_online_balance",
-          "invalid_proof",
-          "hardware_policy_rejected",
-          "identity_conflict",
-          "reserve_underflow",
-          "arithmetic_overflow",
-          "internal_failure"
-        ],
-        "type": "string"
-      },
-      "OfflineCashOperationRejectionV1": {
-        "additionalProperties": false,
-        "properties": {
-          "code": {
-            "$ref": "#/components/schemas/OfflineCashOperationRejectionCodeV1"
-          },
-          "detail_digest": {
-            "$ref": "#/components/schemas/OfflineCashBytes32V1"
-          }
-        },
-        "required": [
-          "code",
-          "detail_digest"
-        ],
-        "type": "object"
-      },
-      "OfflineCashOperationResultV1": {
-        "additionalProperties": false,
-        "description": "A constant-shape top-up or redemption result carrying its exact request, pooled-reserve receipt, consensus finality, and—only for top-up—the byte-identical mint credit.",
-        "properties": {
-          "kind": {
-            "$ref": "#/components/schemas/OfflineCashOperationKindV1"
-          },
-          "result": {
-            "description": "The canonical typed OfflineCashTopUpResultV1 or OfflineCashRedemptionResultV1 value.",
-            "format": "byte",
-            "type": "string"
-          }
-        },
-        "required": [
-          "kind",
-          "result"
-        ],
-        "type": "object"
-      },
-      "OfflineCashOperationStateV1": {
-        "enum": [
-          "pending",
-          "applied",
-          "rejected"
-        ],
-        "type": "string"
-      },
-      "OfflineCashOperationStatusV1": {
-        "additionalProperties": false,
-        "properties": {
-          "kind": {
-            "$ref": "#/components/schemas/OfflineCashOperationKindV1"
-          },
-          "operation_id": {
-            "$ref": "#/components/schemas/OfflineCashBytes32V1"
-          },
-          "rejection": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/OfflineCashOperationRejectionV1"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "result": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/OfflineCashOperationResultV1"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "state": {
-            "$ref": "#/components/schemas/OfflineCashOperationStateV1"
-          },
-          "version": {
-            "const": 1,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "version",
-          "operation_id",
-          "kind",
-          "state",
-          "result",
-          "rejection"
-        ],
-        "type": "object"
-      },
-      "OfflineCashReadinessV1": {
-        "additionalProperties": false,
-        "properties": {
-          "cash_handoff_capability": {
-            "const": "cash_handoff_v1",
-            "type": "string"
-          },
-          "device_lifecycle_version": {
-            "const": 1,
-            "type": "integer"
-          },
-          "ready": {
-            "type": "boolean"
-          },
-          "wire_version": {
-            "const": 1,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "cash_handoff_capability",
-          "wire_version",
-          "device_lifecycle_version",
-          "ready"
-        ],
-        "type": "object"
       },
       "OperatorWebAuthnAlgorithm": {
         "description": "Exact algorithm recorded for an enrolled operator WebAuthn credential.",
@@ -46290,24 +46290,24 @@
             ]
           }
         ],
-        "description": "Mandatory deterministic execution result authenticated by every Prepare/Commit vote and quorum certificate. The Offline Cash top-up root slot is required and is null exactly when offline_cash_top_up_count is zero. The lane-finality manifest slot is required and is null exactly when the block emits no lane-finality statements. Native AMX application manifest version/root/count are mandatory; version is 1, count is bounded to 1,024, and count is zero exactly for the canonical empty root. merge_carrier is mandatory and is null for an ordinary block or an exact V1 merge-ledger entry commitment. executed_block_wire_len is the non-zero exact byte length paired with executed_block_wire_hash.",
+        "description": "Mandatory deterministic execution result authenticated by every Prepare/Commit vote and quorum certificate. The KAGEMUSHA top-up root slot is required and is null exactly when kagemusha_top_up_count is zero. The lane-finality manifest slot is required and is null exactly when the block emits no lane-finality statements. Native AMX application manifest version/root/count are mandatory; version is 1, count is bounded to 1,024, and count is zero exactly for the canonical empty root. merge_carrier is mandatory and is null for an ordinary block or an exact V1 merge-ledger entry commitment. executed_block_wire_len is the non-zero exact byte length paired with executed_block_wire_hash.",
         "oneOf": [
           {
             "properties": {
-              "offline_cash_top_up_count": {
+              "kagemusha_top_up_count": {
                 "const": 0
               },
-              "offline_cash_top_up_root": {
+              "kagemusha_top_up_root": {
                 "type": "null"
               }
             }
           },
           {
             "properties": {
-              "offline_cash_top_up_count": {
+              "kagemusha_top_up_count": {
                 "minimum": 1
               },
-              "offline_cash_top_up_root": {
+              "kagemusha_top_up_root": {
                 "$ref": "#/components/schemas/Hash"
               }
             }
@@ -46322,6 +46322,21 @@
             "maximum": 1.8446744073709552e+19,
             "minimum": 1,
             "type": "integer"
+          },
+          "kagemusha_top_up_count": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kagemusha_top_up_root": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "lane_finality_manifest": {
             "anyOf": [
@@ -46365,29 +46380,14 @@
           },
           "post_state_root": {
             "$ref": "#/components/schemas/Hash"
-          },
-          "offline_cash_top_up_count": {
-            "format": "uint32",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "offline_cash_top_up_root": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Hash"
-              },
-              {
-                "type": "null"
-              }
-            ]
           }
         },
         "required": [
           "parent_state_root",
           "post_state_root",
           "ordinary_writes_root",
-          "offline_cash_top_up_root",
-          "offline_cash_top_up_count",
+          "kagemusha_top_up_root",
+          "kagemusha_top_up_count",
           "native_amx_application_manifest_version",
           "native_amx_application_manifest_root",
           "native_amx_application_manifest_count",
@@ -70491,6 +70491,1418 @@
         "x-iroha-tool-effect": "write"
       }
     },
+    "/v1/kagemusha/operations/{operation_id}": {
+      "get": {
+        "description": "Return one idempotent KAGEMUSHA V1 reserve operation. Applied results carry consensus finality and an exact ordinary-write receipt witness; clients authenticate them against an independently pinned context.",
+        "operationId": "kagemushaOperationStatus",
+        "parameters": [
+          {
+            "description": "Exact lowercase hexadecimal form of one nonzero 32-byte KAGEMUSHA V1 operation ID.",
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KagemushaOperationStatusV1",
+                  "x-iroha-max-bytes": 16777216
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/KagemushaOperationStatusV1",
+                  "x-iroha-max-bytes": 4194304
+                }
+              }
+            },
+            "description": "Current operation state.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Operation responses are not cacheable.",
+                "required": true,
+                "schema": {
+                  "example": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Recommended polling delay in seconds while the operation is pending.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "required": true,
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The operation id is malformed.",
+            "headers": {
+              "x-iroha-reject-code": {
+                "description": "Exact application-validation code for a malformed operation identifier.",
+                "schema": {
+                  "enum": [
+                    "operation_id_invalid"
+                  ],
+                  "example": "operation_id_invalid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The Torii API token is missing or invalid (api_token_required).",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Authentication challenge for the Torii API-token scheme.",
+                "schema": {
+                  "example": "IrohaApiToken realm=\"torii\"",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No such operation exists.",
+            "headers": {
+              "x-iroha-reject-code": {
+                "description": "Exact application-resource code distinguishing an unknown offline operation from an unmatched or intermediary-generated HTTP 404.",
+                "schema": {
+                  "enum": [
+                    "kagemusha_operation_not_found"
+                  ],
+                  "example": "kagemusha_operation_not_found",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Neither application/json nor application/x-norito is acceptable. Because no requested representation was selected, the typed response_not_acceptable error uses deterministic application/json.",
+            "headers": {
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The status request was rejected by the Torii rate limit.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Retryable failures are not cacheable.",
+                "schema": {
+                  "example": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The process-local operation registry could not be read."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Pending Queue ownership, canonical offline operation outcome evidence, or referenced block or merge history is unavailable or inconsistent.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Retryable failures are not cacheable.",
+                "schema": {
+                  "example": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Exact Torii application or transaction-queue availability code; ingress limits sharing this status may omit the header.",
+                "schema": {
+                  "enum": [
+                    "kagemusha_service_unavailable",
+                    "kagemusha_operation_pending_unavailable",
+                    "kagemusha_operation_history_unavailable",
+                    "kagemusha_operation_evidence_inconsistent",
+                    "kagemusha_topup_finality_proof_unavailable"
+                  ],
+                  "example": "kagemusha_service_unavailable",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "Fetch a KAGEMUSHA operation.",
+        "tags": [
+          "KAGEMUSHA"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "kagemusha.operation"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/kagemusha/readiness": {
+      "get": {
+        "description": "Report the sole KAGEMUSHA V1 aggregate-balance capability. The protocol has no hop, ancestry, origin, input, fan-in, or proof-depth admission limit.",
+        "operationId": "kagemushaReadiness",
+        "parameters": [
+          {
+            "description": "A strong or weak ETag returned by an earlier capability response, or *. A match for the selected representation returns 304.",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KagemushaReadinessV1",
+                  "x-iroha-max-bytes": 4096
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/KagemushaReadinessV1",
+                  "x-iroha-max-bytes": 4096
+                }
+              }
+            },
+            "description": "The universal KAGEMUSHA V1 capability is available.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Readiness responses require revalidation.",
+                "required": true,
+                "schema": {
+                  "example": "private, max-age=0, must-revalidate",
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Strong readiness validator bound to the complete selected representation and evaluated block.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "required": true,
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The previously returned capability representation is still current.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Capability revalidation policy.",
+                "required": true,
+                "schema": {
+                  "example": "private, max-age=0, must-revalidate",
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Strong validator for the selected capability representation.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "required": true,
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The Torii API token is missing or invalid (api_token_required).",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Authentication challenge for the Torii API-token scheme.",
+                "schema": {
+                  "example": "IrohaApiToken realm=\"torii\"",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Neither application/json nor application/x-norito is acceptable. Because no requested representation was selected, the typed response_not_acceptable error uses deterministic application/json.",
+            "headers": {
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The capability request was rejected by an ingress or route rate limit.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Retryable failures are not cacheable.",
+                "schema": {
+                  "example": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "Report universal KAGEMUSHA capability.",
+        "tags": [
+          "KAGEMUSHA"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "kagemusha.readiness"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/kagemusha/redeem": {
+      "post": {
+        "description": "Verify one full or partial aggregate-balance redemption voucher, consume its terminal nullifier, debit the pooled reserve, and credit the beneficiary atomically.",
+        "operationId": "kagemushaRedeem",
+        "parameters": [
+          {
+            "description": "Exact lowercase hexadecimal form of the request's nonzero 32-byte operation ID. Reusing an ID with the same canonical operation payload is idempotent; binding it to any different payload conflicts.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "type": "string",
+                "x-iroha-max-bytes": 8192,
+                "x-iroha-norito-schema": "iroha.torii.v1.kagemusha.redeem.request"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KagemushaOperationStatusV1",
+                  "x-iroha-max-bytes": 16777216
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/KagemushaOperationStatusV1",
+                  "x-iroha-max-bytes": 4194304
+                }
+              }
+            },
+            "description": "An exact replay resolved to the operation's terminal status.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Operation responses are not cacheable.",
+                "required": true,
+                "schema": {
+                  "example": "no-store",
+                  "type": "string"
+                }
+              },
+              "Location": {
+                "description": "Canonical operation status resource.",
+                "required": true,
+                "schema": {
+                  "format": "uri-reference",
+                  "pattern": "^/v1/kagemusha/operations/(?!0{64}$)[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "required": true,
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KagemushaOperationStatusV1",
+                  "x-iroha-max-bytes": 16777216
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/KagemushaOperationStatusV1",
+                  "x-iroha-max-bytes": 4194304
+                }
+              }
+            },
+            "description": "The command was accepted for asynchronous processing.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Operation responses are not cacheable.",
+                "required": true,
+                "schema": {
+                  "example": "no-store",
+                  "type": "string"
+                }
+              },
+              "Location": {
+                "description": "Canonical operation status resource.",
+                "required": true,
+                "schema": {
+                  "format": "uri-reference",
+                  "pattern": "^/v1/kagemusha/operations/(?!0{64}$)[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Recommended polling delay in seconds while the operation is pending.",
+                "required": true,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "required": true,
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The typed request or resulting singleton KAGEMUSHA V1 carrier is non-canonical.",
+            "headers": {
+              "x-iroha-reject-code": {
+                "description": "Exact Torii application-validation or transaction-admission code; Content-Type, body-decoding, and body-read failures sharing HTTP 400 omit this header.",
+                "schema": {
+                  "enum": [
+                    "idempotency_key_invalid",
+                    "idempotency_key_missing",
+                    "operation_id_invalid",
+                    "kagemusha_amount_exceeds_limit",
+                    "kagemusha_asset_not_found",
+                    "kagemusha_asset_scale_invalid",
+                    "kagemusha_asset_scale_mismatch",
+                    "kagemusha_authorization_invalid",
+                    "kagemusha_wrong_network",
+                    "kagemusha_redeem_invalid",
+                    "transaction_rejected",
+                    "PRTRY:NTS_UNHEALTHY",
+                    "PRTRY:TX_UNSUPPORTED_AUTHORITY",
+                    "PRTRY:TX_SIGNATURE_ALGO_DENIED",
+                    "PRTRY:TX_SIGNATURE_INVALID",
+                    "PRTRY:TX_SIGNATURE_MALFORMED",
+                    "PRTRY:TX_SIGNATURE_MISSING",
+                    "PRTRY:TX_SIGNATURE_UNKNOWN_SIGNER",
+                    "PRTRY:TX_SIGNATURE_INSUFFICIENT",
+                    "ED07",
+                    "PRTRY:KAGEMUSHA_V1_OPERATION_CARRIER_REJECTED",
+                    "PRTRY:ROUTE_UNRESOLVED"
+                  ],
+                  "example": "idempotency_key_invalid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The Torii API token is missing or invalid (api_token_required).",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Authentication challenge for the Torii API-token scheme.",
+                "schema": {
+                  "example": "IrohaApiToken realm=\"torii\"",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Canonical X-Iroha request-signing headers are unsupported on signed-body offline commands.",
+            "headers": {
+              "x-iroha-reject-code": {
+                "description": "Exact signed-body authorization or transaction-queue policy rejection code.",
+                "schema": {
+                  "enum": [
+                    "kagemusha_auth_header_unsupported",
+                    "PRTRY:QUEUE_GOVERNANCE_REJECTED",
+                    "PRTRY:QUEUE_LANE_COMPLIANCE_DENIED",
+                    "PRTRY:QUEUE_LANE_PRIVACY_PROOF_REJECTED",
+                    "PRTRY:NEXUS_FEE_ADMISSION_REJECTED"
+                  ],
+                  "example": "kagemusha_auth_header_unsupported",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Neither application/json nor application/x-norito is acceptable. Because no requested representation was selected, the typed response_not_acceptable error uses deterministic application/json.",
+            "headers": {
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "408": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The bounded request body did not complete before the absolute route deadline (request_timeout)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The idempotency key or operation id conflicts with another request, or deterministic retry nonce space is exhausted.",
+            "headers": {
+              "x-iroha-reject-code": {
+                "description": "Exact operation-binding or duplicate transaction-admission code.",
+                "schema": {
+                  "enum": [
+                    "idempotency_key_conflict",
+                    "operation_id_conflict",
+                    "kagemusha_operation_retry_exhausted",
+                    "PRTRY:ALREADY_COMMITTED",
+                    "PRTRY:ALREADY_ENQUEUED",
+                    "PRTRY:KAGEMUSHA_V1_OPERATION_ID_CONFLICT"
+                  ],
+                  "example": "idempotency_key_conflict",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The typed request exceeds Torii's configured transaction body limit."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The request content type is missing or unsupported."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The command was rejected by a Torii or transaction-queue rate limit.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Retryable failures are not cacheable.",
+                "schema": {
+                  "example": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Exact Torii application or transaction-queue availability code; ingress limits sharing this status may omit the header.",
+                "schema": {
+                  "enum": [
+                    "PRTRY:QUEUE_FULL",
+                    "PRTRY:QUEUE_LATENCY",
+                    "PRTRY:QUEUE_RATE"
+                  ],
+                  "example": "PRTRY:QUEUE_FULL",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Torii could not read its process-local operation registry or encode the response."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The operation cannot currently be accepted.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Retryable failures are not cacheable.",
+                "schema": {
+                  "example": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Exact Torii application or transaction-queue availability code; ingress limits sharing this status may omit the header.",
+                "schema": {
+                  "enum": [
+                    "kagemusha_service_unavailable",
+                    "kagemusha_not_ready",
+                    "kagemusha_command_authority_not_ready",
+                    "kagemusha_command_fee_asset_not_ready",
+                    "kagemusha_command_authority_unfunded",
+                    "kagemusha_command_body_admission_saturated",
+                    "kagemusha_command_memory_admission_saturated",
+                    "kagemusha_command_admission_configuration_invalid",
+                    "kagemusha_operation_capacity_exhausted",
+                    "kagemusha_operation_admission_inconsistent",
+                    "kagemusha_operation_pending_unavailable",
+                    "kagemusha_operation_history_unavailable",
+                    "kagemusha_operation_evidence_inconsistent",
+                    "kagemusha_recursive_release_invalid",
+                    "kagemusha_recursive_release_outside_issuance_window"
+                  ],
+                  "example": "kagemusha_service_unavailable",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Submit a KAGEMUSHA redemption.",
+        "tags": [
+          "KAGEMUSHA"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_signed_body",
+          "schemaVersion": 1,
+          "stableRouteId": "kagemusha.redeem"
+        },
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/kagemusha/top-up": {
+      "post": {
+        "description": "Submit one canonical versioned payer-signed `SignedTransaction` containing exactly one native `iroha.kagemusha.v1.top_up` instruction. The transaction must target this network, bind `QueuePlanSynced` admission, and name the embedded payer as its authority. Torii verifies and queues the original transaction unchanged; it never rebuilds or signs it. The HTTP body uses the configured `torii.max_content_len` transaction-ingress limit: KAGEMUSHA-enabled nodes require at least 32 KiB, and the first-release Torii protocol permits at most 64,000,000 bytes. The embedded top-up request is limited to 16 KiB.",
+        "operationId": "kagemushaTopUp",
+        "parameters": [
+          {
+            "description": "Exact lowercase hexadecimal form of the request's nonzero 32-byte operation ID. Reusing an ID with the same canonical operation payload is idempotent; binding it to any different payload conflicts.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "type": "string",
+                "x-iroha-norito-schema": "iroha.torii.v1.kagemusha.top_up.signed_transaction"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KagemushaOperationStatusV1",
+                  "x-iroha-max-bytes": 16777216
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/KagemushaOperationStatusV1",
+                  "x-iroha-max-bytes": 4194304
+                }
+              }
+            },
+            "description": "An exact replay resolved to the operation's terminal status.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Operation responses are not cacheable.",
+                "required": true,
+                "schema": {
+                  "example": "no-store",
+                  "type": "string"
+                }
+              },
+              "Location": {
+                "description": "Canonical operation status resource.",
+                "required": true,
+                "schema": {
+                  "format": "uri-reference",
+                  "pattern": "^/v1/kagemusha/operations/(?!0{64}$)[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "required": true,
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KagemushaOperationStatusV1",
+                  "x-iroha-max-bytes": 16777216
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/KagemushaOperationStatusV1",
+                  "x-iroha-max-bytes": 4194304
+                }
+              }
+            },
+            "description": "The command was accepted for asynchronous processing.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Operation responses are not cacheable.",
+                "required": true,
+                "schema": {
+                  "example": "no-store",
+                  "type": "string"
+                }
+              },
+              "Location": {
+                "description": "Canonical operation status resource.",
+                "required": true,
+                "schema": {
+                  "format": "uri-reference",
+                  "pattern": "^/v1/kagemusha/operations/(?!0{64}$)[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Recommended polling delay in seconds while the operation is pending.",
+                "required": true,
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "required": true,
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The typed request or resulting singleton KAGEMUSHA V1 carrier is non-canonical.",
+            "headers": {
+              "x-iroha-reject-code": {
+                "description": "Exact Torii application-validation or transaction-admission code; Content-Type, body-decoding, and body-read failures sharing HTTP 400 omit this header.",
+                "schema": {
+                  "enum": [
+                    "idempotency_key_invalid",
+                    "idempotency_key_missing",
+                    "operation_id_invalid",
+                    "kagemusha_amount_exceeds_limit",
+                    "kagemusha_asset_not_found",
+                    "kagemusha_asset_scale_invalid",
+                    "kagemusha_asset_scale_mismatch",
+                    "kagemusha_authorization_invalid",
+                    "kagemusha_wrong_network",
+                    "kagemusha_top_up_invalid",
+                    "kagemusha_confidential_state_unavailable",
+                    "kagemusha_topup_shield_verifier_unavailable",
+                    "kagemusha_topup_shield_verifier_mismatch",
+                    "kagemusha_confidential_state_invalid",
+                    "kagemusha_topup_tree_full",
+                    "kagemusha_topup_state_conflict",
+                    "kagemusha_topup_snapshot_stale",
+                    "transaction_rejected",
+                    "PRTRY:NTS_UNHEALTHY",
+                    "PRTRY:TX_UNSUPPORTED_AUTHORITY",
+                    "PRTRY:TX_SIGNATURE_ALGO_DENIED",
+                    "PRTRY:TX_SIGNATURE_INVALID",
+                    "PRTRY:TX_SIGNATURE_MALFORMED",
+                    "PRTRY:TX_SIGNATURE_MISSING",
+                    "PRTRY:TX_SIGNATURE_UNKNOWN_SIGNER",
+                    "PRTRY:TX_SIGNATURE_INSUFFICIENT",
+                    "ED07",
+                    "PRTRY:KAGEMUSHA_V1_OPERATION_CARRIER_REJECTED",
+                    "PRTRY:ROUTE_UNRESOLVED"
+                  ],
+                  "example": "idempotency_key_invalid",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The Torii API token is missing or invalid (api_token_required).",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Authentication challenge for the Torii API-token scheme.",
+                "schema": {
+                  "example": "IrohaApiToken realm=\"torii\"",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Canonical X-Iroha request-signing headers are unsupported on signed-body offline commands.",
+            "headers": {
+              "x-iroha-reject-code": {
+                "description": "Exact signed-body authorization or transaction-queue policy rejection code.",
+                "schema": {
+                  "enum": [
+                    "kagemusha_auth_header_unsupported",
+                    "PRTRY:QUEUE_GOVERNANCE_REJECTED",
+                    "PRTRY:QUEUE_LANE_COMPLIANCE_DENIED",
+                    "PRTRY:QUEUE_LANE_PRIVACY_PROOF_REJECTED",
+                    "PRTRY:NEXUS_FEE_ADMISSION_REJECTED"
+                  ],
+                  "example": "kagemusha_auth_header_unsupported",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Neither application/json nor application/x-norito is acceptable. Because no requested representation was selected, the typed response_not_acceptable error uses deterministic application/json.",
+            "headers": {
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "408": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The bounded request body did not complete before the absolute route deadline (request_timeout)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The idempotency key or operation id conflicts with another request, or deterministic retry nonce space is exhausted.",
+            "headers": {
+              "x-iroha-reject-code": {
+                "description": "Exact operation-binding or duplicate transaction-admission code.",
+                "schema": {
+                  "enum": [
+                    "idempotency_key_conflict",
+                    "operation_id_conflict",
+                    "kagemusha_operation_retry_exhausted",
+                    "PRTRY:ALREADY_COMMITTED",
+                    "PRTRY:ALREADY_ENQUEUED",
+                    "PRTRY:KAGEMUSHA_V1_OPERATION_ID_CONFLICT"
+                  ],
+                  "example": "idempotency_key_conflict",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The typed request exceeds Torii's configured transaction body limit."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The request content type is missing or unsupported."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The command was rejected by a Torii or transaction-queue rate limit.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Retryable failures are not cacheable.",
+                "schema": {
+                  "example": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Exact Torii application or transaction-queue availability code; ingress limits sharing this status may omit the header.",
+                "schema": {
+                  "enum": [
+                    "PRTRY:QUEUE_FULL",
+                    "PRTRY:QUEUE_LATENCY",
+                    "PRTRY:QUEUE_RATE"
+                  ],
+                  "example": "PRTRY:QUEUE_FULL",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Torii could not read its process-local operation registry or encode the response."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The operation cannot currently be accepted.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Retryable failures are not cacheable.",
+                "schema": {
+                  "example": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
+                "schema": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Exact Torii application or transaction-queue availability code; ingress limits sharing this status may omit the header.",
+                "schema": {
+                  "enum": [
+                    "kagemusha_service_unavailable",
+                    "kagemusha_not_ready",
+                    "kagemusha_command_authority_not_ready",
+                    "kagemusha_command_fee_asset_not_ready",
+                    "kagemusha_command_authority_unfunded",
+                    "kagemusha_command_body_admission_saturated",
+                    "kagemusha_command_memory_admission_saturated",
+                    "kagemusha_command_admission_configuration_invalid",
+                    "kagemusha_operation_capacity_exhausted",
+                    "kagemusha_operation_admission_inconsistent",
+                    "kagemusha_operation_pending_unavailable",
+                    "kagemusha_operation_history_unavailable",
+                    "kagemusha_operation_evidence_inconsistent",
+                    "kagemusha_recursive_release_invalid",
+                    "kagemusha_recursive_release_outside_issuance_window"
+                  ],
+                  "example": "kagemusha_service_unavailable",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Submit a KAGEMUSHA top-up.",
+        "tags": [
+          "KAGEMUSHA"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_signed_body",
+          "schemaVersion": 1,
+          "stableRouteId": "kagemusha.top_up"
+        },
+        "x-iroha-tool-effect": "write"
+      }
+    },
     "/v1/kaigi/relays": {
       "get": {
         "description": "Returns relay identifiers, domains, bandwidth classes, HPKE fingerprints, and the freshest health report (if available).",
@@ -77294,1325 +78706,6 @@
         "x-iroha-tool-effect": "write"
       }
     },
-    "/v1/offline/operations/{operation_id}": {
-      "get": {
-        "description": "Return one idempotent Offline Cash V1 reserve operation. Applied results carry consensus finality and an exact ordinary-write receipt witness; clients authenticate them against an independently pinned context.",
-        "operationId": "offlineOperationStatus",
-        "parameters": [
-          {
-            "description": "Canonical marked lowercase hexadecimal identifier from the configured Offline Cash V1 submission authority's offline operation namespace.",
-            "in": "path",
-            "name": "operation_id",
-            "required": true,
-            "schema": {
-              "pattern": "^[0-9a-f]{63}[13579bdf]$",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineCashOperationStatusV1",
-                  "x-iroha-max-bytes": 16777216
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineCashOperationStatusV1",
-                  "x-iroha-max-bytes": 4194304
-                }
-              }
-            },
-            "description": "Current operation state.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Operation responses are not cacheable.",
-                "required": true,
-                "schema": {
-                  "example": "no-store",
-                  "type": "string"
-                }
-              },
-              "Retry-After": {
-                "description": "Recommended polling delay in seconds while the operation is pending.",
-                "schema": {
-                  "minimum": 1,
-                  "type": "integer"
-                }
-              },
-              "Vary": {
-                "description": "Negotiated response dimension.",
-                "required": true,
-                "schema": {
-                  "example": "Accept",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The operation id is malformed.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Exact application-validation code for a malformed operation identifier.",
-                "schema": {
-                  "enum": [
-                    "operation_id_invalid"
-                  ],
-                  "example": "operation_id_invalid",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The Torii API token is missing or invalid (api_token_required).",
-            "headers": {
-              "WWW-Authenticate": {
-                "description": "Authentication challenge for the Torii API-token scheme.",
-                "schema": {
-                  "example": "IrohaApiToken realm=\"torii\"",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "No such operation exists.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Exact application-resource code distinguishing an unknown offline operation from an unmatched or intermediary-generated HTTP 404.",
-                "schema": {
-                  "enum": [
-                    "offline_operation_not_found"
-                  ],
-                  "example": "offline_operation_not_found",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "406": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Neither application/json nor application/x-norito is acceptable. Because no requested representation was selected, the typed response_not_acceptable error uses deterministic application/json.",
-            "headers": {
-              "Vary": {
-                "description": "Negotiated response dimension.",
-                "schema": {
-                  "example": "Accept",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "429": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The status request was rejected by the Torii rate limit.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Retryable failures are not cacheable.",
-                "schema": {
-                  "example": "no-store",
-                  "type": "string"
-                }
-              },
-              "Retry-After": {
-                "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
-                "schema": {
-                  "minimum": 1,
-                  "type": "integer"
-                }
-              },
-              "Vary": {
-                "description": "Negotiated response dimension.",
-                "schema": {
-                  "example": "Accept",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The process-local operation registry could not be read."
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Pending Queue ownership, canonical offline operation outcome evidence, or referenced block or merge history is unavailable or inconsistent.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Retryable failures are not cacheable.",
-                "schema": {
-                  "example": "no-store",
-                  "type": "string"
-                }
-              },
-              "Retry-After": {
-                "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
-                "schema": {
-                  "minimum": 1,
-                  "type": "integer"
-                }
-              },
-              "Vary": {
-                "description": "Negotiated response dimension.",
-                "schema": {
-                  "example": "Accept",
-                  "type": "string"
-                }
-              },
-              "x-iroha-reject-code": {
-                "description": "Exact Torii application or transaction-queue availability code; ingress limits sharing this status may omit the header.",
-                "schema": {
-                  "enum": [
-                    "offline_service_unavailable",
-                    "offline_operation_pending_unavailable",
-                    "offline_operation_history_unavailable",
-                    "offline_operation_evidence_inconsistent",
-                    "offline_topup_finality_proof_unavailable"
-                  ],
-                  "example": "offline_service_unavailable",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {},
-          {
-            "IrohaApiToken": []
-          }
-        ],
-        "summary": "Fetch an offline operation.",
-        "tags": [
-          "Offline"
-        ],
-        "x-iroha-route-auth": {
-          "admission": "public",
-          "authentication": "torii_default",
-          "schemaVersion": 1,
-          "stableRouteId": "offline.operation"
-        },
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/offline/readiness": {
-      "get": {
-        "description": "Report the sole Offline Cash V1 aggregate-balance capability. The protocol has no hop, ancestry, origin, input, fan-in, or proof-depth admission limit.",
-        "operationId": "offlineCapability",
-        "parameters": [
-          {
-            "description": "A strong or weak ETag returned by an earlier capability response, or *. A match for the selected representation returns 304.",
-            "in": "header",
-            "name": "If-None-Match",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineCashReadinessV1",
-                  "x-iroha-max-bytes": 4096
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineCashReadinessV1",
-                  "x-iroha-max-bytes": 4096
-                }
-              }
-            },
-            "description": "The universal Offline Cash V1 capability is available.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Readiness responses require revalidation.",
-                "required": true,
-                "schema": {
-                  "example": "private, max-age=0, must-revalidate",
-                  "type": "string"
-                }
-              },
-              "ETag": {
-                "description": "Strong readiness validator bound to the complete selected representation and evaluated block.",
-                "required": true,
-                "schema": {
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Negotiated response dimension.",
-                "required": true,
-                "schema": {
-                  "example": "Accept",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "304": {
-            "description": "The previously returned capability representation is still current.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Capability revalidation policy.",
-                "required": true,
-                "schema": {
-                  "example": "private, max-age=0, must-revalidate",
-                  "type": "string"
-                }
-              },
-              "ETag": {
-                "description": "Strong validator for the selected capability representation.",
-                "required": true,
-                "schema": {
-                  "type": "string"
-                }
-              },
-              "Vary": {
-                "description": "Negotiated response dimension.",
-                "required": true,
-                "schema": {
-                  "example": "Accept",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The Torii API token is missing or invalid (api_token_required).",
-            "headers": {
-              "WWW-Authenticate": {
-                "description": "Authentication challenge for the Torii API-token scheme.",
-                "schema": {
-                  "example": "IrohaApiToken realm=\"torii\"",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "406": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Neither application/json nor application/x-norito is acceptable. Because no requested representation was selected, the typed response_not_acceptable error uses deterministic application/json.",
-            "headers": {
-              "Vary": {
-                "description": "Negotiated response dimension.",
-                "schema": {
-                  "example": "Accept",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "429": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The capability request was rejected by an ingress or route rate limit.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Retryable failures are not cacheable.",
-                "schema": {
-                  "example": "no-store",
-                  "type": "string"
-                }
-              },
-              "Retry-After": {
-                "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
-                "schema": {
-                  "minimum": 1,
-                  "type": "integer"
-                }
-              },
-              "Vary": {
-                "description": "Negotiated response dimension.",
-                "schema": {
-                  "example": "Accept",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {},
-          {
-            "IrohaApiToken": []
-          }
-        ],
-        "summary": "Report universal offline-wallet capability.",
-        "tags": [
-          "Offline"
-        ],
-        "x-iroha-route-auth": {
-          "admission": "public",
-          "authentication": "torii_default",
-          "schemaVersion": 1,
-          "stableRouteId": "offline.readiness"
-        },
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/offline/redeem": {
-      "post": {
-        "description": "Verify one full or partial aggregate-balance redemption voucher, consume its terminal nullifier, debit the pooled reserve, and credit the beneficiary atomically.",
-        "operationId": "offlineRedeem",
-        "parameters": [
-          {
-            "description": "Marked lowercase hexadecimal form of the request's signed 32-byte operation id. The identifier is derived from the canonical authority archive plus the signed nonce and is the globally unique economic identity across offline command routes and Offline Cash V1 submission authorities. The separate canonical request digest binds the complete signed authorization and typed request. A global Applied replay returns the original operation and any different request reuse conflicts. The same exact request under the configured authority may retry a Rejected attempt with the next deterministic non-zero transaction nonce; a newer exact pending attempt supersedes the older rejection. Clients must never recycle an id after a 404.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": true,
-            "schema": {
-              "pattern": "^[0-9a-f]{63}[13579bdf]$",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/x-norito": {
-              "schema": {
-                "format": "binary",
-                "type": "string",
-                "x-iroha-max-bytes": 8192,
-                "x-iroha-norito-schema": "iroha.torii.v1.offline_cash.redeem.request"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineCashOperationStatusV1",
-                  "x-iroha-max-bytes": 16777216
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineCashOperationStatusV1",
-                  "x-iroha-max-bytes": 4194304
-                }
-              }
-            },
-            "description": "The command was accepted for asynchronous processing.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Operation responses are not cacheable.",
-                "required": true,
-                "schema": {
-                  "example": "no-store",
-                  "type": "string"
-                }
-              },
-              "Location": {
-                "description": "Canonical operation status resource.",
-                "required": true,
-                "schema": {
-                  "format": "uri-reference",
-                  "pattern": "^/v1/offline/operations/[0-9a-f]{63}[13579bdf]$",
-                  "type": "string"
-                }
-              },
-              "Retry-After": {
-                "description": "Recommended polling delay in seconds while the operation is pending.",
-                "required": true,
-                "schema": {
-                  "minimum": 1,
-                  "type": "integer"
-                }
-              },
-              "Vary": {
-                "description": "Negotiated response dimension.",
-                "required": true,
-                "schema": {
-                  "example": "Accept",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The typed request or resulting singleton Offline Cash V1 carrier is non-canonical.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Exact Torii application-validation or transaction-admission code; Content-Type, body-decoding, and body-read failures sharing HTTP 400 omit this header.",
-                "schema": {
-                  "enum": [
-                    "idempotency_key_invalid",
-                    "idempotency_key_missing",
-                    "operation_id_invalid",
-                    "offline_amount_exceeds_limit",
-                    "offline_asset_not_found",
-                    "offline_asset_scale_invalid",
-                    "offline_asset_scale_mismatch",
-                    "offline_authorization_invalid",
-                    "offline_wrong_network",
-                    "offline_redeem_invalid",
-                    "transaction_rejected",
-                    "PRTRY:NTS_UNHEALTHY",
-                    "PRTRY:TX_UNSUPPORTED_AUTHORITY",
-                    "PRTRY:TX_SIGNATURE_ALGO_DENIED",
-                    "PRTRY:TX_SIGNATURE_INVALID",
-                    "PRTRY:TX_SIGNATURE_MALFORMED",
-                    "PRTRY:TX_SIGNATURE_MISSING",
-                    "PRTRY:TX_SIGNATURE_UNKNOWN_SIGNER",
-                    "PRTRY:TX_SIGNATURE_INSUFFICIENT",
-                    "ED07",
-                    "PRTRY:OFFLINE_CASH_V1_OPERATION_CARRIER_REJECTED",
-                    "PRTRY:ROUTE_UNRESOLVED"
-                  ],
-                  "example": "idempotency_key_invalid",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The Torii API token is missing or invalid (api_token_required).",
-            "headers": {
-              "WWW-Authenticate": {
-                "description": "Authentication challenge for the Torii API-token scheme.",
-                "schema": {
-                  "example": "IrohaApiToken realm=\"torii\"",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Canonical X-Iroha request-signing headers are unsupported on signed-body offline commands.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Exact signed-body authorization or transaction-queue policy rejection code.",
-                "schema": {
-                  "enum": [
-                    "offline_auth_header_unsupported",
-                    "PRTRY:QUEUE_GOVERNANCE_REJECTED",
-                    "PRTRY:QUEUE_LANE_COMPLIANCE_DENIED",
-                    "PRTRY:QUEUE_LANE_PRIVACY_PROOF_REJECTED",
-                    "PRTRY:NEXUS_FEE_ADMISSION_REJECTED"
-                  ],
-                  "example": "offline_auth_header_unsupported",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "406": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Neither application/json nor application/x-norito is acceptable. Because no requested representation was selected, the typed response_not_acceptable error uses deterministic application/json.",
-            "headers": {
-              "Vary": {
-                "description": "Negotiated response dimension.",
-                "schema": {
-                  "example": "Accept",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "408": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The bounded request body did not complete before the absolute route deadline (request_timeout)."
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The idempotency key or operation id conflicts with another request, or deterministic retry nonce space is exhausted.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Exact operation-binding or duplicate transaction-admission code.",
-                "schema": {
-                  "enum": [
-                    "idempotency_key_conflict",
-                    "operation_id_conflict",
-                    "offline_operation_retry_exhausted",
-                    "PRTRY:ALREADY_COMMITTED",
-                    "PRTRY:ALREADY_ENQUEUED",
-                    "PRTRY:OFFLINE_CASH_V1_OPERATION_ID_CONFLICT"
-                  ],
-                  "example": "idempotency_key_conflict",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "413": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The typed request exceeds Torii's configured transaction body limit."
-          },
-          "415": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The request content type is missing or unsupported."
-          },
-          "429": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The command was rejected by a Torii or transaction-queue rate limit.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Retryable failures are not cacheable.",
-                "schema": {
-                  "example": "no-store",
-                  "type": "string"
-                }
-              },
-              "Retry-After": {
-                "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
-                "schema": {
-                  "minimum": 1,
-                  "type": "integer"
-                }
-              },
-              "Vary": {
-                "description": "Negotiated response dimension.",
-                "schema": {
-                  "example": "Accept",
-                  "type": "string"
-                }
-              },
-              "x-iroha-reject-code": {
-                "description": "Exact Torii application or transaction-queue availability code; ingress limits sharing this status may omit the header.",
-                "schema": {
-                  "enum": [
-                    "PRTRY:QUEUE_FULL",
-                    "PRTRY:QUEUE_LATENCY",
-                    "PRTRY:QUEUE_RATE"
-                  ],
-                  "example": "PRTRY:QUEUE_FULL",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Torii could not read its process-local operation registry or encode the response."
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The operation cannot currently be accepted.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Retryable failures are not cacheable.",
-                "schema": {
-                  "example": "no-store",
-                  "type": "string"
-                }
-              },
-              "Retry-After": {
-                "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
-                "schema": {
-                  "minimum": 1,
-                  "type": "integer"
-                }
-              },
-              "Vary": {
-                "description": "Negotiated response dimension.",
-                "schema": {
-                  "example": "Accept",
-                  "type": "string"
-                }
-              },
-              "x-iroha-reject-code": {
-                "description": "Exact Torii application or transaction-queue availability code; ingress limits sharing this status may omit the header.",
-                "schema": {
-                  "enum": [
-                    "offline_service_unavailable",
-                    "offline_not_ready",
-                    "offline_command_authority_not_ready",
-                    "offline_command_fee_asset_not_ready",
-                    "offline_command_authority_unfunded",
-                    "offline_command_body_admission_saturated",
-                    "offline_command_memory_admission_saturated",
-                    "offline_command_admission_configuration_invalid",
-                    "offline_operation_capacity_exhausted",
-                    "offline_operation_admission_inconsistent",
-                    "offline_operation_pending_unavailable",
-                    "offline_operation_history_unavailable",
-                    "offline_operation_evidence_inconsistent",
-                    "offline_recursive_release_invalid",
-                    "offline_recursive_release_outside_issuance_window"
-                  ],
-                  "example": "offline_service_unavailable",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Submit an offline redemption.",
-        "tags": [
-          "Offline"
-        ],
-        "x-iroha-route-auth": {
-          "admission": "authenticated_account",
-          "authentication": "canonical_signed_body",
-          "schemaVersion": 1,
-          "stableRouteId": "offline.redeem"
-        },
-        "x-iroha-tool-effect": "write"
-      }
-    },
-    "/v1/offline/top-up": {
-      "post": {
-        "description": "Atomically debit online funds, increase the asset's pooled Offline Cash V1 reserve, and create one device-bound aggregate mint credit.",
-        "operationId": "offlineTopUp",
-        "parameters": [
-          {
-            "description": "Marked lowercase hexadecimal form of the request's signed 32-byte operation id. The identifier is derived from the canonical authority archive plus the signed nonce and is the globally unique economic identity across offline command routes and Offline Cash V1 submission authorities. The separate canonical request digest binds the complete signed authorization and typed request. A global Applied replay returns the original operation and any different request reuse conflicts. The same exact request under the configured authority may retry a Rejected attempt with the next deterministic non-zero transaction nonce; a newer exact pending attempt supersedes the older rejection. Clients must never recycle an id after a 404.",
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": true,
-            "schema": {
-              "pattern": "^[0-9a-f]{63}[13579bdf]$",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/x-norito": {
-              "schema": {
-                "format": "binary",
-                "type": "string",
-                "x-iroha-max-bytes": 4096,
-                "x-iroha-norito-schema": "iroha.torii.v1.offline_cash.top_up.request"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineCashOperationStatusV1",
-                  "x-iroha-max-bytes": 16777216
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineCashOperationStatusV1",
-                  "x-iroha-max-bytes": 4194304
-                }
-              }
-            },
-            "description": "The command was accepted for asynchronous processing.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Operation responses are not cacheable.",
-                "required": true,
-                "schema": {
-                  "example": "no-store",
-                  "type": "string"
-                }
-              },
-              "Location": {
-                "description": "Canonical operation status resource.",
-                "required": true,
-                "schema": {
-                  "format": "uri-reference",
-                  "pattern": "^/v1/offline/operations/[0-9a-f]{63}[13579bdf]$",
-                  "type": "string"
-                }
-              },
-              "Retry-After": {
-                "description": "Recommended polling delay in seconds while the operation is pending.",
-                "required": true,
-                "schema": {
-                  "minimum": 1,
-                  "type": "integer"
-                }
-              },
-              "Vary": {
-                "description": "Negotiated response dimension.",
-                "required": true,
-                "schema": {
-                  "example": "Accept",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The typed request or resulting singleton Offline Cash V1 carrier is non-canonical.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Exact Torii application-validation or transaction-admission code; Content-Type, body-decoding, and body-read failures sharing HTTP 400 omit this header.",
-                "schema": {
-                  "enum": [
-                    "idempotency_key_invalid",
-                    "idempotency_key_missing",
-                    "operation_id_invalid",
-                    "offline_amount_exceeds_limit",
-                    "offline_asset_not_found",
-                    "offline_asset_scale_invalid",
-                    "offline_asset_scale_mismatch",
-                    "offline_authorization_invalid",
-                    "offline_wrong_network",
-                    "offline_top_up_invalid",
-                    "offline_confidential_state_unavailable",
-                    "offline_topup_shield_verifier_unavailable",
-                    "offline_topup_shield_verifier_mismatch",
-                    "offline_confidential_state_invalid",
-                    "offline_topup_tree_full",
-                    "offline_topup_state_conflict",
-                    "offline_topup_snapshot_stale",
-                    "transaction_rejected",
-                    "PRTRY:NTS_UNHEALTHY",
-                    "PRTRY:TX_UNSUPPORTED_AUTHORITY",
-                    "PRTRY:TX_SIGNATURE_ALGO_DENIED",
-                    "PRTRY:TX_SIGNATURE_INVALID",
-                    "PRTRY:TX_SIGNATURE_MALFORMED",
-                    "PRTRY:TX_SIGNATURE_MISSING",
-                    "PRTRY:TX_SIGNATURE_UNKNOWN_SIGNER",
-                    "PRTRY:TX_SIGNATURE_INSUFFICIENT",
-                    "ED07",
-                    "PRTRY:OFFLINE_CASH_V1_OPERATION_CARRIER_REJECTED",
-                    "PRTRY:ROUTE_UNRESOLVED"
-                  ],
-                  "example": "idempotency_key_invalid",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The Torii API token is missing or invalid (api_token_required).",
-            "headers": {
-              "WWW-Authenticate": {
-                "description": "Authentication challenge for the Torii API-token scheme.",
-                "schema": {
-                  "example": "IrohaApiToken realm=\"torii\"",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Canonical X-Iroha request-signing headers are unsupported on signed-body offline commands.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Exact signed-body authorization or transaction-queue policy rejection code.",
-                "schema": {
-                  "enum": [
-                    "offline_auth_header_unsupported",
-                    "PRTRY:QUEUE_GOVERNANCE_REJECTED",
-                    "PRTRY:QUEUE_LANE_COMPLIANCE_DENIED",
-                    "PRTRY:QUEUE_LANE_PRIVACY_PROOF_REJECTED",
-                    "PRTRY:NEXUS_FEE_ADMISSION_REJECTED"
-                  ],
-                  "example": "offline_auth_header_unsupported",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "406": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Neither application/json nor application/x-norito is acceptable. Because no requested representation was selected, the typed response_not_acceptable error uses deterministic application/json.",
-            "headers": {
-              "Vary": {
-                "description": "Negotiated response dimension.",
-                "schema": {
-                  "example": "Accept",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "408": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The bounded request body did not complete before the absolute route deadline (request_timeout)."
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The idempotency key or operation id conflicts with another request, or deterministic retry nonce space is exhausted.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Exact operation-binding or duplicate transaction-admission code.",
-                "schema": {
-                  "enum": [
-                    "idempotency_key_conflict",
-                    "operation_id_conflict",
-                    "offline_operation_retry_exhausted",
-                    "PRTRY:ALREADY_COMMITTED",
-                    "PRTRY:ALREADY_ENQUEUED",
-                    "PRTRY:OFFLINE_CASH_V1_OPERATION_ID_CONFLICT"
-                  ],
-                  "example": "idempotency_key_conflict",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "413": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The typed request exceeds Torii's configured transaction body limit."
-          },
-          "415": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The request content type is missing or unsupported."
-          },
-          "429": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The command was rejected by a Torii or transaction-queue rate limit.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Retryable failures are not cacheable.",
-                "schema": {
-                  "example": "no-store",
-                  "type": "string"
-                }
-              },
-              "Retry-After": {
-                "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
-                "schema": {
-                  "minimum": 1,
-                  "type": "integer"
-                }
-              },
-              "Vary": {
-                "description": "Negotiated response dimension.",
-                "schema": {
-                  "example": "Accept",
-                  "type": "string"
-                }
-              },
-              "x-iroha-reject-code": {
-                "description": "Exact Torii application or transaction-queue availability code; ingress limits sharing this status may omit the header.",
-                "schema": {
-                  "enum": [
-                    "PRTRY:QUEUE_FULL",
-                    "PRTRY:QUEUE_LATENCY",
-                    "PRTRY:QUEUE_RATE"
-                  ],
-                  "example": "PRTRY:QUEUE_FULL",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Torii could not read its process-local operation registry or encode the response."
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              },
-              "application/x-norito": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "The operation cannot currently be accepted.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Retryable failures are not cacheable.",
-                "schema": {
-                  "example": "no-store",
-                  "type": "string"
-                }
-              },
-              "Retry-After": {
-                "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
-                "schema": {
-                  "minimum": 1,
-                  "type": "integer"
-                }
-              },
-              "Vary": {
-                "description": "Negotiated response dimension.",
-                "schema": {
-                  "example": "Accept",
-                  "type": "string"
-                }
-              },
-              "x-iroha-reject-code": {
-                "description": "Exact Torii application or transaction-queue availability code; ingress limits sharing this status may omit the header.",
-                "schema": {
-                  "enum": [
-                    "offline_service_unavailable",
-                    "offline_not_ready",
-                    "offline_command_authority_not_ready",
-                    "offline_command_fee_asset_not_ready",
-                    "offline_command_authority_unfunded",
-                    "offline_command_body_admission_saturated",
-                    "offline_command_memory_admission_saturated",
-                    "offline_command_admission_configuration_invalid",
-                    "offline_operation_capacity_exhausted",
-                    "offline_operation_admission_inconsistent",
-                    "offline_operation_pending_unavailable",
-                    "offline_operation_history_unavailable",
-                    "offline_operation_evidence_inconsistent",
-                    "offline_recursive_release_invalid",
-                    "offline_recursive_release_outside_issuance_window"
-                  ],
-                  "example": "offline_service_unavailable",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Submit an offline top-up.",
-        "tags": [
-          "Offline"
-        ],
-        "x-iroha-route-auth": {
-          "admission": "authenticated_account",
-          "authentication": "canonical_signed_body",
-          "schemaVersion": 1,
-          "stableRouteId": "offline.top_up"
-        },
-        "x-iroha-tool-effect": "write"
-      }
-    },
     "/v1/operator/auth/credentials": {
       "get": {
         "description": "Lists enrolled operator WebAuthn credential metadata. Verification keys are never returned. Requires both an exact-network operator request signature and a configured WebAuthn session.",
@@ -80235,7 +80328,7 @@
                     "PRTRY:TX_SIGNATURE_UNKNOWN_SIGNER",
                     "PRTRY:TX_SIGNATURE_INSUFFICIENT",
                     "ED07",
-                    "PRTRY:OFFLINE_CASH_V1_OPERATION_CARRIER_REJECTED",
+                    "PRTRY:KAGEMUSHA_V1_OPERATION_CARRIER_REJECTED",
                     "PRTRY:ROUTE_UNRESOLVED"
                   ],
                   "example": "invalid_transaction_payload",
@@ -80302,7 +80395,7 @@
                 }
               }
             },
-            "description": "The exact transaction is already committed or already present in the queue, or the same authority and Offline Cash V1 operation id already belong to another pending carrier.",
+            "description": "The exact transaction is already committed or already present in the queue, or the same authority and KAGEMUSHA V1 operation id already belong to another pending carrier.",
             "headers": {
               "x-iroha-reject-code": {
                 "description": "Exact duplicate-transaction state. This response does not prove non-admission; clients must reconcile the existing transaction.",
@@ -80310,7 +80403,7 @@
                   "enum": [
                     "PRTRY:ALREADY_COMMITTED",
                     "PRTRY:ALREADY_ENQUEUED",
-                    "PRTRY:OFFLINE_CASH_V1_OPERATION_ID_CONFLICT"
+                    "PRTRY:KAGEMUSHA_V1_OPERATION_ID_CONFLICT"
                   ],
                   "example": "PRTRY:ALREADY_COMMITTED",
                   "type": "string"
@@ -80427,7 +80520,7 @@
                 }
               }
             },
-            "description": "The admission worker, authoritative Torii route, durable queue-plan journal, or Offline Cash V1 pending-operation ownership index is unavailable or inconsistent. PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE means the journal definitely did not durably admit the transaction. PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN means admission may already have occurred: reconcile the exact hashes before retrying and do not create a replacement transaction until resolved. PRTRY:OFFLINE_CASH_V1_OPERATION_INDEX_INCONSISTENT means Queue ownership requires recovery before another Offline Cash V1 carrier can be admitted. Only the journal outcome-unknown response carries singleton x-iroha-entrypoint-hash and x-iroha-signed-transaction-hash headers plus the same exact values in ErrorEnvelope.details.entrypoint_hash and ErrorEnvelope.details.tx_hash; it does not fabricate queue-pressure details or headers.",
+            "description": "The admission worker, authoritative Torii route, durable queue-plan journal, or KAGEMUSHA V1 pending-operation ownership index is unavailable or inconsistent. PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE means the journal definitely did not durably admit the transaction. PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN means admission may already have occurred: reconcile the exact hashes before retrying and do not create a replacement transaction until resolved. PRTRY:KAGEMUSHA_V1_OPERATION_INDEX_INCONSISTENT means Queue ownership requires recovery before another KAGEMUSHA V1 carrier can be admitted. Only the journal outcome-unknown response carries singleton x-iroha-entrypoint-hash and x-iroha-signed-transaction-hash headers plus the same exact values in ErrorEnvelope.details.entrypoint_hash and ErrorEnvelope.details.tx_hash; it does not fabricate queue-pressure details or headers.",
             "headers": {
               "Retry-After": {
                 "description": "Whole-second retry delay when authoritative backpressure supplies one; journal outcome-unknown responses omit it.",
@@ -80451,7 +80544,7 @@
                     "route_unavailable",
                     "PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE",
                     "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN",
-                    "PRTRY:OFFLINE_CASH_V1_OPERATION_INDEX_INCONSISTENT"
+                    "PRTRY:KAGEMUSHA_V1_OPERATION_INDEX_INCONSISTENT"
                   ],
                   "example": "transaction_admission_worker_failed",
                   "type": "string"
@@ -113730,8 +113823,8 @@
       "name": "Sumeragi"
     },
     {
-      "description": "Offline Cash V1 readiness and asynchronous top-up/redemption operations. Commands accept only the canonical typed application/x-norito representation.",
-      "name": "Offline"
+      "description": "KAGEMUSHA V1 readiness and asynchronous top-up/redemption operations. Commands accept only the canonical typed application/x-norito representation.",
+      "name": "KAGEMUSHA"
     },
     {
       "description": "Bridge finality surfaces exposed under `/v1/bridge/*`.",

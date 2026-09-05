@@ -16,7 +16,7 @@ import javax.crypto.spec.SecretKeySpec
 
 /** Portable IPN1 core. Google Nearby remains a narrow platform adapter around these records. */
 object IrohaPeerNearbyV1 {
-    const val SERVICE_ID = "org.hyperledger.iroha.offline.transfer.v1"
+    const val SERVICE_ID = "org.hyperledger.iroha.kagemusha.transfer.v1"
     const val BONJOUR_SERVICE = "_F2EBA4BCB49B._tcp"
     const val WIRE_VERSION = 1
     const val MAXIMUM_CERTIFICATE_BYTES = 16 * 1024

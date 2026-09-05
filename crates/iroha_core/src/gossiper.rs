@@ -6,8 +6,8 @@ use crate::{
         resolve_routing_decision, resolve_routing_plan_against_catalogs,
     },
     state::{
-        PendingQueuePlanAdmissionDisposition, State, StatelessValidationContext,
-        TransactionsReadOnly,
+        PendingQueuePlanAdmissionDisposition, PendingQueuePlanAdmissionPersistenceOutcome, State,
+        StatelessValidationContext, TransactionsReadOnly,
     },
     tx::{
         AcceptTransactionFail, AcceptedTransaction, PreparedTransactionMetadata,
@@ -124,7 +124,8 @@ fn validate_queue_plan_gossip_certificate(
     if !matches!(
         disposition,
         PendingQueuePlanAdmissionDisposition::EligibleAbsent
-            | PendingQueuePlanAdmissionDisposition::Exact
+            | PendingQueuePlanAdmissionDisposition::ExactPending
+            | PendingQueuePlanAdmissionDisposition::Applied
     ) {
         return Err(format!(
             "QueuePlan gossip certificate is not live at the local frontier: {disposition:?}"
@@ -136,21 +137,11 @@ fn validate_queue_plan_gossip_certificate(
         PendingQueuePlanAdmissionDisposition::EligibleAbsent => {
             QueuePlanGossipCertificateDisposition::EligibleAbsent
         }
-        PendingQueuePlanAdmissionDisposition::Exact => {
-            match state
-                .queue_plan_pending_binding_for_entrypoint(binding.entrypoint_hash.clone())?
-            {
-                Some(canonical_binding) if canonical_binding == binding => {
-                    QueuePlanGossipCertificateDisposition::ExactPending
-                }
-                Some(_) => {
-                    return Err(
-                        "QueuePlan gossip certificate differs from the full canonical pending binding"
-                            .to_owned(),
-                    );
-                }
-                None => QueuePlanGossipCertificateDisposition::Applied,
-            }
+        PendingQueuePlanAdmissionDisposition::ExactPending => {
+            QueuePlanGossipCertificateDisposition::ExactPending
+        }
+        PendingQueuePlanAdmissionDisposition::Applied => {
+            QueuePlanGossipCertificateDisposition::Applied
         }
         PendingQueuePlanAdmissionDisposition::Future
         | PendingQueuePlanAdmissionDisposition::DefinitiveConflict
@@ -159,6 +150,32 @@ fn validate_queue_plan_gossip_certificate(
         }
     };
     Ok((binding, disposition))
+}
+fn persist_queue_plan_gossip_certificate(
+    state: &State,
+    certificate: &[u8],
+    expected_binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
+) -> Result<bool, String> {
+    let outcome = state
+        .persist_classified_queue_plan_admission(certificate)
+        .map_err(|error| format!("QueuePlan gossip persistence failed: {error}"))?;
+    let (admission, enqueue) = match outcome {
+        PendingQueuePlanAdmissionPersistenceOutcome::Durable { admission, .. } => (admission, true),
+        PendingQueuePlanAdmissionPersistenceOutcome::Applied { admission } => (admission, false),
+        PendingQueuePlanAdmissionPersistenceOutcome::Rejected {
+            admission,
+            disposition,
+        } => {
+            return Err(format!(
+                "QueuePlan gossip became non-live before persistence: {disposition:?}; binding={}",
+                admission.binding_hash
+            ));
+        }
+    };
+    if admission.certificate.binding != *expected_binding {
+        return Err("QueuePlan gossip binding changed during durable persistence".to_owned());
+    }
+    Ok(enqueue)
 }
 #[derive(Debug, Clone)]
 struct PeerRecentSuppressionEntry {
@@ -2122,12 +2139,16 @@ impl TransactionGossiper {
                         let Some(certificate) = candidate.queue_plan_certificate.as_deref() else {
                             unreachable!("validated QueuePlan gossip retains its certificate")
                         };
-                        if let Err(error) = state
-                            .kura()
-                            .persist_pending_queue_plan_admission_certificate(certificate)
-                        {
-                            iroha_logger::error!(%entrypoint_hash, %error, "failed to persist authenticated QueuePlan gossip certificate");
-                            continue;
+                        match persist_queue_plan_gossip_certificate(state, certificate, &binding) {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                iroha_logger::debug!(%entrypoint_hash, "dropping already-applied QueuePlan gossip entry");
+                                continue;
+                            }
+                            Err(error) => {
+                                iroha_logger::error!(%entrypoint_hash, %error, "failed to persist authenticated QueuePlan gossip certificate");
+                                continue;
+                            }
                         }
                         self.queue
                             .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
@@ -2686,16 +2707,20 @@ impl TransactionGossiper {
                         let Some(certificate) = queue_plan_certificate else {
                             unreachable!("validated QueuePlan gossip retains its certificate")
                         };
-                        if let Err(error) = state
-                            .kura()
-                            .persist_pending_queue_plan_admission_certificate(certificate)
-                        {
-                            iroha_logger::error!(
-                                %entrypoint_hash,
-                                %error,
-                                "failed to persist authenticated QueuePlan gossip certificate"
-                            );
-                            continue;
+                        match persist_queue_plan_gossip_certificate(state, certificate, &binding) {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                iroha_logger::debug!(%entrypoint_hash, "dropping already-applied QueuePlan gossip entry");
+                                continue;
+                            }
+                            Err(error) => {
+                                iroha_logger::error!(
+                                    %entrypoint_hash,
+                                    %error,
+                                    "failed to persist authenticated QueuePlan gossip certificate"
+                                );
+                                continue;
+                            }
                         }
                         self.queue
                             .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(

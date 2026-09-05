@@ -492,27 +492,26 @@ mod slice_tests {
         let network_id = NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; 32])),
         );
-        let mint_finality_roster =
-            crate::isi::offline_cash_v1::OfflineCashMintFinalityEpochRosterV1 {
-                version: crate::isi::offline_cash_v1::OFFLINE_CASH_CHAIN_VERSION_V1,
-                network_id,
-                epoch: 0,
-                validators: roster
-                    .iter()
-                    .enumerate()
-                    .map(|(index, validator)| {
-                        crate::isi::offline_cash_v1::OfflineCashMintFinalityValidatorKeysV1 {
-                            validator: validator.validator.clone(),
-                            eq_proof_public_key: [u8::try_from(index + 1)
-                                .expect("small fixture roster");
-                                32],
-                            ep_proof_public_key: [u8::try_from(index + 17)
-                                .expect("small fixture roster");
-                                32],
-                        }
-                    })
-                    .collect(),
-            };
+        let mint_finality_roster = crate::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+            version: crate::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
+            network_id,
+            epoch: 0,
+            validators: roster
+                .iter()
+                .enumerate()
+                .map(|(index, validator)| {
+                    crate::isi::kagemusha_v1::KagemushaMintFinalityValidatorKeysV1 {
+                        validator: validator.validator.clone(),
+                        eq_proof_public_key: [u8::try_from(index + 1)
+                            .expect("small fixture roster");
+                            32],
+                        ep_proof_public_key: [u8::try_from(index + 17)
+                            .expect("small fixture roster");
+                            32],
+                    }
+                })
+                .collect(),
+        };
         let mint_finality_epoch_id = mint_finality_roster
             .finality_epoch_id()
             .expect("valid fixture mint-finality roster");
@@ -521,8 +520,8 @@ mod slice_tests {
             protocol_version: PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
-            offline_cash_mint_finality_epoch_id: mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster: mint_finality_roster,
+            kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster: mint_finality_roster,
             epoch_end_height: 1,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Permissioned,

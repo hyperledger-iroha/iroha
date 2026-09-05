@@ -192,6 +192,20 @@ var swiftSettings: [SwiftSetting] = [
     .define("IROHASWIFT_BRIDGE_REQUIRED"),
     .define("IROHASWIFT_BRIDGE_PRESENT")
 ]
+let secureElementCredentialInput = ProcessInfo.processInfo.environment[
+    "IROHA_SWIFT_ENABLE_SECURE_ELEMENT_CREDENTIAL"
+]
+guard secureElementCredentialInput == nil
+    || secureElementCredentialInput == "0"
+    || secureElementCredentialInput == "1"
+else {
+    fatalError(
+        "error: IROHA_SWIFT_ENABLE_SECURE_ELEMENT_CREDENTIAL must be exactly 0 or 1."
+    )
+}
+if secureElementCredentialInput == "1" {
+    swiftSettings.append(.define("OFFLINE_SECURE_ELEMENT_CREDENTIAL"))
+}
 
 // Keep Google's Apple Nearby implementation deterministic for fresh Xcode
 // checkouts. Nearby's transitive Abseil branch is additionally locked by the

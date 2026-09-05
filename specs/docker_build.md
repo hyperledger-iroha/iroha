@@ -82,14 +82,17 @@ docker build \
   -t hyperledger/iroha:taira-local .
 ```
 
-The Taira-aware entrypoint starts:
+The Taira-aware entrypoint requires `IROHA_TAIRA_GENESIS` to name an
+operator-materialized complete manifest and starts:
 
 ```bash
-iroha3d_taira --sora --config /config/config.toml --genesis-manifest-json /opt/iroha/configs/soranexus/taira/genesis.json
+iroha3d_taira --sora --config /config/config.toml --genesis-manifest-json "$IROHA_TAIRA_GENESIS"
 ```
 
 Keep validator-specific runtime material out of the image. Mount the exact
-operator-owned `/config/config.toml` read-only; the entrypoint copies it to
+operator-owned `/config/config.toml` and complete genesis manifest read-only,
+set `IROHA_TAIRA_GENESIS` to the latter path, and never point it at the bundled
+`genesis.template.json` source. The entrypoint copies the configuration to
 `/storage/runtime-config.toml` before starting `iroha3d_taira`. Mount that
 validator's canonical Ed25519 private-multihash record, including its trailing
 newline, at the fixed path

@@ -33,6 +33,7 @@ const REQUIRED_OUTPUTS = [
   "browser.js",
   "curveRegistry.js",
   "ivmArtifact.js",
+  "kagemusha.js",
   "native.js",
   "nativeArtifactHash.js",
   "numericV1.js",

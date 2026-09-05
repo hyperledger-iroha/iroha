@@ -16,12 +16,12 @@ MINIMUM_NET_REDUCTION = 2_000
 # guarded files, and its postimage contained 10,313. The current test/schema
 # surface first added 1,206 lines to both sides of that honest comparison.
 # Current OpenAPI/Parliament/SCCP and security-audit hardening adds another
-# 1,694 lines without
+# 2,358 lines without
 # changing the three migrated contract assets or their reduction delta.
 ORIGINAL_PREIMAGE_RUST_LINES = 12_327
 ORIGINAL_POSTIMAGE_RUST_LINES = 10_313
 PREVIOUS_TEST_SURFACE_GROWTH_RUST_LINES = 1_206
-CURRENT_OPENAPI_SURFACE_GROWTH_RUST_LINES = 1_694
+CURRENT_OPENAPI_SURFACE_GROWTH_RUST_LINES = 2_358
 CURRENT_TEST_SURFACE_GROWTH_RUST_LINES = (
     PREVIOUS_TEST_SURFACE_GROWTH_RUST_LINES
     + CURRENT_OPENAPI_SURFACE_GROWTH_RUST_LINES
@@ -39,8 +39,8 @@ SOURCE_LINE_LEDGER = {
     'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_tests.rs': 2_262,
     'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_more_tests.rs': 841,
     'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs': 1_544,
-    'crates/iroha_torii/src/openapi.rs': 5_816,
-    'crates/iroha_torii/src/openapi/tests/vpn_da.rs': 2_749,
+    'crates/iroha_torii/src/openapi.rs': 6_393,
+    'crates/iroha_torii/src/openapi/tests/vpn_da.rs': 2_836,
 }
 ASSETS = {
     'cleanup': ('crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_contracts_v1.txt', 'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_tests.rs', 'sha3_256', 'CLEANUP_CONTRACT_ASSET_LEN', 'CLEANUP_CONTRACT_ASSET_SHA3_256'),
@@ -142,16 +142,6 @@ SECTION_ORDER = {
         'openapi.generated_spec_includes_documented_paths.strings.7',
         'openapi.generated_spec_includes_documented_paths.strings.8',
         'openapi.generated_spec_includes_documented_paths.strings.9',
-        'openapi.generated_spec_documents_strict_typed_offline_request_schemas_and_states.rows.1',
-        'openapi.generated_spec_documents_strict_typed_offline_request_schemas_and_states.rows.2',
-        'openapi.generated_spec_documents_strict_typed_offline_request_schemas_and_states.strings.1',
-        'openapi.generated_spec_documents_strict_typed_offline_request_schemas_and_states.strings.2',
-        'openapi.generated_spec_documents_strict_typed_offline_request_schemas_and_states.strings.3',
-        'openapi.generated_spec_exposes_only_the_closed_verifier_backend_registry_v1.strings.1',
-        'openapi.generated_spec_offline_typed_graph_is_closed_and_publicly_named.strings.1',
-        'openapi.generated_spec_matches_offline_negotiation_and_operation_lifecycle.rows.1',
-        'openapi.generated_spec_matches_offline_negotiation_and_operation_lifecycle.strings.1',
-        'openapi.generated_spec_matches_offline_negotiation_and_operation_lifecycle.strings.2',
         'openapi.generated_operations_declare_tool_effects.strings.1',
         'openapi.generated_operations_declare_tool_effects.strings.2',
         'openapi.openapi_schemas_include_system_keys.strings.1',
@@ -217,15 +207,11 @@ SECTION_ORDER = {
         'openapi.musubi_provider_bundle_attestation.schema_rows',
         'openapi.transaction_payload.required',
         'openapi.transaction_admission_intent.labels',
-        'openapi.offline_request.properties.1',
-        'openapi.offline_request.properties.2',
-        'openapi.offline_backend.labels',
         'vpn.governance_mutation.request_property_rows',
         'vpn.governance_mutation.required_field_rows',
         'vpn.vpn_openapi_schemas_are_strict_and_use_canonical_quantities.rows.6',
         'vpn.governance_read_path_parameters_publish_exact_runtime_grammars.rows.1',
         'vpn.da_proof_openapi_contracts_match_exact_norito_json_wire_shapes.rows.6',
-        'openapi.generated_spec_documents_strict_typed_offline_request_schemas_and_states.integer_bounds',
     ),
 }
 TEST_INVENTORY = {
@@ -280,25 +266,32 @@ TEST_INVENTORY = {
         'fhe_input_admission_proof_validate_rejects_open_verify_envelope_drift',
 ),
     'crates/iroha_torii/src/openapi.rs': (
-        'openapi_authorities_have_only_resolvable_component_schema_refs',
+        'openapi_authorities_have_only_resolvable_component_refs',
         'package_openapi_authority_is_canonical_norito_json',
+        'standalone_ballot_drafts_publish_one_exact_success_and_standard_bad_request',
         'account_onboarding_current_state_openapi_is_one_closed_v1_observation',
         'connect_status_openapi_separates_session_and_operator_aggregate',
         'retired_apartment_execution_history_is_absent',
         'uploaded_private_model_runtime_openapi_surface_is_absent',
         'soracloud_release_openapi_matches_the_exact_closed_catalog_surface',
         'pipeline_preflight_schema_exposes_only_per_scheme_signature_batch_caps',
-        'checked_openapi_assets_match_and_compiled_projection_matches_served_bytes',
+        'checked_openapi_assets_match_package_authority',
+        'public_lane_staking_schema_closes_status_variants_and_unbond_cutoff',
+        'compiled_projection_matches_served_bytes',
         'transaction_payload_schema_requires_closed_domain_admission_and_positive_ttl',
         'authenticated_transaction_nullable_fields_are_required_and_nullable',
         'incoming_static_openapi_contracts_remain_bound_to_runtime_routes',
         'static_account_operations_publish_exact_auth_and_private_responses',
         'compiled_private_cache_contract_follows_the_route_catalog',
+        'operator_credential_management_contract_is_closed_and_two_factor',
         'musubi_provider_bundle_attestation_and_exact_release_contract_is_static',
         'static_authority_is_the_complete_catalog_projection_with_exact_effects',
         'sccp_schema_serialization_excludes_retired_and_secret_fields',
         'sccp_ton_openapi_tracks_state_init_and_curve_neutral_wire_contract',
         'production_constants_embedded_in_openapi_remain_frozen',
+        'openapi_route_auth_metadata_matches_enabled_catalog_projection',
+        'openapi_standard_security_matches_enabled_catalog_authentication',
+        'protocol_specific_bootle_bearer_security_is_preserved',
         'openapi_operations_equal_the_enabled_catalog_projection',
         'every_operation_uses_one_declared_top_level_tag',
         'exact_quantity_components_remain_canonical_and_legacy_deal_api_is_absent',
@@ -310,11 +303,7 @@ TEST_INVENTORY = {
         'content_route_documents_conditional_cache_and_auth_contract',
         'ledger_executed_block_wire_cached_loading_is_safe_from_256_kib_callers',
         'generated_spec_includes_documented_paths',
-        'generated_spec_documents_strict_typed_offline_request_schemas_and_states',
-        'generated_spec_exposes_only_the_closed_verifier_backend_registry_v1',
-        'generated_spec_offline_typed_graph_is_closed_and_publicly_named',
-        'offline_json_adapter_schemas_match_actual_norito_serializers',
-        'generated_spec_matches_offline_negotiation_and_operation_lifecycle',
+        'generated_spec_exposes_only_kagemusha_v1',
         'musubi_v1_openapi_matches_the_complete_catalog_and_declares_models',
         'musubi_instruction_previews_discriminate_equal_payload_shapes_by_wire_id',
         'musubi_crypto_text_schemas_do_not_impose_single_key_size_limits',
@@ -324,6 +313,7 @@ TEST_INVENTORY = {
         'multisig_cancel_response_requires_typed_fee_payment_property',
         'multisig_propose_instruction_schema_matches_native_norito_json',
         'generated_operations_declare_tool_effects',
+        'sumeragi_evidence_audit_contract_is_closed_and_bounded',
         'retired_sumeragi_vrf_surfaces_are_absent',
         'validation_fee_plaintext_contracts_stay_retired_and_parliament_capabilities_are_exact',
         'pipeline_fastpq_recovery_documents_operator_auth_and_bounds',
@@ -352,7 +342,7 @@ ATTRIBUTE_SIGNATURE = {
     'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_tests.rs': 'a91e1c3bbf4e2512564f795b197544667aae798efb4c609a30f94853ddf9085d',
     'crates/iroha_zkp_halo2/src/generalized_bulletproof_secret_cleanup_more_tests.rs': '8a61371f2409f09729a5ccfe5ea016c79d7f2168100feab501bd9b2c218263d0',
     'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs': 'd8bb84caecce3d9dc46322b7fba4c6510a53df96d4ad7ca6f45df4d8d218c471',
-    'crates/iroha_torii/src/openapi.rs': '28c7c0725d41ef027b4830971334c062f170f08f937d2eb5f19490134bda8b19',
+    'crates/iroha_torii/src/openapi.rs': 'fcd52b48d3f289ea1cfafb186a5221abcaf981de9c386acf49858f796d93808d',
     'crates/iroha_torii/src/openapi/tests/vpn_da.rs': '6117af48b2adb690add8256579bfdddda01db37bc04025e1b345aaa65acec8c0',
 }
 

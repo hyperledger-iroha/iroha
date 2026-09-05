@@ -111,6 +111,8 @@ mod json_helpers;
 mod json_key_codec;
 /// Jurisdiction Data Guardian attestations and committee types.
 pub mod jurisdiction;
+/// KAGEMUSHA hardware-backed cash commitments, proofs, and settlement models.
+pub mod kagemusha;
 /// Kaigi session descriptors and billing profile definitions.
 pub mod kaigi;
 /// Log-level and severity utilities.
@@ -129,8 +131,6 @@ pub mod name;
 pub mod nexus;
 /// Non-fungible token structures and specs.
 pub mod nft;
-/// Offline allowance commitments, certificates, and transfer proofs.
-pub mod offline;
 /// Oracle feed schemas and deterministic committee helpers.
 pub mod oracle;
 /// Runtime parameter definitions and schema.

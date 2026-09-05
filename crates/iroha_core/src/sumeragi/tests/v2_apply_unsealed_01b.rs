@@ -1161,7 +1161,7 @@ v2_apply_test!(
         let fixture = ApplyFixture::new();
         let mut certificate = fixture.task.certificate().clone();
         certificate.execution_commitment =
-            wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                 Hash::new(b"wrong parent state"),
                 Hash::new(b"wrong post state"),
                 Hash::new(b"wrong ordinary writes"),
@@ -1189,7 +1189,7 @@ v2_apply_test!(
     fresh_apply_recomputes_and_rejects_a_consistently_forged_marker_and_qc,
     {
         let fixture = ApplyFixture::new();
-        let forged_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        let forged_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"forged parent state"),
             Hash::new(b"forged post state"),
             Hash::new(b"forged ordinary writes"),

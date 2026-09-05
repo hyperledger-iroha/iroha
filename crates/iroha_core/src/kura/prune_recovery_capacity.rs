@@ -83,7 +83,7 @@ impl Kura {
             Self::prune_commit_manifests_above_in_dir(&manifest_dir, intent.target_height)?;
             let finality_dir = self.v2_finality_artifact_dir();
             Self::prune_v2_finality_artifacts_above_in_dir(&finality_dir, intent.target_height)?;
-            for directory in Self::offline_cash_finality_sidecar_dirs_for(&blocks_dir) {
+            for directory in Self::kagemusha_finality_sidecar_dirs_for(&blocks_dir) {
                 Self::prune_commit_manifests_above_in_dir(&directory, intent.target_height)?;
             }
             self.truncate_pipeline_sidecars_for_prune(intent)?;

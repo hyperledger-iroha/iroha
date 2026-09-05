@@ -1,3 +1,5 @@
+use iroha_data_model::parameter::{Parameter, system::SumeragiNposParameters};
+
 #[tokio::test]
 async fn creates_all_dirs_while_writing_snapshots() {
     let tmp_root = tempdir().unwrap();
@@ -44,11 +46,11 @@ async fn normal_snapshot_restore_rejects_overdue_pending_consensus_evidence() {
     let mut state = state_factory();
     {
         let mut parameters = state.world.parameters.block();
-        parameters.set_parameter(iroha_data_model::parameter::Parameter::Custom(
-            iroha_data_model::parameter::system::SumeragiNposParameters {
+        parameters.set_parameter(Parameter::Custom(
+            SumeragiNposParameters {
                 evidence_horizon_blocks: 1,
                 slashing_delay_blocks: 1,
-                ..iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                ..SumeragiNposParameters::default()
             }
             .into_custom_parameter(),
         ));

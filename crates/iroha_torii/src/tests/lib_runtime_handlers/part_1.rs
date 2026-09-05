@@ -1758,8 +1758,8 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
     let query_fanout_inflight = ByteWeightedMemoryPool::new(query_memory.fanout_pool_bytes)
         .expect("default query memory pool fits weighted semaphore geometry");
     #[cfg(feature = "app_api")]
-    let offline_command_memory_inflight = ByteWeightedMemoryPool::new(
-        offline_command_memory_pool_bytes(
+    let kagemusha_command_memory_inflight = ByteWeightedMemoryPool::new(
+        kagemusha_command_memory_pool_bytes(
             usize::try_from(defaults::torii::MAX_CONTENT_LEN.get())
                 .expect("default content limit fits usize"),
         )
@@ -1849,7 +1849,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         proof_egress_limiter: limits::RateLimiter::new_u64(None, None),
         proof_body_inflight,
         #[cfg(feature = "app_api")]
-        offline_command_memory_inflight,
+        kagemusha_command_memory_inflight,
         soracloud_public_rate_limiter: limits::RateLimiter::new(None, None),
         soracloud_mutation_rate_limiter: limits::RateLimiter::new(None, None),
         soracloud_mutation_inflight,
@@ -2039,7 +2039,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         #[cfg(feature = "app_api")]
         sorafs_appeal_settlement_submitter: None,
         #[cfg(feature = "app_api")]
-        offline_commands: None,
+        kagemusha_commands: None,
         #[cfg(feature = "app_api")]
         account_onboarding: None,
         vpn_relay_trust: None,

@@ -93,6 +93,8 @@ pub mod interlane;
 pub mod iso_bridge;
 /// Jurisdiction attestation/SDN enforcement helpers.
 pub mod jurisdiction;
+/// Qualified-provider encryption for Kagemusha V1 credit openings.
+pub mod kagemusha_v1_crypto;
 /// Kiso: storage primitives and data layout.
 pub mod kiso;
 /// Persistent block storage (Kura) backend.
@@ -112,8 +114,6 @@ pub mod native_amx;
 pub(crate) mod native_amx_fault_injection;
 /// Nexus helpers (UAID portfolio aggregation, etc.).
 pub mod nexus;
-/// Qualified-provider encryption for Offline Cash V1 credit openings.
-pub mod offline_cash_v1_crypto;
 /// Oracle host helpers (admission/aggregation plumbing).
 pub mod oracle;
 /// Panic hook suppression helpers shared across crates.
@@ -1341,7 +1341,7 @@ mod isi_gas_fees_tests;
 #[path = "../tests/ivm_corehost_axt.rs"]
 mod ivm_corehost_axt_tests;
 #[cfg(test)]
-mod offline_cash_v1_test_fixtures;
+mod kagemusha_v1_test_fixtures;
 #[cfg(test)]
 #[path = "../tests/overlay_chunking.rs"]
 mod overlay_chunking_tests;
@@ -2564,7 +2564,7 @@ mod tests {
                 payload_hash: Hash::new(b"v2-safety-topic-payload"),
             },
             execution_commitment:
-                wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                     Hash::new(b"v2-safety-topic-parent-state"),
                     Hash::new(b"v2-safety-topic-post-state"),
                     Hash::new(b"v2-safety-topic-ordinary-writes"),

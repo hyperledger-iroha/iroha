@@ -7200,14 +7200,14 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = Telemetry::new(Arc::clone(&metrics), true);
         telemetry.observe_torii_http_request(
-            "offline.operation",
-            "/v1/offline/operations/{operation_id}",
+            "kagemusha.operation",
+            "/v1/kagemusha/operations/{operation_id}",
             "public",
             "GET",
             StatusCode::NOT_FOUND,
             "application/json",
             "json",
-            "offline_operation_not_found",
+            "kagemusha_operation_not_found",
             Duration::from_millis(3),
             Some(0),
             Some(96),
@@ -7216,11 +7216,11 @@ mod tests {
             metrics
                 .torii_http_requests_total
                 .with_label_values(&[
-                    "offline.operation",
-                    "/v1/offline/operations/{operation_id}",
+                    "kagemusha.operation",
+                    "/v1/kagemusha/operations/{operation_id}",
                     "public",
                     "json",
-                    "offline_operation_not_found",
+                    "kagemusha_operation_not_found",
                     "application/json",
                     "GET",
                     "404",
@@ -7232,8 +7232,8 @@ mod tests {
             metrics
                 .torii_http_request_bytes_total
                 .with_label_values(&[
-                    "offline.operation",
-                    "/v1/offline/operations/{operation_id}",
+                    "kagemusha.operation",
+                    "/v1/kagemusha/operations/{operation_id}",
                     "public",
                     "json",
                     "application/json",
@@ -7246,11 +7246,11 @@ mod tests {
             metrics
                 .torii_http_response_bytes_total
                 .with_label_values(&[
-                    "offline.operation",
-                    "/v1/offline/operations/{operation_id}",
+                    "kagemusha.operation",
+                    "/v1/kagemusha/operations/{operation_id}",
                     "public",
                     "json",
-                    "offline_operation_not_found",
+                    "kagemusha_operation_not_found",
                     "application/json",
                     "GET",
                     "404",
@@ -7259,8 +7259,8 @@ mod tests {
             96
         );
         let exposition = metrics.try_to_string().expect("encode metrics");
-        assert!(exposition.contains("route_id=\"offline.operation\""));
-        assert!(exposition.contains("route_template=\"/v1/offline/operations/{operation_id}\""));
+        assert!(exposition.contains("route_id=\"kagemusha.operation\""));
+        assert!(exposition.contains("route_template=\"/v1/kagemusha/operations/{operation_id}\""));
         assert!(!exposition.contains("op_8f61d9a9"));
         assert!(!exposition.contains("cursor=eyJzbmFwc2hvdCI6"));
     }
@@ -9561,7 +9561,7 @@ mod tests {
             payload_hash: Hash::new(b"telemetry-v2-payload"),
         };
         let execution_commitment =
-            wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                 Hash::new(b"telemetry-parent-state"),
                 Hash::new(b"telemetry-post-state"),
                 Hash::new(b"telemetry-ordinary-writes"),

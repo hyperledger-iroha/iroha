@@ -224,6 +224,13 @@ public sealed class TransactionBuilder
         return AddInstruction(TransactionInstruction.ExecuteTrigger(triggerId, args));
     }
 
+    /// <summary>Adds the sole first-release KAGEMUSHA top-up instruction.</summary>
+    public TransactionBuilder TopUpKagemushaV1(
+        Hyperledger.Iroha.Kagemusha.KagemushaTopUpRequestV1 request)
+    {
+        return AddInstruction(TransactionInstruction.TopUpKagemushaV1(request));
+    }
+
     public TransactionBuilder IssueReplicationOrder(
         string orderId,
         ReadOnlySpan<byte> orderPayload,

@@ -1,6 +1,6 @@
-# Offline Cash V1 Android hardware qualification matrix
+# KAGEMUSHA V1 Android hardware qualification matrix
 
-This is the physical-device release gate for an Android Offline Cash V1
+This is the physical-device release gate for an Android KAGEMUSHA V1
 hardware profile. A profile remains disabled until every required device row has
 fresh, signed evidence from the exact release candidate. Emulator, software-key,
 summary-only, or host-simulated results never satisfy the gate.
@@ -9,12 +9,16 @@ summary-only, or host-simulated results never satisfy the gate.
 
 | Device family | Minimum OS | Required secure provider |
 | --- | --- | --- |
-| Google Pixel 6 / 6a | Android 14 | StrongBox-backed KeyMint |
-| Google Pixel 7 / 7 Pro | Android 14 | StrongBox-backed KeyMint |
-| Google Pixel 8 / 8a / 8 Pro | Android 15 | StrongBox-backed KeyMint |
-| Google Pixel Fold / Tablet | Android 15 | StrongBox-backed KeyMint |
-| Samsung Galaxy S23 | Android 14 | StrongBox-backed KeyMint |
-| Samsung Galaxy S24 | Android 15 | StrongBox-backed KeyMint |
+| Google Pixel 6 / 6a | Android 14 | qualified OEM/SE KAGEMUSHA service |
+| Google Pixel 7 / 7 Pro | Android 14 | qualified OEM/SE KAGEMUSHA service |
+| Google Pixel 8 / 8a / 8 Pro | Android 15 | qualified OEM/SE KAGEMUSHA service |
+| Google Pixel Fold / Tablet | Android 15 | qualified OEM/SE KAGEMUSHA service |
+| Samsung Galaxy S23 | Android 14 | qualified OEM/SE KAGEMUSHA service |
+| Samsung Galaxy S24 | Android 15 | qualified OEM/SE KAGEMUSHA service |
+
+A stock StrongBox/KeyMint signing key does not satisfy this column. The OEM or
+secure-element service must implement the complete non-forking hardware
+profile and exact 22-operation device ABI with capability mask `0x0000ffff`.
 
 One signed slot is required for every row. Slots must not reuse a device
 fingerprint, attestation challenge, hardware epoch, or qualification run.
@@ -25,11 +29,16 @@ Each slot binds the exact source tree, release manifest, paired-Pasta artifacts,
 wallet APK and signing certificate, device identity and OS build, attested
 hardware policy, and complete raw command/output transcript. It must prove:
 
-- exact-next or one-use-successor state transitions with no software fallback;
-- rollback-resistant journal, accepted-credit inbox, and payment outbox;
-- trusted commit time and atomic recoverable transition certificates;
-- `Bootstrap`, `MintFold`, `SendSplit`, `ReceiveFold`, `RedeemSplit`, and
-  offline hardware-epoch `Rotate`;
+- exact-next predecessor consumption, one-use successor authorization, and no
+  software fallback;
+- rollback-resistant counter/journal, durable reserved inbox and retry outbox,
+  authoritative replay roots, and exact duplicate/conflict recovery;
+- trusted time or monotonic leases, atomic verified-candidate commit, and
+  recoverable terminal commit certificates;
+- the exact three-message request/payment/acknowledgement exchange with one
+  positive exact amount and receiver encryption key in every request;
+- `Bootstrap`, `MintFold`, `SendSplit`, singular `ReceiveFold`, `RedeemSplit`,
+  and hardware-only `Rotate`;
 - 1,000 independently received one-unit credits folded into one aggregate
   balance, followed by one 1,000-unit payment and subsequent full and partial
   redemption;
@@ -39,16 +48,17 @@ hardware policy, and complete raw command/output transcript. It must prove:
   retry, conflicting credit reuse, stale state, forked successors, rollback,
   counter reuse/skip/rollover, forged rotation, overflow, and proof/output
   substitution rejection;
-- crash injection at every journal, hardware commit, proof, state persistence,
-  inbox, outbox, transport, and acknowledgement boundary, with value
-  conservation and byte-identical recovery;
+- crash injection at every prepare, proof, candidate persistence, hardware
+  commit, terminal authorization, canonical-envelope persistence, inbox, outbox, transport,
+  and acknowledgement boundary, with value conservation and byte-identical
+  recovery;
 - airplane mode, restart, abrupt power loss, clock rollback, backup/restore,
   thermal, latency, memory, throughput, QR, NFC, and nearby-device operation;
 - zero network requests during every device-to-device payment.
 
 Secure state is intentionally non-clonable. Backup/restore qualification must
 show that restored application data cannot fork spend authority; it is not a
-promise that lost hardware cash can be recovered.
+promise that lost KAGEMUSHA value can be recovered.
 
 ## Release decision
 

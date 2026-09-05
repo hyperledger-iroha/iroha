@@ -124,30 +124,26 @@ enum NoritoBridgeLoader {
         "connect_norito_private_settlement_committee_proof_response_verify_v1",
         "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
         "connect_norito_private_settlement_audit_approval_response_verify_v1",
-        "connect_norito_offline_cash_v1_payment_request_validate",
-        "connect_norito_offline_cash_v1_acceptance_intent_authorization_validate",
-        "connect_norito_offline_cash_v1_acceptance_ticket_validate",
-        "connect_norito_offline_cash_v1_no_commit_closure_validate",
-        "connect_norito_offline_cash_v1_payment_validate",
-        "connect_norito_offline_cash_v1_acknowledgement_validate",
-        "connect_norito_offline_cash_v1_complete_exchange_validate",
-        "connect_norito_offline_cash_v1_mint_authorization_validate",
-        "connect_norito_offline_cash_v1_mint_credit_validate",
-        "connect_norito_offline_cash_v1_mint_credit_against_authorization_validate",
-        "connect_norito_offline_cash_v1_redemption_voucher_validate",
-        "connect_norito_offline_cash_v1_payment_request_text_validate",
-        "connect_norito_offline_cash_v1_acceptance_intent_authorization_text_validate",
-        "connect_norito_offline_cash_v1_acceptance_ticket_text_validate",
-        "connect_norito_offline_cash_v1_no_commit_closure_text_validate",
-        "connect_norito_offline_cash_v1_payment_text_validate",
-        "connect_norito_offline_cash_v1_acknowledgement_text_validate",
-        "connect_norito_offline_cash_v1_complete_exchange_text_validate",
-        "connect_norito_offline_cash_v1_mint_authorization_text_validate",
-        "connect_norito_offline_cash_v1_mint_credit_text_validate",
-        "connect_norito_offline_cash_v1_mint_credit_against_authorization_text_validate",
-        "connect_norito_offline_cash_v1_redemption_voucher_text_validate",
-        "connect_norito_offline_cash_device_capabilities_v1",
-        "connect_norito_offline_cash_device_execute_v1"
+        "connect_norito_kagemusha_v1_payment_request_validate",
+        "connect_norito_kagemusha_v1_payment_validate",
+        "connect_norito_kagemusha_v1_acknowledgement_validate",
+        "connect_norito_kagemusha_v1_complete_exchange_validate",
+        "connect_norito_kagemusha_v1_mint_authorization_validate",
+        "connect_norito_kagemusha_v1_mint_credit_validate",
+        "connect_norito_kagemusha_v1_mint_credit_against_authorization_validate",
+        "connect_norito_kagemusha_v1_redemption_voucher_validate",
+        "connect_norito_kagemusha_v1_payment_request_text_validate",
+        "connect_norito_kagemusha_v1_payment_text_validate",
+        "connect_norito_kagemusha_v1_acknowledgement_text_validate",
+        "connect_norito_kagemusha_v1_complete_exchange_text_validate",
+        "connect_norito_kagemusha_v1_mint_authorization_text_validate",
+        "connect_norito_kagemusha_v1_mint_credit_text_validate",
+        "connect_norito_kagemusha_v1_mint_credit_against_authorization_text_validate",
+        "connect_norito_kagemusha_v1_redemption_voucher_text_validate",
+        "connect_norito_kagemusha_device_capabilities_v1",
+        "connect_norito_kagemusha_device_execute_v1",
+        "connect_norito_kagemusha_device_mint_stage_command_v1_validate",
+        "connect_norito_kagemusha_device_mint_stage_result_v1_validate"
     ] + parliamentTimedOvnWalletRequiredSymbols
 
     private typealias BridgeAbiVersionFn = @convention(c) () -> UInt32
@@ -766,13 +762,7 @@ enum NativeBridgeError: Error, Equatable {
     case proofAttachment
     case invalidNullifiers
     case invalidRootHint
-    case offlineReceiver
-    case offlineAsset
-    case offlineNonce
-    case offlineSerialize
-    case offlineCommitment
-    case offlineBlinding
-    case offlineCashV1
+    case kagemushaV1
     case unsupportedAlgorithm
     case metadataTarget
     case metadataKey
@@ -831,13 +821,7 @@ enum NativeBridgeError: Error, Equatable {
         case -29: return .hex
         case -30: return .accountList
         case -34: return .feePayment
-        case -300: return .offlineReceiver
-        case -301: return .offlineAsset
-        case -303: return .offlineNonce
-        case -304: return .offlineSerialize
-        case -305: return .offlineCommitment
-        case -306: return .offlineBlinding
-        case -311: return .offlineCashV1
+        case -311: return .kagemushaV1
         case -402: return .multisigSpec
         case -406: return .identifierReceipt
         case -408: return .accountOnboardingBody

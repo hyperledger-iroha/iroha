@@ -458,14 +458,13 @@ fn queued_store_terminal_adopts_authority_upgrade_under_incumbent_owner() {
         proposal_round: manifest.round,
         phase: wire::GlobalPhase::Commit,
         subject: manifest.subject,
-        execution_commitment:
-            wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
-                Hash::new(b"terminal upgrade parent state"),
-                Hash::new(b"terminal upgrade post state"),
-                Hash::new(b"terminal upgrade writes"),
-                1,
-                Hash::new(b"terminal upgrade block"),
-            ),
+        execution_commitment: wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"terminal upgrade parent state"),
+            Hash::new(b"terminal upgrade post state"),
+            Hash::new(b"terminal upgrade writes"),
+            1,
+            Hash::new(b"terminal upgrade block"),
+        ),
         signers: Vec::new(),
         aggregate_signature: Vec::new(),
     };
@@ -1080,9 +1079,7 @@ fn enqueue_owned_local_proposal_ready_for_timeout_test(
     context: &wire::HeightContext,
     tag: EventTag,
     marker: u8,
-    physical_completion: Option<
-        super::super::v2_worker::LifecycleValidatePhysicalCompletionV1,
-    >,
+    physical_completion: Option<super::super::v2_worker::LifecycleValidatePhysicalCompletionV1>,
 ) -> (u128, u128) {
     let manifest = runtime_manifest(context, marker);
     let durable = DurableBodyReceipt::for_test(

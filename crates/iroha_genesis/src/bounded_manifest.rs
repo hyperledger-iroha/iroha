@@ -695,8 +695,8 @@ mod tests {
             iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(
             ),
         )
-        .with_offline_cash_mint_finality_genesis_parameters(
-            crate::deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+        .with_kagemusha_mint_finality_genesis_parameters(
+            crate::deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         )
         .set_topology(crate::deterministic_test_genesis_topology_entries())
         .build_raw()

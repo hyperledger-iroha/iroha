@@ -294,7 +294,7 @@ extension AndroidProvisionedProof {
         return CanonicalNorito.encodeUInt32(version)
     }
 
-    private static let noritoTypeName = "iroha_data_model::offline::model::AndroidProvisionedProof"
+    private static let noritoTypeName = "iroha_data_model::kagemusha::model::AndroidProvisionedProof"
     private static let signingPayloadTypeName =
-        "iroha_data_model::offline::model::AndroidProvisionedManifestSignaturePayload"
+        "iroha_data_model::kagemusha::model::AndroidProvisionedManifestSignaturePayload"
 }

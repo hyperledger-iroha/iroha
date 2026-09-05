@@ -27,6 +27,7 @@ use iroha_data_model::{
         pipeline::{PipelineEventBox, TransactionEvent, TransactionStatus},
         stream::{EventMessage, EventSubscriptionRequest},
     },
+    isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1,
     nexus::{DataSpaceId, LaneId},
     parameter::system::SumeragiConsensusMode,
     transaction::{FeePaymentIntent, TransactionBuilder},
@@ -603,6 +604,7 @@ pub fn kagami_default_manifest_json(
     ivm_dir: impl AsRef<Path>,
     chain_id: impl AsRef<str>,
     consensus_mode: SumeragiConsensusMode,
+    kagemusha_mint_finality: &KagemushaMintFinalityGenesisParametersV1,
 ) -> Result<String> {
     let mut manifest = norito::json::Map::new();
     manifest.insert(
@@ -634,6 +636,11 @@ pub fn kagami_default_manifest_json(
             .expect("serialize Sumeragi v2 genesis context"),
     );
     manifest.insert(
+        "kagemusha_mint_finality".to_string(),
+        norito::json::value::to_value(kagemusha_mint_finality)
+            .expect("serialize KAGEMUSHA mint-finality genesis parameters"),
+    );
+    manifest.insert(
         "transactions".to_string(),
         Value::Array(vec![Value::Object(norito::json::Map::new())]),
     );
@@ -642,7 +649,46 @@ pub fn kagami_default_manifest_json(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{
+        isi::kagemusha_v1::{
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
+        },
+        peer::PeerId,
+    };
     mod replay_fixture_owner;
+
+    fn test_kagemusha_mint_finality_parameters() -> KagemushaMintFinalityGenesisParametersV1 {
+        let mut validators = (0x20_u8..0x24)
+            .map(|seed| {
+                let validator = PeerId::new(
+                    KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                        .expect("derive deterministic mock validator")
+                        .public_key()
+                        .clone(),
+                );
+                iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                    &[0xA0_u8.wrapping_add(seed); 32],
+                    0,
+                    validator,
+                )
+                .expect("derive mock mint-finality validator keys")
+            })
+            .collect::<Vec<_>>();
+        validators.sort_by(|left, right| left.validator.cmp(&right.validator));
+        let parameters = KagemushaMintFinalityGenesisParametersV1 {
+            epoch_roster: KagemushaMintFinalityEpochRosterTemplateV1 {
+                version: KAGEMUSHA_CHAIN_VERSION_V1,
+                epoch: 0,
+                validators,
+            },
+            next_epoch_roster: None,
+        };
+        parameters
+            .validate()
+            .expect("mock mint-finality parameters are valid");
+        parameters
+    }
     #[test]
     fn default_data_uses_fixtures() {
         let data = MockToriiData::default();
@@ -682,11 +728,13 @@ mod tests {
     fn kagami_manifest_helper_preserves_requested_chain_and_consensus_mode() {
         let key_pair = iroha_crypto::KeyPair::random();
         let ivm_dir = tempfile::tempdir().expect("tempdir");
+        let kagemusha_mint_finality = test_kagemusha_mint_finality_parameters();
         let manifest = kagami_default_manifest_json(
             key_pair.public_key(),
             ivm_dir.path(),
             "mochi-test-chain",
             SumeragiConsensusMode::Npos,
+            &kagemusha_mint_finality,
         )
         .expect("manifest json");
         let value: Value = json::from_str(&manifest).expect("parse manifest json");
@@ -711,6 +759,17 @@ mod tests {
                 .and_then(|layout| layout.get("chunk_size_bytes"))
                 .and_then(Value::as_u64),
             Some(256 * 1024)
+        );
+        assert_eq!(
+            value
+                .get("kagemusha_mint_finality")
+                .and_then(Value::as_object)
+                .and_then(|parameters| parameters.get("epoch_roster"))
+                .and_then(Value::as_object)
+                .and_then(|roster| roster.get("validators"))
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(4)
         );
     }
 }

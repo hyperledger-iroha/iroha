@@ -12923,6 +12923,32 @@ if capacity_bypass && !protected_capacity_bypass {
         "authenticated TimeoutVote admission must bypass only ordinary semantic capacity",
         errors,
     )
+    _require_rust_token_sequence(
+        path,
+        admission,
+        """
+let height_decided = self.reducer.durable_state().decision().is_some();
+if let Some(record) = self.ingress_equivocations.get_mut(&key) {
+""",
+        "authenticated semantic admission must snapshot terminal Decision state before borrowing its record",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        admission,
+        """
+if height_decided {
+    return Ok((
+        Some(Self::ignored_outcome(reducer::IgnoreReason::AlreadyDecided)),
+        None,
+    ));
+}
+let evidence = record.artifact.conflict_with(payload)?;
+record.equivocation_reported = true;
+""",
+        "newly discovered post-Decision semantic conflicts must be terminally inert before diagnostic work is emitted",
+        errors,
+    )
     if admission is not None:
         tokens = rust_code_tokens(admission.body)
         ordered_sequences = (
@@ -26055,7 +26081,11 @@ def _transport_geometry_production_source_fidelity_errors(
             repo_root / "configs" / "soranexus" / "taira" / "config.toml"
         ),
         "taira_genesis": (
-            repo_root / "configs" / "soranexus" / "taira" / "genesis.json"
+            repo_root
+            / "configs"
+            / "soranexus"
+            / "taira"
+            / "genesis.template.json"
         ),
     }
     sources: dict[str, str] = {}
@@ -41828,7 +41858,7 @@ let occurrence_scan_complete = occurrence_owners.is_some();
                 "runtime_queue_ownership_snapshot_projection_hash"
             ),
             """
-projection.extend_from_slice(b"iroha:sumeragi:v2:runtime-queue-snapshot:v3");
+projection.extend_from_slice(b"iroha:sumeragi:v2:runtime-queue-snapshot:v4");
 append_runtime_identity_field(
     &mut projection,
     &(Arc::as_ptr(&snapshot.source_identity) as usize).to_le_bytes(),
@@ -41843,6 +41873,8 @@ append_runtime_identity_u64(
 for owner in &snapshot.occurrence_owners {
     append_runtime_identity_field(&mut projection, owner.projection_hash.as_ref());
 }
+append_runtime_optional_ordinal(&mut projection, snapshot.minimum_lifecycle_ordinal);
+append_runtime_optional_ordinal(&mut projection, snapshot.maximum_lifecycle_ordinal);
 """,
             "queue snapshot hashing must bind scan completeness and every "
             "physical occurrence capability in FIFO order",
@@ -41901,6 +41933,91 @@ RuntimeQueueOccurrenceOwner::from_candidate(candidate).is_some_and(|selected| {
             "pre-selection snapshot hash",
             errors,
         )
+        _require_rust_token_sequence(
+            runtime_path,
+            nonforgeable_helper_items.get("mint_selection_seal"),
+            """
+let lifecycle_bound_is_exact = match (kind, lifecycle_upper_bound) {
+    (RuntimeQueueSelectionKind::LifecycleApplyPredecessor, Some(upper_bound)) => {
+        upper_bound != 0
+            && queue_before
+                .maximum_lifecycle_ordinal
+                .is_some_and(|maximum| maximum < upper_bound)
+            && selected_lifecycle_ordinal < upper_bound
+    }
+    (RuntimeQueueSelectionKind::LifecycleApplyPredecessor, None) => false,
+    (_, None) => true,
+    (_, Some(_)) => false,
+};
+if !lifecycle_bound_is_exact {
+    return Err(EnqueueError::FailClosed);
+}
+""",
+            "pre-Apply queue selection must bind the complete queue maximum to one explicit upper bound",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            nonforgeable_helper_items.get("matches_scheduler_occurrence"),
+            """
+match self.lifecycle_upper_bound {
+    Some(upper_bound) => {
+        self.kind == RuntimeQueueSelectionKind::LifecycleApplyPredecessor
+            && before
+                .maximum_lifecycle_ordinal
+                .is_some_and(|maximum| maximum < upper_bound)
+    }
+    None => self.kind != RuntimeQueueSelectionKind::LifecycleApplyPredecessor,
+}
+""",
+            "scheduler occurrence validation must recheck the sealed complete-queue Apply bound",
+            errors,
+        )
+        apply_predecessor_consumer = nonforgeable_helper_items.get(
+            "take_lifecycle_apply_predecessor_scheduler_ownership"
+        )
+        _require_rust_item_context(
+            runtime_path,
+            apply_predecessor_consumer,
+            (
+                (
+                    "impl",
+                    "<",
+                    "D",
+                    ":",
+                    "RuntimeDriver",
+                    ">",
+                    "SerializedV2Runtime",
+                    "<",
+                    "D",
+                    ">",
+                ),
+            ),
+            "attested live-Apply scheduler ownership consumer",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            apply_predecessor_consumer,
+            """
+let evidence = self
+    .take_last_scheduler_ownership()
+    .ok_or(RuntimeSchedulerEvidenceError::InvalidProjection)?;
+evidence.validate_exact()?;
+let bound_matches = expected_apply_ordinal != 0
+    && matches!(
+        (&evidence.selected, &evidence.candidate),
+        (
+            RuntimeSelectedOwnerKind::LifecycleApplyPredecessor
+                | RuntimeSelectedOwnerKind::LifecycleApplyPredecessorRetryRetained,
+            RuntimeSelectedCandidateOwnership::Exact(candidate),
+        ) if candidate.selection_seal.lifecycle_upper_bound
+            == Some(expected_apply_ordinal)
+    );
+""",
+            "the special scheduler consumer must compare its sealed bound with the exact attested Apply ordinal",
+            errors,
+        )
         require_runtime_item_order(
             nonforgeable_helper_items.get("pop_pacemaker_progress_with_ownership"),
             (
@@ -41955,14 +42072,17 @@ RuntimeQueueOccurrenceOwner::from_candidate(candidate).is_some_and(|selected| {
                 queue_selection_kind_code[0],
                 """
 Self::Ordinary => 1,
+Self::LifecycleApplyPredecessor => 10,
 Self::OrdinaryViewProgress => 7,
 Self::FenceCompletion => 2,
 Self::PacemakerProgress => 3,
 Self::PacemakerCertifiedProgress => 4,
 Self::FencePredecessor => 5,
 Self::PreTimeoutLockedPrepareQc => 6,
+Self::PreTimeoutLocalProposalReady => 8,
+Self::CompletionCapacityRelief => 9,
 """,
-                "the ordinary view-release selection kind must have one distinct sealed code",
+                "every scheduler selection kind must have one distinct sealed code",
                 errors,
             )
 
@@ -42259,6 +42379,7 @@ append_runtime_identity_field(
     &mut projection,
     &seal.oldest_lifecycle_ordinal.to_le_bytes(),
 );
+append_runtime_optional_ordinal(&mut projection, seal.lifecycle_upper_bound);
 append_runtime_optional_ordinal(&mut projection, seal.completion_minimum_lifecycle_ordinal);
 append_runtime_optional_ordinal(&mut projection, seal.progress_minimum_lifecycle_ordinal);
 append_runtime_optional_ordinal(&mut projection, seal.normal_minimum_lifecycle_ordinal);

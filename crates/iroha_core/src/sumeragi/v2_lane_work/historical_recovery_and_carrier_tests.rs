@@ -2120,7 +2120,7 @@ fn verified_finality_for_context(
     keys: &[KeyPair],
     block: &SignedBlock,
 ) -> wire::finality::V2FinalityArtifact {
-    let mut execution_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+    let mut execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"historical sidecar parent state"),
         Hash::new(b"historical sidecar post state"),
         Hash::new(b"historical sidecar writes"),
@@ -2165,20 +2165,55 @@ fn historical_sidecar_server_fixture(
     holder_indices: Option<&[usize]>,
     request_noncanonical_entry: bool,
 ) -> HistoricalSidecarServerFixture {
-    let (adapter, keys) = fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
+    historical_sidecar_server_fixture_with_lane_committee(
+        finality_kind,
+        holder_indices,
+        request_noncanonical_entry,
+        None,
+    )
+}
+#[allow(clippy::too_many_lines)]
+fn historical_sidecar_server_fixture_with_lane_committee(
+    finality_kind: HistoricalSidecarFinality,
+    holder_indices: Option<&[usize]>,
+    request_noncanonical_entry: bool,
+    lane_keys: Option<&[KeyPair]>,
+) -> HistoricalSidecarServerFixture {
+    let (mut adapter, keys) =
+        fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
+    if let Some(lane_keys) = lane_keys {
+        let lane_committee = enable_multilane_nexus(
+            &mut adapter,
+            lane_keys,
+            LaneId::new(1),
+            DataSpaceId::new(7),
+        );
+        assert_eq!(lane_committee.len(), lane_keys.len());
+    }
     let canonical_reference = holder_indices.map_or_else(
         || missing_sidecar_reference(&adapter, &keys, 1),
         |indices| missing_sidecar_reference_with_signers(&adapter, &keys, 1, indices),
     );
-    let canonical_entry =
-        merge_entry_from_reference(&canonical_reference, b"historical canonical sidecar");
+    let canonical_entry = if lane_keys.is_some() {
+        merge_candidate_for_persistence_retry(&adapter, 1)
+            .into_entry(canonical_reference.merge_qc.clone())
+    } else {
+        merge_entry_from_reference(&canonical_reference, b"historical canonical sidecar")
+    };
     let canonical_entry_hash = adapter
         .kura
         .persist_pending_certified_merge_entry(&canonical_entry)
         .expect("persist historical canonical merge entry");
     let requested_entry = request_noncanonical_entry.then(|| {
         let reference = missing_sidecar_reference(&adapter, &keys, 1);
-        merge_entry_from_reference(&reference, b"historical noncanonical sidecar")
+        if lane_keys.is_some() {
+            let mut entry = merge_candidate_for_persistence_retry(&adapter, 1)
+                .into_entry(reference.merge_qc.clone());
+            entry.global_state_root = Hash::new(b"historical noncanonical sidecar");
+            entry
+        } else {
+            merge_entry_from_reference(&reference, b"historical noncanonical sidecar")
+        }
     });
     let requested_entry = requested_entry.as_ref().unwrap_or(&canonical_entry);
     let requested_reference = CertifiedMergeLedgerReference::new(requested_entry);
@@ -2300,6 +2335,226 @@ fn advanced_responder_serves_exact_finalized_historical_merge_sidecar() {
         posted_sidecar_chunk(effect)
             .is_some_and(|chunk| chunk.entry_hash == fixture.request.entry_hash)
     }));
+}
+#[test]
+fn disjoint_lane_committee_requester_receives_exact_finalized_historical_sidecar() {
+    let mut lane_keys = (0xE8_u8..=0xEB)
+        .map(|seed| {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic disjoint lane-sidecar requester key")
+        })
+        .collect::<Vec<_>>();
+    lane_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    let lane_id = LaneId::new(1);
+    let dataspace_id = DataSpaceId::new(7);
+    let mut fixture = historical_sidecar_server_fixture_with_lane_committee(
+        HistoricalSidecarFinality::Exact,
+        None,
+        false,
+        Some(&lane_keys),
+    );
+    let lane_committee = fixture
+        .adapter
+        .state
+        .resolve_lane_committee_at_height(
+            crate::state::LaneAuthorityRoute::new(lane_id, dataspace_id),
+            fixture.carrier_height,
+        )
+        .expect("carrier-bound participant committee")
+        .into_validators();
+    let requester = lane_committee[0].clone();
+    assert!(
+        !fixture
+            .adapter
+            .context
+            .roster
+            .iter()
+            .any(|entry| entry.validator == requester),
+        "the regression requires a participant committee disjoint from the global roster"
+    );
+    assert!(
+        !fixture
+            .finality
+            .height_context
+            .roster
+            .iter()
+            .any(|entry| entry.validator == requester),
+        "the participant requester must also be outside the carrier's historical global roster"
+    );
+    assert!(fixture.adapter.current_lane_committee_contains(&requester));
+
+    fixture.requester = requester.clone();
+    fixture.request.requester = requester;
+    fixture.request.service_generation = fixture
+        .adapter
+        .merge_sidecars
+        .server_service_generation_for_test();
+    fixture.request.request_id = fixture.request.canonical_request_id();
+    assert_eq!(
+        dispatch_historical_sidecar_request(&mut fixture),
+        V2LaneIngressOutcome::Inserted
+    );
+    assert!(fixture.adapter.sidecar_effects.iter().any(|effect| {
+        posted_sidecar_chunk(effect).is_some_and(|chunk| {
+            chunk.requester == fixture.requester && chunk.entry_hash == fixture.request.entry_hash
+        })
+    }));
+}
+#[test]
+fn current_lane_validator_absent_from_historical_entry_is_rejected() {
+    let mut fixture =
+        historical_sidecar_server_fixture(HistoricalSidecarFinality::Exact, None, false);
+    let mut lane_keys = (0xF0_u8..=0xF3)
+        .map(|seed| {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic post-carrier lane validator key")
+        })
+        .collect::<Vec<_>>();
+    lane_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    let lane_committee = enable_multilane_nexus(
+        &mut fixture.adapter,
+        &lane_keys,
+        LaneId::new(1),
+        DataSpaceId::new(7),
+    );
+    let requester = lane_committee[0].clone();
+    assert!(fixture.adapter.current_lane_committee_contains(&requester));
+    let entry = fixture
+        .adapter
+        .kura
+        .merge_entry_by_hash(fixture.request.entry_hash)
+        .expect("read exact historical sidecar")
+        .expect("historical sidecar exists");
+    assert!(entry.active_lanes.is_empty());
+    assert!(
+        !fixture
+            .adapter
+            .finalized_merge_active_lane_committee_contains(&entry, &requester)
+    );
+    fixture.requester = requester.clone();
+    fixture.request.requester = requester;
+    fixture.request.service_generation = fixture
+        .adapter
+        .merge_sidecars
+        .server_service_generation_for_test();
+    fixture.request.request_id = fixture.request.canonical_request_id();
+    assert_eq!(
+        dispatch_historical_sidecar_request(&mut fixture),
+        V2LaneIngressOutcome::Rejected
+    );
+    assert!(fixture.adapter.sidecar_effects.is_empty());
+    assert!(
+        !fixture
+            .adapter
+            .merge_sidecars
+            .has_server_request_gate_for_test(&fixture.request.requester, &fixture.request)
+    );
+}
+#[test]
+fn finalized_lane_committee_requires_exact_carrier_binding() {
+    let mut lane_keys = (0xD8_u8..=0xDB)
+        .map(|seed| {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic exact-binding lane validator key")
+        })
+        .collect::<Vec<_>>();
+    lane_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    let fixture = historical_sidecar_server_fixture_with_lane_committee(
+        HistoricalSidecarFinality::Exact,
+        None,
+        false,
+        Some(&lane_keys),
+    );
+    let requester = PeerId::new(lane_keys[0].public_key().clone());
+    let entry = fixture
+        .adapter
+        .kura
+        .merge_entry_by_hash(fixture.request.entry_hash)
+        .expect("read exact historical sidecar")
+        .expect("historical sidecar exists");
+    assert!(
+        fixture
+            .adapter
+            .finalized_merge_active_lane_committee_contains(&entry, &requester)
+    );
+
+    let mut wrong_activation = entry.clone();
+    for binding in &mut wrong_activation.active_lanes {
+        binding.activation_height = binding.activation_height.saturating_add(1);
+    }
+    assert!(
+        !fixture
+            .adapter
+            .finalized_merge_active_lane_committee_contains(&wrong_activation, &requester)
+    );
+
+    let mut wrong_incarnation = entry.clone();
+    for binding in &mut wrong_incarnation.active_lanes {
+        binding.incarnation = Hash::new(b"wrong lane incarnation");
+    }
+    assert!(
+        !fixture
+            .adapter
+            .finalized_merge_active_lane_committee_contains(&wrong_incarnation, &requester)
+    );
+
+    let mut wrong_config = entry;
+    for binding in &mut wrong_config.active_lanes {
+        binding.lane_config_hash = Hash::new(b"wrong lane configuration");
+    }
+    assert!(
+        !fixture
+            .adapter
+            .finalized_merge_active_lane_committee_contains(&wrong_config, &requester)
+    );
+}
+#[test]
+fn disjoint_lane_committee_cannot_fetch_speculative_current_height_sidecar() {
+    let CertifiedSidecarServerFixture {
+        mut adapter,
+        mut request,
+        ..
+    } = certified_sidecar_server_fixture();
+    let mut lane_keys = (0xEC_u8..=0xEF)
+        .map(|seed| {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic speculative sidecar requester key")
+        })
+        .collect::<Vec<_>>();
+    lane_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    let lane_committee = enable_multilane_nexus(
+        &mut adapter,
+        &lane_keys,
+        LaneId::new(1),
+        DataSpaceId::new(7),
+    );
+    let requester = lane_committee[0].clone();
+    assert!(!adapter.frozen_roster_contains(&requester));
+    assert!(adapter.current_lane_committee_contains(&requester));
+    request.requester = requester.clone();
+    request.request_id = request.canonical_request_id();
+    let hub = PeerId::new(KeyPair::random().public_key().clone());
+    let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(
+        hub.clone(),
+        adapter.limits.reply_source_capacity.get(),
+    );
+    let route = routes.mint_via(requester.clone(), hub);
+    assert_eq!(
+        adapter
+            .accept_certified_merge_sidecar_for_test(requester, route, request.clone())
+            .expect("speculative participant request is rejected without local failure"),
+        V2LaneIngressOutcome::Rejected
+    );
+    assert!(
+        adapter.sidecar_effects.is_empty(),
+        "participant recovery authority must emit no speculative current-height bytes"
+    );
+    assert!(
+        !adapter
+            .merge_sidecars
+            .has_server_request_gate_for_test(&request.requester, &request),
+        "terminal speculative rejection must release the exact materialization gate"
+    );
 }
 #[test]
 fn disjoint_current_roster_requester_receives_exact_historical_sidecar_chunk() {

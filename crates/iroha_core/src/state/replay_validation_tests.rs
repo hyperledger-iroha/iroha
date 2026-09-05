@@ -1009,6 +1009,15 @@ fn replay_rotates_topology_for_npos_prf_leader_impl() {
         .iter()
         .map(|keypair| PeerId::new(keypair.public_key().clone()))
         .collect::<Vec<_>>();
+    let mut mint_finality_roster = peers
+        .iter()
+        .cloned()
+        .map(|validator| ValidatorPower {
+            validator,
+            power: 1,
+        })
+        .collect::<Vec<_>>();
+    mint_finality_roster.sort_by(|left, right| left.validator.cmp(&right.validator));
     let topology = crate::sumeragi::network_topology::Topology::new(peers.clone());
     let height = 2;
     let view = 0u64;
@@ -1032,23 +1041,13 @@ fn replay_rotates_topology_for_npos_prf_leader_impl() {
             )
         })
         .collect::<Vec<_>>();
-    let mut mint_finality_roster = peers
-        .iter()
-        .cloned()
-        .map(|validator| ValidatorPower {
-            validator,
-            power: 1,
-        })
-        .collect::<Vec<_>>();
-    mint_finality_roster.sort();
-    let mint_finality = crate::offline_cash_v1_test_fixtures::mint_finality_genesis_parameters(
-        &mint_finality_roster,
-    );
+    let mint_finality =
+        crate::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(&mint_finality_roster);
     let (user_id, user_keypair) = gen_account_in("wonderland");
     let mut genesis_builder =
         GenesisBuilder::new_without_executor(chain_id.clone(), "ivm/libs/not/installed")
             .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
-            .with_offline_cash_mint_finality_genesis_parameters(mint_finality)
+            .with_kagemusha_mint_finality_genesis_parameters(mint_finality)
             .set_topology(topology_entries)
             .append_parameter(Parameter::Custom(npos_params.into_custom_parameter()));
     genesis_builder = genesis_builder

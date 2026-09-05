@@ -28,9 +28,9 @@ use iroha_data_model::{
     hijiri::HijiriParametersV1,
     isi::{
         Grant, InstructionBox, Mint, SetParameter,
-        offline_cash_v1::{
-            OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterTemplateV1,
-            OfflineCashMintFinalityGenesisParametersV1,
+        kagemusha_v1::{
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
+            KagemushaMintFinalityGenesisParametersV1,
         },
         register::Register,
     },
@@ -171,7 +171,7 @@ pub fn genesis_with_keypair(
     genesis_key_pair: KeyPair,
 ) -> GenesisBlock {
     // Always construct a deterministic, minimal built-in genesis tailored for tests.
-    // This avoids surprises from `defaults/genesis.json` contents and keeps the
+    // This avoids treating `defaults/genesis.template.json` as a runtime manifest and keeps the
     // first transaction shape predictable (e.g., single Upgrade when a sample
     // executor is available).
     init_instruction_registry();
@@ -349,9 +349,9 @@ fn decode_consensus_handshake_metadata(
     Ok(metadata)
 }
 
-fn test_offline_cash_mint_finality_genesis_parameters(
+fn test_kagemusha_mint_finality_genesis_parameters(
     topology: &UniqueVec<PeerId>,
-) -> OfflineCashMintFinalityGenesisParametersV1 {
+) -> KagemushaMintFinalityGenesisParametersV1 {
     let mut voters = topology.iter().cloned().collect::<Vec<_>>();
     voters.sort();
     let validators = voters
@@ -361,7 +361,7 @@ fn test_offline_cash_mint_finality_genesis_parameters(
             let seed_byte = 0xA0_u8.wrapping_add(
                 u8::try_from(index).expect("test-network validator index fits in one byte"),
             );
-            iroha_core::zk::offline_cash_v1_recursion::derive_offline_cash_mint_finality_validator_keys_v1(
+            iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                 &[seed_byte; 32],
                 0,
                 validator,
@@ -369,12 +369,12 @@ fn test_offline_cash_mint_finality_genesis_parameters(
             .expect("derive independent test-only paired-Pasta validator keys")
         })
         .collect();
-    let epoch_roster = OfflineCashMintFinalityEpochRosterTemplateV1 {
-        version: OFFLINE_CASH_CHAIN_VERSION_V1,
+    let epoch_roster = KagemushaMintFinalityEpochRosterTemplateV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
         epoch: 0,
         validators,
     };
-    let parameters = OfflineCashMintFinalityGenesisParametersV1 {
+    let parameters = KagemushaMintFinalityGenesisParametersV1 {
         epoch_roster,
         next_epoch_roster: None,
     };
@@ -644,26 +644,26 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         || consensus_mode_override.unwrap_or(SumeragiConsensusMode::Permissioned),
         |metadata| metadata.mode,
     );
-    let (block_cadence_ms, sumeragi_v2, offline_cash_mint_finality) = consensus_handshake_metadata
+    let (block_cadence_ms, sumeragi_v2, kagemusha_mint_finality) = consensus_handshake_metadata
         .map_or_else(
             || {
                 (
                     None,
                     SumeragiV2GenesisContextParameters::recommended(),
-                    test_offline_cash_mint_finality_genesis_parameters(&topology),
+                    test_kagemusha_mint_finality_genesis_parameters(&topology),
                 )
             },
             |metadata| {
                 (
                     Some(metadata.block_cadence_ms),
                     metadata.sumeragi_v2,
-                    metadata.offline_cash_mint_finality,
+                    metadata.kagemusha_mint_finality,
                 )
             },
         );
     builder = builder
         .with_sumeragi_v2_context_parameters(sumeragi_v2)
-        .with_offline_cash_mint_finality_genesis_parameters(offline_cash_mint_finality);
+        .with_kagemusha_mint_finality_genesis_parameters(kagemusha_mint_finality);
     if let Some(block_cadence_ms) = block_cadence_ms {
         builder = builder.with_block_cadence_ms(block_cadence_ms);
     }
@@ -922,7 +922,7 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
             .collect();
         // Keep the proof-bearing topology in the raw manifest until signing. The
         // signer validates that this exact validator set matches the independently
-        // derived Offline Cash mint-finality authority before lowering the entries
+        // derived KAGEMUSHA mint-finality authority before lowering the entries
         // into `RegisterPeerWithPop` instructions.
         let mut manifest_topology = Vec::with_capacity(topology_vec.len());
         for peer_id in &topology_vec {

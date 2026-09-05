@@ -51,7 +51,7 @@ impl core::fmt::Display for ConsensusFingerprint {
         write!(formatter, "0x{}", hex::encode(self.0))
     }
 }
-/// Consensus-state staging record for the next Offline Cash V1 Pasta roster.
+/// Consensus-state staging record for the next KAGEMUSHA V1 Pasta roster.
 ///
 /// Validators read this value from the finalized world state before building
 /// an epoch-boundary height context. The old roster then authenticates the
@@ -70,20 +70,20 @@ impl core::fmt::Display for ConsensusFingerprint {
     derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)
 )]
 #[norito(deny_unknown_fields)]
-pub struct OfflineCashMintFinalityNextEpochParameterV1 {
+pub struct KagemushaMintFinalityNextEpochParameterV1 {
     /// Full separately provisioned public roster for the next election epoch.
-    pub roster: crate::isi::offline_cash_v1::OfflineCashMintFinalityEpochRosterV1,
+    pub roster: crate::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1,
 }
-impl OfflineCashMintFinalityNextEpochParameterV1 {
+impl KagemushaMintFinalityNextEpochParameterV1 {
     /// Sole custom-parameter identity for the next roster.
-    pub const PARAMETER_ID_STR: &'static str = "offline_cash_mint_finality_next_epoch_v1";
+    pub const PARAMETER_ID_STR: &'static str = "kagemusha_mint_finality_next_epoch_v1";
 
     /// Construct the canonical custom-parameter identifier.
     #[must_use]
     pub fn parameter_id() -> CustomParameterId {
         Self::PARAMETER_ID_STR
             .parse()
-            .expect("valid Offline Cash V1 next-roster parameter identifier")
+            .expect("valid KAGEMUSHA V1 next-roster parameter identifier")
     }
 
     /// Validate the complete public roster before it enters consensus state.
@@ -91,9 +91,7 @@ impl OfflineCashMintFinalityNextEpochParameterV1 {
     /// # Errors
     ///
     /// Returns the roster validation error unchanged.
-    pub fn validate(
-        &self,
-    ) -> Result<(), crate::isi::offline_cash_v1::OfflineCashIsiValidationErrorV1> {
+    pub fn validate(&self) -> Result<(), crate::isi::kagemusha_v1::KagemushaIsiValidationErrorV1> {
         self.roster.validate()
     }
 
@@ -176,12 +174,11 @@ pub struct ConsensusHandshakeMetadata {
     pub wire_protocol_version: u32,
     /// Canonical consensus fingerprint.
     pub consensus_fingerprint: ConsensusFingerprint,
-    /// Signed network-independent Offline Cash mint-finality genesis authority.
+    /// Signed network-independent KAGEMUSHA mint-finality genesis authority.
     ///
     /// Core binds the final genesis-derived network identity to these
     /// templates before constructing the first height context.
-    pub offline_cash_mint_finality:
-        crate::isi::offline_cash_v1::OfflineCashMintFinalityGenesisParametersV1,
+    pub kagemusha_mint_finality: crate::isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1,
     /// Signed inputs for the first Sumeragi v2 height context.
     pub sumeragi_v2: crate::block::consensus_v2::SumeragiV2GenesisContextParameters,
 }
@@ -191,7 +188,7 @@ impl ConsensusHandshakeMetadata {
     /// # Errors
     ///
     /// Returns an error when the wire version is not the first-release version
-    /// or the signed Sumeragi v2 context/Offline Cash genesis authority is
+    /// or the signed Sumeragi v2 context/KAGEMUSHA genesis authority is
     /// invalid.
     pub fn validate(&self) -> Result<(), String> {
         let expected_version = u32::from(crate::block::consensus_v2::PROTOCOL_VERSION);
@@ -203,7 +200,7 @@ impl ConsensusHandshakeMetadata {
         self.sumeragi_v2
             .validate()
             .map_err(|error| error.to_string())?;
-        self.offline_cash_mint_finality
+        self.kagemusha_mint_finality
             .validate()
             .map_err(|error| error.to_string())?;
         Ok(())
@@ -2651,8 +2648,8 @@ mod tests {
             block_cadence_ms: NonZeroU64::new(1_000).unwrap(),
             wire_protocol_version: u32::from(crate::block::consensus_v2::PROTOCOL_VERSION),
             consensus_fingerprint: ConsensusFingerprint::new([0xab; 32]),
-            offline_cash_mint_finality:
-                crate::block::consensus_v2::test_offline_cash_mint_finality_genesis_parameters(),
+            kagemusha_mint_finality:
+                crate::block::consensus_v2::test_kagemusha_mint_finality_genesis_parameters(),
             sumeragi_v2: crate::block::consensus_v2::test_genesis_context_parameters(),
         }
     }
@@ -2670,15 +2667,15 @@ mod tests {
     }
     #[cfg(feature = "json")]
     #[test]
-    fn handshake_metadata_requires_offline_cash_genesis_authority() {
+    fn handshake_metadata_requires_kagemusha_genesis_authority() {
         let mut value = norito::json::to_value(&handshake_metadata_fixture())
             .expect("serialize handshake metadata");
         value
             .as_object_mut()
             .expect("metadata object")
-            .remove("offline_cash_mint_finality");
+            .remove("kagemusha_mint_finality");
         norito::json::value::from_value::<ConsensusHandshakeMetadata>(value)
-            .expect_err("signed Offline Cash genesis authority must be mandatory");
+            .expect_err("signed KAGEMUSHA genesis authority must be mandatory");
     }
     #[cfg(feature = "json")]
     #[test]
@@ -2692,12 +2689,9 @@ mod tests {
         bad_context.sumeragi_v2.da_layout.parity_shards = 0;
         assert!(bad_context.validate().is_err());
 
-        let mut bad_offline_cash = handshake_metadata_fixture();
-        bad_offline_cash
-            .offline_cash_mint_finality
-            .epoch_roster
-            .epoch = 1;
-        assert!(bad_offline_cash.validate().is_err());
+        let mut bad_kagemusha = handshake_metadata_fixture();
+        bad_kagemusha.kagemusha_mint_finality.epoch_roster.epoch = 1;
+        assert!(bad_kagemusha.validate().is_err());
     }
     #[cfg(feature = "json")]
     #[test]

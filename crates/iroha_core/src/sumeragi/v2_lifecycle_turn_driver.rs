@@ -1125,10 +1125,6 @@ impl LaunchedProductionLifecycleV1 {
         };
         let (dispatch, ack) = completion.into_publication_parts();
         let physical_completion = ack.physical_completion();
-        iroha_logger::warn!(
-            lifecycle_ordinal = physical_completion.dispatch_key().lifecycle_ordinal(),
-            "TEMP lifecycle Validate completion entered durable publication"
-        );
         match owner.coordinator.complete_durable_validate_dispatch(
             &mut owner.registry,
             dispatch,

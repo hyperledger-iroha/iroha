@@ -337,7 +337,7 @@ fn v2_vote(phase: wire::GlobalPhase) -> BlockMessage {
                 payload_hash: Hash::new(b"fair-v2-ingress-vote-payload"),
             },
             execution_commitment:
-                wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                     Hash::new(b"fair-v2-ingress-parent-state"),
                     Hash::new(b"fair-v2-ingress-post-state"),
                     Hash::new(b"fair-v2-ingress-writes"),
@@ -476,12 +476,12 @@ fn v2_maximum_valid_timeout_vote_wire() -> BlockMessage {
         payload_hash: Hash::new(b"fair-v2-ingress-max-timeout-payload"),
     };
     let ordinary_writes_root = Hash::new(b"fair-v2-ingress-max-writes");
-    let offline_cash_top_up_root = Hash::new(b"fair-v2-ingress-max-topup-root");
-    let offline_cash_top_up_count = u32::MAX;
-    let post_state_root = wire::ExecutionCommitment::offline_cash_post_state_root_v1(
-        offline_cash_top_up_count,
+    let kagemusha_top_up_root = Hash::new(b"fair-v2-ingress-max-topup-root");
+    let kagemusha_top_up_count = u32::MAX;
+    let post_state_root = wire::ExecutionCommitment::kagemusha_post_state_root_v1(
+        kagemusha_top_up_count,
         ordinary_writes_root,
-        offline_cash_top_up_root,
+        kagemusha_top_up_root,
     );
     let highest_prepare_qc = wire::QuorumCertificate {
         round,
@@ -492,8 +492,8 @@ fn v2_maximum_valid_timeout_vote_wire() -> BlockMessage {
             Hash::new(b"fair-v2-ingress-max-parent-state"),
             post_state_root,
             ordinary_writes_root,
-            Some(offline_cash_top_up_root),
-            offline_cash_top_up_count,
+            Some(kagemusha_top_up_root),
+            kagemusha_top_up_count,
             1,
             Hash::new(b"fair-v2-ingress-max-executed-wire"),
         )
@@ -531,19 +531,19 @@ fn v2_maximum_structural_proposal_wire(
         payload_hash: Hash::new(b"fair-v2-ingress-max-proposal-payload"),
     };
     let ordinary_writes_root = Hash::new(b"fair-v2-ingress-max-proposal-writes");
-    let offline_cash_top_up_root = Hash::new(b"fair-v2-ingress-max-proposal-topup-root");
-    let offline_cash_top_up_count = u32::MAX;
-    let post_state_root = wire::ExecutionCommitment::offline_cash_post_state_root_v1(
-        offline_cash_top_up_count,
+    let kagemusha_top_up_root = Hash::new(b"fair-v2-ingress-max-proposal-topup-root");
+    let kagemusha_top_up_count = u32::MAX;
+    let post_state_root = wire::ExecutionCommitment::kagemusha_post_state_root_v1(
+        kagemusha_top_up_count,
         ordinary_writes_root,
-        offline_cash_top_up_root,
+        kagemusha_top_up_root,
     );
     let execution_commitment = wire::ExecutionCommitment::new_with_manifests(
         Hash::new(b"fair-v2-ingress-max-proposal-parent-state"),
         post_state_root,
         ordinary_writes_root,
-        Some(offline_cash_top_up_root),
-        offline_cash_top_up_count,
+        Some(kagemusha_top_up_root),
+        kagemusha_top_up_count,
         wire::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
         Hash::new(b"fair-v2-ingress-max-proposal-native-amx"),
         wire::MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES,

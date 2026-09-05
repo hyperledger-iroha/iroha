@@ -14,8 +14,8 @@ import org.hyperledger.iroha.sdk.crypto.IrohaHash
 object SumeragiV2Wire {
     /** The only protocol revision accepted by live consensus. */
     const val PROTOCOL_VERSION: Int = 4
-    private val OFFLINE_CASH_TOP_UP_POST_STATE_ROOT_DOMAIN =
-        "iroha:offline-cash:v1:post-state-root".toByteArray(StandardCharsets.UTF_8)
+    private val KAGEMUSHA_TOP_UP_POST_STATE_ROOT_DOMAIN =
+        "iroha:kagemusha:v1:post-state-root".toByteArray(StandardCharsets.UTF_8)
     /** Canonical Native AMX application-manifest wire version. */
     const val NATIVE_AMX_APPLICATION_MANIFEST_VERSION: Int = 1
     /** Exact first-release merge-carrier projection version. */
@@ -208,8 +208,8 @@ object SumeragiV2Wire {
         @JvmField val parentStateRoot: Hash32,
         @JvmField val postStateRoot: Hash32,
         @JvmField val ordinaryWritesRoot: Hash32,
-        @JvmField val offlineCashTopUpRoot: Hash32?,
-        @JvmField val offlineCashTopUpCount: Long,
+        @JvmField val kagemushaTopUpRoot: Hash32?,
+        @JvmField val kagemushaTopUpCount: Long,
         @JvmField val nativeAmxApplicationManifestVersion: Int,
         @JvmField val nativeAmxApplicationManifestRoot: Hash32,
         @JvmField val nativeAmxApplicationManifestCount: Long,
@@ -219,24 +219,24 @@ object SumeragiV2Wire {
         @JvmField val executedBlockWireHash: Hash32,
     ) : WireValue() {
         init {
-            require(offlineCashTopUpCount in 0..0xffff_ffffL) {
-                "offlineCashTopUpCount must fit in an unsigned 32-bit integer"
+            require(kagemushaTopUpCount in 0..0xffff_ffffL) {
+                "kagemushaTopUpCount must fit in an unsigned 32-bit integer"
             }
-            if (offlineCashTopUpCount == 0L) {
-                require(offlineCashTopUpRoot == null) {
-                    "zero Offline Cash top-up count must not carry a root"
+            if (kagemushaTopUpCount == 0L) {
+                require(kagemushaTopUpRoot == null) {
+                    "zero KAGEMUSHA top-up count must not carry a root"
                 }
             } else {
-                require(offlineCashTopUpRoot != null) {
-                    "non-zero Offline Cash top-up count requires a root"
+                require(kagemushaTopUpRoot != null) {
+                    "non-zero KAGEMUSHA top-up count requires a root"
                 }
                 require(
-                    postStateRoot == offlineCashTopUpPostStateRoot(
-                        offlineCashTopUpCount,
+                    postStateRoot == kagemushaTopUpPostStateRoot(
+                        kagemushaTopUpCount,
                         ordinaryWritesRoot,
-                        offlineCashTopUpRoot,
+                        kagemushaTopUpRoot,
                     ),
-                ) { "post-state root does not bind the Offline Cash top-up projection" }
+                ) { "post-state root does not bind the KAGEMUSHA top-up projection" }
             }
             require(
                 nativeAmxApplicationManifestVersion ==
@@ -263,8 +263,8 @@ object SumeragiV2Wire {
             parentStateRoot.bytes(),
             postStateRoot.bytes(),
             ordinaryWritesRoot.bytes(),
-            option(offlineCashTopUpRoot?.bytes()),
-            u32(offlineCashTopUpCount),
+            option(kagemushaTopUpRoot?.bytes()),
+            u32(kagemushaTopUpCount),
             u16(nativeAmxApplicationManifestVersion),
             nativeAmxApplicationManifestRoot.bytes(),
             u32(nativeAmxApplicationManifestCount),
@@ -276,7 +276,7 @@ object SumeragiV2Wire {
 
         companion object {
             @JvmStatic
-            fun withoutOfflineCashTopUps(
+            fun withoutKagemushaTopUps(
                 parentStateRoot: Hash32,
                 postStateRoot: Hash32,
                 ordinaryWritesRoot: Hash32,
@@ -303,20 +303,20 @@ object SumeragiV2Wire {
                 Hash32(IrohaHash.prehash(NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT_DOMAIN))
 
             @JvmStatic
-            fun offlineCashTopUpPostStateRoot(
-                offlineCashTopUpCount: Long,
+            fun kagemushaTopUpPostStateRoot(
+                kagemushaTopUpCount: Long,
                 ordinaryWritesRoot: Hash32,
-                offlineCashTopUpRoot: Hash32,
+                kagemushaTopUpRoot: Hash32,
             ): Hash32 {
-                require(offlineCashTopUpCount in 1..0xffff_ffffL) {
-                    "Offline Cash top-up count must fit a non-zero unsigned 32-bit integer"
+                require(kagemushaTopUpCount in 1..0xffff_ffffL) {
+                    "KAGEMUSHA top-up count must fit a non-zero unsigned 32-bit integer"
                 }
                 val preimage = ByteArrayOutputStream()
-                preimage.write(OFFLINE_CASH_TOP_UP_POST_STATE_ROOT_DOMAIN)
+                preimage.write(KAGEMUSHA_TOP_UP_POST_STATE_ROOT_DOMAIN)
                 preimage.write(0)
-                preimage.write(u32(offlineCashTopUpCount))
+                preimage.write(u32(kagemushaTopUpCount))
                 preimage.write(ordinaryWritesRoot.bytes())
-                preimage.write(offlineCashTopUpRoot.bytes())
+                preimage.write(kagemushaTopUpRoot.bytes())
                 return Hash32(IrohaHash.prehash(preimage.toByteArray()))
             }
 
@@ -328,11 +328,11 @@ object SumeragiV2Wire {
                         Hash32(reader.field("execution.post_state_root") { it.hash() })
                     val ordinaryWritesRoot =
                         Hash32(reader.field("execution.ordinary_writes_root") { it.hash() })
-                    val offlineCashTopUpRoot =
-                        reader.field("execution.offline_cash_top_up_root") { optionHash(it) }
-                    val offlineCashTopUpCount =
-                        reader.field("execution.offline_cash_top_up_count") {
-                            it.u32Only("execution.offline_cash_top_up_count")
+                    val kagemushaTopUpRoot =
+                        reader.field("execution.kagemusha_top_up_root") { optionHash(it) }
+                    val kagemushaTopUpCount =
+                        reader.field("execution.kagemusha_top_up_count") {
+                            it.u32Only("execution.kagemusha_top_up_count")
                         }
                     val manifestVersion =
                         reader.field("execution.native_amx_application_manifest_version") {
@@ -367,8 +367,8 @@ object SumeragiV2Wire {
                         parentStateRoot,
                         postStateRoot,
                         ordinaryWritesRoot,
-                        offlineCashTopUpRoot,
-                        offlineCashTopUpCount,
+                        kagemushaTopUpRoot,
+                        kagemushaTopUpCount,
                         manifestVersion,
                         manifestRoot,
                         manifestCount,

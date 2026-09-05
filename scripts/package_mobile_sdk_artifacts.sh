@@ -101,7 +101,7 @@ Usage:
 
 Packages built mobile SDK artifacts into an explicit external cache directory:
   --apple    Package NoritoBridge.xcframework and its artifact manifest.
-  --android  Package Kotlin core/client/offline-wallet Android release outputs,
+  --android  Package Kotlin core/client/kagemusha-wallet-android release outputs,
              generated native bridge bytes, and their embedded provenance.
 
 MOBILE_SDK_APPLE_ARTIFACT_DIR is required for Apple packaging and must select an

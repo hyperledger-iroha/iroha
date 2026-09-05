@@ -55,19 +55,22 @@ impl<T: Write> RunArgs<T> for Args {
 }
 fn validate_consensus_manifest(manifest: &RawGenesisTransaction) -> color_eyre::Result<()> {
     super::require_v2_wire_protocol_only(manifest)?;
-    let consensus_mode = manifest.consensus_mode();
-    let has_npos = super::has_npos_parameters(manifest)?;
-    match (consensus_mode, has_npos) {
-        (iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned, false)
-        | (iroha_data_model::parameter::system::SumeragiConsensusMode::Npos, true) => {}
-        (iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned, true) => {
-            return Err(eyre!(
-                "permissioned genesis must omit `sumeragi_npos_parameters`"
-            ));
-        }
-        (iroha_data_model::parameter::system::SumeragiConsensusMode::Npos, false) => {
-            return Err(eyre!("NPoS genesis requires `sumeragi_npos_parameters`"));
-        }
+    super::ensure_kagemusha_mint_finality_schedule_matches_consensus(manifest)?;
+    let topology = manifest
+        .transactions()
+        .iter()
+        .flat_map(|transaction| transaction.topology())
+        .map(|entry| entry.peer.clone())
+        .collect::<Vec<_>>();
+    if topology.is_empty() {
+        iroha_core::zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
+            manifest.kagemusha_mint_finality_genesis_parameters(),
+        )
+        .map_err(|error| eyre!("invalid KAGEMUSHA mint-finality public parameters: {error}"))?;
+    } else {
+        super::ensure_kagemusha_mint_finality_epoch_zero_authority_matches_topology(
+            manifest, &topology,
+        )?;
     }
     Ok(())
 }
@@ -160,6 +163,7 @@ fn validate_instructions_array(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_crypto::{Algorithm, KeyPair, bls_normal_pop_prove};
     use iroha_data_model::{
         ChainId,
         parameter::{
@@ -167,7 +171,7 @@ mod tests {
             system::{SumeragiConsensusMode, SumeragiNposParameters},
         },
     };
-    use iroha_genesis::GenesisBuilder;
+    use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
     use std::{fs, io::BufWriter, path::PathBuf};
     use tempfile::NamedTempFile;
     #[test]
@@ -240,12 +244,11 @@ mod tests {
     }
     #[test]
     fn run_accepts_permissioned_consensus() {
-        let manifest = crate::verify::configured_test_genesis_builder(
+        let manifest = super::super::complete_test_genesis_builder(
             GenesisBuilder::new_without_executor(ChainId::from("0"), PathBuf::from(".")),
-            Vec::new(),
         )
         .build_raw()
-        .expect("build permissioned validation fixture with explicit authority")
+        .expect("complete permissioned validation fixture")
         .with_consensus_mode(SumeragiConsensusMode::Permissioned)
         .with_consensus_meta();
         let manifest = norito::json::to_json_pretty(&manifest).expect("serialize manifest");
@@ -259,19 +262,53 @@ mod tests {
             .expect("permissioned consensus should be allowed");
     }
     #[test]
+    fn consensus_validation_rejects_authority_mismatched_with_embedded_topology() {
+        let topology = (0..4)
+            .map(|_| {
+                let key_pair = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+                    .expect("generate topology key");
+                let pop = bls_normal_pop_prove(key_pair.private_key())
+                    .expect("generate topology proof of possession");
+                GenesisTopologyEntry::new(
+                    iroha_data_model::peer::PeerId::new(key_pair.public_key().clone()),
+                    pop,
+                )
+            })
+            .collect();
+        let manifest = super::super::complete_test_genesis_builder(
+            GenesisBuilder::new_without_executor(
+                ChainId::from("mismatched-authority"),
+                PathBuf::from("."),
+            )
+            .set_topology(topology),
+        )
+        .build_raw()
+        .expect("complete mismatched validation fixture")
+        .with_consensus_mode(SumeragiConsensusMode::Permissioned)
+        .with_consensus_meta();
+
+        let error = validate_consensus_manifest(&manifest)
+            .expect_err("embedded topology must match the KAGEMUSHA authority exactly");
+        assert!(
+            error
+                .to_string()
+                .contains("does not match the exact genesis topology"),
+            "unexpected error: {error:#}"
+        );
+    }
+    #[test]
     fn run_accepts_canonical_npos() {
-        let manifest = crate::verify::configured_test_genesis_builder(
+        let manifest = super::super::complete_test_genesis_builder(
             GenesisBuilder::new_without_executor(
                 ChainId::from("npos-validate"),
                 PathBuf::from("."),
-            ),
-            Vec::new(),
+            )
+            .append_parameter(Parameter::Custom(
+                SumeragiNposParameters::default().into_custom_parameter(),
+            )),
         )
-        .append_parameter(Parameter::Custom(
-            SumeragiNposParameters::default().into_custom_parameter(),
-        ))
         .build_raw()
-        .expect("build NPoS validation fixture with explicit authority")
+        .expect("complete NPoS validation fixture")
         .with_consensus_mode(SumeragiConsensusMode::Npos)
         .with_consensus_meta();
         let json = norito::json::to_json_pretty(&manifest).expect("serialize manifest");

@@ -4,9 +4,9 @@ use iroha_data_model::{
     NetworkId,
     block::BlockHeader,
     merge::{
-        LaneDrainCertificateV1, MERGE_LEDGER_ENTRY_VERSION_V2, MergeExecutionBatch,
-        MergeLaneBinding, MergeLaneExecution, MergeLaneSnapshot, MergeLedgerEntry,
-        MergeQuorumCertificate,
+        LaneDrainCertificateV1, MERGE_LEDGER_ENTRY_VERSION_V3, MergeExecutionBatch,
+        MergeLaneAuthorityCatalogV1, MergeLaneBinding, MergeLaneExecution, MergeLaneSnapshot,
+        MergeLedgerEntry, MergeQuorumCertificate,
     },
     nexus::{LaneCatalog, LaneConfig},
     peer::PeerId,
@@ -17,7 +17,7 @@ use norito::codec::{Decode, Encode};
 /// Domain separator applied to the merge-hint reduction payloads.
 const MERGE_REDUCE_DOMAIN_TAG: &[u8] = b"iroha:merge:reduce:v1\0";
 /// Domain separator applied to merge-committee signature payloads.
-const MERGE_QC_DOMAIN_TAG: &[u8] = b"iroha:merge:qc:v2\0";
+const MERGE_QC_DOMAIN_TAG: &[u8] = b"iroha:merge:qc:v3\0";
 /// Domain separator for exact lane-incarnation activation commitments.
 const MERGE_ACTIVATION_ROOT_DOMAIN_TAG: &[u8] = b"iroha:merge:lane-activations:v1\0";
 /// Domain separator for individual lane configuration commitments.
@@ -34,7 +34,7 @@ const MERGE_EXECUTION_IDENTITY_DOMAIN_TAG: &[u8] = b"iroha:merge:execution-ident
 const MERGE_POST_STATE_DOMAIN_TAG: &[u8] = b"iroha:merge:post-state:v1\0";
 /// Domain separator for a complete merge execution batch.
 const MERGE_EXECUTION_BATCH_DOMAIN_TAG: &[u8] = b"iroha:merge:execution-batch:v1\0";
-const MERGE_CANDIDATE_BODY_DOMAIN_TAG: &[u8] = b"iroha:merge:candidate-body:v2\0";
+const MERGE_CANDIDATE_BODY_DOMAIN_TAG: &[u8] = b"iroha:merge:candidate-body:v3\0";
 /// Merge-ledger entry data required for signature payloads.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -53,6 +53,8 @@ pub struct MergeLedgerCandidate {
     pub lane_catalog_hash: Hash,
     /// Exact active lane binding set bound to the catalog hash.
     pub active_lanes: Vec<MergeLaneBinding>,
+    /// Compact exact lane committees aligned with `active_lanes`.
+    pub lane_authority_catalog: MergeLaneAuthorityCatalogV1,
     /// Canonical active-incarnation root.
     pub incarnation_root: Hash,
     /// Canonical incarnation-activation root.
@@ -68,7 +70,7 @@ pub struct MergeLedgerCandidate {
 }
 impl MergeLedgerCandidate {
     /// Current supported candidate/entry layout.
-    pub const VERSION: u8 = MERGE_LEDGER_ENTRY_VERSION_V2;
+    pub const VERSION: u8 = MERGE_LEDGER_ENTRY_VERSION_V3;
     /// Return whether this candidate advertises the current first-release layout.
     #[must_use]
     pub const fn has_current_version(&self) -> bool {
@@ -115,6 +117,7 @@ impl MergeLedgerCandidate {
             epoch_id: self.epoch_id,
             lane_catalog_hash: self.lane_catalog_hash,
             active_lanes: self.active_lanes,
+            lane_authority_catalog: self.lane_authority_catalog,
             incarnation_root: self.incarnation_root,
             activation_root: self.activation_root,
             lane_snapshots: self.lane_snapshots,
@@ -135,6 +138,7 @@ impl From<&MergeLedgerEntry> for MergeLedgerCandidate {
             carrier_parent_hash: entry.merge_qc.carrier_parent_hash,
             lane_catalog_hash: entry.lane_catalog_hash,
             active_lanes: entry.active_lanes.clone(),
+            lane_authority_catalog: entry.lane_authority_catalog.clone(),
             incarnation_root: entry.incarnation_root,
             activation_root: entry.activation_root,
             lane_snapshots: entry.lane_snapshots.clone(),
@@ -182,6 +186,7 @@ struct MergeLedgerSignPayload {
     carrier_parent_hash: HashOf<BlockHeader>,
     lane_catalog_hash: Hash,
     active_lanes: Vec<MergeLaneBinding>,
+    lane_authority_catalog: MergeLaneAuthorityCatalogV1,
     incarnation_root: Hash,
     activation_root: Hash,
     lane_snapshots: Vec<MergeLaneSnapshot>,
@@ -208,6 +213,7 @@ pub fn merge_qc_message_digest(
         carrier_parent_hash: candidate.carrier_parent_hash,
         lane_catalog_hash: candidate.lane_catalog_hash,
         active_lanes: candidate.active_lanes.clone(),
+        lane_authority_catalog: candidate.lane_authority_catalog.clone(),
         incarnation_root: candidate.incarnation_root,
         activation_root: candidate.activation_root,
         lane_snapshots: candidate.lane_snapshots.clone(),
@@ -737,6 +743,7 @@ mod tests {
             incarnation_root: Hash::new(b"incarnation-root"),
             activation_root: merge_activation_root(&active_lanes),
             active_lanes,
+            lane_authority_catalog: MergeLaneAuthorityCatalogV1::default(),
             lane_snapshots: vec![MergeLaneSnapshot {
                 lane_id,
                 lane_incarnation,

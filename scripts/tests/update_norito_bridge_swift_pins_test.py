@@ -86,6 +86,7 @@ def validate(
     expected_link_target,
     swift_loader=None,
     verify_repository_provenance=False,
+    allow_dirty_source=False,
 ):
     if verify_repository_provenance is not True:
         raise ValidationError("full repository provenance was not requested")
@@ -109,6 +110,8 @@ def validate(
         manifest_path.read_text(encoding="utf-8"),
         object_pairs_hook=reject_duplicates,
     )
+    if payload["source_tree_dirty"] and not allow_dirty_source:
+        raise ValidationError("release artifact must be built from a clean source tree")
     marker = manifest_path.parent.parent / ".mutate-manifest-after-validation"
     if marker.exists():
         changed = dict(payload)
@@ -306,6 +309,7 @@ def validate(
         self.assertEqual(help_result.returncode, 0, help_result.stderr)
         self.assertIn("--check", help_result.stdout)
         self.assertIn("--output OUTPUT", help_result.stdout)
+        self.assertIn("--allow-dirty-source", help_result.stdout)
         self.assertNotIn("--write", help_result.stdout)
 
         stale = self.run_owner("--check")
@@ -363,6 +367,129 @@ def validate(
         self.assertNotEqual(symbolic.returncode, 0)
         self.assertIn("non-symbolic canonical directory", symbolic.stderr)
         self.assertFalse(symbolic_output.exists())
+
+    def test_both_modes_forward_dirty_source_allowance_only_when_explicit(self) -> None:
+        """Exercise CLI propagation with a provenance double, not native admission."""
+        manifest = self.artifact / "NoritoBridge.xcframework/NoritoBridge.artifacts.json"
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        payload["source_tree_dirty"] = True
+        manifest.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        self.write_loader(self.hashes)
+        preimage = self.loader.read_bytes()
+        output = self.output_root / "dirty-local.swift"
+        modes = (
+            ("--check",),
+            (
+                "--output", str(output), "--expected-preimage-sha256",
+                hashlib.sha256(preimage).hexdigest(),
+            ),
+        )
+        for arguments in modes:
+            with self.subTest(mode=arguments[0]):
+                rejected = self.run_owner(*arguments)
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn("clean source tree", rejected.stderr)
+                self.assertFalse(output.exists())
+                accepted = self.run_owner(*arguments, "--allow-dirty-source")
+                self.assertEqual(accepted.returncode, 0, accepted.stderr)
+                self.assertEqual(self.loader.read_bytes(), preimage)
+        self.assertEqual(output.read_bytes(), preimage)
+
+    def test_dirty_source_allowance_keeps_provenance_and_preimage_guards(self) -> None:
+        """A CLI allowance cannot bypass the rejecting provenance test double."""
+        self.write_loader(self.hashes)
+        preimage = self.loader.read_bytes()
+        output = self.output_root / "rejected.swift"
+        stale_environment = os.environ.copy()
+        stale_environment["PIN_OWNER_TEST_REJECT_PROVENANCE"] = "1"
+        for arguments in (
+            ("--check",),
+            (
+                "--output", str(output), "--expected-preimage-sha256",
+                hashlib.sha256(preimage).hexdigest(),
+            ),
+        ):
+            with self.subTest(mode=arguments[0]):
+                rejected = self.run_owner(
+                    *arguments, "--allow-dirty-source", environment=stale_environment,
+                )
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn("stale repository provenance", rejected.stderr)
+                self.assertFalse(output.exists())
+                self.assertEqual(self.loader.read_bytes(), preimage)
+        wrong_preimage = self.run_owner(
+            "--output", str(output), "--allow-dirty-source",
+            "--expected-preimage-sha256", "0" * 64,
+        )
+        self.assertNotEqual(wrong_preimage.returncode, 0)
+        self.assertIn("preimage differs", wrong_preimage.stderr)
+        self.assertFalse(output.exists())
+
+    def test_dirty_source_allowance_cannot_skip_real_tool_provenance(self) -> None:
+        """Run the real validator without mocks; invalid tools must still refuse."""
+        for name in (
+            "validate_norito_bridge_xcframework.py",
+            "check_mobile_sdk_artifact_pin_commit.py",
+        ):
+            shutil.copy2(REPO / "scripts" / name, self.root / "scripts" / name)
+        manifest = self.artifact / "NoritoBridge.xcframework/NoritoBridge.artifacts.json"
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        payload["source_tree_dirty"] = True
+        manifest.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        self.write_loader(self.hashes)
+        preimage = self.loader.read_bytes()
+        output = self.output_root / "unverified-tools.swift"
+        environment = os.environ.copy()
+        environment["NORITO_BRIDGE_SEAL_CARGO"] = str(self.temporary_root / "missing-cargo")
+        for arguments in (
+            ("--check",),
+            (
+                "--output", str(output), "--expected-preimage-sha256",
+                hashlib.sha256(preimage).hexdigest(),
+            ),
+        ):
+            with self.subTest(mode=arguments[0]):
+                rejected = self.run_owner(
+                    *arguments, "--allow-dirty-source", environment=environment,
+                )
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn("unable to authenticate artifact source provenance", rejected.stderr)
+                self.assertIn("missing-cargo", rejected.stderr)
+                self.assertFalse(output.exists())
+                self.assertEqual(self.loader.read_bytes(), preimage)
+
+    def test_builder_forwards_only_its_explicit_dirty_source_option(self) -> None:
+        """Execute the real argument assembly; do not invoke any native build."""
+        source = (REPO / "scripts/build_norito_xcframework.sh").read_text(encoding="utf-8")
+        self.assertIn("ALLOW_DIRTY_SOURCE=0", source)
+        fragment = source.split("SWIFT_PIN_OWNER_ARGUMENTS=(", 1)[1].split("\nenv -i \\\n", 1)[0]
+        fragment = "SWIFT_PIN_OWNER_ARGUMENTS=(" + fragment
+        invocation = source.split('"$ROOT_DIR/scripts/update_norito_bridge_swift_pins.py"', 1)[1]
+        self.assertTrue(invocation.startswith(' \\\n  "${SWIFT_PIN_OWNER_ARGUMENTS[@]}"\n'))
+        environment = {
+            "PATH": "/usr/bin:/bin",
+            "ROOT_DIR": "/repo with spaces",
+            "PUBLISH_ROOT": "/external artifacts",
+            "PUBLISH_PROSPECTIVE_LOADER": "/external artifacts/prospective.swift",
+            "SWIFT_PIN_PREIMAGE_SHA256": "a" * 64,
+        }
+        expected = [
+            "--root", environment["ROOT_DIR"],
+            "--artifact-dir", environment["PUBLISH_ROOT"],
+            "--output", environment["PUBLISH_PROSPECTIVE_LOADER"],
+            "--expected-preimage-sha256", environment["SWIFT_PIN_PREIMAGE_SHA256"],
+        ]
+        for allowance in ("0", "1", "true"):
+            with self.subTest(allowance=allowance):
+                result = subprocess.run(
+                    ["/bin/bash", "-euc", fragment + '\nprintf "%s\\0" "${SWIFT_PIN_OWNER_ARGUMENTS[@]}"'],
+                    env={**environment, "ALLOW_DIRTY_SOURCE": allowance},
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                arguments = result.stdout.decode().split("\0")[:-1]
+                self.assertEqual(arguments, expected + (["--allow-dirty-source"] if allowance == "1" else []))
 
     def test_late_output_competitor_is_preserved(self) -> None:
         output = self.output_root / "prospective.swift"

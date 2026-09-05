@@ -16,13 +16,14 @@ export { inspectCanonicalTransactionPayloadBindings } from "./transactionCodec.j
 export { normalizeGovernanceProposalWireV1 } from "./governanceProposalV1.js";
 
 export {
-  offlineCashOperationIdHexV1,
-  normalizeOfflineCashReadinessV1,
-  normalizeUnverifiedOfflineCashOperationStatusV1,
-  requireOfflineCashJsonContentTypeV1,
-} from "./offlineCashToriiV1.js";
+  kagemushaOperationIdHexV1,
+  normalizeKagemushaReadinessV1,
+  normalizeUnverifiedKagemushaOperationStatusV1,
+  requireKagemushaJsonContentTypeV1,
+  requireKagemushaSubmissionResponseV1,
+} from "./kagemushaToriiV1.js";
 
-export { OfflineCashV1 } from "./offlineCashV1.js";
+export { Kagemusha } from "./kagemusha.js";
 
 export {
   normalizeSccpCapabilities,

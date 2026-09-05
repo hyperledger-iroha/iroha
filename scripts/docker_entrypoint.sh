@@ -84,7 +84,7 @@ set_genesis_file_override() {
 run_default_taira_command() {
     local config_path="${IROHA_TAIRA_CONFIG:-/config/config.toml}"
     local runtime_config_path="${IROHA_TAIRA_RUNTIME_CONFIG:-/storage/runtime-config.toml}"
-    local genesis_path="${IROHA_TAIRA_GENESIS:-/opt/iroha/configs/soranexus/taira/genesis.json}"
+    local genesis_path="${IROHA_TAIRA_GENESIS:-}"
     local signed_genesis_path="${IROHA_TAIRA_SIGNED_GENESIS:-}"
     local runtime_signer_path="/run/secrets/iroha-taira-runtime-signer.private_key"
     local runtime_signer_launch_path="/storage/private/taira-runtime-signer.fd198"
@@ -95,6 +95,11 @@ run_default_taira_command() {
     local runtime_config_tmp=""
 
     require_file "Taira config" "$config_path"
+    if [[ -z "$genesis_path" ]]; then
+        printf '%s\n' \
+            'IROHA_TAIRA_GENESIS must name an operator-materialized complete genesis manifest' >&2
+        exit 1
+    fi
     require_file "Taira genesis" "$genesis_path"
     require_file "Taira runtime signer" "$runtime_signer_path"
     require_owner_only_regular_file "Taira runtime signer" "$runtime_signer_path" 71

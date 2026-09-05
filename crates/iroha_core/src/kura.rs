@@ -12,7 +12,7 @@ use crate::lane_consensus::{
 #[cfg(test)]
 use crate::merge::reduce_merge_hint_roots;
 use crate::telemetry::StateTelemetry;
-use crate::zk::offline_cash_v1_recursion::OfflineCashMintAuthorityCheckpointV1;
+use crate::zk::kagemusha_v1_recursion::KagemushaMintAuthorityCheckpointV1;
 use crate::{
     block::CommittedBlock,
     queue::{
@@ -128,10 +128,9 @@ use iroha_data_model::{
         },
         decode_framed_signed_block,
     },
-    isi::offline_cash_v1::{
-        OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashFinalityTrustAnchorV1,
-        OfflineCashOperationFinalityV1, OfflineCashOperationKindV1,
-        OfflineCashReserveReceiptWitnessV1, OfflineCashTopUpResultV1,
+    isi::kagemusha_v1::{
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaFinalityTrustAnchorV1, KagemushaOperationFinalityV1,
+        KagemushaOperationKindV1, KagemushaReserveReceiptWitnessV1, KagemushaTopUpResultV1,
     },
     kaigi::KaigiId,
     merge::{
@@ -219,19 +218,19 @@ const COMMIT_MANIFESTS_DIR_NAME: &str = "commit_manifests";
 const RETAINED_BLOCKS_DIR_NAME: &str = "retained_blocks";
 const RETAINED_BLOCK_REWRITE_STAGING_DIR_NAME: &str = "retained_blocks_rewrite_staging";
 const V2_FINALITY_ARTIFACTS_DIR_NAME: &str = "v2_finality";
-const OFFLINE_CASH_FINALITY_STAGING_DIR_NAME: &str = "offline_cash_v1_finality_staging";
-const OFFLINE_CASH_FINALITY_SIDECARS_DIR_NAME: &str = "offline_cash_v1_finality";
-const OFFLINE_CASH_MINT_OUTBOX_DIR_NAME: &str = "offline_cash_v1_mint_outbox";
-const OFFLINE_CASH_MINT_AUTHORITY_DIR_NAME: &str = "offline_cash_v1_mint_authority";
-const MAX_OFFLINE_CASH_FINALITY_SIDECAR_BYTES: usize = 2 * 1024 * 1024;
-const MAX_OFFLINE_CASH_MINT_OUTBOX_ENTRY_BYTES: usize = 4 * 1024 * 1024;
-const MAX_OFFLINE_CASH_MINT_AUTHORITY_CHECKPOINT_BYTES: usize = 64 * 1024;
-const MAX_OFFLINE_CASH_FINALITY_DECODE_TOTAL_ELEMENTS: usize = 1_000_000;
-const MAX_OFFLINE_CASH_FINALITY_DECODE_ALLOCATED_BYTES: usize = 4 * 1024 * 1024;
-const MAX_OFFLINE_CASH_FINALITY_DECODE_DEPTH: usize = 32;
+const KAGEMUSHA_FINALITY_STAGING_DIR_NAME: &str = "kagemusha_v1_finality_staging";
+const KAGEMUSHA_FINALITY_SIDECARS_DIR_NAME: &str = "kagemusha_v1_finality";
+const KAGEMUSHA_MINT_OUTBOX_DIR_NAME: &str = "kagemusha_v1_mint_outbox";
+const KAGEMUSHA_MINT_AUTHORITY_DIR_NAME: &str = "kagemusha_v1_mint_authority";
+const MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES: usize = 2 * 1024 * 1024;
+const MAX_KAGEMUSHA_MINT_OUTBOX_ENTRY_BYTES: usize = 4 * 1024 * 1024;
+const MAX_KAGEMUSHA_MINT_AUTHORITY_CHECKPOINT_BYTES: usize = 64 * 1024;
+const MAX_KAGEMUSHA_FINALITY_DECODE_TOTAL_ELEMENTS: usize = 1_000_000;
+const MAX_KAGEMUSHA_FINALITY_DECODE_ALLOCATED_BYTES: usize = 4 * 1024 * 1024;
+const MAX_KAGEMUSHA_FINALITY_DECODE_DEPTH: usize = 32;
 
 /// Bound corrupt local sidecars before any attacker-advertised collection allocation.
-fn offline_cash_finality_decode_limits(wire_bytes: usize) -> norito::DecodeLimits {
+fn kagemusha_finality_decode_limits(wire_bytes: usize) -> norito::DecodeLimits {
     let max_sequence_elements = usize::try_from(
         iroha_data_model::parliament_casting::MAX_PARLIAMENT_CONCURRENT_CASTING_CONTEXTS_V1,
     )
@@ -245,13 +244,13 @@ fn offline_cash_finality_decode_limits(wire_bytes: usize) -> norito::DecodeLimit
         .saturating_mul(4)
         .saturating_add(64 * 1024)
         .saturating_add(max_sequence_elements)
-        .min(MAX_OFFLINE_CASH_FINALITY_DECODE_ALLOCATED_BYTES);
+        .min(MAX_KAGEMUSHA_FINALITY_DECODE_ALLOCATED_BYTES);
     norito::DecodeLimits::new(
         max_sequence_elements,
         wire_bytes,
-        MAX_OFFLINE_CASH_FINALITY_DECODE_TOTAL_ELEMENTS,
+        MAX_KAGEMUSHA_FINALITY_DECODE_TOTAL_ELEMENTS,
         max_allocated_bytes,
-        MAX_OFFLINE_CASH_FINALITY_DECODE_DEPTH,
+        MAX_KAGEMUSHA_FINALITY_DECODE_DEPTH,
     )
 }
 include!("kura/startup_finality_support.rs");
@@ -321,10 +320,8 @@ const AUTONOMOUS_LIFECYCLE_CURSOR_HASH_DOMAIN: &[u8] =
     b"iroha:kura:autonomous-lifecycle-cursor:v1\0";
 const AUTONOMOUS_LIFECYCLE_CURSOR_SIGNATURE_DOMAIN: &[u8] =
     b"iroha:kura:autonomous-lifecycle-signature:v1\0";
-const AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN_V1: &[u8] =
+const AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN: &[u8] =
     b"iroha:kura:autonomous-lifecycle-terminal-outcome:v1\0";
-const AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN_V2: &[u8] =
-    b"iroha:kura:autonomous-lifecycle-terminal-outcome:v2\0";
 const AUTONOMOUS_LIFECYCLE_PROCESS_GENERATION_HASH_DOMAIN: &[u8] =
     b"iroha:kura:autonomous-lifecycle-process-generation:v1\0";
 const AUTONOMOUS_LIFECYCLE_BOOTSTRAP_HASH_DOMAIN: &[u8] =
@@ -11450,7 +11447,57 @@ impl Kura {
     /// # Errors
     /// Returns an error when the certificate or pending-control store exceeds
     /// its bounds, or when durable no-clobber publication cannot complete.
-    pub fn persist_pending_queue_plan_admission_certificate(
+    pub(crate) fn persist_pending_queue_plan_admission_certificate(
+        &self,
+        canonical_certificate_bytes: &[u8],
+    ) -> Result<Hash> {
+        self.persist_pending_queue_plan_admission_certificate_inner(canonical_certificate_bytes)
+    }
+    /// Persist QueuePlan evidence only while the canonical block store is at one exact height.
+    ///
+    /// Holding `canonical_chain_lock` across the height check and sidecar publication makes this
+    /// operation linearizable with the first irreversible block write. The caller must derive
+    /// `expected_durable_height` from a coherent State view while excluding State publication.
+    pub(crate) fn persist_pending_queue_plan_admission_certificate_at_exact_durable_height(
+        &self,
+        expected_durable_height: u64,
+        canonical_certificate_bytes: &[u8],
+    ) -> Result<Hash> {
+        self.ensure_canonical_storage_not_poisoned()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let actual_durable_height = self.block_store.lock().read_exact_durable_index_count()?;
+        if actual_durable_height != expected_durable_height {
+            return Err(Error::QueuePlanAdmissionDurableHeightMismatch {
+                expected_durable_height,
+                actual_durable_height,
+            });
+        }
+        self.persist_pending_queue_plan_admission_certificate_inner(canonical_certificate_bytes)
+    }
+    /// Verify the canonical block store is at one exact height without rewriting a durable
+    /// QueuePlan certificate.
+    ///
+    /// This is the O(1) retry companion to
+    /// [`Self::persist_pending_queue_plan_admission_certificate_at_exact_durable_height`]. The
+    /// caller must already own the QueuePlan admission mutation lock, which keeps the previously
+    /// authenticated sidecar from being retired while this height check linearizes with block
+    /// publication.
+    pub(crate) fn verify_pending_queue_plan_admission_durable_height(
+        &self,
+        expected_durable_height: u64,
+    ) -> Result<()> {
+        self.ensure_canonical_storage_not_poisoned()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let actual_durable_height = self.block_store.lock().read_exact_durable_index_count()?;
+        if actual_durable_height != expected_durable_height {
+            return Err(Error::QueuePlanAdmissionDurableHeightMismatch {
+                expected_durable_height,
+                actual_durable_height,
+            });
+        }
+        Ok(())
+    }
+    fn persist_pending_queue_plan_admission_certificate_inner(
         &self,
         canonical_certificate_bytes: &[u8],
     ) -> Result<Hash> {
@@ -14914,75 +14961,75 @@ impl Kura {
             highest_verified_finality_artifact,
         })
     }
-    fn offline_cash_finality_staging_dir_for(blocks_dir: &Path) -> PathBuf {
-        blocks_dir.join(OFFLINE_CASH_FINALITY_STAGING_DIR_NAME)
+    fn kagemusha_finality_staging_dir_for(blocks_dir: &Path) -> PathBuf {
+        blocks_dir.join(KAGEMUSHA_FINALITY_STAGING_DIR_NAME)
     }
-    fn offline_cash_finality_staging_path_for(blocks_dir: &Path, height: u64) -> PathBuf {
-        Self::offline_cash_finality_staging_dir_for(blocks_dir).join(format!("{height:020}.norito"))
+    fn kagemusha_finality_staging_path_for(blocks_dir: &Path, height: u64) -> PathBuf {
+        Self::kagemusha_finality_staging_dir_for(blocks_dir).join(format!("{height:020}.norito"))
     }
-    fn offline_cash_finality_staging_dir(&self) -> PathBuf {
-        Self::offline_cash_finality_staging_dir_for(&self.active_blocks_dir.lock())
+    fn kagemusha_finality_staging_dir(&self) -> PathBuf {
+        Self::kagemusha_finality_staging_dir_for(&self.active_blocks_dir.lock())
     }
-    fn offline_cash_finality_staging_path(&self, height: u64) -> PathBuf {
-        Self::offline_cash_finality_staging_path_for(&self.active_blocks_dir.lock(), height)
+    fn kagemusha_finality_staging_path(&self, height: u64) -> PathBuf {
+        Self::kagemusha_finality_staging_path_for(&self.active_blocks_dir.lock(), height)
     }
-    fn offline_cash_finality_sidecar_dir_for(blocks_dir: &Path) -> PathBuf {
-        blocks_dir.join(OFFLINE_CASH_FINALITY_SIDECARS_DIR_NAME)
+    fn kagemusha_finality_sidecar_dir_for(blocks_dir: &Path) -> PathBuf {
+        blocks_dir.join(KAGEMUSHA_FINALITY_SIDECARS_DIR_NAME)
     }
-    fn offline_cash_finality_sidecar_path_for(blocks_dir: &Path, height: u64) -> PathBuf {
-        Self::offline_cash_finality_sidecar_dir_for(blocks_dir).join(format!("{height:020}.norito"))
+    fn kagemusha_finality_sidecar_path_for(blocks_dir: &Path, height: u64) -> PathBuf {
+        Self::kagemusha_finality_sidecar_dir_for(blocks_dir).join(format!("{height:020}.norito"))
     }
-    fn offline_cash_finality_sidecar_dir(&self) -> PathBuf {
-        Self::offline_cash_finality_sidecar_dir_for(&self.active_blocks_dir.lock())
+    fn kagemusha_finality_sidecar_dir(&self) -> PathBuf {
+        Self::kagemusha_finality_sidecar_dir_for(&self.active_blocks_dir.lock())
     }
-    fn offline_cash_finality_sidecar_path(&self, height: u64) -> PathBuf {
-        Self::offline_cash_finality_sidecar_path_for(&self.active_blocks_dir.lock(), height)
+    fn kagemusha_finality_sidecar_path(&self, height: u64) -> PathBuf {
+        Self::kagemusha_finality_sidecar_path_for(&self.active_blocks_dir.lock(), height)
     }
-    fn offline_cash_mint_outbox_dir_for(blocks_dir: &Path) -> PathBuf {
-        blocks_dir.join(OFFLINE_CASH_MINT_OUTBOX_DIR_NAME)
+    fn kagemusha_mint_outbox_dir_for(blocks_dir: &Path) -> PathBuf {
+        blocks_dir.join(KAGEMUSHA_MINT_OUTBOX_DIR_NAME)
     }
-    fn offline_cash_mint_outbox_dir(&self) -> PathBuf {
-        Self::offline_cash_mint_outbox_dir_for(&self.active_blocks_dir.lock())
+    fn kagemusha_mint_outbox_dir(&self) -> PathBuf {
+        Self::kagemusha_mint_outbox_dir_for(&self.active_blocks_dir.lock())
     }
-    fn offline_cash_mint_outbox_path_for(blocks_dir: &Path, operation_id: [u8; 32]) -> PathBuf {
-        Self::offline_cash_mint_outbox_dir_for(blocks_dir)
+    fn kagemusha_mint_outbox_path_for(blocks_dir: &Path, operation_id: [u8; 32]) -> PathBuf {
+        Self::kagemusha_mint_outbox_dir_for(blocks_dir)
             .join(format!("{}.norito", hex::encode(operation_id)))
     }
-    fn offline_cash_mint_outbox_path(&self, operation_id: [u8; 32]) -> PathBuf {
-        Self::offline_cash_mint_outbox_path_for(&self.active_blocks_dir.lock(), operation_id)
+    fn kagemusha_mint_outbox_path(&self, operation_id: [u8; 32]) -> PathBuf {
+        Self::kagemusha_mint_outbox_path_for(&self.active_blocks_dir.lock(), operation_id)
     }
-    fn offline_cash_mint_authority_dir_for(blocks_dir: &Path) -> PathBuf {
-        blocks_dir.join(OFFLINE_CASH_MINT_AUTHORITY_DIR_NAME)
+    fn kagemusha_mint_authority_dir_for(blocks_dir: &Path) -> PathBuf {
+        blocks_dir.join(KAGEMUSHA_MINT_AUTHORITY_DIR_NAME)
     }
-    fn offline_cash_mint_authority_dir(&self) -> PathBuf {
-        Self::offline_cash_mint_authority_dir_for(&self.active_blocks_dir.lock())
+    fn kagemusha_mint_authority_dir(&self) -> PathBuf {
+        Self::kagemusha_mint_authority_dir_for(&self.active_blocks_dir.lock())
     }
-    fn offline_cash_mint_authority_path_for(
+    fn kagemusha_mint_authority_path_for(
         blocks_dir: &Path,
         release_id: [u8; 32],
         authority_head: [u8; 32],
     ) -> PathBuf {
-        Self::offline_cash_mint_authority_dir_for(blocks_dir).join(format!(
+        Self::kagemusha_mint_authority_dir_for(blocks_dir).join(format!(
             "{}-{}.norito",
             hex::encode(release_id),
             hex::encode(authority_head)
         ))
     }
-    fn offline_cash_mint_authority_path(
+    fn kagemusha_mint_authority_path(
         &self,
         release_id: [u8; 32],
         authority_head: [u8; 32],
     ) -> PathBuf {
-        Self::offline_cash_mint_authority_path_for(
+        Self::kagemusha_mint_authority_path_for(
             &self.active_blocks_dir.lock(),
             release_id,
             authority_head,
         )
     }
-    fn offline_cash_finality_sidecar_dirs_for(blocks_dir: &Path) -> [PathBuf; 2] {
+    fn kagemusha_finality_sidecar_dirs_for(blocks_dir: &Path) -> [PathBuf; 2] {
         [
-            Self::offline_cash_finality_staging_dir_for(blocks_dir),
-            Self::offline_cash_finality_sidecar_dir_for(blocks_dir),
+            Self::kagemusha_finality_staging_dir_for(blocks_dir),
+            Self::kagemusha_finality_sidecar_dir_for(blocks_dir),
         ]
     }
     fn v2_finality_cache_hit(
@@ -16073,30 +16120,30 @@ impl Kura {
         let receipt = v2_commit_receipt(&artifact);
         Ok(Some((artifact, receipt)))
     }
-    fn validate_staged_offline_cash_finality(
-        staged: &StagedOfflineCashFinalitySidecarV1,
+    fn validate_staged_kagemusha_finality(
+        staged: &StagedKagemushaFinalitySidecarV1,
         artifact: &V2FinalityArtifact,
     ) -> Result<()> {
         let commitment = artifact.commit_qc.execution_commitment;
         let validation_fee_snapshot = staged
             .validation_fee_policy_witness
             .commitment()
-            .map_err(|error| Error::OfflineCashFinalitySidecar(error.to_owned()))?;
+            .map_err(|error| Error::KagemushaFinalitySidecar(error.to_owned()))?;
         let casting_snapshot = staged
             .parliament_timed_ovn_casting_witness
             .commitment()
-            .map_err(|error| Error::OfflineCashFinalitySidecar(error.to_owned()))?;
+            .map_err(|error| Error::KagemushaFinalitySidecar(error.to_owned()))?;
         let rebuilt_casting_snapshot =
             ParliamentTimedOvnCastingSnapshotCommitmentV1::from_ordered_bindings(
                 staged.height,
                 &staged.parliament_timed_ovn_casting_bindings,
             )
             .map_err(|error| {
-                Error::OfflineCashFinalitySidecar(format!(
+                Error::KagemushaFinalitySidecar(format!(
                     "invalid retained Parliament timed-OVN casting bindings: {error}"
                 ))
             })?;
-        if staged.version != OfflineCashFinalitySidecarV1::VERSION
+        if staged.version != KagemushaFinalitySidecarV1::VERSION
             || staged.height != artifact.height
             || staged.block_hash != artifact.block_hash
             || staged.ordinary_writes_root != commitment.ordinary_writes_root
@@ -16111,31 +16158,31 @@ impl Kura {
                 .parliament_timed_ovn_casting_witness
                 .verify(commitment.ordinary_writes_root)
             || staged
-                .offline_cash_reserve_receipts
+                .kagemusha_reserve_receipts
                 .windows(2)
                 .any(|pair| pair[0].receipt.operation_id >= pair[1].receipt.operation_id)
             || staged
-                .offline_cash_reserve_receipts
+                .kagemusha_reserve_receipts
                 .iter()
                 .any(|proof| !proof.verify(commitment.ordinary_writes_root))
         {
-            return Err(Error::OfflineCashFinalitySidecar(
-                "Offline Cash V1 witness stage differs from the exact finality artifact".to_owned(),
+            return Err(Error::KagemushaFinalitySidecar(
+                "Kagemusha V1 witness stage differs from the exact finality artifact".to_owned(),
             ));
         }
         commitment.validate().map_err(|error| {
-            Error::OfflineCashFinalitySidecar(format!(
-                "Offline Cash V1 finality execution commitment is invalid: {error}"
+            Error::KagemushaFinalitySidecar(format!(
+                "Kagemusha V1 finality execution commitment is invalid: {error}"
             ))
         })?;
         Ok(())
     }
-    fn validate_offline_cash_finality_sidecar(
-        sidecar: &OfflineCashFinalitySidecarV1,
+    fn validate_kagemusha_finality_sidecar(
+        sidecar: &KagemushaFinalitySidecarV1,
         artifact: &V2FinalityArtifact,
     ) -> Result<()> {
-        Self::validate_staged_offline_cash_finality(
-            &StagedOfflineCashFinalitySidecarV1 {
+        Self::validate_staged_kagemusha_finality(
+            &StagedKagemushaFinalitySidecarV1 {
                 version: sidecar.version,
                 height: sidecar.height,
                 block_hash: sidecar.block_hash,
@@ -16148,78 +16195,78 @@ impl Kura {
                 parliament_timed_ovn_casting_bindings: sidecar
                     .parliament_timed_ovn_casting_bindings
                     .clone(),
-                offline_cash_reserve_receipts: sidecar.offline_cash_reserve_receipts.clone(),
+                kagemusha_reserve_receipts: sidecar.kagemusha_reserve_receipts.clone(),
             },
             artifact,
         )?;
         if sidecar.finality_artifact_hash != HashOf::new(artifact) {
-            return Err(Error::OfflineCashFinalitySidecar(
-                "Offline Cash V1 sidecar is bound to another finality artifact".to_owned(),
+            return Err(Error::KagemushaFinalitySidecar(
+                "Kagemusha V1 sidecar is bound to another finality artifact".to_owned(),
             ));
         }
         Ok(())
     }
-    fn decode_staged_offline_cash_finality(
+    fn decode_staged_kagemusha_finality(
         &self,
         path: &Path,
-    ) -> Result<Option<(StagedOfflineCashFinalitySidecarV1, StableSidecarRead)>> {
-        let directory = self.offline_cash_finality_staging_dir();
+    ) -> Result<Option<(StagedKagemushaFinalitySidecarV1, StableSidecarRead)>> {
+        let directory = self.kagemusha_finality_staging_dir();
         let Some(snapshot) = self.read_regular_sidecar_snapshot(
             path,
             &directory,
-            MAX_OFFLINE_CASH_FINALITY_SIDECAR_BYTES,
+            MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES,
         )?
         else {
             return Ok(None);
         };
         let mut cursor = snapshot.bytes.as_slice();
         let sidecar = norito::with_decode_limits(
-            offline_cash_finality_decode_limits(snapshot.bytes.len()),
-            || StagedOfflineCashFinalitySidecarV1::decode_all(&mut cursor),
+            kagemusha_finality_decode_limits(snapshot.bytes.len()),
+            || StagedKagemushaFinalitySidecarV1::decode_all(&mut cursor),
         )
         .map_err(Error::NoritoFrame)?;
         if sidecar.encode() != snapshot.bytes {
             return Err(Error::IO(
                 std::io::Error::new(
                     ErrorKind::InvalidData,
-                    "staged Offline Cash V1 sidecar is not canonical Norito",
+                    "staged Kagemusha V1 sidecar is not canonical Norito",
                 ),
                 path.to_path_buf(),
             ));
         }
         Ok(Some((sidecar, snapshot)))
     }
-    fn decode_offline_cash_finality_sidecar(
+    fn decode_kagemusha_finality_sidecar(
         &self,
         path: &Path,
-    ) -> Result<Option<(OfflineCashFinalitySidecarV1, StableSidecarRead)>> {
-        let directory = self.offline_cash_finality_sidecar_dir();
+    ) -> Result<Option<(KagemushaFinalitySidecarV1, StableSidecarRead)>> {
+        let directory = self.kagemusha_finality_sidecar_dir();
         let Some(snapshot) = self.read_regular_sidecar_snapshot(
             path,
             &directory,
-            MAX_OFFLINE_CASH_FINALITY_SIDECAR_BYTES,
+            MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES,
         )?
         else {
             return Ok(None);
         };
         let mut cursor = snapshot.bytes.as_slice();
         let sidecar = norito::with_decode_limits(
-            offline_cash_finality_decode_limits(snapshot.bytes.len()),
-            || OfflineCashFinalitySidecarV1::decode_all(&mut cursor),
+            kagemusha_finality_decode_limits(snapshot.bytes.len()),
+            || KagemushaFinalitySidecarV1::decode_all(&mut cursor),
         )
         .map_err(Error::NoritoFrame)?;
         if sidecar.encode() != snapshot.bytes {
             return Err(Error::IO(
                 std::io::Error::new(
                     ErrorKind::InvalidData,
-                    "final Offline Cash V1 sidecar is not canonical Norito",
+                    "final Kagemusha V1 sidecar is not canonical Norito",
                 ),
                 path.to_path_buf(),
             ));
         }
         Ok(Some((sidecar, snapshot)))
     }
-    pub(crate) fn stage_offline_cash_finality_sidecar(
+    pub(crate) fn stage_kagemusha_finality_sidecar(
         &self,
         height: u64,
         block_hash: HashOf<BlockHeader>,
@@ -16230,52 +16277,52 @@ impl Kura {
         self.durable_mutation_authorized()?;
         let (validation_fee_policy_witness, validation_fee_root) =
             crate::receiver_snapshot::validation_fee_policy_witness_proof_v1(witness)
-                .map_err(Error::OfflineCashFinalitySidecar)?;
+                .map_err(Error::KagemushaFinalitySidecar)?;
         let (parliament_timed_ovn_casting_witness, casting_root) =
             crate::receiver_snapshot::parliament_timed_ovn_casting_witness_proof_v1(witness)
-                .map_err(Error::OfflineCashFinalitySidecar)?;
-        let (offline_cash_reserve_receipts, offline_cash_root) =
-            crate::receiver_snapshot::offline_cash_reserve_receipt_witnesses_v1(witness)
-                .map_err(Error::OfflineCashFinalitySidecar)?;
+                .map_err(Error::KagemushaFinalitySidecar)?;
+        let (kagemusha_reserve_receipts, kagemusha_root) =
+            crate::receiver_snapshot::kagemusha_reserve_receipt_witnesses_v1(witness)
+                .map_err(Error::KagemushaFinalitySidecar)?;
         if validation_fee_root != expected.ordinary_writes_root
             || casting_root != expected.ordinary_writes_root
-            || offline_cash_root != expected.ordinary_writes_root
+            || kagemusha_root != expected.ordinary_writes_root
             || !validation_fee_policy_witness.verify(expected.ordinary_writes_root)
             || !parliament_timed_ovn_casting_witness.verify(expected.ordinary_writes_root)
         {
-            return Err(Error::OfflineCashFinalitySidecar(
-                "witness-derived Offline Cash V1 proof differs from the signed ordinary-write root"
+            return Err(Error::KagemushaFinalitySidecar(
+                "witness-derived Kagemusha V1 proof differs from the signed ordinary-write root"
                     .to_owned(),
             ));
         }
         let validation_fee_snapshot = validation_fee_policy_witness
             .commitment()
-            .map_err(|error| Error::OfflineCashFinalitySidecar(error.to_owned()))?;
+            .map_err(|error| Error::KagemushaFinalitySidecar(error.to_owned()))?;
         if validation_fee_snapshot.evaluated_height != height {
-            return Err(Error::OfflineCashFinalitySidecar(
+            return Err(Error::KagemushaFinalitySidecar(
                 "validation-fee snapshot height differs from its block".to_owned(),
             ));
         }
         let casting_snapshot = parliament_timed_ovn_casting_witness
             .commitment()
-            .map_err(|error| Error::OfflineCashFinalitySidecar(error.to_owned()))?;
+            .map_err(|error| Error::KagemushaFinalitySidecar(error.to_owned()))?;
         let rebuilt_casting_snapshot =
             ParliamentTimedOvnCastingSnapshotCommitmentV1::from_ordered_bindings(
                 height,
                 parliament_timed_ovn_casting_bindings,
             )
             .map_err(|error| {
-                Error::OfflineCashFinalitySidecar(format!(
+                Error::KagemushaFinalitySidecar(format!(
                     "invalid Parliament timed-OVN casting bindings: {error}"
                 ))
             })?;
         if casting_snapshot != rebuilt_casting_snapshot {
-            return Err(Error::OfflineCashFinalitySidecar(
+            return Err(Error::KagemushaFinalitySidecar(
                 "Parliament timed-OVN casting leaves differ from the synthetic snapshot".to_owned(),
             ));
         }
-        let staged = StagedOfflineCashFinalitySidecarV1 {
-            version: OfflineCashFinalitySidecarV1::VERSION,
+        let staged = StagedKagemushaFinalitySidecarV1 {
+            version: KagemushaFinalitySidecarV1::VERSION,
             height,
             block_hash,
             ordinary_writes_root: expected.ordinary_writes_root,
@@ -16283,79 +16330,79 @@ impl Kura {
             validation_fee_policy_witness,
             parliament_timed_ovn_casting_witness,
             parliament_timed_ovn_casting_bindings: parliament_timed_ovn_casting_bindings.to_vec(),
-            offline_cash_reserve_receipts,
+            kagemusha_reserve_receipts,
         };
         let bytes = staged.encode();
-        if bytes.len() > MAX_OFFLINE_CASH_FINALITY_SIDECAR_BYTES {
-            return Err(Error::OfflineCashFinalitySidecarTooLarge {
+        if bytes.len() > MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES {
+            return Err(Error::KagemushaFinalitySidecarTooLarge {
                 actual: bytes.len(),
-                max: MAX_OFFLINE_CASH_FINALITY_SIDECAR_BYTES,
+                max: MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES,
             });
         }
         let _guard = self.sidecar_lock.lock();
-        let directory = self.offline_cash_finality_staging_dir();
+        let directory = self.kagemusha_finality_staging_dir();
         create_dir_all_with_context(&directory)?;
         if let Some(parent) = directory.parent() {
             sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
         }
-        let path = self.offline_cash_finality_staging_path(height);
-        if let Some((existing, identity)) = self.decode_staged_offline_cash_finality(&path)? {
+        let path = self.kagemusha_finality_staging_path(height);
+        if let Some((existing, identity)) = self.decode_staged_kagemusha_finality(&path)? {
             if existing == staged
                 && identity.bytes == bytes
                 && identity.bytes_hash == Hash::new(&bytes)
             {
                 return Ok(());
             }
-            return Err(Error::OfflineCashFinalitySidecar(
-                "conflicting staged Offline Cash V1 sidecar at one height".to_owned(),
+            return Err(Error::KagemushaFinalitySidecar(
+                "conflicting staged Kagemusha V1 sidecar at one height".to_owned(),
             ));
         }
         if !self.write_atomic_synced_noclobber(&path, &bytes)? {
-            let Some((existing, _)) = self.decode_staged_offline_cash_finality(&path)? else {
-                return Err(Error::OfflineCashFinalitySidecar(
-                    "staged Offline Cash V1 sidecar disappeared during publication".to_owned(),
+            let Some((existing, _)) = self.decode_staged_kagemusha_finality(&path)? else {
+                return Err(Error::KagemushaFinalitySidecar(
+                    "staged Kagemusha V1 sidecar disappeared during publication".to_owned(),
                 ));
             };
             if existing != staged {
-                return Err(Error::OfflineCashFinalitySidecar(
-                    "no-clobber race published a conflicting Offline Cash V1 stage".to_owned(),
+                return Err(Error::KagemushaFinalitySidecar(
+                    "no-clobber race published a conflicting Kagemusha V1 stage".to_owned(),
                 ));
             }
         }
-        let Some((persisted, identity)) = self.decode_staged_offline_cash_finality(&path)? else {
-            return Err(Error::OfflineCashFinalitySidecar(
-                "staged Offline Cash V1 sidecar disappeared after publication".to_owned(),
+        let Some((persisted, identity)) = self.decode_staged_kagemusha_finality(&path)? else {
+            return Err(Error::KagemushaFinalitySidecar(
+                "staged Kagemusha V1 sidecar disappeared after publication".to_owned(),
             ));
         };
         if persisted != staged
             || identity.bytes != bytes
             || identity.bytes_hash != Hash::new(&bytes)
         {
-            return Err(Error::OfflineCashFinalitySidecar(
-                "staged Offline Cash V1 sidecar changed during readback".to_owned(),
+            return Err(Error::KagemushaFinalitySidecar(
+                "staged Kagemusha V1 sidecar changed during readback".to_owned(),
             ));
         }
         Ok(())
     }
-    fn remove_exact_staged_offline_cash_finality(
+    fn remove_exact_staged_kagemusha_finality(
         &self,
         path: &Path,
         read_identity: &StableSidecarRead,
     ) -> Result<()> {
-        let directory = self.offline_cash_finality_staging_dir();
+        let directory = self.kagemusha_finality_staging_dir();
         let Some(current) = self.regular_sidecar_metadata(path, &directory)? else {
             return Ok(());
         };
         if !Self::stable_sidecar_metadata_unchanged(&read_identity.metadata, &current) {
-            return Err(Error::OfflineCashFinalitySidecar(
-                "staged Offline Cash V1 sidecar changed before cleanup".to_owned(),
+            return Err(Error::KagemushaFinalitySidecar(
+                "staged Kagemusha V1 sidecar changed before cleanup".to_owned(),
             ));
         }
         std::fs::remove_file(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
         sync_dir(&directory).map_err(|error| Error::IO(error, directory))?;
         Ok(())
     }
-    pub(crate) fn promote_offline_cash_finality_sidecar(
+    pub(crate) fn promote_kagemusha_finality_sidecar(
         &self,
         artifact: &V2FinalityArtifact,
         receipt: &KuraV2CommitReceipt,
@@ -16368,42 +16415,40 @@ impl Kura {
             || receipt.certificate != artifact.commit_qc.as_ref()
             || receipt.artifact_hash != HashOf::new(artifact)
         {
-            return Err(Error::OfflineCashFinalitySidecar(
-                "finality receipt does not identify the Offline Cash V1 artifact".to_owned(),
+            return Err(Error::KagemushaFinalitySidecar(
+                "finality receipt does not identify the Kagemusha V1 artifact".to_owned(),
             ));
         }
         let durable = self.v2_finality_artifact(artifact.height)?.ok_or_else(|| {
-            Error::OfflineCashFinalitySidecar(
-                "Offline Cash V1 promotion has no durable finality artifact".to_owned(),
+            Error::KagemushaFinalitySidecar(
+                "Kagemusha V1 promotion has no durable finality artifact".to_owned(),
             )
         })?;
         if durable != *artifact || HashOf::new(&durable) != receipt.artifact_hash {
-            return Err(Error::OfflineCashFinalitySidecar(
-                "durable finality differs from Offline Cash V1 promotion receipt".to_owned(),
+            return Err(Error::KagemushaFinalitySidecar(
+                "durable finality differs from Kagemusha V1 promotion receipt".to_owned(),
             ));
         }
         let _guard = self.sidecar_lock.lock();
-        let final_path = self.offline_cash_finality_sidecar_path(artifact.height);
-        let staged_path = self.offline_cash_finality_staging_path(artifact.height);
-        if let Some((existing, _)) = self.decode_offline_cash_finality_sidecar(&final_path)? {
-            Self::validate_offline_cash_finality_sidecar(&existing, artifact)?;
-            if let Some((staged, identity)) =
-                self.decode_staged_offline_cash_finality(&staged_path)?
-            {
-                Self::validate_staged_offline_cash_finality(&staged, artifact)?;
-                self.remove_exact_staged_offline_cash_finality(&staged_path, &identity)?;
+        let final_path = self.kagemusha_finality_sidecar_path(artifact.height);
+        let staged_path = self.kagemusha_finality_staging_path(artifact.height);
+        if let Some((existing, _)) = self.decode_kagemusha_finality_sidecar(&final_path)? {
+            Self::validate_kagemusha_finality_sidecar(&existing, artifact)?;
+            if let Some((staged, identity)) = self.decode_staged_kagemusha_finality(&staged_path)? {
+                Self::validate_staged_kagemusha_finality(&staged, artifact)?;
+                self.remove_exact_staged_kagemusha_finality(&staged_path, &identity)?;
             }
             return Ok(());
         }
         let Some((staged, staged_identity)) =
-            self.decode_staged_offline_cash_finality(&staged_path)?
+            self.decode_staged_kagemusha_finality(&staged_path)?
         else {
-            return Err(Error::OfflineCashFinalitySidecar(
-                "finality is durable but its Offline Cash V1 witness stage is missing".to_owned(),
+            return Err(Error::KagemushaFinalitySidecar(
+                "finality is durable but its Kagemusha V1 witness stage is missing".to_owned(),
             ));
         };
-        Self::validate_staged_offline_cash_finality(&staged, artifact)?;
-        let final_sidecar = OfflineCashFinalitySidecarV1 {
+        Self::validate_staged_kagemusha_finality(&staged, artifact)?;
+        let final_sidecar = KagemushaFinalitySidecarV1 {
             version: staged.version,
             height: staged.height,
             block_hash: staged.block_hash,
@@ -16413,222 +16458,216 @@ impl Kura {
             validation_fee_policy_witness: staged.validation_fee_policy_witness,
             parliament_timed_ovn_casting_witness: staged.parliament_timed_ovn_casting_witness,
             parliament_timed_ovn_casting_bindings: staged.parliament_timed_ovn_casting_bindings,
-            offline_cash_reserve_receipts: staged.offline_cash_reserve_receipts,
+            kagemusha_reserve_receipts: staged.kagemusha_reserve_receipts,
         };
-        Self::validate_offline_cash_finality_sidecar(&final_sidecar, artifact)?;
+        Self::validate_kagemusha_finality_sidecar(&final_sidecar, artifact)?;
         let bytes = final_sidecar.encode();
-        if bytes.len() > MAX_OFFLINE_CASH_FINALITY_SIDECAR_BYTES {
-            return Err(Error::OfflineCashFinalitySidecarTooLarge {
+        if bytes.len() > MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES {
+            return Err(Error::KagemushaFinalitySidecarTooLarge {
                 actual: bytes.len(),
-                max: MAX_OFFLINE_CASH_FINALITY_SIDECAR_BYTES,
+                max: MAX_KAGEMUSHA_FINALITY_SIDECAR_BYTES,
             });
         }
-        let directory = self.offline_cash_finality_sidecar_dir();
+        let directory = self.kagemusha_finality_sidecar_dir();
         create_dir_all_with_context(&directory)?;
         if let Some(parent) = directory.parent() {
             sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
         }
         if !self.write_atomic_synced_noclobber(&final_path, &bytes)? {
-            let Some((existing, _)) = self.decode_offline_cash_finality_sidecar(&final_path)?
-            else {
-                return Err(Error::OfflineCashFinalitySidecar(
-                    "final Offline Cash V1 sidecar disappeared during publication".to_owned(),
+            let Some((existing, _)) = self.decode_kagemusha_finality_sidecar(&final_path)? else {
+                return Err(Error::KagemushaFinalitySidecar(
+                    "final Kagemusha V1 sidecar disappeared during publication".to_owned(),
                 ));
             };
             if existing != final_sidecar {
-                return Err(Error::OfflineCashFinalitySidecar(
-                    "no-clobber race published a conflicting Offline Cash V1 sidecar".to_owned(),
+                return Err(Error::KagemushaFinalitySidecar(
+                    "no-clobber race published a conflicting Kagemusha V1 sidecar".to_owned(),
                 ));
             }
         }
-        let Some((persisted, identity)) = self.decode_offline_cash_finality_sidecar(&final_path)?
+        let Some((persisted, identity)) = self.decode_kagemusha_finality_sidecar(&final_path)?
         else {
-            return Err(Error::OfflineCashFinalitySidecar(
-                "final Offline Cash V1 sidecar disappeared after publication".to_owned(),
+            return Err(Error::KagemushaFinalitySidecar(
+                "final Kagemusha V1 sidecar disappeared after publication".to_owned(),
             ));
         };
         if persisted != final_sidecar
             || identity.bytes != bytes
             || identity.bytes_hash != Hash::new(&bytes)
         {
-            return Err(Error::OfflineCashFinalitySidecar(
-                "final Offline Cash V1 sidecar changed during readback".to_owned(),
+            return Err(Error::KagemushaFinalitySidecar(
+                "final Kagemusha V1 sidecar changed during readback".to_owned(),
             ));
         }
-        self.remove_exact_staged_offline_cash_finality(&staged_path, &staged_identity)?;
+        self.remove_exact_staged_kagemusha_finality(&staged_path, &staged_identity)?;
         Ok(())
     }
-    /// Return one finalized Offline Cash V1 reserve receipt and its exact consensus proof.
+    /// Return one finalized Kagemusha V1 reserve receipt and its exact consensus proof.
     ///
     /// A missing operation returns `None`; a missing, malformed, or finality-mismatched
     /// sidecar fails closed.
-    pub fn offline_cash_operation_finality_v1(
+    pub fn kagemusha_operation_finality_v1(
         &self,
         height: u64,
         operation_id: [u8; 32],
-    ) -> Result<Option<OfflineCashOperationFinalityV1>> {
+    ) -> Result<Option<KagemushaOperationFinalityV1>> {
         let Some(artifact) = self.v2_finality_artifact(height)? else {
             return Ok(None);
         };
         let _guard = self.sidecar_lock.lock();
-        let path = self.offline_cash_finality_sidecar_path(height);
-        let Some((sidecar, _)) = self.decode_offline_cash_finality_sidecar(&path)? else {
-            return Err(Error::OfflineCashFinalitySidecar(
-                "finality artifact has no Offline Cash V1 receipt sidecar".to_owned(),
+        let path = self.kagemusha_finality_sidecar_path(height);
+        let Some((sidecar, _)) = self.decode_kagemusha_finality_sidecar(&path)? else {
+            return Err(Error::KagemushaFinalitySidecar(
+                "finality artifact has no Kagemusha V1 receipt sidecar".to_owned(),
             ));
         };
-        Self::validate_offline_cash_finality_sidecar(&sidecar, &artifact)?;
+        Self::validate_kagemusha_finality_sidecar(&sidecar, &artifact)?;
         let Ok(index) = sidecar
-            .offline_cash_reserve_receipts
+            .kagemusha_reserve_receipts
             .binary_search_by_key(&operation_id, |proof| proof.receipt.operation_id)
         else {
             return Ok(None);
         };
-        let reserve_receipt_witness = sidecar.offline_cash_reserve_receipts[index].clone();
+        let reserve_receipt_witness = sidecar.kagemusha_reserve_receipts[index].clone();
         let top_up_membership_witness = if reserve_receipt_witness.receipt.kind
-            == OfflineCashOperationKindV1::TopUp
+            == KagemushaOperationKindV1::TopUp
         {
             let leaves = sidecar
-                .offline_cash_reserve_receipts
+                .kagemusha_reserve_receipts
                 .iter()
-                .filter(|witness| witness.receipt.kind == OfflineCashOperationKindV1::TopUp)
+                .filter(|witness| witness.receipt.kind == KagemushaOperationKindV1::TopUp)
                 .map(|witness| {
-                    crate::zk::offline_cash_v1_recursion::offline_cash_top_up_leaf_from_receipt_v1(
+                    crate::zk::kagemusha_v1_recursion::kagemusha_top_up_leaf_from_receipt_v1(
                         &witness.receipt,
                     )
                 })
                 .collect::<core::result::Result<Vec<_>, _>>()
                 .map_err(|error| {
-                    Error::OfflineCashFinalitySidecar(format!(
-                        "failed to reconstruct the canonical Offline Cash V1 top-up leaves: {error}"
+                    Error::KagemushaFinalitySidecar(format!(
+                        "failed to reconstruct the canonical Kagemusha V1 top-up leaves: {error}"
                     ))
                 })?;
-            let tree = crate::zk::offline_cash_v1_recursion::OfflineCashMintFinalityTreeV1::new(
-                leaves,
-            )
-            .map_err(|error| {
-                Error::OfflineCashFinalitySidecar(format!(
-                    "failed to reconstruct the canonical Offline Cash V1 top-up tree: {error}"
-                ))
-            })?;
+            let tree = crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityTreeV1::new(leaves)
+                .map_err(|error| {
+                    Error::KagemushaFinalitySidecar(format!(
+                        "failed to reconstruct the canonical Kagemusha V1 top-up tree: {error}"
+                    ))
+                })?;
             if tree.leaf_count()
                 != artifact
                     .commit_qc
                     .execution_commitment
-                    .offline_cash_top_up_count
+                    .kagemusha_top_up_count
                 || Some(tree.execution_root())
                     != artifact
                         .commit_qc
                         .execution_commitment
-                        .offline_cash_top_up_root
+                        .kagemusha_top_up_root
             {
-                return Err(Error::OfflineCashFinalitySidecar(
-                    "reconstructed Offline Cash V1 top-up tree differs from the finalized execution commitment"
+                return Err(Error::KagemushaFinalitySidecar(
+                    "reconstructed Kagemusha V1 top-up tree differs from the finalized execution commitment"
                         .to_owned(),
                 ));
             }
             let witness = tree.witness(operation_id).map_err(|error| {
-                Error::OfflineCashFinalitySidecar(format!(
-                    "failed to reconstruct the Offline Cash V1 top-up membership path: {error}"
+                Error::KagemushaFinalitySidecar(format!(
+                    "failed to reconstruct the Kagemusha V1 top-up membership path: {error}"
                 ))
             })?;
-            crate::zk::offline_cash_v1_recursion::verify_offline_cash_top_up_membership_v1(
+            crate::zk::kagemusha_v1_recursion::verify_kagemusha_top_up_membership_v1(
                 &witness,
                 tree.leaf_count(),
             )
             .map_err(|error| {
-                Error::OfflineCashFinalitySidecar(format!(
-                    "reconstructed Offline Cash V1 top-up membership path is invalid: {error}"
+                Error::KagemushaFinalitySidecar(format!(
+                    "reconstructed Kagemusha V1 top-up membership path is invalid: {error}"
                 ))
             })?;
             Some(witness)
         } else {
             None
         };
-        let finality = OfflineCashOperationFinalityV1 {
-            version: OFFLINE_CASH_CHAIN_VERSION_V1,
+        let finality = KagemushaOperationFinalityV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
             finality_artifact: artifact,
             reserve_receipt_witness,
             top_up_membership_witness,
         };
-        let trust_anchor = OfflineCashFinalityTrustAnchorV1 {
+        let trust_anchor = KagemushaFinalityTrustAnchorV1 {
             network_id: finality.finality_artifact.height_context.network_id,
             block_height: finality.finality_artifact.height,
             height_context_id: finality.finality_artifact.context_id(),
         };
         finality.validate_against(&trust_anchor).map_err(|error| {
-            Error::OfflineCashFinalitySidecar(format!(
-                "Offline Cash V1 finality proof failed canonical Kura validation: {error}"
+            Error::KagemushaFinalitySidecar(format!(
+                "Kagemusha V1 finality proof failed canonical Kura validation: {error}"
             ))
         })?;
         Ok(Some(finality))
     }
 
     /// Return the canonically ordered top-up operation identifiers finalized at one height.
-    pub(crate) fn offline_cash_top_up_operation_ids_v1(
-        &self,
-        height: u64,
-    ) -> Result<Vec<[u8; 32]>> {
+    pub(crate) fn kagemusha_top_up_operation_ids_v1(&self, height: u64) -> Result<Vec<[u8; 32]>> {
         let Some(artifact) = self.v2_finality_artifact(height)? else {
-            return Err(Error::OfflineCashFinalitySidecar(
+            return Err(Error::KagemushaFinalitySidecar(
                 "top-up inventory has no durable finality artifact".to_owned(),
             ));
         };
         let _guard = self.sidecar_lock.lock();
-        let path = self.offline_cash_finality_sidecar_path(height);
-        let Some((sidecar, _)) = self.decode_offline_cash_finality_sidecar(&path)? else {
-            return Err(Error::OfflineCashFinalitySidecar(
-                "top-up inventory has no final Offline Cash V1 sidecar".to_owned(),
+        let path = self.kagemusha_finality_sidecar_path(height);
+        let Some((sidecar, _)) = self.decode_kagemusha_finality_sidecar(&path)? else {
+            return Err(Error::KagemushaFinalitySidecar(
+                "top-up inventory has no final Kagemusha V1 sidecar".to_owned(),
             ));
         };
-        Self::validate_offline_cash_finality_sidecar(&sidecar, &artifact)?;
+        Self::validate_kagemusha_finality_sidecar(&sidecar, &artifact)?;
         Ok(sidecar
-            .offline_cash_reserve_receipts
+            .kagemusha_reserve_receipts
             .iter()
-            .filter(|witness| witness.receipt.kind == OfflineCashOperationKindV1::TopUp)
+            .filter(|witness| witness.receipt.kind == KagemushaOperationKindV1::TopUp)
             .map(|witness| witness.receipt.operation_id)
             .collect())
     }
 
-    fn decode_offline_cash_mint_authority_checkpoint_v1(
+    fn decode_kagemusha_mint_authority_checkpoint_v1(
         &self,
         path: &Path,
-    ) -> Result<Option<(OfflineCashMintAuthorityCheckpointEntryV1, StableSidecarRead)>> {
-        let directory = self.offline_cash_mint_authority_dir();
+    ) -> Result<Option<(KagemushaMintAuthorityCheckpointEntryV1, StableSidecarRead)>> {
+        let directory = self.kagemusha_mint_authority_dir();
         let Some(snapshot) = self.read_regular_sidecar_snapshot(
             path,
             &directory,
-            MAX_OFFLINE_CASH_MINT_AUTHORITY_CHECKPOINT_BYTES,
+            MAX_KAGEMUSHA_MINT_AUTHORITY_CHECKPOINT_BYTES,
         )?
         else {
             return Ok(None);
         };
         let mut cursor = snapshot.bytes.as_slice();
-        let entry = OfflineCashMintAuthorityCheckpointEntryV1::decode_all(&mut cursor)
+        let entry = KagemushaMintAuthorityCheckpointEntryV1::decode_all(&mut cursor)
             .map_err(Error::NoritoFrame)?;
         if entry.encode() != snapshot.bytes {
-            return Err(Error::OfflineCashMintOutbox(
+            return Err(Error::KagemushaMintOutbox(
                 "mint-authority checkpoint is not canonical Norito".to_owned(),
             ));
         }
         Ok(Some((entry, snapshot)))
     }
 
-    fn validate_offline_cash_mint_authority_checkpoint_v1(
-        entry: &OfflineCashMintAuthorityCheckpointEntryV1,
+    fn validate_kagemusha_mint_authority_checkpoint_v1(
+        entry: &KagemushaMintAuthorityCheckpointEntryV1,
     ) -> Result<()> {
         entry
             .checkpoint
             .validate_shape()
-            .map_err(Error::OfflineCashMintOutbox)?;
-        if entry.version != OFFLINE_CASH_CHAIN_VERSION_V1
+            .map_err(Error::KagemushaMintOutbox)?;
+        if entry.version != KAGEMUSHA_CHAIN_VERSION_V1
             || entry.release_id == [0; 32]
             || entry.authority_head == [0; 32]
             || entry.release_id != entry.checkpoint.release_id
             || entry.authority_head != entry.checkpoint.authority_head
             || entry.checkpoint_wire_hash != Hash::new(entry.checkpoint.encode())
         {
-            return Err(Error::OfflineCashMintOutbox(
+            return Err(Error::KagemushaMintOutbox(
                 "mint-authority checkpoint identity or content digest is invalid".to_owned(),
             ));
         }
@@ -16639,66 +16678,65 @@ impl Kura {
     ///
     /// Kura authenticates the immutable bytes and path identity. Monetary authority is granted
     /// only after the release runtime recursively verifies the loaded proof again.
-    pub(crate) fn store_offline_cash_mint_authority_checkpoint_v1(
+    pub(crate) fn store_kagemusha_mint_authority_checkpoint_v1(
         &self,
-        checkpoint: &OfflineCashMintAuthorityCheckpointV1,
+        checkpoint: &KagemushaMintAuthorityCheckpointV1,
     ) -> Result<()> {
         self.durable_mutation_authorized()?;
-        let entry = OfflineCashMintAuthorityCheckpointEntryV1 {
-            version: OFFLINE_CASH_CHAIN_VERSION_V1,
+        let entry = KagemushaMintAuthorityCheckpointEntryV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
             release_id: checkpoint.release_id,
             authority_head: checkpoint.authority_head,
             checkpoint: checkpoint.clone(),
             checkpoint_wire_hash: Hash::new(checkpoint.encode()),
         };
-        Self::validate_offline_cash_mint_authority_checkpoint_v1(&entry)?;
+        Self::validate_kagemusha_mint_authority_checkpoint_v1(&entry)?;
         let bytes = entry.encode();
-        if bytes.len() > MAX_OFFLINE_CASH_MINT_AUTHORITY_CHECKPOINT_BYTES {
-            return Err(Error::OfflineCashMintOutboxTooLarge {
+        if bytes.len() > MAX_KAGEMUSHA_MINT_AUTHORITY_CHECKPOINT_BYTES {
+            return Err(Error::KagemushaMintOutboxTooLarge {
                 actual: bytes.len(),
-                max: MAX_OFFLINE_CASH_MINT_AUTHORITY_CHECKPOINT_BYTES,
+                max: MAX_KAGEMUSHA_MINT_AUTHORITY_CHECKPOINT_BYTES,
             });
         }
-        let directory = self.offline_cash_mint_authority_dir();
-        let path = self.offline_cash_mint_authority_path(entry.release_id, entry.authority_head);
+        let directory = self.kagemusha_mint_authority_dir();
+        let path = self.kagemusha_mint_authority_path(entry.release_id, entry.authority_head);
         let _guard = self.sidecar_lock.lock();
         create_dir_all_with_context(&directory)?;
         if let Some(parent) = directory.parent() {
             sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
         }
-        if let Some((existing, _)) = self.decode_offline_cash_mint_authority_checkpoint_v1(&path)? {
+        if let Some((existing, _)) = self.decode_kagemusha_mint_authority_checkpoint_v1(&path)? {
             return if existing == entry {
                 Ok(())
             } else {
-                Err(Error::OfflineCashMintOutbox(
+                Err(Error::KagemushaMintOutbox(
                     "authority head already owns different checkpoint bytes".to_owned(),
                 ))
             };
         }
         if !self.write_atomic_synced_noclobber(&path, &bytes)? {
-            let Some((existing, _)) =
-                self.decode_offline_cash_mint_authority_checkpoint_v1(&path)?
+            let Some((existing, _)) = self.decode_kagemusha_mint_authority_checkpoint_v1(&path)?
             else {
-                return Err(Error::OfflineCashMintOutbox(
+                return Err(Error::KagemushaMintOutbox(
                     "mint-authority checkpoint disappeared during publication".to_owned(),
                 ));
             };
             if existing != entry {
-                return Err(Error::OfflineCashMintOutbox(
+                return Err(Error::KagemushaMintOutbox(
                     "no-clobber race published different mint-authority bytes".to_owned(),
                 ));
             }
         }
         let Some((persisted, identity)) =
-            self.decode_offline_cash_mint_authority_checkpoint_v1(&path)?
+            self.decode_kagemusha_mint_authority_checkpoint_v1(&path)?
         else {
-            return Err(Error::OfflineCashMintOutbox(
+            return Err(Error::KagemushaMintOutbox(
                 "mint-authority checkpoint disappeared after publication".to_owned(),
             ));
         };
         if persisted != entry || identity.bytes != bytes || identity.bytes_hash != Hash::new(&bytes)
         {
-            return Err(Error::OfflineCashMintOutbox(
+            return Err(Error::KagemushaMintOutbox(
                 "mint-authority checkpoint changed during durable readback".to_owned(),
             ));
         }
@@ -16706,85 +16744,85 @@ impl Kura {
     }
 
     /// Load an immutable authority checkpoint for one authenticated release and roster head.
-    pub(crate) fn offline_cash_mint_authority_checkpoint_v1(
+    pub(crate) fn kagemusha_mint_authority_checkpoint_v1(
         &self,
         release_id: [u8; 32],
         authority_head: [u8; 32],
-    ) -> Result<Option<OfflineCashMintAuthorityCheckpointV1>> {
+    ) -> Result<Option<KagemushaMintAuthorityCheckpointV1>> {
         if release_id == [0; 32] || authority_head == [0; 32] {
-            return Err(Error::OfflineCashMintOutbox(
+            return Err(Error::KagemushaMintOutbox(
                 "mint-authority checkpoint lookup identity is zero".to_owned(),
             ));
         }
-        let path = self.offline_cash_mint_authority_path(release_id, authority_head);
+        let path = self.kagemusha_mint_authority_path(release_id, authority_head);
         let entry = {
             let _guard = self.sidecar_lock.lock();
-            self.decode_offline_cash_mint_authority_checkpoint_v1(&path)?
+            self.decode_kagemusha_mint_authority_checkpoint_v1(&path)?
                 .map(|(entry, _)| entry)
         };
         let Some(entry) = entry else {
             return Ok(None);
         };
         if entry.release_id != release_id || entry.authority_head != authority_head {
-            return Err(Error::OfflineCashMintOutbox(
+            return Err(Error::KagemushaMintOutbox(
                 "mint-authority checkpoint path differs from its identity".to_owned(),
             ));
         }
-        Self::validate_offline_cash_mint_authority_checkpoint_v1(&entry)?;
+        Self::validate_kagemusha_mint_authority_checkpoint_v1(&entry)?;
         Ok(Some(entry.checkpoint))
     }
 
-    fn decode_offline_cash_mint_outbox_entry_v1(
+    fn decode_kagemusha_mint_outbox_entry_v1(
         &self,
         path: &Path,
-    ) -> Result<Option<(OfflineCashMintOutboxEntryV1, StableSidecarRead)>> {
-        let directory = self.offline_cash_mint_outbox_dir();
+    ) -> Result<Option<(KagemushaMintOutboxEntryV1, StableSidecarRead)>> {
+        let directory = self.kagemusha_mint_outbox_dir();
         let Some(snapshot) = self.read_regular_sidecar_snapshot(
             path,
             &directory,
-            MAX_OFFLINE_CASH_MINT_OUTBOX_ENTRY_BYTES,
+            MAX_KAGEMUSHA_MINT_OUTBOX_ENTRY_BYTES,
         )?
         else {
             return Ok(None);
         };
         let mut cursor = snapshot.bytes.as_slice();
         let entry =
-            OfflineCashMintOutboxEntryV1::decode_all(&mut cursor).map_err(Error::NoritoFrame)?;
+            KagemushaMintOutboxEntryV1::decode_all(&mut cursor).map_err(Error::NoritoFrame)?;
         if entry.encode() != snapshot.bytes {
-            return Err(Error::OfflineCashMintOutbox(
+            return Err(Error::KagemushaMintOutbox(
                 "mint outbox entry is not canonical Norito".to_owned(),
             ));
         }
         Ok(Some((entry, snapshot)))
     }
-    fn validate_offline_cash_mint_outbox_entry_v1(
+    fn validate_kagemusha_mint_outbox_entry_v1(
         &self,
-        entry: &OfflineCashMintOutboxEntryV1,
+        entry: &KagemushaMintOutboxEntryV1,
     ) -> Result<()> {
-        if entry.version != OFFLINE_CASH_CHAIN_VERSION_V1
+        if entry.version != KAGEMUSHA_CHAIN_VERSION_V1
             || entry.operation_id == [0; 32]
             || entry.result.request.operation_id != entry.operation_id
             || entry.result_wire_hash != Hash::new(entry.result.encode())
             || entry.finality_artifact_hash != HashOf::new(&entry.result.finality.finality_artifact)
         {
-            return Err(Error::OfflineCashMintOutbox(
+            return Err(Error::KagemushaMintOutbox(
                 "mint outbox identity or content digest is invalid".to_owned(),
             ));
         }
         let height = entry.result.finality.finality_artifact.height;
         let Some(canonical_finality) =
-            self.offline_cash_operation_finality_v1(height, entry.operation_id)?
+            self.kagemusha_operation_finality_v1(height, entry.operation_id)?
         else {
-            return Err(Error::OfflineCashMintOutbox(
+            return Err(Error::KagemushaMintOutbox(
                 "mint outbox entry has no canonical reserve-receipt finality proof".to_owned(),
             ));
         };
         if canonical_finality != entry.result.finality {
-            return Err(Error::OfflineCashMintOutbox(
+            return Err(Error::KagemushaMintOutbox(
                 "mint outbox finality differs from canonical Kura evidence".to_owned(),
             ));
         }
-        let anchor = OfflineCashFinalityTrustAnchorV1 {
+        let anchor = KagemushaFinalityTrustAnchorV1 {
             network_id: canonical_finality
                 .finality_artifact
                 .height_context
@@ -16793,7 +16831,7 @@ impl Kura {
             height_context_id: canonical_finality.finality_artifact.context_id(),
         };
         entry.result.validate_against(&anchor).map_err(|error| {
-            Error::OfflineCashMintOutbox(format!(
+            Error::KagemushaMintOutbox(format!(
                 "mint outbox result failed canonical finality validation: {error}"
             ))
         })
@@ -16802,93 +16840,92 @@ impl Kura {
     ///
     /// The caller must hold Kura's durable-mutation authority. The result is accepted only
     /// after its finality and receipt witness exactly match canonical Kura evidence.
-    pub fn store_offline_cash_mint_outbox_entry_v1(
+    pub fn store_kagemusha_mint_outbox_entry_v1(
         &self,
-        result: &OfflineCashTopUpResultV1,
+        result: &KagemushaTopUpResultV1,
     ) -> Result<()> {
         self.durable_mutation_authorized()?;
-        let entry = OfflineCashMintOutboxEntryV1 {
-            version: OFFLINE_CASH_CHAIN_VERSION_V1,
+        let entry = KagemushaMintOutboxEntryV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
             operation_id: result.request.operation_id,
             result: result.clone(),
             result_wire_hash: Hash::new(result.encode()),
             finality_artifact_hash: HashOf::new(&result.finality.finality_artifact),
         };
-        self.validate_offline_cash_mint_outbox_entry_v1(&entry)?;
+        self.validate_kagemusha_mint_outbox_entry_v1(&entry)?;
         let bytes = entry.encode();
-        if bytes.len() > MAX_OFFLINE_CASH_MINT_OUTBOX_ENTRY_BYTES {
-            return Err(Error::OfflineCashMintOutboxTooLarge {
+        if bytes.len() > MAX_KAGEMUSHA_MINT_OUTBOX_ENTRY_BYTES {
+            return Err(Error::KagemushaMintOutboxTooLarge {
                 actual: bytes.len(),
-                max: MAX_OFFLINE_CASH_MINT_OUTBOX_ENTRY_BYTES,
+                max: MAX_KAGEMUSHA_MINT_OUTBOX_ENTRY_BYTES,
             });
         }
-        let directory = self.offline_cash_mint_outbox_dir();
-        let path = self.offline_cash_mint_outbox_path(entry.operation_id);
+        let directory = self.kagemusha_mint_outbox_dir();
+        let path = self.kagemusha_mint_outbox_path(entry.operation_id);
         let _guard = self.sidecar_lock.lock();
         create_dir_all_with_context(&directory)?;
         if let Some(parent) = directory.parent() {
             sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
         }
-        if let Some((existing, _)) = self.decode_offline_cash_mint_outbox_entry_v1(&path)? {
+        if let Some((existing, _)) = self.decode_kagemusha_mint_outbox_entry_v1(&path)? {
             return if existing == entry {
                 Ok(())
             } else {
-                Err(Error::OfflineCashMintOutbox(
+                Err(Error::KagemushaMintOutbox(
                     "operation id already owns different mint outbox bytes".to_owned(),
                 ))
             };
         }
         if !self.write_atomic_synced_noclobber(&path, &bytes)? {
-            let Some((existing, _)) = self.decode_offline_cash_mint_outbox_entry_v1(&path)? else {
-                return Err(Error::OfflineCashMintOutbox(
+            let Some((existing, _)) = self.decode_kagemusha_mint_outbox_entry_v1(&path)? else {
+                return Err(Error::KagemushaMintOutbox(
                     "mint outbox entry disappeared during publication".to_owned(),
                 ));
             };
             if existing != entry {
-                return Err(Error::OfflineCashMintOutbox(
+                return Err(Error::KagemushaMintOutbox(
                     "no-clobber race published different mint outbox bytes".to_owned(),
                 ));
             }
         }
-        let Some((persisted, identity)) = self.decode_offline_cash_mint_outbox_entry_v1(&path)?
-        else {
-            return Err(Error::OfflineCashMintOutbox(
+        let Some((persisted, identity)) = self.decode_kagemusha_mint_outbox_entry_v1(&path)? else {
+            return Err(Error::KagemushaMintOutbox(
                 "mint outbox entry disappeared after publication".to_owned(),
             ));
         };
         if persisted != entry || identity.bytes != bytes || identity.bytes_hash != Hash::new(&bytes)
         {
-            return Err(Error::OfflineCashMintOutbox(
+            return Err(Error::KagemushaMintOutbox(
                 "mint outbox entry changed during durable readback".to_owned(),
             ));
         }
         Ok(())
     }
     /// Load one fully proved mint result from the immutable Kura outbox.
-    pub fn offline_cash_mint_outbox_entry_v1(
+    pub fn kagemusha_mint_outbox_entry_v1(
         &self,
         operation_id: [u8; 32],
-    ) -> Result<Option<OfflineCashTopUpResultV1>> {
+    ) -> Result<Option<KagemushaTopUpResultV1>> {
         if operation_id == [0; 32] {
-            return Err(Error::OfflineCashMintOutbox(
+            return Err(Error::KagemushaMintOutbox(
                 "mint outbox operation id is zero".to_owned(),
             ));
         }
-        let path = self.offline_cash_mint_outbox_path(operation_id);
+        let path = self.kagemusha_mint_outbox_path(operation_id);
         let entry = {
             let _guard = self.sidecar_lock.lock();
-            self.decode_offline_cash_mint_outbox_entry_v1(&path)?
+            self.decode_kagemusha_mint_outbox_entry_v1(&path)?
                 .map(|(entry, _)| entry)
         };
         let Some(entry) = entry else {
             return Ok(None);
         };
         if entry.operation_id != operation_id {
-            return Err(Error::OfflineCashMintOutbox(
+            return Err(Error::KagemushaMintOutbox(
                 "mint outbox path does not match its operation id".to_owned(),
             ));
         }
-        self.validate_offline_cash_mint_outbox_entry_v1(&entry)?;
+        self.validate_kagemusha_mint_outbox_entry_v1(&entry)?;
         Ok(Some(entry.result))
     }
     /// Return the finalized fixed-key validation-fee registry witness proof for one block.
@@ -16900,13 +16937,13 @@ impl Kura {
             return Ok(None);
         };
         let _guard = self.sidecar_lock.lock();
-        let path = self.offline_cash_finality_sidecar_path(height);
-        let Some((sidecar, _)) = self.decode_offline_cash_finality_sidecar(&path)? else {
-            return Err(Error::OfflineCashFinalitySidecar(
+        let path = self.kagemusha_finality_sidecar_path(height);
+        let Some((sidecar, _)) = self.decode_kagemusha_finality_sidecar(&path)? else {
+            return Err(Error::KagemushaFinalitySidecar(
                 "finality artifact has no validation-fee witness sidecar".to_owned(),
             ));
         };
-        Self::validate_offline_cash_finality_sidecar(&sidecar, &artifact)?;
+        Self::validate_kagemusha_finality_sidecar(&sidecar, &artifact)?;
         Ok(Some(sidecar.validation_fee_policy_witness))
     }
     /// Return the finalized fixed-write Parliament timed-OVN casting snapshot proof.
@@ -16918,13 +16955,13 @@ impl Kura {
             return Ok(None);
         };
         let _guard = self.sidecar_lock.lock();
-        let path = self.offline_cash_finality_sidecar_path(height);
-        let Some((sidecar, _)) = self.decode_offline_cash_finality_sidecar(&path)? else {
-            return Err(Error::OfflineCashFinalitySidecar(
+        let path = self.kagemusha_finality_sidecar_path(height);
+        let Some((sidecar, _)) = self.decode_kagemusha_finality_sidecar(&path)? else {
+            return Err(Error::KagemushaFinalitySidecar(
                 "finality artifact has no Parliament timed-OVN casting witness sidecar".to_owned(),
             ));
         };
-        Self::validate_offline_cash_finality_sidecar(&sidecar, &artifact)?;
+        Self::validate_kagemusha_finality_sidecar(&sidecar, &artifact)?;
         Ok(Some(sidecar.parliament_timed_ovn_casting_witness))
     }
     /// Return the stable finalized Parliament timed-OVN root-and-count commitment.
@@ -16936,7 +16973,7 @@ impl Kura {
             .map(|proof| {
                 proof
                     .commitment()
-                    .map_err(|error| Error::OfflineCashFinalitySidecar(error.to_owned()))
+                    .map_err(|error| Error::KagemushaFinalitySidecar(error.to_owned()))
             })
             .transpose()
     }
@@ -16950,13 +16987,13 @@ impl Kura {
             return Ok(None);
         };
         let _guard = self.sidecar_lock.lock();
-        let path = self.offline_cash_finality_sidecar_path(height);
-        let Some((sidecar, _)) = self.decode_offline_cash_finality_sidecar(&path)? else {
-            return Err(Error::OfflineCashFinalitySidecar(
+        let path = self.kagemusha_finality_sidecar_path(height);
+        let Some((sidecar, _)) = self.decode_kagemusha_finality_sidecar(&path)? else {
+            return Err(Error::KagemushaFinalitySidecar(
                 "finality artifact has no Parliament timed-OVN casting witness sidecar".to_owned(),
             ));
         };
-        Self::validate_offline_cash_finality_sidecar(&sidecar, &artifact)?;
+        Self::validate_kagemusha_finality_sidecar(&sidecar, &artifact)?;
         let Ok(index) = sidecar
             .parliament_timed_ovn_casting_bindings
             .binary_search_by_key(&ballot_attempt_id, |binding| binding.ballot_attempt_id)
@@ -16970,13 +17007,13 @@ impl Kura {
                 .map(HashOf::new),
         );
         let leaf_index = u32::try_from(index).map_err(|_| {
-            Error::OfflineCashFinalitySidecar(
+            Error::KagemushaFinalitySidecar(
                 "Parliament timed-OVN casting leaf index exceeds u32".to_owned(),
             )
         })?;
         let membership_proof = ParliamentTimedOvnCastingContextMembershipProofV1::new(
             tree.get_proof(leaf_index).ok_or_else(|| {
-                Error::OfflineCashFinalitySidecar(
+                Error::KagemushaFinalitySidecar(
                     "Parliament timed-OVN casting membership proof is unavailable".to_owned(),
                 )
             })?,
@@ -16987,7 +17024,7 @@ impl Kura {
             membership_proof,
         };
         if !proof.verify(artifact.commit_qc.execution_commitment.ordinary_writes_root) {
-            return Err(Error::OfflineCashFinalitySidecar(
+            return Err(Error::KagemushaFinalitySidecar(
                 "constructed Parliament timed-OVN casting proof failed verification".to_owned(),
             ));
         }
@@ -18127,10 +18164,10 @@ impl Kura {
             RETAINED_BLOCKS_DIR_NAME,
             RETAINED_BLOCK_REWRITE_STAGING_DIR_NAME,
             V2_FINALITY_ARTIFACTS_DIR_NAME,
-            OFFLINE_CASH_FINALITY_STAGING_DIR_NAME,
-            OFFLINE_CASH_FINALITY_SIDECARS_DIR_NAME,
-            OFFLINE_CASH_MINT_OUTBOX_DIR_NAME,
-            OFFLINE_CASH_MINT_AUTHORITY_DIR_NAME,
+            KAGEMUSHA_FINALITY_STAGING_DIR_NAME,
+            KAGEMUSHA_FINALITY_SIDECARS_DIR_NAME,
+            KAGEMUSHA_MINT_OUTBOX_DIR_NAME,
+            KAGEMUSHA_MINT_AUTHORITY_DIR_NAME,
         ] {
             total = total.saturating_add(Self::dir_file_bytes(&blocks_dir.join(directory))?);
         }
@@ -19013,7 +19050,7 @@ impl Kura {
         Self::prune_wsv_checkpoints_above_in_dir(&self.wsv_checkpoint_dir(), retained_height)?;
         Self::prune_commit_manifests_above_in_dir(&self.commit_manifest_dir(), retained_height)?;
         self.prune_v2_finality_artifacts_above(retained_height)?;
-        for directory in Self::offline_cash_finality_sidecar_dirs_for(&blocks_dir) {
+        for directory in Self::kagemusha_finality_sidecar_dirs_for(&blocks_dir) {
             Self::prune_commit_manifests_above_in_dir(&directory, retained_height)?;
         }
         self.append_debug_block_dump(&block);
@@ -21452,11 +21489,11 @@ impl Kura {
                 "Sumeragi v2 finality directory",
             )?;
             let blocks_dir = self.active_blocks_dir.lock().clone();
-            for directory in Self::offline_cash_finality_sidecar_dirs_for(&blocks_dir) {
+            for directory in Self::kagemusha_finality_sidecar_dirs_for(&blocks_dir) {
                 Self::validate_no_numbered_sidecar_suffix(
                     &directory,
                     intent.target_height,
-                    "Offline Cash V1 finality sidecar directory",
+                    "Kagemusha V1 finality sidecar directory",
                 )?;
             }
             self.validate_pipeline_sidecars_for_prune(intent.target_height, true)?;
@@ -21729,9 +21766,9 @@ impl Kura {
             "Sumeragi v2 finality suffix",
             Self::prune_v2_finality_artifacts_above_in_dir(&finality_dir, height)
         );
-        for directory in Self::offline_cash_finality_sidecar_dirs_for(&blocks_dir) {
+        for directory in Self::kagemusha_finality_sidecar_dirs_for(&blocks_dir) {
             forward_or_stop!(
-                "Offline Cash V1 finality sidecar suffix",
+                "Kagemusha V1 finality sidecar suffix",
                 Self::prune_commit_manifests_above_in_dir(&directory, height)
             );
         }

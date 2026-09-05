@@ -213,8 +213,8 @@
         "parent_state_root",
         "post_state_root",
         "ordinary_writes_root",
-        "offline_cash_top_up_root",
-        "offline_cash_top_up_count",
+        "kagemusha_top_up_root",
+        "kagemusha_top_up_count",
         "native_amx_application_manifest_version",
         "native_amx_application_manifest_root",
         "native_amx_application_manifest_count",
@@ -226,7 +226,7 @@
     },
     {
       "id": "execution.nullable",
-      "values": ["offline_cash_top_up_root", "lane_finality_manifest", "merge_carrier"]
+      "values": ["kagemusha_top_up_root", "lane_finality_manifest", "merge_carrier"]
     },
     {
       "id": "qc.required",
@@ -422,8 +422,8 @@
         "ordinary_writes_root",
         "parent_state_root",
         "post_state_root",
-        "offline_cash_top_up_root",
-        "offline_cash_top_up_count"
+        "kagemusha_top_up_root",
+        "kagemusha_top_up_count"
       ]
     },
     {

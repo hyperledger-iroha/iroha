@@ -14,7 +14,7 @@
   "options": {
     "chunk_size": 200,
     "parity_group": 0,
-    "payload_kind": "offline_cash_payment_request_v1"
+    "payload_kind": "kagemusha_payment_request_v1"
   },
   "payload_hex": "69726f68612d71722d73747265616d2d6261736963"
 }

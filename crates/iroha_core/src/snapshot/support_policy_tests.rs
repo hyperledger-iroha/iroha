@@ -56,65 +56,6 @@ use std::{
 };
 use tempfile::tempdir;
 const TEST_CHUNK_SIZE: NonZeroUsize = nonzero!(1024_usize);
-const PRE_PRIVATE_SETTLEMENT_WORLD_FIXTURE_V1: &str =
-    include_str!("../../tests/fixtures/snapshot/pre_private_settlement_world_v1.json");
-const PRE_PRIVATE_SETTLEMENT_STATE_FIXTURE_V1: &[u8] =
-    include_bytes!("../../tests/fixtures/snapshot/pre_private_settlement_state_v1.json");
-const PRE_PRIVATE_SETTLEMENT_BLOCK_WIRE_FIXTURE_V1: &[u8] =
-    include_bytes!("../../tests/fixtures/snapshot/pre_private_settlement_block_v1.norito");
-const PRE_PRIVATE_SETTLEMENT_WSV_CHECKPOINT_FIXTURE_V1: &[u8] =
-    include_bytes!("../../tests/fixtures/snapshot/pre_private_settlement_wsv_checkpoint_v1.norito");
-const PRE_PRIVATE_SETTLEMENT_COMMIT_MANIFEST_FIXTURE_V1: &[u8] = include_bytes!(
-    "../../tests/fixtures/snapshot/pre_private_settlement_commit_manifest_v1.norito"
-);
-const PRE_PRIVATE_SETTLEMENT_FINALITY_FIXTURE_V1: &[u8] =
-    include_bytes!("../../tests/fixtures/snapshot/pre_private_settlement_finality_v1.norito");
-const PRE_PRIVATE_SETTLEMENT_WSV_HASH_FIXTURE_V1: &str =
-    include_str!("../../tests/fixtures/snapshot/pre_private_settlement_state_v1.wsv");
-const PRE_PRIVATE_SETTLEMENT_PROVENANCE_FIXTURE_V1: &str =
-    include_str!("../../tests/fixtures/snapshot/pre_private_settlement_v1.provenance");
-const PRE_PRIVATE_SETTLEMENT_GENERATOR_SOURCE_V1: &[u8] =
-    include_bytes!("pre_private_settlement_v1_generator.rs");
-const PRE_PRIVATE_SETTLEMENT_STATE_FIXTURE_SHA256_V1: &str =
-    "c4ed9375846c8217ed0c28ae0e9ef28f00fb66aab39e8dfbe57c6ce771eed30c";
-const PRE_PRIVATE_SETTLEMENT_BLOCK_WIRE_FIXTURE_SHA256_V1: &str =
-    "134f36ddceaee8339cdaff9836f1f476180c48aad08477460f7093a6d4a5967c";
-const PRE_PRIVATE_SETTLEMENT_WSV_CHECKPOINT_FIXTURE_SHA256_V1: &str =
-    "08161a6c6376212e8ec38cd7c0d19969658226a7b834618d4329d2b902c36359";
-const PRE_PRIVATE_SETTLEMENT_COMMIT_MANIFEST_FIXTURE_SHA256_V1: &str =
-    "81ac529112fb6478a2d8df2f78c39377b875f9a01cfc6a5a6bb3b39541ba010b";
-const PRE_PRIVATE_SETTLEMENT_FINALITY_FIXTURE_SHA256_V1: &str =
-    "862968be63f62ddcf3054c846ec1b490f69e6529b172cf6900eb0b687f318859";
-const PRE_PRIVATE_SETTLEMENT_WSV_HASH_FIXTURE_SHA256_V1: &str =
-    "9257a5ba5cc4f93155de3b3d3f3a82ed085b495aabd2f9f3eedc776f95b9aa94";
-const PRE_PRIVATE_SETTLEMENT_PROVENANCE_FIXTURE_SHA256_V1: &str =
-    "7f767620b62510ed4fabc3e9a68565c1e738b9505d7a98c3e70342b5ec73ca3d";
-const PRE_PRIVATE_SETTLEMENT_GENERATOR_SOURCE_SHA256_V1: &str =
-    "155d9183bdbbf032dc789c447fa6afc27c4127341de9157b71b5a99259fbe934";
-const PRE_PRIVATE_SETTLEMENT_INJECTION_SHA256_V1: &str =
-    "8a2dd37e612f90b6f244fb43dff0c3bb1765453eeb5a57a5966d2848c35f2bf5";
-// This source is also appended verbatim to the exact predecessor checkout. Compiling its
-// fail-closed staging test here keeps atomic publication behavior covered by the current suite;
-// the ignored emitter itself can only produce the reviewed 180-field predecessor schema.
-include!("pre_private_settlement_v1_generator.rs");
-fn parsed_pre_private_settlement_provenance_v1()
--> std::collections::BTreeMap<&'static str, &'static str> {
-    let mut entries = std::collections::BTreeMap::new();
-    for (line_index, line) in PRE_PRIVATE_SETTLEMENT_PROVENANCE_FIXTURE_V1
-        .lines()
-        .enumerate()
-    {
-        let (key, value) = line
-            .split_once('=')
-            .unwrap_or_else(|| panic!("provenance line {} has no separator", line_index + 1));
-        assert!(!key.is_empty(), "provenance keys must not be empty");
-        assert!(
-            entries.insert(key, value).is_none(),
-            "duplicate predecessor provenance key {key}"
-        );
-    }
-    entries
-}
 fn dummy_block_hash(marker: u8) -> HashOf<BlockHeader> {
     HashOf::from_untyped_unchecked(Hash::prehashed([marker; 32]))
 }
@@ -159,8 +100,8 @@ fn canonical_snapshot_v2_phase_vote_evidence(network_id: NetworkId) -> Evidence 
             power: 1,
         })
         .collect::<Vec<_>>();
-    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
+    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
     let context = wire_v2::HeightContext {
         network_id,
         protocol_version: wire_v2::PROTOCOL_VERSION,
@@ -174,8 +115,8 @@ fn canonical_snapshot_v2_phase_vote_evidence(network_id: NetworkId) -> Evidence 
         quorum: wire_v2::DualQuorum::from_roster(&roster)
             .expect("equal-power snapshot evidence quorum"),
         roster,
-        offline_cash_mint_finality_epoch_id,
-        offline_cash_mint_finality_epoch_roster,
+        kagemusha_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster,
         nexus_amx_context_hash: Hash::new(b"snapshot evidence context"),
         execution_policy_hash: Hash::new(b"snapshot evidence execution policy"),
         da_layout: wire_v2::DataAvailabilityLayout {
@@ -203,7 +144,7 @@ fn canonical_snapshot_v2_phase_vote_evidence(network_id: NetworkId) -> Evidence 
         view: 0,
     };
     let execution_commitment =
-        wire_v2::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        wire_v2::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"snapshot evidence parent state"),
             Hash::new(b"snapshot evidence post state"),
             Hash::new(b"snapshot evidence ordinary writes"),
@@ -349,15 +290,15 @@ fn signed_complete_wire_finality_for_snapshot_blocks(
         })
         .collect::<Vec<_>>();
     let execution_commitment_template =
-        ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"snapshot eviction parent state"),
             Hash::new(b"snapshot eviction post state"),
             Hash::new(b"snapshot eviction ordinary writes"),
             1,
             Hash::new(b"snapshot eviction executed block wire placeholder"),
         );
-    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(*network_id, 0, &roster);
+    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(*network_id, 0, &roster);
     let mut parent: Option<V2FinalityArtifact> = None;
     let mut artifacts = Vec::with_capacity(blocks.len());
     for block in blocks {
@@ -374,9 +315,8 @@ fn signed_complete_wire_finality_for_snapshot_blocks(
             snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("snapshot-eviction fixture quorum"),
             roster: roster.clone(),
-            offline_cash_mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster: offline_cash_mint_finality_epoch_roster
-                .clone(),
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster: kagemusha_mint_finality_epoch_roster.clone(),
             nexus_amx_context_hash: Hash::new(b"snapshot eviction nexus context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
@@ -1303,56 +1243,6 @@ async fn staged_snapshot_wsv_hash_commits_consensus_evidence() {
 }
 
 #[tokio::test]
-async fn nonempty_successor_world_is_not_normalized_to_the_predecessor_schema() {
-    let state = State::new_with_chain_and_network_id_for_testing(
-        crate::state::World::default(),
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-        ChainId::from(TEST_CHAIN_ID),
-        snapshot_test_network_id(),
-    );
-    let header = BlockHeader::new(
-        NonZeroU64::new(1).expect("non-zero test height"),
-        None,
-        None,
-        None,
-        1_000,
-        0,
-    );
-    let mut state_block = state.block(header);
-    let evidence = canonical_snapshot_v2_phase_vote_evidence(snapshot_test_network_id());
-    let key = crate::sumeragi::evidence::evidence_key(&evidence);
-    state_block.world.consensus_evidence.insert(
-        key,
-        EvidenceRecord {
-            evidence,
-            recorded_at_height: 1,
-            recorded_at_view: 0,
-            recorded_at_ms: 1_000,
-            penalty_status: EvidencePenaltyStatus::Pending,
-        },
-    );
-    state_block
-        .commit_world_overlay_for_testing()
-        .expect("commit nonempty successor evidence overlay");
-    let normalized = canonical_state_snapshot_value(&state);
-    let normalized_world = normalized
-        .get("world")
-        .and_then(json::Value::as_object)
-        .expect("normalized State carries World");
-    assert!(
-        PRIVATE_SETTLEMENT_SNAPSHOT_FIELDS_V1
-            .iter()
-            .all(|field| normalized_world.contains_key(*field))
-            && normalized_world.contains_key("consensus_evidence")
-            && PRE_PRIVATE_SETTLEMENT_RETIRED_WORLD_FIELDS_V1
-                .iter()
-                .all(|field| !normalized_world.contains_key(*field)),
-        "a nonempty successor field must retain the complete current schema instead of entering an APS-only hybrid"
-    );
-}
-
-#[tokio::test]
 async fn canonical_wsv_hash_uses_current_mv_cell_values() {
     let state = state_factory();
     let before = canonical_state_snapshot_bytes_for_tests(&state);
@@ -1507,32 +1397,6 @@ fn exact_snapshot_payload_bytes(state: &State) -> Vec<u8> {
     let mut payload = String::new();
     serialize_state_snapshot(state, &mut payload);
     payload.into_bytes()
-}
-fn collect_snapshot_object_field_paths(
-    value: &json::Value,
-    parent: &str,
-    fields: &mut BTreeSet<String>,
-) {
-    match value {
-        json::Value::Object(object) => {
-            for (field, value) in object {
-                let path = if parent.is_empty() {
-                    field.clone()
-                } else {
-                    format!("{parent}.{field}")
-                };
-                fields.insert(path.clone());
-                collect_snapshot_object_field_paths(value, &path, fields);
-            }
-        }
-        json::Value::Array(items) => {
-            let path = format!("{parent}[]");
-            for value in items {
-                collect_snapshot_object_field_paths(value, &path, fields);
-            }
-        }
-        _ => {}
-    }
 }
 fn snapshot_payload_without_space_directory_manifest_section(state: &State) -> Vec<u8> {
     let mut snapshot: json::Value = json::from_slice(&exact_snapshot_payload_bytes(state))

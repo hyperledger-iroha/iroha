@@ -72,11 +72,28 @@ Signed transaction hashes in this status surface use exact
 `[0-9a-f]{63}[13579bdf]` text; the final odd nibble is the Iroha `HashOf`
 marker, not a normalization option. Contract `tx_hash_hex` receipt fields use
 the same exact spelling, as do contract entrypoint hashes, multisig transaction
-hashes, and offline-operation status transaction hashes.
+hashes, and KAGEMUSHA operation-status transaction hashes.
 
-`get_offline_cash_readiness()` validates the closed four-field Offline Cash V1
-response from `GET /v1/offline/readiness`. Peer-payment, mint-credit, and
-redemption-voucher codecs live in the sole `OfflineCashV1` Python namespace.
+`get_kagemusha_readiness()` validates the closed four-field KAGEMUSHA
+wire-version-1 response from `GET /v1/kagemusha/readiness`. Peer-payment,
+mint-credit, and redemption-voucher codecs live in the sole `Kagemusha` Python
+namespace.
+
+Top-up submission is payer-signed: `submit_kagemusha_top_up` accepts only the
+canonical version-1 `SignedTransaction` bytes and the exact nonzero 32-byte
+operation ID embedded in its sole `iroha.kagemusha.v1.top_up` instruction. It
+posts the transaction unchanged to `/v1/kagemusha/top-up` and derives the
+lowercase `Idempotency-Key` from that explicit operation ID. There is no
+unsigned-request overload or server-signing path. The transaction must contain
+exactly one payer-authorized top-up instruction and signature-bind
+`QueuePlanSynced`; its embedded request may be up to 16 KiB, while the complete
+transaction uses Torii's normal signed-transaction ingress limit. Redemption
+continues to submit its canonical typed request archive. Both submission calls
+require the exact operation resource in `Location`: HTTP 202 is accepted only
+with a pending status and a positive `Retry-After`, while HTTP 200 is accepted
+only for applied or rejected status without `Retry-After`. Applied monetary
+results remain inaccessible in the returned wrapper until a caller-pinned
+finality verifier authenticates them.
 
 ## Caller-trusted unsigned drafts
 

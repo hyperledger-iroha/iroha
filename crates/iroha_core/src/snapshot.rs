@@ -1,6 +1,4 @@
 //! This module contains [`State`] snapshot actor service.
-#[cfg(any(test, feature = "iroha-core-tests"))]
-use crate::state::deserialize::PRE_PRIVATE_SETTLEMENT_HSM_PROVIDERS_V1;
 #[cfg(feature = "telemetry")]
 use crate::telemetry::StateTelemetry;
 use crate::{
@@ -10,15 +8,7 @@ use crate::{
     state::{
         LaneIncarnationLineage, SnapshotNexusRuntime, SnapshotNoritoBlob,
         SnapshotPublicLaneRewardClaim, SnapshotSpaceDirectoryManifestSet, State, StateBlock,
-        ValidatedSccpRegistryV1, WorldReadOnly, ZkConfigInstallError,
-        deserialize::{
-            KuraSeed, PRE_PRIVATE_SETTLEMENT_HSM_PROVIDERS_JSON_V1,
-            PRE_PRIVATE_SETTLEMENT_RETIRED_MARKER_V1,
-            PRE_PRIVATE_SETTLEMENT_RETIRED_WORLD_FIELDS_V1,
-            PRE_PRIVATE_SETTLEMENT_SUCCESSOR_WORLD_FIELDS_V1,
-            PRIVATE_SETTLEMENT_SNAPSHOT_FIELDS_V1,
-            is_exact_post_private_settlement_world_field_set_v1,
-        },
+        ValidatedSccpRegistryV1, WorldReadOnly, ZkConfigInstallError, deserialize::KuraSeed,
         lane_incarnation_lineage_root, public_lane_reward_record_matches_key,
         public_lane_stake_share_matches_key, public_lane_validator_record_matches_key,
     },
@@ -2056,13 +2046,11 @@ enum CanonicalWsvPath {
     World,
     Parameters,
     Sumeragi,
-    Transactions,
     Other,
 }
 #[derive(Clone, Copy, Default)]
 struct CanonicalWsvOverrides<'a> {
     committed_external_event_buf: Option<&'a str>,
-    pre_private_settlement_state: bool,
 }
 struct BorrowedJsonMember<'a> {
     key: String,
@@ -2138,16 +2126,14 @@ fn canonical_wsv_member_is_redacted(path: CanonicalWsvPath, key: &str) -> bool {
             "sumeragi_v2_bootstrap" | "commit_topology" | "prev_commit_topology"
         ),
         CanonicalWsvPath::World => false,
-        CanonicalWsvPath::Parameters
-        | CanonicalWsvPath::Sumeragi
-        | CanonicalWsvPath::Transactions
-        | CanonicalWsvPath::Other => false,
+        CanonicalWsvPath::Parameters | CanonicalWsvPath::Sumeragi | CanonicalWsvPath::Other => {
+            false
+        }
     }
 }
 fn canonical_wsv_child_path(path: CanonicalWsvPath, key: &str) -> CanonicalWsvPath {
     match (path, key) {
         (CanonicalWsvPath::Root, "world") => CanonicalWsvPath::World,
-        (CanonicalWsvPath::Root, "transactions") => CanonicalWsvPath::Transactions,
         (CanonicalWsvPath::World, "parameters") => CanonicalWsvPath::Parameters,
         (CanonicalWsvPath::Parameters, "sumeragi") => CanonicalWsvPath::Sumeragi,
         _ => CanonicalWsvPath::Other,
@@ -2220,12 +2206,6 @@ fn update_snapshot_wsv_object_hash<'a>(
     overrides: CanonicalWsvOverrides<'a>,
 ) -> Result<(), TryReadError> {
     let mut members = borrowed_json_object_members(input)?;
-    let pre_private_settlement_state = overrides.pre_private_settlement_state
-        || (path == CanonicalWsvPath::Root
-            && is_exact_pre_private_settlement_current_state_hash_v1(
-                &members,
-                overrides.committed_external_event_buf,
-            )?);
     if path == CanonicalWsvPath::World
         && !members
             .iter()
@@ -2246,45 +2226,6 @@ fn update_snapshot_wsv_object_hash<'a>(
     if members.windows(2).any(|pair| pair[0].key == pair[1].key) {
         return Err(TryReadError::NonCanonicalSnapshotPayload);
     }
-    if path == CanonicalWsvPath::World && pre_private_settlement_state {
-        if !normalize_exact_pre_private_settlement_world_hash_v1(&mut members) {
-            return Err(TryReadError::NonCanonicalSnapshotPayload);
-        }
-        members.sort_unstable_by(|left, right| left.key.cmp(&right.key));
-    }
-    if path == CanonicalWsvPath::Sumeragi && pre_private_settlement_state {
-        if members.iter().any(|member| {
-            matches!(
-                member.key.as_str(),
-                "key_require_hsm" | "key_allowed_hsm_providers"
-            )
-        }) {
-            return Err(TryReadError::NonCanonicalSnapshotPayload);
-        }
-        members.extend([
-            BorrowedJsonMember {
-                key: "key_require_hsm".to_owned(),
-                encoded_key: r#""key_require_hsm""#,
-                value: "false",
-            },
-            BorrowedJsonMember {
-                key: "key_allowed_hsm_providers".to_owned(),
-                encoded_key: r#""key_allowed_hsm_providers""#,
-                value: PRE_PRIVATE_SETTLEMENT_HSM_PROVIDERS_JSON_V1,
-            },
-        ]);
-        members.sort_unstable_by(|left, right| left.key.cmp(&right.key));
-    }
-    if path == CanonicalWsvPath::Transactions && pre_private_settlement_state {
-        if !normalize_exact_pre_private_settlement_transactions_hash_v1(&mut members) {
-            return Err(TryReadError::NonCanonicalSnapshotPayload);
-        }
-        members.sort_unstable_by(|left, right| left.key.cmp(&right.key));
-    }
-    let child_overrides = CanonicalWsvOverrides {
-        pre_private_settlement_state,
-        ..overrides
-    };
     Digest::update(hasher, b"{");
     let mut first = true;
     for member in members {
@@ -2314,364 +2255,12 @@ fn update_snapshot_wsv_object_hash<'a>(
                 hasher,
                 value,
                 canonical_wsv_child_path(path, &member.key),
-                child_overrides,
+                overrides,
             )?;
         }
     }
     Digest::update(hasher, b"}");
     Ok(())
-}
-
-fn is_empty_mv_storage_json_v1(input: &str) -> bool {
-    input == r#"{"revert":{},"blocks":{}}"#
-}
-
-fn is_empty_mv_optional_cell_json_v1(input: &str) -> bool {
-    input == r#"{"revert":null,"blocks":null}"#
-}
-
-const PRE_PRIVATE_SETTLEMENT_STATE_REQUIRED_FIELDS_V1: [&str; 13] = [
-    "chain_id",
-    "network_id",
-    "world",
-    "nexus_runtime",
-    "block_hashes",
-    "transactions",
-    "public_lane_validators",
-    "public_lane_stake_shares",
-    "public_lane_rewards",
-    "public_lane_reward_claims",
-    "space_directory_manifests",
-    "commit_topology",
-    "prev_commit_topology",
-];
-
-const POST_PRIVATE_SETTLEMENT_TRANSACTION_STORAGE_FIELDS_V1: [&str; 2] = ["latest_block", "blocks"];
-
-const POST_PRIVATE_SETTLEMENT_PARAMETERS_REQUIRED_FIELDS_V1: [&str; 5] = [
-    "sumeragi",
-    "block",
-    "transaction",
-    "executor",
-    "smart_contract",
-];
-
-const POST_PRIVATE_SETTLEMENT_SUMERAGI_FIELDS_V1: [&str; 6] = [
-    "block_cadence_ms",
-    "max_clock_drift_ms",
-    "key_activation_lead_blocks",
-    "key_overlap_grace_blocks",
-    "key_expiry_grace_blocks",
-    "key_allowed_algorithms",
-];
-
-const POST_PRIVATE_SETTLEMENT_BLOCK_FIELDS_V1: [&str; 1] = ["max_transactions"];
-
-const POST_PRIVATE_SETTLEMENT_TRANSACTION_FIELDS_V1: [&str; 9] = [
-    "max_signatures",
-    "max_instructions",
-    "ivm_bytecode_size",
-    "max_tx_bytes",
-    "max_decompressed_bytes",
-    "max_metadata_depth",
-    "max_time_to_live_ms",
-    "require_height_ttl",
-    "require_sequence",
-];
-
-const POST_PRIVATE_SETTLEMENT_SMART_CONTRACT_FIELDS_V1: [&str; 5] = [
-    "fuel",
-    "memory",
-    "execution_depth",
-    "max_output_items",
-    "max_output_bytes",
-];
-
-const POST_PRIVATE_SETTLEMENT_NEXUS_RUNTIME_FIELDS_V1: [&str; 9] = [
-    "version",
-    "lane_count",
-    "lanes",
-    "lane_incarnation_lineage",
-    "autoscale_last_transition_height",
-    "autoscale_scale_out_window_blocks",
-    "autoscale_scale_in_window_blocks",
-    "autoscale_sample_history_cap",
-    "autoscale_sample_history",
-];
-
-// This frozen literal is deliberately not `SnapshotNexusRuntime::VERSION`. The runtime envelope
-// version is also the compatibility-generation fence for the complete persisted State JSON used
-// by this one predecessor bridge. Any later persisted State shape change must advance that version;
-// the V1 bridge must continue to admit only generation 3.
-const PRE_PRIVATE_SETTLEMENT_EXPECTED_NEXUS_RUNTIME_VERSION_V1: u8 = 3;
-const PRE_PRIVATE_SETTLEMENT_EXPECTED_NEXUS_RUNTIME_VERSION_JSON_V1: &str = "3";
-const _: () = assert!(
-    PRE_PRIVATE_SETTLEMENT_EXPECTED_NEXUS_RUNTIME_VERSION_JSON_V1.len() == 1
-        && PRE_PRIVATE_SETTLEMENT_EXPECTED_NEXUS_RUNTIME_VERSION_JSON_V1.as_bytes()[0]
-            == b'0' + PRE_PRIVATE_SETTLEMENT_EXPECTED_NEXUS_RUNTIME_VERSION_V1
-);
-
-fn borrowed_members_have_exact_fields(
-    members: &[BorrowedJsonMember<'_>],
-    required: &[&str],
-    optional: &[&str],
-) -> bool {
-    let fields = members
-        .iter()
-        .map(|member| member.key.as_str())
-        .collect::<BTreeSet<_>>();
-    fields.len() == members.len()
-        && required.iter().all(|field| fields.contains(field))
-        && fields
-            .iter()
-            .all(|field| required.contains(field) || optional.contains(field))
-}
-
-fn borrowed_members_have_unique_fields(members: &[BorrowedJsonMember<'_>]) -> bool {
-    members
-        .iter()
-        .map(|member| member.key.as_str())
-        .collect::<BTreeSet<_>>()
-        .len()
-        == members.len()
-}
-
-fn borrowed_member_value<'input>(
-    members: &[BorrowedJsonMember<'input>],
-    key: &str,
-) -> Option<&'input str> {
-    members
-        .iter()
-        .find(|member| member.key == key)
-        .map(|member| member.value)
-}
-
-fn is_exact_post_private_settlement_world_values_v1(members: &[BorrowedJsonMember<'_>]) -> bool {
-    if !borrowed_members_have_unique_fields(members) {
-        return false;
-    }
-    if !is_exact_post_private_settlement_world_field_set_v1(
-        members.iter().map(|member| member.key.as_str()),
-    ) || members
-        .iter()
-        .any(|member| PRE_PRIVATE_SETTLEMENT_RETIRED_WORLD_FIELDS_V1.contains(&member.key.as_str()))
-    {
-        return false;
-    }
-    PRIVATE_SETTLEMENT_SNAPSHOT_FIELDS_V1
-        .iter()
-        .all(|field| borrowed_member_value(members, field).is_some_and(is_empty_mv_storage_json_v1))
-        && PRE_PRIVATE_SETTLEMENT_SUCCESSOR_WORLD_FIELDS_V1
-            .iter()
-            .filter(|field| **field != "privacy_exact12_qualification")
-            .all(|field| {
-                borrowed_member_value(members, field).is_some_and(is_empty_mv_storage_json_v1)
-            })
-        && borrowed_member_value(members, "privacy_exact12_qualification")
-            .is_some_and(is_empty_mv_optional_cell_json_v1)
-}
-
-fn is_exact_post_private_settlement_parameters_hash_v1(
-    world: &[BorrowedJsonMember<'_>],
-) -> Result<bool, TryReadError> {
-    let Some(parameters_cell) = borrowed_member_value(world, "parameters") else {
-        return Ok(false);
-    };
-    let cell = borrowed_json_object_members(parameters_cell)?;
-    if !borrowed_members_have_exact_fields(&cell, &["revert", "blocks"], &[]) {
-        return Ok(false);
-    }
-    let Some(parameters) = borrowed_member_value(&cell, "blocks") else {
-        return Ok(false);
-    };
-    if !parameters.starts_with('{') {
-        return Ok(false);
-    }
-    let parameters = borrowed_json_object_members(parameters)?;
-    if !borrowed_members_have_exact_fields(
-        &parameters,
-        &POST_PRIVATE_SETTLEMENT_PARAMETERS_REQUIRED_FIELDS_V1,
-        &["custom"],
-    ) {
-        return Ok(false);
-    }
-    let Some(sumeragi) = borrowed_member_value(&parameters, "sumeragi") else {
-        return Ok(false);
-    };
-    if !sumeragi.starts_with('{') {
-        return Ok(false);
-    }
-    let sumeragi = borrowed_json_object_members(sumeragi)?;
-    if !borrowed_members_have_exact_fields(
-        &sumeragi,
-        &POST_PRIVATE_SETTLEMENT_SUMERAGI_FIELDS_V1,
-        &[],
-    ) {
-        return Ok(false);
-    }
-    for (field, expected) in [
-        ("block", POST_PRIVATE_SETTLEMENT_BLOCK_FIELDS_V1.as_slice()),
-        (
-            "transaction",
-            POST_PRIVATE_SETTLEMENT_TRANSACTION_FIELDS_V1.as_slice(),
-        ),
-        (
-            "executor",
-            POST_PRIVATE_SETTLEMENT_SMART_CONTRACT_FIELDS_V1.as_slice(),
-        ),
-        (
-            "smart_contract",
-            POST_PRIVATE_SETTLEMENT_SMART_CONTRACT_FIELDS_V1.as_slice(),
-        ),
-    ] {
-        let Some(value) = borrowed_member_value(&parameters, field) else {
-            return Ok(false);
-        };
-        if !value.starts_with('{')
-            || !borrowed_members_have_exact_fields(
-                &borrowed_json_object_members(value)?,
-                expected,
-                &[],
-            )
-        {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-
-fn is_exact_pre_private_settlement_nexus_runtime_hash_v1(
-    root: &[BorrowedJsonMember<'_>],
-) -> Result<bool, TryReadError> {
-    let Some(runtime) = borrowed_member_value(root, "nexus_runtime") else {
-        return Ok(false);
-    };
-    if !runtime.starts_with('{') {
-        return Ok(false);
-    }
-    let runtime = borrowed_json_object_members(runtime)?;
-    Ok(borrowed_members_have_exact_fields(
-        &runtime,
-        &POST_PRIVATE_SETTLEMENT_NEXUS_RUNTIME_FIELDS_V1,
-        &[],
-    ) && borrowed_member_value(&runtime, "version")
-        == Some(PRE_PRIVATE_SETTLEMENT_EXPECTED_NEXUS_RUNTIME_VERSION_JSON_V1))
-}
-
-fn is_exact_post_private_settlement_transactions_hash_v1(
-    root: &[BorrowedJsonMember<'_>],
-) -> Result<bool, TryReadError> {
-    let Some(transactions) = borrowed_member_value(root, "transactions") else {
-        return Ok(false);
-    };
-    if !transactions.starts_with('{') {
-        return Ok(false);
-    }
-    let transactions = borrowed_json_object_members(transactions)?;
-    Ok(transactions
-        .iter()
-        .map(|member| member.key.as_str())
-        .eq(POST_PRIVATE_SETTLEMENT_TRANSACTION_STORAGE_FIELDS_V1))
-}
-
-fn is_exact_pre_private_settlement_current_state_hash_v1<'input>(
-    root: &[BorrowedJsonMember<'input>],
-    committed_external_event_buf: Option<&'input str>,
-) -> Result<bool, TryReadError> {
-    if !borrowed_members_have_exact_fields(
-        root,
-        &PRE_PRIVATE_SETTLEMENT_STATE_REQUIRED_FIELDS_V1,
-        &["sumeragi_v2_bootstrap"],
-    ) {
-        return Ok(false);
-    }
-    let Some(world) = borrowed_member_value(root, "world") else {
-        return Ok(false);
-    };
-    if !world.starts_with('{') {
-        return Ok(false);
-    }
-    let mut world = borrowed_json_object_members(world)?;
-    if !world
-        .iter()
-        .any(|member| member.key == "external_event_buf")
-        && let Some(value) = committed_external_event_buf
-    {
-        world.push(BorrowedJsonMember {
-            key: "external_event_buf".to_owned(),
-            encoded_key: r#""external_event_buf""#,
-            value,
-        });
-    }
-    Ok(is_exact_post_private_settlement_world_values_v1(&world)
-        && is_exact_post_private_settlement_parameters_hash_v1(&world)?
-        && is_exact_post_private_settlement_transactions_hash_v1(root)?
-        && is_exact_pre_private_settlement_nexus_runtime_hash_v1(root)?)
-}
-
-fn normalize_exact_pre_private_settlement_transactions_hash_v1(
-    members: &mut Vec<BorrowedJsonMember<'_>>,
-) -> bool {
-    if !borrowed_members_have_exact_fields(
-        members,
-        &POST_PRIVATE_SETTLEMENT_TRANSACTION_STORAGE_FIELDS_V1,
-        &[],
-    ) {
-        return false;
-    }
-    members.push(BorrowedJsonMember {
-        key: "direct_committed".to_owned(),
-        encoded_key: r#""direct_committed""#,
-        value: "{}",
-    });
-    true
-}
-
-// This is a mutation primitive, not an independent compatibility fallback. Production callers
-// invoke it only after the root-level State predicate has admitted the World and parameter deltas
-// together, so a current/future hybrid can never receive a predecessor hash.
-fn normalize_exact_pre_private_settlement_world_hash_v1(
-    members: &mut Vec<BorrowedJsonMember<'_>>,
-) -> bool {
-    if !is_exact_post_private_settlement_world_values_v1(members) {
-        return false;
-    }
-    let private_settlement_members = members
-        .iter()
-        .filter(|member| PRIVATE_SETTLEMENT_SNAPSHOT_FIELDS_V1.contains(&member.key.as_str()))
-        .collect::<Vec<_>>();
-    let retired_empty_value = private_settlement_members[0].value;
-    members.retain(|member| {
-        !PRE_PRIVATE_SETTLEMENT_SUCCESSOR_WORLD_FIELDS_V1.contains(&member.key.as_str())
-    });
-    members.extend([
-        BorrowedJsonMember {
-            key: "sccp_outbound_proofs".to_owned(),
-            encoded_key: r#""sccp_outbound_proofs""#,
-            value: retired_empty_value,
-        },
-        BorrowedJsonMember {
-            key: "sccp_inbound_messages".to_owned(),
-            encoded_key: r#""sccp_inbound_messages""#,
-            value: retired_empty_value,
-        },
-        BorrowedJsonMember {
-            key: PRE_PRIVATE_SETTLEMENT_RETIRED_MARKER_V1.to_owned(),
-            encoded_key: r#""direct_lane_block_application_markers""#,
-            value: retired_empty_value,
-        },
-        BorrowedJsonMember {
-            key: "council".to_owned(),
-            encoded_key: r#""council""#,
-            value: retired_empty_value,
-        },
-        BorrowedJsonMember {
-            key: "parliament_bodies".to_owned(),
-            encoded_key: r#""parliament_bodies""#,
-            value: retired_empty_value,
-        },
-    ]);
-    true
 }
 
 fn update_snapshot_wsv_array_hash<'a>(
@@ -5105,7 +4694,6 @@ pub(crate) fn canonical_staged_state_snapshot_bytes(state_block: &StateBlock<'_>
         .expect("staged state snapshot world must be an object")
         .insert("external_event_buf".to_owned(), event_buffer);
     normalize_mv_cell_fields_in_state_value(&mut value);
-    normalize_exact_pre_private_settlement_fields_in_state_value_v1(&mut value);
     normalize_set_like_parameter_fields_in_state_value(&mut value);
     redact_consensus_sidecars_from_state_value(&mut value);
     json::to_json(&value)
@@ -5127,7 +4715,6 @@ pub(crate) fn canonical_staged_state_snapshot_hash(
         snapshot_json.as_bytes(),
         CanonicalWsvOverrides {
             committed_external_event_buf: Some(&committed_external_event_buf),
-            pre_private_settlement_state: false,
         },
     )
     .expect("typed staged State serialization must form a canonical WSV snapshot")
@@ -5139,7 +4726,6 @@ fn canonical_state_snapshot_value(state: &State) -> json::Value {
     let mut value: json::Value =
         json::from_str(&json).expect("state snapshot serialization must produce valid JSON");
     normalize_mv_cell_fields_in_state_value(&mut value);
-    normalize_exact_pre_private_settlement_fields_in_state_value_v1(&mut value);
     normalize_set_like_parameter_fields_in_state_value(&mut value);
     redact_consensus_sidecars_from_state_value(&mut value);
     value
@@ -5182,199 +4768,6 @@ fn normalize_serialized_cell_field(map: &mut json::Map, key: &str) {
     if let Some(current_value) = replacement {
         *value = current_value;
     }
-}
-
-#[cfg(any(test, feature = "iroha-core-tests"))]
-fn normalize_exact_pre_private_settlement_fields_in_state_value_v1(
-    value: &mut json::Value,
-) -> bool {
-    if !is_exact_pre_private_settlement_current_state_value_v1(value) {
-        return false;
-    }
-    let world = value
-        .get_mut("world")
-        .and_then(json::Value::as_object_mut)
-        .expect("complete current State compatibility was checked");
-    let retired_empty_value = world
-        .get(PRIVATE_SETTLEMENT_SNAPSHOT_FIELDS_V1[0])
-        .expect("all private-settlement fields were checked")
-        .clone();
-    for field in PRE_PRIVATE_SETTLEMENT_SUCCESSOR_WORLD_FIELDS_V1 {
-        world.remove(field);
-    }
-    for field in PRE_PRIVATE_SETTLEMENT_RETIRED_WORLD_FIELDS_V1 {
-        world.insert(field.to_owned(), retired_empty_value.clone());
-    }
-    let sumeragi = world
-        .get_mut("parameters")
-        .and_then(json::Value::as_object_mut)
-        .and_then(|parameters| parameters.get_mut("sumeragi"))
-        .and_then(json::Value::as_object_mut)
-        .expect("current Sumeragi parameters were checked before normalization");
-    sumeragi.insert("key_require_hsm".to_owned(), json::Value::Bool(false));
-    sumeragi.insert(
-        "key_allowed_hsm_providers".to_owned(),
-        json::Value::Array(
-            PRE_PRIVATE_SETTLEMENT_HSM_PROVIDERS_V1
-                .into_iter()
-                .map(|provider| json::Value::String(provider.to_owned()))
-                .collect(),
-        ),
-    );
-    value
-        .get_mut("transactions")
-        .and_then(json::Value::as_object_mut)
-        .expect("current transaction-storage schema was checked before normalization")
-        .insert(
-            "direct_committed".to_owned(),
-            json::Value::Object(json::Map::new()),
-        );
-    true
-}
-
-#[cfg(any(test, feature = "iroha-core-tests"))]
-fn value_map_has_exact_fields(map: &json::Map, required: &[&str], optional: &[&str]) -> bool {
-    required.iter().all(|field| map.contains_key(*field))
-        && map
-            .keys()
-            .all(|field| required.contains(&field.as_str()) || optional.contains(&field.as_str()))
-}
-
-#[cfg(any(test, feature = "iroha-core-tests"))]
-fn is_exact_post_private_settlement_world_value_v1(world: &json::Map) -> bool {
-    is_exact_post_private_settlement_world_field_set_v1(world.keys().map(String::as_str))
-        && !PRE_PRIVATE_SETTLEMENT_RETIRED_WORLD_FIELDS_V1
-            .iter()
-            .any(|field| world.contains_key(*field))
-        && PRIVATE_SETTLEMENT_SNAPSHOT_FIELDS_V1
-            .iter()
-            .all(|field| world.get(*field).is_some_and(is_empty_mv_storage_value_v1))
-        && PRE_PRIVATE_SETTLEMENT_SUCCESSOR_WORLD_FIELDS_V1
-            .iter()
-            .filter(|field| **field != "privacy_exact12_qualification")
-            .all(|field| world.get(*field).is_some_and(is_empty_mv_storage_value_v1))
-        && world
-            .get("privacy_exact12_qualification")
-            .is_some_and(is_empty_mv_optional_cell_value_v1)
-}
-
-#[cfg(any(test, feature = "iroha-core-tests"))]
-fn is_exact_post_private_settlement_parameters_value_v1(world: &json::Map) -> bool {
-    let Some(parameters) = world.get("parameters").and_then(json::Value::as_object) else {
-        return false;
-    };
-    if !value_map_has_exact_fields(
-        parameters,
-        &POST_PRIVATE_SETTLEMENT_PARAMETERS_REQUIRED_FIELDS_V1,
-        &["custom"],
-    ) {
-        return false;
-    }
-    let sumeragi_matches = parameters
-        .get("sumeragi")
-        .and_then(json::Value::as_object)
-        .is_some_and(|sumeragi| {
-            value_map_has_exact_fields(sumeragi, &POST_PRIVATE_SETTLEMENT_SUMERAGI_FIELDS_V1, &[])
-        });
-    sumeragi_matches
-        && [
-            ("block", POST_PRIVATE_SETTLEMENT_BLOCK_FIELDS_V1.as_slice()),
-            (
-                "transaction",
-                POST_PRIVATE_SETTLEMENT_TRANSACTION_FIELDS_V1.as_slice(),
-            ),
-            (
-                "executor",
-                POST_PRIVATE_SETTLEMENT_SMART_CONTRACT_FIELDS_V1.as_slice(),
-            ),
-            (
-                "smart_contract",
-                POST_PRIVATE_SETTLEMENT_SMART_CONTRACT_FIELDS_V1.as_slice(),
-            ),
-        ]
-        .into_iter()
-        .all(|(field, expected)| {
-            parameters
-                .get(field)
-                .and_then(json::Value::as_object)
-                .is_some_and(|value| value_map_has_exact_fields(value, expected, &[]))
-        })
-}
-
-#[cfg(any(test, feature = "iroha-core-tests"))]
-fn is_exact_pre_private_settlement_nexus_runtime_value_v1(state: &json::Map) -> bool {
-    state
-        .get("nexus_runtime")
-        .and_then(json::Value::as_object)
-        .is_some_and(|runtime| {
-            value_map_has_exact_fields(
-                runtime,
-                &POST_PRIVATE_SETTLEMENT_NEXUS_RUNTIME_FIELDS_V1,
-                &[],
-            ) && runtime.get("version").and_then(json::Value::as_u64)
-                == Some(u64::from(
-                    PRE_PRIVATE_SETTLEMENT_EXPECTED_NEXUS_RUNTIME_VERSION_V1,
-                ))
-        })
-}
-
-#[cfg(any(test, feature = "iroha-core-tests"))]
-fn is_exact_post_private_settlement_transactions_value_v1(state: &json::Map) -> bool {
-    state
-        .get("transactions")
-        .and_then(json::Value::as_object)
-        .is_some_and(|transactions| {
-            value_map_has_exact_fields(
-                transactions,
-                &POST_PRIVATE_SETTLEMENT_TRANSACTION_STORAGE_FIELDS_V1,
-                &[],
-            )
-        })
-}
-
-#[cfg(any(test, feature = "iroha-core-tests"))]
-fn is_exact_pre_private_settlement_current_state_value_v1(value: &json::Value) -> bool {
-    let Some(state) = value.as_object() else {
-        return false;
-    };
-    if !value_map_has_exact_fields(
-        state,
-        &PRE_PRIVATE_SETTLEMENT_STATE_REQUIRED_FIELDS_V1,
-        &["sumeragi_v2_bootstrap"],
-    ) {
-        return false;
-    }
-    let Some(world) = state.get("world").and_then(json::Value::as_object) else {
-        return false;
-    };
-    is_exact_post_private_settlement_world_value_v1(world)
-        && is_exact_post_private_settlement_parameters_value_v1(world)
-        && is_exact_post_private_settlement_transactions_value_v1(state)
-        && is_exact_pre_private_settlement_nexus_runtime_value_v1(state)
-}
-
-#[cfg(any(test, feature = "iroha-core-tests"))]
-fn is_empty_mv_storage_value_v1(value: &json::Value) -> bool {
-    value.as_object().is_some_and(|storage| {
-        storage.len() == 2
-            && storage
-                .get("revert")
-                .and_then(json::Value::as_object)
-                .is_some_and(|map| map.is_empty())
-            && storage
-                .get("blocks")
-                .and_then(json::Value::as_object)
-                .is_some_and(|map| map.is_empty())
-    })
-}
-
-#[cfg(any(test, feature = "iroha-core-tests"))]
-fn is_empty_mv_optional_cell_value_v1(value: &json::Value) -> bool {
-    value.as_object().is_some_and(|cell| {
-        cell.len() == 2
-            && cell.get("revert").is_some_and(json::Value::is_null)
-            && cell.get("blocks").is_some_and(json::Value::is_null)
-    })
 }
 #[cfg(any(test, feature = "iroha-core-tests"))]
 fn normalize_set_like_parameter_fields_in_state_value(value: &mut json::Value) {

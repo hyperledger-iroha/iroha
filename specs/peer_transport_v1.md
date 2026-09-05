@@ -1,123 +1,111 @@
-# Offline Cash V1 peer transport
+# KAGEMUSHA V1 peer transport
 
-Offline Cash V1 has one transport-neutral five-message exchange:
+KAGEMUSHA has one transport-neutral three-message exchange:
 
-1. the receiver emits `PaymentRequestV1`;
-2. the sender emits a release-bound proof-bearing
-   `OfflineCashAcceptanceIntentAuthorizationV1`;
-3. after verifying that proof and reserving capacity, receiver hardware emits
-   one exact-amount `OfflineCashAcceptanceTicketV1`;
-4. the sender commits an irreversible receiver-bound credit and emits
-   `PaymentV1`; and
-5. the receiver durably stages the exact payment and emits
-   `AcknowledgementV1`.
+1. Receiver: signed `KagemushaPaymentRequestV1`.
+2. Sender: `KagemushaPaymentV1`, containing the committed receiver-bound
+   credit, its recoverable hardware transition certificate, and constant-size
+   paired recursive `KagemushaPaymentProofV1`.
+3. Receiver: `KagemushaAcknowledgementV1`, only after irreversible secure
+   staging in the rollback-resistant accepted-credit inbox.
 
-An authenticated `OfflineCashNoCommitClosureV1` is a separate recovery
-envelope, not a sixth message in the normal payment exchange. It embeds the
-exact request, the original sender authorization, the exact issued ticket, and
-the proof that closes that intent without committing a payment. Its bindings
-prevent a closure from being replayed across a different request,
-authorization, ticket, release, suite, verifying-key set, or artifact manifest.
-
-All binary values are canonical Norito. Text transport is exactly `oc1:` followed
-by unpadded base64url of one canonical binary value. There are no alternate
-profiles, compatibility discriminators, legacy prefixes, or heuristic decoders.
+IPM1 kinds are exactly Request (`1`), Payment (`2`), and Acknowledgement (`3`).
+There are no acceptance-intent, acceptance-ticket, precommit, cancellation, or
+compatibility message kinds. Binary values use canonical Norito; text is exactly
+`kgm1:` plus unpadded base64url of one canonical value.
 
 ## Semantics
 
-The signed request identifies the authenticated release, network, exact asset
-incarnation and scale, pooled reserve, recipient, complete compact receiver
-credential, policy epoch, request ID/window, and one positive exact amount. It
-never carries a mutable balance head. Any number of requests may coexist, and
-every distinct valid payment against the same request remains acceptable.
+The request binds release, network, exact asset/incarnation/scale, pooled
+reserve, recipient account and device lane, recipient encryption key, required
+hardware policy, request ID, positive exact amount, validity window, and
+signature. It never contains the receiver's current balance head.
 
-The sender authorization carries a compact one-use intent and paired proof. The
-proof hides sender credential, lane, epoch, predecessor, successor, and balance
-while proving qualified enabled-profile hardware, sufficient private balance,
-and an exact one-use predecessor authorization. Receiver intent-decision state
-and physical inbox capacity cannot change until the authenticated native verifier
-accepts it. The ticket then binds the exact request and intent digests, amount,
-asset incarnation, reserved inbox bytes, recipient X25519 key, receiver profile
-and policy epoch, and exclusive sender-commit deadline.
+The sender validates the request and prepares one receiver-bound credit. Sender
+hardware commits an exact-next balance transition once within the request
+window. The resulting payment binds the request digest and amount, unique credit
+ID and transition nullifier, sender before/after commitments, receiver/request
+binding, recipient-encrypted credit opening and ciphertext commitment,
+normalized hardware transition commitment, trusted commit time and evidence,
+and the constant-size recursive proof. Host signatures or certificates alone
+grant no monetary authority: the proof verifies the normalized hardware guard
+bundle and monetary transition.
 
-The payment carries one unlinkable transition nullifier/credit ID, the compact
-intent and complete ticket, exact request/ticket bindings, recipient key,
-amount and ciphertext commitments, typed encrypted-credit envelope, hardware
-profile/policy, opaque time-or-lease evidence, recoverable terminal certificate,
-and constant-size paired wrapper proof. It exposes no sender predecessor or
-successor commitment, stable credential audit, lane, or hardware epoch. Only
-the sender's hardware commit must occur before ticket expiry. Delivery,
-staging, folding, spending, and redemption remain valid indefinitely afterward.
+Request expiry gates only the sender hardware commit time. A credit committed
+inside the window remains acceptable, foldable, spendable, and redeemable
+indefinitely. Sender funds become an irrevocable receiver-bound credit at
+hardware commit. The sender successor, including a zero-balance successor after
+a full spend, is immediately usable. A missing acknowledgement retains only the
+byte-identical retry outbox and never freezes the remainder. Exposed credits
+cannot be cancelled.
 
-The receiver acknowledges only after rollback-resistant staging of the exact
-payment bytes and credit ID. Exact duplicate delivery returns the byte-identical
-durable acknowledgement. Reusing a credit ID with different bytes is corruption
-and fails closed. A missing acknowledgement never cancels the credit or freezes
-the sender successor.
+Receiver hardware verifies the complete payment and atomically stages its exact
+canonical bytes before signing the acknowledgement. The acknowledgement binds
+the request, payment, credit ID, and rollback-resistant inbox receipt. Exact
+duplicate delivery returns the same durable acknowledgement; reuse of one
+credit ID with different bytes fails closed.
+
+Any number of receiver requests may be live simultaneously. Distinct valid
+payments made against the same request are all accepted. The protocol deduplicates
+credits, not invoices; detecting an already-satisfied or overpaid invoice is an
+application concern and cannot make valid money unspendable.
+
+The accepted-credit inbox may stage many credits while one monetary lane
+serializes balance transitions. Credits fold continuously in the background.
+Before sending or redeeming, the wallet synchronously folds whatever pending
+credits are required. Backlog can add processing latency, but neither a count nor
+history-depth limit may reject a valid credit or prevent its later use.
 
 ## Bounds
 
-Bounds protect parsers and physical transports; none depends on balance history,
-receipt count, fan-in, origins, hops, ancestry, or proof depth.
+These limits protect one message parser and physical transport. They never bound
+cumulative history, received-note count, fan-in, origins, hops, ancestry, or
+recursive proof depth.
 
-| Value | Canonical binary maximum | `oc1:` text maximum |
+| Value | Canonical binary maximum | `kgm1:` text maximum |
 | --- | ---: | ---: |
-| `PaymentRequestV1` | 1,024 bytes | 1,370 bytes |
-| `OfflineCashAcceptanceIntentAuthorizationV1` | 7,936 bytes | 10,586 bytes |
-| `OfflineCashAcceptanceTicketV1` | 1,024 bytes | 1,370 bytes |
-| `PaymentV1` | 7,936 bytes | 10,586 bytes |
-| `AcknowledgementV1` | 512 bytes | 687 bytes |
-| `OfflineCashNoCommitClosureV1` recovery envelope | 16,384 bytes | 21,850 bytes |
-| terminal request/payment/ack trio | 9,211 bytes | 12,288 bytes |
-| pre-ticket request/authorization/ticket absolute cap | 9,984 bytes | 13,326 bytes |
-| complete five-message absolute cap | 18,171 bytes | 24,244 bytes |
-| paired recursive proof | 6,528 bytes | not separately transported |
+| `KagemushaPaymentRequestV1` | 928 bytes | 1,243 bytes |
+| `KagemushaPaymentV1` | 7,552 bytes | 10,075 bytes |
+| `KagemushaAcknowledgementV1` | 256 bytes | 347 bytes |
+| Complete exchange hard gate | 9,211 bytes | 12,288 bytes |
+| Paired recursive proof | 6,528 bytes | Included only in the payment |
 
-The pre-ticket request/authorization/ticket exchange has an 8,960-byte raw
-qualification target, distinct from its 9,984-byte decoder ceiling. The
-complete five-message exchange has a 16,384-byte raw qualification target,
-distinct from its 18,171-byte raw and 24,244-byte text decoder ceilings. The
-complete raw cap is the 9,211-byte terminal-trio cap plus the independently
-bounded authorization and ticket. The 9,211/12,288 limits apply only to the
-terminal three-message subset and cannot be presented as the complete
-proof-bearing exchange. The independently framed no-commit recovery envelope
-has its own 16,384-byte raw and 21,850-byte text ceilings and is excluded from
-all normal-exchange totals.
+Every frame counts exactly once. Decoders check the applicable byte cap before
+allocation, require canonical V1 framing, reject trailing bytes, and validate
+the complete context. Synthetic maximum-size proof fixtures establish transport
+bounds, not cryptographic or hardware qualification.
 
-Decoders enforce the applicable byte ceiling before allocation, require the
-canonical frame and exact V1 type, reject trailing bytes, and then run semantic
-validation. A lower implementation transport limit is not an Offline Cash
-profile and cannot be advertised as offline-capable.
+A smaller implementation-specific limit cannot be advertised as an
+offline-capable KAGEMUSHA profile. Finite storage, memory, battery, bandwidth,
+hardware lifetime, and `u128` arithmetic remain physical bounds; protocol
+admission cannot impose history-count limits.
 
-## QR
+## QR, NFC, and local radio
 
-A QR implementation carries each independently framed `oc1:` value directly
-when it fits one symbol.
-For animated QR, frames contain a session ID, value kind, total encoded length,
-offset, frame payload, and checksum. The receiver accepts frames in any order,
-deduplicates byte-identical overlap, rejects conflicting overlap, and decodes only
-after the complete bounded byte range is present. Frame count is derived from the
-bounded value length and selected symbol capacity; it is not a cash-history field.
+A static QR carries an independently framed `kgm1:` value only if it fits.
+Animated QR frames include stream ID, kind, total length, offset, payload, and
+checksum. Reassembly accepts any ordering, deduplicates identical overlap,
+rejects conflicting overlap, and decodes only a complete bounded value. Frame
+count depends on the current bounded message, never payment history.
 
-## NFC and local radio
+NFC, Nearby, Multipeer, and equivalent links carry the same canonical binary
+values with explicit kind and length, using the same overlap/conflict rules.
+Transport encryption never replaces the recipient-only credit envelope,
+recursive proof, or hardware authorization. Staging must finish before ACK;
+plaintext metadata must not expose balance openings, replay paths, stable
+credential audits, or journals.
 
-NFC, Nearby, Multipeer, and equivalent links exchange the canonical binary value
-with an explicit value kind and total length. Fragmentation and retry are transport
-concerns. Reassembly uses the same overlap/conflict rules as animated QR and must
-not acknowledge a payment before the device's irreversible inbox stage completes.
-
-Transport encryption does not replace the recipient-only canonical
-`OfflineCashEncryptedCreditEnvelopeV1`, recursive proof, or hardware
-authorization. Plaintext transport metadata must not contain balance openings,
-replay-index contents, stable proof audits, or journal material.
-
-## Conformance
+## Conformance and qualification
 
 Rust, Swift, Kotlin, mirrored Java, JavaScript, Python, C#, JNI, QR, and NFC must
-decode and re-encode identical canonical fixtures. Conformance covers shuffled
-frames, missing/forged sender authorization, duplicate/conflicting intent
-decisions, delayed delivery after expiry, exact duplicate delivery, credit-ID
-conflict, low-order X25519 keys, malformed AEAD envelopes, truncation,
-over-limit input, noncanonical base64url, trailing bytes, proof/output
-substitution, no-commit request/authorization/ticket substitution, restart
-between staging and acknowledgement, and byte-identical retry.
+re-encode identical canonical fixtures. Tests cover concurrent and shuffled
+requests, multiple valid payments against one request, delayed post-expiry
+delivery, restart, exact retries, conflicting credit-ID reuse, stale state,
+forked successors, rollback, hardware counter reuse/skip, epoch rotation,
+overflow, proof/output substitution, truncation, framing, and transport bounds.
+
+Codec conformance is necessary but not sufficient. Release qualification also
+requires real recursive proofs across long histories, pooled-reserve settlement,
+crash recovery at every durable boundary, multi-peer tests, and physical
+airplane-mode, restart, power-loss, clock-rollback, backup/restore, thermal,
+latency, memory, and throughput evidence for every approved hardware profile.

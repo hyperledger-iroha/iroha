@@ -51,27 +51,27 @@ public final class SumeragiStatusModelsTests {
   }
 
   @Test
-  public void executionCommitmentAcceptsOneThousandOfflineCashTopUpsAndRejectsLegacyNames() {
-    final String offlineCashTopUpRoot = hash(0x38);
+  public void executionCommitmentAcceptsOneThousandKagemushaTopUpsAndRejectsLegacyNames() {
+    final String kagemushaTopUpRoot = hash(0x38);
     final String canonicalPayload =
         statusJson("2", "123", "19")
             .replace(
-                "\"offline_cash_top_up_count\":0,",
-                "\"offline_cash_top_up_root\":\""
-                    + offlineCashTopUpRoot
-                    + "\",\"offline_cash_top_up_count\":1000,");
+                "\"kagemusha_top_up_count\":0,",
+                "\"kagemusha_top_up_root\":\""
+                    + kagemushaTopUpRoot
+                    + "\",\"kagemusha_top_up_count\":1000,");
     final SumeragiStatusModels.ExecutionCommitment commitment =
         SumeragiStatusModels.parseStatus(canonicalPayload)
             .lastCommitQc()
             .certificate()
             .executionCommitment();
-    assertEquals(BigInteger.valueOf(1_000), commitment.offlineCashTopUpCount());
-    assertEquals(offlineCashTopUpRoot, commitment.offlineCashTopUpRoot());
+    assertEquals(BigInteger.valueOf(1_000), commitment.kagemushaTopUpCount());
+    assertEquals(kagemushaTopUpRoot, commitment.kagemushaTopUpRoot());
 
     assertRejected(
-        canonicalPayload.replace("offline_cash_top_up_count", "topup_anchor_count"));
+        canonicalPayload.replace("kagemusha_top_up_count", "topup_anchor_count"));
     assertRejected(
-        canonicalPayload.replace("offline_cash_top_up_root", "topup_anchor_root"));
+        canonicalPayload.replace("kagemusha_top_up_root", "topup_anchor_root"));
   }
 
   @Test
@@ -262,7 +262,7 @@ public final class SumeragiStatusModelsTests {
         + "\"parent_state_root\":\"" + hash(0x34) + "\","
         + "\"post_state_root\":\"" + hash(0x35) + "\","
         + "\"ordinary_writes_root\":\"" + hash(0x36) + "\","
-        + "\"offline_cash_top_up_count\":0,"
+        + "\"kagemusha_top_up_count\":0,"
         + "\"native_amx_application_manifest_version\": 1,"
         + "\"native_amx_application_manifest_root\":\"" + EMPTY_MANIFEST_ROOT + "\","
         + "\"native_amx_application_manifest_count\": 0,"

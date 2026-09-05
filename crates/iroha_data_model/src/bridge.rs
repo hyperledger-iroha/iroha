@@ -1145,30 +1145,26 @@ mod tests {
         network_id: NetworkId,
         epoch: u64,
         roster: &[wire::ValidatorPower],
-    ) -> crate::isi::offline_cash_v1::OfflineCashMintFinalityEpochRosterV1 {
-        use crate::isi::offline_cash_v1::{
-            OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterV1,
-            OfflineCashMintFinalityValidatorKeysV1,
+    ) -> crate::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1 {
+        use crate::isi::kagemusha_v1::{
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
+            KagemushaMintFinalityValidatorKeysV1,
         };
 
-        OfflineCashMintFinalityEpochRosterV1 {
-            version: OFFLINE_CASH_CHAIN_VERSION_V1,
+        KagemushaMintFinalityEpochRosterV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
             network_id,
             epoch,
             validators: roster
                 .iter()
                 .enumerate()
-                .map(
-                    |(index, validator)| OfflineCashMintFinalityValidatorKeysV1 {
-                        validator: validator.validator.clone(),
-                        eq_proof_public_key: [u8::try_from(index + 1)
-                            .expect("small fixture roster");
-                            32],
-                        ep_proof_public_key: [u8::try_from(index + 17)
-                            .expect("small fixture roster");
-                            32],
-                    },
-                )
+                .map(|(index, validator)| KagemushaMintFinalityValidatorKeysV1 {
+                    validator: validator.validator.clone(),
+                    eq_proof_public_key: [u8::try_from(index + 1).expect("small fixture roster");
+                        32],
+                    ep_proof_public_key: [u8::try_from(index + 17).expect("small fixture roster");
+                        32],
+                })
                 .collect(),
         }
     }
@@ -1355,8 +1351,8 @@ mod tests {
                 Some(
                     crate::block::consensus_v2::finality::FinalizedNextEpochSnapshot {
                         epoch: 1,
-                        offline_cash_mint_finality_epoch_id: next_mint_finality_epoch_id,
-                        offline_cash_mint_finality_epoch_roster: next_mint_finality_roster,
+                        kagemusha_mint_finality_epoch_id: next_mint_finality_epoch_id,
+                        kagemusha_mint_finality_epoch_roster: next_mint_finality_roster,
                         epoch_end_height: 11,
                         mode: ConsensusMode::Npos,
                         quorum: DualQuorum::from_roster(&next_roster)
@@ -1376,8 +1372,8 @@ mod tests {
             protocol_version: PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
-            offline_cash_mint_finality_epoch_id: mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster: current_mint_finality_roster,
+            kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster: current_mint_finality_roster,
             epoch_end_height: if boundary { 1 } else { 10 },
             next_epoch_snapshot,
             mode: ConsensusMode::Npos,
@@ -1408,7 +1404,7 @@ mod tests {
             view: 0,
         };
         let execution_commitment =
-            crate::block::consensus_v2::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            crate::block::consensus_v2::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                 Hash::new(b"bridge v2 parent state"),
                 Hash::new(b"bridge v2 post state"),
                 Hash::new(b"bridge v2 ordinary writes"),
@@ -1491,10 +1487,10 @@ mod tests {
                         parent_artifact.height_context.epoch,
                         parent_artifact
                             .height_context
-                            .offline_cash_mint_finality_epoch_id,
+                            .kagemusha_mint_finality_epoch_id,
                         parent_artifact
                             .height_context
-                            .offline_cash_mint_finality_epoch_roster
+                            .kagemusha_mint_finality_epoch_roster
                             .clone(),
                         parent_artifact.height_context.epoch_end_height,
                         parent_artifact.height_context.mode,
@@ -1507,8 +1503,8 @@ mod tests {
                 |snapshot| {
                     (
                         snapshot.epoch,
-                        snapshot.offline_cash_mint_finality_epoch_id,
-                        snapshot.offline_cash_mint_finality_epoch_roster.clone(),
+                        snapshot.kagemusha_mint_finality_epoch_id,
+                        snapshot.kagemusha_mint_finality_epoch_roster.clone(),
                         snapshot.epoch_end_height,
                         snapshot.mode,
                         snapshot.roster.clone(),
@@ -1536,8 +1532,8 @@ mod tests {
             protocol_version: wire::PROTOCOL_VERSION,
             height,
             epoch,
-            offline_cash_mint_finality_epoch_id: mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster: mint_finality_roster,
+            kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster: mint_finality_roster,
             epoch_end_height,
             next_epoch_snapshot: None,
             mode,
@@ -1561,7 +1557,7 @@ mod tests {
             view: 0,
         };
         let execution_commitment =
-            wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                 Hash::new(b"bridge v2 successor parent state"),
                 Hash::new(b"bridge v2 successor post state"),
                 Hash::new(b"bridge v2 successor ordinary writes"),

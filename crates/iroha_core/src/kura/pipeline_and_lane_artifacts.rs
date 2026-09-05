@@ -2080,79 +2080,15 @@ pub(crate) enum AutonomousLifecycleTerminalOutcomeStageV1 {
         terminal: AutonomousLifecycleStableStateV1,
     },
 }
-/// Historical V1 body, retained byte-exactly for on-disk upgrade compatibility.
+/// Hash-protected body of one autonomous lifecycle terminal outcome.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
-#[norito(
-    schema_name = "iroha_core::kura::AutonomousLifecycleTerminalOutcomeBodyV1",
-    deny_unknown_fields
-)]
-struct LegacyAutonomousLifecycleTerminalOutcomeBodyV1 {
-    version: u16,
-    binding: AutonomousLifecycleAttemptBindingV1,
-    source: AutonomousLifecycleTerminalOutcomeSourceV1,
-    stage: AutonomousLifecycleTerminalOutcomeStageV1,
-}
-/// Historical V1 outer frame, retained byte-exactly for on-disk upgrade compatibility.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
-#[norito(
-    schema_name = "iroha_core::kura::AutonomousLifecycleTerminalOutcomeV1",
-    deny_unknown_fields
-)]
-struct LegacyAutonomousLifecycleTerminalOutcomeWireV1 {
-    body: LegacyAutonomousLifecycleTerminalOutcomeBodyV1,
-    outcome_hash: Hash,
-}
-/// Short-lived basis-bearing V1 body emitted before the layout received a new version.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
-#[norito(
-    schema_name = "iroha_core::kura::AutonomousLifecycleTerminalOutcomeBodyV1",
-    deny_unknown_fields
-)]
-struct BasisAutonomousLifecycleTerminalOutcomeBodyV1 {
+#[norito(deny_unknown_fields)]
+struct AutonomousLifecycleTerminalOutcomeBodyV1 {
     version: u16,
     binding: AutonomousLifecycleAttemptBindingV1,
     basis: AutonomousLifecycleTerminalOutcomeBasisV1,
     source: AutonomousLifecycleTerminalOutcomeSourceV1,
     stage: AutonomousLifecycleTerminalOutcomeStageV1,
-}
-/// Short-lived basis-bearing V1 frame accepted so a node never strands evidence it emitted.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
-#[norito(
-    schema_name = "iroha_core::kura::AutonomousLifecycleTerminalOutcomeV1",
-    deny_unknown_fields
-)]
-struct BasisAutonomousLifecycleTerminalOutcomeWireV1 {
-    body: BasisAutonomousLifecycleTerminalOutcomeBodyV1,
-    outcome_hash: Hash,
-}
-/// Current V2 body with an explicit local-custody basis.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
-#[norito(
-    schema_name = "iroha_core::kura::AutonomousLifecycleTerminalOutcomeBodyV2",
-    deny_unknown_fields
-)]
-struct AutonomousLifecycleTerminalOutcomeBodyV2 {
-    version: u16,
-    binding: AutonomousLifecycleAttemptBindingV1,
-    basis: AutonomousLifecycleTerminalOutcomeBasisV1,
-    source: AutonomousLifecycleTerminalOutcomeSourceV1,
-    stage: AutonomousLifecycleTerminalOutcomeStageV1,
-}
-/// Current V2 outer frame with a distinct advertised schema.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
-#[norito(
-    schema_name = "iroha_core::kura::AutonomousLifecycleTerminalOutcomeV2",
-    deny_unknown_fields
-)]
-struct AutonomousLifecycleTerminalOutcomeWireV2 {
-    body: AutonomousLifecycleTerminalOutcomeBodyV2,
-    outcome_hash: Hash,
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum AutonomousLifecycleTerminalOutcomeBodyWire {
-    LegacyV1(LegacyAutonomousLifecycleTerminalOutcomeBodyV1),
-    BasisV1(BasisAutonomousLifecycleTerminalOutcomeBodyV1),
-    V2(AutonomousLifecycleTerminalOutcomeBodyV2),
 }
 /// Durable source/Queue join for terminal ownership of one exact attempt.
 ///
@@ -2162,20 +2098,20 @@ enum AutonomousLifecycleTerminalOutcomeBodyWire {
 /// revalidated complete carrier outcome when a removed validator cannot sign a
 /// new local lifecycle cursor. A local release outcome never substitutes for
 /// globally authenticated retirement/drain evidence.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct AutonomousLifecycleTerminalOutcomeV1 {
-    body: AutonomousLifecycleTerminalOutcomeBodyWire,
+    body: AutonomousLifecycleTerminalOutcomeBodyV1,
     outcome_hash: Hash,
 }
 impl AutonomousLifecycleTerminalOutcomeV1 {
-    const LEGACY_VERSION: u16 = 1;
-    const VERSION: u16 = 2;
+    const VERSION: u16 = 1;
     fn pending(
         binding: AutonomousLifecycleAttemptBindingV1,
         basis: AutonomousLifecycleTerminalOutcomeBasisV1,
         source: AutonomousLifecycleTerminalOutcomeSourceV1,
     ) -> Result<Self, &'static str> {
-        let body = AutonomousLifecycleTerminalOutcomeBodyV2 {
+        let body = AutonomousLifecycleTerminalOutcomeBodyV1 {
             version: Self::VERSION,
             binding,
             basis,
@@ -2185,7 +2121,7 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
                     AutonomousLifecycleStableStateV1::terminal_outcome_pending_reservation(),
             },
         };
-        Self::from_v2_body(body)
+        Self::from_body(body)
     }
     fn complete(
         &self,
@@ -2197,94 +2133,26 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
         ) {
             return Err("autonomous lifecycle terminal outcome is not pending");
         }
-        let stage = AutonomousLifecycleTerminalOutcomeStageV1::Complete {
-            terminal: AutonomousLifecycleStableStateV1::from_production(terminal),
-        };
-        match &self.body {
-            AutonomousLifecycleTerminalOutcomeBodyWire::LegacyV1(body) => {
-                Self::from_legacy_v1_body(LegacyAutonomousLifecycleTerminalOutcomeBodyV1 {
-                    version: Self::LEGACY_VERSION,
-                    binding: body.binding.clone(),
-                    source: body.source,
-                    stage,
-                })
-            }
-            AutonomousLifecycleTerminalOutcomeBodyWire::BasisV1(body) => {
-                Self::from_basis_v1_body(BasisAutonomousLifecycleTerminalOutcomeBodyV1 {
-                    version: Self::LEGACY_VERSION,
-                    binding: body.binding.clone(),
-                    basis: body.basis,
-                    source: body.source,
-                    stage,
-                })
-            }
-            AutonomousLifecycleTerminalOutcomeBodyWire::V2(body) => {
-                Self::from_v2_body(AutonomousLifecycleTerminalOutcomeBodyV2 {
-                    version: Self::VERSION,
-                    binding: body.binding.clone(),
-                    basis: body.basis,
-                    source: body.source,
-                    stage,
-                })
-            }
-        }
-    }
-    fn from_legacy_v1_body(
-        body: LegacyAutonomousLifecycleTerminalOutcomeBodyV1,
-    ) -> Result<Self, &'static str> {
-        if body.version != Self::LEGACY_VERSION {
-            return Err("unsupported autonomous lifecycle terminal outcome version");
-        }
-        Self::validate_body_parts(
-            &body.binding,
-            AutonomousLifecycleTerminalOutcomeBasisV1::OwnedLifecycle,
-            body.source,
-            body.stage,
-        )?;
-        let encoded = norito::encode_canonical(&body)
-            .map_err(|_| "autonomous lifecycle terminal outcome body failed encoding")?;
-        let outcome_hash = Hash::new_from_chunks(&[
-            AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN_V1,
-            &encoded,
-        ]);
-        Ok(Self {
-            body: AutonomousLifecycleTerminalOutcomeBodyWire::LegacyV1(body),
-            outcome_hash,
+        Self::from_body(AutonomousLifecycleTerminalOutcomeBodyV1 {
+            version: Self::VERSION,
+            binding: self.body.binding.clone(),
+            basis: self.body.basis,
+            source: self.body.source,
+            stage: AutonomousLifecycleTerminalOutcomeStageV1::Complete {
+                terminal: AutonomousLifecycleStableStateV1::from_production(terminal),
+            },
         })
     }
-    fn from_basis_v1_body(
-        body: BasisAutonomousLifecycleTerminalOutcomeBodyV1,
-    ) -> Result<Self, &'static str> {
-        if body.version != Self::LEGACY_VERSION {
-            return Err("unsupported autonomous lifecycle terminal outcome version");
-        }
-        Self::validate_body_parts(&body.binding, body.basis, body.source, body.stage)?;
-        let encoded = norito::encode_canonical(&body)
-            .map_err(|_| "autonomous lifecycle terminal outcome body failed encoding")?;
-        let outcome_hash = Hash::new_from_chunks(&[
-            AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN_V1,
-            &encoded,
-        ]);
-        Ok(Self {
-            body: AutonomousLifecycleTerminalOutcomeBodyWire::BasisV1(body),
-            outcome_hash,
-        })
-    }
-    fn from_v2_body(body: AutonomousLifecycleTerminalOutcomeBodyV2) -> Result<Self, &'static str> {
+    fn from_body(body: AutonomousLifecycleTerminalOutcomeBodyV1) -> Result<Self, &'static str> {
         if body.version != Self::VERSION {
             return Err("unsupported autonomous lifecycle terminal outcome version");
         }
         Self::validate_body_parts(&body.binding, body.basis, body.source, body.stage)?;
         let encoded = norito::encode_canonical(&body)
             .map_err(|_| "autonomous lifecycle terminal outcome body failed encoding")?;
-        let outcome_hash = Hash::new_from_chunks(&[
-            AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN_V2,
-            &encoded,
-        ]);
-        Ok(Self {
-            body: AutonomousLifecycleTerminalOutcomeBodyWire::V2(body),
-            outcome_hash,
-        })
+        let outcome_hash =
+            Hash::new_from_chunks(&[AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN, &encoded]);
+        Ok(Self { body, outcome_hash })
     }
     fn validate_body_parts(
         binding: &AutonomousLifecycleAttemptBindingV1,
@@ -2367,46 +2235,19 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
         Ok(())
     }
     fn validate_structure(&self) -> Result<(), &'static str> {
-        let (encoded, hash_domain) = match &self.body {
-            AutonomousLifecycleTerminalOutcomeBodyWire::LegacyV1(body) => {
-                if body.version != Self::LEGACY_VERSION {
-                    return Err("unsupported autonomous lifecycle terminal outcome version");
-                }
-                Self::validate_body_parts(
-                    &body.binding,
-                    AutonomousLifecycleTerminalOutcomeBasisV1::OwnedLifecycle,
-                    body.source,
-                    body.stage,
-                )?;
-                (
-                    norito::encode_canonical(body),
-                    AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN_V1,
-                )
-            }
-            AutonomousLifecycleTerminalOutcomeBodyWire::BasisV1(body) => {
-                if body.version != Self::LEGACY_VERSION {
-                    return Err("unsupported autonomous lifecycle terminal outcome version");
-                }
-                Self::validate_body_parts(&body.binding, body.basis, body.source, body.stage)?;
-                (
-                    norito::encode_canonical(body),
-                    AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN_V1,
-                )
-            }
-            AutonomousLifecycleTerminalOutcomeBodyWire::V2(body) => {
-                if body.version != Self::VERSION {
-                    return Err("unsupported autonomous lifecycle terminal outcome version");
-                }
-                Self::validate_body_parts(&body.binding, body.basis, body.source, body.stage)?;
-                (
-                    norito::encode_canonical(body),
-                    AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN_V2,
-                )
-            }
-        };
-        let encoded =
-            encoded.map_err(|_| "autonomous lifecycle terminal outcome body failed encoding")?;
-        let expected = Hash::new_from_chunks(&[hash_domain, &encoded]);
+        if self.body.version != Self::VERSION {
+            return Err("unsupported autonomous lifecycle terminal outcome version");
+        }
+        Self::validate_body_parts(
+            &self.body.binding,
+            self.body.basis,
+            self.body.source,
+            self.body.stage,
+        )?;
+        let encoded = norito::encode_canonical(&self.body)
+            .map_err(|_| "autonomous lifecycle terminal outcome body failed encoding")?;
+        let expected =
+            Hash::new_from_chunks(&[AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN, &encoded]);
         if self.outcome_hash != expected {
             return Err("autonomous lifecycle terminal outcome hash does not match its body");
         }
@@ -2417,41 +2258,9 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
         self.binding().validate_for_payload(payload)
     }
     fn decode_framed_unvalidated(bytes: &[u8]) -> Result<Self, norito::Error> {
-        let schema = norito::core::from_bytes_view(bytes)?.schema();
-        if schema
-            == <AutonomousLifecycleTerminalOutcomeWireV2 as norito::NoritoSerialize>::schema_hash()
-        {
-            let wire = norito::decode_canonical::<AutonomousLifecycleTerminalOutcomeWireV2>(bytes)?;
-            return Ok(Self {
-                body: AutonomousLifecycleTerminalOutcomeBodyWire::V2(wire.body),
-                outcome_hash: wire.outcome_hash,
-            });
-        }
-        if schema
-            != <LegacyAutonomousLifecycleTerminalOutcomeWireV1 as norito::NoritoSerialize>::schema_hash()
-        {
-            return Err(norito::Error::SchemaMismatch);
-        }
-        let basis =
-            norito::decode_canonical::<BasisAutonomousLifecycleTerminalOutcomeWireV1>(bytes);
-        let legacy =
-            norito::decode_canonical::<LegacyAutonomousLifecycleTerminalOutcomeWireV1>(bytes);
-        match (basis, legacy) {
-            (Ok(_), Ok(_)) => Err(norito::Error::Message(
-                "ambiguous autonomous lifecycle terminal outcome V1 layout".to_owned(),
-            )),
-            (Ok(wire), Err(_)) => Ok(Self {
-                body: AutonomousLifecycleTerminalOutcomeBodyWire::BasisV1(wire.body),
-                outcome_hash: wire.outcome_hash,
-            }),
-            (Err(_), Ok(wire)) => Ok(Self {
-                body: AutonomousLifecycleTerminalOutcomeBodyWire::LegacyV1(wire.body),
-                outcome_hash: wire.outcome_hash,
-            }),
-            (Err(error), Err(_)) => Err(error),
-        }
+        norito::decode_canonical(bytes)
     }
-    /// Decode and validate the current V2 frame or either byte-exact V1 layout retained for upgrades.
+    /// Decode and validate the canonical basis-bearing V1 frame.
     pub(crate) fn decode_framed(bytes: &[u8]) -> Result<Self, norito::Error> {
         let outcome = Self::decode_framed_unvalidated(bytes)?;
         outcome
@@ -2460,26 +2269,7 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
         Ok(outcome)
     }
     fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
-        let bytes = match &self.body {
-            AutonomousLifecycleTerminalOutcomeBodyWire::LegacyV1(body) => {
-                norito::encode_canonical(&LegacyAutonomousLifecycleTerminalOutcomeWireV1 {
-                    body: body.clone(),
-                    outcome_hash: self.outcome_hash,
-                })
-            }
-            AutonomousLifecycleTerminalOutcomeBodyWire::BasisV1(body) => {
-                norito::encode_canonical(&BasisAutonomousLifecycleTerminalOutcomeWireV1 {
-                    body: body.clone(),
-                    outcome_hash: self.outcome_hash,
-                })
-            }
-            AutonomousLifecycleTerminalOutcomeBodyWire::V2(body) => {
-                norito::encode_canonical(&AutonomousLifecycleTerminalOutcomeWireV2 {
-                    body: body.clone(),
-                    outcome_hash: self.outcome_hash,
-                })
-            }
-        }?;
+        let bytes = norito::encode_canonical(self)?;
         if bytes.is_empty() || bytes.len() > AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES {
             return Err(norito::Error::Message(
                 "autonomous lifecycle terminal outcome exceeds its hard byte limit".to_owned(),
@@ -2488,27 +2278,13 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
         Ok(bytes)
     }
     fn binding(&self) -> &AutonomousLifecycleAttemptBindingV1 {
-        match &self.body {
-            AutonomousLifecycleTerminalOutcomeBodyWire::LegacyV1(body) => &body.binding,
-            AutonomousLifecycleTerminalOutcomeBodyWire::BasisV1(body) => &body.binding,
-            AutonomousLifecycleTerminalOutcomeBodyWire::V2(body) => &body.binding,
-        }
+        &self.body.binding
     }
     fn basis(&self) -> AutonomousLifecycleTerminalOutcomeBasisV1 {
-        match &self.body {
-            AutonomousLifecycleTerminalOutcomeBodyWire::LegacyV1(_) => {
-                AutonomousLifecycleTerminalOutcomeBasisV1::OwnedLifecycle
-            }
-            AutonomousLifecycleTerminalOutcomeBodyWire::BasisV1(body) => body.basis,
-            AutonomousLifecycleTerminalOutcomeBodyWire::V2(body) => body.basis,
-        }
+        self.body.basis
     }
     fn source(&self) -> AutonomousLifecycleTerminalOutcomeSourceV1 {
-        match &self.body {
-            AutonomousLifecycleTerminalOutcomeBodyWire::LegacyV1(body) => body.source,
-            AutonomousLifecycleTerminalOutcomeBodyWire::BasisV1(body) => body.source,
-            AutonomousLifecycleTerminalOutcomeBodyWire::V2(body) => body.source,
-        }
+        self.body.source
     }
     #[cfg(test)]
     fn body_parts_mut_for_test(
@@ -2518,66 +2294,18 @@ impl AutonomousLifecycleTerminalOutcomeV1 {
         &mut AutonomousLifecycleTerminalOutcomeSourceV1,
         &mut AutonomousLifecycleTerminalOutcomeStageV1,
     ) {
-        match &mut self.body {
-            AutonomousLifecycleTerminalOutcomeBodyWire::LegacyV1(body) => {
-                (&mut body.binding, &mut body.source, &mut body.stage)
-            }
-            AutonomousLifecycleTerminalOutcomeBodyWire::BasisV1(body) => {
-                (&mut body.binding, &mut body.source, &mut body.stage)
-            }
-            AutonomousLifecycleTerminalOutcomeBodyWire::V2(body) => {
-                (&mut body.binding, &mut body.source, &mut body.stage)
-            }
-        }
+        (
+            &mut self.body.binding,
+            &mut self.body.source,
+            &mut self.body.stage,
+        )
     }
     #[cfg(test)]
     fn rehash_for_test(self) -> Result<Self, &'static str> {
-        match self.body {
-            AutonomousLifecycleTerminalOutcomeBodyWire::LegacyV1(body) => {
-                Self::from_legacy_v1_body(body)
-            }
-            AutonomousLifecycleTerminalOutcomeBodyWire::BasisV1(body) => {
-                Self::from_basis_v1_body(body)
-            }
-            AutonomousLifecycleTerminalOutcomeBodyWire::V2(body) => Self::from_v2_body(body),
-        }
-    }
-    #[cfg(test)]
-    fn to_legacy_v1_for_test(&self) -> Result<Self, &'static str> {
-        if self.basis() != AutonomousLifecycleTerminalOutcomeBasisV1::OwnedLifecycle {
-            return Err("only owned terminal outcomes have a historical V1 representation");
-        }
-        Self::from_legacy_v1_body(LegacyAutonomousLifecycleTerminalOutcomeBodyV1 {
-            version: Self::LEGACY_VERSION,
-            binding: self.binding().clone(),
-            source: self.source(),
-            stage: self.stage(),
-        })
-    }
-    #[cfg(test)]
-    fn to_basis_v1_for_test(&self) -> Result<Self, &'static str> {
-        Self::from_basis_v1_body(BasisAutonomousLifecycleTerminalOutcomeBodyV1 {
-            version: Self::LEGACY_VERSION,
-            binding: self.binding().clone(),
-            basis: self.basis(),
-            source: self.source(),
-            stage: self.stage(),
-        })
-    }
-    #[cfg(test)]
-    const fn wire_layout_for_test(&self) -> &'static str {
-        match &self.body {
-            AutonomousLifecycleTerminalOutcomeBodyWire::LegacyV1(_) => "legacy_v1",
-            AutonomousLifecycleTerminalOutcomeBodyWire::BasisV1(_) => "basis_v1",
-            AutonomousLifecycleTerminalOutcomeBodyWire::V2(_) => "v2",
-        }
+        Self::from_body(self.body)
     }
     fn stage(&self) -> AutonomousLifecycleTerminalOutcomeStageV1 {
-        match &self.body {
-            AutonomousLifecycleTerminalOutcomeBodyWire::LegacyV1(body) => body.stage,
-            AutonomousLifecycleTerminalOutcomeBodyWire::BasisV1(body) => body.stage,
-            AutonomousLifecycleTerminalOutcomeBodyWire::V2(body) => body.stage,
-        }
+        self.body.stage
     }
     fn is_complete(&self) -> bool {
         matches!(

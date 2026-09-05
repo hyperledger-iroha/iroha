@@ -486,10 +486,8 @@ mod tests {
             .collect::<Vec<_>>();
         roster.sort_by(|left, right| left.validator.cmp(&right.validator));
         let network_id = test_network_id();
-        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
-                network_id, 0, &roster,
-            );
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
         wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
@@ -502,8 +500,8 @@ mod tests {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("quorum"),
             roster,
-            offline_cash_mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"nexus amx context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
@@ -519,10 +517,8 @@ mod tests {
     }
     fn parent_qc(roster: &[wire::ValidatorPower]) -> wire::QuorumCertificate {
         let network_id = test_network_id();
-        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
-                network_id, 0, roster,
-            );
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, roster);
         let parent_context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
@@ -535,8 +531,8 @@ mod tests {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(roster).expect("quorum"),
             roster: roster.to_vec(),
-            offline_cash_mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"nexus amx context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
@@ -568,7 +564,7 @@ mod tests {
             phase: wire::GlobalPhase::Commit,
             subject,
             execution_commitment:
-                wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                     Hash::new(b"chunk fixture parent state"),
                     Hash::new(b"chunk fixture post state"),
                     Hash::new(b"chunk fixture ordinary writes"),

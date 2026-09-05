@@ -149,7 +149,7 @@ Major first-release areas include:
 - signed iterable queries and canonical transaction submission;
 - fee quotes and sponsor programs;
 - pipeline, data, proof, and explorer event streams;
-- contracts, runtime governance, verifying keys, privacy, Offline Cash V1, SCCP, VPN, and
+- contracts, runtime governance, verifying keys, privacy, KAGEMUSHA V1, SCCP, VPN, and
   SoraFS routes.
 
 ## Run the sample

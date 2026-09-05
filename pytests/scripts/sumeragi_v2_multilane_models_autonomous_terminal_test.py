@@ -621,7 +621,7 @@ def test_autonomous_terminal_recovery_rejects_complete_without_queue_evidence(
     ), errors
 
 
-def test_autonomous_terminal_recovery_rejects_eager_v1_wire_migration(
+def test_autonomous_terminal_recovery_rejects_completion_basis_substitution(
     tmp_path: Path,
 ) -> None:
     module = load_checker()
@@ -632,21 +632,21 @@ def test_autonomous_terminal_recovery_rejects_eager_v1_wire_migration(
     )
     replace_once_after(
         path,
-        "impl AutonomousLifecycleTerminalOutcomeV1 {",
-        "Self::from_legacy_v1_body(",
-        "Self::from_v2_body(",
+        "fn complete(",
+        "basis: self.body.basis",
+        "basis: AutonomousLifecycleTerminalOutcomeBasisV1::OwnedLifecycle",
     )
     errors = validate_autonomous_terminal_recovery_fixture(
         tmp_path, module, models
     )
     assert any(
         "AutonomousLifecycleTerminalOutcomeV1::complete" in error
-        and "Self::from_legacy_v1_body(" in error
+        and "basis: self.body.basis" in error
         for error in errors
     ), errors
 
 
-def test_autonomous_terminal_recovery_rejects_v2_v1_hash_domain_reuse(
+def test_autonomous_terminal_recovery_rejects_unbound_hash_domain(
     tmp_path: Path,
 ) -> None:
     module = load_checker()
@@ -657,21 +657,21 @@ def test_autonomous_terminal_recovery_rejects_v2_v1_hash_domain_reuse(
     )
     replace_once_after(
         path,
-        "fn from_v2_body(",
-        "AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN_V2",
-        "AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN_V1",
+        "fn from_body(",
+        "AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN",
+        "b\"unbound-terminal-outcome\"",
     )
     errors = validate_autonomous_terminal_recovery_fixture(
         tmp_path, module, models
     )
     assert any(
-        "AutonomousLifecycleTerminalOutcomeV1::from_v2_body" in error
-        and "HASH_DOMAIN_V2" in error
+        "AutonomousLifecycleTerminalOutcomeV1::from_body" in error
+        and "AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN" in error
         for error in errors
     ), errors
 
 
-def test_autonomous_terminal_recovery_rejects_wrong_v2_body_version(
+def test_autonomous_terminal_recovery_rejects_wrong_v1_body_version(
     tmp_path: Path,
 ) -> None:
     module = load_checker()
@@ -682,7 +682,7 @@ def test_autonomous_terminal_recovery_rejects_wrong_v2_body_version(
     )
     replace_once_after(
         path,
-        "fn from_v2_body(",
+        "fn from_body(",
         "body.version != Self::VERSION",
         "false",
     )
@@ -690,13 +690,13 @@ def test_autonomous_terminal_recovery_rejects_wrong_v2_body_version(
         tmp_path, module, models
     )
     assert any(
-        "AutonomousLifecycleTerminalOutcomeV1::from_v2_body" in error
+        "AutonomousLifecycleTerminalOutcomeV1::from_body" in error
         and "body.version != Self::VERSION" in error
         for error in errors
     ), errors
 
 
-def test_autonomous_terminal_recovery_rejects_ambiguous_v1_fallback(
+def test_autonomous_terminal_recovery_rejects_alternate_layout_decode(
     tmp_path: Path,
 ) -> None:
     module = load_checker()
@@ -708,15 +708,15 @@ def test_autonomous_terminal_recovery_rejects_ambiguous_v1_fallback(
     replace_once_after(
         path,
         "fn decode_framed_unvalidated(",
-        "ambiguous autonomous lifecycle terminal outcome V1 layout",
-        "dual-decode terminal outcome V1 layout",
+        "norito::decode_canonical(bytes)",
+        "decode_legacy_terminal_outcome(bytes)",
     )
     errors = validate_autonomous_terminal_recovery_fixture(
         tmp_path, module, models
     )
     assert any(
         "AutonomousLifecycleTerminalOutcomeV1::decode_framed_unvalidated" in error
-        and "ambiguous autonomous lifecycle terminal outcome V1 layout" in error
+        and "norito::decode_canonical(bytes)" in error
         for error in errors
     ), errors
 

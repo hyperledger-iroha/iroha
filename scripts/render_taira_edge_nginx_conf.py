@@ -61,11 +61,14 @@ PUBLIC_TORII_CORS_ORIGINS = [
     "https://bokolo-m-selen.soramitsu.io",
     "https://bokolo-ezipei.soramitsu.io",
     "https://bpng.soramitsu.io",
+    "https://mibank.soramitsu.io",
+    "https://explorer-bpng.soramitsu.io",
     "https://bokolo-explorer.soramitsu.io",
 ]
 PUBLIC_TORII_CORS_METHODS = "GET, POST, DELETE, OPTIONS"
 PUBLIC_TORII_CORS_HEADERS = (
-    "accept, authorization, content-type, idempotency-key, mcp-method, mcp-name, "
+    "accept, authorization, content-type, idempotency-key, "
+    "x-client-app, x-request-id, x-account-id, x-correlation-id, mcp-method, mcp-name, "
     "mcp-protocol-version, x-api-token, x-iroha-onboarding-token, "
     "x-iroha-account, x-iroha-signature, "
     "x-iroha-timestamp-ms, x-iroha-nonce, x-iroha-witness"

@@ -136,8 +136,8 @@ mod tests {
             .collect::<Vec<_>>();
         roster.sort_by(|left, right| left.validator.cmp(&right.validator));
         let network_id = crate::sumeragi::synthetic_network_id("autonomous-reservation-slot-test");
-        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
                 network_id, 7, &roster,
             );
         wire::HeightContext {
@@ -152,8 +152,8 @@ mod tests {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("valid frozen quorum"),
             roster,
-            offline_cash_mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"autonomous reservation nexus context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {

@@ -179,13 +179,6 @@ mod tests {
                 "not-a-key".to_owned(),
             )
             .expect_err("invalid request must fail"),
-            verify_auditor_capsule_response_v1(
-                Uint8Array::from(b"{}".to_vec()),
-                Uint8Array::from(vec![0; 32]),
-                Uint8Array::from(vec![1; 32]),
-                "not-a-key".to_owned(),
-            )
-            .expect_err("legacy capsule verifier must fail closed"),
         ] {
             assert_eq!(error.status, napi::Status::InvalidArg);
             assert_eq!(

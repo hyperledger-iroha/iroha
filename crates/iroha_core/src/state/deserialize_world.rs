@@ -7192,19 +7192,23 @@ fn parse_world(
     mut map: SnapshotJsonMap<'_>,
     ivm_seed: &IvmSeed<'_, World>,
 ) -> Result<World, json::Error> {
-    let snapshot_schema = map.source_order.as_ref().map_or_else(
-        || Ok(WorldSnapshotSchemaV1::Current),
-        |actual| classify_world_snapshot_schema_v1(actual, canonical_world_field_order()),
-    )?;
-    if snapshot_schema == WorldSnapshotSchemaV1::PrePrivateSettlement {
-        take_pre_private_settlement_retired_world_fields(&mut map)?;
-    }
-    let parameters = match snapshot_schema {
-        WorldSnapshotSchemaV1::Current => take_parameters_cell(&mut map, "parameters")?,
-        WorldSnapshotSchemaV1::PrePrivateSettlement => {
-            take_pre_private_settlement_parameters_cell(&mut map, "parameters")?
+    if let Some(actual) = map.source_order.as_ref() {
+        let expected = canonical_world_field_order();
+        if let Some(unknown) = actual.iter().find(|key| !expected.contains(key)) {
+            return Err(json::Error::InvalidField {
+                field: format!("world.{unknown}"),
+                message: "unknown field is not permitted in a signed first-release snapshot"
+                    .to_owned(),
+            });
         }
-    };
+        if actual != expected {
+            return Err(json::Error::InvalidField {
+                field: "world".to_owned(),
+                message: "snapshot world fields are not in canonical schema order".to_owned(),
+            });
+        }
+    }
+    let parameters = take_parameters_cell(&mut map, "parameters")?;
     let peers: Cell<Peers> = take_required(&mut map, "peers")?;
     let domain_committees = take_required(&mut map, "domain_committees")?;
     let domain_endorsement_policies = take_required(&mut map, "domain_endorsement_policies")?;
@@ -7452,17 +7456,9 @@ fn parse_world(
     let sccp_route_liabilities: Storage<SccpRouteKeyV1, SccpRouteLiabilityV1> =
         take_required(&mut map, "sccp_route_liabilities")?;
     let sccp_ton_breaker_observations: Storage<SccpRouteKeyV1, SccpTonBreakerObservationRecordV1> =
-        match snapshot_schema {
-            WorldSnapshotSchemaV1::Current => {
-                take_required(&mut map, "sccp_ton_breaker_observations")?
-            }
-            WorldSnapshotSchemaV1::PrePrivateSettlement => Storage::default(),
-        };
+        take_required(&mut map, "sccp_ton_breaker_observations")?;
     let sccp_replay_forests: Storage<SccpReplayAccumulatorIdV1, SccpReplayForestV1> =
-        match snapshot_schema {
-            WorldSnapshotSchemaV1::Current => take_required(&mut map, "sccp_replay_forests")?,
-            WorldSnapshotSchemaV1::PrePrivateSettlement => Storage::default(),
-        };
+        take_required(&mut map, "sccp_replay_forests")?;
     let sccp_outbound_pending_usage = take_required(&mut map, "sccp_outbound_pending_usage")?;
     let sccp_outbound_pending_messages = take_required(&mut map, "sccp_outbound_pending_messages")?;
     let sccp_outbound_message_locator = take_required(&mut map, "sccp_outbound_message_locator")?;
@@ -7509,10 +7505,7 @@ fn parse_world(
         take_required(&mut map, "privacy_consensus_policy")?;
     let privacy_exact12_qualification: Cell<
         Option<iroha_data_model::privacy::PrivacyExact12QualificationRecordV1>,
-    > = match snapshot_schema {
-        WorldSnapshotSchemaV1::Current => take_required(&mut map, "privacy_exact12_qualification")?,
-        WorldSnapshotSchemaV1::PrePrivateSettlement => Cell::new(None),
-    };
+    > = take_required(&mut map, "privacy_exact12_qualification")?;
     let privacy_activations: Storage<
         crate::privacy_state::PrivacyActivationKeyV1,
         iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
@@ -7520,38 +7513,23 @@ fn parse_world(
     let private_settlement_governance: Storage<
         PrivateSettlementPoolKeyV1,
         PrivateSettlementPoolGovernanceProjectionV1,
-    > = match snapshot_schema {
-        WorldSnapshotSchemaV1::Current => take_required(&mut map, "private_settlement_governance")?,
-        WorldSnapshotSchemaV1::PrePrivateSettlement => Storage::default(),
-    };
+    > = take_required(&mut map, "private_settlement_governance")?;
     let private_settlement_pools: Storage<
         PrivateSettlementPoolKeyV1,
         PrivateSettlementPoolStateV1,
-    > = match snapshot_schema {
-        WorldSnapshotSchemaV1::Current => take_required(&mut map, "private_settlement_pools")?,
-        WorldSnapshotSchemaV1::PrePrivateSettlement => Storage::default(),
-    };
+    > = take_required(&mut map, "private_settlement_pools")?;
     let private_settlement_roots: Storage<
         PrivateSettlementRootKeyV1,
         PrivateSettlementRootProvenanceV1,
-    > = match snapshot_schema {
-        WorldSnapshotSchemaV1::Current => take_required(&mut map, "private_settlement_roots")?,
-        WorldSnapshotSchemaV1::PrePrivateSettlement => Storage::default(),
-    };
+    > = take_required(&mut map, "private_settlement_roots")?;
     let private_settlement_nullifiers: Storage<
         PrivateSettlementNullifierKeyV1,
         PrivateSettlementFinalizationReferenceV1,
-    > = match snapshot_schema {
-        WorldSnapshotSchemaV1::Current => take_required(&mut map, "private_settlement_nullifiers")?,
-        WorldSnapshotSchemaV1::PrePrivateSettlement => Storage::default(),
-    };
+    > = take_required(&mut map, "private_settlement_nullifiers")?;
     let private_settlement_outputs: Storage<
         PrivateSettlementOutputKeyV1,
         PrivateSettlementOutputRecordV1,
-    > = match snapshot_schema {
-        WorldSnapshotSchemaV1::Current => take_required(&mut map, "private_settlement_outputs")?,
-        WorldSnapshotSchemaV1::PrePrivateSettlement => Storage::default(),
-    };
+    > = take_required(&mut map, "private_settlement_outputs")?;
     let private_settlement_recipient_index = Storage::from_iter(
         crate::private_settlement::global_state::rebuild_private_settlement_recipient_index_v1(
             &private_settlement_outputs.view(),
@@ -7564,26 +7542,15 @@ fn parse_world(
     let private_settlement_staged_locks: Storage<
         PrivateSettlementStagedLockKeyV1,
         PrivateSettlementStagedLockRecordV1,
-    > = match snapshot_schema {
-        WorldSnapshotSchemaV1::Current => {
-            take_required(&mut map, "private_settlement_staged_locks")?
-        }
-        WorldSnapshotSchemaV1::PrePrivateSettlement => Storage::default(),
-    };
+    > = take_required(&mut map, "private_settlement_staged_locks")?;
     let private_settlement_receipts: Storage<
         Hash,
         iroha_data_model::nexus::PrivateSettlementReceiptV1,
-    > = match snapshot_schema {
-        WorldSnapshotSchemaV1::Current => take_required(&mut map, "private_settlement_receipts")?,
-        WorldSnapshotSchemaV1::PrePrivateSettlement => Storage::default(),
-    };
+    > = take_required(&mut map, "private_settlement_receipts")?;
     let private_settlement_aborts: Storage<
         Hash,
         iroha_data_model::nexus::PrivateSettlementAbortReceiptV1,
-    > = match snapshot_schema {
-        WorldSnapshotSchemaV1::Current => take_required(&mut map, "private_settlement_aborts")?,
-        WorldSnapshotSchemaV1::PrePrivateSettlement => Storage::default(),
-    };
+    > = take_required(&mut map, "private_settlement_aborts")?;
     crate::private_settlement::global_state::validate_private_settlement_persisted_state_v1(
         &private_settlement_governance.view(),
         &private_settlement_pools.view(),
@@ -7795,10 +7762,7 @@ fn parse_world(
     let parliament_attempts = take_required(&mut map, "parliament_attempts")?;
     let tle_key_sessions = take_required(&mut map, "tle_key_sessions")?;
     let tle_key_session_rosters = take_required(&mut map, "tle_key_session_rosters")?;
-    let tle_key_session_lifecycles = match snapshot_schema {
-        WorldSnapshotSchemaV1::Current => take_required(&mut map, "tle_key_session_lifecycles")?,
-        WorldSnapshotSchemaV1::PrePrivateSettlement => Storage::default(),
-    };
+    let tle_key_session_lifecycles = take_required(&mut map, "tle_key_session_lifecycles")?;
     let tle_active_key_session = take_required(&mut map, "tle_active_key_session")?;
     let timed_ovn_evidence = take_required(&mut map, "timed_ovn_evidence")?;
     let global_beacon_dkg = take_required(&mut map, "global_beacon_dkg")?;
@@ -7808,30 +7772,30 @@ fn parse_world(
     let global_beacon_pulses = take_required(&mut map, "global_beacon_pulses")?;
     let repo_agreements = take_required(&mut map, "repo_agreements")?;
     let settlement_receipts = take_required(&mut map, "settlement_receipts")?;
-    let offline_cash_reserve_pools: Storage<
+    let kagemusha_reserve_pools: Storage<
         [u8; 32],
-        crate::smartcontracts::isi::offline::offline_cash_v1_reserve::OfflineCashReservePoolV1,
-    > = take_required(&mut map, "offline_cash_reserve_pools")?;
-    let offline_cash_reserve_operations: Storage<
+        crate::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::KagemushaReservePoolV1,
+    > = take_required(&mut map, "kagemusha_reserve_pools")?;
+    let kagemusha_reserve_operations: Storage<
         [u8; 32],
-        crate::smartcontracts::isi::offline::offline_cash_v1_reserve::OfflineCashReserveOperationRecordV1,
-    > = take_required(&mut map, "offline_cash_reserve_operations")?;
-    let offline_cash_mint_credit_operations: Storage<[u8; 32], [u8; 32]> =
-        take_required(&mut map, "offline_cash_mint_credit_operations")?;
-    let offline_cash_issuance_operations: Storage<[u8; 32], [u8; 32]> =
-        take_required(&mut map, "offline_cash_issuance_operations")?;
-    let offline_cash_redemption_id_operations: Storage<[u8; 32], [u8; 32]> =
-        take_required(&mut map, "offline_cash_redemption_id_operations")?;
-    let offline_cash_terminal_nullifier_operations: Storage<[u8; 32], [u8; 32]> =
-        take_required(&mut map, "offline_cash_terminal_nullifier_operations")?;
+        crate::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::KagemushaReserveOperationRecordV1,
+    > = take_required(&mut map, "kagemusha_reserve_operations")?;
+    let kagemusha_mint_credit_operations: Storage<[u8; 32], [u8; 32]> =
+        take_required(&mut map, "kagemusha_mint_credit_operations")?;
+    let kagemusha_issuance_operations: Storage<[u8; 32], [u8; 32]> =
+        take_required(&mut map, "kagemusha_issuance_operations")?;
+    let kagemusha_redemption_id_operations: Storage<[u8; 32], [u8; 32]> =
+        take_required(&mut map, "kagemusha_redemption_id_operations")?;
+    let kagemusha_terminal_nullifier_operations: Storage<[u8; 32], [u8; 32]> =
+        take_required(&mut map, "kagemusha_terminal_nullifier_operations")?;
     {
-        let pools = offline_cash_reserve_pools.view();
-        let operations = offline_cash_reserve_operations.view();
-        let mint_credits = offline_cash_mint_credit_operations.view();
-        let issuances = offline_cash_issuance_operations.view();
-        let redemptions = offline_cash_redemption_id_operations.view();
-        let nullifiers = offline_cash_terminal_nullifier_operations.view();
-        crate::smartcontracts::isi::offline::offline_cash_v1_reserve::validate_persisted_reserve_entries_v1(
+        let pools = kagemusha_reserve_pools.view();
+        let operations = kagemusha_reserve_operations.view();
+        let mint_credits = kagemusha_mint_credit_operations.view();
+        let issuances = kagemusha_issuance_operations.view();
+        let redemptions = kagemusha_redemption_id_operations.view();
+        let nullifiers = kagemusha_terminal_nullifier_operations.view();
+        crate::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::validate_persisted_reserve_entries_v1(
             pools.iter(),
             operations.iter(),
             mint_credits.iter(),
@@ -7840,17 +7804,17 @@ fn parse_world(
             nullifiers.iter(),
         )
         .map_err(|error| json::Error::InvalidField {
-            field: "offline_cash_reserve_pools".to_owned(),
-            message: format!("invalid Offline Cash V1 reserve snapshot: {error}"),
+            field: "kagemusha_reserve_pools".to_owned(),
+            message: format!("invalid Kagemusha V1 reserve snapshot: {error}"),
         })?;
         let assets = assets.view();
-        crate::smartcontracts::isi::offline::offline_cash_v1_reserve::validate_persisted_reserve_custody_v1(
+        crate::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::validate_persisted_reserve_custody_v1(
             pools.iter().map(|(_, pool)| pool),
             assets.iter(),
         )
         .map_err(|error| json::Error::InvalidField {
-            field: "offline_cash_reserve_pools".to_owned(),
-            message: format!("invalid Offline Cash V1 reserve custody snapshot: {error}"),
+            field: "kagemusha_reserve_pools".to_owned(),
+            message: format!("invalid Kagemusha V1 reserve custody snapshot: {error}"),
         })?;
     }
     let lane_relay_emergency_validators =
@@ -7879,10 +7843,8 @@ fn parse_world(
     let merge_hint_roots: Cell<Vec<Hash>> = take_required(&mut map, "merge_hint_roots")?;
     let merge_global_state_root: Cell<Option<Hash>> =
         take_required(&mut map, "merge_global_state_root")?;
-    let consensus_evidence: Storage<Hash, EvidenceRecord> = match snapshot_schema {
-        WorldSnapshotSchemaV1::Current => take_required(&mut map, "consensus_evidence")?,
-        WorldSnapshotSchemaV1::PrePrivateSettlement => Storage::default(),
-    };
+    let consensus_evidence: Storage<Hash, EvidenceRecord> =
+        take_required(&mut map, "consensus_evidence")?;
     reject_unknown(&map, "world")?;
     let mut world = World {
         parameters,
@@ -8099,12 +8061,12 @@ fn parse_world(
         repo_agreements_by_counterparty: Storage::default(),
         repo_agreements_by_custodian: Storage::default(),
         settlement_receipts,
-        offline_cash_reserve_pools,
-        offline_cash_reserve_operations,
-        offline_cash_mint_credit_operations,
-        offline_cash_issuance_operations,
-        offline_cash_redemption_id_operations,
-        offline_cash_terminal_nullifier_operations,
+        kagemusha_reserve_pools,
+        kagemusha_reserve_operations,
+        kagemusha_mint_credit_operations,
+        kagemusha_issuance_operations,
+        kagemusha_redemption_id_operations,
+        kagemusha_terminal_nullifier_operations,
         domain_committees,
         domain_endorsement_policies,
         domain_endorsements,
@@ -8819,8 +8781,8 @@ fn build_state(
         gov: default_governance(),
         content: default_content_cfg(),
         settlement: iroha_config::parameters::actual::Settlement::default(),
-        offline_cash_v1_runtime_verifier: Arc::new(
-            crate::smartcontracts::isi::offline::RejectAllOfflineCashV1RuntimeVerifier,
+        kagemusha_v1_runtime_verifier: Arc::new(
+            crate::smartcontracts::isi::kagemusha::RejectAllKagemushaV1RuntimeVerifier,
         ),
         settlement_engine: SettlementEngine::new_roadmap_default(),
         chain_id,
@@ -8831,6 +8793,7 @@ fn build_state(
         #[cfg(feature = "telemetry")]
         telemetry,
         lane_lifecycle_lock: parking_lot::Mutex::new(()),
+        queue_plan_admission_persistence_lock: parking_lot::Mutex::new(()),
         state_commit_lock: Arc::new(parking_lot::Mutex::new(())),
         state_write_lock: parking_lot::Mutex::new(()),
         view_generation: AtomicU64::new(0),
@@ -9164,13 +9127,6 @@ mod decode_tests {
         ChunkerProfileHandle, ManifestAliasBinding, ManifestRootCid,
         ProviderIngestCompletionSignerPolicyV1, ProviderIngestFinalizedAnchorV1,
     };
-    use sha2::{Digest, Sha256};
-
-    const PRE_PRIVATE_SETTLEMENT_WORLD_FIXTURE_V1: &str =
-        include_str!("../../tests/fixtures/snapshot/pre_private_settlement_world_v1.json");
-    const PRE_PRIVATE_SETTLEMENT_WORLD_FIXTURE_SHA256_V1: &str =
-        "df3d0d6b7651d032e516524d0dace90658e624513392e5829fce9f5a52e5512a";
-
     #[test]
     fn restored_proposal_status_must_match_latest_attempt_exactly() {
         use iroha_data_model::governance::types::GovernanceAttemptStatusV1 as Attempt;
@@ -10119,734 +10075,6 @@ mod decode_tests {
             "duplicate signed snapshot fields must fail closed"
         );
     }
-    fn rewrite_world_snapshot_fields(
-        encoded: &str,
-        omitted: &[&str],
-        inserted_after: Option<(&str, &str, &str)>,
-    ) -> String {
-        let parsed = SnapshotJsonMap::parse(encoded, "world").expect("parse canonical World");
-        let order = parsed
-            .source_order
-            .as_ref()
-            .expect("borrowed snapshot retains source order");
-        let mut rewritten = String::from("{");
-        let mut first = true;
-        let append = |out: &mut String, first: &mut bool, field: &str, raw: &str| {
-            if !*first {
-                out.push(',');
-            }
-            *first = false;
-            out.push_str(&json::to_json(field).expect("encode snapshot field name"));
-            out.push(':');
-            out.push_str(raw);
-        };
-        for field in order {
-            if omitted.contains(&field.as_str()) {
-                continue;
-            }
-            let SnapshotJsonField::Borrowed { raw } =
-                parsed.fields.get(field).expect("source-order field exists")
-            else {
-                unreachable!("parsed snapshot fields are borrowed")
-            };
-            append(&mut rewritten, &mut first, field, raw);
-            if let Some((anchor, inserted_field, inserted_raw)) = inserted_after
-                && field == anchor
-            {
-                append(&mut rewritten, &mut first, inserted_field, inserted_raw);
-            }
-        }
-        rewritten.push('}');
-        rewritten
-    }
-
-    fn replace_world_snapshot_field_raw(
-        encoded: &str,
-        target: &str,
-        replacement_raw: &str,
-    ) -> String {
-        let parsed = SnapshotJsonMap::parse(encoded, "world").expect("parse canonical World");
-        let order = parsed
-            .source_order
-            .as_ref()
-            .expect("borrowed snapshot retains source order");
-        let mut rewritten = String::from("{");
-        for (index, field) in order.iter().enumerate() {
-            if index != 0 {
-                rewritten.push(',');
-            }
-            rewritten.push_str(&json::to_json(field).expect("encode snapshot field name"));
-            rewritten.push(':');
-            if field == target {
-                rewritten.push_str(replacement_raw);
-            } else {
-                let SnapshotJsonField::Borrowed { raw } =
-                    parsed.fields.get(field).expect("source-order field exists")
-                else {
-                    unreachable!("parsed snapshot fields are borrowed")
-                };
-                rewritten.push_str(raw);
-            }
-        }
-        rewritten.push('}');
-        rewritten
-    }
-
-    fn borrowed_snapshot_field_raw<'a>(encoded: &'a str, target: &str) -> &'a str {
-        let parsed = SnapshotJsonMap::parse(encoded, target).expect("parse snapshot object");
-        let SnapshotJsonField::Borrowed { raw } = parsed
-            .fields
-            .get(target)
-            .unwrap_or_else(|| panic!("snapshot object carries {target}"))
-        else {
-            unreachable!("parsed snapshot fields are borrowed")
-        };
-        raw
-    }
-
-    fn rewrite_predecessor_sumeragi_fields(
-        encoded_world: &str,
-        omitted: &[&str],
-        inserted_after: Option<(&str, &str, &str)>,
-    ) -> String {
-        let parameters_cell = borrowed_snapshot_field_raw(encoded_world, "parameters");
-        let parameters = borrowed_snapshot_field_raw(parameters_cell, "blocks");
-        let sumeragi = borrowed_snapshot_field_raw(parameters, "sumeragi");
-        let rewritten_sumeragi = rewrite_world_snapshot_fields(sumeragi, omitted, inserted_after);
-        let rewritten_parameters =
-            replace_world_snapshot_field_raw(parameters, "sumeragi", &rewritten_sumeragi);
-        let rewritten_cell =
-            replace_world_snapshot_field_raw(parameters_cell, "blocks", &rewritten_parameters);
-        replace_world_snapshot_field_raw(encoded_world, "parameters", &rewritten_cell)
-    }
-
-    fn replace_predecessor_sumeragi_field_raw(
-        encoded_world: &str,
-        target: &str,
-        replacement_raw: &str,
-    ) -> String {
-        let parameters_cell = borrowed_snapshot_field_raw(encoded_world, "parameters");
-        let parameters = borrowed_snapshot_field_raw(parameters_cell, "blocks");
-        let sumeragi = borrowed_snapshot_field_raw(parameters, "sumeragi");
-        let rewritten_sumeragi =
-            replace_world_snapshot_field_raw(sumeragi, target, replacement_raw);
-        let rewritten_parameters =
-            replace_world_snapshot_field_raw(parameters, "sumeragi", &rewritten_sumeragi);
-        let rewritten_cell =
-            replace_world_snapshot_field_raw(parameters_cell, "blocks", &rewritten_parameters);
-        replace_world_snapshot_field_raw(encoded_world, "parameters", &rewritten_cell)
-    }
-
-    fn replace_predecessor_revert_sumeragi_field_raw(
-        encoded_world: &str,
-        target: &str,
-        replacement_raw: &str,
-    ) -> String {
-        let parameters_cell = borrowed_snapshot_field_raw(encoded_world, "parameters");
-        let parameters = borrowed_snapshot_field_raw(parameters_cell, "blocks");
-        let sumeragi = borrowed_snapshot_field_raw(parameters, "sumeragi");
-        let rewritten_sumeragi =
-            replace_world_snapshot_field_raw(sumeragi, target, replacement_raw);
-        let rewritten_revert =
-            replace_world_snapshot_field_raw(parameters, "sumeragi", &rewritten_sumeragi);
-        let rewritten_cell =
-            replace_world_snapshot_field_raw(parameters_cell, "revert", &rewritten_revert);
-        replace_world_snapshot_field_raw(encoded_world, "parameters", &rewritten_cell)
-    }
-
-    fn replace_predecessor_npos_field_raw(
-        encoded_world: &str,
-        target: &str,
-        replacement_raw: &str,
-    ) -> String {
-        let parameters_cell = borrowed_snapshot_field_raw(encoded_world, "parameters");
-        let parameters = borrowed_snapshot_field_raw(parameters_cell, "blocks");
-        let custom = borrowed_snapshot_field_raw(parameters, "custom");
-        let npos = borrowed_snapshot_field_raw(custom, "sumeragi_npos_parameters");
-        let payload = borrowed_snapshot_field_raw(npos, "payload");
-        let rewritten_payload = replace_world_snapshot_field_raw(payload, target, replacement_raw);
-        let rewritten_npos = replace_world_snapshot_field_raw(npos, "payload", &rewritten_payload);
-        let rewritten_custom =
-            replace_world_snapshot_field_raw(custom, "sumeragi_npos_parameters", &rewritten_npos);
-        let rewritten_parameters =
-            replace_world_snapshot_field_raw(parameters, "custom", &rewritten_custom);
-        let rewritten_cell =
-            replace_world_snapshot_field_raw(parameters_cell, "blocks", &rewritten_parameters);
-        replace_world_snapshot_field_raw(encoded_world, "parameters", &rewritten_cell)
-    }
-
-    fn canonical_nonempty_retired_storage_v1(field: &str) -> String {
-        use pre_private_settlement_world_v1 as predecessor;
-
-        match field {
-            "sccp_outbound_proofs" => {
-                let mut storage = Storage::default();
-                storage.insert(
-                    predecessor::SccpOutboundMessageKeyV1 {
-                        lane: predecessor::SccpLaneIdV1 {
-                            source: predecessor::SccpNetworkV1::SoraTaira,
-                            target: predecessor::SccpNetworkV1::EthereumSepolia,
-                        },
-                        message_id: [1; 32],
-                    },
-                    predecessor::SccpOutboundProofRecordV1 {
-                        payload_hash: [2; 32],
-                        destination_binding_hash: [3; 32],
-                        route_configuration_hash: [4; 32],
-                        finality_block_hash: [5; 32],
-                        destination_proof_commitment: [6; 32],
-                        finality_height: 7,
-                        commitment_index: 8,
-                        accepted_at_height: 9,
-                    },
-                );
-                json::to_json(&storage).expect("encode exact retired outbound SCCP storage")
-            }
-            "sccp_inbound_messages" => {
-                let mut storage = Storage::default();
-                storage.insert(
-                    predecessor::SccpInboundMessageKeyV1 {
-                        lane: predecessor::SccpLaneIdV1 {
-                            source: predecessor::SccpNetworkV1::SolanaTestnet,
-                            target: predecessor::SccpNetworkV1::SoraTaira,
-                        },
-                        message_id: [10; 32],
-                    },
-                    predecessor::SccpInboundMessageRecordV1 {
-                        payload_hash: [11; 32],
-                        route_configuration_hash: [12; 32],
-                        source_identity_hash: [13; 32],
-                        trust_anchor: predecessor::SccpNativeTrustAnchorV1 {
-                            backend: predecessor::BridgeNativeProofBackendV1::SolanaAgave,
-                            anchor_hash: [14; 32],
-                            checkpoint_height: 15,
-                        },
-                        anchor_interval_height: 16,
-                        source_finality_height: 17,
-                        source_finality_hash: [18; 32],
-                        source_proof_commitment: [19; 32],
-                        admitted_at_height: 20,
-                    },
-                );
-                json::to_json(&storage).expect("encode exact retired inbound SCCP storage")
-            }
-            PRE_PRIVATE_SETTLEMENT_RETIRED_MARKER_V1 => {
-                let mut storage = Storage::default();
-                let incarnation = Hash::prehashed([21; Hash::LENGTH]);
-                storage.insert(
-                    predecessor::DirectLaneBlockApplicationKey {
-                        lane_id: LaneId::new(22),
-                        lane_incarnation: incarnation,
-                        lane_block_height: 23,
-                    },
-                    predecessor::DirectLaneBlockApplicationMarker {
-                        lane_id: LaneId::new(22),
-                        lane_incarnation: incarnation,
-                        proposal_height: 24,
-                        dataspace_id: DataSpaceId::new(25),
-                        lane_block_height: 23,
-                        descriptor_hash: Hash::prehashed([26; Hash::LENGTH]),
-                        proposal_hash: Hash::prehashed([27; Hash::LENGTH]),
-                        preflight_state_height: 28,
-                        preflight_state_hash: HashOf::from_untyped_unchecked(Hash::prehashed(
-                            [29; Hash::LENGTH],
-                        )),
-                        result_hashes: vec![Hash::prehashed([30; Hash::LENGTH])],
-                    },
-                );
-                json::to_json(&storage).expect("encode exact retired direct-lane marker storage")
-            }
-            "council" => {
-                let mut storage = Storage::default();
-                storage.insert(
-                    31,
-                    predecessor::CouncilState {
-                        epoch: 31,
-                        members: Vec::new(),
-                        alternates: Vec::new(),
-                        candidate_count: 0,
-                        derived_by: predecessor::CouncilDerivationKind::Sortition,
-                    },
-                );
-                json::to_json(&storage).expect("encode exact retired council storage")
-            }
-            "parliament_bodies" => {
-                let mut storage = Storage::default();
-                storage.insert(
-                    32,
-                    predecessor::ParliamentBodies {
-                        selection_epoch: 32,
-                        rosters: BTreeMap::from([(
-                            predecessor::ParliamentBody::ConfirmationJury,
-                            predecessor::ParliamentRoster {
-                                body: predecessor::ParliamentBody::ConfirmationJury,
-                                epoch: 32,
-                                members: Vec::new(),
-                                alternates: Vec::new(),
-                                candidate_count: 0,
-                                derived_by: predecessor::CouncilDerivationKind::Manual,
-                            },
-                        )]),
-                    },
-                );
-                json::to_json(&storage).expect("encode exact retired Parliament storage")
-            }
-            _ => panic!("unknown retired predecessor field {field}"),
-        }
-    }
-
-    #[test]
-    fn exact_pre_private_settlement_snapshot_fixture_is_frozen() {
-        let digest = Sha256::digest(PRE_PRIVATE_SETTLEMENT_WORLD_FIXTURE_V1.as_bytes());
-        assert_eq!(
-            hex::encode(digest),
-            PRE_PRIVATE_SETTLEMENT_WORLD_FIXTURE_SHA256_V1,
-            "the checked-in predecessor bytes must match their reviewed SHA-256"
-        );
-        let parsed = SnapshotJsonMap::parse(PRE_PRIVATE_SETTLEMENT_WORLD_FIXTURE_V1, "world")
-            .expect("parse exact predecessor World");
-        assert_eq!(
-            parsed
-                .source_order
-                .as_deref()
-                .expect("borrowed predecessor retains source order")
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
-            PRE_PRIVATE_SETTLEMENT_WORLD_FIELD_ORDER_V1,
-            "fixture schema order must remain anchored to the declared predecessor revision"
-        );
-        let schema_order = PRE_PRIVATE_SETTLEMENT_WORLD_FIELD_ORDER_V1.join("\n");
-        assert_eq!(
-            hex::encode(Sha256::digest(schema_order.as_bytes())),
-            PRE_PRIVATE_SETTLEMENT_WORLD_FIELD_ORDER_SHA256_V1,
-            "the literal newline-delimited predecessor schema order must retain its reviewed SHA-256"
-        );
-        assert_eq!(PRE_PRIVATE_SETTLEMENT_WORLD_REVISION_V1.len(), 40);
-        let current = canonical_world_field_order()
-            .iter()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>();
-        let predecessor = PRE_PRIVATE_SETTLEMENT_WORLD_FIELD_ORDER_V1
-            .into_iter()
-            .collect::<BTreeSet<_>>();
-        assert_eq!(canonical_world_field_order().len(), 188);
-        assert_eq!(
-            current
-                .difference(&predecessor)
-                .copied()
-                .collect::<BTreeSet<_>>(),
-            PRE_PRIVATE_SETTLEMENT_SUCCESSOR_WORLD_FIELDS_V1
-                .into_iter()
-                .collect(),
-            "the complete current-only delta must remain the frozen 13 successor fields"
-        );
-        assert_eq!(
-            predecessor
-                .difference(&current)
-                .copied()
-                .collect::<BTreeSet<_>>(),
-            PRE_PRIVATE_SETTLEMENT_RETIRED_WORLD_FIELDS_V1
-                .into_iter()
-                .collect(),
-            "the complete predecessor-only delta must remain the frozen five retired fields"
-        );
-    }
-
-    #[test]
-    fn exact_pre_private_settlement_snapshot_migrates_only_empty_state() {
-        let ivm = IVM::new(0);
-        let seed = IvmSeed {
-            ivm: &ivm,
-            _marker: PhantomData,
-        };
-        let restored = parse_world(
-            SnapshotJsonMap::parse(PRE_PRIVATE_SETTLEMENT_WORLD_FIXTURE_V1, "world")
-                .expect("parse exact predecessor World"),
-            &seed,
-        )
-        .expect("exact empty predecessor World must migrate");
-        assert!(
-            restored
-                .private_settlement_governance
-                .view()
-                .iter()
-                .next()
-                .is_none()
-                && restored
-                    .private_settlement_pools
-                    .view()
-                    .iter()
-                    .next()
-                    .is_none()
-                && restored
-                    .private_settlement_roots
-                    .view()
-                    .iter()
-                    .next()
-                    .is_none()
-                && restored
-                    .private_settlement_nullifiers
-                    .view()
-                    .iter()
-                    .next()
-                    .is_none()
-                && restored
-                    .private_settlement_outputs
-                    .view()
-                    .iter()
-                    .next()
-                    .is_none()
-                && restored
-                    .private_settlement_staged_locks
-                    .view()
-                    .iter()
-                    .next()
-                    .is_none()
-                && restored
-                    .private_settlement_receipts
-                    .view()
-                    .iter()
-                    .next()
-                    .is_none()
-                && restored
-                    .private_settlement_aborts
-                    .view()
-                    .iter()
-                    .next()
-                    .is_none()
-                && restored.sccp_ton_breaker_observations.view().is_empty()
-                && restored.sccp_replay_forests.view().is_empty()
-                && restored
-                    .privacy_exact12_qualification
-                    .view()
-                    .get()
-                    .is_none()
-                && restored.consensus_evidence.view().is_empty()
-                && restored.tle_key_session_lifecycles.view().is_empty(),
-            "migration must synthesize only empty successor projections"
-        );
-        let parameters = restored.parameters.view();
-        let npos = parameters
-            .get()
-            .custom()
-            .get(&iroha_data_model::parameter::system::SumeragiNposParameters::parameter_id())
-            .and_then(
-                iroha_data_model::parameter::system::SumeragiNposParameters::from_custom_parameter,
-            )
-            .expect("the predecessor NPoS custom parameter must remain decodable");
-        assert_eq!(
-            npos.slashing_delay_blocks(),
-            3_599,
-            "migration must preserve the exact retained predecessor slashing delay"
-        );
-        let current = json::to_json(&restored).expect("serialize migrated World");
-        assert!(
-            PRIVATE_SETTLEMENT_SNAPSHOT_FIELDS_V1
-                .iter()
-                .all(|field| current.contains(&format!("\"{field}\"")))
-                && PRE_PRIVATE_SETTLEMENT_RETIRED_WORLD_FIELDS_V1
-                    .iter()
-                    .all(|field| !current.contains(&format!("\"{field}\""))),
-            "the next snapshot must use only the current schema"
-        );
-
-        let nondefault = replace_predecessor_npos_field_raw(
-            PRE_PRIVATE_SETTLEMENT_WORLD_FIXTURE_V1,
-            "slashing_delay_blocks",
-            "3598",
-        );
-        let nondefault = parse_world(
-            SnapshotJsonMap::parse(&nondefault, "world")
-                .expect("parse nondefault retained predecessor parameter"),
-            &seed,
-        )
-        .expect("a canonical governed predecessor slashing value must migrate");
-        let parameters = nondefault.parameters.view();
-        let npos = parameters
-            .get()
-            .custom()
-            .get(&iroha_data_model::parameter::system::SumeragiNposParameters::parameter_id())
-            .and_then(
-                iroha_data_model::parameter::system::SumeragiNposParameters::from_custom_parameter,
-            )
-            .expect("the nondefault retained NPoS parameter must remain decodable");
-        assert_eq!(npos.slashing_delay_blocks(), 3_598);
-    }
-
-    #[test]
-    fn exact_predecessor_snapshot_schema_mutations_fail_closed() {
-        let ivm = IVM::new(0);
-        let seed = IvmSeed {
-            ivm: &ivm,
-            _marker: PhantomData,
-        };
-        let missing_marker = rewrite_world_snapshot_fields(
-            PRE_PRIVATE_SETTLEMENT_WORLD_FIXTURE_V1,
-            &[PRE_PRIVATE_SETTLEMENT_RETIRED_MARKER_V1],
-            None,
-        );
-        let missing_error = SnapshotJsonMap::parse(&missing_marker, "world")
-            .and_then(|map| parse_world(map, &seed))
-            .err()
-            .expect("missing predecessor marker must fail closed");
-        assert!(
-            missing_error
-                .to_string()
-                .contains("supported canonical schema order"),
-            "unexpected missing-marker error: {missing_error}"
-        );
-
-        for retired in PRE_PRIVATE_SETTLEMENT_RETIRED_WORLD_FIELDS_V1 {
-            let nonempty_raw = canonical_nonempty_retired_storage_v1(retired);
-            let nonempty = replace_world_snapshot_field_raw(
-                PRE_PRIVATE_SETTLEMENT_WORLD_FIXTURE_V1,
-                retired,
-                &nonempty_raw,
-            );
-            let error = SnapshotJsonMap::parse(&nonempty, "world")
-                .and_then(|map| parse_world(map, &seed))
-                .err()
-                .unwrap_or_else(|| panic!("nonempty retired field {retired} must fail closed"));
-            assert!(
-                error.to_string().contains(retired)
-                    && error
-                        .to_string()
-                        .contains("accepts only a canonical empty retired store"),
-                "unexpected nonempty retired-field error for {retired}: {error}"
-            );
-
-            let nonempty_history_raw = format!(
-                r#"{{"revert":{},"blocks":{{}}}}"#,
-                borrowed_snapshot_field_raw(&nonempty_raw, "blocks")
-            );
-            let nonempty_history = replace_world_snapshot_field_raw(
-                PRE_PRIVATE_SETTLEMENT_WORLD_FIXTURE_V1,
-                retired,
-                &nonempty_history_raw,
-            );
-            let error = SnapshotJsonMap::parse(&nonempty_history, "world")
-                .and_then(|map| parse_world(map, &seed))
-                .err()
-                .unwrap_or_else(|| panic!("nonempty retired history {retired} must fail closed"));
-            assert!(
-                error.to_string().contains(retired)
-                    && error
-                        .to_string()
-                        .contains("accepts only a canonical empty retired store"),
-                "unexpected nonempty retired-history error for {retired}: {error}"
-            );
-        }
-
-        for noncanonical_empty in [
-            r#"{"blocks":{},"revert":{}}"#,
-            r#"{"revert": {}, "blocks": {}}"#,
-        ] {
-            let noncanonical = replace_world_snapshot_field_raw(
-                PRE_PRIVATE_SETTLEMENT_WORLD_FIXTURE_V1,
-                PRE_PRIVATE_SETTLEMENT_RETIRED_MARKER_V1,
-                noncanonical_empty,
-            );
-            let error = SnapshotJsonMap::parse(&noncanonical, "world")
-                .and_then(|map| parse_world(map, &seed))
-                .err()
-                .expect("noncanonical empty retired storage must fail closed");
-            assert!(
-                error.to_string().contains("canonically encoded"),
-                "unexpected noncanonical-empty diagnostic: {error}"
-            );
-        }
-
-        for (name, mutated, expected) in [
-            (
-                "required HSM",
-                replace_predecessor_sumeragi_field_raw(
-                    PRE_PRIVATE_SETTLEMENT_WORLD_FIXTURE_V1,
-                    "key_require_hsm",
-                    "true",
-                ),
-                "required historical HSM policy",
-            ),
-            (
-                "empty HSM provider policy",
-                replace_predecessor_sumeragi_field_raw(
-                    PRE_PRIVATE_SETTLEMENT_WORLD_FIXTURE_V1,
-                    "key_allowed_hsm_providers",
-                    "[]",
-                ),
-                "nondefault historical HSM provider policy",
-            ),
-            (
-                "reordered HSM provider policy",
-                replace_predecessor_sumeragi_field_raw(
-                    PRE_PRIVATE_SETTLEMENT_WORLD_FIXTURE_V1,
-                    "key_allowed_hsm_providers",
-                    r#"["softkey","pkcs11","yubihsm"]"#,
-                ),
-                "nondefault historical HSM provider policy",
-            ),
-            (
-                "noncanonical HSM spelling",
-                replace_predecessor_sumeragi_field_raw(
-                    PRE_PRIVATE_SETTLEMENT_WORLD_FIXTURE_V1,
-                    "key_require_hsm",
-                    "false ",
-                ),
-                "canonically encoded",
-            ),
-            (
-                "missing HSM requirement",
-                rewrite_predecessor_sumeragi_fields(
-                    PRE_PRIVATE_SETTLEMENT_WORLD_FIXTURE_V1,
-                    &["key_require_hsm"],
-                    None,
-                ),
-                "key_require_hsm",
-            ),
-            (
-                "reordered HSM field",
-                rewrite_predecessor_sumeragi_fields(
-                    PRE_PRIVATE_SETTLEMENT_WORLD_FIXTURE_V1,
-                    &["key_allowed_hsm_providers"],
-                    Some((
-                        "block_cadence_ms",
-                        "key_allowed_hsm_providers",
-                        r#"["pkcs11","softkey","yubihsm"]"#,
-                    )),
-                ),
-                "canonically encoded",
-            ),
-        ] {
-            let error = SnapshotJsonMap::parse(&mutated, "world")
-                .and_then(|map| parse_world(map, &seed))
-                .err()
-                .unwrap_or_else(|| panic!("{name} predecessor parameters must fail closed"));
-            assert!(
-                error.to_string().contains(expected),
-                "unexpected {name} diagnostic: {error}"
-            );
-        }
-
-        let nondefault_revert_hsm = replace_predecessor_revert_sumeragi_field_raw(
-            PRE_PRIVATE_SETTLEMENT_WORLD_FIXTURE_V1,
-            "key_require_hsm",
-            "true",
-        );
-        let error = SnapshotJsonMap::parse(&nondefault_revert_hsm, "world")
-            .and_then(|map| parse_world(map, &seed))
-            .err()
-            .expect("nondefault predecessor revert-slot HSM policy must fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("world.parameters.revert.sumeragi.key_require_hsm")
-                && error.to_string().contains("required historical HSM policy"),
-            "unexpected predecessor revert-slot HSM diagnostic: {error}"
-        );
-
-        let partial = rewrite_world_snapshot_fields(
-            PRE_PRIVATE_SETTLEMENT_WORLD_FIXTURE_V1,
-            &[],
-            Some((
-                "privacy_activations",
-                PRIVATE_SETTLEMENT_SNAPSHOT_FIELDS_V1[0],
-                r#"{"revert":{},"blocks":{}}"#,
-            )),
-        );
-        let partial_error = SnapshotJsonMap::parse(&partial, "world")
-            .and_then(|map| parse_world(map, &seed))
-            .err()
-            .expect("partial private-settlement schema must fail closed");
-        assert!(
-            partial_error
-                .to_string()
-                .contains("complete current schema or the exact empty predecessor schema"),
-            "unexpected partial-schema error: {partial_error}"
-        );
-
-        let reordered = rewrite_world_snapshot_fields(
-            PRE_PRIVATE_SETTLEMENT_WORLD_FIXTURE_V1,
-            &[PRE_PRIVATE_SETTLEMENT_RETIRED_MARKER_V1],
-            Some((
-                "lane_relay_emergency_validators",
-                PRE_PRIVATE_SETTLEMENT_RETIRED_MARKER_V1,
-                r#"{"revert":{},"blocks":{}}"#,
-            )),
-        );
-        let reordered_error = SnapshotJsonMap::parse(&reordered, "world")
-            .and_then(|map| parse_world(map, &seed))
-            .err()
-            .expect("reordered predecessor field must fail closed");
-        assert!(
-            reordered_error
-                .to_string()
-                .contains("supported canonical schema order"),
-            "unexpected reordered-schema error: {reordered_error}"
-        );
-
-        for (name, mutated) in [
-            (
-                "renamed",
-                rewrite_world_snapshot_fields(
-                    PRE_PRIVATE_SETTLEMENT_WORLD_FIXTURE_V1,
-                    &[PRE_PRIVATE_SETTLEMENT_RETIRED_MARKER_V1],
-                    Some((
-                        "kagemusha_replay_keys",
-                        "direct_lane_block_application_markers_renamed",
-                        r#"{"revert":{},"blocks":{}}"#,
-                    )),
-                ),
-            ),
-            (
-                "extra",
-                rewrite_world_snapshot_fields(
-                    PRE_PRIVATE_SETTLEMENT_WORLD_FIXTURE_V1,
-                    &[],
-                    Some(("parameters", "unexpected_predecessor_field", "null")),
-                ),
-            ),
-        ] {
-            let error = SnapshotJsonMap::parse(&mutated, "world")
-                .and_then(|map| parse_world(map, &seed))
-                .err()
-                .unwrap_or_else(|| panic!("{name} predecessor field must fail closed"));
-            assert!(
-                error.to_string().contains("unknown field"),
-                "unexpected {name}-field diagnostic: {error}"
-            );
-        }
-
-        let current = json::to_json(&World::default()).expect("serialize current World");
-        let future_current = rewrite_world_snapshot_fields(
-            &current,
-            &[],
-            Some(("parameters", "future_current_world_field", "null")),
-        );
-        let future_current_error = SnapshotJsonMap::parse(&future_current, "world")
-            .and_then(|map| parse_world(map, &seed))
-            .err()
-            .expect("an unreviewed future current field must fail closed");
-        assert!(
-            future_current_error.to_string().contains("unknown field"),
-            "unexpected future-current-field diagnostic: {future_current_error}"
-        );
-        let partial_current = rewrite_world_snapshot_fields(
-            &current,
-            &PRIVATE_SETTLEMENT_SNAPSHOT_FIELDS_V1[..1],
-            None,
-        );
-        let partial_current_error = SnapshotJsonMap::parse(&partial_current, "world")
-            .and_then(|map| parse_world(map, &seed))
-            .err()
-            .expect("partially missing current private-settlement maps must fail closed");
-        assert!(
-            partial_current_error
-                .to_string()
-                .contains("complete current schema or the exact empty predecessor schema"),
-            "unexpected partial-current-schema error: {partial_current_error}"
-        );
-    }
-
     #[test]
     fn private_settlement_snapshot_roundtrip_validates_governed_pool_projection() {
         let fixture = crate::private_settlement::sidecar_store::tests::sidecar_fixture();

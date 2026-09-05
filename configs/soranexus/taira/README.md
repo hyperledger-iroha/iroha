@@ -363,14 +363,14 @@ topology and four-replica Inrou convergence belong to the signed Inrou canary,
 not the public route-posture probe.
 
 Maintained clients may perform one bounded, credential-free
-`GET /v1/offline/readiness` and must reject redirects. A ready deployment
-advertises only the sole `OfflineCashV1` aggregate-balance protocol and its
+`GET /v1/kagemusha/readiness` and must reject redirects. A ready deployment
+advertises only the sole `KagemushaV1` aggregate-balance protocol and its
 authenticated proof and hardware profiles. The readiness schema has no hop,
 origin, ancestry, input-count, note-count, or proof-depth capability field.
 
-`ready=true` describes the universal peer-cash protocol surface; it does not
+`ready=true` describes the universal KAGEMUSHA peer-cash protocol surface; it does not
 assert that a particular asset has a promoted proof release or operational
-command authority. Use the signed Offline Cash V1 rollout evidence before attempting
+command authority. Use the signed KAGEMUSHA V1 rollout evidence before attempting
 top-up or redemption. Override the probe origin only with the credential-free
 HTTPS origin in `IROHA_TAIRA_PUBLIC_ROOT`.
 The Taira rollout asset is Digital Shekel `7ZepsJTHCVLKsrFFNZGSRGZgvBhv`
@@ -445,9 +445,10 @@ authorization headers in this repository.
 
 ## Retained source-coupled assets
 
-- `config.toml` and `genesis.json` are canonical profile fixtures consumed by
-  compiled Kagami/config/genesis tests. They are not inputs to the disposable
-  generator.
+- `config.toml` and `genesis.template.json` are canonical profile sources
+  consumed by compiled Kagami/config/genesis tests. The genesis source omits
+  operator-owned mint-finality authority, is not a raw or signable manifest,
+  and is not an input to the disposable generator.
 - `privacy_bootstrap_plan.json` and `privacy_rollout_plan_v1.json` remain
   coupled to Kagami's compiled privacy bootstrap feature. The V1 rollout does
   not carry caller-authored assurance or availability claims. It admits a wave

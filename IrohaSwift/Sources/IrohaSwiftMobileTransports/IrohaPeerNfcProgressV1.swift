@@ -288,7 +288,7 @@ public struct IrohaPeerNfcProgressEventV1: Equatable, Sendable {
     }
 
     public var logLine: String {
-        "offline_peer_nfc_stage trace=\(trace) stage=\(stage.rawValue) "
+        "kagemusha_peer_nfc_stage trace=\(trace) stage=\(stage.rawValue) "
             + "elapsed_ms=\(elapsedMilliseconds) attempt=\(attempt) bytes=\(bytes) chunk=\(chunk)"
     }
 }
@@ -347,7 +347,7 @@ final class IrohaPeerNfcReaderProgressReporterV1: @unchecked Sendable {
             bytes: max(bytes, 0),
             chunk: max(chunk, 0)
         )
-        NSLog("iroha_offline_nfc_ios_reader %@", event.logLine)
+        NSLog("iroha_kagemusha_nfc_ios_reader %@", event.logLine)
         handler?(event)
     }
 

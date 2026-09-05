@@ -472,9 +472,9 @@ fn merge_carrier_finality_artifact_with_network(
         height,
         "merge-carrier finality fixtures must form a contiguous chain"
     );
-    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
-    let_row! { context = HeightContext { network_id, protocol_version: PROTOCOL_VERSION, height, epoch: 0, epoch_end_height: u64::MAX, next_epoch_snapshot: None, mode: ConsensusMode::Permissioned, parent_commit_qc: parent.map(|artifact| artifact.commit_qc.clone()), snapshot_bootstrap: None, quorum: DualQuorum::from_roster(&roster).expect("valid four-validator fixture quorum"), roster, offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster, nexus_amx_context_hash: Hash::new(b"state merge finality nexus AMX context"), execution_policy_hash: Hash::new(b"state merge finality execution policy"), da_layout: DataAvailabilityLayout { encoding: PayloadEncoding::ReedSolomon16, chunk_size_bytes: 1024, data_shards: 1, parity_shards: 1, max_payload_size_bytes: 4096, max_chunk_count: 8, }, leader_seed: [0xD3; 32], } };
+    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
+    let_row! { context = HeightContext { network_id, protocol_version: PROTOCOL_VERSION, height, epoch: 0, epoch_end_height: u64::MAX, next_epoch_snapshot: None, mode: ConsensusMode::Permissioned, parent_commit_qc: parent.map(|artifact| artifact.commit_qc.clone()), snapshot_bootstrap: None, quorum: DualQuorum::from_roster(&roster).expect("valid four-validator fixture quorum"), roster, kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster, nexus_amx_context_hash: Hash::new(b"state merge finality nexus AMX context"), execution_policy_hash: Hash::new(b"state merge finality execution policy"), da_layout: DataAvailabilityLayout { encoding: PayloadEncoding::ReedSolomon16, chunk_size_bytes: 1024, data_shards: 1, parity_shards: 1, max_payload_size_bytes: 4096, max_chunk_count: 8, }, leader_seed: [0xD3; 32], } };
     let executed_block_wire = block.encode_wire().expect("canonical executed block wire");
     let_row! { mut execution_commitment = ExecutionCommitment::new_without_merge_carrier( Hash::new(b"state merge finality parent state"), Hash::new(b"state merge finality post state"), Hash::new(b"state merge finality ordinary writes"), None, 0, 1, Hash::new(&executed_block_wire), ) .expect("canonical merge-carrier finality execution commitment") };
     execution_commitment.executed_block_wire_len =
@@ -699,9 +699,23 @@ fn queue_plan_admission_certificate_bytes_for_state_test(
     binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
     validator_keypairs: &[KeyPair],
 ) -> Vec<u8> {
+    let coordinator = &binding.admission_context.route_incarnations[0];
+    let validator_indices = (0..coordinator.durability_threshold)
+        .collect::<Vec<_>>();
+    queue_plan_admission_certificate_bytes_for_signer_indices_state_test(
+        binding,
+        validator_keypairs,
+        &validator_indices,
+    )
+}
+fn queue_plan_admission_certificate_bytes_for_signer_indices_state_test(
+    binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
+    validator_keypairs: &[KeyPair],
+    validator_indices: &[u16],
+) -> Vec<u8> {
     let binding_hash = binding.canonical_hash();
     let coordinator = &binding.admission_context.route_incarnations[0];
-    let_row! { attestations = coordinator .validator_set .iter() .take(usize::from(coordinator.durability_threshold)) .enumerate() .map(|(index, validator)| { let keypair = validator_keypairs .iter() .find(|keypair| keypair.public_key() == validator.public_key()) .expect("fixture retains every authoritative validator key"); let validator_index = u16::try_from(index).expect("fixture validator index fits u16"); let signing_bytes = crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v1( binding_hash, validator_index, ) .expect("QueuePlan attestation preimage"); crate::torii_proxy::QueuePlanAdmissionAttestationV1 { version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1, validator_index, signature: Signature::try_new(keypair.private_key(), &signing_bytes) .expect("QueuePlan attestation signature"), } }) .collect() };
+    let_row! { attestations = validator_indices .iter() .map(|&validator_index| { let validator = coordinator .validator_set .get(usize::from(validator_index)) .expect("fixture validator index is in bounds"); let keypair = validator_keypairs .iter() .find(|keypair| keypair.public_key() == validator.public_key()) .expect("fixture retains every authoritative validator key"); let signing_bytes = crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v1( binding_hash, validator_index, ) .expect("QueuePlan attestation preimage"); crate::torii_proxy::QueuePlanAdmissionAttestationV1 { version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1, validator_index, signature: Signature::try_new(keypair.private_key(), &signing_bytes) .expect("QueuePlan attestation signature"), } }) .collect() };
     let_row! { certificate = crate::torii_proxy::QueuePlanAdmissionCertificateV1 { version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1, binding: binding.clone(), attestations, } };
     norito::to_bytes(&certificate).expect("canonical QueuePlan admission certificate")
 }

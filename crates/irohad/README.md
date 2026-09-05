@@ -337,15 +337,15 @@ You may deploy Iroha as a [native binary](#native-binary) or by using [Docker](#
     mkdir -p deploy/peer
     cp target/release/iroha3d deploy/peer/
     cp defaults/nexus/config.toml deploy/peer/config.toml
-    cp defaults/nexus/genesis.json deploy/peer/genesis.json
+    cp defaults/nexus/genesis.template.json deploy/peer/genesis.template.json
     ```
 
     Adjust the file layout if you prefer another location. `irohad` resolves
     relative paths from the directory that contains `config.toml`. The checked-in
-    Nexus genesis is a schema-valid template, not a deployable public-chain
-    identity: regenerate it with the operator-approved canonical Nexus XOR asset
-    definition via `--xor-asset-definition-id` before signing. Do not substitute
-    Taira's XOR asset ID.
+    Nexus source is intentionally not a `RawGenesisTransaction` and cannot be
+    signed or selected by `[genesis]`. Materialize it with operator-provisioned
+    public mint-finality parameters for the final validator identities. Do not
+    substitute Taira authority or Taira's XOR asset ID.
 
 3. **Provision keys and network settings.**
 
@@ -365,13 +365,14 @@ You may deploy Iroha as a [native binary](#native-binary) or by using [Docker](#
 
 4. **Generate and sign the genesis block.**
 
-    - Produce a template genesis manifest and tweak it as needed (additional
-      accounts, assets, instructions, etc.):
+    - Materialize the reviewed source with the public half of the operator-owned
+      KAGEMUSHA mint-finality authority. The corresponding private authority
+      remains runtime-only:
 
       ```bash
       cargo run --release -p iroha_kagami -- \
-        genesis generate default \
-        --genesis-public-key <GENESIS_PUBLIC_KEY> \
+        genesis materialize deploy/peer/genesis.template.json \
+        --kagemusha-mint-finality-parameters <PUBLIC_AUTHORITY_PARAMETERS_JSON> \
         > deploy/peer/genesis.json
       ```
 
@@ -381,6 +382,7 @@ You may deploy Iroha as a [native binary](#native-binary) or by using [Docker](#
       ```bash
       cargo run --release -p iroha_kagami -- \
         genesis sign deploy/peer/genesis.json \
+        --topology '<FINAL_VALIDATOR_PEER_ID_JSON_ARRAY>' \
         --private-key-file <MODE_0600_GENESIS_PRIVATE_KEY_FILE> \
         --expected-public-key <GENESIS_PUBLIC_KEY> \
         --bound-manifest-out deploy/peer/genesis.json \

@@ -97,6 +97,8 @@ run_python312_clean() {
 # - Produces a static-library XCFramework with iOS device, universal iOS
 #   simulator, and universal macOS slices so Xcode links it without trying to
 #   embed/sign a framework inside simulator app bundles.
+# - Links every thin archive into a real C consumer with all members loaded;
+#   the host macOS consumer also exercises SHA3/SHAKE and ML-DSA/ML-KEM.
 # - Bridge packaging skips the broader Norito bindings sync gate because unrelated
 #   Kotlin/Java parity drift should not block rebuilding the Swift bridge artifact.
 # - Requires: Python 3.12, rustup + cargo, xcodebuild, lipo, and the exact
@@ -1030,6 +1032,7 @@ IPHONEOS_SDK_VERSION="$(xcrun_value --sdk iphoneos --show-sdk-version)"
 IPHONESIMULATOR_SDK_VERSION="$(xcrun_value --sdk iphonesimulator --show-sdk-version)"
 MACOSX_SDK_VERSION="$(xcrun_value --sdk macosx --show-sdk-version)"
 LIPO_BINARY="$(xcrun_value --find lipo)"
+CLANG_BINARY="$(xcrun_value --find clang)"
 for sdk_variable in IPHONEOS_SDKROOT IPHONESIMULATOR_SDKROOT MACOSX_SDKROOT; do
   sdkroot="${!sdk_variable}"
   printf -v "$sdk_variable" '%s' "$(run_python312_clean -c \
@@ -1047,6 +1050,13 @@ LIPO_BINARY="$(run_python312_clean -c \
   "$LIPO_BINARY")"
 [[ -x "$LIPO_BINARY" ]] || {
   echo "[-] Xcode lipo executable is unavailable" >&2
+  exit 1
+}
+CLANG_BINARY="$(run_python312_clean -c \
+  'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+  "$CLANG_BINARY")"
+[[ -x "$CLANG_BINARY" ]] || {
+  echo "[-] Xcode clang executable is unavailable" >&2
   exit 1
 }
 XCODE_VERSION_OUTPUT="$(
@@ -1147,6 +1157,109 @@ SIM_ARM_TRIPLE="aarch64-apple-ios-sim"
 SIM_X64_TRIPLE="x86_64-apple-ios"
 MACOS_ARM_TRIPLE="aarch64-apple-darwin"
 MACOS_X64_TRIPLE="x86_64-apple-darwin"
+check_apple_consumer_link() {
+  local target_triple="$1"
+  local library="$2"
+  local sdkroot clang_target host_arch
+  local consumer_dir="$STAGE_DIR/consumer-link/$target_triple"
+  case "$target_triple" in
+    "$DEVICE_TRIPLE")
+      sdkroot="$IPHONEOS_SDKROOT"
+      clang_target="arm64-apple-ios$IPHONEOS_DEPLOYMENT_TARGET"
+      ;;
+    "$SIM_ARM_TRIPLE")
+      sdkroot="$IPHONESIMULATOR_SDKROOT"
+      clang_target="arm64-apple-ios$IPHONESIMULATOR_DEPLOYMENT_TARGET-simulator"
+      ;;
+    "$SIM_X64_TRIPLE")
+      sdkroot="$IPHONESIMULATOR_SDKROOT"
+      clang_target="x86_64-apple-ios$IPHONESIMULATOR_DEPLOYMENT_TARGET-simulator"
+      ;;
+    "$MACOS_ARM_TRIPLE")
+      sdkroot="$MACOSX_SDKROOT"
+      clang_target="arm64-apple-macos$MACOSX_DEPLOYMENT_TARGET"
+      ;;
+    "$MACOS_X64_TRIPLE")
+      sdkroot="$MACOSX_SDKROOT"
+      clang_target="x86_64-apple-macos$MACOSX_DEPLOYMENT_TARGET"
+      ;;
+    *) echo "[-] Unknown Apple consumer target: $target_triple" >&2; return 1 ;;
+  esac
+  mkdir -p "$consumer_dir"
+  cat > "$consumer_dir/main.c" <<'CONSUMER_EOF'
+#include "connect_norito_bridge.h"
+#include <stdint.h>
+#include <string.h>
+
+/* Pinned PQClean implementation symbols are exercised here, not added to the
+ * public bridge ABI. Exact sizes/signatures match pqcrypto-mldsa 0.1.2 and
+ * pqcrypto-mlkem 0.1.1. Loading all archive members also checks the accelerated
+ * backends' helper closure on each packaged architecture. */
+extern void sha3_256(uint8_t *, const uint8_t *, size_t);
+extern void shake256(uint8_t *, size_t, const uint8_t *, size_t);
+extern int PQCLEAN_MLDSA44_CLEAN_crypto_sign_keypair(uint8_t *, uint8_t *);
+extern int PQCLEAN_MLDSA44_CLEAN_crypto_sign_signature_ctx(
+    uint8_t *, size_t *, const uint8_t *, size_t, const uint8_t *, size_t, const uint8_t *);
+extern int PQCLEAN_MLDSA44_CLEAN_crypto_sign_verify_ctx(
+    const uint8_t *, size_t, const uint8_t *, size_t, const uint8_t *, size_t, const uint8_t *);
+extern int PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair(uint8_t *, uint8_t *);
+extern int PQCLEAN_MLKEM512_CLEAN_crypto_kem_enc(uint8_t *, uint8_t *, const uint8_t *);
+extern int PQCLEAN_MLKEM512_CLEAN_crypto_kem_dec(uint8_t *, const uint8_t *, const uint8_t *);
+
+int main(void) {
+    static const uint8_t message[] = {'a', 'b', 'c'};
+    static const uint8_t changed[] = {'a', 'b', 'd'};
+    static const uint8_t sha3_expected[32] = {
+        58, 152, 93, 167, 79, 226, 37, 178, 4, 92, 23, 45, 107, 211, 144, 189,
+        133, 95, 8, 110, 62, 157, 82, 91, 70, 191, 226, 69, 17, 67, 21, 50};
+    static const uint8_t shake_expected[32] = {
+        72, 51, 102, 96, 19, 96, 168, 119, 28, 104, 99, 8, 12, 196, 17, 77,
+        141, 180, 69, 48, 248, 241, 225, 238, 79, 148, 234, 55, 231, 139, 87, 57};
+    uint8_t sha3[32], shake[32];
+    uint8_t signing_public[1312], signing_secret[2560], signature[2420];
+    uint8_t kem_public[800], kem_secret[1632], ciphertext[768], sent[32], received[32];
+    size_t signature_len = 0;
+    if (connect_norito_bridge_abi_version() != CONNECT_NORITO_BRIDGE_ABI_VERSION) return 1;
+    sha3_256(sha3, message, sizeof(message));
+    shake256(shake, sizeof(shake), message, sizeof(message));
+    if (memcmp(sha3, sha3_expected, sizeof(sha3)) || memcmp(shake, shake_expected, sizeof(shake))) return 2;
+    if (PQCLEAN_MLDSA44_CLEAN_crypto_sign_keypair(signing_public, signing_secret)) return 3;
+    if (PQCLEAN_MLDSA44_CLEAN_crypto_sign_signature_ctx(signature, &signature_len,
+            message, sizeof(message), NULL, 0, signing_secret)) return 4;
+    if (signature_len != sizeof(signature)) return 5;
+    if (PQCLEAN_MLDSA44_CLEAN_crypto_sign_verify_ctx(signature, signature_len,
+            message, sizeof(message), NULL, 0, signing_public)) return 6;
+    if (!PQCLEAN_MLDSA44_CLEAN_crypto_sign_verify_ctx(signature, signature_len,
+            changed, sizeof(changed), NULL, 0, signing_public)) return 7;
+    if (PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair(kem_public, kem_secret)) return 8;
+    if (PQCLEAN_MLKEM512_CLEAN_crypto_kem_enc(ciphertext, sent, kem_public)) return 9;
+    if (PQCLEAN_MLKEM512_CLEAN_crypto_kem_dec(received, ciphertext, kem_secret)) return 10;
+    if (memcmp(sent, received, sizeof(sent))) return 11;
+    return 0;
+}
+CONSUMER_EOF
+  echo "[+] Linking complete native archive into a C consumer: $target_triple" >&2
+  env -i \
+    HOME="$USER_HOME_DIR" \
+    PATH="${CLANG_BINARY%/*}:/usr/bin:/bin" \
+    TMPDIR="$MOBILE_TMPDIR" \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
+    "$CLANG_BINARY" -target "$clang_target" -isysroot "$sdkroot" \
+    -I "$ROOT_DIR/crates/connect_norito_bridge/include" "$consumer_dir/main.c" \
+    -Wl,-all_load "$library" \
+    -framework Foundation -framework Security -framework Metal -framework Accelerate \
+    -lc++ -liconv -o "$consumer_dir/consumer" || return $?
+  host_arch="$(/usr/bin/uname -m)"
+  if [[ ( "$target_triple" == "$MACOS_ARM_TRIPLE" && "$host_arch" == "arm64" ) \
+     || ( "$target_triple" == "$MACOS_X64_TRIPLE" && "$host_arch" == "x86_64" ) ]]; then
+    env -i HOME="$USER_HOME_DIR" PATH=/usr/bin:/bin TMPDIR="$MOBILE_TMPDIR" \
+      LANG=C.UTF-8 LC_ALL=C.UTF-8 "$consumer_dir/consumer" || return $?
+    echo "[+] Host C consumer passed ABI, SHA3/SHAKE, ML-DSA and ML-KEM checks" >&2
+  fi
+}
+
 stage_cargo_library() {
   local target_triple="$1"
   local label="$2"
@@ -1158,6 +1271,7 @@ stage_cargo_library() {
   fi
   mkdir -p "$(dirname "$staged_library")"
   cp "$source_library" "$staged_library"
+  check_apple_consumer_link "$target_triple" "$staged_library" || return $?
   printf '%s\n' "$staged_library"
 }
 
@@ -1350,6 +1464,11 @@ if [[ -n "$CI_ASSEMBLE_APPLE_SLICES" ]]; then
   LIB_SIM_X64="$STAGE_DIR/cargo-libraries/$SIM_X64_TRIPLE/lib${LIB_CRATE_NAME}.a"
   LIB_MAC_ARM="$STAGE_DIR/cargo-libraries/$MACOS_ARM_TRIPLE/lib${LIB_CRATE_NAME}.a"
   LIB_MAC_X64="$STAGE_DIR/cargo-libraries/$MACOS_X64_TRIPLE/lib${LIB_CRATE_NAME}.a"
+  for restored_target in "$DEVICE_TRIPLE" "$SIM_ARM_TRIPLE" "$SIM_X64_TRIPLE" \
+      "$MACOS_ARM_TRIPLE" "$MACOS_X64_TRIPLE"; do
+    check_apple_consumer_link "$restored_target" \
+      "$STAGE_DIR/cargo-libraries/$restored_target/lib${LIB_CRATE_NAME}.a"
+  done
 fi
 
 if [[ ! -f "$LIB_DEV" || ! -f "$LIB_SIM_ARM" || ! -f "$LIB_SIM_X64" \
@@ -1497,6 +1616,13 @@ if protocol_abis != header_abis:
 print(header_abis[0])
 PY
 )" || exit 1
+
+RETIRED_AUDITOR_CAPSULE_VERIFY_PARTS=(
+  connect_norito_private_settlement_auditor_capsule_response
+  verify
+  v1
+)
+RETIRED_AUDITOR_CAPSULE_VERIFY_SYMBOL="${RETIRED_AUDITOR_CAPSULE_VERIFY_PARTS[0]}_${RETIRED_AUDITOR_CAPSULE_VERIFY_PARTS[1]}_${RETIRED_AUDITOR_CAPSULE_VERIFY_PARTS[2]}"
 
 cat > "$PUBLISH_MANIFEST" <<EOF
 {
@@ -1648,35 +1774,31 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
     "connect_norito_private_settlement_audit_approval_response_verify_v1",
     "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
-    "connect_norito_offline_cash_v1_payment_request_validate",
-    "connect_norito_offline_cash_v1_acceptance_intent_authorization_validate",
-    "connect_norito_offline_cash_v1_acceptance_ticket_validate",
-    "connect_norito_offline_cash_v1_no_commit_closure_validate",
-    "connect_norito_offline_cash_v1_payment_validate",
-    "connect_norito_offline_cash_v1_acknowledgement_validate",
-    "connect_norito_offline_cash_v1_complete_exchange_validate",
-    "connect_norito_offline_cash_v1_mint_authorization_validate",
-    "connect_norito_offline_cash_v1_mint_credit_validate",
-    "connect_norito_offline_cash_v1_mint_credit_against_authorization_validate",
-    "connect_norito_offline_cash_v1_redemption_voucher_validate",
-    "connect_norito_offline_cash_v1_payment_request_text_validate",
-    "connect_norito_offline_cash_v1_acceptance_intent_authorization_text_validate",
-    "connect_norito_offline_cash_v1_acceptance_ticket_text_validate",
-    "connect_norito_offline_cash_v1_no_commit_closure_text_validate",
-    "connect_norito_offline_cash_v1_payment_text_validate",
-    "connect_norito_offline_cash_v1_acknowledgement_text_validate",
-    "connect_norito_offline_cash_v1_complete_exchange_text_validate",
-    "connect_norito_offline_cash_v1_mint_authorization_text_validate",
-    "connect_norito_offline_cash_v1_mint_credit_text_validate",
-    "connect_norito_offline_cash_v1_mint_credit_against_authorization_text_validate",
-    "connect_norito_offline_cash_v1_redemption_voucher_text_validate",
-    "connect_norito_offline_cash_device_capabilities_v1",
-    "connect_norito_offline_cash_device_execute_v1"
+    "connect_norito_kagemusha_v1_payment_request_validate",
+    "connect_norito_kagemusha_v1_payment_validate",
+    "connect_norito_kagemusha_v1_acknowledgement_validate",
+    "connect_norito_kagemusha_v1_complete_exchange_validate",
+    "connect_norito_kagemusha_v1_mint_authorization_validate",
+    "connect_norito_kagemusha_v1_mint_credit_validate",
+    "connect_norito_kagemusha_v1_mint_credit_against_authorization_validate",
+    "connect_norito_kagemusha_v1_redemption_voucher_validate",
+    "connect_norito_kagemusha_v1_payment_request_text_validate",
+    "connect_norito_kagemusha_v1_payment_text_validate",
+    "connect_norito_kagemusha_v1_acknowledgement_text_validate",
+    "connect_norito_kagemusha_v1_complete_exchange_text_validate",
+    "connect_norito_kagemusha_v1_mint_authorization_text_validate",
+    "connect_norito_kagemusha_v1_mint_credit_text_validate",
+    "connect_norito_kagemusha_v1_mint_credit_against_authorization_text_validate",
+    "connect_norito_kagemusha_v1_redemption_voucher_text_validate",
+    "connect_norito_kagemusha_device_mint_stage_command_v1_validate",
+    "connect_norito_kagemusha_device_mint_stage_result_v1_validate",
+    "connect_norito_kagemusha_device_capabilities_v1",
+    "connect_norito_kagemusha_device_execute_v1"
   ],
   "forbidden_symbols": [
     "connect_norito_get_chain_discriminant",
     "connect_norito_set_chain_discriminant",
-    "connect_norito_private_settlement_auditor_capsule_response_verify_v1",
+    "$RETIRED_AUDITOR_CAPSULE_VERIFY_SYMBOL",
     "iroha_privacy_capabilities_v1",
     "iroha_privacy_validate_capabilities_v1",
     "iroha_privacy_proof_request_v1",
@@ -1696,6 +1818,15 @@ PUBLISH_PROSPECTIVE_LOADER="$PUBLISH_ROOT/.NoritoBridge.prospective.NativeBridge
 SWIFT_PIN_PREIMAGE_SHA256="$(
   sha256_file "$ROOT_DIR/IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
 )"
+SWIFT_PIN_OWNER_ARGUMENTS=(
+  --root "$ROOT_DIR"
+  --artifact-dir "$PUBLISH_ROOT"
+  --output "$PUBLISH_PROSPECTIVE_LOADER"
+  --expected-preimage-sha256 "$SWIFT_PIN_PREIMAGE_SHA256"
+)
+if [[ "$ALLOW_DIRTY_SOURCE" == "1" ]]; then
+  SWIFT_PIN_OWNER_ARGUMENTS+=(--allow-dirty-source)
+fi
 env -i \
   HOME="$USER_HOME_DIR" \
   PATH="${PYTHON_BINARY%/*}:${CARGO_BINARY%/*}:${RUSTC_BINARY%/*}:${RUSTDOC_BINARY%/*}:${GIT_BINARY%/*}:/usr/bin:/bin" \
@@ -1714,10 +1845,7 @@ env -i \
   NORITO_BRIDGE_SEAL_DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
   "$PYTHON_BINARY" -I -S -B \
   "$ROOT_DIR/scripts/update_norito_bridge_swift_pins.py" \
-  --root "$ROOT_DIR" \
-  --artifact-dir "$PUBLISH_ROOT" \
-  --output "$PUBLISH_PROSPECTIVE_LOADER" \
-  --expected-preimage-sha256 "$SWIFT_PIN_PREIMAGE_SHA256"
+  "${SWIFT_PIN_OWNER_ARGUMENTS[@]}"
 
 run_isolated_python - \
   "$PUBLISH_XCFRAMEWORK" "$PUBLISH_MANIFEST" \
@@ -2176,6 +2304,14 @@ if [[ -n "$ARCHIVE_OUTPUT" ]]; then
     echo "[-] Deterministic NoritoBridge archive owner is unavailable: $ARCHIVE_OWNER" >&2
     exit 1
   fi
+  ARCHIVE_OWNER_ARGUMENTS=(
+    --xcframework "$FINAL_XCFRAMEWORK"
+    --output "$ARCHIVE_OUTPUT"
+    --scratch-dir "$BUILD_DIR"
+  )
+  if [[ "$ALLOW_DIRTY_SOURCE" == "1" ]]; then
+    ARCHIVE_OWNER_ARGUMENTS+=(--allow-dirty-source)
+  fi
   env -i \
     HOME="$USER_HOME_DIR" \
     PATH="${PYTHON_BINARY%/*}:${CARGO_BINARY%/*}:${RUSTC_BINARY%/*}:${RUSTDOC_BINARY%/*}:${GIT_BINARY%/*}:/usr/bin:/bin" \
@@ -2195,8 +2331,6 @@ if [[ -n "$ARCHIVE_OUTPUT" ]]; then
     NORITO_BRIDGE_SEAL_RUSTUP="$RUSTUP_BINARY" \
     NORITO_BRIDGE_SEAL_DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
     "$PYTHON_BINARY" -I -S -B "$ARCHIVE_OWNER" \
-      --xcframework "$FINAL_XCFRAMEWORK" \
-      --output "$ARCHIVE_OUTPUT" \
-      --scratch-dir "$BUILD_DIR"
+      "${ARCHIVE_OWNER_ARGUMENTS[@]}"
   echo "[+] Deterministic XCFramework archive: $ARCHIVE_OUTPUT" >&2
 fi

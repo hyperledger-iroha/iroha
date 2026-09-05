@@ -83,7 +83,7 @@ ANDROID_ROOT_INPUTS = (
     "kotlin/core-jvm/src/main",
     "kotlin/client-android/build.gradle.kts",
     "kotlin/client-android/src/main",
-    "kotlin/offline-wallet-android/build.gradle.kts",
+    "kotlin/kagemusha-wallet-android/build.gradle.kts",
     "java/norito_java/settings.gradle.kts",
     "java/norito_java/build.gradle.kts",
     "java/norito_java/gradle.properties",

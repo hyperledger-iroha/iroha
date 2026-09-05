@@ -707,6 +707,7 @@ mod tests {
             Parameter,
             system::{SumeragiConsensusMode, SumeragiNposParameters},
         },
+        peer::PeerId,
     };
     use iroha_genesis::GenesisBuilder;
 
@@ -877,18 +878,18 @@ mod tests {
                 }
             })
             .collect::<Vec<_>>();
-        let reviewed = crate::verify::configured_test_genesis_builder(
-            GenesisBuilder::new_without_executor(configs[0].common.chain.clone(), "."),
+        let reviewed = super::super::complete_test_genesis_builder_for_peers(
+            GenesisBuilder::new_without_executor(configs[0].common.chain.clone(), ".")
+                .append_parameter(Parameter::Custom(
+                    SumeragiNposParameters::default().into_custom_parameter(),
+                )),
             validator_bindings
                 .iter()
-                .map(|binding| iroha_data_model::prelude::PeerId::new(binding.public_key.clone()))
+                .map(|binding| PeerId::new(binding.public_key.clone()))
                 .collect(),
         )
-        .append_parameter(Parameter::Custom(
-            SumeragiNposParameters::default().into_custom_parameter(),
-        ))
         .build_raw()
-        .expect("build reviewed prepared-genesis fixture with exact explicit authority")
+        .expect("complete prepared-bundle test genesis")
         .with_chain_discriminant(*configs[0].common.chain_discriminant.value())
         .with_consensus_mode(SumeragiConsensusMode::Npos)
         .with_consensus_meta();

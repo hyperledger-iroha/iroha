@@ -28,12 +28,17 @@ def test_privacy_wallet_worker_contract_is_a_base_export() -> None:
         assert not hasattr(iroha_python, retired)
 
 
-def test_offline_capability_is_the_only_discovery_export() -> None:
+def test_kagemusha_facade_and_readiness_are_base_exports() -> None:
     import iroha_python
-    from iroha_python import OfflineStatus
+    from iroha_python import Kagemusha, KagemushaReadinessV1
 
-    assert "OfflineStatus" in iroha_python.__all__
-    assert OfflineStatus.__name__ == "OfflineStatus"
+    assert "Kagemusha" in iroha_python.__all__
+    assert Kagemusha.__name__ == "Kagemusha"
+    assert "KagemushaReadinessV1" in iroha_python.__all__
+    assert KagemushaReadinessV1.__name__ == "KagemushaReadinessV1"
+    retired_facade = "Kagemusha" + "V1"
+    assert retired_facade not in iroha_python.__all__
+    assert not hasattr(iroha_python, retired_facade)
     for retired in (
         "OfflineActiveTransferVerifier",
         "OfflineActiveTopUpShieldVerifier",

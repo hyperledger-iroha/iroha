@@ -223,10 +223,10 @@ async fn assembled_router_canonicalizes_early_path_and_accept_failures() {
     runtime.shutdown().await;
 }
 #[tokio::test]
-async fn offline_command_header_admission_precedes_body_decoding() {
+async fn kagemusha_command_header_admission_precedes_body_decoding() {
     let runtime = build_router();
     let router = runtime.router();
-    for path in ["/v1/offline/top-up", "/v1/offline/redeem"] {
+    for path in ["/v1/kagemusha/top-up", "/v1/kagemusha/redeem"] {
         let response = router
             .clone()
             .oneshot(
@@ -264,7 +264,7 @@ async fn offline_command_header_admission_precedes_body_decoding() {
         assert_eq!(status, StatusCode::FORBIDDEN, "path={path}");
         assert_eq!(
             envelope.code(),
-            "offline_auth_header_unsupported",
+            "kagemusha_auth_header_unsupported",
             "path={path}"
         );
     }

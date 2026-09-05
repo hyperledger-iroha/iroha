@@ -48,19 +48,15 @@ impl V2LaneWorkAdapter {
                     ))
                 })?;
             match disposition {
-                PendingQueuePlanAdmissionDisposition::Exact => {
+                PendingQueuePlanAdmissionDisposition::ExactPending => {
                     // Retain the quorum certificate while the marker is canonical but the body
                     // is not. It remains the authenticated handoff for peers lagging behind the
                     // marker and is retired only with canonical transaction membership.
-                    if self
-                        .state
-                        .queue_plan_admission_certificate_transaction_applied(&certificate_bytes)
-                        .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?
-                    {
-                        self.kura
-                            .remove_pending_queue_plan_admission_certificate(certificate_hash)
-                            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
-                    }
+                }
+                PendingQueuePlanAdmissionDisposition::Applied => {
+                    self.state
+                        .remove_pending_queue_plan_admission_certificate(certificate_hash)
+                        .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
                 }
                 PendingQueuePlanAdmissionDisposition::DefinitiveConflict
                 | PendingQueuePlanAdmissionDisposition::Stale => {
@@ -77,7 +73,7 @@ impl V2LaneWorkAdapter {
                                 "losing QueuePlan admission queue claim cannot be durably rejected: {error}"
                             ))
                         })?;
-                    self.kura
+                    self.state
                         .remove_pending_queue_plan_admission_certificate(certificate_hash)
                         .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
                 }
@@ -153,35 +149,26 @@ impl V2LaneWorkAdapter {
         if !local_is_leader {
             return Ok(V2LaneIngressOutcome::Rejected);
         }
-        let Ok((_, disposition)) = self
+        let Ok(outcome) = self
             .state
-            .classify_pending_queue_plan_admission(certificate.as_slice(), self.context.height)
+            .persist_classified_queue_plan_admission(certificate.as_slice())
         else {
             return Ok(V2LaneIngressOutcome::Rejected);
         };
-        match disposition {
-            PendingQueuePlanAdmissionDisposition::Exact => {
-                return Ok(V2LaneIngressOutcome::Duplicate);
+        match outcome {
+            PendingQueuePlanAdmissionPersistenceOutcome::Applied { .. } => {
+                Ok(V2LaneIngressOutcome::Duplicate)
             }
-            PendingQueuePlanAdmissionDisposition::EligibleAbsent => {}
-            PendingQueuePlanAdmissionDisposition::DefinitiveConflict
-            | PendingQueuePlanAdmissionDisposition::Stale
-            | PendingQueuePlanAdmissionDisposition::Future => {
-                return Ok(V2LaneIngressOutcome::Rejected);
+            PendingQueuePlanAdmissionPersistenceOutcome::Rejected { .. } => {
+                Ok(V2LaneIngressOutcome::Rejected)
+            }
+            PendingQueuePlanAdmissionPersistenceOutcome::Durable { inserted, .. } => {
+                Ok(if inserted {
+                    V2LaneIngressOutcome::Inserted
+                } else {
+                    V2LaneIngressOutcome::Duplicate
+                })
             }
         }
-        let certificate_hash = Hash::new(certificate.as_slice());
-        if self
-            .kura
-            .pending_queue_plan_admission_certificate(certificate_hash)
-            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?
-            .is_some()
-        {
-            return Ok(V2LaneIngressOutcome::Duplicate);
-        }
-        self.kura
-            .persist_pending_queue_plan_admission_certificate(certificate.as_slice())
-            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
-        Ok(V2LaneIngressOutcome::Inserted)
     }
 }

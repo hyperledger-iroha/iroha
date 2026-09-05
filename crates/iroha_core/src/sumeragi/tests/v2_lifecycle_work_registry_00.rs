@@ -390,6 +390,7 @@ struct ProductionRecoveredApplyReadyFixture {
     owned: OwnedReadyDurableValidateFixture,
     commit_qc: wire::QuorumCertificate,
     retry_census: RecoveredDurableValidateRetryCensusV1,
+    validator_keys: Vec<KeyPair>,
 }
 
 #[cfg(feature = "bls")]
@@ -452,6 +453,7 @@ fn production_recovered_apply_ready_fixture(marker: u8) -> ProductionRecoveredAp
         owned,
         commit_qc,
         retry_census,
+        validator_keys,
     }
 }
 
@@ -567,17 +569,24 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
     crate::sumeragi::status::clear_v2_status();
     let marker = production_ready_validate_dispatch_marker();
     for row in ProductionReadyValidateDispatchRow::ALL {
-        let (owned, recovered_apply, recovered_validate_retry_census) =
+        let (owned, recovered_apply, recovered_validate_retry_census, recovered_validator_keys) =
             if matches!(row, ProductionReadyValidateDispatchRow::ValidatedApply) {
                 let ProductionRecoveredApplyReadyFixture {
                     owned,
                     commit_qc,
                     retry_census,
+                    validator_keys,
                 } = production_recovered_apply_ready_fixture(marker);
-                (owned, Some(commit_qc), Some(retry_census))
+                (
+                    owned,
+                    Some(commit_qc),
+                    Some(retry_census),
+                    Some(validator_keys),
+                )
             } else {
                 (
                     owned_production_ready_validate_fixture(row, marker),
+                    None,
                     None,
                     None,
                 )
@@ -770,6 +779,11 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 2,
             )
         };
+        if matches!(row, ProductionReadyValidateDispatchRow::ValidatedApply) {
+            executor
+                .set_max_pending_work_for_test(1)
+                .expect("ValidatedApply exercises the minimal pending-work bound");
+        }
         let scenario = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // Production retains this exact marker continuously from the
             // durable Store-to-Validate publication. This focused fixture
@@ -836,8 +850,8 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 .attest_ready_validate_demand(&owner.registry, lease.ordinal())
                 .expect("attest the exact pre-publication Validate carrier");
             let replacement_dispatch_key = validate_attestation.dispatch_key();
-            let incumbent_dispatch_key = replacement_dispatch_key
-                .with_carrier_digest(completion_incumbent_digest);
+            let incumbent_dispatch_key =
+                replacement_dispatch_key.with_carrier_digest(completion_incumbent_digest);
             assert_ne!(
                 incumbent_dispatch_key.digest(),
                 replacement_dispatch_key.digest(),
@@ -899,24 +913,77 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                     "{row:?}: executor protection must match the adapter's decided body"
                 );
             }
-            let queued_apply_snapshot =
-                matches!(row, ProductionReadyValidateDispatchRow::ValidatedApply).then(|| {
-                    let commit_qc = recovered_apply
-                        .as_ref()
-                        .expect("ValidatedApply retains its exact production fixture");
-                    let queued_progress = wire::ConsensusMessageV2::new(
-                        wire::ConsensusMessageV2Payload::QuorumCertificate(commit_qc.clone()),
-                    );
-                    executor
-                        .enqueue_network(queued_progress)
-                        .expect("queue authenticated runtime ingress beside typed live Apply");
-                    let snapshot = executor.runtime_queue_snapshot_for_test(now);
-                    assert_eq!(
-                        snapshot.progress.depth, 1,
-                        "ValidatedApply fixture retains one authentic Progress wire"
-                    );
-                    snapshot
-                });
+            let outer_ingress =
+                crate::sumeragi::FairV2Ingress::new(8, 1024 * 1024, 1024 * 1024, 0, 0);
+            let outer_ingress_peer = crate::sumeragi::authenticated_peer_for_test();
+            outer_ingress
+                .configure_roster(vec![outer_ingress_peer.clone()])
+                .expect("configure the production-shaped outer ingress fixture");
+            outer_ingress
+                .open()
+                .expect("open the production-shaped outer ingress fixture");
+            let queued_pre_apply_snapshot = matches!(
+                row,
+                ProductionReadyValidateDispatchRow::ValidatedApply
+            )
+            .then(|| {
+                let proposer = fixture.verified.context().leader(validate_round.view);
+                let mut conflicting_subject = validate_subject;
+                conflicting_subject.block_hash = HashOf::from_untyped_unchecked(Hash::new(
+                    b"validated Apply post-Decision conflicting predecessor",
+                ));
+                let mut conflicting_manifest = fixture.manifest.clone();
+                conflicting_manifest.subject = conflicting_subject;
+                let mut queued_normal = wire::Proposal {
+                    round: validate_round,
+                    proposer,
+                    subject: conflicting_subject,
+                    manifest: conflicting_manifest,
+                    justification: wire::ProposalJustification::ParentCommit(
+                        wire::ParentCommitJustification { certificate: None },
+                    ),
+                    signature: Vec::new(),
+                };
+                let keys = recovered_validator_keys
+                    .as_ref()
+                    .expect("ValidatedApply retains its authenticated validator keys");
+                let signer = usize::try_from(proposer)
+                    .expect("ValidatedApply proposer index is representable");
+                queued_normal.signature = iroha_crypto::Signature::new(
+                    keys[signer].private_key(),
+                    &queued_normal.signature_preimage(),
+                )
+                .payload()
+                .to_vec();
+                let queued_message = wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::Proposal(queued_normal),
+                );
+                assert!(matches!(
+                    outer_ingress.try_push(
+                        crate::sumeragi::InboundBlockMessage::from_authenticated_peer(
+                            crate::sumeragi::message::BlockMessage::V2(queued_message.clone()),
+                            outer_ingress_peer.clone(),
+                        )
+                    ),
+                    Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
+                ));
+                let mut admitted = outer_ingress
+                    .try_recv()
+                    .expect("dequeue the exact outer-ingress predecessor carrier");
+                let ingress_ownership = admitted
+                    .take_ingress_ownership()
+                    .expect("dequeued predecessor retains its fair-ingress ownership");
+                executor
+                    .enqueue_network_with_ingress_ownership(queued_message, ingress_ownership)
+                    .expect("queue an authenticated Normal predecessor before live Apply");
+                let snapshot = executor.runtime_queue_snapshot_for_test(now);
+                assert_eq!(
+                    snapshot.normal.depth, 1,
+                    "ValidatedApply fixture retains one authentic conflicting Normal predecessor"
+                );
+                assert_eq!(snapshot.progress.depth, 0);
+                snapshot
+            });
             let expected_reducer_fence_wait = row.is_busy().then(|| {
                 let reducer_fence = executor.lifecycle_reducer_fence_observation();
                 super::super::WaitToken::new(
@@ -1142,24 +1209,13 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 );
                 assert_eq!(
                     Some(executor.runtime_queue_snapshot_for_test(now)),
-                    queued_apply_snapshot,
+                    queued_pre_apply_snapshot,
                     "{row:?}: the blocked Apply probe cannot consume or reorder runtime ingress"
                 );
                 assert!(matches!(
                     owner.coordinator.records[&apply_ordinal].state,
                     super::super::LifecycleState::Ready
                 ));
-
-                executor.step(now, &mut services).unwrap_or_else(|error| {
-                    panic!("{row:?}: drain the pre-Apply authenticated runtime command: {error}")
-                });
-                let drained_queue = executor.runtime_queue_snapshot_for_test(now);
-                assert_eq!(drained_queue.progress.depth, 0, "{row:?}");
-                assert_eq!(
-                    executor.status().queued_runtime_completions,
-                    0,
-                    "{row:?}: normal Runtime must settle the finite pre-Apply FIFO"
-                );
 
                 let periodic_due = now
                     .checked_add(retransmit_interval)
@@ -1199,6 +1255,11 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                 assert_eq!(
                     periodic_status.effect_dispatch_queue.depth, 1,
                     "{row:?}: the exact retransmit Apply remains at the retained FIFO head"
+                );
+                let post_periodic_queue = executor.runtime_queue_snapshot_for_test(periodic_due);
+                assert_eq!(
+                    post_periodic_queue.normal.depth, 1,
+                    "{row:?}: the first periodic prompt must leave its Normal predecessor owed"
                 );
 
                 let generic_settlement = executor
@@ -1253,6 +1314,62 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                     0,
                     "{row:?}: ordinal deferral must precede CommitQC service I/O"
                 );
+
+                let predecessor_slice = crate::sumeragi::v2_runner::advance_executor(
+                    &outer_ingress,
+                    &mut owner,
+                    &mut executor,
+                    &mut services,
+                    Some(apply_ordinal),
+                    1,
+                )
+                .unwrap_or_else(|error| {
+                    panic!("{row:?}: drain the attested pre-Apply runtime predecessor: {error}")
+                });
+                match predecessor_slice {
+                    crate::sumeragi::v2_runner::AdvanceExecutorSliceOutcomeV1::Yielded(yielded) => {
+                        assert!(
+                            yielded.requires_completion_retry(),
+                            "{row:?}: the drained predecessor must hand control back to Apply"
+                        )
+                    }
+                    other => panic!(
+                        "{row:?}: the attested predecessor turn must yield to Apply, got {other:?}"
+                    ),
+                }
+                let post_predecessor_queue = executor.runtime_queue_snapshot_for_test(periodic_due);
+                assert_eq!(post_predecessor_queue.normal.depth, 0, "{row:?}");
+                assert_eq!(post_predecessor_queue.progress.depth, 0, "{row:?}");
+                assert_eq!(
+                    executor.status().effect_dispatch_queue.depth,
+                    1,
+                    "{row:?}: the byte-exact Apply must be restored after the empty-effect Normal predecessor"
+                );
+                assert!(
+                    executor.has_pending_lifecycle_output_admissions(),
+                    "{row:?}"
+                );
+                assert_eq!(
+                    services.consensus_broadcast_count_for_test(&commit_qc_envelope),
+                    0,
+                    "{row:?}: predecessor service cannot overtake the deferred CommitQC output"
+                );
+                let predecessor_observation = executor
+                    .last_runtime_step_observation_for_test()
+                    .expect("owed Normal predecessor records its scheduler owner");
+                assert_eq!(
+                    predecessor_observation.selected(),
+                    Some(
+                        crate::sumeragi::v2_runtime::RuntimeSelectedOwnerKind::LifecycleApplyPredecessor
+                    ),
+                    "{row:?}"
+                );
+                assert_eq!(predecessor_observation.effect_count(), 0, "{row:?}");
+                assert!(
+                    !executor.status().fail_closed,
+                    "{row:?}: a post-Decision semantic conflict must be terminally inert"
+                );
+                assert!(!output_guard.restart_required(), "{row:?}");
 
                 let dispatched = owner
                     .dispatch_completion_for_test(&mut services, &mut executor, 0)

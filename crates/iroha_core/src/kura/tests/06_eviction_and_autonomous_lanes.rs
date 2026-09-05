@@ -1149,7 +1149,7 @@ fn create_blocks(rt: &tokio::runtime::Runtime, temp_dir: &TempDir) -> Vec<Commit
             },
         )
         .collect::<Vec<_>>();
-    let mint_finality = crate::offline_cash_v1_test_fixtures::mint_finality_genesis_parameters(
+    let mint_finality = crate::kagemusha_v1_test_fixtures::mint_finality_genesis_parameters(
         &mint_finality_roster,
     );
     let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
@@ -1203,7 +1203,7 @@ fn create_blocks(rt: &tokio::runtime::Runtime, temp_dir: &TempDir) -> Vec<Commit
             iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(
             ),
         )
-        .with_offline_cash_mint_finality_genesis_parameters(mint_finality)
+        .with_kagemusha_mint_finality_genesis_parameters(mint_finality)
         .set_topology(topology_entries)
         .build_and_sign(&genesis_key_pair)
         .expect("genesis block should be built");

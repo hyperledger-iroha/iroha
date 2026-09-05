@@ -291,8 +291,8 @@ mod tests {
         ),
     ];
     #[test]
-    fn final_offline_catalog_is_valid_and_unique() {
-        let catalog = RouteCatalog::new(offline::ROUTES);
+    fn final_kagemusha_catalog_is_valid_and_unique() {
+        let catalog = RouteCatalog::new(kagemusha::ROUTES);
         assert_eq!(catalog.validate(), Ok(()));
         let ids: BTreeSet<_> = catalog
             .routes()
@@ -304,16 +304,16 @@ mod tests {
             .iter()
             .map(|route| (route.method(), route.path()))
             .collect();
-        assert_eq!(ids.len(), offline::ROUTES.len());
-        assert_eq!(method_paths.len(), offline::ROUTES.len());
+        assert_eq!(ids.len(), kagemusha::ROUTES.len());
+        assert_eq!(method_paths.len(), kagemusha::ROUTES.len());
     }
     #[test]
     fn canonical_catalog_satisfies_closed_security_axes() {
         assert_eq!(RouteCatalog::new(CATALOGED_ROUTES).validate(), Ok(()));
     }
     #[test]
-    fn offline_routes_are_universal_for_app_api_and_project_to_mcp() {
-        let catalog = RouteCatalog::new(offline::ROUTES);
+    fn kagemusha_routes_are_universal_for_app_api_and_project_to_mcp() {
+        let catalog = RouteCatalog::new(kagemusha::ROUTES);
         assert_eq!(
             catalog
                 .project(
@@ -321,15 +321,15 @@ mod tests {
                     EnabledFeatures::new(&["app_api"]),
                 )
                 .len(),
-            offline::ROUTES.len(),
-            "every app-api node must expose the complete offline route family"
+            kagemusha::ROUTES.len(),
+            "every app-api node must expose the complete KAGEMUSHA route family"
         );
         assert_eq!(
             catalog
                 .project(CatalogProjection::Mcp, EnabledFeatures::new(&["app_api"]))
                 .len(),
-            offline::ROUTES.len(),
-            "the offline route family must be available to MCP clients"
+            kagemusha::ROUTES.len(),
+            "the KAGEMUSHA route family must be available to MCP clients"
         );
     }
     #[test]

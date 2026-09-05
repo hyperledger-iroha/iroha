@@ -193,7 +193,7 @@ public struct ZkAssetMerklePath: Equatable, Sendable {
     }
 
     /// Recompute the path root after replacing its leaf with one exact
-    /// commitment. Offline Cash V1 uses the authoritative next-zero path to derive
+    /// commitment. KAGEMUSHA V1 uses the authoritative next-zero path to derive
     /// the post-transfer root for a newly appended output.
     public func root(
         replacingLeafWith commitment: Data

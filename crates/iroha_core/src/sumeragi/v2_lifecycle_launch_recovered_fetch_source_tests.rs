@@ -246,7 +246,10 @@ fn active_height_tail_bounds_executor_work_before_the_producer_point() {
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect();
-    assert_eq!(compact_executor_slice, "receiver,owner,executor,services,1");
+    assert_eq!(
+        compact_executor_slice,
+        "receiver,owner,executor,services,producer_claim.required_ready_ordinal(),1"
+    );
     let post_slice_suffix = source_region(
         post_drain_runtime,
         "let executor_slice = advance_executor(",
@@ -313,7 +316,7 @@ fn active_height_tail_bounds_executor_work_before_the_producer_point() {
     assert_source_tokens_in_order(
         runtime_turn,
         &[
-            "advance_executor(receiver, owner, executor, services, 1)?",
+            "producer_claim.required_ready_ordinal(),",
             "match executor_slice",
             "AdvanceExecutorSliceOutcomeV1::Idle",
             "AdvanceExecutorSliceOutcomeV1::AdvancedAtSliceBoundary => {}",

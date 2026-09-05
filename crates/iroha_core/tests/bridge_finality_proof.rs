@@ -14,7 +14,7 @@ use iroha_data_model::{
             QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
         },
     },
-    isi::offline_cash_v1::{OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterV1},
+    isi::kagemusha_v1::{KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1},
     peer::PeerId,
 };
 use std::{num::NonZeroU64, sync::Arc};
@@ -59,8 +59,8 @@ fn fixture() -> Fixture {
             power,
         })
         .collect::<Vec<_>>();
-    let offline_cash_mint_finality_epoch_roster = OfflineCashMintFinalityEpochRosterV1 {
-        version: OFFLINE_CASH_CHAIN_VERSION_V1,
+    let kagemusha_mint_finality_epoch_roster = KagemushaMintFinalityEpochRosterV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
         epoch: 0,
         validators: roster
@@ -73,7 +73,7 @@ fn fixture() -> Fixture {
                     );
                     32
                 ];
-                iroha_core::zk::offline_cash_v1_recursion::derive_offline_cash_mint_finality_validator_keys_v1(
+                iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                     &seed,
                     0,
                     validator.validator.clone(),
@@ -82,7 +82,7 @@ fn fixture() -> Fixture {
             })
             .collect(),
     };
-    let offline_cash_mint_finality_epoch_id = offline_cash_mint_finality_epoch_roster
+    let kagemusha_mint_finality_epoch_id = kagemusha_mint_finality_epoch_roster
         .finality_epoch_id()
         .expect("derive bridge fixture Pasta roster ID");
     let block_key = KeyPair::try_random().expect("block fixture key");
@@ -116,8 +116,8 @@ fn fixture() -> Fixture {
         snapshot_bootstrap: None,
         quorum: DualQuorum::from_roster(&roster).expect("valid roster"),
         roster,
-        offline_cash_mint_finality_epoch_id,
-        offline_cash_mint_finality_epoch_roster,
+        kagemusha_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster,
         nexus_amx_context_hash: Hash::new(b"bridge core v2 context"),
         execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
         da_layout: DataAvailabilityLayout {
@@ -138,7 +138,7 @@ fn fixture() -> Fixture {
             .expect("canonical bridge proposal block wire"),
     };
     let signers = vec![0, 1, 2];
-    let execution_commitment = ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+    let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"bridge core v2 parent state"),
         Hash::new(b"bridge core v2 post state"),
         Hash::new(b"bridge core v2 ordinary writes"),

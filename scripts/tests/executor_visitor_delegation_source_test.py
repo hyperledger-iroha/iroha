@@ -51,12 +51,7 @@ EXPECTED_PERMISSION_PROVIDERS = (
     ("peer", "CanManagePeers", "OnlyGenesis::from"),
     ("peer", "CanManageLaneRelayEmergency", "OnlyGenesis::from"),
     ("role", "CanManageRoles", "OnlyGenesis::from"),
-    ("offline", "CanManageOfflineEscrow", "OnlyGenesis::from"),
-    (
-        "offline",
-        "CanManageOfflineDeviceAttestationPolicy",
-        "OnlyGenesis::from",
-    ),
+    ("kagemusha", "CanManageKagemushaReserve", "OnlyGenesis::from"),
     (
         "asset",
         "CanMintAssetWithDefinition",

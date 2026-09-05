@@ -286,10 +286,8 @@ mod tests {
         domain::Domain,
         isi::{
             InstructionBox,
+            kagemusha_v1::{KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1},
             musubi::RegisterMusubiArchiveV1,
-            offline_cash_v1::{
-                OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterV1,
-            },
         },
         musubi::{
             MUSUBI_REGISTRY_VERSION_V1, MusubiArchiveCommitmentV1, MusubiContentDigestV1,
@@ -492,9 +490,8 @@ mod tests {
                 power: 1,
             })
             .collect::<Vec<_>>();
-        let offline_cash_mint_finality_epoch_roster =
-            OfflineCashMintFinalityEpochRosterV1 {
-                version: OFFLINE_CASH_CHAIN_VERSION_V1,
+        let kagemusha_mint_finality_epoch_roster = KagemushaMintFinalityEpochRosterV1 {
+                version: KAGEMUSHA_CHAIN_VERSION_V1,
                 network_id,
                 epoch: 0,
                 validators: roster
@@ -505,7 +502,7 @@ mod tests {
                             u8::try_from(index)
                                 .expect("Musubi finality validator index fits in one byte"),
                         );
-                        iroha_core::zk::offline_cash_v1_recursion::derive_offline_cash_mint_finality_validator_keys_v1(
+                        iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
                             &[seed; 32],
                             0,
                             validator.validator.clone(),
@@ -514,10 +511,10 @@ mod tests {
                     })
                     .collect(),
             };
-        offline_cash_mint_finality_epoch_roster
+        kagemusha_mint_finality_epoch_roster
             .validate()
             .expect("Musubi finality Pasta authority must be canonical");
-        let offline_cash_mint_finality_epoch_id = offline_cash_mint_finality_epoch_roster
+        let kagemusha_mint_finality_epoch_id = kagemusha_mint_finality_epoch_roster
             .finality_epoch_id()
             .expect("derive Musubi finality Pasta authority identifier");
         let height = block.header().height().get();
@@ -533,8 +530,8 @@ mod tests {
             snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("valid finality fixture quorum"),
             roster,
-            offline_cash_mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"Musubi finality fixture Nexus context"),
             execution_policy_hash: Hash::new(b"Musubi finality fixture execution policy"),
             da_layout: DataAvailabilityLayout {

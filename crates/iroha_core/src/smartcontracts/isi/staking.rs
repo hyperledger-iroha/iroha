@@ -8033,10 +8033,8 @@ mod tests {
             .collect::<Vec<_>>();
         roster.sort_by(|left, right| left.validator.cmp(&right.validator));
         let network_id = *state.network_id_ref();
-        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
-                network_id, 0, &roster,
-            );
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
         let context = HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,
@@ -8049,8 +8047,8 @@ mod tests {
             snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
-            offline_cash_mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"staking cancellation nexus context"),
             execution_policy_hash: Hash::new(b"staking cancellation execution policy"),
             da_layout: DataAvailabilityLayout {
@@ -8068,14 +8066,13 @@ mod tests {
             height: context.height,
             view: 0,
         };
-        let execution_commitment =
-            ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
-                Hash::new(b"staking cancellation parent state"),
-                Hash::new(b"staking cancellation post state"),
-                Hash::new(b"staking cancellation ordinary writes"),
-                1,
-                Hash::new(b"staking cancellation block"),
-            );
+        let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"staking cancellation parent state"),
+            Hash::new(b"staking cancellation post state"),
+            Hash::new(b"staking cancellation ordinary writes"),
+            1,
+            Hash::new(b"staking cancellation block"),
+        );
         let vote = |seed: u8| Vote {
             round,
             proposal_round: round,

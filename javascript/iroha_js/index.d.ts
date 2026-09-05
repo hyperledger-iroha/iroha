@@ -1,6 +1,6 @@
 import type { Buffer } from "buffer";
 import type { BrowserFeePayment } from "./transaction-codec.js";
-import type { OfflineCashV1 } from "./offline-cash-v1.js";
+import type { Kagemusha } from "./kagemusha.js";
 import { OperatorSigningContext } from "./operator-request.js";
 import type { RepoAgreementLifecycleFields } from "./repo-agreement.js";
 import type { ToriiBlockMerkleCommitment, ToriiBlockMerkleProof, ToriiBlockProofs, ToriiBlockProofTrustedAnchor, ToriiBlockProofVerification } from "./dist/blockProofTypes.js";
@@ -51,9 +51,9 @@ export interface TairaTestnetProfile {
   readonly toriiBaseUrl: "https://taira.sora.org";
   readonly chainId: "fc56984b-2be7-431d-840e-21514d1883f0";
   readonly i105Discriminant: 369;
-  readonly offlineCashAssetDefinitionId: "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
-  readonly offlineCashAssetAlias: "ds#boi.is";
-  readonly offlineCashAssetScale: 2;
+  readonly kagemushaAssetDefinitionId: "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
+  readonly kagemushaAssetAlias: "ds#boi.is";
+  readonly kagemushaAssetScale: 2;
   readonly xorAssetDefinitionId: "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
   readonly xorAssetAlias: "xor#universal";
   readonly xorAssetScale: 9;
@@ -80,16 +80,16 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-export interface OfflineCashReadinessV1 {
-  readonly cash_handoff_capability: "cash_handoff_v1";
+export interface KagemushaReadinessV1 {
+  readonly kagemusha_handoff_capability: "kagemusha_handoff_v1";
   readonly wire_version: 1;
   readonly device_lifecycle_version: 1;
   readonly ready: boolean;
 }
 
-export type OfflineCashOperationKindV1 = "top_up" | "redemption";
-export type OfflineCashOperationStateV1 = "pending" | "applied" | "rejected";
-export interface OfflineCashOperationRejectionV1 {
+export type KagemushaOperationKindV1 = "top_up" | "redemption";
+export type KagemushaOperationStateV1 = "pending" | "applied" | "rejected";
+export interface KagemushaOperationRejectionV1 {
   readonly code:
     | "invalid_request"
     | "unauthorized"
@@ -102,11 +102,11 @@ export interface OfflineCashOperationRejectionV1 {
     | "internal_failure";
   readonly detailDigest: Uint8Array;
 }
-export interface UnverifiedOfflineCashOperationStatusV1 {
+export interface UnverifiedKagemushaOperationStatusV1 {
   readonly operationId: Uint8Array;
-  readonly kind: OfflineCashOperationKindV1;
-  readonly state: OfflineCashOperationStateV1;
-  readonly rejection: OfflineCashOperationRejectionV1 | null;
+  readonly kind: KagemushaOperationKindV1;
+  readonly state: KagemushaOperationStateV1;
+  readonly rejection: KagemushaOperationRejectionV1 | null;
   verifyAgainst<T>(
     trustAnchor: unknown,
     verifier: (status: JsonValue, trustAnchor: unknown) => T | Promise<T>,
@@ -2365,7 +2365,7 @@ export type ToriiVerifierBackendLabelV1 =
   | "halo2/pasta/kaigi-roster-v1"
   | "halo2/pasta/kaigi-usage-v1"
   | "halo2/pasta/ivm-execution-v1"
-  | "halo2/pasta/offline-cash-v1-mint-fold-merkle16-axiom-poseidon-v1"
+  | "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1"
   | "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"
   | "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3"
   | "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4"
@@ -6426,8 +6426,8 @@ export interface ToriiSumeragiV2ExecutionCommitment {
   parent_state_root: string;
   post_state_root: string;
   ordinary_writes_root: string;
-  offline_cash_top_up_root: string | null;
-  offline_cash_top_up_count: number;
+  kagemusha_top_up_root: string | null;
+  kagemusha_top_up_count: number;
   native_amx_application_manifest_version: number;
   native_amx_application_manifest_root: string;
   native_amx_application_manifest_count: number;
@@ -10375,11 +10375,6 @@ export interface SubmitTransactionAndWaitOptions
   hashHex: string;
 }
 
-export interface SubmitOfflineSettlementAndWaitOptions
-  extends TransactionStatusPollOptions {
-  signal?: AbortSignal;
-}
-
 export declare class ToriiHttpError extends Error {
   constructor(details: {
     status: number;
@@ -10672,21 +10667,22 @@ export declare class ToriiBrowserClient {
     accountId: string,
     options?: ToriiBrowserRequestOptions,
   ): Promise<unknown>;
-  getOfflineCapability(
+  getKagemushaReadiness(
     options?: { signal?: AbortSignal },
-  ): Promise<OfflineCashReadinessV1>;
-  submitOfflineCashTopUp(
-    request: OfflineCashV1.TopUpRequest,
+  ): Promise<KagemushaReadinessV1>;
+  submitKagemushaTopUp(
+    signedTransaction: VersionedSignedTransactionV1,
+    operationId: ArrayBuffer | ArrayBufferView,
     options?: { signal?: AbortSignal },
-  ): Promise<UnverifiedOfflineCashOperationStatusV1>;
-  submitOfflineCashRedemption(
-    request: OfflineCashV1.RedemptionRequest,
+  ): Promise<UnverifiedKagemushaOperationStatusV1>;
+  submitKagemushaRedemption(
+    request: Kagemusha.RedemptionRequest,
     options?: { signal?: AbortSignal },
-  ): Promise<UnverifiedOfflineCashOperationStatusV1>;
-  getOfflineCashOperation(
+  ): Promise<UnverifiedKagemushaOperationStatusV1>;
+  getKagemushaOperation(
     operationId: string | ArrayBuffer | ArrayBufferView,
     options?: { signal?: AbortSignal },
-  ): Promise<UnverifiedOfflineCashOperationStatusV1>;
+  ): Promise<UnverifiedKagemushaOperationStatusV1>;
   listExplorerAccounts<T = unknown>(
     options?: ToriiBrowserExplorerAccountsOptions,
   ): Promise<ToriiBrowserExplorerCursorPage<T>>;
@@ -11012,21 +11008,22 @@ export interface ValidationFeePolicyProofCatchUpV1
 
 export declare class ToriiClient {
   constructor(baseUrl: string, options?: ToriiClientOptions);
-  getOfflineCapability(
+  getKagemushaReadiness(
     options?: { signal?: AbortSignal },
-  ): Promise<OfflineCashReadinessV1>;
-  submitOfflineCashTopUp(
-    request: OfflineCashV1.TopUpRequest,
+  ): Promise<KagemushaReadinessV1>;
+  submitKagemushaTopUp(
+    signedTransaction: VersionedSignedTransactionV1,
+    operationId: ArrayBuffer | ArrayBufferView,
     options?: { signal?: AbortSignal },
-  ): Promise<UnverifiedOfflineCashOperationStatusV1>;
-  submitOfflineCashRedemption(
-    request: OfflineCashV1.RedemptionRequest,
+  ): Promise<UnverifiedKagemushaOperationStatusV1>;
+  submitKagemushaRedemption(
+    request: Kagemusha.RedemptionRequest,
     options?: { signal?: AbortSignal },
-  ): Promise<UnverifiedOfflineCashOperationStatusV1>;
-  getOfflineCashOperation(
+  ): Promise<UnverifiedKagemushaOperationStatusV1>;
+  getKagemushaOperation(
     operationId: string | ArrayBuffer | ArrayBufferView,
     options?: { signal?: AbortSignal },
-  ): Promise<UnverifiedOfflineCashOperationStatusV1>;
+  ): Promise<UnverifiedKagemushaOperationStatusV1>;
   listAccounts<T = ToriiAccountListItem>(
     options?: IterableListOptions,
   ): Promise<ToriiIterableListResponse<T>>;
@@ -14462,4 +14459,4 @@ export const NumericV1: {
 export * from "./nexus-app.js";
 export * from "./transaction-codec.js";
 export * from "./smart-contract-deployment.js";
-export { OfflineCashV1 } from "./offline-cash-v1.js";
+export { Kagemusha } from "./kagemusha.js";

@@ -19,8 +19,8 @@ extern "C" {
 
 #define CONNECT_NORITO_ERR_ACCOUNT_ADDRESS -200
 #define CONNECT_NORITO_ERR_UNSUPPORTED_ALGORITHM -21
-#define CONNECT_NORITO_ERR_OFFLINE_CASH_V1 -311
-#define CONNECT_NORITO_ERR_OFFLINE_CASH_DEVICE_UNAVAILABLE_V1 -312
+#define CONNECT_NORITO_ERR_KAGEMUSHA_V1 -311
+#define CONNECT_NORITO_ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1 -312
 #define CONNECT_NORITO_ERR_SORAFS_REFERENCE -114
 #define CONNECT_NORITO_ERR_DETACHED_TRANSACTION_SCAFFOLD -501
 #define CONNECT_NORITO_ERR_DETACHED_TRANSACTION_SIGNATURE -502
@@ -395,152 +395,154 @@ int32_t connect_norito_decode_ciphertext_frame(
     uint8_t* out_sid, uint8_t* out_dir, uint64_t* out_seq,
     uint8_t** out_aead_ptr, unsigned long* out_aead_len);
 
-// ---------------- Offline Cash V1 ----------------
-// All raw and `oc1:` validators enforce their protocol byte limits before decode.
-int32_t connect_norito_offline_cash_v1_payment_request_validate(
+// ---------------- KAGEMUSHA V1 ----------------
+// All raw and `kgm1:` validators enforce their protocol byte limits before decode.
+// These are the only IPM1 lifecycle payload kinds and their only accepted order.
+typedef enum ConnectNoritoKagemushaIpm1PayloadKindV1 {
+  CONNECT_NORITO_KAGEMUSHA_IPM1_PAYLOAD_REQUEST_V1 = 1,
+  CONNECT_NORITO_KAGEMUSHA_IPM1_PAYLOAD_PAYMENT_V1 = 2,
+  CONNECT_NORITO_KAGEMUSHA_IPM1_PAYLOAD_ACKNOWLEDGEMENT_V1 = 3
+} ConnectNoritoKagemushaIpm1PayloadKindV1;
+
+int32_t connect_norito_kagemusha_v1_payment_request_validate(
     const uint8_t* request, unsigned long request_len);
-int32_t connect_norito_offline_cash_v1_acceptance_intent_authorization_validate(
-    const uint8_t* request, unsigned long request_len,
-    const uint8_t* authorization, unsigned long authorization_len);
-int32_t connect_norito_offline_cash_v1_acceptance_ticket_validate(
-    const uint8_t* request, unsigned long request_len,
-    const uint8_t* authorization, unsigned long authorization_len,
-    const uint8_t* ticket, unsigned long ticket_len);
-int32_t connect_norito_offline_cash_v1_no_commit_closure_validate(
-    const uint8_t* closure, unsigned long closure_len);
-int32_t connect_norito_offline_cash_v1_payment_validate(
+int32_t connect_norito_kagemusha_v1_payment_validate(
     const uint8_t* request, unsigned long request_len,
     const uint8_t* payment, unsigned long payment_len);
-int32_t connect_norito_offline_cash_v1_acknowledgement_validate(
+int32_t connect_norito_kagemusha_v1_acknowledgement_validate(
     const uint8_t* request, unsigned long request_len,
     const uint8_t* payment, unsigned long payment_len,
     const uint8_t* acknowledgement, unsigned long acknowledgement_len);
-// Validates all five separately transported messages, including their aggregate
-// byte cap and the standalone authorization/ticket binding embedded by payment.
-int32_t connect_norito_offline_cash_v1_complete_exchange_validate(
+// Validates the sole exact three-message handoff and its aggregate byte cap.
+int32_t connect_norito_kagemusha_v1_complete_exchange_validate(
     const uint8_t* request, unsigned long request_len,
-    const uint8_t* authorization, unsigned long authorization_len,
-    const uint8_t* ticket, unsigned long ticket_len,
     const uint8_t* payment, unsigned long payment_len,
     const uint8_t* acknowledgement, unsigned long acknowledgement_len);
-int32_t connect_norito_offline_cash_v1_mint_authorization_validate(
+int32_t connect_norito_kagemusha_v1_mint_authorization_validate(
     const uint8_t* authorization, unsigned long authorization_len);
-int32_t connect_norito_offline_cash_v1_mint_credit_validate(
+int32_t connect_norito_kagemusha_v1_mint_credit_validate(
     const uint8_t* credit, unsigned long credit_len);
-int32_t connect_norito_offline_cash_v1_mint_credit_against_authorization_validate(
+int32_t connect_norito_kagemusha_v1_mint_credit_against_authorization_validate(
     const uint8_t* authorization, unsigned long authorization_len,
     const uint8_t* credit, unsigned long credit_len);
-int32_t connect_norito_offline_cash_v1_redemption_voucher_validate(
+int32_t connect_norito_kagemusha_device_mint_stage_command_v1_validate(
+    const uint8_t* command, unsigned long command_len);
+int32_t connect_norito_kagemusha_device_mint_stage_result_v1_validate(
+    const uint8_t* command, unsigned long command_len,
+    const uint8_t* result, unsigned long result_len);
+int32_t connect_norito_kagemusha_v1_redemption_voucher_validate(
     const uint8_t* voucher, unsigned long voucher_len);
 
-int32_t connect_norito_offline_cash_v1_payment_request_text_validate(
+int32_t connect_norito_kagemusha_v1_payment_request_text_validate(
     const char* request, unsigned long request_len);
-int32_t connect_norito_offline_cash_v1_acceptance_intent_authorization_text_validate(
-    const char* request, unsigned long request_len,
-    const char* authorization, unsigned long authorization_len);
-int32_t connect_norito_offline_cash_v1_acceptance_ticket_text_validate(
-    const char* request, unsigned long request_len,
-    const char* authorization, unsigned long authorization_len,
-    const char* ticket, unsigned long ticket_len);
-int32_t connect_norito_offline_cash_v1_no_commit_closure_text_validate(
-    const char* closure, unsigned long closure_len);
-int32_t connect_norito_offline_cash_v1_payment_text_validate(
+int32_t connect_norito_kagemusha_v1_payment_text_validate(
     const char* request, unsigned long request_len,
     const char* payment, unsigned long payment_len);
-int32_t connect_norito_offline_cash_v1_acknowledgement_text_validate(
+int32_t connect_norito_kagemusha_v1_acknowledgement_text_validate(
     const char* request, unsigned long request_len,
     const char* payment, unsigned long payment_len,
     const char* acknowledgement, unsigned long acknowledgement_len);
-int32_t connect_norito_offline_cash_v1_complete_exchange_text_validate(
+int32_t connect_norito_kagemusha_v1_complete_exchange_text_validate(
     const char* request, unsigned long request_len,
-    const char* authorization, unsigned long authorization_len,
-    const char* ticket, unsigned long ticket_len,
     const char* payment, unsigned long payment_len,
     const char* acknowledgement, unsigned long acknowledgement_len);
-int32_t connect_norito_offline_cash_v1_mint_authorization_text_validate(
+int32_t connect_norito_kagemusha_v1_mint_authorization_text_validate(
     const char* authorization, unsigned long authorization_len);
-int32_t connect_norito_offline_cash_v1_mint_credit_text_validate(
+int32_t connect_norito_kagemusha_v1_mint_credit_text_validate(
     const char* credit, unsigned long credit_len);
-int32_t connect_norito_offline_cash_v1_mint_credit_against_authorization_text_validate(
+int32_t connect_norito_kagemusha_v1_mint_credit_against_authorization_text_validate(
     const char* authorization, unsigned long authorization_len,
     const char* credit, unsigned long credit_len);
-int32_t connect_norito_offline_cash_v1_redemption_voucher_text_validate(
+int32_t connect_norito_kagemusha_v1_redemption_voucher_text_validate(
     const char* voucher, unsigned long voucher_len);
 
-// Closed lower-sixteen-bit capability mask shared with OfflineCashHardwareProfileV1.
-#define CONNECT_NORITO_OFFLINE_CASH_DEVICE_REQUIRED_CAPABILITIES_V1 UINT32_C(0x0000FFFF)
+// Closed lower-sixteen-bit capability mask shared with KagemushaHardwareProfileV1.
+#define CONNECT_NORITO_KAGEMUSHA_DEVICE_REQUIRED_CAPABILITIES_V1 UINT32_C(0x0000FFFF)
 
-typedef enum ConnectNoritoOfflineCashDeviceCapabilityV1 {
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_CAPABILITY_EXACT_NEXT_PREDECESSOR_CONSUMPTION_V1 = 1u << 0,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_CAPABILITY_ONE_USE_SUCCESSOR_AUTHORIZATION_V1 = 1u << 1,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_CAPABILITY_ROLLBACK_RESISTANT_COUNTER_AND_JOURNAL_V1 = 1u << 2,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_CAPABILITY_SEALED_TRANSITION_RECOVERY_V1 = 1u << 3,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_CAPABILITY_ONE_USE_ACCEPTANCE_TICKETS_V1 = 1u << 4,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_CAPABILITY_DURABLE_INBOX_RESERVATION_V1 = 1u << 5,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_CAPABILITY_AUTHENTICATED_INBOUND_STAGING_V1 = 1u << 6,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_CAPABILITY_AUTHORITATIVE_REPLAY_ROOT_RECOVERY_V1 = 1u << 7,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_CAPABILITY_SENDER_OUTBOX_RESERVATION_V1 = 1u << 8,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_CAPABILITY_AUTHENTICATED_DURABLE_RETRY_OUTBOX_V1 = 1u << 9,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_CAPABILITY_ATOMIC_VERIFIED_CANDIDATE_COMMIT_V1 = 1u << 10,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_CAPABILITY_RECOVERABLE_TERMINAL_COMMIT_CERTIFICATE_V1 = 1u << 11,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_CAPABILITY_TRUSTED_TIME_OR_LEASE_V1 = 1u << 12,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_CAPABILITY_OFFLINE_HARDWARE_EPOCH_ROTATION_V1 = 1u << 13,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_CAPABILITY_ROLLBACK_SAFE_COUNTER_ROLLOVER_V1 = 1u << 14,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_CAPABILITY_NO_SOFTWARE_FALLBACK_V1 = 1u << 15
-} ConnectNoritoOfflineCashDeviceCapabilityV1;
+typedef enum ConnectNoritoKagemushaDeviceCapabilityV1 {
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_CAPABILITY_EXACT_NEXT_PREDECESSOR_CONSUMPTION_V1 = 1u << 0,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_CAPABILITY_ONE_USE_SUCCESSOR_AUTHORIZATION_V1 = 1u << 1,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_CAPABILITY_ROLLBACK_RESISTANT_COUNTER_AND_JOURNAL_V1 = 1u << 2,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_CAPABILITY_SEALED_TRANSITION_RECOVERY_V1 = 1u << 3,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_CAPABILITY_RECEIVER_BOUND_CREDIT_COMMIT_V1 = 1u << 4,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_CAPABILITY_ROLLBACK_RESISTANT_ACCEPTED_CREDIT_INBOX_V1 = 1u << 5,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_CAPABILITY_AUTHENTICATED_INBOUND_STAGING_V1 = 1u << 6,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_CAPABILITY_AUTHORITATIVE_REPLAY_ROOT_RECOVERY_V1 = 1u << 7,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_CAPABILITY_SENDER_OUTBOX_RESERVATION_V1 = 1u << 8,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_CAPABILITY_AUTHENTICATED_DURABLE_RETRY_OUTBOX_V1 = 1u << 9,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_CAPABILITY_ATOMIC_VERIFIED_CANDIDATE_COMMIT_V1 = 1u << 10,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_CAPABILITY_RECOVERABLE_TERMINAL_COMMIT_CERTIFICATE_V1 = 1u << 11,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_CAPABILITY_TRUSTED_TIME_OR_LEASE_V1 = 1u << 12,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_CAPABILITY_OFFLINE_HARDWARE_EPOCH_ROTATION_V1 = 1u << 13,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_CAPABILITY_ROLLBACK_SAFE_COUNTER_ROLLOVER_V1 = 1u << 14,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_CAPABILITY_NO_SOFTWARE_FALLBACK_V1 = 1u << 15
+} ConnectNoritoKagemushaDeviceCapabilityV1;
 
 // Values are encoded in the command frame's one-byte operation field; the enum itself is not
 // passed as a C ABI argument.
-typedef enum ConnectNoritoOfflineCashDeviceOperationV1 {
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_OPERATION_READ_ACTIVE_HARDWARE_CREDENTIAL_V1 = 1,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_OPERATION_PREPARE_ACCEPTANCE_INTENT_AUTHORIZATION_V1 = 2,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_OPERATION_RECOVER_ACCEPTANCE_INTENT_AUTHORIZATION_V1 = 3,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_OPERATION_VERIFY_AUTHORIZATION_RESERVE_INBOX_AND_ISSUE_ACCEPTANCE_TICKET_V1 = 4,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_OPERATION_RECOVER_ACCEPTANCE_TICKET_V1 = 5,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_OPERATION_STAGE_INBOUND_PAYMENT_V1 = 6,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_OPERATION_RECOVER_STAGED_INBOUND_PAYMENT_V1 = 7,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_OPERATION_RECOVER_INBOUND_INBOX_PAGE_V1 = 8,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_OPERATION_PREPARE_EXACT_NEXT_TRANSITION_V1 = 9,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_OPERATION_RECOVER_PREPARED_TRANSITION_V1 = 10,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_OPERATION_ABANDON_UNCOMMITTED_PREPARED_TRANSITION_V1 = 11,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_OPERATION_COMMIT_VERIFIED_CANDIDATE_V1 = 12,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_OPERATION_RECOVER_TERMINAL_COMMIT_CERTIFICATE_V1 = 13,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_OPERATION_INSTALL_FINAL_COMMIT_WRAPPER_V1 = 14,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_OPERATION_RECOVER_INSTALLED_ENVELOPE_OR_STATE_PROOF_V1 = 15,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_OPERATION_SIGN_RECEIVE_ACKNOWLEDGEMENT_V1 = 16,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_OPERATION_RELEASE_OUTBOX_ENTRY_V1 = 17,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_OPERATION_READ_TRUSTED_TIME_OR_LEASE_V1 = 18,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_OPERATION_PREPARE_MINT_AUTHORIZATION_V1 = 19,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_OPERATION_RECOVER_MINT_AUTHORIZATION_V1 = 20,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_OPERATION_VERIFY_AUTHORIZATION_AND_STAGE_MINT_CREDIT_V1 = 21,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_OPERATION_FOLD_RECEIVE_V1 = 22,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_OPERATION_READ_PENDING_CREDIT_WATERMARK_V1 = 23,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_OPERATION_ROTATE_HARDWARE_EPOCH_V1 = 24
-} ConnectNoritoOfflineCashDeviceOperationV1;
+typedef enum ConnectNoritoKagemushaDeviceOperationV1 {
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_OPERATION_READ_ACTIVE_HARDWARE_CREDENTIAL_V1 = 1,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_OPERATION_STAGE_INBOUND_PAYMENT_V1 = 2,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_OPERATION_RECOVER_STAGED_INBOUND_PAYMENT_V1 = 3,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_OPERATION_RECOVER_INBOUND_INBOX_PAGE_V1 = 4,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_OPERATION_PREPARE_EXACT_NEXT_TRANSITION_V1 = 5,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_OPERATION_RECOVER_PREPARED_TRANSITION_V1 = 6,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_OPERATION_COMMIT_VERIFIED_CANDIDATE_AND_SIGN_TERMINAL_V1 = 7,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_OPERATION_RECOVER_TERMINAL_OUTCOME_V1 = 8,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_OPERATION_INSTALL_TERMINAL_ENVELOPE_V1 = 9,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_OPERATION_RECOVER_INSTALLED_ENVELOPE_OR_STATE_PROOF_V1 = 10,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_OPERATION_SIGN_RECEIVE_ACKNOWLEDGEMENT_V1 = 11,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_OPERATION_RELEASE_OUTBOX_ENTRY_V1 = 12,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_OPERATION_READ_TRUSTED_TIME_OR_LEASE_V1 = 13,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_OPERATION_PREPARE_MINT_AUTHORIZATION_V1 = 14,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_OPERATION_RECOVER_MINT_AUTHORIZATION_V1 = 15,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_OPERATION_VERIFY_AUTHORIZATION_AND_STAGE_MINT_CREDIT_V1 = 16,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_OPERATION_FOLD_RECEIVE_CREDIT_V1 = 17,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_OPERATION_READ_PENDING_CREDIT_WATERMARK_V1 = 18,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_OPERATION_ROTATE_HARDWARE_EPOCH_V1 = 19,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_OPERATION_BOOTSTRAP_AGGREGATE_STATE_V1 = 20,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_OPERATION_RECOVER_WALLET_SNAPSHOT_V1 = 21,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_OPERATION_CREATE_SIGNED_PAYMENT_REQUEST_V1 = 22
+} ConnectNoritoKagemushaDeviceOperationV1;
 
 // Values are encoded in the response frame's one-byte status field.
-typedef enum ConnectNoritoOfflineCashDeviceStatusV1 {
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_STATUS_SUCCESS_V1 = 0,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_STATUS_UNAVAILABLE_V1 = 1,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_STATUS_STALE_OR_CONCURRENT_V1 = 2,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_STATUS_BINDING_MISMATCH_V1 = 3,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_STATUS_TRUSTED_TIME_REJECTED_V1 = 4,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_STATUS_REJECTED_V1 = 5,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_STATUS_MISSING_V1 = 6,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_STATUS_CONFLICT_V1 = 7,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_STATUS_CORRUPT_V1 = 8,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_STATUS_MALFORMED_REQUEST_V1 = 9,
-  CONNECT_NORITO_OFFLINE_CASH_DEVICE_STATUS_RECOVERY_REQUIRED_V1 = 10
-} ConnectNoritoOfflineCashDeviceStatusV1;
+typedef enum ConnectNoritoKagemushaDeviceStatusV1 {
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_STATUS_SUCCESS_V1 = 0,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_STATUS_UNAVAILABLE_V1 = 1,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_STATUS_STALE_OR_CONCURRENT_V1 = 2,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_STATUS_BINDING_MISMATCH_V1 = 3,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_STATUS_TRUSTED_TIME_REJECTED_V1 = 4,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_STATUS_REJECTED_V1 = 5,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_STATUS_MISSING_V1 = 6,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_STATUS_CONFLICT_V1 = 7,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_STATUS_CORRUPT_V1 = 8,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_STATUS_MALFORMED_REQUEST_V1 = 9,
+  CONNECT_NORITO_KAGEMUSHA_DEVICE_STATUS_RECOVERY_REQUIRED_V1 = 10
+} ConnectNoritoKagemushaDeviceStatusV1;
 
-// Generic builds deliberately expose no monetary software fallback. These functions return
-// CONNECT_NORITO_ERR_OFFLINE_CASH_DEVICE_UNAVAILABLE_V1 until replaced by a qualified,
-// attested non-forking platform provider.
-int32_t connect_norito_offline_cash_device_capabilities_v1(
+// Generic builds deliberately expose no monetary software fallback. Capabilities return
+// CONNECT_NORITO_ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1. Execute first validates the complete outer
+// frame and canonical operation bodies 1 through 22, returning CONNECT_NORITO_ERR_KAGEMUSHA_V1 for
+// malformed input and DEVICE_UNAVAILABLE for valid input until a qualified, attested non-forking
+// platform provider is installed.
+int32_t connect_norito_kagemusha_device_capabilities_v1(
     uint8_t* output, size_t output_capacity);
-int32_t connect_norito_offline_cash_device_execute_v1(
+int32_t connect_norito_kagemusha_device_execute_v1(
     const uint8_t* command, size_t command_len,
     uint8_t* output, size_t output_capacity, size_t* output_len);
+// Verifies a successful response's exact 64-byte low-S P-256 authenticator.
+// The three digest/key lengths are exact. For operation 1 the device key must
+// be NULL/zero and is bootstrapped from the validated qualification payload;
+// later operations require the accepted 65-byte uncompressed SEC1 device key.
+// Release-catalog membership remains a wallet-session responsibility.
+int32_t connect_norito_kagemusha_device_response_authenticator_v1_verify(
+    const uint8_t* response, size_t response_len,
+    uint8_t expected_operation,
+    const uint8_t* expected_request_id, size_t expected_request_id_len,
+    const uint8_t* hardware_policy_id, size_t hardware_policy_id_len,
+    const uint8_t* qualification_report_digest,
+    size_t qualification_report_digest_len,
+    const uint8_t* device_public_key, size_t device_public_key_len);
 
 // ---------------- Privacy compiled-profile native FFI ----------------
 // Output buffers are Norito V1 archives allocated by the bridge and must be

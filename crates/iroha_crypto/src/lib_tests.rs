@@ -1673,6 +1673,38 @@ mod tests {
         assert!(signature.payload().is_empty());
     }
     #[test]
+    fn typed_signature_confidential_discard_is_idempotent() {
+        let mut signature = SignatureOf::<()>::from_signature(Signature::from_bytes(&[0xA9; 64]));
+
+        signature.zeroize_for_confidential_discard();
+        assert!(signature.payload().is_empty());
+
+        signature.zeroize_for_confidential_discard();
+        assert!(signature.payload().is_empty());
+    }
+    #[test]
+    fn confidential_discard_helper_zeroizes_supported_shapes_idempotently() {
+        let mut selector = true;
+        let mut amount = u128::MAX;
+        let mut fixed_bytes = [0xA5; 32];
+        let mut dynamic_bytes = vec![0xA6; 64];
+        let mut optional_hash = Some(Hash::new(b"confidential domain"));
+
+        for _ in 0..2 {
+            zeroize_value_for_confidential_discard(&mut selector);
+            zeroize_value_for_confidential_discard(&mut amount);
+            zeroize_value_for_confidential_discard(&mut fixed_bytes);
+            zeroize_value_for_confidential_discard(&mut dynamic_bytes);
+            zeroize_value_for_confidential_discard(&mut optional_hash);
+
+            assert!(!selector);
+            assert_eq!(amount, 0);
+            assert_eq!(fixed_bytes, [0; 32]);
+            assert!(dynamic_bytes.is_empty());
+            assert!(optional_hash.is_none());
+        }
+    }
+    #[test]
     fn invalid_private_key() {
         assert!(PrivateKey::from_hex(
             Algorithm::Ed25519,

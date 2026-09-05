@@ -1834,16 +1834,21 @@ sponsor_vault_custody_account_id = "__CHAIN_ACCOUNT__"
                 GenesisTopologyEntry::new(PeerId::new(validator.public_key().clone()), pop)
             })
             .collect::<Vec<_>>();
-        let mint_finality = crate::genesis::localnet_mint_finality_genesis_parameters(&topology)
-            .expect("derive fixture Offline Cash mint-finality authority");
+        let kagemusha_mint_finality =
+            crate::genesis::dev_sandbox_kagemusha_mint_finality_parameters(
+                chain_id.as_ref(),
+                "complete-candidate-fixture",
+                topology.iter().map(|entry| entry.peer.clone()),
+            )
+            .expect("derive fixture mint-finality parameters");
         let manifest = iroha_genesis::GenesisBuilder::new_without_executor(chain_id.clone(), ".")
             .with_sumeragi_v2_context_parameters(
                 iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
             )
-            .with_offline_cash_mint_finality_genesis_parameters(mint_finality)
+            .with_kagemusha_mint_finality_genesis_parameters(kagemusha_mint_finality)
             .set_topology(topology)
             .build_raw()
-            .expect("build complete executable genesis fixture")
+            .expect("build complete generation fixture manifest")
             .with_chain_discriminant(chain_discriminant)
             .with_consensus_meta();
         let manifest_path = genesis_dir.join("genesis.json");

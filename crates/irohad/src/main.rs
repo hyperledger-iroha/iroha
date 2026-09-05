@@ -178,92 +178,6 @@ use tokio::{
     task,
 };
 
-#[cfg(test)]
-fn deterministic_genesis_topology_for_test() -> Vec<iroha_genesis::GenesisTopologyEntry> {
-    let mut topology = (0_u8..4)
-        .map(|index| {
-            let seed = 0x60_u8.wrapping_add(index);
-            let key_pair = iroha_crypto::KeyPair::try_from_seed(
-                vec![seed; 32],
-                iroha_crypto::Algorithm::BlsNormal,
-            )
-            .expect("derive deterministic irohad test validator");
-            let pop = iroha_crypto::bls_normal_pop_prove(key_pair.private_key())
-                .expect("derive deterministic irohad test validator proof of possession");
-            iroha_genesis::GenesisTopologyEntry::new(
-                iroha_data_model::peer::PeerId::new(key_pair.public_key().clone()),
-                pop,
-            )
-        })
-        .collect::<Vec<_>>();
-    topology.sort_by(|left, right| left.peer.cmp(&right.peer));
-    topology
-}
-
-#[cfg(test)]
-fn configured_genesis_builder_for_test(
-    builder: iroha_genesis::GenesisBuilder,
-) -> iroha_genesis::GenesisBuilder {
-    configured_genesis_builder_with_topology_for_test(
-        builder,
-        deterministic_genesis_topology_for_test(),
-    )
-}
-
-#[cfg(test)]
-fn configured_genesis_builder_with_topology_for_test(
-    builder: iroha_genesis::GenesisBuilder,
-    mut topology: Vec<iroha_genesis::GenesisTopologyEntry>,
-) -> iroha_genesis::GenesisBuilder {
-    use iroha_data_model::{
-        block::consensus_v2::{SumeragiV2GenesisContextParameters, is_valid_committee_size},
-        isi::offline_cash_v1::{
-            OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterTemplateV1,
-            OfflineCashMintFinalityGenesisParametersV1,
-        },
-    };
-
-    topology.sort_by(|left, right| left.peer.cmp(&right.peer));
-    assert!(
-        is_valid_committee_size(topology.len()),
-        "irohad genesis fixtures require an exact supported 3f + 1 topology"
-    );
-    assert!(
-        !topology.windows(2).any(|pair| pair[0].peer == pair[1].peer),
-        "irohad genesis fixture topology must not repeat validators"
-    );
-    let validators = topology
-        .iter()
-        .enumerate()
-        .map(|(index, entry)| {
-            let seed = 0xA0_u8.wrapping_add(
-                u8::try_from(index).expect("irohad test validator index fits in one byte"),
-            );
-            iroha_core::zk::offline_cash_v1_recursion::derive_offline_cash_mint_finality_validator_keys_v1(
-                &[seed; 32],
-                0,
-                entry.peer.clone(),
-            )
-            .expect("derive independent irohad test Pasta authority")
-        })
-        .collect();
-    let authority = OfflineCashMintFinalityGenesisParametersV1 {
-        epoch_roster: OfflineCashMintFinalityEpochRosterTemplateV1 {
-            version: OFFLINE_CASH_CHAIN_VERSION_V1,
-            epoch: 0,
-            validators,
-        },
-        next_epoch_roster: None,
-    };
-    authority
-        .validate()
-        .expect("irohad test Offline Cash authority must be canonical");
-    builder
-        .set_topology(topology)
-        .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
-        .with_offline_cash_mint_finality_genesis_parameters(authority)
-}
-
 const NODE_RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 /// Build-time source identity embedded for release artifact validation.
 const BUILD_SOURCE_ID: Option<&str> = option_env!("IROHA_GIT_COMMIT_HASH");
@@ -532,18 +446,107 @@ fn build_shared_sorafs_provider_cache(
 }
 include!("main/shared_sorafs_provider_cache_tests.rs");
 #[cfg(test)]
+fn deterministic_test_genesis_topology() -> Vec<iroha_genesis::GenesisTopologyEntry> {
+    (0_u8..4)
+        .map(|index| {
+            let key_pair = iroha_crypto::KeyPair::try_from_seed(
+                vec![0x40_u8.wrapping_add(index); 32],
+                Algorithm::BlsNormal,
+            )
+            .expect("derive deterministic test genesis validator");
+            let pop = iroha_crypto::bls_normal_pop_prove(key_pair.private_key())
+                .expect("derive deterministic test genesis validator proof of possession");
+            iroha_genesis::GenesisTopologyEntry::new(
+                PeerId::new(key_pair.public_key().clone()),
+                pop,
+            )
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn complete_test_genesis_builder_for_topology(
+    builder: iroha_genesis::GenesisBuilder,
+    mut topology: Vec<iroha_genesis::GenesisTopologyEntry>,
+) -> iroha_genesis::GenesisBuilder {
+    topology.sort_by(|left, right| left.peer.cmp(&right.peer));
+    assert!(
+        iroha_data_model::block::consensus_v2::is_valid_committee_size(topology.len()),
+        "irohad genesis fixtures require an exact supported 3f + 1 topology"
+    );
+    assert!(
+        !topology.windows(2).any(|pair| pair[0].peer == pair[1].peer),
+        "irohad genesis fixture topology must not repeat validators"
+    );
+    for entry in &topology {
+        let pop = entry
+            .pop_bytes()
+            .expect("decode irohad test validator proof of possession")
+            .expect("irohad test validator must carry a proof of possession");
+        iroha_crypto::bls_normal_pop_verify(entry.peer.public_key(), &pop)
+            .expect("verify irohad test validator proof of possession");
+    }
+    let validators = topology
+        .iter()
+        .map(|entry| entry.peer.clone())
+        .collect::<Vec<_>>();
+    let validators = validators
+        .into_iter()
+        .enumerate()
+        .map(|(index, validator)| {
+            let seed_byte = 0xA0_u8.wrapping_add(
+                u8::try_from(index).expect("test genesis validator index fits in one byte"),
+            );
+            iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                &[seed_byte; 32],
+                0,
+                validator,
+            )
+            .expect("derive deterministic paired-Pasta test genesis validator keys")
+        })
+        .collect();
+    let parameters =
+        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1 {
+            epoch_roster:
+                iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterTemplateV1 {
+                    version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
+                    epoch: 0,
+                    validators,
+                },
+            next_epoch_roster: None,
+        };
+    parameters
+        .validate()
+        .expect("test genesis topology must form a canonical mint-finality roster");
+    builder
+        .set_topology(topology)
+        .with_sumeragi_v2_context_parameters(
+            iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(
+            ),
+        )
+        .with_kagemusha_mint_finality_genesis_parameters(parameters)
+}
+
+#[cfg(test)]
+fn complete_test_genesis_builder(
+    builder: iroha_genesis::GenesisBuilder,
+) -> iroha_genesis::GenesisBuilder {
+    complete_test_genesis_builder_for_topology(builder, deterministic_test_genesis_topology())
+}
+
+#[cfg(test)]
 mod handshake_payload_tests {
     use super::*;
     use iroha_genesis::{GenesisBuilder, ManifestCrypto};
     use std::path::PathBuf;
     fn handshake_payload_from_genesis() -> Json {
         let chain = iroha_data_model::ChainId::from("handshake-meta-test");
-        let manifest = configured_genesis_builder_for_test(GenesisBuilder::new_without_executor(
+        let manifest = complete_test_genesis_builder(GenesisBuilder::new_without_executor(
             chain,
             PathBuf::from("."),
         ))
         .build_raw()
-        .expect("build handshake genesis fixture")
+        .expect("build complete handshake metadata test genesis")
         .with_consensus_meta();
         let keypair = iroha_crypto::KeyPair::random();
         let genesis_block = manifest
@@ -5401,7 +5404,7 @@ mod network_relay_tests {
                 phase: consensus_v2::GlobalPhase::Prepare,
                 subject: sample_v2_subject(),
                 execution_commitment:
-                    consensus_v2::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                    consensus_v2::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                         Hash::prehashed([0x64; 32]),
                         Hash::prehashed([0x65; 32]),
                         Hash::prehashed([0x66; 32]),
@@ -6429,11 +6432,8 @@ fn authorize_kura_runtime_start(
         (true, true) | (false, false) => Ok(()),
     }
 }
-fn install_offline_cash_v1_runtime_verifier(
-    state: &mut State,
-    config: &Config,
-) -> Result<(), String> {
-    let Some(files) = config.settlement.offline.proof_release.as_ref() else {
+fn install_kagemusha_v1_runtime_verifier(state: &mut State, config: &Config) -> Result<(), String> {
+    let Some(files) = config.settlement.kagemusha.proof_release.as_ref() else {
         return Ok(());
     };
     let read = |path: &Path, max_bytes, label| {
@@ -6442,31 +6442,31 @@ fn install_offline_cash_v1_runtime_verifier(
     };
     let manifest = read(
         &files.manifest,
-        iroha_data_model::offline::OFFLINE_CASH_RELEASE_MANIFEST_MAX_BYTES_V1,
-        "Offline Cash V1 release manifest",
+        iroha_data_model::kagemusha::KAGEMUSHA_RELEASE_MANIFEST_MAX_BYTES_V1,
+        "KAGEMUSHA V1 release manifest",
     )?;
     let receipt = read(
         &files.validation_receipt,
-        iroha_data_model::offline::OFFLINE_CASH_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1,
-        "Offline Cash V1 validation receipt",
+        iroha_data_model::kagemusha::KAGEMUSHA_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1,
+        "KAGEMUSHA V1 validation receipt",
     )?;
     let policy = read(
         &files.authority_policy,
-        iroha_data_model::offline::OFFLINE_CASH_RELEASE_AUTHORITY_POLICY_MAX_BYTES_V1,
-        "Offline Cash V1 authority policy",
+        iroha_data_model::kagemusha::KAGEMUSHA_RELEASE_AUTHORITY_POLICY_MAX_BYTES_V1,
+        "KAGEMUSHA V1 authority policy",
     )?;
     let attestation = read(
         &files.attestation,
-        iroha_data_model::offline::OFFLINE_CASH_RELEASE_ATTESTATION_MAX_BYTES_V1,
-        "Offline Cash V1 release attestation",
+        iroha_data_model::kagemusha::KAGEMUSHA_RELEASE_ATTESTATION_MAX_BYTES_V1,
+        "KAGEMUSHA V1 release attestation",
     )?;
     let profile = read(
         &files.recursive_profile,
-        iroha_core::smartcontracts::isi::offline::OFFLINE_CASH_RECURSIVE_PROFILE_MAX_BYTES_V1,
-        "Offline Cash V1 recursive verifier profile",
+        iroha_core::smartcontracts::isi::kagemusha::KAGEMUSHA_RECURSIVE_PROFILE_MAX_BYTES_V1,
+        "KAGEMUSHA V1 recursive verifier profile",
     )?;
     let verifier =
-        iroha_core::smartcontracts::isi::offline::load_authenticated_offline_cash_v1_runtime_verifier(
+        iroha_core::smartcontracts::isi::kagemusha::load_authenticated_kagemusha_v1_runtime_verifier(
             &manifest,
             &receipt,
             &policy,
@@ -6474,7 +6474,7 @@ fn install_offline_cash_v1_runtime_verifier(
             &profile,
             &files.artifact_directory,
         )?;
-    state.install_offline_cash_v1_runtime_verifier(verifier);
+    state.install_kagemusha_v1_runtime_verifier(verifier);
     Ok(())
 }
 fn apply_state_runtime_config_before_snapshot_auth(
@@ -6494,7 +6494,7 @@ fn apply_state_runtime_config_before_snapshot_auth(
     state.set_gov(config.gov.clone());
     state.content = config.content.clone();
     state.set_settlement(config.settlement.clone());
-    install_offline_cash_v1_runtime_verifier(state, config)
+    install_kagemusha_v1_runtime_verifier(state, config)
 }
 fn apply_state_geometry_config_before_kura_replay(
     state: &mut State,
@@ -7823,9 +7823,9 @@ impl Iroha {
                         "emergency Fast restored governance is incompatible with configured governance: {error}"
                     ))
                 })?;
-            install_offline_cash_v1_runtime_verifier(&mut state, &config).map_err(|error| {
+            install_kagemusha_v1_runtime_verifier(&mut state, &config).map_err(|error| {
                 Report::new(StartError::InitKura).attach(format!(
-                    "failed to install the authenticated Offline Cash V1 runtime: {error}"
+                    "failed to install the authenticated KAGEMUSHA V1 runtime: {error}"
                 ))
             })?;
         } else {
@@ -9247,8 +9247,8 @@ impl Iroha {
                 global_beacon_partial_signer: runtime_deps
                     .sumeragi_global_beacon_partial_signer
                     .clone(),
-                offline_cash_mint_finality_authority: runtime_deps
-                    .offline_cash_mint_finality_authority
+                kagemusha_mint_finality_authority: runtime_deps
+                    .kagemusha_mint_finality_authority
                     .clone(),
                 startup_replay_plan: v2_replay_plan,
                 startup_replay_inventory_guard,
@@ -11013,19 +11013,19 @@ mod genesis_key_tests {
     use iroha_genesis::GenesisBuilder;
     use std::path::PathBuf;
     fn prepared_genesis_proposal(keypair: &KeyPair) -> GenesisBlock {
-        let proposal = configured_genesis_builder_for_test(GenesisBuilder::new_without_executor(
+        let proposal = complete_test_genesis_builder(GenesisBuilder::new_without_executor(
             ChainId::from("configured-genesis-trust-anchor-test"),
             PathBuf::from("."),
         ))
         .build_raw()
-        .expect("build configured genesis fixture")
+        .expect("build complete prepared genesis manifest")
         .build_and_sign(keypair)
         .expect("build prepared genesis proposal");
         assert!(proposal.0.is_resultless_proposal());
         proposal
     }
     fn prepared_genesis_proposal_with_marker(keypair: &KeyPair, marker: &str) -> GenesisBlock {
-        let proposal = configured_genesis_builder_for_test(
+        let proposal = complete_test_genesis_builder(
             GenesisBuilder::new_without_executor(
                 ChainId::from("configured-genesis-trust-anchor-test"),
                 PathBuf::from("."),
@@ -11036,7 +11036,7 @@ mod genesis_key_tests {
             )),
         )
         .build_raw()
-        .expect("build marked configured genesis fixture")
+        .expect("build complete marked prepared genesis manifest")
         .build_and_sign(keypair)
         .expect("build marked prepared genesis proposal");
         assert!(proposal.0.is_resultless_proposal());
@@ -11057,12 +11057,12 @@ mod genesis_key_tests {
     #[test]
     fn derives_genesis_pubkey_from_block_authority() {
         let chain = ChainId::from("derive-genesis-pubkey-test");
-        let manifest = configured_genesis_builder_for_test(GenesisBuilder::new_without_executor(
+        let manifest = complete_test_genesis_builder(GenesisBuilder::new_without_executor(
             chain,
             PathBuf::from("."),
         ))
         .build_raw()
-        .expect("build configured genesis fixture");
+        .expect("build complete genesis public-key derivation manifest");
         let keypair = iroha_crypto::KeyPair::random();
         let genesis_block = manifest
             .build_and_sign(&keypair)
@@ -16406,15 +16406,15 @@ mod tests {
                 std::num::NonZeroU64::new(7).expect("nonzero message cap");
             config.zk.sccp.max_pending_outbound_payload_bytes =
                 std::num::NonZeroU64::new(11).expect("nonzero byte cap");
-            let offline_asset_definition_id = AssetDefinitionId::derive_from_components(
+            let kagemusha_asset_definition_id = AssetDefinitionId::derive_from_components(
                 iroha_data_model::domain::DomainId::try_new("boi", "is")
-                    .expect("offline asset domain"),
-                "ds".parse().expect("offline asset name"),
+                    .expect("KAGEMUSHA asset domain"),
+                "ds".parse().expect("KAGEMUSHA asset name"),
             );
-            let offline_reserve_account_id = iroha_test_samples::ALICE_ID.clone();
-            config.settlement.offline.reserve_accounts.insert(
-                offline_asset_definition_id.clone(),
-                offline_reserve_account_id.clone(),
+            let kagemusha_reserve_account_id = iroha_test_samples::ALICE_ID.clone();
+            config.settlement.kagemusha.reserve_accounts.insert(
+                kagemusha_asset_definition_id.clone(),
+                kagemusha_reserve_account_id.clone(),
             );
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
@@ -16435,11 +16435,11 @@ mod tests {
             assert_eq!(
                 state
                     .settlement()
-                    .offline
+                    .kagemusha
                     .reserve_accounts
-                    .get(&offline_asset_definition_id),
-                Some(&offline_reserve_account_id),
-                "the exact Offline Cash reserve catalog must be installed before Kura replay",
+                    .get(&kagemusha_asset_definition_id),
+                Some(&kagemusha_reserve_account_id),
+                "the exact KAGEMUSHA reserve catalog must be installed before Kura replay",
             );
         }
     }
@@ -16776,7 +16776,7 @@ mod tests {
                     phase: consensus_v2::GlobalPhase::Prepare,
                     subject: sample_v2_subject(),
                     execution_commitment:
-                        consensus_v2::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                        consensus_v2::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                             Hash::prehashed([marker; 32]),
                             Hash::prehashed([marker.wrapping_add(1); 32]),
                             Hash::prehashed([marker.wrapping_add(2); 32]),
@@ -18345,12 +18345,12 @@ mod tests {
         use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, ManifestCrypto};
         use std::sync::Arc;
         fn sample_manifest() -> RawGenesisTransaction {
-            configured_genesis_builder_for_test(GenesisBuilder::new_without_executor(
+            complete_test_genesis_builder(GenesisBuilder::new_without_executor(
                 ChainId::from("test-chain"),
                 PathBuf::from("."),
             ))
             .build_raw()
-            .expect("build sample genesis manifest")
+            .expect("build complete sample genesis manifest")
         }
         fn sample_config_table() -> toml::Table {
             toml::toml! {
@@ -18585,7 +18585,7 @@ mod tests {
                 .into_builder()
                 .with_crypto(crypto)
                 .build_raw()
-                .expect("rebuild genesis manifest with changed crypto");
+                .expect("rebuild complete sample genesis manifest");
             let config = sample_config();
             let err = ensure_manifest_crypto_matches(&manifest, &config)
                 .expect_err("allowed signing mismatch should be detected");
@@ -18613,11 +18613,12 @@ mod tests {
             let mut config = sample_config();
             let genesis_keys = config.common.key_pair.clone();
             let chain = config.common.chain.clone();
-            let manifest = configured_genesis_builder_for_test(
-                GenesisBuilder::new_without_executor(chain.clone(), PathBuf::from(".")),
-            )
+            let manifest = complete_test_genesis_builder(GenesisBuilder::new_without_executor(
+                chain.clone(),
+                PathBuf::from("."),
+            ))
             .build_raw()
-            .expect("build configured crypto-mismatch genesis")
+            .expect("build complete crypto-mismatch genesis manifest")
             .with_consensus_meta();
             let genesis_block = manifest.build_and_sign(&genesis_keys)?;
             let mut instructions = Vec::new();
@@ -18787,12 +18788,12 @@ mod tests {
                     GenesisTopologyEntry::new(PeerId::new(key.public_key().clone()), pop)
                 })
                 .collect::<Vec<_>>();
-            let raw_genesis = configured_genesis_builder_with_topology_for_test(
+            let raw_genesis = complete_test_genesis_builder_for_topology(
                 GenesisBuilder::new_without_executor(chain_id.clone(), "."),
                 topology,
             )
             .build_raw()
-            .expect("build fresh v2 genesis fixture");
+            .expect("build complete fresh v2 genesis staging manifest");
             let authority_id = AccountId::new(genesis_authority.public_key().clone());
             let mut config = sample_config();
             config.common.chain = chain_id.clone();
@@ -18840,7 +18841,7 @@ mod tests {
             assert_eq!(state.committed_height(), before_height);
             assert_eq!(state.committed_block_hashes_snapshot(), before_hashes);
         }
-        struct OfflineSemanticGenesisFixture {
+        struct LocalSemanticGenesisFixture {
             config: Config,
             genesis: GenesisBlock,
             authority: AccountId,
@@ -18850,7 +18851,7 @@ mod tests {
         }
         fn offline_semantic_genesis_fixture(
             extra_instructions: impl IntoIterator<Item = InstructionBox>,
-        ) -> OfflineSemanticGenesisFixture {
+        ) -> LocalSemanticGenesisFixture {
             let mut config = sample_config();
             let chain_id = ChainId::from("offline-genesis-validation-test");
             let genesis_authority = iroha_crypto::KeyPair::try_from_seed(
@@ -18880,13 +18881,13 @@ mod tests {
             {
                 config.crypto.allowed_signing.push(Algorithm::BlsNormal);
             }
-            let base_genesis = configured_genesis_builder_with_topology_for_test(
+            let base_genesis = complete_test_genesis_builder_for_topology(
                 GenesisBuilder::new_without_executor(chain_id, "."),
                 topology,
             );
             let base_raw = base_genesis
                 .build_raw()
-                .expect("build offline semantic genesis fixture");
+                .expect("build complete offline semantic genesis manifest");
             let (context_hash, execution_policy_hash) =
                 staged_context_hashes_for_test(&base_raw, &genesis_authority, &config);
             let mut parameters = base_raw.sumeragi_v2_context_parameters();
@@ -18910,7 +18911,7 @@ mod tests {
             let (_, _, _, cadence_ms, _) =
                 consensus_caps_from_genesis(&genesis, &config_caps, &config.sumeragi)
                     .expect("canonical genesis consensus metadata");
-            OfflineSemanticGenesisFixture {
+            LocalSemanticGenesisFixture {
                 config,
                 genesis,
                 authority,
@@ -19100,14 +19101,14 @@ mod tests {
             let config = sample_config();
             let genesis_keys = config.common.key_pair.clone();
             let chain = config.common.chain.clone();
-            let permissioned_genesis = configured_genesis_builder_for_test(
+            let permissioned_genesis = complete_test_genesis_builder(
                 GenesisBuilder::new_without_executor(chain.clone(), PathBuf::from(".")),
             )
             .build_raw()
-            .expect("build permissioned genesis fixture")
+            .expect("build complete permissioned genesis manifest")
             .with_consensus_meta()
             .build_and_sign(&genesis_keys)?;
-            let npos_genesis = configured_genesis_builder_for_test(
+            let npos_genesis = complete_test_genesis_builder(
                 GenesisBuilder::new_without_executor(chain.clone(), PathBuf::from("."))
                     .append_parameter(Parameter::Custom(
                         iroha_data_model::parameter::system::SumeragiNposParameters::default()
@@ -19115,7 +19116,7 @@ mod tests {
                     )),
             )
             .build_raw()
-            .expect("build NPoS genesis fixture")
+            .expect("build complete NPoS genesis manifest")
             .with_consensus_mode(SumeragiConsensusMode::Npos)
             .with_consensus_meta()
             .build_and_sign(&genesis_keys)?;
@@ -19144,11 +19145,12 @@ mod tests {
             let chain = config.common.chain.clone();
             // Build a canonical manifest with consensus metadata, then tamper with the advertised
             // fingerprint so genesis validation should fail.
-            let manifest = configured_genesis_builder_for_test(
-                GenesisBuilder::new_without_executor(chain, PathBuf::from(".")),
-            )
+            let manifest = complete_test_genesis_builder(GenesisBuilder::new_without_executor(
+                chain,
+                PathBuf::from("."),
+            ))
             .build_raw()
-            .expect("build configured fingerprint-mismatch genesis")
+            .expect("build complete fingerprint-mismatch genesis manifest")
             .with_consensus_meta();
             let mut manifest_value =
                 norito::json::value::to_value(&manifest).expect("serialize manifest");
@@ -19220,7 +19222,7 @@ mod tests {
             manifest_crypto.default_hash = "sm3-256".to_owned();
             manifest_crypto.allowed_signing = vec![Algorithm::Ed25519, Algorithm::Sm2];
             manifest_crypto.sm2_distid_default = "CN1234567812345678".to_owned();
-            let manifest = configured_genesis_builder_for_test(
+            let manifest = complete_test_genesis_builder(
                 GenesisBuilder::new_without_executor(
                     ChainId::from("test-chain"),
                     PathBuf::from("."),
@@ -19228,7 +19230,7 @@ mod tests {
                 .with_crypto(manifest_crypto),
             )
             .build_raw()
-            .expect("build manifest-crypto fixture");
+            .expect("build complete SM manifest crypto fixture");
             let temp_dir = tempfile::tempdir()?;
             let config_path = temp_dir.path().join("config.toml");
             let manifest_path = temp_dir.path().join("manifest.json");
@@ -19356,12 +19358,12 @@ mod tests {
             F: FnMut(&mut toml::Table, &KeyPair),
         {
             let genesis_key_pair = KeyPair::random();
-            let raw = configured_genesis_builder_for_test(GenesisBuilder::new_without_executor(
+            let raw = complete_test_genesis_builder(GenesisBuilder::new_without_executor(
                 ChainId::from("chain"),
                 ".",
             ))
             .build_raw()
-            .expect("build config-integration genesis fixture");
+            .expect("build complete configuration fixture genesis manifest");
             iroha_genesis::init_instruction_registry();
             let proposal = raw
                 .build_and_sign(&genesis_key_pair)

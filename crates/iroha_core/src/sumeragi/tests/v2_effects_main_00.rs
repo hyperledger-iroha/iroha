@@ -1421,8 +1421,8 @@ impl Fixture {
             })
             .collect::<Vec<_>>();
         let network_id = crate::sumeragi::synthetic_network_id("v2-effect-executor-test");
-        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
                 network_id, 0, &roster,
             );
         let context = wire::HeightContext {
@@ -1437,8 +1437,8 @@ impl Fixture {
             snapshot_bootstrap: None,
             roster: roster.clone(),
             quorum: wire::DualQuorum::from_roster(&roster).expect("quorum"),
-            offline_cash_mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"nexus amx context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
@@ -1571,8 +1571,8 @@ impl ProductionTransportFixture {
             .collect::<Vec<_>>();
         let network_id =
             crate::sumeragi::synthetic_network_id("v2-production-transport-regression");
-        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
                 network_id, 0, &roster,
             );
         let context = wire::HeightContext {
@@ -1587,8 +1587,8 @@ impl ProductionTransportFixture {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("equal-vote quorum"),
             roster,
-            offline_cash_mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"production transport nexus/amx context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: wire::DataAvailabilityLayout {
@@ -1634,7 +1634,7 @@ impl ProductionTransportFixture {
         let validated = ValidatedBodyReceipt::for_test(durable.clone());
         let canonical_commitment = validated.execution_commitment();
         let conflicting_commitment =
-            wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                 Hash::new(b"conflicting parent state"),
                 Hash::new(b"conflicting post state"),
                 Hash::new(b"conflicting ordinary writes"),
@@ -2243,7 +2243,7 @@ fn deliberately_conflicting_payload_manifest(
     .expect("derive the structurally valid conflicting fixture manifest")
 }
 fn fixture_execution_commitment() -> wire::ExecutionCommitment {
-    wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+    wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"effects fixture parent state"),
         Hash::new(b"effects fixture post state"),
         Hash::new(b"effects fixture ordinary writes"),
@@ -2374,7 +2374,7 @@ fn vote_equivocation_evidence(
     second.subject.block_hash =
         HashOf::from_untyped_unchecked(Hash::new(b"conflicting equivocation block"));
     second.execution_commitment =
-        wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"conflicting equivocation parent state"),
             Hash::new(b"conflicting equivocation post state"),
             Hash::new(b"conflicting equivocation ordinary writes"),

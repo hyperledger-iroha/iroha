@@ -147,7 +147,7 @@ func optionVariantSelector(
 ) frontend.Variable {
 	selector := frontend.Variable(1)
 	for bit, present := range []frontend.Variable{
-		execution.HasOfflineCashTopUpRoot,
+		execution.HasKagemushaTopUpRoot,
 		execution.HasLaneFinalityManifest,
 		execution.HasMergeCarrier,
 	} {
@@ -232,16 +232,16 @@ func canonicalExecutionCommitmentBody(
 	body = append(body, noritoHashField(execution.OrdinaryWritesRoot[:])...)
 
 	if variant&1 != 0 {
-		option := append(constants([]byte{1}), noritoHashField(execution.OfflineCashTopUpRoot[:])...)
+		option := append(constants([]byte{1}), noritoHashField(execution.KagemushaTopUpRoot[:])...)
 		body = append(body, noritoField(option)...)
 	} else {
 		body = append(body, noritoField(constants([]byte{0}))...)
 	}
-	offlineCashTopUpCount, err := noritoU32Field(api, execution.OfflineCashTopUpCount)
+	kagemushaTopUpCount, err := noritoU32Field(api, execution.KagemushaTopUpCount)
 	if err != nil {
 		return nil, err
 	}
-	body = append(body, offlineCashTopUpCount...)
+	body = append(body, kagemushaTopUpCount...)
 	nativeVersion, err := noritoU16Field(api, execution.NativeAMXApplicationManifestVer)
 	if err != nil {
 		return nil, err
@@ -294,13 +294,13 @@ func nativeCanonicalExecutionCommitmentBody(execution ExecutionCommitmentWitness
 	body := nativeNoritoHash(value32(execution.ParentStateRoot))
 	body = append(body, nativeNoritoHash(value32(execution.PostStateRoot))...)
 	body = append(body, nativeNoritoHash(value32(execution.OrdinaryWritesRoot))...)
-	if execution.HasOfflineCashTopUpRoot.(int) == 1 {
-		option := append([]byte{1}, nativeNoritoHash(value32(execution.OfflineCashTopUpRoot))...)
+	if execution.HasKagemushaTopUpRoot.(int) == 1 {
+		option := append([]byte{1}, nativeNoritoHash(value32(execution.KagemushaTopUpRoot))...)
 		body = append(body, nativeNoritoField(option)...)
 	} else {
 		body = append(body, nativeNoritoField([]byte{0})...)
 	}
-	body = append(body, nativeNoritoU32(uint32(execution.OfflineCashTopUpCount.(int)))...)
+	body = append(body, nativeNoritoU32(uint32(execution.KagemushaTopUpCount.(int)))...)
 	body = append(body, nativeNoritoU16(uint16(execution.NativeAMXApplicationManifestVer.(int)))...)
 	body = append(body, nativeNoritoHash(value32(execution.NativeAMXApplicationManifestRoot))...)
 	body = append(body, nativeNoritoU32(uint32(execution.NativeAMXApplicationManifestCount.(int)))...)

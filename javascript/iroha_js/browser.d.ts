@@ -92,4 +92,4 @@ export {
   tryNormalizeAssetDefinitionId,
   tryNormalizeI105AccountId,
 } from "./index.js";
-export { OfflineCashV1 } from "./offline-cash-v1.js";
+export { Kagemusha } from "./kagemusha.js";

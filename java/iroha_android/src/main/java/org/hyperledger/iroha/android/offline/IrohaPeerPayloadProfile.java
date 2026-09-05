@@ -2,7 +2,7 @@ package org.hyperledger.iroha.android.offline;
 
 /** Stable application profile identifiers carried by IPM1. */
 public enum IrohaPeerPayloadProfile {
-  OFFLINE_CASH_V1(1, 1);
+  KAGEMUSHA_V1(1, 1);
 
   private final int code;
   private final int requiredSchemaVersion;

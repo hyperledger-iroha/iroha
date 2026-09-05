@@ -4011,7 +4011,7 @@ Some(RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc),
             "EffectExecutorStep::Advanced",
             "reconcile_executor_locked_body(executor, services)",
             "LifecycleV2IngressDrainDispositionV1::retry_before_producer(",
-            "advance_executor(receiver, owner, executor, services, 1)",
+            "advance_executor(receiver, owner, executor, services, producer_claim.required_ready_ordinal(), 1)",
         ),
     )
     executor_advance = item("runner", "advance_executor")

@@ -108,8 +108,9 @@ use iroha_data_model::{
         LaneDrainCertificateBodyV1, LaneDrainCertificateV1, LaneDrainCommitmentV1,
         LaneDrainFrontierV1, LaneDrainIntentV1, LaneDrainStateV1, MAX_MERGE_EXECUTION_BATCH_BYTES,
         MAX_MERGE_EXECUTION_ENTRYPOINTS, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES,
-        MAX_MERGE_LEDGER_ENTRY_BYTES, MergeExecutionBatch, MergeLaneBinding, MergeLaneExecution,
-        MergeLaneSignerProof, MergeLaneSnapshot, MergeLedgerEntry,
+        MAX_MERGE_LEDGER_ENTRY_BYTES, MergeExecutionBatch, MergeLaneAuthorityCatalogV1,
+        MergeLaneBinding, MergeLaneExecution, MergeLaneSignerProof, MergeLaneSnapshot,
+        MergeLedgerEntry,
     },
     metadata::Metadata,
     musubi::{
@@ -155,7 +156,7 @@ use iroha_data_model::{
     },
     parameter::{
         CustomParameterId, Parameters,
-        system::{OfflineCashMintFinalityNextEpochParameterV1, SumeragiNposParameters},
+        system::{KagemushaMintFinalityNextEpochParameterV1, SumeragiNposParameters},
     },
     peer::PeerId,
     permission::{Permission, Permissions},
@@ -365,8 +366,8 @@ use crate::{
         receipts::{DaReceiptCursorError, DaReceiptCursorIndex},
     },
     governance::parliament::ParliamentAttemptStateV1,
-    smartcontracts::isi::offline::offline_cash_v1_reserve::{
-        OfflineCashReserveOperationRecordV1, OfflineCashReservePoolV1,
+    smartcontracts::isi::kagemusha::kagemusha_v1_reserve::{
+        KagemushaReserveOperationRecordV1, KagemushaReservePoolV1,
     },
 };
 mod bounded_authority;
@@ -908,8 +909,8 @@ mod threshold_key_lifecycle_certificate_tests {
                 power: 1,
             })
             .collect::<Vec<_>>();
-        let offline_cash_mint_finality_epoch_roster =
-            crate::offline_cash_v1_test_fixtures::mint_finality_roster(
+        let kagemusha_mint_finality_epoch_roster =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster(
                 certificate.network_id,
                 0,
                 &election_roster,
@@ -919,7 +920,7 @@ mod threshold_key_lifecycle_certificate_tests {
                 network_id: certificate.network_id,
                 election: crate::sumeragi::v2_context::FrozenElectionInputs {
                     epoch: 0,
-                    offline_cash_mint_finality_epoch_roster,
+                    kagemusha_mint_finality_epoch_roster,
                     epoch_end_height: 8,
                     mode: ConsensusMode::Npos,
                     roster: election_roster,
@@ -981,15 +982,15 @@ mod threshold_key_lifecycle_certificate_tests {
         let successor_roster = sorted_roster();
         let network_id = network_id(0x63);
         let (successor_mint_finality_epoch_id, successor_mint_finality_epoch_roster) =
-            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
                 network_id,
                 1,
                 &successor_roster,
             );
         let successor_snapshot = FinalizedNextEpochSnapshot {
             epoch: 1,
-            offline_cash_mint_finality_epoch_id: successor_mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster: successor_mint_finality_epoch_roster,
+            kagemusha_mint_finality_epoch_id: successor_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster: successor_mint_finality_epoch_roster,
             epoch_end_height: 9,
             mode: ConsensusMode::Npos,
             validator_set_pops: vec![vec![0x61]; successor_roster.len()],
@@ -1003,8 +1004,8 @@ mod threshold_key_lifecycle_certificate_tests {
                 network_id,
                 election: crate::sumeragi::v2_context::FrozenElectionInputs {
                     epoch: 0,
-                    offline_cash_mint_finality_epoch_roster:
-                        crate::offline_cash_v1_test_fixtures::mint_finality_roster(
+                    kagemusha_mint_finality_epoch_roster:
+                        crate::kagemusha_v1_test_fixtures::mint_finality_roster(
                             network_id,
                             0,
                             &parent_roster,
@@ -1375,12 +1376,12 @@ macro_rules! with_world_overlay_fields {
             repo_agreements_by_counterparty,
             repo_agreements_by_custodian,
             settlement_receipts,
-            offline_cash_reserve_pools,
-            offline_cash_reserve_operations,
-            offline_cash_mint_credit_operations,
-            offline_cash_issuance_operations,
-            offline_cash_redemption_id_operations,
-            offline_cash_terminal_nullifier_operations,
+            kagemusha_reserve_pools,
+            kagemusha_reserve_operations,
+            kagemusha_mint_credit_operations,
+            kagemusha_issuance_operations,
+            kagemusha_redemption_id_operations,
+            kagemusha_terminal_nullifier_operations,
             public_lane_validators,
             public_lane_stake_shares,
             public_lane_rewards,
@@ -2959,8 +2960,10 @@ pub(crate) enum QueuePlanBindingApplicationEvidence {
 /// Durable disposition of one authenticated pending QueuePlan certificate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PendingQueuePlanAdmissionDisposition {
-    /// The exact immutable marker is already present in canonical WSV.
-    Exact,
+    /// The exact immutable marker and pending transaction obligation are present in canonical WSV.
+    ExactPending,
+    /// Canonical transaction membership proves that the exact admission was already applied.
+    Applied,
     /// No marker exists and the complete certificate is eligible for the next carrier.
     EligibleAbsent,
     /// The certificate is authentic but its bound canonical frontier has not arrived locally yet.
@@ -2971,6 +2974,35 @@ pub enum PendingQueuePlanAdmissionDisposition {
     DefinitiveConflict,
     /// The certificate is authentic but its history, lifecycle, or authority context is stale.
     Stale,
+}
+/// Result of atomically classifying and durably retaining one QueuePlan certificate.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PendingQueuePlanAdmissionPersistenceOutcome {
+    /// One live logical admission is durable under the returned canonical certificate bytes.
+    Durable {
+        /// Fully authenticated certificate projection.
+        admission: crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1,
+        /// Content hash of the exact durable certificate bytes.
+        certificate_hash: Hash,
+        /// Exact bytes retained in Kura for this logical admission.
+        certificate: Vec<u8>,
+        /// Live canonical disposition observed while the finality fence was held.
+        disposition: PendingQueuePlanAdmissionDisposition,
+        /// Whether this call created the logical admission slot.
+        inserted: bool,
+    },
+    /// Canonical transaction membership already proves exact application.
+    Applied {
+        /// Fully authenticated certificate projection.
+        admission: crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1,
+    },
+    /// Canonical state definitively rejects this certificate.
+    Rejected {
+        /// Fully authenticated certificate projection.
+        admission: crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1,
+        /// Terminal rejection disposition.
+        disposition: PendingQueuePlanAdmissionDisposition,
+    },
 }
 /// Compare one exact QueuePlan binding with the immutable WSV admission registry.
 ///
@@ -4890,19 +4922,18 @@ pub struct World {
     pub(crate) repo_agreements_by_custodian: Storage<AccountId, BTreeSet<RepoAgreementId>>,
     /// Successful settlement receipts keyed by their one-shot identifier.
     pub(crate) settlement_receipts: Storage<SettlementId, SettlementReceipt>,
-    /// Pooled Offline Cash V1 reserve totals keyed by network and asset.
-    pub(crate) offline_cash_reserve_pools: Storage<[u8; 32], OfflineCashReservePoolV1>,
-    /// Idempotent Offline Cash V1 operation records keyed by operation id.
-    pub(crate) offline_cash_reserve_operations:
-        Storage<[u8; 32], OfflineCashReserveOperationRecordV1>,
+    /// Pooled KAGEMUSHA V1 reserve totals keyed by network, asset, and exact incarnation.
+    pub(crate) kagemusha_reserve_pools: Storage<[u8; 32], KagemushaReservePoolV1>,
+    /// Idempotent Kagemusha V1 operation records keyed by operation id.
+    pub(crate) kagemusha_reserve_operations: Storage<[u8; 32], KagemushaReserveOperationRecordV1>,
     /// One-to-one index from mint credit id to top-up operation id.
-    pub(crate) offline_cash_mint_credit_operations: Storage<[u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_mint_credit_operations: Storage<[u8; 32], [u8; 32]>,
     /// One-to-one index from issuance commitment to top-up operation id.
-    pub(crate) offline_cash_issuance_operations: Storage<[u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_issuance_operations: Storage<[u8; 32], [u8; 32]>,
     /// One-to-one index from redemption id to redemption operation id.
-    pub(crate) offline_cash_redemption_id_operations: Storage<[u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_redemption_id_operations: Storage<[u8; 32], [u8; 32]>,
     /// One-to-one index from terminal nullifier to redemption operation id.
-    pub(crate) offline_cash_terminal_nullifier_operations: Storage<[u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_terminal_nullifier_operations: Storage<[u8; 32], [u8; 32]>,
     /// Public-lane validators keyed by `(lane_id, validator account id)`.
     #[norito(skip)]
     pub(crate) public_lane_validators: Storage<(LaneId, AccountId), PublicLaneValidatorRecord>,
@@ -5690,19 +5721,19 @@ pub struct WorldBlock<'world> {
         StorageBlock<'world, AccountId, BTreeSet<RepoAgreementId>>,
     /// Successful settlement receipts keyed by their one-shot identifier.
     pub(crate) settlement_receipts: StorageBlock<'world, SettlementId, SettlementReceipt>,
-    /// Pooled Offline Cash V1 reserve totals keyed by network and asset.
-    pub(crate) offline_cash_reserve_pools: StorageBlock<'world, [u8; 32], OfflineCashReservePoolV1>,
-    /// Idempotent Offline Cash V1 operation records keyed by operation id.
-    pub(crate) offline_cash_reserve_operations:
-        StorageBlock<'world, [u8; 32], OfflineCashReserveOperationRecordV1>,
+    /// Pooled Kagemusha V1 reserve totals keyed by network and asset.
+    pub(crate) kagemusha_reserve_pools: StorageBlock<'world, [u8; 32], KagemushaReservePoolV1>,
+    /// Idempotent Kagemusha V1 operation records keyed by operation id.
+    pub(crate) kagemusha_reserve_operations:
+        StorageBlock<'world, [u8; 32], KagemushaReserveOperationRecordV1>,
     /// One-to-one index from mint credit id to top-up operation id.
-    pub(crate) offline_cash_mint_credit_operations: StorageBlock<'world, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_mint_credit_operations: StorageBlock<'world, [u8; 32], [u8; 32]>,
     /// One-to-one index from issuance commitment to top-up operation id.
-    pub(crate) offline_cash_issuance_operations: StorageBlock<'world, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_issuance_operations: StorageBlock<'world, [u8; 32], [u8; 32]>,
     /// One-to-one index from redemption id to redemption operation id.
-    pub(crate) offline_cash_redemption_id_operations: StorageBlock<'world, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_redemption_id_operations: StorageBlock<'world, [u8; 32], [u8; 32]>,
     /// One-to-one index from terminal nullifier to redemption operation id.
-    pub(crate) offline_cash_terminal_nullifier_operations: StorageBlock<'world, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_terminal_nullifier_operations: StorageBlock<'world, [u8; 32], [u8; 32]>,
     /// Public lane validator registry.
     #[norito(skip)]
     pub(crate) public_lane_validators:
@@ -6007,26 +6038,23 @@ impl WorldBlock<'_> {
         collect_reverts!(self.global_beacon_active_session, GlobalBeaconActiveSession);
         collect_reverts!(self.global_beacon_latest_pulse, GlobalBeaconLatestPulse);
         collect_reverts!(self.global_beacon_pulses, GlobalBeaconPulse);
-        collect_reverts!(self.offline_cash_reserve_pools, OfflineCashReservePool);
+        collect_reverts!(self.kagemusha_reserve_pools, KagemushaReservePool);
+        collect_reverts!(self.kagemusha_reserve_operations, KagemushaReserveOperation);
         collect_reverts!(
-            self.offline_cash_reserve_operations,
-            OfflineCashReserveOperation
+            self.kagemusha_mint_credit_operations,
+            KagemushaMintCreditOperation
         );
         collect_reverts!(
-            self.offline_cash_mint_credit_operations,
-            OfflineCashMintCreditOperation
+            self.kagemusha_issuance_operations,
+            KagemushaIssuanceOperation
         );
         collect_reverts!(
-            self.offline_cash_issuance_operations,
-            OfflineCashIssuanceOperation
+            self.kagemusha_redemption_id_operations,
+            KagemushaRedemptionIdOperation
         );
         collect_reverts!(
-            self.offline_cash_redemption_id_operations,
-            OfflineCashRedemptionIdOperation
-        );
-        collect_reverts!(
-            self.offline_cash_terminal_nullifier_operations,
-            OfflineCashTerminalNullifierOperation
+            self.kagemusha_terminal_nullifier_operations,
+            KagemushaTerminalNullifierOperation
         );
         diff
     }
@@ -6134,26 +6162,23 @@ impl WorldBlock<'_> {
         collect_payload!(self.global_beacon_active_session, GlobalBeaconActiveSession);
         collect_payload!(self.global_beacon_latest_pulse, GlobalBeaconLatestPulse);
         collect_payload!(self.global_beacon_pulses, GlobalBeaconPulse);
-        collect_payload!(self.offline_cash_reserve_pools, OfflineCashReservePool);
+        collect_payload!(self.kagemusha_reserve_pools, KagemushaReservePool);
+        collect_payload!(self.kagemusha_reserve_operations, KagemushaReserveOperation);
         collect_payload!(
-            self.offline_cash_reserve_operations,
-            OfflineCashReserveOperation
+            self.kagemusha_mint_credit_operations,
+            KagemushaMintCreditOperation
         );
         collect_payload!(
-            self.offline_cash_mint_credit_operations,
-            OfflineCashMintCreditOperation
+            self.kagemusha_issuance_operations,
+            KagemushaIssuanceOperation
         );
         collect_payload!(
-            self.offline_cash_issuance_operations,
-            OfflineCashIssuanceOperation
+            self.kagemusha_redemption_id_operations,
+            KagemushaRedemptionIdOperation
         );
         collect_payload!(
-            self.offline_cash_redemption_id_operations,
-            OfflineCashRedemptionIdOperation
-        );
-        collect_payload!(
-            self.offline_cash_terminal_nullifier_operations,
-            OfflineCashTerminalNullifierOperation
+            self.kagemusha_terminal_nullifier_operations,
+            KagemushaTerminalNullifierOperation
         );
         payload
     }
@@ -6403,12 +6428,12 @@ impl WorldBlock<'_> {
             repo_agreements_by_counterparty,
             repo_agreements_by_custodian,
             settlement_receipts,
-            offline_cash_reserve_pools,
-            offline_cash_reserve_operations,
-            offline_cash_mint_credit_operations,
-            offline_cash_issuance_operations,
-            offline_cash_redemption_id_operations,
-            offline_cash_terminal_nullifier_operations,
+            kagemusha_reserve_pools,
+            kagemusha_reserve_operations,
+            kagemusha_mint_credit_operations,
+            kagemusha_issuance_operations,
+            kagemusha_redemption_id_operations,
+            kagemusha_terminal_nullifier_operations,
             public_lane_validators,
             public_lane_stake_shares,
             public_lane_rewards,
@@ -7203,23 +7228,23 @@ pub struct WorldTransaction<'block, 'world> {
     /// Successful settlement receipts keyed by their one-shot identifier.
     pub(crate) settlement_receipts:
         StorageTransaction<'block, 'world, SettlementId, SettlementReceipt>,
-    /// Pooled Offline Cash V1 reserve totals keyed by network and asset.
-    pub(crate) offline_cash_reserve_pools:
-        StorageTransaction<'block, 'world, [u8; 32], OfflineCashReservePoolV1>,
-    /// Idempotent Offline Cash V1 operation records keyed by operation id.
-    pub(crate) offline_cash_reserve_operations:
-        StorageTransaction<'block, 'world, [u8; 32], OfflineCashReserveOperationRecordV1>,
+    /// Pooled Kagemusha V1 reserve totals keyed by network and asset.
+    pub(crate) kagemusha_reserve_pools:
+        StorageTransaction<'block, 'world, [u8; 32], KagemushaReservePoolV1>,
+    /// Idempotent Kagemusha V1 operation records keyed by operation id.
+    pub(crate) kagemusha_reserve_operations:
+        StorageTransaction<'block, 'world, [u8; 32], KagemushaReserveOperationRecordV1>,
     /// One-to-one index from mint credit id to top-up operation id.
-    pub(crate) offline_cash_mint_credit_operations:
+    pub(crate) kagemusha_mint_credit_operations:
         StorageTransaction<'block, 'world, [u8; 32], [u8; 32]>,
     /// One-to-one index from issuance commitment to top-up operation id.
-    pub(crate) offline_cash_issuance_operations:
+    pub(crate) kagemusha_issuance_operations:
         StorageTransaction<'block, 'world, [u8; 32], [u8; 32]>,
     /// One-to-one index from redemption id to redemption operation id.
-    pub(crate) offline_cash_redemption_id_operations:
+    pub(crate) kagemusha_redemption_id_operations:
         StorageTransaction<'block, 'world, [u8; 32], [u8; 32]>,
     /// One-to-one index from terminal nullifier to redemption operation id.
-    pub(crate) offline_cash_terminal_nullifier_operations:
+    pub(crate) kagemusha_terminal_nullifier_operations:
         StorageTransaction<'block, 'world, [u8; 32], [u8; 32]>,
     /// Public-lane validators keyed by lane and account.
     pub(crate) public_lane_validators:
@@ -9276,19 +9301,19 @@ pub struct WorldView<'world> {
         StorageView<'world, AccountId, BTreeSet<RepoAgreementId>>,
     /// Successful settlement receipts keyed by their one-shot identifier.
     pub(crate) settlement_receipts: StorageView<'world, SettlementId, SettlementReceipt>,
-    /// Pooled Offline Cash V1 reserve totals keyed by network and asset.
-    pub(crate) offline_cash_reserve_pools: StorageView<'world, [u8; 32], OfflineCashReservePoolV1>,
-    /// Idempotent Offline Cash V1 operation records keyed by operation id.
-    pub(crate) offline_cash_reserve_operations:
-        StorageView<'world, [u8; 32], OfflineCashReserveOperationRecordV1>,
+    /// Pooled Kagemusha V1 reserve totals keyed by network and asset.
+    pub(crate) kagemusha_reserve_pools: StorageView<'world, [u8; 32], KagemushaReservePoolV1>,
+    /// Idempotent Kagemusha V1 operation records keyed by operation id.
+    pub(crate) kagemusha_reserve_operations:
+        StorageView<'world, [u8; 32], KagemushaReserveOperationRecordV1>,
     /// One-to-one index from mint credit id to top-up operation id.
-    pub(crate) offline_cash_mint_credit_operations: StorageView<'world, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_mint_credit_operations: StorageView<'world, [u8; 32], [u8; 32]>,
     /// One-to-one index from issuance commitment to top-up operation id.
-    pub(crate) offline_cash_issuance_operations: StorageView<'world, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_issuance_operations: StorageView<'world, [u8; 32], [u8; 32]>,
     /// One-to-one index from redemption id to redemption operation id.
-    pub(crate) offline_cash_redemption_id_operations: StorageView<'world, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_redemption_id_operations: StorageView<'world, [u8; 32], [u8; 32]>,
     /// One-to-one index from terminal nullifier to redemption operation id.
-    pub(crate) offline_cash_terminal_nullifier_operations: StorageView<'world, [u8; 32], [u8; 32]>,
+    pub(crate) kagemusha_terminal_nullifier_operations: StorageView<'world, [u8; 32], [u8; 32]>,
     /// Public-lane validators keyed by lane and account.
     pub(crate) public_lane_validators:
         StorageView<'world, (LaneId, AccountId), PublicLaneValidatorRecord>,
@@ -11492,9 +11517,9 @@ pub struct State {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration (repo defaults, collateral policies).
     pub settlement: iroha_config::parameters::actual::Settlement,
-    /// Authenticated Offline Cash V1 release/artifact resolution and recursive verification.
-    pub offline_cash_v1_runtime_verifier:
-        Arc<dyn crate::smartcontracts::isi::offline::OfflineCashV1RuntimeVerifier>,
+    /// Authenticated Kagemusha V1 release/artifact resolution and recursive verification.
+    pub kagemusha_v1_runtime_verifier:
+        Arc<dyn crate::smartcontracts::isi::kagemusha::KagemushaV1RuntimeVerifier>,
     /// Unified settlement engine for XOR quoting.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Display chain identifier from configuration, exposed through the display sysvar.
@@ -11513,6 +11538,13 @@ pub struct State {
     pub telemetry: StateTelemetry,
     /// Lock serializing lane lifecycle storage reconciliation with state commits.
     lane_lifecycle_lock: parking_lot::Mutex<()>,
+    /// Outermost lock serializing QueuePlan sidecar snapshot-to-persistence operations.
+    ///
+    /// The admission path acquires this before `state_commit_lock`; block commit
+    /// never acquires it. Expensive sidecar inventory decoding therefore stays
+    /// outside the block-publication fence without allowing two signer subsets
+    /// to race from the same stale inventory snapshot.
+    queue_plan_admission_persistence_lock: parking_lot::Mutex<()>,
     /// Lock serializing complete block commits across fallible pre-publication work.
     state_commit_lock: Arc<parking_lot::Mutex<()>>,
     /// Lock serializing writer commit phases that mutate several state components.
@@ -12383,9 +12415,9 @@ pub struct StateBlock<'state> {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration snapshot for this block.
     pub settlement: iroha_config::parameters::actual::Settlement,
-    /// Authenticated Offline Cash V1 release/artifact resolver snapshot for this block.
-    pub offline_cash_v1_runtime_verifier:
-        Arc<dyn crate::smartcontracts::isi::offline::OfflineCashV1RuntimeVerifier>,
+    /// Authenticated Kagemusha V1 release/artifact resolver snapshot for this block.
+    pub kagemusha_v1_runtime_verifier:
+        Arc<dyn crate::smartcontracts::isi::kagemusha::KagemushaV1RuntimeVerifier>,
     /// Settlement engine snapshot for this block.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Chain identifier for this block.
@@ -13626,9 +13658,9 @@ pub struct StateTransaction<'block, 'state> {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration snapshot for this transaction.
     pub settlement: iroha_config::parameters::actual::Settlement,
-    /// Authenticated Offline Cash V1 release/artifact resolver snapshot for this transaction.
-    pub offline_cash_v1_runtime_verifier:
-        Arc<dyn crate::smartcontracts::isi::offline::OfflineCashV1RuntimeVerifier>,
+    /// Authenticated Kagemusha V1 release/artifact resolver snapshot for this transaction.
+    pub kagemusha_v1_runtime_verifier:
+        Arc<dyn crate::smartcontracts::isi::kagemusha::KagemushaV1RuntimeVerifier>,
     /// Settlement engine snapshot for this transaction.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Display chain identifier snapshot exposed through the display sysvar.
@@ -14009,9 +14041,9 @@ pub struct StateView<'state> {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration snapshot for this view.
     pub settlement: iroha_config::parameters::actual::Settlement,
-    /// Authenticated Offline Cash V1 release/artifact resolver snapshot for this view.
-    pub offline_cash_v1_runtime_verifier:
-        Arc<dyn crate::smartcontracts::isi::offline::OfflineCashV1RuntimeVerifier>,
+    /// Authenticated Kagemusha V1 release/artifact resolver snapshot for this view.
+    pub kagemusha_v1_runtime_verifier:
+        Arc<dyn crate::smartcontracts::isi::kagemusha::KagemushaV1RuntimeVerifier>,
     /// Settlement engine snapshot for this view.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Chain identifier for this view.
@@ -20590,20 +20622,20 @@ macro_rules! world_ro_accessors {
             storage repo_agreements_by_custodian: AccountId => BTreeSet<RepoAgreementId>;
             /// Successful settlement receipts (read-only).
             storage settlement_receipts: SettlementId => SettlementReceipt;
-            /// Pooled Offline Cash V1 reserve totals (read-only).
-            storage offline_cash_reserve_pools:
-                [u8; 32] => OfflineCashReservePoolV1;
-            /// Idempotent Offline Cash V1 operation records (read-only).
-            storage offline_cash_reserve_operations:
-                [u8; 32] => OfflineCashReserveOperationRecordV1;
+            /// Pooled Kagemusha V1 reserve totals (read-only).
+            storage kagemusha_reserve_pools:
+                [u8; 32] => KagemushaReservePoolV1;
+            /// Idempotent Kagemusha V1 operation records (read-only).
+            storage kagemusha_reserve_operations:
+                [u8; 32] => KagemushaReserveOperationRecordV1;
             /// Mint-credit replay index (read-only).
-            storage offline_cash_mint_credit_operations: [u8; 32] => [u8; 32];
+            storage kagemusha_mint_credit_operations: [u8; 32] => [u8; 32];
             /// Issuance-commitment replay index (read-only).
-            storage offline_cash_issuance_operations: [u8; 32] => [u8; 32];
+            storage kagemusha_issuance_operations: [u8; 32] => [u8; 32];
             /// Redemption-id replay index (read-only).
-            storage offline_cash_redemption_id_operations: [u8; 32] => [u8; 32];
+            storage kagemusha_redemption_id_operations: [u8; 32] => [u8; 32];
             /// Terminal-nullifier replay index (read-only).
-            storage offline_cash_terminal_nullifier_operations: [u8; 32] => [u8; 32];
+            storage kagemusha_terminal_nullifier_operations: [u8; 32] => [u8; 32];
             /// Public lane validators keyed by `(lane_id, validator)` (read-only).
             storage public_lane_validators: (LaneId, AccountId) => PublicLaneValidatorRecord;
             /// Public lane stake shares keyed by `(lane_id, validator, staker)` (read-only).
@@ -20764,11 +20796,11 @@ pub trait WorldReadOnly {
     fn sumeragi_npos_parameters(&self) -> Option<SumeragiNposParameters> {
         sumeragi_npos_parameters_from_parameters(self.parameters())
     }
-    /// Decode the consensus-committed next Offline Cash V1 Pasta roster.
-    fn offline_cash_mint_finality_next_epoch_parameter(
+    /// Decode the consensus-committed next Kagemusha V1 Pasta roster.
+    fn kagemusha_mint_finality_next_epoch_parameter(
         &self,
-    ) -> Option<OfflineCashMintFinalityNextEpochParameterV1> {
-        offline_cash_mint_finality_next_epoch_parameter_from_parameters(self.parameters())
+    ) -> Option<KagemushaMintFinalityNextEpochParameterV1> {
+        kagemusha_mint_finality_next_epoch_parameter_from_parameters(self.parameters())
     }
     world_ro_accessors!(identity, declaration);
     /// Iterate registered identifier policies.
@@ -22280,12 +22312,12 @@ impl<'world> WorldBlock<'world> {
             repo_agreements_by_counterparty,
             repo_agreements_by_custodian,
             settlement_receipts,
-            offline_cash_reserve_pools,
-            offline_cash_reserve_operations,
-            offline_cash_mint_credit_operations,
-            offline_cash_issuance_operations,
-            offline_cash_redemption_id_operations,
-            offline_cash_terminal_nullifier_operations,
+            kagemusha_reserve_pools,
+            kagemusha_reserve_operations,
+            kagemusha_mint_credit_operations,
+            kagemusha_issuance_operations,
+            kagemusha_redemption_id_operations,
+            kagemusha_terminal_nullifier_operations,
             public_lane_validators,
             public_lane_stake_shares,
             public_lane_rewards,
@@ -22457,12 +22489,12 @@ impl<'world> WorldBlock<'world> {
         repo_agreements_by_counterparty.commit();
         repo_agreements_by_custodian.commit();
         settlement_receipts.commit();
-        offline_cash_reserve_pools.commit();
-        offline_cash_reserve_operations.commit();
-        offline_cash_mint_credit_operations.commit();
-        offline_cash_issuance_operations.commit();
-        offline_cash_redemption_id_operations.commit();
-        offline_cash_terminal_nullifier_operations.commit();
+        kagemusha_reserve_pools.commit();
+        kagemusha_reserve_operations.commit();
+        kagemusha_mint_credit_operations.commit();
+        kagemusha_issuance_operations.commit();
+        kagemusha_redemption_id_operations.commit();
+        kagemusha_terminal_nullifier_operations.commit();
         domain_committees.commit();
         domain_endorsement_policies.commit();
         domain_endorsements.commit();
@@ -22794,12 +22826,12 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     /// derived parameter defaults.
     pub fn apply_executor_data_model(&mut self, mut executor_data_model: ExecutorDataModel) {
         let npos_parameter_id = SumeragiNposParameters::parameter_id();
-        let offline_cash_next_roster_parameter_id =
-            OfflineCashMintFinalityNextEpochParameterV1::parameter_id();
+        let kagemusha_next_roster_parameter_id =
+            KagemushaMintFinalityNextEpochParameterV1::parameter_id();
         executor_data_model.parameters.remove(&npos_parameter_id);
         executor_data_model
             .parameters
-            .remove(&offline_cash_next_roster_parameter_id);
+            .remove(&kagemusha_next_roster_parameter_id);
         executor_data_model
             .parameters
             .retain(|_, parameter| !is_retired_sccp_registry_parameter(parameter));
@@ -23080,7 +23112,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         }
         let consensus_owned_ids = [
             SumeragiNposParameters::parameter_id(),
-            OfflineCashMintFinalityNextEpochParameterV1::parameter_id(),
+            KagemushaMintFinalityNextEpochParameterV1::parameter_id(),
         ];
         let prev_ids: BTreeSet<_> = prev_parameters
             .keys()
@@ -24952,12 +24984,12 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             soradns_last_publish_ms,
             soradns_history_len,
             settlement_receipts,
-            offline_cash_reserve_pools,
-            offline_cash_reserve_operations,
-            offline_cash_mint_credit_operations,
-            offline_cash_issuance_operations,
-            offline_cash_redemption_id_operations,
-            offline_cash_terminal_nullifier_operations,
+            kagemusha_reserve_pools,
+            kagemusha_reserve_operations,
+            kagemusha_mint_credit_operations,
+            kagemusha_issuance_operations,
+            kagemusha_redemption_id_operations,
+            kagemusha_terminal_nullifier_operations,
             public_lane_validators,
             public_lane_stake_shares,
             public_lane_rewards,
@@ -25143,12 +25175,12 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         soradns_last_publish_ms.apply();
         soradns_history_len.apply();
         settlement_receipts.apply();
-        offline_cash_reserve_pools.apply();
-        offline_cash_reserve_operations.apply();
-        offline_cash_mint_credit_operations.apply();
-        offline_cash_issuance_operations.apply();
-        offline_cash_redemption_id_operations.apply();
-        offline_cash_terminal_nullifier_operations.apply();
+        kagemusha_reserve_pools.apply();
+        kagemusha_reserve_operations.apply();
+        kagemusha_mint_credit_operations.apply();
+        kagemusha_issuance_operations.apply();
+        kagemusha_redemption_id_operations.apply();
+        kagemusha_terminal_nullifier_operations.apply();
         domain_committees.apply();
         domain_endorsement_policies.apply();
         domain_endorsements.apply();
@@ -28268,14 +28300,15 @@ impl State {
                 stripe_layout: iroha_config::parameters::defaults::content::default_stripe_layout(),
             },
             settlement: settlement_cfg,
-            offline_cash_v1_runtime_verifier: Arc::new(
-                crate::smartcontracts::isi::offline::RejectAllOfflineCashV1RuntimeVerifier,
+            kagemusha_v1_runtime_verifier: Arc::new(
+                crate::smartcontracts::isi::kagemusha::RejectAllKagemushaV1RuntimeVerifier,
             ),
             settlement_engine,
             #[cfg(feature = "telemetry")]
             telemetry,
             crypto: parking_lot::RwLock::new(Arc::new(initial_crypto.clone())),
             lane_lifecycle_lock: parking_lot::Mutex::new(()),
+            queue_plan_admission_persistence_lock: parking_lot::Mutex::new(()),
             state_commit_lock: Arc::new(parking_lot::Mutex::new(())),
             state_write_lock: parking_lot::Mutex::new(()),
             view_generation: AtomicU64::new(0),
@@ -29033,7 +29066,7 @@ impl State {
             gov: self.gov.clone(),
             content: self.content.clone(),
             settlement: self.settlement.clone(),
-            offline_cash_v1_runtime_verifier: Arc::clone(&self.offline_cash_v1_runtime_verifier),
+            kagemusha_v1_runtime_verifier: Arc::clone(&self.kagemusha_v1_runtime_verifier),
             settlement_engine: self.settlement_engine.clone(),
             chain_id: self.chain_id.clone(),
             network_id: self.network_id,
@@ -29726,7 +29759,7 @@ impl State {
             gov: self.gov.clone(),
             content: self.content.clone(),
             settlement: self.settlement.clone(),
-            offline_cash_v1_runtime_verifier: Arc::clone(&self.offline_cash_v1_runtime_verifier),
+            kagemusha_v1_runtime_verifier: Arc::clone(&self.kagemusha_v1_runtime_verifier),
             settlement_engine: self.settlement_engine.clone(),
             chain_id: self.chain_id.clone(),
             network_id: self.network_id,
@@ -29861,7 +29894,7 @@ impl State {
             gov: self.gov.clone(),
             content: self.content.clone(),
             settlement: self.settlement.clone(),
-            offline_cash_v1_runtime_verifier: Arc::clone(&self.offline_cash_v1_runtime_verifier),
+            kagemusha_v1_runtime_verifier: Arc::clone(&self.kagemusha_v1_runtime_verifier),
             settlement_engine: self.settlement_engine.clone(),
             chain_id: self.chain_id.clone(),
             network_id: self.network_id,
@@ -30271,6 +30304,38 @@ impl State {
     /// Override the latest committed block-header cache in tests.
     pub fn update_latest_block_header_cache_for_tests(&self, header: BlockHeader) {
         self.update_latest_block_header_cache(header);
+    }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Advance the test-only committed frontier with one contiguous block header.
+    ///
+    /// This updates only the block-hash journal and latest-header cache. It is
+    /// intended for cross-crate admission tests that need a real
+    /// [`StateReadOnly::height`] transition without constructing a full block.
+    pub fn append_committed_block_header_for_tests(&self, header: BlockHeader) {
+        let expected_height = u64::try_from(self.block_hashes.view().len())
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        assert_eq!(
+            header.height().get(),
+            expected_height,
+            "test block header must extend the committed frontier contiguously"
+        );
+        let _view_generation = self.begin_state_view_write();
+        let mut block_hashes = self.block_hashes.block();
+        block_hashes.push_for_tests(header.hash());
+        block_hashes.commit_for_tests();
+        self.update_latest_block_header_cache(header);
+    }
+
+    /// Replace one active lane incarnation in a unit-test fixture.
+    #[cfg(test)]
+    pub(crate) fn set_lane_incarnation_for_test(
+        &self,
+        lane_id: LaneId,
+        incarnation: Hash,
+    ) -> Option<Hash> {
+        let _view_generation = self.begin_state_view_write();
+        self.lane_incarnations.write().insert(lane_id, incarnation)
     }
     #[cfg(test)]
     pub(crate) fn clear_latest_block_header_cache_for_testing(&self) {
@@ -30760,9 +30825,7 @@ impl State {
                 gov: self.gov.clone(),
                 content: self.content.clone(),
                 settlement: self.settlement.clone(),
-                offline_cash_v1_runtime_verifier: Arc::clone(
-                    &self.offline_cash_v1_runtime_verifier,
-                ),
+                kagemusha_v1_runtime_verifier: Arc::clone(&self.kagemusha_v1_runtime_verifier),
                 settlement_engine: self.settlement_engine.clone(),
                 chain_id: self.chain_id.clone(),
                 network_id: self.network_id,
@@ -30862,6 +30925,10 @@ impl State {
                     entry.incarnation_root,
                     entry.activation_root,
                     &entry.lane_snapshots,
+                )?;
+                Self::validate_merge_lane_authority_catalog_structure(
+                    &entry.active_lanes,
+                    &entry.lane_authority_catalog,
                 )?;
                 self.validate_merge_quorum_certificate(entry, false, false)?;
                 self.validate_merge_lane_drain_certificate_payload(
@@ -33411,6 +33478,118 @@ impl State {
             frozen_mode,
         )
     }
+    /// Snapshot active merge bindings and their exact lane committees from one
+    /// immutable State view.
+    fn merge_active_lane_authority_snapshot(
+        &self,
+        authority_height: u64,
+    ) -> Result<
+        (Hash, Vec<MergeLaneBinding>, MergeLaneAuthorityCatalogV1),
+        MergeLedgerCommitError,
+    > {
+        let state_view = self.view();
+        Self::merge_active_lane_authority_snapshot_from_view(&state_view, authority_height)
+    }
+    fn merge_active_lane_authority_snapshot_from_view(
+        state_view: &StateView<'_>,
+        authority_height: u64,
+    ) -> Result<
+        (Hash, Vec<MergeLaneBinding>, MergeLaneAuthorityCatalogV1),
+        MergeLedgerCommitError,
+    > {
+        let nexus = state_view.nexus();
+        if nexus.lane_catalog.lanes().is_empty()
+            || nexus.lane_catalog.lanes().len() > MAX_ACTIVE_EXECUTION_LANES
+        {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "merge active-lane count is empty or exceeds the hard limit".to_owned(),
+            ));
+        }
+        let mut active_lanes = Vec::with_capacity(nexus.lane_catalog.lanes().len());
+        let mut lane_committees = Vec::with_capacity(nexus.lane_catalog.lanes().len());
+        for lane in nexus.lane_catalog.lanes() {
+            let incarnation = state_view
+                .lane_incarnations
+                .get(&lane.id)
+                .copied()
+                .ok_or(MergeLedgerCommitError::UnknownLane { lane_id: lane.id })?;
+            let activation_height = state_view
+                .lane_incarnation_activation_heights
+                .get(&lane.id)
+                .and_then(|height| height.checked_add(1))
+                .ok_or(MergeLedgerCommitError::UnknownLane { lane_id: lane.id })?;
+            let route = LaneAuthorityRoute::new(lane.id, lane.dataspace_id);
+            let committee = state_view
+                .resolve_lane_committee_at_height(route, authority_height)
+                .map_err(|error| {
+                    MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                        "merge lane {} authority is unavailable at height {authority_height}: {error}",
+                        lane.id
+                    ))
+                })?;
+            active_lanes.push(MergeLaneBinding {
+                lane_id: lane.id,
+                dataspace_id: lane.dataspace_id,
+                lane_config_hash: merge_lane_config_hash(lane),
+                incarnation,
+                activation_height,
+            });
+            lane_committees.push(committee.into_validators());
+        }
+        let lane_authority_catalog =
+            MergeLaneAuthorityCatalogV1::from_lane_committees(&lane_committees).map_err(
+                |error| {
+                    MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                        "merge lane authority catalog is invalid: {error}"
+                    ))
+                },
+            )?;
+        Ok((
+            merge_lane_catalog_hash(&nexus.lane_catalog),
+            active_lanes,
+            lane_authority_catalog,
+        ))
+    }
+    fn validate_merge_lane_authority_catalog_structure(
+        active_lanes: &[MergeLaneBinding],
+        lane_authority_catalog: &MergeLaneAuthorityCatalogV1,
+    ) -> Result<(), MergeLedgerCommitError> {
+        lane_authority_catalog
+            .validate_for_active_lanes(active_lanes.len())
+            .map_err(|error| {
+                MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                    "merge lane authority catalog is invalid: {error}"
+                ))
+            })
+    }
+    fn validate_merge_lane_authority_catalog_live(
+        &self,
+        lane_catalog_hash: Hash,
+        active_lanes: &[MergeLaneBinding],
+        lane_authority_catalog: &MergeLaneAuthorityCatalogV1,
+        authority_height: u64,
+    ) -> Result<(), MergeLedgerCommitError> {
+        Self::validate_merge_lane_authority_catalog_structure(
+            active_lanes,
+            lane_authority_catalog,
+        )?;
+        let state_view = self.view();
+        let (expected_catalog_hash, expected_lanes, expected_authority_catalog) =
+            Self::merge_active_lane_authority_snapshot_from_view(
+                &state_view,
+                authority_height,
+            )?;
+        if lane_catalog_hash != expected_catalog_hash || active_lanes != expected_lanes {
+            return Err(MergeLedgerCommitError::CatalogMismatch);
+        }
+        if lane_authority_catalog != &expected_authority_catalog {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "merge lane authority catalog differs from the exact carrier-height committees"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    }
     /// Build a self-contained autonomous execution candidate for an exact
     /// canonical carrier header.
     ///
@@ -33437,25 +33616,9 @@ impl State {
             &consensus,
             frozen_mode,
         )?;
-        let lifecycle = &consensus.lifecycle;
-        let nexus = &lifecycle.nexus;
-        let active_lanes = nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .map(|lane| {
-                Some(MergeLaneBinding {
-                    lane_id: lane.id,
-                    dataspace_id: lane.dataspace_id,
-                    lane_config_hash: merge_lane_config_hash(lane),
-                    incarnation: *lifecycle.incarnations.get(&lane.id)?,
-                    activation_height: lifecycle
-                        .activation_heights
-                        .get(&lane.id)?
-                        .checked_add(1)?,
-                })
-            })
-            .collect::<Option<Vec<_>>>()?;
+        let (lane_catalog_hash, active_lanes, lane_authority_catalog) = self
+            .merge_active_lane_authority_snapshot(batch.application_block_header.height().get())
+            .ok()?;
         let incarnation_entries = active_lanes
             .iter()
             .map(
@@ -33471,8 +33634,9 @@ impl State {
             view: global_view,
             carrier_height: batch.application_block_header.height().get(),
             carrier_parent_hash: batch.application_block_header.prev_block_hash()?,
-            lane_catalog_hash: merge_lane_catalog_hash(&nexus.lane_catalog),
+            lane_catalog_hash,
             active_lanes: active_lanes.clone(),
+            lane_authority_catalog,
             incarnation_root: LaneLifecycleParameterV1::incarnation_root(&incarnation_entries),
             activation_root: crate::merge::merge_activation_root(&active_lanes),
             lane_snapshots: Vec::new(),
@@ -33936,7 +34100,8 @@ impl State {
                 };
             if matches!(
                 disposition,
-                PendingQueuePlanAdmissionDisposition::Exact
+                PendingQueuePlanAdmissionDisposition::ExactPending
+                    | PendingQueuePlanAdmissionDisposition::Applied
                     | PendingQueuePlanAdmissionDisposition::DefinitiveConflict
                     | PendingQueuePlanAdmissionDisposition::Stale
             ) {
@@ -34012,28 +34177,8 @@ impl State {
                 "lane drain certificate cannot be carried at or before its close height".to_owned(),
             ));
         }
-        let nexus = self.nexus_snapshot();
-        let incarnations = self.lane_incarnations_snapshot();
-        let activation_heights = self.lane_incarnation_activation_heights_snapshot();
-        let active_lanes = nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .map(|lane| {
-                Ok(MergeLaneBinding {
-                    lane_id: lane.id,
-                    dataspace_id: lane.dataspace_id,
-                    lane_config_hash: merge_lane_config_hash(lane),
-                    incarnation: *incarnations
-                        .get(&lane.id)
-                        .ok_or(MergeLedgerCommitError::UnknownLane { lane_id: lane.id })?,
-                    activation_height: activation_heights
-                        .get(&lane.id)
-                        .and_then(|height| height.checked_add(1))
-                        .ok_or(MergeLedgerCommitError::UnknownLane { lane_id: lane.id })?,
-                })
-            })
-            .collect::<Result<Vec<_>, MergeLedgerCommitError>>()?;
+        let (lane_catalog_hash, active_lanes, lane_authority_catalog) =
+            self.merge_active_lane_authority_snapshot(carrier_height)?;
         let incarnation_entries = active_lanes
             .iter()
             .map(
@@ -34052,8 +34197,9 @@ impl State {
             view: global_view,
             carrier_height,
             carrier_parent_hash: parent_header.hash(),
-            lane_catalog_hash: merge_lane_catalog_hash(&nexus.lane_catalog),
+            lane_catalog_hash,
             active_lanes: active_lanes.clone(),
+            lane_authority_catalog,
             incarnation_root: iroha_data_model::nexus::LaneLifecycleParameterV1::incarnation_root(
                 &incarnation_entries,
             ),
@@ -34146,6 +34292,16 @@ impl State {
                 "queue-plan admission controls exceed their count or byte bounds".to_owned(),
             ));
         }
+        let committed_height = u64::try_from(state_view.height()).map_err(|_| {
+            MergeLedgerCommitError::ExecutionBatchInvalid(
+                "committed height does not fit QueuePlan admission validation".to_owned(),
+            )
+        })?;
+        let current_proposal_height = committed_height.checked_add(1).ok_or_else(|| {
+            MergeLedgerCommitError::ExecutionBatchInvalid(
+                "current QueuePlan authority height overflows its proposal height".to_owned(),
+            )
+        })?;
         let mut validated = Vec::with_capacity(admissions.len());
         let mut previous_registry_key = None;
         for bytes in admissions {
@@ -34189,6 +34345,18 @@ impl State {
                         .to_owned(),
                 ));
             }
+            // WSV does not retain immutable historical committee snapshots for
+            // QueuePlan admission. A delayed certificate may nevertheless be
+            // carried after a height-only advance when every signed source
+            // identity still equals the exact current source. Under the static
+            // `f` adversary assumed by the committee protocol, its `f + 1`
+            // availability quorum then still contains a current honest signer.
+            // Any roster, route, or incarnation drift fails closed below.
+            let source_proposal_height = if context.authority_height < committed_height {
+                current_proposal_height
+            } else {
+                context.proposal_height
+            };
             for route in &context.route_incarnations {
                 let active = active_lanes.iter().find(|binding| {
                     binding.lane_id == route.leg.route.lane_id
@@ -34211,11 +34379,11 @@ impl State {
                 let authority = crate::queue::queue_plan_authoritative_peers_in_view_at_height(
                     state_view,
                     route.leg.route,
-                    context.proposal_height,
+                    source_proposal_height,
                 );
                 if authority.as_ref().ok() != Some(&route.validator_set) {
                     return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "queue-plan admission validator set is not authoritative at its proposal height"
+                        "queue-plan admission validator set is not authoritative at the required source proposal height"
                             .to_owned(),
                     ));
                 }
@@ -34223,6 +34391,37 @@ impl State {
             validated.push(admission);
         }
         Ok(validated)
+    }
+    fn pending_queue_plan_admission_registry_lookup_in_view(
+        state_view: &impl StateReadOnlyWithTransactions,
+        bytes: &[u8],
+    ) -> Result<
+        (
+            crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1,
+            QueuePlanAdmissionRegistryMatch,
+        ),
+        MergeLedgerCommitError,
+    > {
+        let admission =
+            crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
+                state_view.network_id(),
+                bytes,
+            )
+            .map_err(|error| {
+                MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                    "pending queue-plan admission certificate is invalid: {error}"
+                ))
+            })?;
+        let lookup = Self::queue_plan_admission_registry_match_in_view(
+            state_view,
+            admission.registry_key.entrypoint_hash.clone(),
+            admission.registry_value.binding_hash,
+        )
+        .map_err(MergeLedgerCommitError::ExecutionMarkerConflict)?;
+        if lookup == QueuePlanAdmissionRegistryMatch::Exact {
+            Self::queue_plan_admission_application_state(state_view, &admission)?;
+        }
+        Ok((admission, lookup))
     }
     pub(crate) fn pending_queue_plan_admission_registry_lookup(
         &self,
@@ -34234,27 +34433,8 @@ impl State {
         ),
         MergeLedgerCommitError,
     > {
-        let admission =
-            crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
-                &self.network_id,
-                bytes,
-            )
-            .map_err(|error| {
-                MergeLedgerCommitError::ExecutionBatchInvalid(format!(
-                    "pending queue-plan admission certificate is invalid: {error}"
-                ))
-            })?;
         let state_view = self.view();
-        let lookup = Self::queue_plan_admission_registry_match_in_view(
-            &state_view,
-            admission.registry_key.entrypoint_hash.clone(),
-            admission.registry_value.binding_hash,
-        )
-        .map_err(MergeLedgerCommitError::ExecutionMarkerConflict)?;
-        if lookup == QueuePlanAdmissionRegistryMatch::Exact {
-            Self::queue_plan_admission_application_state(&state_view, &admission)?;
-        }
-        Ok((admission, lookup))
+        Self::pending_queue_plan_admission_registry_lookup_in_view(&state_view, bytes)
     }
     /// Classify one durable pending QueuePlan certificate against canonical
     /// WSV, history, and the complete current lane lifecycle.
@@ -34274,53 +34454,308 @@ impl State {
         ),
         MergeLedgerCommitError,
     > {
+        let state_view = self.view();
+        Self::classify_pending_queue_plan_admission_in_view(&state_view, bytes, carrier_height)
+    }
+    fn classify_pending_queue_plan_admission_in_view(
+        state_view: &StateView<'_>,
+        bytes: &[u8],
+        carrier_height: u64,
+    ) -> Result<
+        (
+            crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1,
+            PendingQueuePlanAdmissionDisposition,
+        ),
+        MergeLedgerCommitError,
+    > {
         let (admission, registry_match) =
-            self.pending_queue_plan_admission_registry_lookup(bytes)?;
-        let disposition = match registry_match {
-            QueuePlanAdmissionRegistryMatch::Exact => {
-                let state_view = self.view();
-                match Self::queue_plan_admission_application_state(&state_view, &admission)? {
-                    QueuePlanAdmissionApplicationState::PendingStale => {
-                        PendingQueuePlanAdmissionDisposition::Stale
-                    }
-                    QueuePlanAdmissionApplicationState::Pending
-                    | QueuePlanAdmissionApplicationState::Applied => {
-                        PendingQueuePlanAdmissionDisposition::Exact
+            Self::pending_queue_plan_admission_registry_lookup_in_view(state_view, bytes)?;
+        let disposition =
+            match registry_match {
+                QueuePlanAdmissionRegistryMatch::Exact => {
+                    match Self::queue_plan_admission_application_state(state_view, &admission)? {
+                        QueuePlanAdmissionApplicationState::PendingStale => {
+                            PendingQueuePlanAdmissionDisposition::Stale
+                        }
+                        QueuePlanAdmissionApplicationState::Pending => {
+                            PendingQueuePlanAdmissionDisposition::ExactPending
+                        }
+                        QueuePlanAdmissionApplicationState::Applied => {
+                            PendingQueuePlanAdmissionDisposition::Applied
+                        }
                     }
                 }
-            }
-            QueuePlanAdmissionRegistryMatch::Conflict => {
-                PendingQueuePlanAdmissionDisposition::DefinitiveConflict
-            }
-            QueuePlanAdmissionRegistryMatch::Absent => {
-                let committed_height = u64::try_from(self.committed_height()).map_err(|_| {
-                    MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "committed height does not fit QueuePlan admission classification"
-                            .to_owned(),
-                    )
-                })?;
-                if admission
-                    .certificate
-                    .binding
-                    .admission_context
-                    .authority_height
-                    > committed_height
-                {
-                    PendingQueuePlanAdmissionDisposition::Future
-                } else {
-                    let encoded = vec![bytes.to_vec()];
-                    if self
-                        .validate_queue_plan_admissions_for_carrier(&encoded, carrier_height)
-                        .is_ok()
+                QueuePlanAdmissionRegistryMatch::Conflict => {
+                    PendingQueuePlanAdmissionDisposition::DefinitiveConflict
+                }
+                QueuePlanAdmissionRegistryMatch::Absent => {
+                    let committed_height = u64::try_from(state_view.height()).map_err(|_| {
+                        MergeLedgerCommitError::ExecutionBatchInvalid(
+                            "committed height does not fit QueuePlan admission classification"
+                                .to_owned(),
+                        )
+                    })?;
+                    if admission
+                        .certificate
+                        .binding
+                        .admission_context
+                        .authority_height
+                        > committed_height
                     {
-                        PendingQueuePlanAdmissionDisposition::EligibleAbsent
+                        let routing_plan = admission.certificate.binding.routing_plan().map_err(
+                            |error| {
+                                MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                                    "future QueuePlan admission routing plan is invalid: {error}"
+                                ))
+                            },
+                        )?;
+                        match crate::queue::Queue::classify_plan_admission_context_in_view(
+                            state_view,
+                            &routing_plan,
+                            &admission.certificate.binding.admission_context,
+                        ) {
+                            Ok(crate::queue::QueuePlanAdmissionContextDisposition::Future) => {
+                                PendingQueuePlanAdmissionDisposition::Future
+                            }
+                            Ok(_) | Err(_) => PendingQueuePlanAdmissionDisposition::Stale,
+                        }
                     } else {
-                        PendingQueuePlanAdmissionDisposition::Stale
+                        let encoded = vec![bytes.to_vec()];
+                        let active_lanes = Self::queue_plan_active_lane_bindings_from_snapshot(
+                            state_view.nexus(),
+                            &state_view.lane_incarnations,
+                            &state_view.lane_incarnation_activation_heights,
+                        )?;
+                        if Self::validate_queue_plan_admissions_for_carrier_in_view(
+                            state_view,
+                            &encoded,
+                            &active_lanes,
+                            carrier_height,
+                        )
+                        .is_ok()
+                        {
+                            PendingQueuePlanAdmissionDisposition::EligibleAbsent
+                        } else {
+                            PendingQueuePlanAdmissionDisposition::Stale
+                        }
                     }
                 }
-            }
-        };
+            };
         Ok((admission, disposition))
+    }
+    /// Classify and retain one QueuePlan certificate under the block-finality fence.
+    ///
+    /// State publication is excluded while classification runs, and Kura checks its exact durable
+    /// height while holding the same canonical-chain lock used by block publication. Admission
+    /// therefore either linearizes before the next irreversible block write or observes frontier
+    /// drift. An exact one-block Kura lead is retried for a bounded interval while fairly releasing
+    /// the State fence so the corresponding State publication can finish; Kura-behind and larger
+    /// leads fail closed. The durable store is also deduplicated by logical registry identity:
+    /// alternate valid signer subsets reuse the first exact certificate instead of consuming
+    /// another slot.
+    ///
+    /// # Errors
+    /// Returns an error when Kura and WSV are not at one published frontier, certificate
+    /// authentication fails, an unresolved logical admission conflict exists, or durable
+    /// sidecar persistence fails.
+    pub fn persist_classified_queue_plan_admission(
+        &self,
+        bytes: &[u8],
+    ) -> Result<PendingQueuePlanAdmissionPersistenceOutcome, MergeLedgerCommitError> {
+        const FRONTIER_RECONCILIATION_TIMEOUT: Duration = Duration::from_millis(250);
+
+        let _admission_persistence = self.queue_plan_admission_persistence_lock.lock();
+        let incoming_hash = Hash::new(bytes);
+        let incoming = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
+            &self.network_id,
+            bytes,
+        )
+        .map_err(|error| {
+            MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                "pending queue-plan admission certificate is invalid: {error}"
+            ))
+        })?;
+
+        // Preserve the exact-hash idempotent fast path. Otherwise authenticate
+        // the bounded inventory before taking the block-publication fence; only
+        // state-dependent decisions are repeated under that fence below.
+        let exact_existing = self
+            .kura
+            .pending_queue_plan_admission_certificate(incoming_hash)?;
+        let mut same_binding = None;
+        let mut duplicate_same_binding = Vec::new();
+        let mut conflicting_bindings = Vec::new();
+        if exact_existing.is_none() {
+            let pending = self
+                .kura
+                .pending_queue_plan_admission_certificates_bounded(
+                    self.kura.pending_queue_plan_admission_capacity(),
+                )?;
+            for (hash, existing_bytes) in pending {
+                let existing =
+                    crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
+                        &self.network_id,
+                        &existing_bytes,
+                    )
+                    .map_err(|error| {
+                        MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                            "pending QueuePlan inventory certificate is invalid: {error}"
+                        ))
+                    })?;
+                if existing.registry_key != incoming.registry_key {
+                    continue;
+                }
+                if existing.certificate.binding == incoming.certificate.binding {
+                    if same_binding.is_none() {
+                        same_binding = Some((hash, existing_bytes, existing));
+                    } else {
+                        duplicate_same_binding.push(hash);
+                    }
+                } else {
+                    conflicting_bindings.push((hash, existing_bytes));
+                }
+            }
+        }
+
+        let mut reconciliation_deadline = None;
+        loop {
+            let state_commit = self.state_commit_lock.lock();
+            let committed_height = u64::try_from(self.committed_height()).map_err(|_| {
+                MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "committed height does not fit QueuePlan persistence".to_owned(),
+                )
+            })?;
+            let carrier_height = committed_height.checked_add(1).ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "QueuePlan persistence carrier height overflowed".to_owned(),
+                )
+            })?;
+            let state_view = self.view();
+            let (admission, disposition) = Self::classify_pending_queue_plan_admission_in_view(
+                &state_view,
+                bytes,
+                carrier_height,
+            )?;
+            match disposition {
+                PendingQueuePlanAdmissionDisposition::Applied => {
+                    return Ok(PendingQueuePlanAdmissionPersistenceOutcome::Applied { admission });
+                }
+                PendingQueuePlanAdmissionDisposition::DefinitiveConflict
+                | PendingQueuePlanAdmissionDisposition::Stale => {
+                    return Ok(PendingQueuePlanAdmissionPersistenceOutcome::Rejected {
+                        admission,
+                        disposition,
+                    });
+                }
+                PendingQueuePlanAdmissionDisposition::ExactPending
+                | PendingQueuePlanAdmissionDisposition::EligibleAbsent
+                | PendingQueuePlanAdmissionDisposition::Future => {}
+            }
+
+            let persistence_result = if let Some(certificate) = exact_existing.as_ref() {
+                self.kura
+                    .verify_pending_queue_plan_admission_durable_height(committed_height)
+                    .map(|()| PendingQueuePlanAdmissionPersistenceOutcome::Durable {
+                        admission,
+                        certificate_hash: incoming_hash,
+                        certificate: certificate.clone(),
+                        disposition,
+                        inserted: false,
+                    })
+            } else {
+                let mut retire = duplicate_same_binding.clone();
+                for (hash, existing_bytes) in &conflicting_bindings {
+                    let (existing, existing_disposition) =
+                        Self::classify_pending_queue_plan_admission_in_view(
+                            &state_view,
+                            existing_bytes,
+                            carrier_height,
+                        )?;
+                    debug_assert_eq!(existing.registry_key, admission.registry_key);
+                    if matches!(
+                        existing_disposition,
+                        PendingQueuePlanAdmissionDisposition::Applied
+                            | PendingQueuePlanAdmissionDisposition::DefinitiveConflict
+                            | PendingQueuePlanAdmissionDisposition::Stale
+                    ) {
+                        retire.push(*hash);
+                        continue;
+                    }
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                        "another live QueuePlan binding already owns the same logical admission"
+                            .to_owned(),
+                    ));
+                }
+                for hash in retire {
+                    self.kura
+                        .remove_pending_queue_plan_admission_certificate(hash)?;
+                }
+                if let Some((certificate_hash, certificate, existing)) = same_binding.as_ref() {
+                    self.kura
+                        .verify_pending_queue_plan_admission_durable_height(committed_height)
+                        .map(|()| PendingQueuePlanAdmissionPersistenceOutcome::Durable {
+                            admission: existing.clone(),
+                            certificate_hash: *certificate_hash,
+                            certificate: certificate.clone(),
+                            disposition,
+                            inserted: false,
+                        })
+                } else {
+                    self.kura
+                        .persist_pending_queue_plan_admission_certificate_at_exact_durable_height(
+                            committed_height,
+                            bytes,
+                        )
+                        .map(|certificate_hash| {
+                            PendingQueuePlanAdmissionPersistenceOutcome::Durable {
+                                admission,
+                                certificate_hash,
+                                certificate: bytes.to_vec(),
+                                disposition,
+                                inserted: true,
+                            }
+                        })
+                }
+            };
+
+            match persistence_result {
+                Ok(outcome) => return Ok(outcome),
+                Err(
+                    error @ crate::kura::Error::QueuePlanAdmissionDurableHeightMismatch {
+                        expected_durable_height,
+                        actual_durable_height,
+                    },
+                ) => {
+                    let one_ahead = committed_height.checked_add(1);
+                    if expected_durable_height != committed_height
+                        || one_ahead != Some(actual_durable_height)
+                    {
+                        return Err(error.into());
+                    }
+
+                    drop(state_view);
+                    parking_lot::MutexGuard::unlock_fair(state_commit);
+                    let deadline = reconciliation_deadline
+                        .get_or_insert_with(|| Instant::now() + FRONTIER_RECONCILIATION_TIMEOUT);
+                    if Instant::now() >= *deadline {
+                        return Err(error.into());
+                    }
+                    std::thread::yield_now();
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+    /// Remove one pending QueuePlan certificate under the same mutation owner
+    /// used by classified persistence.
+    pub(crate) fn remove_pending_queue_plan_admission_certificate(
+        &self,
+        certificate_hash: Hash,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let _admission_persistence = self.queue_plan_admission_persistence_lock.lock();
+        self.kura
+            .remove_pending_queue_plan_admission_certificate(certificate_hash)?;
+        Ok(())
     }
     /// Index authenticated QueuePlan certificates which are waiting for their
     /// canonical registry marker by exact binding hash.
@@ -34353,33 +34788,17 @@ impl State {
         for (_, bytes) in pending {
             let (admission, disposition) =
                 self.classify_pending_queue_plan_admission(&bytes, carrier_height)?;
-            let exact_pending = disposition == PendingQueuePlanAdmissionDisposition::Exact
-                && Self::queue_plan_admission_application_state(&self.view(), &admission)?
-                    == QueuePlanAdmissionApplicationState::Pending;
-            if disposition == PendingQueuePlanAdmissionDisposition::EligibleAbsent || exact_pending
-            {
+            if matches!(
+                disposition,
+                PendingQueuePlanAdmissionDisposition::EligibleAbsent
+                    | PendingQueuePlanAdmissionDisposition::ExactPending
+            ) {
                 certificates
                     .entry(admission.certificate.binding.canonical_hash())
                     .or_insert_with(|| Arc::new(bytes));
             }
         }
         Ok(certificates)
-    }
-    /// Return whether an exact QueuePlan certificate's transaction has been
-    /// canonically applied and no longer needs body-handoff evidence.
-    pub(crate) fn queue_plan_admission_certificate_transaction_applied(
-        &self,
-        bytes: &[u8],
-    ) -> Result<bool, MergeLedgerCommitError> {
-        let (admission, registry_match) =
-            self.pending_queue_plan_admission_registry_lookup(bytes)?;
-        if registry_match != QueuePlanAdmissionRegistryMatch::Exact {
-            return Ok(false);
-        }
-        Ok(
-            Self::queue_plan_admission_application_state(&self.view(), &admission)?
-                == QueuePlanAdmissionApplicationState::Applied,
-        )
     }
     fn validate_merge_candidate_round_binding(
         &self,
@@ -34460,6 +34879,12 @@ impl State {
             candidate.incarnation_root,
             candidate.activation_root,
             &candidate.lane_snapshots,
+        )?;
+        self.validate_merge_lane_authority_catalog_live(
+            candidate.lane_catalog_hash,
+            &candidate.active_lanes,
+            &candidate.lane_authority_catalog,
+            candidate.carrier_height,
         )?;
         self.validate_merge_active_lanes_against_lifecycle(
             &consensus.lifecycle,
@@ -34710,26 +35135,11 @@ impl State {
             return Vec::new();
         };
         let previous_snapshots = &admission.latest_lane_snapshots;
-        let Some(merge_lane_bindings) = nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .map(|lane| {
-                Some(MergeLaneBinding {
-                    lane_id: lane.id,
-                    dataspace_id: lane.dataspace_id,
-                    lane_config_hash: merge_lane_config_hash(lane),
-                    incarnation: *lifecycle.incarnations.get(&lane.id)?,
-                    activation_height: lifecycle
-                        .activation_heights
-                        .get(&lane.id)?
-                        .checked_add(1)?,
-                })
-            })
-            .collect::<Option<Vec<_>>>()
+        let Ok((lane_catalog_hash, merge_lane_bindings, lane_authority_catalog)) =
+            self.merge_active_lane_authority_snapshot(carrier_height)
         else {
             iroha_logger::error!(
-                "cannot synthesize merge entry from incomplete lane incarnation activation state"
+                "cannot synthesize merge entry from incomplete lane authority state"
             );
             return Vec::new();
         };
@@ -34845,8 +35255,9 @@ impl State {
             view: max_view,
             carrier_height,
             carrier_parent_hash,
-            lane_catalog_hash: merge_lane_catalog_hash(&nexus.lane_catalog),
+            lane_catalog_hash,
             active_lanes: merge_lane_bindings,
+            lane_authority_catalog,
             incarnation_root,
             activation_root,
             lane_snapshots,
@@ -35151,6 +35562,10 @@ impl State {
             entry.incarnation_root,
             entry.activation_root,
             &entry.lane_snapshots,
+        )?;
+        Self::validate_merge_lane_authority_catalog_structure(
+            &entry.active_lanes,
+            &entry.lane_authority_catalog,
         )?;
         self.validate_merge_quorum_certificate(entry, false, false)?;
         let Some(batch) = entry.execution_batch.as_ref() else {
@@ -41466,6 +41881,12 @@ impl State {
             entry.activation_root,
             &entry.lane_snapshots,
         )?;
+        self.validate_merge_lane_authority_catalog_live(
+            entry.lane_catalog_hash,
+            &entry.active_lanes,
+            &entry.lane_authority_catalog,
+            entry.merge_qc.carrier_height,
+        )?;
         let consensus = self.merge_consensus_snapshot_validating(entry)?;
         self.validate_merge_active_lanes_against_lifecycle(
             &consensus.lifecycle,
@@ -41853,6 +42274,12 @@ impl State {
             entry.incarnation_root,
             entry.activation_root,
             &entry.lane_snapshots,
+        )?;
+        self.validate_merge_lane_authority_catalog_live(
+            entry.lane_catalog_hash,
+            &entry.active_lanes,
+            &entry.lane_authority_catalog,
+            entry.merge_qc.carrier_height,
         )?;
         self.merge_admission.read().validate_next(&entry)?;
         // This test-only direct append has no global carrier block. Keep live
@@ -44551,11 +44978,11 @@ impl State {
     /// This is the sole production transition away from the fail-closed startup verifier. The
     /// concrete type prevents node startup code from granting monetary authority to an arbitrary
     /// host-side predicate.
-    pub fn install_offline_cash_v1_runtime_verifier(
+    pub fn install_kagemusha_v1_runtime_verifier(
         &mut self,
-        verifier: crate::smartcontracts::isi::offline::AuthenticatedOfflineCashV1RuntimeVerifier,
+        verifier: crate::smartcontracts::isi::kagemusha::AuthenticatedKagemushaV1RuntimeVerifier,
     ) {
-        self.offline_cash_v1_runtime_verifier = Arc::new(verifier);
+        self.kagemusha_v1_runtime_verifier = Arc::new(verifier);
     }
     /// Install ZK settings into an isolated, non-running State reconstruction.
     ///
@@ -46434,30 +46861,29 @@ fn sumeragi_npos_parameters_from_parameters(params: &Parameters) -> Option<Sumer
         }
     }
 }
-fn offline_cash_mint_finality_next_epoch_parameter_from_parameters(
+fn kagemusha_mint_finality_next_epoch_parameter_from_parameters(
     params: &Parameters,
-) -> Option<OfflineCashMintFinalityNextEpochParameterV1> {
-    let id = OfflineCashMintFinalityNextEpochParameterV1::parameter_id();
+) -> Option<KagemushaMintFinalityNextEpochParameterV1> {
+    let id = KagemushaMintFinalityNextEpochParameterV1::parameter_id();
     let custom = params.custom().get(&id)?;
-    if let Some(parsed) = OfflineCashMintFinalityNextEpochParameterV1::from_custom_parameter(custom)
-    {
+    if let Some(parsed) = KagemushaMintFinalityNextEpochParameterV1::from_custom_parameter(custom) {
         return Some(parsed);
     }
     let payload = custom.payload();
     let payload_preview: String = payload.get().chars().take(256).collect();
-    match payload.try_into_any_norito::<OfflineCashMintFinalityNextEpochParameterV1>() {
+    match payload.try_into_any_norito::<KagemushaMintFinalityNextEpochParameterV1>() {
         Ok(parsed) if parsed.validate().is_ok() => Some(parsed),
         Ok(parsed) => {
             warn!(
                 error = ?parsed.validate().expect_err("invalid branch checked above"),
-                "Rejected invalid Offline Cash V1 next-roster parameter; payload_preview={payload_preview}"
+                "Rejected invalid Kagemusha V1 next-roster parameter; payload_preview={payload_preview}"
             );
             None
         }
         Err(error) => {
             warn!(
                 ?error,
-                "Failed to decode Offline Cash V1 next-roster parameter; payload_preview={payload_preview}"
+                "Failed to decode Kagemusha V1 next-roster parameter; payload_preview={payload_preview}"
             );
             None
         }
@@ -50098,7 +50524,7 @@ impl<'state> StateBlock<'state> {
             gov: self.gov.clone(),
             content: self.content.clone(),
             settlement: self.settlement.clone(),
-            offline_cash_v1_runtime_verifier: Arc::clone(&self.offline_cash_v1_runtime_verifier),
+            kagemusha_v1_runtime_verifier: Arc::clone(&self.kagemusha_v1_runtime_verifier),
             settlement_engine: self.settlement_engine.clone(),
             chain_id: self.chain_id.clone(),
             network_id: self.network_id,
@@ -59639,6 +60065,10 @@ fn install_prevalidated_replay_state(state: &mut State, mut final_state: State) 
     core::mem::swap(
         &mut state.lane_lifecycle_lock,
         &mut final_state.lane_lifecycle_lock,
+    );
+    core::mem::swap(
+        &mut state.queue_plan_admission_persistence_lock,
+        &mut final_state.queue_plan_admission_persistence_lock,
     );
     core::mem::swap(
         &mut state.state_commit_lock,

@@ -607,27 +607,26 @@ pub mod isi {
         }
         Ok(())
     }
-    /// Derive the deterministic Offline Cash V1 reserve custody account for an asset definition.
-    pub(crate) fn offline_cash_reserve_account_id(
+    /// Derive the deterministic Kagemusha V1 reserve custody account for an asset definition.
+    pub(crate) fn kagemusha_reserve_account_id(
         network_id: &NetworkId,
         definition_id: &AssetDefinitionId,
     ) -> AccountId {
         AccountId::new(iroha_crypto::derive_non_signing_ed25519_public_key(
-            b"iroha.offline-cash.v1.reserve-custody",
+            b"iroha.kagemusha.v1.reserve-custody",
             &[network_id.as_bytes(), definition_id.to_string().as_bytes()],
         ))
     }
-    pub(crate) fn ensure_offline_reserve_account(
+    pub(crate) fn ensure_kagemusha_reserve_account(
         asset_definition: &AssetDefinition,
         _authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let definition_id = asset_definition.id();
-        let derived =
-            offline_cash_reserve_account_id(state_transaction.network_id(), definition_id);
+        let derived = kagemusha_reserve_account_id(state_transaction.network_id(), definition_id);
         let reserve_account = match state_transaction
             .settlement
-            .offline
+            .kagemusha
             .reserve_accounts
             .entry(definition_id.clone())
         {
@@ -638,7 +637,7 @@ pub mod isi {
                         definition = %definition_id,
                         configured = %entry.get(),
                         derived = %derived,
-                        "Offline Cash reserve account overridden by deterministic derivation"
+                        "Kagemusha reserve account overridden by deterministic derivation"
                     );
                     entry.insert(derived.clone());
                 }
@@ -1637,14 +1636,14 @@ pub mod isi {
                 .into());
             }
             for (definition_id, reserve_account) in
-                &state_transaction.settlement.offline.reserve_accounts
+                &state_transaction.settlement.kagemusha.reserve_accounts
             {
                 if reserve_account != &account_id {
                     continue;
                 }
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "cannot unregister account {account_id}: it is the lazily derived Offline Cash reserve account for asset definition {definition_id}"
+                        "cannot unregister account {account_id}: it is the lazily derived Kagemusha reserve account for asset definition {definition_id}"
                     )
                     .into(),
                 )
@@ -1656,13 +1655,13 @@ pub mod isi {
                 .assets_in_account_iter(&account_id)
                 .find_map(|asset| {
                     let definition_id = asset.id().definition();
-                    (offline_cash_reserve_account_id(&network_id, definition_id) == account_id)
+                    (kagemusha_reserve_account_id(&network_id, definition_id) == account_id)
                         .then(|| definition_id.clone())
                 })
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "cannot unregister account {account_id}: it is the deterministic Offline Cash reserve account holding live assets for asset definition {definition_id}"
+                        "cannot unregister account {account_id}: it is the deterministic Kagemusha reserve account holding live assets for asset definition {definition_id}"
                     )
                     .into(),
                 )
@@ -2386,14 +2385,14 @@ pub mod isi {
                 &BTreeSet::from([asset_definition_id.clone()]),
                 &format!("unregister asset definition {asset_definition_id}"),
             )?;
-            for (storage_key, pool) in state_transaction.world.offline_cash_reserve_pools.iter() {
+            for (storage_key, pool) in state_transaction.world.kagemusha_reserve_pools.iter() {
                 if pool.key.asset != asset_definition_id {
                     continue;
                 }
                 if storage_key != &pool.key.liability_pool_id {
                     return Err(InstructionExecutionError::InvariantViolation(
                         format!(
-                            "cannot unregister asset definition {asset_definition_id}: its Offline Cash V1 reserve pool has a non-canonical storage key"
+                            "cannot unregister asset definition {asset_definition_id}: its Kagemusha V1 reserve pool has a non-canonical storage key"
                         )
                         .into(),
                     )
@@ -2402,7 +2401,7 @@ pub mod isi {
                 pool.validate().map_err(|error| {
                     InstructionExecutionError::InvariantViolation(
                         format!(
-                            "cannot unregister asset definition {asset_definition_id}: its Offline Cash V1 reserve pool is invalid: {error}"
+                            "cannot unregister asset definition {asset_definition_id}: its Kagemusha V1 reserve pool is invalid: {error}"
                         )
                         .into(),
                     )
@@ -2410,7 +2409,7 @@ pub mod isi {
                 let outstanding = pool.available().map_err(|error| {
                     InstructionExecutionError::InvariantViolation(
                         format!(
-                            "cannot unregister asset definition {asset_definition_id}: its Offline Cash V1 reserve liability is invalid: {error}"
+                            "cannot unregister asset definition {asset_definition_id}: its Kagemusha V1 reserve liability is invalid: {error}"
                         )
                         .into(),
                     )
@@ -2418,29 +2417,25 @@ pub mod isi {
                 if outstanding != 0 {
                     return Err(InstructionExecutionError::InvariantViolation(
                         format!(
-                            "cannot unregister asset definition {asset_definition_id}: its Offline Cash V1 reserve has {outstanding} outstanding atomic units"
+                            "cannot unregister asset definition {asset_definition_id}: its Kagemusha V1 reserve has {outstanding} outstanding atomic units"
                         )
                         .into(),
                     )
                     .into());
                 }
             }
-            for (_, operation) in state_transaction
-                .world
-                .offline_cash_reserve_operations
-                .iter()
-            {
+            for (_, operation) in state_transaction.world.kagemusha_reserve_operations.iter() {
                 let pool = operation.pool();
                 if pool.asset == asset_definition_id
                     && state_transaction
                         .world
-                        .offline_cash_reserve_pools
+                        .kagemusha_reserve_pools
                         .get(&pool.liability_pool_id)
                         .is_none()
                 {
                     return Err(InstructionExecutionError::InvariantViolation(
                         format!(
-                            "cannot unregister asset definition {asset_definition_id}: an Offline Cash V1 operation references a missing reserve pool"
+                            "cannot unregister asset definition {asset_definition_id}: an Kagemusha V1 operation references a missing reserve pool"
                         )
                         .into(),
                     )
@@ -2759,7 +2754,7 @@ pub mod isi {
                 .remove(asset_definition_id.clone());
             state_transaction
                 .settlement
-                .offline
+                .kagemusha
                 .reserve_accounts
                 .remove(&asset_definition_id);
             events.push(DataEvent::asset_definition(
@@ -7800,15 +7795,15 @@ mod tests {
         .expect("register asset definition");
         test(authority, asset_definition_id, &mut transaction);
     }
-    fn install_offline_cash_reserve_pool(
+    fn install_kagemusha_reserve_pool(
         transaction: &mut crate::state::StateTransaction<'_, '_>,
         asset_definition_id: &AssetDefinitionId,
         outstanding: bool,
     ) -> [u8; 32] {
-        use crate::smartcontracts::isi::offline::offline_cash_v1_reserve::{
-            OFFLINE_CASH_RESERVE_VERSION_V1, OfflineCashReservePoolKeyV1, OfflineCashReservePoolV1,
+        use crate::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::{
+            KAGEMUSHA_RESERVE_VERSION_V1, KagemushaReservePoolKeyV1, KagemushaReservePoolV1,
         };
-        use iroha_data_model::isi::{OfflineCashOperationKindV1, OfflineCashReserveReceiptV1};
+        use iroha_data_model::isi::{KagemushaOperationKindV1, KagemushaReserveReceiptV1};
 
         let network_id = *transaction.network_id();
         let asset_incarnation = *transaction
@@ -7816,19 +7811,19 @@ mod tests {
             .axt_asset_incarnations
             .get(asset_definition_id)
             .expect("registered asset definition incarnation");
-        let key = OfflineCashReservePoolKeyV1::new(
+        let key = KagemushaReservePoolKeyV1::new(
             network_id,
             asset_definition_id.clone(),
             asset_incarnation,
         )
-        .expect("canonical Offline Cash reserve key");
+        .expect("canonical Kagemusha reserve key");
         let kind = if outstanding {
-            OfflineCashOperationKindV1::TopUp
+            KagemushaOperationKindV1::TopUp
         } else {
-            OfflineCashOperationKindV1::Redemption
+            KagemushaOperationKindV1::Redemption
         };
-        let receipt = OfflineCashReserveReceiptV1 {
-            version: OFFLINE_CASH_RESERVE_VERSION_V1,
+        let receipt = KagemushaReserveReceiptV1 {
+            version: KAGEMUSHA_RESERVE_VERSION_V1,
             operation_id: [0x41; 32],
             kind,
             request_digest: [0x42; 32],
@@ -7845,19 +7840,19 @@ mod tests {
             transaction_hash: [0x45; 32],
             committed_at_ms: 1,
         };
-        let pool = OfflineCashReservePoolV1 {
-            version: OFFLINE_CASH_RESERVE_VERSION_V1,
+        let pool = KagemushaReservePoolV1 {
+            version: KAGEMUSHA_RESERVE_VERSION_V1,
             key,
             scale: 0,
             total_topups: 1,
             total_redemptions: if outstanding { 0 } else { 1 },
             latest_receipt: Some(receipt),
         };
-        pool.validate().expect("valid Offline Cash reserve pool");
+        pool.validate().expect("valid Kagemusha reserve pool");
         let pool_id = pool.key.liability_pool_id;
         transaction
             .world
-            .offline_cash_reserve_pools
+            .kagemusha_reserve_pools
             .insert(pool_id, pool);
         pool_id
     }
@@ -8258,7 +8253,7 @@ mod tests {
         );
     }
     #[test]
-    fn unregister_account_rejects_when_account_is_offline_reserve_account() {
+    fn unregister_account_rejects_when_account_is_kagemusha_reserve_account() {
         with_registered_account_unregistration_candidate(|authority, domain_id, account_id, tx| {
             let asset_definition_id = AssetDefinitionId::derive_from_components(
                 domain_id.clone(),
@@ -8276,16 +8271,16 @@ mod tests {
             .execute(&authority, tx)
             .expect("register asset definition");
             tx.settlement
-                .offline
+                .kagemusha
                 .reserve_accounts
                 .insert(asset_definition_id, account_id.clone());
             let err = Unregister::account(account_id.clone())
                 .execute(&authority, tx)
-                .expect_err("Offline Cash reserve account must not be unregistered");
+                .expect_err("Kagemusha reserve account must not be unregistered");
             let err_string = err.to_string();
             assert!(
-                err_string.contains("Offline Cash reserve account"),
-                "error should explain Offline Cash reserve conflict: {err_string}"
+                err_string.contains("Kagemusha reserve account"),
+                "error should explain Kagemusha reserve conflict: {err_string}"
             );
             assert!(
                 tx.world.accounts.get(&account_id).is_some(),
@@ -8294,7 +8289,7 @@ mod tests {
         });
     }
     #[test]
-    fn unregister_account_rejects_live_offline_reserve_after_transaction_boundary() {
+    fn unregister_account_rejects_live_kagemusha_reserve_after_transaction_boundary() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
@@ -8324,13 +8319,13 @@ mod tests {
                 .world
                 .asset_definition(&asset_definition_id)
                 .expect("registered asset definition");
-            super::isi::ensure_offline_reserve_account(
+            super::isi::ensure_kagemusha_reserve_account(
                 &asset_definition,
                 &authority,
                 &mut first_tx,
             )
-            .expect("materialize deterministic Offline Cash reserve account");
-            reserve_account_id = super::isi::offline_cash_reserve_account_id(
+            .expect("materialize deterministic Kagemusha reserve account");
+            reserve_account_id = super::isi::kagemusha_reserve_account_id(
                 first_tx.network_id(),
                 &asset_definition_id,
             );
@@ -8338,31 +8333,31 @@ mod tests {
                 AssetId::new(asset_definition_id.clone(), reserve_account_id.clone());
             Mint::asset_quantity(5_u32, reserve_asset_id.clone())
                 .execute(&authority, &mut first_tx)
-                .expect("mint live Offline Cash reserve backing");
+                .expect("mint live Kagemusha reserve backing");
             first_tx.apply();
         }
         let mut second_tx = block.transaction();
         assert!(
-            second_tx.settlement.offline.reserve_accounts.is_empty(),
+            second_tx.settlement.kagemusha.reserve_accounts.is_empty(),
             "transaction-local reserve bindings must not be required for protection"
         );
         let err = Unregister::account(reserve_account_id.clone())
             .execute(&authority, &mut second_tx)
-            .expect_err("live Offline Cash reserve backing must survive account unregistration");
+            .expect_err("live Kagemusha reserve backing must survive account unregistration");
         let err_string = err.to_string();
         assert!(
-            err_string.contains("Offline Cash reserve account"),
-            "error should explain the live Offline Cash reserve conflict: {err_string}"
+            err_string.contains("Kagemusha reserve account"),
+            "error should explain the live Kagemusha reserve conflict: {err_string}"
         );
         assert!(
             second_tx.world.accounts.get(&reserve_account_id).is_some(),
-            "Offline Cash reserve account should remain after rejected unregister"
+            "Kagemusha reserve account should remain after rejected unregister"
         );
         assert_eq!(
             second_tx
                 .world
                 .asset(&reserve_asset_id)
-                .expect("Offline Cash reserve backing should remain")
+                .expect("Kagemusha reserve backing should remain")
                 .value()
                 .as_ref()
                 .clone(),
@@ -8370,21 +8365,21 @@ mod tests {
         );
     }
     #[test]
-    fn ordinary_metadata_does_not_reserve_an_offline_reserve_account() {
-        let chain_id = ChainId::from("offline-reserve-testnet");
+    fn ordinary_metadata_does_not_reserve_a_kagemusha_reserve_account() {
+        let chain_id = ChainId::from("kagemusha-reserve-testnet");
         let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
             iroha_data_model::block::BlockHeader,
         >::from_untyped_unchecked(
-            iroha_crypto::Hash::new(b"offline-reserve-test-network"),
+            iroha_crypto::Hash::new(b"kagemusha-reserve-test-network"),
         ));
-        let domain_id: DomainId = DomainId::try_new("offline", "world").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("kagemusha", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         let asset_definition_id = AssetDefinitionId::derive_from_components(
             domain_id.clone(),
             "usd".parse().expect("asset definition name"),
         );
         let reserve_account_id =
-            super::isi::offline_cash_reserve_account_id(&network_id, &asset_definition_id);
+            super::isi::kagemusha_reserve_account_id(&network_id, &asset_definition_id);
         let mut metadata = Metadata::default();
         metadata.insert(
             "offline.enabled".parse().expect("legacy metadata key"),
@@ -8414,12 +8409,12 @@ mod tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
         assert!(
-            tx.settlement.offline.reserve_accounts.is_empty(),
+            tx.settlement.kagemusha.reserve_accounts.is_empty(),
             "ordinary asset metadata must not create a reserve binding"
         );
         Unregister::account(reserve_account_id.clone())
             .execute(&authority, &mut tx)
-            .expect("legacy-looking metadata must have no offline semantics");
+            .expect("legacy-looking metadata must have no Kagemusha semantics");
         assert!(
             tx.world.accounts.get(&reserve_account_id).is_none(),
             "ordinary unbound account should be removable"
@@ -9182,10 +9177,10 @@ mod tests {
         block.commit_world_overlay_for_testing().unwrap();
     }
     #[test]
-    fn asset_registration_is_independent_of_legacy_offline_metadata() {
+    fn asset_registration_is_independent_of_pre_release_cash_metadata() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let domain_id: DomainId = DomainId::try_new("offline", "universal").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("precash", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
         let asset_name: Name = "usd".parse().expect("asset name");
         let definition_id =
@@ -9215,18 +9210,18 @@ mod tests {
             .expect("register asset definition");
         assert!(
             tx.settlement
-                .offline
+                .kagemusha
                 .reserve_accounts
                 .get(&definition_id)
                 .is_none(),
-            "ordinary registration must not materialize offline state"
+            "ordinary registration must not materialize Kagemusha state"
         );
     }
     #[test]
-    fn register_asset_definition_defers_offline_state_until_offline_use() {
+    fn register_asset_definition_defers_kagemusha_state_until_kagemusha_use() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let domain_id: DomainId = DomainId::try_new("offline2", "universal").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("precash2", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
         let asset_name: Name = "eur".parse().expect("asset name");
         let definition_id =
@@ -9251,7 +9246,7 @@ mod tests {
             .expect("register asset definition");
         assert!(
             tx.settlement
-                .offline
+                .kagemusha
                 .reserve_accounts
                 .get(&definition_id)
                 .is_none(),
@@ -10634,10 +10629,10 @@ mod tests {
         );
     }
     #[test]
-    fn legacy_offline_metadata_is_ordinary_metadata() {
+    fn pre_release_cash_metadata_is_ordinary_metadata() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let domain_id: DomainId = DomainId::try_new("offline3", "universal").expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("precash3", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
         let asset_name: Name = "gbp".parse().expect("asset name");
         let definition_id =
@@ -10662,7 +10657,7 @@ mod tests {
             .expect("register asset definition");
         assert!(
             tx.settlement
-                .offline
+                .kagemusha
                 .reserve_accounts
                 .get(&definition_id)
                 .is_none(),
@@ -10677,18 +10672,18 @@ mod tests {
         .expect("set ordinary metadata");
         assert!(
             tx.settlement
-                .offline
+                .kagemusha
                 .reserve_accounts
                 .get(&definition_id)
                 .is_none(),
-            "metadata must not create offline runtime state"
+            "metadata must not create Kagemusha runtime state"
         );
     }
     #[test]
-    fn legacy_offline_false_metadata_does_not_change_runtime_state() {
+    fn pre_release_cash_false_metadata_does_not_change_runtime_state() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let domain_id = DomainId::try_new("offline-disable", "universal").expect("domain id");
+        let domain_id = DomainId::try_new("precash-disable", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
         let definition_id = AssetDefinitionId::derive_from_components(
             domain_id,
@@ -10696,7 +10691,7 @@ mod tests {
         );
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "Offline cash".to_owned(),
+            name: "Kagemusha".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),
@@ -10729,15 +10724,15 @@ mod tests {
             Some(&Json::new(false))
         );
         assert!(
-            tx.settlement.offline.reserve_accounts.is_empty(),
-            "legacy-looking metadata must not materialize offline state"
+            tx.settlement.kagemusha.reserve_accounts.is_empty(),
+            "legacy-looking metadata must not materialize Kagemusha state"
         );
     }
     #[test]
-    fn removing_legacy_offline_metadata_does_not_change_runtime_state() {
+    fn removing_pre_release_cash_metadata_does_not_change_runtime_state() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let domain_id = DomainId::try_new("offline-remove", "universal").expect("domain id");
+        let domain_id = DomainId::try_new("precash-remove", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
         let definition_id = AssetDefinitionId::derive_from_components(
             domain_id,
@@ -10745,7 +10740,7 @@ mod tests {
         );
         let definition = NewAssetDefinition {
             id: definition_id.clone(),
-            name: "Offline cash".to_owned(),
+            name: "Kagemusha".to_owned(),
             description: None,
             alias: None,
             spec: NumericSpec::integer(),
@@ -10767,7 +10762,7 @@ mod tests {
             .expect("store ordinary metadata");
         RemoveKeyValue::asset_definition(definition_id.clone(), metadata_key.clone())
             .execute(&authority, &mut tx)
-            .expect("remove offline opt-in metadata");
+            .expect("remove pre-release cash metadata");
         assert!(
             tx.world
                 .asset_definition(&definition_id)
@@ -10778,16 +10773,16 @@ mod tests {
             "metadata must be removed"
         );
         assert!(
-            tx.settlement.offline.reserve_accounts.is_empty(),
-            "metadata removal must not materialize offline state"
+            tx.settlement.kagemusha.reserve_accounts.is_empty(),
+            "metadata removal must not materialize Kagemusha state"
         );
     }
     #[test]
-    fn legacy_offline_true_metadata_does_not_change_runtime_state() {
+    fn pre_release_cash_true_metadata_does_not_change_runtime_state() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let domain_id: DomainId =
-            DomainId::try_new("offline-metadata-disabled", "universal").expect("domain id");
+            DomainId::try_new("precash-metadata-disabled", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
         let definition_id = AssetDefinitionId::derive_from_components(
             domain_id,
@@ -10825,8 +10820,8 @@ mod tests {
             "metadata should be stored unchanged"
         );
         assert!(
-            tx.settlement.offline.reserve_accounts.is_empty(),
-            "legacy-looking metadata must not materialize offline state"
+            tx.settlement.kagemusha.reserve_accounts.is_empty(),
+            "legacy-looking metadata must not materialize Kagemusha state"
         );
     }
     #[test]
@@ -11381,16 +11376,16 @@ mod tests {
         );
     }
     #[test]
-    fn unregister_asset_definition_removes_offline_reserve_mapping() {
+    fn unregister_asset_definition_removes_kagemusha_reserve_mapping() {
         with_registered_asset_definition_unregistration_candidate(
             |authority, asset_definition_id, tx| {
                 tx.settlement
-                    .offline
+                    .kagemusha
                     .reserve_accounts
                     .insert(asset_definition_id.clone(), ALICE_ID.clone());
                 assert!(
                     tx.settlement
-                        .offline
+                        .kagemusha
                         .reserve_accounts
                         .get(&asset_definition_id)
                         .is_some(),
@@ -11401,7 +11396,7 @@ mod tests {
                     .expect("unregister asset definition");
                 assert!(
                     tx.settlement
-                        .offline
+                        .kagemusha
                         .reserve_accounts
                         .get(&asset_definition_id)
                         .is_none(),
@@ -11411,17 +11406,17 @@ mod tests {
         );
     }
     #[test]
-    fn unregister_asset_definition_rejects_outstanding_offline_cash_liability() {
+    fn unregister_asset_definition_rejects_outstanding_kagemusha_liability() {
         with_registered_asset_definition_unregistration_candidate(
             |authority, asset_definition_id, tx| {
-                let pool_id = install_offline_cash_reserve_pool(tx, &asset_definition_id, true);
+                let pool_id = install_kagemusha_reserve_pool(tx, &asset_definition_id, true);
                 let error = Unregister::asset_definition(asset_definition_id.clone())
                     .execute(&authority, tx)
-                    .expect_err("outstanding Offline Cash liability must block unregistration");
+                    .expect_err("outstanding Kagemusha liability must block unregistration");
                 assert!(
                     error
                         .to_string()
-                        .contains("Offline Cash V1 reserve has 1 outstanding atomic units"),
+                        .contains("Kagemusha V1 reserve has 1 outstanding atomic units"),
                     "unexpected reserve-liability rejection: {error}"
                 );
                 assert!(
@@ -11429,23 +11424,23 @@ mod tests {
                         .asset_definitions
                         .get(&asset_definition_id)
                         .is_some(),
-                    "asset definition must remain while offline cash is redeemable"
+                    "asset definition must remain while Kagemusha is redeemable"
                 );
                 assert!(
-                    tx.world.offline_cash_reserve_pools.get(&pool_id).is_some(),
+                    tx.world.kagemusha_reserve_pools.get(&pool_id).is_some(),
                     "rejected unregistration must preserve the reserve pool"
                 );
             },
         );
     }
     #[test]
-    fn unregister_asset_definition_archives_fully_redeemed_offline_cash_pool() {
+    fn unregister_asset_definition_archives_fully_redeemed_kagemusha_pool() {
         with_registered_asset_definition_unregistration_candidate(
             |authority, asset_definition_id, tx| {
-                let pool_id = install_offline_cash_reserve_pool(tx, &asset_definition_id, false);
+                let pool_id = install_kagemusha_reserve_pool(tx, &asset_definition_id, false);
                 Unregister::asset_definition(asset_definition_id.clone())
                     .execute(&authority, tx)
-                    .expect("a fully redeemed Offline Cash incarnation may be retired");
+                    .expect("a fully redeemed Kagemusha incarnation may be retired");
                 assert!(
                     tx.world
                         .asset_definitions
@@ -11454,7 +11449,7 @@ mod tests {
                     "fully redeemed asset definition should be removed"
                 );
                 assert!(
-                    tx.world.offline_cash_reserve_pools.get(&pool_id).is_some(),
+                    tx.world.kagemusha_reserve_pools.get(&pool_id).is_some(),
                     "zeroed old-incarnation reserve state must remain archived"
                 );
             },

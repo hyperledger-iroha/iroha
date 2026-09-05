@@ -404,7 +404,7 @@ else
 fi
 
 tree_inventory='[]'
-for name in genesis.json client.toml config.toml; do
+for name in client.toml config.toml; do
   "${release_python[@]}" "$repo_root/scripts/copy_release_file.py" \
     --source "$repo_root/defaults/nexus/$name" \
     --output "$stage_root/config/$name" \

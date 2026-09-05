@@ -308,7 +308,6 @@ impl LifecycleValidatePhysicalCompletionV1 {
     pub(in crate::sumeragi) const fn retained_at(self) -> std::time::Instant {
         self.retained_at
     }
-
 }
 /// Guarded lifecycle Serve completion retained through LedgerV1 and reply delivery.
 #[must_use = "Certified-Serve completion must be settled and acknowledged"]
@@ -326,8 +325,7 @@ impl PreparedLifecycleValidateCompletionV1 {
         if !guarded.result().matches_dispatch_key(key) {
             return None;
         }
-        let retained_at =
-            queue.transfer_lifecycle_validate_completion(key, ownership_position)?;
+        let retained_at = queue.transfer_lifecycle_validate_completion(key, ownership_position)?;
         Some(Self {
             guarded,
             queue,
@@ -1248,8 +1246,8 @@ impl V2IoHandle {
         context: wire::HeightContext,
         key_pair: KeyPair,
         local_validator: Option<wire::ValidatorIndex>,
-        offline_cash_mint_finality_authority: Option<
-            Arc<crate::zk::offline_cash_v1_recursion::OfflineCashMintFinalityLocalAuthorityV1>,
+        kagemusha_mint_finality_authority: Option<
+            Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>,
         >,
         auxiliary_queue_capacity: usize,
         consensus_queue_capacity: usize,
@@ -1345,13 +1343,13 @@ impl V2IoHandle {
                                         task,
                                         restore_outbound_payload,
                                     } => {
-                                        sign_consensus_task_with_offline_cash_authority(
+                                        sign_consensus_task_with_kagemusha_authority(
                                             body_store
                                                 .as_ref()
                                                 .expect("body store remains live before Retire"),
                                             &context,
                                             &key_pair,
-                                            offline_cash_mint_finality_authority.as_deref(),
+                                            kagemusha_mint_finality_authority.as_deref(),
                                             task,
                                             restore_outbound_payload,
                                         )
@@ -1471,13 +1469,13 @@ impl V2IoHandle {
                                             }
                                         }),
                                     V2IoCommand::RecoveredLifecycleSign(task) => {
-                                        sign_recovered_lifecycle_task_with_offline_cash_authority(
+                                        sign_recovered_lifecycle_task_with_kagemusha_authority(
                                             body_store
                                                 .as_ref()
                                                 .expect("body store remains live before Retire"),
                                             &context,
                                             &key_pair,
-                                            offline_cash_mint_finality_authority.as_deref(),
+                                            kagemusha_mint_finality_authority.as_deref(),
                                             task,
                                         )
                                         .map(|result| {
@@ -1641,16 +1639,6 @@ impl V2IoHandle {
                                             false
                                         }
                                         Ok(true) => {
-                                            if let V2IoCompletion::LifecycleValidate(guarded) =
-                                                &completion
-                                            {
-                                                iroha_logger::warn!(
-                                                    lifecycle_ordinal = guarded
-                                                        .key()
-                                                        .lifecycle_ordinal(),
-                                                    "TEMP lifecycle Validate worker completion sealed"
-                                                );
-                                            }
                                             send_completion_with_lifecycle_ordinal(
                                                 &completion_tx,
                                                 &worker_admission,

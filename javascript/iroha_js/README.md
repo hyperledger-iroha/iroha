@@ -178,26 +178,74 @@ validator options use the exact TypeScript camelCase names; snake_case option
 aliases and alternate `payload`/`noritoBytes` byte fields are rejected before
 native dispatch. Fixture-bundle and Governance DAG block entries use `bytes`.
 
-## Offline cash SDK boundary
+## KAGEMUSHA SDK boundary
 
-The JavaScript package exposes the sole `OfflineCashV1` namespace. It models
-the five-message request, proof-bearing acceptance authorization, one-use
-ticket, unlinkable payment, and acknowledgement exchange, plus mint
+The JavaScript package exposes the sole `Kagemusha` namespace. It models the
+three-message signed request, committed payment, and acknowledgement exchange, plus mint
 authorization/credit binding and typed encrypted-credit opening, AAD, and
-envelope codecs. Governed sender recovery uses the fully cross-bound,
-16,384-byte `NoCommitClosure` canonical wire; its proof remains native-verified.
-Each request binds one positive exact amount. Every distinct valid payment
-against the same request remains protocol-acceptable; invoice deduplication is
-application policy. Strict canonical Norito and unpadded `oc1:` decoders enforce
-the raw/text message and composed-exchange caps before allocation.
+envelope codecs. Sender recovery reproduces the same hardware-committed
+canonical payment bytes from the durable outbox.
+
+```js
+import { Kagemusha } from "@iroha/iroha-js/kagemusha";
+```
+
+The root entry point re-exports that same namespace; no parallel product alias
+or version-suffixed product subpath is published.
+
+Requests carry the exact positive amount and non-zero recipient encryption key.
+Strict canonical Norito and unpadded `kgm1:` decoders enforce per-message bounds.
+`validateCompleteExchange` is the sole public spend-exchange validator: it
+requires the exact request, payment, and acknowledgement and caps their combined
+transport at 9,211 raw bytes or 12,288 `kgm1:` text bytes. A committed payment
+carries its hardware commit certificate and post-commit `PaymentProof`, whose
+semantic digest binds the output and actual ciphertext. There is no intent,
+ticket, request-mode, or alternate compatibility path.
 
 The namespace is codec and orchestration support only. Monetary proving,
 signing, encryption, decryption, and hardware state changes must come from the
 release-pinned native implementation. No public predecessor/successor link or
 software money-crypto fallback is exposed.
 
-`getOfflineCapability` reads the universally compiled four-field readiness
-projection: `cash_handoff_v1`, wire version `1`, secure-device lifecycle
+`DeviceMintStageCommand` and `DeviceMintStageResult` describe operation 16 at
+the host/native boundary. `encodeDeviceMintStageCommandShape` and
+`decodeDeviceMintStageCommandShapeExact` check the exact nested authorization
+and mint-credit archives, their derived credit ID, and their public bindings.
+The command is bounded to 65,536 bytes, each nested archive to 7,936 bytes, and
+the result to 128 bytes. The result codecs accept an optional command for
+credit-ID binding. These codecs do not execute a device transition or
+authenticate a result: the qualified native response authenticator remains
+mandatory, and private openings and complete Guard certificates stay native.
+
+Top-up is payer-signed in the first-release protocol. Build the sole
+`TopUpKagemushaV1` instruction with
+`Kagemusha.buildTopUpInstruction(request)` (or obtain its exact framed
+`InstructionBox` with `encodeTopUpInstruction`), place exactly that instruction
+in a normal transaction, and sign it with the payer. Submit the resulting
+canonical version-1 `SignedTransaction` bytes with the same exact binary
+operation ID embedded in the request:
+
+```js
+await torii.submitKagemushaTopUp(signedTransaction, request.operationId);
+```
+
+The SDK sends those bytes unchanged to `POST /v1/kagemusha/top-up` and uses the
+lowercase hexadecimal operation ID as `Idempotency-Key`. There is no unsigned
+top-up overload, wrapper envelope, or server-signing path. The embedded top-up
+request may be up to 16 KiB so a full paired mint-authorization proof fits;
+the enclosing transaction uses Torii's normal signed-transaction ingress
+limit. `Kagemusha.topUpInstructionWireId` is the exact
+`iroha.kagemusha.v1.top_up` registry ID. The standard instruction transaction
+builder signature-binds `QueuePlanSynced`; KAGEMUSHA top-ups must not be built
+with ordinary queue admission. Redemption retains its typed request submission
+surface. Both submission methods require the exact operation resource in
+`Location`: HTTP 202 is accepted only with a pending status and a positive
+`Retry-After`, while HTTP 200 is accepted only for applied or rejected status
+without `Retry-After`. Applied monetary results remain inaccessible in the
+returned wrapper until a caller-pinned finality verifier authenticates them.
+
+`getKagemushaReadiness` reads the universally compiled four-field readiness
+projection: `kagemusha_handoff_v1`, wire version `1`, secure-device lifecycle
 version `1`, and `ready: true`. Monetary transitions still require a qualified
 non-forking hardware profile; successful transport decoding alone grants no
 monetary authority.
@@ -3348,7 +3396,7 @@ part of the portable registry tarball.
 Node.js clients can register confidential assets and schedule policy
 transitions without hand-writing Norito payloads. ABI V1 does not expose
 generic shield, transfer, or unshield instructions: wallets use the typed,
-proof-bound `OfflineCashV1` mint and redemption operations described above.
+proof-bound `Kagemusha` mint and redemption operations described above.
 The underlying confidential proof helpers remain available for those typed flows.
 
 ```js
@@ -4146,10 +4194,10 @@ Asset and RWA quantities use the stricter `QuantityInput` surface:
 `number` is deliberately rejected, and strings are never trimmed or rewritten;
 for example `"1"` is valid while `" 1"`, `"01"`, `"+1"`, and `"1.0"` are not.
 
-`OfflineCashV1` exposes canonical wire encoding and verification, not a software
-prover or a software fallback for device authority. Peer-transfer keys and
-state transitions remain hardware-bound; applications must obtain transition
-proofs from a qualified wallet implementation.
+`Kagemusha` exposes canonical wire encoding and public binding checks, not a
+cryptographic proof verifier, software prover, or fallback for device authority.
+Peer-transfer keys and state transitions remain hardware-bound; applications
+must obtain and verify transition proofs through a qualified wallet implementation.
 
 for await (const assetDef of torii.iterateAssetDefinitions({
   pageSize: 50,

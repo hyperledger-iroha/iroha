@@ -4,29 +4,30 @@ package org.hyperledger.iroha.android.offline;
 public final class IrohaPeerWireLimitsV1 {
   public static final IrohaPeerWireLimitsV1 PEER_V1 =
       new IrohaPeerWireLimitsV1(
-          OfflineCashWireV1.MAXIMUM_PAYMENT_BYTES,
-          OfflineCashWireV1.MAXIMUM_PAYMENT_BYTES);
+          KagemushaWireV1.MAXIMUM_PAYMENT_BYTES,
+          KagemushaWireV1.MAXIMUM_PAYMENT_BYTES);
 
   private final int maximumCanonicalBytes;
-  private final int maximumOfflineCashEncodedBytes;
+  private final int maximumKagemushaEncodedBytes;
 
   public IrohaPeerWireLimitsV1(
       final int maximumCanonicalBytes,
-      final int maximumOfflineCashEncodedBytes) {
+      final int maximumKagemushaEncodedBytes) {
     require(maximumCanonicalBytes > 0
-        && maximumCanonicalBytes <= OfflineCashWireV1.MAXIMUM_PAYMENT_BYTES);
-    require(maximumOfflineCashEncodedBytes > 0
-        && maximumOfflineCashEncodedBytes <= OfflineCashWireV1.MAXIMUM_PAYMENT_BYTES);
+        && maximumCanonicalBytes <= KagemushaWireV1.MAXIMUM_PAYMENT_BYTES);
+    require(maximumKagemushaEncodedBytes > 0
+        && maximumKagemushaEncodedBytes
+            <= KagemushaWireV1.MAXIMUM_PAYMENT_BYTES);
     this.maximumCanonicalBytes = maximumCanonicalBytes;
-    this.maximumOfflineCashEncodedBytes = maximumOfflineCashEncodedBytes;
+    this.maximumKagemushaEncodedBytes = maximumKagemushaEncodedBytes;
   }
 
   public int maximumCanonicalBytes() {
     return maximumCanonicalBytes;
   }
 
-  public int maximumOfflineCashEncodedBytes() {
-    return maximumOfflineCashEncodedBytes;
+  public int maximumKagemushaEncodedBytes() {
+    return maximumKagemushaEncodedBytes;
   }
 
   private static void require(final boolean condition) {

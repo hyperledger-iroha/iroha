@@ -1864,27 +1864,41 @@ CRDT/commutative precompiles (optional)
 
 ---
 
-## Offline Cash V1 (protocol-bound aggregate balance)
+## KAGEMUSHA V1 (protocol-bound aggregate balance)
 
 The first release does not expose generic deposit, transfer, or withdrawal
-instructions. Its sole offline-cash settlement surface is:
+instructions. Its sole KAGEMUSHA settlement surface is:
 
-- `TopUpOfflineCashV1`, which atomically debits the payer, credits the sole
+- `TopUpKagemushaV1`, which atomically debits the payer, credits the sole
   reserve for `(network, asset)`, and fixes one hardware-bound mint credit;
-- device-to-device `SendSplit` and `ReceiveFold`, which move value between
-  recursively proven aggregate balances without touching consensus state; and
-- `RedeemOfflineCashV1`, which verifies a hardware-bound full or partial
+- device-to-device `SendSplit` and singular `ReceiveFold`, which move value
+  between recursively proven aggregate balances without touching consensus
+  state; and
+- `RedeemKagemushaV1`, which verifies a hardware-bound full or partial
   redemption voucher, consumes one terminal nullifier, debits the reserve, and
   credits the beneficiary atomically.
+
+The top-up Torii adapter accepts only a canonical versioned
+`SignedTransaction` containing exactly one `TopUpKagemushaV1`. It verifies the
+network and transaction signature, requires `authority == request.payer`, and
+binds the HTTP idempotency key to the embedded operation ID before submitting
+the same signed transaction through strict durable ingress. Torii never
+substitutes its configured redemption issuer as the payer. The bounded embedded
+request is at most 16 KiB; enabled nodes reserve at least 32 KiB of ordinary
+signed-transaction ingress capacity for its framing.
 
 Each hardware lane and asset has one hidden `u128` balance, policy and device
 binding, hardware epoch, logical sequence, consumed-credit sparse-Merkle root,
 nonce, and public commitment. The fixed-shape paired-Pasta recursion implements
-`Bootstrap`, `MintFold`, `SendSplit`, `ReceiveFold`, `RedeemSplit`, and `Rotate`.
-It verifies the normalized GuardBundle, recursively verifies every consumed
-parent proof, and folds all prior proof obligations into constant-size history
-accumulators. No hop, note, input, origin, fan-in, ancestry, or proof-depth
-field participates in admission.
+`Bootstrap`, `MintFold`, `SendSplit`, `ReceiveFold`, `RedeemSplit`, and
+hardware-only `Rotate`. Each `ReceiveFold` consumes exactly one durably staged
+credit, proves its ID was absent from the sparse-Merkle replay root, and updates
+that root. Wallets may stage any number of credits and perform these serialized
+folds continuously or synchronously before spending. The relation verifies the
+normalized GuardBundle and folds every prior proof obligation into constant-size
+history accumulators. No hop, note, input, origin, fan-in, ancestry, receipt
+count, historical transition count, or proof-depth field participates in
+admission.
 
 Conservation is enforced twice: circuits prove exact balance arithmetic, while
 the ledger maintains `reserve = total_topups - total_redemptions` with checked

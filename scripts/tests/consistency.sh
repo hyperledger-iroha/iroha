@@ -68,6 +68,32 @@ do_render_check() {
     fi
 }
 
+check_genesis_template() {
+    local target="defaults/genesis.template.json"
+
+    if ! python3 - "$target" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+with path.open(encoding="utf-8") as source:
+    value = json.load(source)
+if not isinstance(value, dict):
+    raise SystemExit("genesis source template must be a JSON object")
+if "kagemusha_mint_finality" in value:
+    raise SystemExit("genesis source template must not contain operator authority")
+if value.get("consensus_fingerprint", object()) is not None:
+    raise SystemExit("genesis source template must leave consensus_fingerprint null")
+PY
+    then
+        echo "[FAIL] $target is not a canonical incomplete genesis source template"
+        exit_code=1
+        return
+    fi
+    echo "[OK] $target is a canonical incomplete genesis source template"
+}
+
 do_check_swarm() {
     local peers="$1"
     local image="$2"
@@ -77,9 +103,6 @@ do_check_swarm() {
     do_check "$cmd_base --out-file $target $extra" "$target"
 }
 
-# The canonical zero-chain fixture historically uses the all-A5 NPoS seed.
-# Keep it explicit now that production NPoS generation rejects implicit seeds.
-cmd_genesis="${bin_kagami[@]} genesis generate --ivm-dir . --genesis-public-key ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4 --vrf-seed-hex A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5"
 cmd_schema="${bin_kagami[@]} advanced schema"
 cmd_iroha_help="${bin_iroha[@]} tools markdown-help"
 cmd_kagami_help="${bin_kagami[@]} advanced markdown-help"
@@ -88,21 +111,21 @@ tasks=()
 
 case "${1:-}" in
     "all")
-        tasks=(genesis schema cli-help docker-compose)
+        tasks=(genesis-template schema cli-help docker-compose)
         ;;
-    "genesis"|"schema"|"cli-help"|"docker-compose")
+    "genesis-template"|"schema"|"cli-help"|"docker-compose")
         tasks=("$1")
         ;;
     *)
-        echo "Usage: $0 [--update] {all|genesis|schema|cli-help|docker-compose}"
+        echo "Usage: $0 [--update] {all|genesis-template|schema|cli-help|docker-compose}"
         exit 2
         ;;
 esac
 
 for task in "${tasks[@]}"; do
     case "$task" in
-        "genesis")
-            do_check "$cmd_genesis" "defaults/genesis.json"
+        "genesis-template")
+            check_genesis_template
             ;;
         "schema")
             do_check "$cmd_schema" "specs/references/schema.json"

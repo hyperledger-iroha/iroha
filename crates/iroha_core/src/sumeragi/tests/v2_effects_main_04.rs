@@ -202,7 +202,7 @@ fn live_lifecycle_validation_marker_promotes_idempotently_and_authorizes_vote_si
 
     let conflicting = ValidatedBodyReceipt::for_test_with_commitment(
         durable,
-        wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"conflicting live marker parent state"),
             Hash::new(b"conflicting live marker post state"),
             Hash::new(b"conflicting live marker writes"),
@@ -259,7 +259,7 @@ fn vote_signing_requires_the_exact_fsynced_execution_commitment() {
         fixture.manifest.clone(),
     );
     let mut drifted_vote = vote(&fixture);
-    drifted_vote.execution_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+    drifted_vote.execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"drifted effects fixture parent state"),
         Hash::new(b"drifted effects fixture post state"),
         Hash::new(b"drifted effects fixture ordinary writes"),

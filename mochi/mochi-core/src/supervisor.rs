@@ -28,6 +28,7 @@ use iroha_crypto::{
 };
 use iroha_data_model::{
     block::BlockHeader,
+    isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1,
     parameter::system::SumeragiConsensusMode,
     peer::PeerId,
     prelude::{AccountId, ChainId, NetworkId},
@@ -4318,6 +4319,63 @@ impl Drop for TemporaryGenesisKeyFile {
         }
     }
 }
+
+#[derive(Debug)]
+struct TemporaryKagemushaMintFinalityParametersFile {
+    path: PathBuf,
+}
+
+impl TemporaryKagemushaMintFinalityParametersFile {
+    fn create(
+        genesis_dir: &Path,
+        parameters: &KagemushaMintFinalityGenesisParametersV1,
+    ) -> Result<Self> {
+        const MAX_CREATE_ATTEMPTS: u8 = 32;
+        let genesis_dir = fs::canonicalize(genesis_dir)?;
+        let encoded = json::to_vec_pretty(parameters)?;
+        for attempt in 0..MAX_CREATE_ATTEMPTS {
+            let path = genesis_dir.join(format!(
+                ".mochi-kagemusha-mint-finality-{}-{}-{attempt}.json",
+                std::process::id(),
+                timestamp_ms()
+            ));
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            options.mode(0o600);
+            let mut file = match options.open(&path) {
+                Ok(file) => file,
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error.into()),
+            };
+            let guard = Self { path };
+            file.write_all(&encoded)?;
+            file.sync_all()?;
+            return Ok(guard);
+        }
+        Err(SupervisorError::Config(format!(
+            "failed to allocate a KAGEMUSHA mint-finality parameter file beneath `{}`",
+            genesis_dir.display()
+        )))
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TemporaryKagemushaMintFinalityParametersFile {
+    fn drop(&mut self) {
+        if let Err(error) = fs::remove_file(&self.path)
+            && error.kind() != io::ErrorKind::NotFound
+        {
+            eprintln!(
+                "warning: failed to remove temporary KAGEMUSHA mint-finality parameters `{}`: {error}",
+                self.path.display()
+            );
+        }
+    }
+}
 /// Build the canonical signed genesis body used by Mochi's Kagami test stub.
 ///
 /// This helper is intentionally available only to tests and consumers which
@@ -4394,6 +4452,11 @@ impl GenesisMaterial {
         let expected_hash_path = genesis_dir.join(GENESIS_EXPECTED_HASH_FILE_NAME);
         let public_key_path = genesis_dir.join(GENESIS_PUBLIC_KEY_FILE_NAME);
         let key_pair = KeyPair::random();
+        let kagemusha_mint_finality = genesis::dev_sandbox_kagemusha_mint_finality_parameters(
+            chain_id,
+            generation_id,
+            peers.iter().map(PeerSpec::peer_id),
+        )?;
         let manifest = Self::generate_manifest(
             binaries,
             &genesis_dir,
@@ -4402,6 +4465,7 @@ impl GenesisMaterial {
             consensus_mode,
             genesis_profile,
             vrf_seed_hex,
+            &kagemusha_mint_finality,
         )?;
         // Public Kagami profiles own their signed cadence and are checked by
         // `kagami verify`. Unprofiled Mochi sandboxes bind the documented
@@ -4750,9 +4814,14 @@ impl GenesisMaterial {
         consensus_mode: SumeragiConsensusMode,
         genesis_profile: Option<GenesisProfile>,
         vrf_seed_hex: Option<&str>,
+        kagemusha_mint_finality: &KagemushaMintFinalityGenesisParametersV1,
     ) -> Result<RawGenesisTransaction> {
         validate_genesis_profile_inputs(genesis_profile, vrf_seed_hex)?;
         let kagami = binaries.ensure_kagami_ready()?;
+        let kagemusha_mint_finality_file = TemporaryKagemushaMintFinalityParametersFile::create(
+            genesis_dir,
+            kagemusha_mint_finality,
+        )?;
         let mut command = Command::new(kagami);
         command
             .current_dir(genesis_dir)
@@ -4763,7 +4832,9 @@ impl GenesisMaterial {
             .arg("--genesis-public-key")
             .arg(genesis_public_key.to_string())
             .arg("--chain-id")
-            .arg(chain_id);
+            .arg(chain_id)
+            .arg("--kagemusha-mint-finality-parameters")
+            .arg(kagemusha_mint_finality_file.path());
         if let Some(profile) = genesis_profile {
             command.arg("--profile").arg(profile.as_kagami_arg());
         }

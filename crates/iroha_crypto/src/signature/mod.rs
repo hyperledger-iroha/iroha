@@ -734,6 +734,15 @@ impl<'a, T> DecodeFromSlice<'a> for SignatureOf<T> {
     }
 }
 impl<T> SignatureOf<T> {
+    /// Wipe signature bytes before discarding a confidential typed copy.
+    ///
+    /// The signature intentionally becomes invalid and must not be used after
+    /// this call. This is for restricted plaintext containers in which an
+    /// otherwise-public signature is itself confidential metadata.
+    pub fn zeroize_for_confidential_discard(&mut self) {
+        <Self as Zeroize>::zeroize(self);
+    }
+
     /// Fallibly create [`SignatureOf`] from the given hash with [`crate::KeyPair::private_key`].
     ///
     /// # Errors

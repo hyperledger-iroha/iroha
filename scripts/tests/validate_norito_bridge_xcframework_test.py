@@ -8,6 +8,7 @@ import importlib.util
 import json
 from pathlib import Path
 import plistlib
+import re
 import sys
 import tempfile
 import types
@@ -137,6 +138,39 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
+    def test_native_symbol_inventories_match_authoritative_header(self) -> None:
+        """Source inventories must require current C exports before packaging."""
+        header = (
+            ROOT / "crates/connect_norito_bridge/include/connect_norito_bridge.h"
+        ).read_text(encoding="utf-8")
+        for symbol in validator.EXPECTED_REQUIRED_SYMBOLS:
+            with self.subTest(symbol=symbol):
+                self.assertRegex(header, rf"\b{re.escape(symbol)}\s*\(")
+
+        builder = (ROOT / "scripts/build_norito_xcframework.sh").read_text(
+            encoding="utf-8"
+        )
+        builder_inventory = builder.split('  "required_symbols": [', 1)[1].split(
+            "\n  ],", 1
+        )[0]
+        self.assertEqual(
+            re.findall(r'"([a-z][a-z0-9_]+)"', builder_inventory),
+            validator.EXPECTED_REQUIRED_SYMBOLS,
+        )
+        checker = (ROOT / "scripts/check_mobile_sdk_artifacts.sh").read_text(
+            encoding="utf-8"
+        )
+        checker_inventory = checker.split("KAGEMUSHA_C_SYMBOLS=(\n", 1)[1].split(
+            "\n)", 1
+        )[0]
+        self.assertEqual(
+            checker_inventory.split(),
+            [
+                symbol for symbol in validator.EXPECTED_REQUIRED_SYMBOLS
+                if symbol.startswith("connect_norito_kagemusha_")
+            ],
+        )
+
     def write_manifest(self) -> None:
         self.manifest.write_text(
             json.dumps(self.payload, indent=2) + "\n", encoding="utf-8"
@@ -171,6 +205,20 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
 
     def test_accepts_only_the_canonical_inventory(self) -> None:
         self.validate()
+
+    def test_rejects_manifests_missing_either_mint_stage_export(self) -> None:
+        for missing in (
+            "connect_norito_kagemusha_device_mint_stage_command_v1_validate",
+            "connect_norito_kagemusha_device_mint_stage_result_v1_validate",
+        ):
+            with self.subTest(missing=missing):
+                self.payload["required_symbols"] = [
+                    symbol for symbol in validator.EXPECTED_REQUIRED_SYMBOLS
+                    if symbol != missing
+                ]
+                self.write_manifest()
+                with self.assertRaisesRegex(validator.ValidationError, "required symbol inventory"):
+                    self.validate()
 
     def test_repository_provenance_rejects_dirty_source_without_allowance(self) -> None:
         self.payload["source_tree_dirty"] = True

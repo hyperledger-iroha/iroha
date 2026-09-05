@@ -17,14 +17,14 @@ mod hash;
 #[cfg(feature = "pqc")]
 /// Hybrid KEM/DEM helpers used by SoraFS payload envelopes.
 pub mod hybrid;
+/// Qualified-provider cryptography for KAGEMUSHA V1 credit envelopes.
+pub mod kagemusha;
 /// Key exchange protocols.
 pub mod kex;
 mod merkle;
 #[cfg(feature = "pqc")]
 mod mldsa_seed;
 mod multihash;
-/// Qualified-provider cryptography for Offline Cash V1 credit envelopes.
-pub mod offline_cash;
 /// Lane privacy commitment registry (NX-10).
 pub mod privacy;
 mod protocol_key;
@@ -162,6 +162,17 @@ use crate::secrecy::Secret;
 pub use algorithm::{Algorithm, ED_25519, SECP_256_K1};
 #[cfg(feature = "bls")]
 pub use algorithm::{BLS_NORMAL, BLS_SMALL};
+
+/// Securely wipe a supported value before confidential discard.
+///
+/// This bridge lets dependent crates erase scalars and containers using
+/// [`zeroize::Zeroize`]'s volatile writes and compiler fences without taking a
+/// separate dependency on `zeroize`. The value may intentionally become
+/// invalid and must not be used after this call.
+pub fn zeroize_value_for_confidential_discard<T: Zeroize + ?Sized>(value: &mut T) {
+    <T as Zeroize>::zeroize(value);
+}
+
 /// Domain separator for BLS Proof-of-Possession over a validator public key.
 /// Message = Hash("iroha:bls:pop:v1" || `pk_bytes`)
 #[cfg(feature = "bls")]

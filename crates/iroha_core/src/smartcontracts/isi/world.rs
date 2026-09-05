@@ -318,6 +318,116 @@ pub mod isi {
             message.into().into(),
         ))
     }
+    fn validate_alias_registry_routing_activation(
+        custom: &iroha_data_model::parameter::CustomParameter,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        use iroha_data_model::alias_setup::AliasRegistryRoutingActivationV1;
+
+        let Some(next) =
+            AliasRegistryRoutingActivationV1::from_custom_parameter(custom).map_err(|error| {
+                invalid_smart_contract_parameter(format!(
+                    "invalid alias registry routing activation: {error}"
+                ))
+            })?
+        else {
+            return Ok(());
+        };
+        let previous = state_transaction
+            .world
+            .parameters
+            .get()
+            .custom()
+            .get(custom.id())
+            .map(|installed| {
+                AliasRegistryRoutingActivationV1::from_custom_parameter(installed)?.ok_or_else(
+                    || {
+                        norito::json::Error::Message(
+                            "installed activation parameter identifier does not match its key"
+                                .to_owned(),
+                        )
+                    },
+                )
+            })
+            .transpose()
+            .map_err(|error| {
+                invalid_smart_contract_parameter(format!(
+                    "invalid installed alias registry routing activation: {error}"
+                ))
+            })?;
+        next.validate_installation(previous.as_ref(), state_transaction.block_height())
+            .map_err(invalid_smart_contract_parameter)
+    }
+    fn validate_alias_dataspace_bootstrap_grant(
+        custom: &iroha_data_model::parameter::CustomParameter,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        use iroha_data_model::alias_setup::{AliasDataspaceBootstrapGrantV1, AliasTargetV1};
+
+        let Some(next) =
+            AliasDataspaceBootstrapGrantV1::from_custom_parameter(custom).map_err(|error| {
+                invalid_smart_contract_parameter(format!(
+                    "invalid alias dataspace bootstrap grant: {error}"
+                ))
+            })?
+        else {
+            return Ok(());
+        };
+        if let Some(installed) = state_transaction
+            .world
+            .parameters
+            .get()
+            .custom()
+            .get(custom.id())
+        {
+            let previous = AliasDataspaceBootstrapGrantV1::from_custom_parameter(installed)
+                .map_err(|error| {
+                    invalid_smart_contract_parameter(format!(
+                        "invalid installed alias dataspace bootstrap grant: {error}"
+                    ))
+                })?
+                .ok_or_else(|| {
+                    invalid_smart_contract_parameter(
+                        "installed alias dataspace bootstrap grant identifier does not match its key",
+                    )
+                })?;
+            return if previous == next {
+                Ok(())
+            } else {
+                Err(invalid_smart_contract_parameter(
+                    "alias dataspace bootstrap grant is immutable once installed",
+                ))
+            };
+        }
+        if state_transaction.world.accounts.get(&next.owner).is_none() {
+            return Err(invalid_smart_contract_parameter(
+                "alias dataspace bootstrap grant owner must already exist",
+            ));
+        }
+        let target = AliasTargetV1::Dataspace(next.dataspace);
+        crate::alias_setup::validate_resolved_alias_target(
+            state_transaction.world(),
+            &state_transaction.nexus.dataspace_catalog,
+            &target,
+            state_transaction.block_unix_timestamp_ms(),
+        )
+        .map_err(|error| {
+            invalid_smart_contract_parameter(format!(
+                "alias dataspace bootstrap grant mapping conflicts: {error}"
+            ))
+        })?;
+        let selector = crate::alias_setup::selector_for_resolved_alias_target(&target)
+            .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?;
+        if crate::sns::record_by_selector(state_transaction.world(), &selector)
+            .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?
+            .is_some()
+        {
+            return Err(invalid_smart_contract_parameter(
+                "alias dataspace bootstrap grant must be installed before the first SNS record",
+            ));
+        }
+        Ok(())
+    }
     #[derive(crate::json_macros::JsonDeserialize)]
     struct GovernedGasRate {
         asset: String,
@@ -20209,7 +20319,7 @@ pub mod isi {
             for asset_definition_id in remove_asset_definitions {
                 state_transaction
                     .settlement
-                    .offline
+                    .kagemusha
                     .reserve_accounts
                     .remove(&asset_definition_id);
                 state_transaction
@@ -20484,6 +20594,8 @@ pub mod isi {
         ) -> Result<(), Error> {
             super::parameter_validation::validate_ivm_heap_parameter(self.inner())?;
             if let Parameter::Custom(custom) = self.inner() {
+                validate_alias_registry_routing_activation(custom, state_transaction)?;
+                validate_alias_dataspace_bootstrap_grant(custom, state_transaction)?;
                 validate_governed_pipeline_gas_parameter(custom)?;
                 validate_hijiri_parameters(custom, state_transaction)?;
                 validate_da_ingest_admission_policy(custom, state_transaction)?;
@@ -20717,13 +20829,13 @@ pub mod isi {
                                 }
                             }
                             if next.id()
-                                == &iroha_data_model::parameter::system::OfflineCashMintFinalityNextEpochParameterV1::parameter_id()
+                                == &iroha_data_model::parameter::system::KagemushaMintFinalityNextEpochParameterV1::parameter_id()
                             {
-                                let staged = iroha_data_model::parameter::system::OfflineCashMintFinalityNextEpochParameterV1::from_custom_parameter(&next)
+                                let staged = iroha_data_model::parameter::system::KagemushaMintFinalityNextEpochParameterV1::from_custom_parameter(&next)
                                     .ok_or_else(|| {
                                         InstructionExecutionError::InvalidParameter(
                                             InvalidParameterError::SmartContract(
-                                                "invalid Offline Cash V1 next mint-finality roster parameter"
+                                                "invalid Kagemusha V1 next mint-finality roster parameter"
                                                     .to_owned(),
                                             ),
                                         )
@@ -20735,11 +20847,11 @@ pub mod isi {
                                     .custom()
                                     .get(next.id())
                                 {
-                                    let previous = iroha_data_model::parameter::system::OfflineCashMintFinalityNextEpochParameterV1::from_custom_parameter(previous_custom)
+                                    let previous = iroha_data_model::parameter::system::KagemushaMintFinalityNextEpochParameterV1::from_custom_parameter(previous_custom)
                                         .ok_or_else(|| {
                                             InstructionExecutionError::InvalidParameter(
                                                 InvalidParameterError::SmartContract(
-                                                    "installed Offline Cash V1 next mint-finality roster parameter is invalid"
+                                                    "installed Kagemusha V1 next mint-finality roster parameter is invalid"
                                                         .to_owned(),
                                                 ),
                                             )
@@ -20749,7 +20861,7 @@ pub mod isi {
                                     {
                                         return Err(InstructionExecutionError::InvalidParameter(
                                             InvalidParameterError::SmartContract(
-                                                "Offline Cash V1 next mint-finality roster cannot change network or roll back its epoch"
+                                                "Kagemusha V1 next mint-finality roster cannot change network or roll back its epoch"
                                                     .to_owned(),
                                             ),
                                         ));
@@ -33358,7 +33470,7 @@ seiyaku GovernanceLifecycle {
                 "asset definition should remain after rejected unregister"
             );
         });
-        world_test!(unregister_domain_removes_offline_reserve_mappings_for_domain_asset_definitions {
+        world_test!(unregister_domain_removes_kagemusha_reserve_mappings_for_domain_asset_definitions {
             let state = blank_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "world").expect("domain id parses");
@@ -33367,11 +33479,11 @@ seiyaku GovernanceLifecycle {
                 .expect_execute(&ALICE_ID, &mut stx, "register cleanup domain");
             let reward_def = AssetDefinitionId::derive_from_components(
                 domain_id.clone(),
-                "offline".parse().unwrap(),
+                "kagemusha".parse().unwrap(),
             );
             Register::asset_definition(NewAssetDefinition {
                 id: reward_def.clone(),
-                name: "offline".to_owned(),
+                name: "Kagemusha".to_owned(),
                 description: None,
                 alias: None,
                 spec: NumericSpec::integer(),
@@ -33382,38 +33494,38 @@ seiyaku GovernanceLifecycle {
                 owning_domain: None,
             })
             .expect_execute(&ALICE_ID, &mut stx, "register cleanup-domain asset definition");
-            let escrow = crate::smartcontracts::isi::domain::isi::offline_cash_reserve_account_id(
+            let escrow = crate::smartcontracts::isi::domain::isi::kagemusha_reserve_account_id(
                 stx.network_id(),
                 &reward_def,
             );
             stx.settlement
-                .offline
+                .kagemusha
                 .reserve_accounts
                 .insert(reward_def.clone(), escrow);
             assert!(
                 stx.settlement
-                    .offline
+                    .kagemusha
                     .reserve_accounts
                     .get(&reward_def)
                     .is_some(),
-                "Offline Cash reserve mapping should exist before domain unregister"
+                "Kagemusha reserve mapping should exist before domain unregister"
             );
             Unregister::domain(domain_id.clone())
-                .expect_execute(&ALICE_ID, &mut stx, "domain unregister should remove domain-local Offline Cash reserve mapping");
+                .expect_execute(&ALICE_ID, &mut stx, "domain unregister should remove domain-local Kagemusha reserve mapping");
             assert!(
                 stx.settlement
-                    .offline
+                    .kagemusha
                     .reserve_accounts
                     .get(&reward_def)
                     .is_none(),
-                "Offline Cash reserve mapping should be removed with domain asset definitions"
+                "Kagemusha reserve mapping should be removed with domain asset definitions"
             );
             assert!(
                 stx.world.domains.get(&domain_id).is_none(),
                 "domain should be removed"
             );
         });
-        world_test!(unregister_domain_preserves_accounts_with_active_settlement_oracle_and_offline_state {
+        world_test!(unregister_domain_preserves_accounts_with_active_settlement_oracle_and_kagemusha_state {
             let state = blank_state();
             let domain_id: DomainId =
                 DomainId::try_new("cleanup", "world").expect("domain id parses");
@@ -38810,6 +38922,154 @@ seiyaku GovernanceLifecycle {
                 .expect_execute(&ALICE_ID, &mut stx, "max clock drift is the mutable first-release Sumeragi parameter");
             let params = stx.world.parameters.get().sumeragi().clone();
             assert_eq!(params.max_clock_drift_ms(), 333);
+        });
+        world_test!(set_parameter_alias_registry_routing_activation_is_future_and_immutable {
+            use iroha_data_model::alias_setup::AliasRegistryRoutingActivationV1;
+
+            blank_state_transaction!(state, block, state_block, stx);
+            let carrier_height = stx.block_height();
+            let parameter_id = AliasRegistryRoutingActivationV1::parameter_id();
+            for invalid_height in [0, carrier_height] {
+                let invalid = AliasRegistryRoutingActivationV1::new(invalid_height)
+                    .into_custom_parameter();
+                SetParameter::new(Parameter::Custom(invalid))
+                    .expect_execute_err(&ALICE_ID, &mut stx, "activation cannot change its installation carrier");
+                assert!(stx.world.parameters.get().custom().get(&parameter_id).is_none());
+            }
+            let activation = AliasRegistryRoutingActivationV1::new(carrier_height + 2);
+            let custom = activation.into_custom_parameter();
+            SetParameter::new(Parameter::Custom(custom.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "install future activation");
+            SetParameter::new(Parameter::Custom(custom.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "exact activation retry is idempotent");
+            for changed_height in [carrier_height + 1, carrier_height + 3] {
+                let changed = AliasRegistryRoutingActivationV1::new(changed_height)
+                    .into_custom_parameter();
+                let error = SetParameter::new(Parameter::Custom(changed))
+                    .expect_execute_err(&ALICE_ID, &mut stx, "installed activation cannot move in either direction");
+                assert_eq!(error, InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "alias registry routing activation is immutable once installed".into(),
+                    ),
+                ));
+                assert_eq!(stx.world.parameters.get().custom().get(&parameter_id), Some(&custom));
+            }
+        });
+        world_test!(set_parameter_alias_registry_routing_activation_rejects_malformed_installed_state {
+            use iroha_data_model::alias_setup::AliasRegistryRoutingActivationV1;
+
+            blank_state_transaction!(state, block, state_block, stx);
+            let parameter_id = AliasRegistryRoutingActivationV1::parameter_id();
+            let malformed = iroha_data_model::parameter::CustomParameter::new(
+                parameter_id.clone(),
+                Json::from(norito::json!({"version": 1, "activation_height": 0})),
+            );
+            stx.world.parameters.get_mut().set_parameter(Parameter::Custom(malformed.clone()));
+            let valid = AliasRegistryRoutingActivationV1::new(stx.block_height() + 1)
+                .into_custom_parameter();
+            let error = SetParameter::new(Parameter::Custom(valid))
+                .expect_execute_err(&ALICE_ID, &mut stx, "malformed installed state is not silently overwritten");
+            assert!(matches!(&error,
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(reason))
+                    if reason.starts_with("invalid installed alias registry routing activation:")
+            ), "unexpected malformed activation error: {error:?}");
+            assert_eq!(stx.world.parameters.get().custom().get(&parameter_id), Some(&malformed));
+        });
+        world_test!(set_parameter_alias_dataspace_bootstrap_grant_is_immutable_and_requires_existing_owner {
+            use iroha_data_model::alias_setup::AliasDataspaceBootstrapGrantV1;
+
+            alice_state_transaction!(state, block, state_block, stx);
+            let grant = AliasDataspaceBootstrapGrantV1::try_new("bpng", ALICE_ID.clone())
+                .expect("canonical bootstrap grant");
+            let parameter_id = grant.parameter_id().expect("canonical grant key");
+            let custom = grant.clone().into_custom_parameter().expect("grant parameter");
+            let absent_owner = AccountId::new(
+                KeyPair::from_seed(vec![0xF3; 32], Algorithm::Ed25519).public_key().clone(),
+            );
+            let unknown_owner = AliasDataspaceBootstrapGrantV1::try_new("unowned", absent_owner.clone())
+                .expect("canonical grant with absent owner");
+            let error = SetParameter::new(Parameter::Custom(unknown_owner.into_custom_parameter().expect("grant parameter")))
+                .expect_execute_err(&ALICE_ID, &mut stx, "grant owner must exist before governance installation");
+            assert_eq!(error, InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "alias dataspace bootstrap grant owner must already exist".into(),
+                ),
+            ));
+            SetParameter::new(Parameter::Custom(custom.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "install exact bootstrap grant");
+            SetParameter::new(Parameter::Custom(custom.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "identical governance retry is idempotent");
+            let changed = AliasDataspaceBootstrapGrantV1::try_new("bpng", absent_owner)
+                .expect("syntactically valid owner replacement");
+            let error = SetParameter::new(Parameter::Custom(changed.into_custom_parameter().expect("grant parameter")))
+                .expect_execute_err(&ALICE_ID, &mut stx, "grant owner cannot be replaced");
+            assert_eq!(error, InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "alias dataspace bootstrap grant is immutable once installed".into(),
+                ),
+            ));
+            assert_eq!(stx.world.parameters.get().custom().get(&parameter_id), Some(&custom));
+        });
+        world_test!(set_parameter_alias_dataspace_bootstrap_grant_rejects_conflicting_static_catalog {
+            use iroha_data_model::alias_setup::AliasDataspaceBootstrapGrantV1;
+
+            alice_state_transaction!(state, block, state_block, stx);
+            let grant = AliasDataspaceBootstrapGrantV1::try_new("bpng", ALICE_ID.clone())
+                .expect("canonical bootstrap grant");
+            let parameter_id = grant.parameter_id().expect("canonical grant key");
+            stx.nexus.dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+                iroha_data_model::nexus::DataSpaceMetadata {
+                    id: iroha_data_model::nexus::DataSpaceId::new(10),
+                    alias: "bpng".to_owned(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ]).expect("conflicting catalog");
+            let error = SetParameter::new(Parameter::Custom(grant.into_custom_parameter().expect("grant parameter")))
+                .expect_execute_err(&ALICE_ID, &mut stx, "bootstrap grant cannot rename or reassign a static dataspace");
+            assert!(matches!(&error,
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(reason))
+                    if reason.starts_with("alias dataspace bootstrap grant mapping conflicts: alias.catalog.mapping_conflict:")
+            ), "unexpected catalog mapping error: {error:?}");
+            assert!(stx.world.parameters.get().custom().get(&parameter_id).is_none());
+        });
+        world_test!(set_parameter_alias_dataspace_bootstrap_grant_must_precede_first_sns_record {
+            use iroha_data_model::alias_setup::{AliasDataspaceBootstrapGrantV1, AliasTargetV1};
+
+            alice_state_transaction!(state, block, state_block, stx);
+            let grant = AliasDataspaceBootstrapGrantV1::try_new("bpng", ALICE_ID.clone())
+                .expect("canonical bootstrap grant");
+            let parameter_id = grant.parameter_id().expect("canonical grant key");
+            let target = AliasTargetV1::Dataspace(grant.dataspace.clone());
+            let selector = crate::alias_setup::selector_for_resolved_alias_target(&target)
+                .expect("dataspace selector");
+            let address = AccountAddress::from_account_id(&ALICE_ID).expect("owner controller");
+            let record = iroha_data_model::sns::NameRecordV1::new(
+                selector.clone(),
+                ALICE_ID.clone(),
+                vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+                0,
+                0,
+                u64::MAX,
+                u64::MAX,
+                u64::MAX,
+                crate::alias_setup::alias_registration_metadata(&target).expect("dataspace metadata"),
+            );
+            stx.world.smart_contract_state.insert(crate::sns::record_storage_key(&selector), record.encode());
+            let custom = grant.into_custom_parameter().expect("grant parameter");
+            let error = SetParameter::new(Parameter::Custom(custom.clone()))
+                .expect_execute_err(&ALICE_ID, &mut stx, "even same-owner grants cannot retroactively authorize a prior lease");
+            assert_eq!(error, InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "alias dataspace bootstrap grant must be installed before the first SNS record".into(),
+                ),
+            ));
+            assert!(stx.world.parameters.get().custom().get(&parameter_id).is_none());
+            // An already committed exact grant remains retryable after its authorized creation.
+            stx.world.parameters.get_mut().set_parameter(Parameter::Custom(custom.clone()));
+            SetParameter::new(Parameter::Custom(custom.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "installed exact grant retry does not mutate SNS ownership");
+            assert_eq!(stx.world.parameters.get().custom().get(&parameter_id), Some(&custom));
         });
         world_test!(set_parameter_rejects_heap_limits_outside_the_abi_window {
             assert_eq!(

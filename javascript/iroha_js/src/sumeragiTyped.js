@@ -3097,8 +3097,8 @@ function parseSumeragiExecutionCommitment(value, context) {
     "parent_state_root",
     "post_state_root",
     "ordinary_writes_root",
-    "offline_cash_top_up_root",
-    "offline_cash_top_up_count",
+    "kagemusha_top_up_root",
+    "kagemusha_top_up_count",
     "native_amx_application_manifest_version",
     "native_amx_application_manifest_root",
     "native_amx_application_manifest_count",
@@ -3112,7 +3112,7 @@ function parseSumeragiExecutionCommitment(value, context) {
     throw new TypeError(`${context} contains unknown field ${unknown}`);
   }
   for (const field of [
-    "offline_cash_top_up_root",
+    "kagemusha_top_up_root",
     "lane_finality_manifest",
     "merge_carrier",
   ]) {
@@ -3120,21 +3120,21 @@ function parseSumeragiExecutionCommitment(value, context) {
       throw new TypeError(`${context}.${field} is required`);
     }
   }
-  const offlineCashTopUpCount = parseSumeragiUnsigned(
-    record.offline_cash_top_up_count,
-    `${context}.offline_cash_top_up_count`,
+  const kagemushaTopUpCount = parseSumeragiUnsigned(
+    record.kagemusha_top_up_count,
+    `${context}.kagemusha_top_up_count`,
     { max: 0xffff_ffff },
   );
-  const offlineCashTopUpRoot =
-    record.offline_cash_top_up_root == null
+  const kagemushaTopUpRoot =
+    record.kagemusha_top_up_root == null
       ? null
       : parseSumeragiHash(
-          record.offline_cash_top_up_root,
-          `${context}.offline_cash_top_up_root`,
+          record.kagemusha_top_up_root,
+          `${context}.kagemusha_top_up_root`,
         );
-  if ((offlineCashTopUpCount === 0) !== (offlineCashTopUpRoot === null)) {
+  if ((kagemushaTopUpCount === 0) !== (kagemushaTopUpRoot === null)) {
     throw new TypeError(
-      `${context}.offline_cash_top_up_root must be present exactly when offline_cash_top_up_count is positive`,
+      `${context}.kagemusha_top_up_root must be present exactly when kagemusha_top_up_count is positive`,
     );
   }
   const nativeManifestVersion = parseSumeragiUnsigned(
@@ -3238,8 +3238,8 @@ function parseSumeragiExecutionCommitment(value, context) {
       record.ordinary_writes_root,
       `${context}.ordinary_writes_root`,
     ),
-    offline_cash_top_up_root: offlineCashTopUpRoot,
-    offline_cash_top_up_count: offlineCashTopUpCount,
+    kagemusha_top_up_root: kagemushaTopUpRoot,
+    kagemusha_top_up_count: kagemushaTopUpCount,
     native_amx_application_manifest_version: nativeManifestVersion,
     native_amx_application_manifest_root: nativeManifestRoot,
     native_amx_application_manifest_count: nativeManifestCount,

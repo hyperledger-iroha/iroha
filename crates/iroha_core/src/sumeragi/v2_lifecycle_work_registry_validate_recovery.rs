@@ -1633,8 +1633,7 @@ enum ReadyValidateSuccessorIdentityV1 {
 pub(in crate::sumeragi) struct ReadyValidateSuccessorV1 {
     identity: ReadyValidateSuccessorIdentityV1,
     reducer_fence_wait: Option<WaitToken>,
-    physical_completion:
-        Option<crate::sumeragi::v2_worker::LifecycleValidatePhysicalCompletionV1>,
+    physical_completion: Option<crate::sumeragi::v2_worker::LifecycleValidatePhysicalCompletionV1>,
 }
 
 impl ReadyValidateSuccessorV1 {
@@ -2779,14 +2778,6 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
     ) -> Option<PreparedLifecycleLocalProposalReadyV1> {
         let completion = self.validated_completion()?;
         let validated = completion.outcome.validated_receipt()?;
-        let projection_diagnostic = completion
-            .incumbent
-            .replay_evidence
-            .local_completion_projection_diagnostic(
-                &completion.incumbent.effect,
-                &completion.incumbent.durable_receipt,
-                &completion.incumbent.pending,
-            );
         let projected = completion
             .incumbent
             .replay_evidence
@@ -2795,28 +2786,14 @@ impl<'registry> PreparedReadyDurableValidateExecution<'registry> {
                 &completion.incumbent.durable_receipt,
                 &completion.incumbent.pending,
             );
-        let Some((replay, manifest)) = projected else {
-            iroha_logger::warn!(
-                projection_diagnostic,
-                "TEMP validated lifecycle carrier did not project a local proposal"
-            );
-            return None;
-        };
-        let prepared = PreparedLifecycleLocalProposalReadyV1::new(
+        let (replay, manifest) = projected?;
+        PreparedLifecycleLocalProposalReadyV1::new(
             completion.incumbent.effect.clone(),
             manifest,
             validated.clone(),
             self.lease.ordinal(),
             replay,
-        );
-        if prepared.is_none() {
-            iroha_logger::warn!(
-                projection_diagnostic,
-                lifecycle_ordinal = self.lease.ordinal(),
-                "TEMP local proposal handoff shape rejected a projectable carrier"
-            );
-        }
-        prepared
+        )
     }
     fn local_origin_manifest(
         completion: &DurableValidateCompletion,

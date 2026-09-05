@@ -48,18 +48,18 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     GovernanceContractResponse,
     GovernanceLockCustody,
     GovernanceLockRecord,
+    KagemushaReadinessV1,
     MultisigDraftIntent,
     MultisigResponse,
     NetworkTimeSnapshot,
     NetworkTimeStatus,
-    OfflineCashReadinessV1,
-    UnverifiedOfflineCashOperationStatusV1,
     SumeragiDiagnosticsStatus,
     SumeragiV2Status,
     ToriiCanonicalRequestAuth,
     ToriiClient,
     ToriiLocalSigningContext,
     ToriiOperatorSigningContext,
+    UnverifiedKagemushaOperationStatusV1,
     VpnQuoteCreateRequest,
     VpnReceiptSubmitRequest,
     VpnSessionCreateRequest,
@@ -315,8 +315,8 @@ def _sumeragi_v2_status_payload() -> Dict[str, Any]:
         "parent_state_root": _canonical_hash(0x34),
         "post_state_root": _canonical_hash(0x35),
         "ordinary_writes_root": _canonical_hash(0x36),
-        "offline_cash_top_up_root": None,
-        "offline_cash_top_up_count": 0,
+        "kagemusha_top_up_root": None,
+        "kagemusha_top_up_count": 0,
         "native_amx_application_manifest_version": 1,
         "native_amx_application_manifest_root": _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT,
         "native_amx_application_manifest_count": 0,
@@ -8880,12 +8880,12 @@ def test_trigger_registration_deletion_and_query() -> None:
 
 
 @pytest.mark.parametrize("ready", [True, False])
-def test_get_offline_cash_readiness_is_exact_v1(ready: bool) -> None:
+def test_get_kagemusha_readiness_is_exact_v1(ready: bool) -> None:
     session = RecordingSession()
     session.queue(
         StubResponse(
             payload={
-                "cash_handoff_capability": "cash_handoff_v1",
+                "kagemusha_handoff_capability": "kagemusha_handoff_v1",
                 "wire_version": 1,
                 "device_lifecycle_version": 1,
                 "ready": ready,
@@ -8894,25 +8894,25 @@ def test_get_offline_cash_readiness_is_exact_v1(ready: bool) -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    readiness = client.get_offline_cash_readiness(timeout=12.5)
+    readiness = client.get_kagemusha_readiness(timeout=12.5)
 
-    assert readiness == OfflineCashReadinessV1(
-        cash_handoff_capability="cash_handoff_v1",
+    assert readiness == KagemushaReadinessV1(
+        kagemusha_handoff_capability="kagemusha_handoff_v1",
         wire_version=1,
         device_lifecycle_version=1,
         ready=ready,
     )
-    assert session.calls[0]["url"].endswith("/v1/offline/readiness")
+    assert session.calls[0]["url"].endswith("/v1/kagemusha/readiness")
     assert session.calls[0]["allow_redirects"] is False
     assert session.calls[0]["timeout"] == 12.5
 
 
-def test_get_offline_cash_readiness_rejects_non_v1_contract() -> None:
+def test_get_kagemusha_readiness_rejects_non_v1_contract() -> None:
     session = RecordingSession()
     session.queue(
         StubResponse(
             payload={
-                "cash_handoff_capability": "cash_handoff_v1",
+                "kagemusha_handoff_capability": "kagemusha_handoff_v1",
                 "wire_version": 1,
                 "device_lifecycle_version": 1,
                 "ready": True,
@@ -8922,10 +8922,10 @@ def test_get_offline_cash_readiness_rejects_non_v1_contract() -> None:
     )
 
     with pytest.raises(RuntimeError, match="unexpected"):
-        ToriiClient("http://node.test", session=session).get_offline_cash_readiness()
+        ToriiClient("http://node.test", session=session).get_kagemusha_readiness()
 
 
-def _offline_command_archive(schema: str, operation_id: bytes) -> bytes:
+def _kagemusha_command_archive(schema: str, operation_id: bytes) -> bytes:
     payload = b"\x02\x01\x00\x20" + operation_id + b"\x01\x00"
     return encode_norito_frame(
         payload,
@@ -8935,7 +8935,7 @@ def _offline_command_archive(schema: str, operation_id: bytes) -> bytes:
     )
 
 
-def test_submit_and_get_offline_cash_operation_use_exact_v1_routes() -> None:
+def test_submit_and_get_kagemusha_operation_use_exact_v1_routes() -> None:
     operation_id = bytes((0x41,)) * 32
     pending = {
         "version": 1,
@@ -8946,34 +8946,187 @@ def test_submit_and_get_offline_cash_operation_use_exact_v1_routes() -> None:
         "rejection": None,
     }
     session = RecordingSession()
-    session.queue(StubResponse(status_code=202, payload=pending))
+    session.queue(
+        StubResponse(
+            status_code=202,
+            payload=pending,
+            headers={
+                "Location": f"/v1/kagemusha/operations/{operation_id.hex()}",
+                "Retry-After": "1",
+            },
+        )
+    )
     session.queue(StubResponse(payload=pending))
     client = ToriiClient("http://node.test", session=session)
-    archive = _offline_command_archive(
-        "iroha.torii.v1.offline_cash.top_up.request", operation_id
-    )
+    signed_transaction = b"\x01payer-signed-kagemusha-top-up"
 
-    submitted = client.submit_offline_cash_top_up(archive)
-    fetched = client.get_offline_cash_operation(operation_id.hex())
+    submitted = client.submit_kagemusha_top_up(signed_transaction, operation_id)
+    fetched = client.get_kagemusha_operation(operation_id.hex())
 
-    assert isinstance(submitted, UnverifiedOfflineCashOperationStatusV1)
+    assert isinstance(submitted, UnverifiedKagemushaOperationStatusV1)
     assert submitted.operation_id == operation_id
     assert submitted.kind == "top_up" and submitted.state == "pending"
     assert fetched == submitted
     post = session.calls[0]
-    assert post["url"].endswith("/v1/offline/top-up")
+    assert post["url"].endswith("/v1/kagemusha/top-up")
+    assert post["headers"]["Content-Type"] == "application/x-norito"
+    assert post["headers"]["Idempotency-Key"] == operation_id.hex()
+    assert post["data"] == signed_transaction
+    assert post["allow_redirects"] is False
+    assert session.calls[1]["url"].endswith(
+        f"/v1/kagemusha/operations/{operation_id.hex()}"
+    )
+
+
+def test_submit_kagemusha_top_up_rejects_unsigned_request_and_operation_id_aliases() -> None:
+    client = ToriiClient("http://node.test", session=RecordingSession())
+    operation_id = bytes((0x41,)) * 32
+
+    with pytest.raises(TypeError, match="signed_transaction must be exact immutable bytes"):
+        client.submit_kagemusha_top_up(bytearray(b"\x01signed"), operation_id)
+    with pytest.raises(ValueError, match="version-1 SignedTransaction"):
+        client.submit_kagemusha_top_up(b"unsigned", operation_id)
+    with pytest.raises(TypeError, match="operation_id must be exact immutable bytes"):
+        client.submit_kagemusha_top_up(b"\x01signed", operation_id.hex())
+    with pytest.raises(ValueError, match="nonzero 32-byte"):
+        client.submit_kagemusha_top_up(b"\x01signed", bytes(32))
+
+
+def test_submit_kagemusha_top_up_accepts_terminal_response_without_retry_after() -> None:
+    operation_id = bytes((0x44,)) * 32
+    applied = {
+        "version": 1,
+        "operation_id": list(operation_id),
+        "kind": {"kind": "top_up", "value": None},
+        "state": {"state": "applied", "value": None},
+        "result": {"opaque_until_verified": True},
+        "rejection": None,
+    }
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            status_code=200,
+            payload=applied,
+            headers={"Location": f"/v1/kagemusha/operations/{operation_id.hex()}"},
+        )
+    )
+
+    status = ToriiClient("http://node.test", session=session).submit_kagemusha_top_up(
+        b"\x01signed", operation_id
+    )
+
+    assert status.state == "applied"
+    assert not hasattr(status, "result")
+
+
+@pytest.mark.parametrize(
+    ("status_code", "state", "headers", "message"),
+    (
+        (202, "pending", {"Retry-After": "1"}, "Location"),
+        (202, "pending", {"Location": "wrong", "Retry-After": "1"}, "Location"),
+        (202, "pending", {"Location": "canonical"}, "positive Retry-After"),
+        (
+            202,
+            "pending",
+            {"Location": "canonical", "Retry-After": "0"},
+            "positive Retry-After",
+        ),
+        (
+            202,
+            "applied",
+            {"Location": "canonical", "Retry-After": "1"},
+            "HTTP 202 response must be pending",
+        ),
+        (
+            200,
+            "pending",
+            {"Location": "canonical"},
+            "HTTP 200 response must be applied or rejected",
+        ),
+        (
+            200,
+            "applied",
+            {"Location": "canonical", "Retry-After": "1"},
+            "must not have Retry-After",
+        ),
+    ),
+)
+def test_submit_kagemusha_top_up_rejects_invalid_response_contract(
+    status_code: int,
+    state: str,
+    headers: Mapping[str, str],
+    message: str,
+) -> None:
+    operation_id = bytes((0x45,)) * 32
+    canonical_location = f"/v1/kagemusha/operations/{operation_id.hex()}"
+    response_headers = {
+        name: canonical_location if value == "canonical" else value
+        for name, value in headers.items()
+    }
+    payload = {
+        "version": 1,
+        "operation_id": list(operation_id),
+        "kind": {"kind": "top_up", "value": None},
+        "state": {"state": state, "value": None},
+        "result": {"opaque_until_verified": True} if state == "applied" else None,
+        "rejection": None,
+    }
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            status_code=status_code,
+            payload=payload,
+            headers=response_headers,
+        )
+    )
+
+    with pytest.raises(RuntimeError, match=message):
+        ToriiClient("http://node.test", session=session).submit_kagemusha_top_up(
+            b"\x01signed", operation_id
+        )
+
+
+def test_submit_kagemusha_redemption_uses_exact_v1_route() -> None:
+    operation_id = bytes((0x43,)) * 32
+    pending = {
+        "version": 1,
+        "operation_id": list(operation_id),
+        "kind": {"kind": "redemption", "value": None},
+        "state": {"state": "pending", "value": None},
+        "result": None,
+        "rejection": None,
+    }
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            status_code=202,
+            payload=pending,
+            headers={
+                "Location": f"/v1/kagemusha/operations/{operation_id.hex()}",
+                "Retry-After": "1",
+            },
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+    archive = _kagemusha_command_archive(
+        "iroha.torii.v1.kagemusha.redeem.request", operation_id
+    )
+
+    submitted = client.submit_kagemusha_redemption(archive)
+
+    assert submitted.operation_id == operation_id
+    assert submitted.kind == "redemption" and submitted.state == "pending"
+    post = session.calls[0]
+    assert post["url"].endswith("/v1/kagemusha/redeem")
     assert post["headers"]["Content-Type"] == "application/x-norito"
     assert post["headers"]["Idempotency-Key"] == operation_id.hex()
     assert post["data"] == archive
     assert post["allow_redirects"] is False
-    assert session.calls[1]["url"].endswith(
-        f"/v1/offline/operations/{operation_id.hex()}"
-    )
 
 
-def test_applied_offline_cash_result_requires_caller_pinned_verifier() -> None:
+def test_applied_kagemusha_result_requires_caller_pinned_verifier() -> None:
     operation_id = bytes((0x42,)) * 32
-    status = UnverifiedOfflineCashOperationStatusV1.from_payload(
+    status = UnverifiedKagemushaOperationStatusV1.from_payload(
         {
             "version": 1,
             "operation_id": list(operation_id),

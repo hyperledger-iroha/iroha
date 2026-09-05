@@ -2093,7 +2093,7 @@ mod v2_liveness_watchdog_tests {
                     payload_hash: Hash::new(b"watchdog-network-ingress-payload"),
                 },
                 execution_commitment:
-                    ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                    ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                         Hash::new(b"watchdog-network-ingress-parent-state"),
                         Hash::new(b"watchdog-network-ingress-post-state"),
                         Hash::new(b"watchdog-network-ingress-writes"),
@@ -2156,7 +2156,7 @@ mod v2_liveness_watchdog_tests {
         }
     }
     fn execution_commitment(seed: u8) -> ExecutionCommitment {
-        ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new([seed, 2]),
             Hash::new([seed, 3]),
             Hash::new([seed, 4]),

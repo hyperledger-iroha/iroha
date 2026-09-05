@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-09-03
+Last updated: 2026-09-04
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -17,9 +17,49 @@ rotation and revocation, sealed-CAS durability where state is retained, failover
 and recovery evidence, and independent review.
 
 This provider-neutral policy covers ordinary node, client, and consensus
-signing. The optional Offline Cash monetary device service is deliberately
+signing. The optional KAGEMUSHA monetary device service is deliberately
 separate: offline spending requires a governed, qualified non-forking hardware
 profile and never permits software fallback.
+
+## Android native device integration
+
+- Complete same-source arm64-v8a/x86_64 native builds and actual device JNI
+  execution. Debug device builds can now explicitly include the sealed native
+  bridge with `irohaDebugNativeBridge=true`; JVM-only checks cannot establish
+  native linkage or hardware Offline qualification.
+- Complete canonical device payload/response schemas outside the now-integrated
+  receiver operations 4--8, then bind the dispatcher to a service that actually
+  owns authenticated Core release/proof state, trusted time, receiver keys and
+  the full non-forking journal/outbox contract. Provision the authorized Android
+  secure-element applet/OEM service and Apple secure-element credential, rebuild
+  the exact ABI-23 mobile artifacts, and pass physical power-loss, airplane-mode,
+  rollback, restore, rollover and byte-identical recovery qualification before
+  enabling Offline monetary actions. The current strict frame/receiver codecs
+  and Java Card journal tests are prerequisites, not device qualification.
+- Connect the now-validated Swift/Kotlin bootstrap and recovery ordering to the
+  qualified native service, then rebuild mobile artifacts from the settled
+  source. Sender request, payment and redemption still need caller-persisted
+  operation identities, authenticated lookup after a lost native return, and
+  revision-consistent outbox discovery before complete customer flows can ship.
+
+## Additive SNS dataspace bootstrap qualification
+
+- Carry the passing focused height-bound alias-registry and owner-bound
+  bootstrap-grant tests into the settled release candidate. Preserve legacy
+  committed plans, nested routing (including the corrected settlement/multisig
+  height pre-walk), native quote/payment enforcement and static namespace
+  ownership checks; source-level passes are not deployment qualification.
+- Qualify preserved Kura/CommitQC cold replay after additive static dataspace
+  catalog expansion, then verify the coordinated four-validator activation and
+  additive lane lifecycle. The `alias_registry_bootstrap_network` scenario is
+  now wired into the authenticated sealed release child, where exact discovery,
+  non-ignored status and source-bound prebuilt binaries are mandatory, but it
+  still needs an actual clean signed release run for runtime qualification. Its
+  second Strict restart now commits and retains an exact linked BPNG successor;
+  the universal-history control and zero ordinary fees still do not qualify a
+  historical private-lane transition or production fees. Independent-World
+  replay tests are not substitutes for this release evidence; never reset
+  existing chain history to make additive bootstrap pass.
 
 ## Python SDK first-release follow-up
 
@@ -187,24 +227,17 @@ profile and never permits software fallback.
   globally one-time output-recipient identifiers per leg, deterministic
   recipient-index reconstruction, the compact authority catalog, exact terminal
   replay rejection, sponsor-authorized all-Prepare WSV registration before any
-  Commit vote, exact finalization/abort/expiry lock release, the 188-field current
-  world with eight APS maps, and the sole exact 180-field feature-predecessor
-  snapshot migration at revision `1bdec3b88c348a84776241839fb0e8ad71738b3e`
-  as fixed consensus/recovery contracts in every regenerated SDK and release
-  artifact. Keep its full 13-added/5-retired delta fail-closed: decode the five
-  retired SCCP/direct-lane/Parliament stores with their historical types and
-  accept only empty history/current maps; synthesize canonical defaults only
-  for the eight APS maps plus the two SCCP stores, exact12 qualification,
-  consensus evidence, and TLE lifecycle store. At the same complete-State
-  boundary, accept only the predecessor's canonical HSM policy defaults
-  (`false` plus ordered `pkcs11`/`softkey`/`yubihsm`) and reinsert them for
-  historical hashing atomically with the 13/5 `World` bridge. Preserve every
-  retained governed parameter value, including nondefault NPoS slashing delays;
-  no retained value is a schema discriminator. The checked-in complete State,
-  World, and exact predecessor block-wire bytes, their revision/SHA/schema-order
-  provenance, and full WSV/Kura checkpoint-manifest continuity are the required
-  release evidence; dynamic current-World inference and APS-only hybrid hash
-  normalization are forbidden.
+  Commit vote, exact finalization/abort/expiry lock release, and the canonical
+  current 188-field world with eight APS maps as fixed consensus/recovery
+  contracts in every regenerated SDK and release artifact. Snapshot restore
+  must accept only that exact current schema, rebuild and cross-check the
+  recipient index from canonical encrypted outputs, and reject every other
+  field set. V1 has no pre-release snapshot bridge, retired-store decoder,
+  retired configuration-default reinsertion, dynamic current-World inference,
+  or APS-only hybrid hash normalization. The checked-in complete current-schema
+  State, World, and block-wire bytes, with their revision/SHA/schema-order
+  provenance and full WSV/Kura checkpoint-manifest continuity, are the required
+  release evidence.
 - Run real four-validator processes for every participating dataspace at
   N=2,3,4,8,16, with N=3 as the paper configuration and mandatory signed RS16
   DA/RBC throughout. The implemented release topology now binds one public
@@ -1014,109 +1047,73 @@ profile and never permits software fallback.
   review from the immutable release source. Focused security suites are green;
   they do not substitute for this release qualification.
 
-## Offline Cash V1 release completion
+## KAGEMUSHA V1 release completion
 
-- Seal the implemented hard cut across the specification, formal model, Core,
-  Torii, CLI, native bridge, SDKs, fixtures, and generated artifacts.
-  `OfflineCashV1` and `oc1:` must remain the only public protocol and text
-  transport; reject any reintroduction of legacy decoders, aliases, migrations,
-  note inventories, public state heads, or hop/input/origin/receipt/fan-in/
-  proof-depth/history admission caps.
-- Candidate-qualify the implemented hidden `u128` aggregate balance and fixed
-  paired-Pasta `Bootstrap`, `MintFold`, `SendSplit`, `ReceiveFold`,
-  `RedeemSplit`, `Rotate`, terminal-wrapper, and no-commit-closure relations.
-  Implement the missing Core `SuiteUpgrade` preview/apply orchestration and a
-  positive authenticated bridge lifecycle regression before treating all
-  seven aggregate-state relations as end-to-end complete. Define a
-  threshold-authenticated target-release bridge that binds the exact old/new
-  release, manifest, suite, verifying-key, protocol, profile, and policy
-  mapping; preserve every monetary, lane, device-key, replay-root, and hardware
-  epoch invariant across it. Retain authenticated old-suite verifiers across
-  snapshot/restore so delayed committed credits remain acceptable after an
-  ordinary upgrade.
-  Prove that each singular `ReceiveFold` has constant public/proof shape and
-  that arbitrarily many repeated folds preserve unrestricted later spending.
-  Finish the focused single-credit metering, near-capacity, replay, and
-  late-authorization atomicity gates, then qualify the real circuit. Resolve
-  every remaining native circuit failure without weakening lifecycle, Guard,
-  release/VK, replay, or private-state bindings.
-- Complete one immutable-candidate crash matrix for the recoverable
-  prepare/prove/hardware-commit/persist/expose protocol. Inject failure at every
-  journal, candidate, hardware commit, proof, successor, inbox, retained
-  receipt, outbox, transport, and acknowledgement boundary; demonstrate
-  byte-identical recovery, one successor, no balance burn, and no cancellation
-  of exposed credits. The two focused mock recovery selectors pass 1/1, but
-  they do not replace this immutable-candidate matrix.
-- Qualify exact durable-capacity accounting for the reusable, exact-amount
-  `PaymentRequestV1`. Distinct valid intents against the same request must each
-  receive an independent one-use ticket without a request-local count or amount
-  ledger; invoice deduplication remains outside the monetary protocol. Core now
-  enforces conservative complete-operation floors of 298,640 inbox
-  bytes and 90,274 implementation-local outbox bytes. Preserve those floors and
-  preserve the passing focused floor, precommit, and zero-headroom baselines
-  while obtaining immutable-candidate exhaustion evidence and completing
-  bounded sender-metadata compaction under long histories without introducing
-  a history-count limit. Preserve the exact prepared-projection `effect_digest`
-  binding, including commit evidence, throughout candidate qualification.
-  Cover maximum-size Guard bundles, collection-prefix thresholds, shuffled
-  concurrent tickets, delayed post-expiry delivery, duplicate delivery,
-  conflicting credit-ID reuse, folding, restart, and rotation. Exhaustion may
-  stop only new tickets or preparations; every already committed ticketed
-  payment must remain stageable, foldable, acknowledgeable, and spendable.
-- Qualify the hardware-only authority contract with governed
-  `HardwareProfileV1` and `HardwareCredentialV1` values: raw attestation,
-  exact-next consumption, one-use successor authority, rollback-resistant
-  journal/counter/inbox/outbox, trusted time or monotonic lease, atomic recovery,
-  epoch rotation, and counter rollover. Stock signing-only services remain
-  online-only, and no software fallback may enter the monetary path.
-  Preserve the source-aligned ABI baseline (`0x0000ffff`, operations `1..=24`,
-  statuses `0..=10`, fail-closed unknown values) while implementing exact
-  operation bodies and authenticators in the OEM/secure-element provider.
-  Stock C/JNI must remain unavailable until that provider and physical
-  crash/capacity/rollback qualification exist.
-- Candidate-qualify exactly one pooled reserve per `(network, asset
-  incarnation)` with finalized mint authorization, idempotent top-up and
-  redemption, unique terminal nullifiers, full and partial redemption,
-  zero-balance continuation, reserve-underflow and custody-burn rejection, and
-  restored-state solvency. Normal suite rotation must retain offline
-  verification or use an authenticated recursive upgrade; emergency suspension
-  must retain legitimate online redemption and recovery.
-- Preserve canonical fixture version 2 regenerated from Rust's corrected
-  fixed-width semantic transcripts at SHA-256
-  `e3cb07f567c75abb965ef460cd093228580b01a841a0cc65c535ef63bd894b7d`.
-  Focused Swift, Kotlin, mirrored Java, JavaScript, Python, and C# fixture
-  parity is green; finish the same byte-identical boundary through JNI,
-  animated QR, and NFC from one audited native core. Rebuild the Swift
-  XCFramework, run the full SDK matrix, preserve exact positive and adversarial
-  fixtures, and allow static QR only for messages proven to fit its
-  small-message policy.
-- Treat measured evidence from that immutable candidate as the release gate.
-  Record exact proof/raw/text bytes, circuit rows, verifying-key sizes,
-  prove/verify/handoff latency, peak RSS, energy, and sustained thermal folding.
-  The integrated 1,000-credit mock-verifier lifecycle baseline passes 1/1; it
-  remains software coverage and does not satisfy the immutable-candidate gate.
-  Pass 1,000 independently funded credits folded and spent as one payment, at
-  least 1,024 real recursive handoffs, real proofs at depths 8, 64, 1,024 and
-  beyond, the full adversarial matrix, a four-validator settlement corridor,
-  and physical airplane-mode, restart, power-loss, clock-rollback,
-  backup/restore, thermal, latency, memory, and throughput qualification for
-  every enabled hardware profile. Do not claim completion from model runs,
-  fixture roundtrips, or mock proofs.
-- Hold the published transport targets at no more than 6,528 bytes for paired
-  proofs, approximately 9,211/12,288 bytes for raw/text handoff, 16,384 bytes
-  for the raw five-message qualification exchange, and 18,171 bytes for the
-  composed absolute cap. If a candidate misses a target, revise the sole V1
-  design rather than adding an alternate protocol or history limit. The first
-  measured Eq platform-credential proof is an internal 20,128-byte proof with
-  exact transcript inventory `129 + 8 + 449 + 6 + 37 = 629` 32-byte items;
-  internal parsing must use its authenticated protocol-derived exact length,
-  not the 2,495-byte wire slot. Keep compile-time transport preflight for every
-  externally serialized proof role and replace the SHA/dense-MSM public carrier
-  with a narrow authenticated decider whose non-tail inventory satisfies
-  `W + T + E + Q <= 40` at `k=16` (2,495-byte parity slot), without raising the
-  authoritative 6,528-byte complete-proof limit. Re-run the real handoff gate
-  only after every transported role passes that structural preflight.
+The first-release target is one unbounded-history hardware aggregate balance and
+one three-message peer protocol. Backward compatibility is forbidden. Complete
+the following work before enabling KAGEMUSHA:
 
+- **Finish the three-message hard cut.** Keep only Request=1, Payment=2, and
+  Acknowledgement=3 across Core, Torii, native bridge, Rust fixtures, Swift,
+  Kotlin, mirrored Java, JavaScript, Python, C#, JNI, QR, and NFC. Delete every
+  request-mode, request-budget, acceptance-intent, acceptance-ticket,
+  precommit/no-commit, tag-4/tag-5, and five-message path rather than aliasing or
+  deprecating it. Distinct valid payments against one request must all stage;
+  only exact credit-ID duplicate/conflict semantics belong to the protocol.
+- **Close recursive mint authority.** Integrate the measured k=12 Table8
+  mint-hash shards into the ordered k=16 paired claim-fold. Equality-bind every
+  canonical leaf byte, typed plan/cursor, proof accumulator, MintAuthorization
+  statement, finalized ledger credit, recipient lane, lifecycle, replay ID, and
+  envelope commitment. The leaf proof must never authorize money without the
+  recursively verified claim-fold and normalized hardware guard.
+- **Complete fixed aggregate relations.** Ship Bootstrap, MintFold, SendSplit,
+  ReceiveFold, RedeemSplit, and Rotate as fixed-shape paired-Pasta transitions
+  over one private `u128` balance and replay root. Remove batch-count, hop,
+  ancestry, origin, note, fan-in, and proof-depth admission maxima. Preserve a
+  zero-balance successor for full spends and redemptions.
+- **Prove real long-history behavior.** Run at least 1,024 real recursive
+  handoffs and longer property histories. Complete the 1,000 independently
+  funded devices -> merchant receives/folds -> one 1,000-unit payment ->
+  recipient spend and full/partial redemption corridor. Measure and enforce
+  history-independent proof size and verifier work at depths 8, 64, 1,024, and
+  beyond; mocked-recursion models are supporting evidence only.
+- **Finish non-forking hardware persistence.** Implement exact-next
+  transitions/one-use successors, rollback-resistant journal and accepted-credit
+  inbox, trusted commit time, atomic recoverable certificates, authenticated
+  state/outbox, offline rotation/counter rollover, and no software fallback.
+  Stage intent and outbox capacity before the one hardware commit; recovery must
+  resume the same successor and reproduce every exposed byte. Host-only
+  signatures and stock signing services grant no offline monetary authority.
+- **Complete pooled settlement and routes.** Keep one reserve per asset,
+  idempotent finalized top-ups, atomic full/partial redemption, unique terminal
+  nullifiers, and reserve-underflow/concurrency protection. Peer transfers never
+  touch the reserve. Keep only `/v1/kagemusha/readiness`,
+  `/v1/kagemusha/top-up`, `/v1/kagemusha/redeem`, and operation status;
+  remove lifecycle, anchor, lineage, and per-top-up drawdown endpoints and reset
+  every pre-release wallet/fixture/genesis/WSV legacy state.
+- **Regenerate conformance artifacts.** Publish identical canonical Norito
+  fixtures and behavior across all SDKs and transports. Keep the paired proof at
+  or below 6,528 bytes and the complete raw/text exchange near
+  9,211/12,288 bytes without adding a history-dependent envelope.
+- **Exercise adversarial recovery.** Cover shuffled concurrent requests,
+  multiple distinct payments per request, delayed post-expiry delivery, exact
+  duplicate transport, conflicting credit reuse, stale state, forked successors,
+  rollback, counter reuse/skip, forged rotation, overflow, proof/output
+  substitution, top-up recovery, reserve underflow, duplicate/concurrent
+  redemption, zero-balance continuation, verifier rotation, and rollover.
+  Inject crashes at every journal, hardware commit, proof, state, inbox, outbox,
+  transport, and ACK boundary and prove value conservation plus byte-identical
+  recovery.
+- **Qualify release evidence.** Regenerate the final source/recovery inventory,
+  run focused and workspace Rust/SDK/lint/format gates from stable source, obtain
+  independent cryptographic review, and complete physical airplane-mode,
+  restart, power-loss, clock-rollback, backup/restore, thermal, latency, memory,
+  and throughput qualification for every enabled hardware profile.
+
+Current focused structural tests are useful iteration evidence, not release
+qualification. Do not mark this section complete until the real recursive,
+hardware, settlement, cross-SDK, crash-recovery, and physical-device gates all
+pass.
 ## MKHE and Figure 9 evidence-gated completion
 
 - Join the implemented 40-limb qPCS/FRI, private RLWE/source-statement,
@@ -3350,7 +3347,7 @@ workflows remain excluded from the first release.
   Core consensus-preimage and peer-trust gossip fixtures, Sumeragi vNext
   rechain/view-change and local commit-vote fixtures, merge-committee
   signature helper, oracle observation, SoraDNS,
-  Offline Cash certificate, Soracloud provenance, and contract-manifest
+  Kagemusha certificate, Soracloud provenance, and contract-manifest
   provenance tests now cover both malformed-`R` encodings from valid
   signatures, Torii DA receipt-log,
   transaction-batch deterministic precheck, signed-query routing, Soracloud

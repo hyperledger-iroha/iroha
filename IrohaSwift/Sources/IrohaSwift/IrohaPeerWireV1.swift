@@ -6,17 +6,15 @@ import zlib
 public enum IrohaPeerWireProfileV1: UInt16, CaseIterable, Sendable {
     /// Reserved on the wire so a zero-filled or omitted profile is never accepted.
     case reject = 0
-    /// Offline Cash V1 aggregate-balance handoffs.
-    case offlineCashV1 = 1
+    /// KAGEMUSHA V1 aggregate-balance handoffs.
+    case kagemushaV1 = 1
 }
 
 /// Wire-stable transfer phases carried by an `IPM1` peer message.
 public enum IrohaPeerWireKindV1: UInt8, CaseIterable, Sendable {
-    case receiveRequest = 1
+    case request = 1
     case payment = 2
     case acknowledgement = 3
-    case acceptanceIntentAuthorization = 4
-    case acceptanceTicket = 5
 }
 
 /// Canonical cross-SDK spellings shared with the upstream Iroha SDK.
@@ -28,25 +26,42 @@ public extension IrohaPeerWireProfileV1 {
     var requiredSchemaVersion: UInt16 {
         switch self {
         case .reject: return 0
-        case .offlineCashV1: return 1
+        case .kagemushaV1: return 1
         }
     }
 }
 
 public extension IrohaPeerWireKindV1 {
-    /// Exact Offline Cash V1 schema admitted for this peer-message kind.
-    var requiredOfflineCashCanonicalSchema: String {
+    /// Exact KAGEMUSHA V1 schema admitted for this peer-message kind.
+    var requiredKagemushaCanonicalSchema: String {
         switch self {
-        case .receiveRequest:
-            return "iroha_data_model::offline::offline_cash_v1::OfflineCashPaymentRequestV1"
+        case .request:
+            return "iroha_data_model::kagemusha::kagemusha_v1::KagemushaPaymentRequestV1"
         case .payment:
-            return "iroha_data_model::offline::offline_cash_v1::OfflineCashPaymentV1"
+            return "iroha_data_model::kagemusha::kagemusha_v1::KagemushaPaymentV1"
         case .acknowledgement:
-            return "iroha_data_model::offline::offline_cash_v1::OfflineCashAcknowledgementV1"
-        case .acceptanceIntentAuthorization:
-            return "iroha_data_model::offline::offline_cash_v1::OfflineCashAcceptanceIntentAuthorizationV1"
-        case .acceptanceTicket:
-            return "iroha_data_model::offline::offline_cash_v1::OfflineCashAcceptanceTicketV1"
+            return "iroha_data_model::kagemusha::kagemusha_v1::KagemushaAcknowledgementV1"
+        }
+    }
+
+    /// Exact payload alignment used by the authoritative Norito model.
+    var requiredKagemushaPayloadAlignment: Int {
+        switch self {
+        case .request: return 16
+        case .payment: return 16
+        case .acknowledgement: return 2
+        }
+    }
+
+    /// Exact per-message raw cap from the authoritative KAGEMUSHA V1 model.
+    var maximumKagemushaCanonicalBytes: Int {
+        switch self {
+        case .request:
+            return KagemushaWireV1.maximumPaymentRequestBytes
+        case .payment:
+            return KagemushaWireV1.maximumPaymentBytes
+        case .acknowledgement:
+            return KagemushaWireV1.maximumAcknowledgementBytes
         }
     }
 }
@@ -67,42 +82,43 @@ public enum IrohaPeerWireCompressionPolicyV1: Sendable {
 
 /// Allocation limits applied before an untrusted body is decompressed.
 public struct IrohaPeerWireLimitsV1: Equatable, Sendable {
-    /// Maximum complete Offline Cash V1 payment carried by IPM1.
-    public static let maximumOfflineCashProfileBytes = OfflineCashWireV1.maximumPaymentBytes
+    /// Maximum single KAGEMUSHA V1 peer message carried by IPM1.
+    public static let maximumKagemushaProfileBytes =
+        KagemushaWireV1.maximumPaymentBytes
 
     public let maximumCanonicalBytes: Int
-    public let maximumOfflineCashEncodedBytes: Int
+    public let maximumKagemushaEncodedBytes: Int
 
     public init(
-        maximumCanonicalBytes: Int = Self.maximumOfflineCashProfileBytes,
-        maximumOfflineCashEncodedBytes: Int = Self.maximumOfflineCashProfileBytes
+        maximumCanonicalBytes: Int = Self.maximumKagemushaProfileBytes,
+        maximumKagemushaEncodedBytes: Int = Self.maximumKagemushaProfileBytes
     ) {
         precondition(
             Self.areValid(
                 maximumCanonicalBytes: maximumCanonicalBytes,
-                maximumOfflineCashEncodedBytes: maximumOfflineCashEncodedBytes
+                maximumKagemushaEncodedBytes: maximumKagemushaEncodedBytes
             )
         )
         self.maximumCanonicalBytes = maximumCanonicalBytes
-        self.maximumOfflineCashEncodedBytes = maximumOfflineCashEncodedBytes
+        self.maximumKagemushaEncodedBytes = maximumKagemushaEncodedBytes
     }
 
     public static let peerV1 = IrohaPeerWireLimitsV1()
 
     static func areValid(
         maximumCanonicalBytes: Int,
-        maximumOfflineCashEncodedBytes: Int
+        maximumKagemushaEncodedBytes: Int
     ) -> Bool {
-        (1...(32 * 1_024)).contains(maximumCanonicalBytes) &&
-            (1...maximumOfflineCashProfileBytes).contains(maximumOfflineCashEncodedBytes)
+        (1...maximumKagemushaProfileBytes).contains(maximumCanonicalBytes) &&
+            (1...maximumKagemushaProfileBytes).contains(maximumKagemushaEncodedBytes)
     }
 
     public func maximumEncodedBytes(for profile: IrohaPeerWireProfileV1) throws -> Int {
         switch profile {
         case .reject:
             throw IrohaPeerWireMessageErrorV1.invalidProfile(profile.rawValue)
-        case .offlineCashV1:
-            return maximumOfflineCashEncodedBytes
+        case .kagemushaV1:
+            return maximumKagemushaEncodedBytes
         }
     }
 }
@@ -423,15 +439,17 @@ public struct IrohaPeerWireMessageV1: Equatable, Sendable {
         kind: IrohaPeerWireKindV1,
         canonicalPayload: Data
     ) throws {
-        guard profile == .offlineCashV1 else { return }
-        guard canonicalPayload.count <= OfflineCashWireV1.maximumPaymentBytes,
+        guard profile == .kagemushaV1 else { return }
+        guard canonicalPayload.count <= kind.maximumKagemushaCanonicalBytes,
               let decoded = noritoDecodeFrame(canonicalPayload),
               decoded.header.compression == .none,
               decoded.header.flags == NoritoHeader.compactLen,
               decoded.header.schema == noritoSchemaHash(
-                forTypeName: kind.requiredOfflineCashCanonicalSchema
+                forTypeName: kind.requiredKagemushaCanonicalSchema
               ),
-              decoded.paddingLength == 8,
+              decoded.paddingLength == noritoHeaderPaddingLength(
+                payloadAlignment: kind.requiredKagemushaPayloadAlignment
+              ),
               !decoded.payload.isEmpty else {
             throw IrohaPeerWireMessageErrorV1.invalidCanonicalPayload(
                 profile: profile,

@@ -1109,8 +1109,8 @@ pub(super) mod tests {
                 })
                 .collect::<Vec<_>>();
             let network_id = test_network_id(0x81);
-            let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-                crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+            let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+                crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
                     network_id, 0, &roster,
                 );
             let context = wire::HeightContext {
@@ -1125,8 +1125,8 @@ pub(super) mod tests {
                 snapshot_bootstrap: None,
                 quorum: wire::DualQuorum::from_roster(&roster).expect("equal-vote quorum"),
                 roster,
-                offline_cash_mint_finality_epoch_id,
-                offline_cash_mint_finality_epoch_roster,
+                kagemusha_mint_finality_epoch_id,
+                kagemusha_mint_finality_epoch_roster,
                 nexus_amx_context_hash: Hash::new(b"v2 sync nexus/amx context"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire::DataAvailabilityLayout {
@@ -1244,7 +1244,7 @@ pub(super) mod tests {
         HashOf::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH]))
     }
     fn execution_commitment(seed: u8) -> wire::ExecutionCommitment {
-        wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new([seed, 1]),
             Hash::new([seed, 2]),
             Hash::new([seed, 3]),

@@ -2052,7 +2052,7 @@ mod tests {
         }
     }
     fn execution_commitment(marker: u8) -> ExecutionCommitment {
-        ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new([marker, 1]),
             Hash::new([marker, 2]),
             Hash::new([marker, 3]),
@@ -2735,7 +2735,7 @@ mod tests {
             .execution_commitment
             .as_mut()
             .expect("vote commitment")
-            .offline_cash_top_up_count = 1;
+            .kagemusha_top_up_count = 1;
         cases.push(invalid_commitment);
         let mut mismatched_hash = valid_meta(MessageKind::PrepareVote);
         mismatched_hash.block_hash = Some(hash(99));

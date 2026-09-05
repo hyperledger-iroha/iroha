@@ -85,9 +85,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         validated_receipt: ValidatedBodyReceipt,
         pending: &PendingRuntimeEffectBinding,
         lifecycle_ordinal: u128,
-        physical_completion: Option<
-            super::v2_worker::LifecycleValidatePhysicalCompletionV1,
-        >,
+        physical_completion: Option<super::v2_worker::LifecycleValidatePhysicalCompletionV1>,
     ) -> Result<LocalProposalReadyCommandAdmission, EnqueueError> {
         if self.fail_closed || lifecycle_ordinal == 0 {
             return Err(EnqueueError::FailClosed);
@@ -120,30 +118,17 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
                 let retained_at = completion.retained_at();
                 retained_at <= admitted_at
                     && retained_at
-                    .checked_duration_since(self.round_started_at)
-                    .is_some_and(|elapsed| {
-                        elapsed
-                            < round_timeout_for_view(
-                                self.base_round_timeout,
-                                self.round_tag.view(),
-                            )
-                    })
+                        .checked_duration_since(self.round_started_at)
+                        .is_some_and(|elapsed| {
+                            elapsed
+                                < round_timeout_for_view(
+                                    self.base_round_timeout,
+                                    self.round_tag.view(),
+                                )
+                        })
             });
         let preflight =
             self.command_admission_preflight(tag, CommandClass::Completion, &command)?;
-        iroha_logger::warn!(
-            ?preflight,
-            ?tag,
-            current_tag = ?self.driver.current_tag(),
-            clocks_armed = self.clocks_armed,
-            elapsed_ms = admitted_at
-                .checked_duration_since(self.round_started_at)
-                .map(|elapsed| elapsed.as_millis()),
-            timeout_ms = round_timeout_for_view(self.base_round_timeout, self.round_tag.view())
-                .as_millis(),
-            worker_completed_before_deadline,
-            "TEMP local ProposalReady runtime admission trace"
-        );
         let mut tagged = match preflight {
             RuntimeCommandAdmissionPreflight::Coalesce
             | RuntimeCommandAdmissionPreflight::CoalesceOwned { .. } => {
@@ -197,8 +182,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             }
             RuntimeCommandAdmissionPreflight::Reject => unreachable!("reject handled above"),
         };
-        tagged.local_proposal_worker_completed_before_deadline =
-            worker_completed_before_deadline;
+        tagged.local_proposal_worker_completed_before_deadline = worker_completed_before_deadline;
         tagged.candidate_semantic_statement = pending.candidate_statement();
         if !tagged.validate_admission_identity() {
             self.latch_fail_closed(

@@ -70,8 +70,6 @@ impl ProductionV2Services {
         &self,
         runtime_capacity_available: bool,
     ) -> Result<V2CompletionRuntimeCutDecisionV1, String> {
-        static TEMP_COMPLETION_CUT_LOGGED: std::sync::atomic::AtomicUsize =
-            std::sync::atomic::AtomicUsize::new(0);
         if self.output_guard.restart_required() {
             return Err("Sumeragi v2 consensus requires process restart".to_owned());
         }
@@ -98,14 +96,6 @@ impl ProductionV2Services {
         };
 
         if let Some(completion) = self.held_io_completion.as_ref() {
-            if TEMP_COMPLETION_CUT_LOGGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 16 {
-                iroha_logger::warn!(
-                    runtime_capacity_available,
-                    requires_runtime_capacity = completion.requires_runtime_capacity(),
-                    dedicated_lifecycle = completion.is_dedicated_lifecycle_completion(),
-                    "TEMP Completion-to-Runtime cut observed held completion"
-                );
-            }
             if runtime_capacity_available
                 || completion.is_dedicated_lifecycle_completion()
                 || !completion.requires_runtime_capacity()
@@ -118,9 +108,7 @@ impl ProductionV2Services {
             let V2IoCompletionRuntimeCutObservationV1::Pending(owner) =
                 io.admission.completion_runtime_cut_observation()
             else {
-                return Err(
-                    "held runtime completion lost its physical ownership record".to_owned(),
-                );
+                return Err("held runtime completion lost its physical ownership record".to_owned());
             };
             if !owner.requires_runtime_capacity || owner.is_dedicated_lifecycle() {
                 return Err(
@@ -154,38 +142,18 @@ impl ProductionV2Services {
         };
         // Worker retention samples its timestamp inside this same mutex.
         match io.admission.completion_runtime_cut_observation() {
-            V2IoCompletionRuntimeCutObservationV1::Empty { cut_at } => {
-                Ok(runtime_cut(cut_at))
-            }
+            V2IoCompletionRuntimeCutObservationV1::Empty { cut_at } => Ok(runtime_cut(cut_at)),
             V2IoCompletionRuntimeCutObservationV1::Pending(owner)
                 if !runtime_capacity_available
                     && owner.requires_runtime_capacity
                     && !owner.is_dedicated_lifecycle() =>
             {
                 let blocked_ordinal = owner.runtime_lifecycle_ordinal.ok_or_else(|| {
-                    "capacity-blocked completion lost its actor-global lifecycle ordinal"
-                        .to_owned()
+                    "capacity-blocked completion lost its actor-global lifecycle ordinal".to_owned()
                 })?;
                 capacity_relief_cut(owner.retained_at, blocked_ordinal)
             }
-            V2IoCompletionRuntimeCutObservationV1::Pending(owner) => {
-                if TEMP_COMPLETION_CUT_LOGGED
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                    < 16
-                {
-                    iroha_logger::warn!(
-                        runtime_capacity_available,
-                        requires_runtime_capacity = owner.requires_runtime_capacity,
-                        dedicated_lifecycle = owner.is_dedicated_lifecycle(),
-                        runtime_lifecycle_ordinal = ?owner.runtime_lifecycle_ordinal,
-                        lifecycle_apply = owner.lifecycle_decision_apply.is_some(),
-                        lifecycle_validate = owner.lifecycle_validate.is_some(),
-                        recovered_sign = owner.recovered_lifecycle_sign.is_some(),
-                        recovered_fetch = owner.recovered_decision_fetch.is_some(),
-                        certified_serve = owner.lifecycle_certified_serve.is_some(),
-                        "TEMP Completion-to-Runtime cut observed physical completion"
-                    );
-                }
+            V2IoCompletionRuntimeCutObservationV1::Pending(_) => {
                 Ok(V2CompletionRuntimeCutDecisionV1::RetryCompletion)
             }
         }
@@ -1247,8 +1215,8 @@ impl ProductionV2Services {
         validator_set_pops: Vec<Vec<u8>>,
         local_peer: PeerId,
         local_validator: Option<wire::ValidatorIndex>,
-        offline_cash_mint_finality_authority: Option<
-            Arc<crate::zk::offline_cash_v1_recursion::OfflineCashMintFinalityLocalAuthorityV1>,
+        kagemusha_mint_finality_authority: Option<
+            Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>,
         >,
         key_pair: KeyPair,
         network: IrohaNetwork,
@@ -1282,7 +1250,7 @@ impl ProductionV2Services {
             validator_set_pops,
             local_peer,
             local_validator,
-            offline_cash_mint_finality_authority,
+            kagemusha_mint_finality_authority,
             key_pair,
             network,
             body_store,
@@ -1308,8 +1276,8 @@ impl ProductionV2Services {
         validator_set_pops: Vec<Vec<u8>>,
         local_peer: PeerId,
         local_validator: Option<wire::ValidatorIndex>,
-        offline_cash_mint_finality_authority: Option<
-            Arc<crate::zk::offline_cash_v1_recursion::OfflineCashMintFinalityLocalAuthorityV1>,
+        kagemusha_mint_finality_authority: Option<
+            Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>,
         >,
         key_pair: KeyPair,
         network: IrohaNetwork,
@@ -1392,7 +1360,7 @@ impl ProductionV2Services {
             context.clone(),
             key_pair.clone(),
             local_validator,
-            offline_cash_mint_finality_authority,
+            kagemusha_mint_finality_authority,
             auxiliary_io_capacity,
             consensus_io_capacity,
             reply_route_source_capacity,
@@ -2676,12 +2644,6 @@ impl ProductionV2Services {
                 | V2IoCompletion::LifecycleValidate(_)
                 | V2IoCompletion::LifecycleCertifiedServe(_)
         ) {
-            if let V2IoCompletion::LifecycleValidate(guarded) = &completion {
-                iroha_logger::warn!(
-                    lifecycle_ordinal = guarded.key().lifecycle_ordinal(),
-                    "TEMP generic completion classifier parked lifecycle Validate"
-                );
-            }
             assert!(
                 self.held_io_completion.is_none(),
                 "completion ownership metadata must preserve one recovered lifecycle head"
@@ -3014,10 +2976,6 @@ impl ProductionV2Services {
                 Ok(LifecycleCompletionTakeV1::DecisionFetch(completion))
             }
             V2IoCompletion::LifecycleValidate(guarded) => {
-                iroha_logger::warn!(
-                    lifecycle_ordinal = guarded.key().lifecycle_ordinal(),
-                    "TEMP lifecycle completion classifier took lifecycle Validate"
-                );
                 let completion = self
                     .io
                     .as_ref()

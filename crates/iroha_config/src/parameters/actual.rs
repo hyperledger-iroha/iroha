@@ -177,7 +177,7 @@ pub struct Root {
     pub confidential: Confidential,
     /// Cryptography feature toggles and defaults.
     pub crypto: Crypto,
-    /// Settlement configuration for offline cash and conversion routing.
+    /// Settlement configuration for KAGEMUSHA and conversion routing.
     pub settlement: Settlement,
     /// Streaming configuration (control-plane key material).
     pub streaming: Streaming,
@@ -4231,10 +4231,9 @@ pub fn execution_policy_digest_v1(
     policy.push("content.immutable_bundles", &content.immutable_bundles);
     policy.push("content.default_auth_mode", &content.default_auth_mode);
     policy.push("content.stripe_layout", &content.stripe_layout);
-    // Offline-cash primitives are universal. Runtime escrow bindings are
-    // Reserve custody accounts are deterministically derived when an offline
-    // instruction executes, so no process-local offline setting participates
-    // in consensus policy.
+    // KAGEMUSHA primitives are universal. Reserve custody accounts are
+    // deterministically derived when a KAGEMUSHA instruction executes, so no
+    // process-local KAGEMUSHA setting participates in consensus policy.
     policy.push(
         "settlement.router.twap_window",
         &execution_policy_duration(settlement.router.twap_window),
@@ -8056,8 +8055,8 @@ pub struct Torii {
     pub account_onboarding: Option<AccountOnboarding>,
     /// Optional app-facing faucet configuration.
     pub faucet: Option<ToriiFaucet>,
-    /// Optional Offline Cash V1 command-submission authority.
-    pub offline_cash_v1_commands: Option<ToriiOfflineCashV1Commands>,
+    /// Optional KAGEMUSHA V1 command-submission authority.
+    pub kagemusha_v1_commands: Option<ToriiKagemushaV1Commands>,
     /// Optional RAM-LFE runtime configuration.
     pub ram_lfe: Option<ToriiRamLfe>,
     /// Optional transaction-history visibility/auth configuration.
@@ -8106,8 +8105,8 @@ impl fmt::Debug for Torii {
             )
             .field("faucet_configured", &self.faucet.is_some())
             .field(
-                "offline_cash_v1_commands",
-                &RedactedSecret::present(self.offline_cash_v1_commands.is_some()),
+                "kagemusha_v1_commands",
+                &RedactedSecret::present(self.kagemusha_v1_commands.is_some()),
             )
             .field(
                 "ram_lfe_program_count",
@@ -8637,21 +8636,27 @@ pub struct ToriiFaucet {
     /// Whether finalized global threshold-beacon seeds are mixed into faucet challenges.
     pub pow_beacon_seed_enabled: bool,
 }
-/// Offline Cash V1 command-submission configuration exposed to Torii.
+/// KAGEMUSHA V1 command-admission configuration exposed to Torii.
 #[derive(Debug, Clone)]
-pub struct ToriiOfflineCashV1Commands {
-    /// Account derived from the submission key; must hold `CanManageOfflineReserve`.
-    pub authority: AccountId,
-    /// Key pair used only to submit typed Offline Cash V1 instructions.
-    pub key_pair: KeyPair,
-    /// Minimum live XOR balance required for the self-funded command authority.
-    pub minimum_xor_balance: Quantity,
-    /// Maximum value accepted for one Offline Cash V1 command.
+pub struct ToriiKagemushaV1Commands {
+    /// Optional issuer used only for server-signed redemption transactions.
+    pub redemption_issuer: Option<ToriiKagemushaV1RedemptionIssuer>,
+    /// Maximum value accepted for one KAGEMUSHA V1 command.
     pub max_tx_value: Quantity,
     /// Maximum number of accepted bindings plus in-flight reservations retained in memory.
     pub operation_registry_max_entries: NonZeroUsize,
     /// Maximum canonical bytes reserved by accepted bindings and in-flight operations.
     pub operation_registry_max_bytes: NonZeroUsize,
+}
+/// Optional KAGEMUSHA V1 redemption issuer exposed to Torii.
+#[derive(Debug, Clone)]
+pub struct ToriiKagemushaV1RedemptionIssuer {
+    /// Account derived from the redemption key; must hold `CanManageKagemushaReserve`.
+    pub authority: AccountId,
+    /// Key pair used only to submit typed KAGEMUSHA V1 redemption instructions.
+    pub key_pair: KeyPair,
+    /// Minimum live XOR balance required for the self-funded redemption authority.
+    pub minimum_xor_balance: Quantity,
 }
 /// RAM-LFE runtime configuration exposed to Torii.
 #[derive(Debug, Clone)]
@@ -11917,12 +11922,12 @@ impl_default!(StreamingSync => {
 /// Settlement execution state and conversion routing configuration.
 #[derive(Debug, Clone, Default)]
 pub struct Settlement {
-    /// Universal cash-protocol state plus optional proof-release cache controls.
-    pub offline: Offline,
+    /// KAGEMUSHA cash-protocol state plus optional proof-release cache controls.
+    pub kagemusha: Kagemusha,
     /// Router configuration for XOR conversion.
     pub router: Router,
 }
-include!("actual/offline.rs");
+include!("actual/kagemusha.rs");
 /// Router configuration controlling shadow-price and buffer guard rails.
 #[derive(Debug, Clone, Copy)]
 pub struct Router {

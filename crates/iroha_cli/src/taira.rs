@@ -107,9 +107,9 @@ const ROUTE_CHECKS: &[(&str, RouteCheckMethod, &str, &[u16])] = &[
         &[400],
     ),
     (
-        "offline_capability",
+        "kagemusha_readiness",
         RouteCheckMethod::Get,
-        "/v1/offline/readiness",
+        "/v1/kagemusha/readiness",
         &[200],
     ),
     (
@@ -2184,7 +2184,7 @@ fn run_doctor(public_root: &str) -> Result<Value> {
             match *name {
                 "status" => validate_public_status(result.body.as_ref()).err(),
                 "time_now" => validate_time_snapshot(result.body.as_ref()).err(),
-                "offline_capability" => validate_offline_capability(result.body.as_ref()).err(),
+                "kagemusha_readiness" => validate_kagemusha_readiness(result.body.as_ref()).err(),
                 _ => None,
             }
         } else {
@@ -5521,32 +5521,32 @@ fn validate_time_snapshot(snapshot: Option<&Value>) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_offline_capability(capability: Option<&Value>) -> Result<(), String> {
+fn validate_kagemusha_readiness(capability: Option<&Value>) -> Result<(), String> {
     let capability = capability
         .cloned()
-        .ok_or_else(|| "/v1/offline/readiness returned no JSON body".to_owned())?;
-    let capability: iroha::data_model::offline::OfflineStatus = json::from_value(capability)
-        .map_err(|error| {
-            format!("/v1/offline/readiness is not exact OfflineStatus JSON: {error}")
+        .ok_or_else(|| "/v1/kagemusha/readiness returned no JSON body".to_owned())?;
+    let capability: iroha_torii_shared::kagemusha_api::KagemushaReadinessV1 =
+        json::from_value(capability).map_err(|error| {
+            format!("/v1/kagemusha/readiness is not exact KagemushaReadinessV1 JSON: {error}")
         })?;
-    if capability.cash_handoff_capability
-        != iroha::data_model::offline::OFFLINE_CASH_HANDOFF_CAPABILITY_V1
+    if capability.kagemusha_handoff_capability
+        != iroha::data_model::kagemusha::KAGEMUSHA_HANDOFF_CAPABILITY_V1
     {
         return Err(
-            "/v1/offline/readiness does not advertise the exact cash_handoff_v1 contract"
+            "/v1/kagemusha/readiness does not advertise the exact kagemusha_handoff_v1 contract"
                 .to_owned(),
         );
     }
-    if capability.wire_version != iroha::data_model::offline::OFFLINE_CASH_WIRE_VERSION_V1 {
-        return Err("/v1/offline/readiness does not advertise Offline Cash wire V1".to_owned());
+    if capability.wire_version != iroha::data_model::kagemusha::KAGEMUSHA_WIRE_VERSION_V1 {
+        return Err("/v1/kagemusha/readiness does not advertise KAGEMUSHA wire V1".to_owned());
     }
     if capability.device_lifecycle_version
-        != iroha::data_model::offline::OFFLINE_CASH_DEVICE_LIFECYCLE_VERSION_V1
+        != iroha::data_model::kagemusha::KAGEMUSHA_DEVICE_LIFECYCLE_VERSION_V1
     {
-        return Err("/v1/offline/readiness does not require secure-device lifecycle V1".to_owned());
+        return Err("/v1/kagemusha/readiness does not require secure-device lifecycle V1".to_owned());
     }
     if !capability.ready {
-        return Err("/v1/offline/readiness reports Offline Cash V1 unavailable".to_owned());
+        return Err("/v1/kagemusha/readiness reports KAGEMUSHA V1 unavailable".to_owned());
     }
     Ok(())
 }
@@ -7960,10 +7960,10 @@ mod tests {
             ("GET", "/v1/pipeline/transactions/status") => {
                 MockResponse::json(400, norito::json!({"error": "missing transaction hash"}))
             }
-            ("GET", "/v1/offline/readiness") => MockResponse::json(
+            ("GET", "/v1/kagemusha/readiness") => MockResponse::json(
                 200,
                 norito::json!({
-                    "cash_handoff_capability": "cash_handoff_v1",
+                    "kagemusha_handoff_capability": "kagemusha_handoff_v1",
                     "wire_version": 1,
                     "device_lifecycle_version": 1,
                     "ready": true
@@ -10090,7 +10090,7 @@ mod tests {
             request.method == "GET" && path_only(&request.path) == "/v1/time/now"
         }));
         assert!(requests.iter().any(|request| {
-            request.method == "GET" && path_only(&request.path) == "/v1/offline/readiness"
+            request.method == "GET" && path_only(&request.path) == "/v1/kagemusha/readiness"
         }));
         assert!(requests.iter().any(|request| {
             request.method == "POST"
@@ -10282,17 +10282,17 @@ mod tests {
         assert!(validate_time_snapshot(None).is_err());
     }
     #[test]
-    fn offline_capability_requires_exact_universal_offline_cash_contract() {
+    fn kagemusha_readiness_requires_exact_universal_kagemusha_contract() {
         let canonical = norito::json!({
-            "cash_handoff_capability": "cash_handoff_v1",
+            "kagemusha_handoff_capability": "kagemusha_handoff_v1",
             "wire_version": 1,
             "device_lifecycle_version": 1,
             "ready": true
         });
-        validate_offline_capability(Some(&canonical)).expect("canonical capability");
+        validate_kagemusha_readiness(Some(&canonical)).expect("canonical capability");
 
         for (field, replacement) in [
-            ("cash_handoff_capability", Value::from("legacy")),
+            ("kagemusha_handoff_capability", Value::from("legacy")),
             ("wire_version", Value::from(2_u64)),
             ("device_lifecycle_version", Value::from(2_u64)),
             ("ready", Value::Bool(false)),
@@ -10302,7 +10302,7 @@ mod tests {
                 .as_object_mut()
                 .expect("capability fixture is an object")
                 .insert(field.to_owned(), replacement);
-            assert!(validate_offline_capability(Some(&hostile)).is_err());
+            assert!(validate_kagemusha_readiness(Some(&hostile)).is_err());
         }
 
         let mut expanded = canonical;
@@ -10310,8 +10310,8 @@ mod tests {
             .as_object_mut()
             .expect("capability fixture is an object")
             .insert("release_ready".to_owned(), Value::Bool(true));
-        assert!(validate_offline_capability(Some(&expanded)).is_err());
-        assert!(validate_offline_capability(None).is_err());
+        assert!(validate_kagemusha_readiness(Some(&expanded)).is_err());
+        assert!(validate_kagemusha_readiness(None).is_err());
     }
     #[test]
     fn write_canary_exit_gate_fails_closed() {

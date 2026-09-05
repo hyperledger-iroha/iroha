@@ -18,10 +18,10 @@ use iroha_data_model::{
             SumeragiV2StatusPhase, TimeoutVote, ValidationError, ValidatorPower,
         },
     },
-    isi::offline_cash_v1::{
-        OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterTemplateV1,
-        OfflineCashMintFinalityEpochRosterV1, OfflineCashMintFinalityGenesisParametersV1,
-        OfflineCashMintFinalityValidatorKeysV1,
+    isi::kagemusha_v1::{
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
+        KagemushaMintFinalityEpochRosterV1, KagemushaMintFinalityGenesisParametersV1,
+        KagemushaMintFinalityValidatorKeysV1,
     },
     nexus::{DataSpaceId, LaneId},
     peer::PeerId,
@@ -54,23 +54,19 @@ fn mint_finality_roster(
     network_id: NetworkId,
     epoch: u64,
     roster: &[ValidatorPower],
-) -> OfflineCashMintFinalityEpochRosterV1 {
-    OfflineCashMintFinalityEpochRosterV1 {
-        version: OFFLINE_CASH_CHAIN_VERSION_V1,
+) -> KagemushaMintFinalityEpochRosterV1 {
+    KagemushaMintFinalityEpochRosterV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
         epoch,
         validators: roster
             .iter()
             .enumerate()
-            .map(
-                |(index, validator)| OfflineCashMintFinalityValidatorKeysV1 {
-                    validator: validator.validator.clone(),
-                    eq_proof_public_key: [u8::try_from(index + 1).expect("small fixture roster");
-                        32],
-                    ep_proof_public_key: [u8::try_from(index + 17).expect("small fixture roster");
-                        32],
-                },
-            )
+            .map(|(index, validator)| KagemushaMintFinalityValidatorKeysV1 {
+                validator: validator.validator.clone(),
+                eq_proof_public_key: [u8::try_from(index + 1).expect("small fixture roster"); 32],
+                ep_proof_public_key: [u8::try_from(index + 17).expect("small fixture roster"); 32],
+            })
             .collect(),
     }
 }
@@ -273,8 +269,8 @@ fn rng_evidence(rng: &mut DeterministicRng) -> Evidence {
         protocol_version: V2_PROTOCOL_VERSION,
         height,
         epoch,
-        offline_cash_mint_finality_epoch_id: mint_finality_epoch_id,
-        offline_cash_mint_finality_epoch_roster: mint_finality_roster,
+        kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster: mint_finality_roster,
         epoch_end_height: height,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Permissioned,
@@ -382,14 +378,13 @@ fn rng_sumeragi_v2_qc_response(rng: &mut DeterministicRng) -> SumeragiV2QcRespon
                 block_hash: rng_block_hash(rng),
                 payload_hash: rng_hash(rng),
             },
-            execution_commitment:
-                ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
-                    rng_hash(rng),
-                    rng_hash(rng),
-                    rng_hash(rng),
-                    rng.next_u64().max(1),
-                    rng_hash(rng),
-                ),
+            execution_commitment: ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+                rng_hash(rng),
+                rng_hash(rng),
+                rng_hash(rng),
+                rng.next_u64().max(1),
+                rng_hash(rng),
+            ),
         }
     }
     SumeragiV2QcResponse {
@@ -429,7 +424,7 @@ fn consensus_genesis_norito_roundtrip() {
     assert_roundtrip(&without_npos);
 }
 #[test]
-fn offline_cash_mint_finality_genesis_parameters_norito_roundtrip() {
+fn kagemusha_mint_finality_genesis_parameters_norito_roundtrip() {
     let network_id = NetworkId::from_genesis_hash(sample_block_hash(0xD0));
     let mut roster = [0xD1, 0xD2, 0xD3, 0xD4]
         .into_iter()
@@ -441,13 +436,13 @@ fn offline_cash_mint_finality_genesis_parameters_norito_roundtrip() {
     roster.sort();
     let template = |epoch| {
         let roster = mint_finality_roster(network_id, epoch, &roster);
-        OfflineCashMintFinalityEpochRosterTemplateV1 {
+        KagemushaMintFinalityEpochRosterTemplateV1 {
             version: roster.version,
             epoch: roster.epoch,
             validators: roster.validators,
         }
     };
-    let parameters = OfflineCashMintFinalityGenesisParametersV1 {
+    let parameters = KagemushaMintFinalityGenesisParametersV1 {
         epoch_roster: template(0),
         next_epoch_roster: Some(template(1)),
     };

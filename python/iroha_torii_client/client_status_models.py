@@ -49,8 +49,8 @@ class SumeragiV2ExecutionCommitment:
     parent_state_root: str
     post_state_root: str
     ordinary_writes_root: str
-    offline_cash_top_up_root: Optional[str]
-    offline_cash_top_up_count: int
+    kagemusha_top_up_root: Optional[str]
+    kagemusha_top_up_count: int
     native_amx_application_manifest_version: int
     native_amx_application_manifest_root: str
     native_amx_application_manifest_count: int

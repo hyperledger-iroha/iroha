@@ -15,7 +15,7 @@ public enum IrohaPeerNfcV1 {
     public static let hashBytes = 32
     public static let maximumChunkBytes = 4_096
     public static let maximumMessageBytes =
-        IrohaPeerWireMessageV1.headerBytes + OfflineCashWireV1.maximumPaymentBytes
+        IrohaPeerWireMessageV1.headerBytes + KagemushaWireV1.maximumPaymentBytes
     public static let infoBytes = 98
     public static let statusBytes = 174
 
@@ -1310,7 +1310,7 @@ public struct IrohaPeerNfcReceiverSessionV1: Sendable {
         let request = try nfcDecodeMessage(
             receiveRequest,
             expectedProfile: nil,
-            expectedKind: .receiveRequest,
+            expectedKind: .request,
             limits: limits
         )
         let identity = try IrohaPeerNfcRequestIdentityV1(
@@ -1848,7 +1848,7 @@ public enum IrohaPeerNfcReaderPlanningV1 {
         let message = try nfcDecodeMessage(
             data,
             expectedProfile: info.identity.profile,
-            expectedKind: .receiveRequest,
+            expectedKind: .request,
             limits: limits
         )
         guard message.canonicalHash == info.identity.requestCanonicalHash,
@@ -1881,7 +1881,7 @@ public struct IrohaPeerNfcSenderCheckpointV1: Equatable, Sendable {
         let requestMessage = try nfcDecodeMessage(
             receiveRequest,
             expectedProfile: nil,
-            expectedKind: .receiveRequest,
+            expectedKind: .request,
             limits: limits
         )
         let effectivePolicy = profilePolicy ?? .init(profile: requestMessage.profile)

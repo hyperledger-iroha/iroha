@@ -43,7 +43,12 @@ use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSe
     PartialEq,
     Eq,
 )]
-#[norito(tag = "status", content = "value", rename_all = "snake_case")]
+#[norito(
+    tag = "status",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum PrivateSettlementLifecycleDtoV1 {
     /// Encrypted sidecar is durable and auditor approvals are being collected.
     Collecting,
@@ -235,7 +240,12 @@ pub struct PrivateSettlementPhaseCertificatesResponseV1 {
     PartialEq,
     Eq,
 )]
-#[norito(tag = "result", content = "value", rename_all = "snake_case")]
+#[norito(
+    tag = "result",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum PrivateSettlementLegUploadDispositionV1 {
     /// New encrypted bytes became durable.
     Stored,
@@ -1134,7 +1144,12 @@ pub struct PrivateSettlementBundleStatusResponseV1 {
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
-#[norito(tag = "status", content = "value", rename_all = "snake_case")]
+#[norito(
+    tag = "status",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum PrivateSettlementBundleReceiptResponseV1 {
     /// The bundle is known but has no public terminal receipt yet.
     Pending {
@@ -1158,7 +1173,8 @@ mod tests {
         block::BlockHeader,
         nexus::{
             DataSpaceId, LaneId, PRIVATE_SETTLEMENT_ML_KEM_768_CIPHERTEXT_BYTES_V1,
-            PRIVATE_SETTLEMENT_WRAPPED_DEK_BYTES_V1, PrivateSettlementAuditAadV1,
+            PRIVATE_SETTLEMENT_WRAPPED_DEK_BYTES_V1, PrivateSettlementAbortReasonV1,
+            PrivateSettlementAuditAadV1,
             PrivateSettlementAuditApprovalAcknowledgementAttestationBodyV1,
             PrivateSettlementAuditApprovalBodyV1, PrivateSettlementAuditPolicyBodyV1,
             PrivateSettlementAuditorV1, PrivateSettlementAuditorViewAttestationBodyV1,
@@ -1185,6 +1201,40 @@ mod tests {
         auditor: PrivateSettlementAuditorCapsuleResponseV1,
         approval_request: PrivateSettlementAuditApprovalRequestV1,
         approval_response: PrivateSettlementAuditApprovalResponseV1,
+    }
+
+    fn assert_unknown_json_error<T>(result: Result<T, norito::json::Error>) {
+        match result {
+            Err(norito::json::Error::UnknownField { field }) => {
+                assert_eq!(field, "unexpected_private_material")
+            }
+            Err(error) => panic!("expected an unknown-field error, got {error:?}"),
+            Ok(_) => panic!("unexpected private-settlement JSON field was accepted"),
+        }
+    }
+
+    fn assert_unknown_json_field_rejected<T>(value: &T, path: &[&str])
+    where
+        T: norito::json::JsonDeserialize + norito::json::JsonSerialize,
+    {
+        let mut hostile = norito::json::to_value(value).expect("encode strict JSON fixture");
+        let mut target = &mut hostile;
+        for field in path {
+            target = target
+                .get_mut(*field)
+                .unwrap_or_else(|| panic!("strict JSON fixture is missing `{field}`"));
+        }
+        target
+            .as_object_mut()
+            .expect("strict JSON target is an object")
+            .insert(
+                "unexpected_private_material".to_owned(),
+                norito::json::Value::Bool(true),
+            );
+
+        let encoded = norito::json::to_json(&hostile).expect("encode hostile JSON fixture");
+        assert_unknown_json_error(norito::json::from_json::<T>(&encoded));
+        assert_unknown_json_error(norito::json::from_value::<T>(hostile));
     }
 
     fn validation_network(seed: u8) -> NetworkId {
@@ -2058,6 +2108,84 @@ mod tests {
         let decoded_json: PrivateSettlementBundleReceiptResponseV1 =
             norito::json::from_json(&json).expect("DTO JSON decodes");
         assert_eq!(decoded_json, response);
+    }
+
+    #[test]
+    fn lifecycle_and_upload_disposition_json_reject_unknown_fields_for_every_variant() {
+        for lifecycle in [
+            PrivateSettlementLifecycleDtoV1::Collecting,
+            PrivateSettlementLifecycleDtoV1::Audited,
+            PrivateSettlementLifecycleDtoV1::Prepared,
+            PrivateSettlementLifecycleDtoV1::CommitCertified,
+            PrivateSettlementLifecycleDtoV1::Finalized,
+            PrivateSettlementLifecycleDtoV1::Aborted,
+            PrivateSettlementLifecycleDtoV1::Expired,
+        ] {
+            assert_unknown_json_field_rejected(&lifecycle, &[]);
+
+            let response = PrivateSettlementLegUploadResponseV1 {
+                bundle_id: Hash::new(b"strict-lifecycle-response-bundle"),
+                payload_digest: Hash::new(b"strict-lifecycle-response-payload"),
+                leg_ordinal: 0,
+                disposition: PrivateSettlementLegUploadDispositionV1::Stored,
+                lifecycle,
+            };
+            assert_unknown_json_field_rejected(&response, &["lifecycle"]);
+        }
+
+        for disposition in [
+            PrivateSettlementLegUploadDispositionV1::Stored,
+            PrivateSettlementLegUploadDispositionV1::AlreadyStored,
+        ] {
+            assert_unknown_json_field_rejected(&disposition, &[]);
+
+            let response = PrivateSettlementLegUploadResponseV1 {
+                bundle_id: Hash::new(b"strict-upload-response-bundle"),
+                payload_digest: Hash::new(b"strict-upload-response-payload"),
+                leg_ordinal: 0,
+                disposition,
+                lifecycle: PrivateSettlementLifecycleDtoV1::Collecting,
+            };
+            assert_unknown_json_field_rejected(&response, &["disposition"]);
+        }
+    }
+
+    #[test]
+    fn public_receipt_json_rejects_unknown_envelope_variant_and_nested_fields() {
+        let fixture = response_validation_fixture_v1();
+        let bundle_id = fixture.committee.manifest.bundle_id;
+        let receipt_variants = [
+            PrivateSettlementBundleReceiptResponseV1::Pending {
+                bundle_id,
+                lifecycle: PrivateSettlementLifecycleDtoV1::Prepared,
+            },
+            PrivateSettlementBundleReceiptResponseV1::Finalized(PrivateSettlementReceiptV1 {
+                version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+                manifest: fixture.committee.manifest.clone(),
+                authority_catalog: Default::default(),
+                legs: Vec::new(),
+                finalized_height: fixture.committee.manifest.authority_context_height,
+            }),
+            PrivateSettlementBundleReceiptResponseV1::Aborted(PrivateSettlementAbortReceiptV1 {
+                version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
+                network_id: fixture.network_id,
+                bundle_id,
+                manifest_digest: fixture
+                    .committee
+                    .manifest
+                    .manifest_digest()
+                    .expect("fixture manifest digest"),
+                finalized_height: fixture.committee.manifest.authority_context_height,
+                reason: PrivateSettlementAbortReasonV1::ParticipantRejected,
+            }),
+        ];
+
+        for response in &receipt_variants {
+            assert_unknown_json_field_rejected(response, &[]);
+            assert_unknown_json_field_rejected(response, &["value"]);
+        }
+
+        assert_unknown_json_field_rejected(&receipt_variants[0], &["value", "lifecycle"]);
     }
 
     #[test]

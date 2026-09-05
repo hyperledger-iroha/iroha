@@ -112,10 +112,11 @@ use super::{
         CancelledLifecycleValidateSidecarV1, DurableStoreTerminalRetrySealV1,
         InstalledAuthenticatedGenesisReplayAuthorityV1, LifecycleContext,
         LifecycleDecisionApplyDispatchKeyV1, LifecycleDecisionApplyLineageV1,
-        LifecycleOutputAdmissionKeyV1, LifecycleOutputServiceDispositionV1,
-        LifecycleValidateDispatchKeyV1, LiveLifecycleDecisionApplyReconciliationAuthorityV1,
-        PendingDurableValidateAdmissionV1, PendingLifecycleOutputAdmissionV1,
-        PendingLiveWalSignAdmissionV1, PreparedAuthenticatedGenesisFetchReplayPreAdmission,
+        LifecycleDecisionApplySuccessorOutputModeV1, LifecycleOutputAdmissionKeyV1,
+        LifecycleOutputServiceDispositionV1, LifecycleValidateDispatchKeyV1,
+        LiveLifecycleDecisionApplyReconciliationAuthorityV1, PendingDurableValidateAdmissionV1,
+        PendingLifecycleOutputAdmissionV1, PendingLiveWalSignAdmissionV1,
+        PreparedAuthenticatedGenesisFetchReplayPreAdmission,
         PreparedAuthenticatedGenesisStoreReplayPreAdmission,
         PreparedAuthenticatedGenesisStoredReplayPreAdmission,
         PreparedLifecycleDecisionApplyDispatchV1, PreparedLocalBodyValidateReplayPreAdmission,
@@ -3516,10 +3517,6 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             let ready_incumbent = self.local_proposal_ready_replay.get(&identity);
             let intent_incumbent = self.local_proposal_intent_replay.get(&identity);
             let command_was_coalesced = published.command_was_coalesced();
-            iroha_logger::warn!(
-                command_was_coalesced,
-                "TEMP local ProposalReady publication trace"
-            );
             if command_was_coalesced {
                 // Runtime installed no FIFO owner. Drop this new linear replay
                 // value and leave any older replay incumbent untouched;
@@ -3611,12 +3608,56 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         !self.runtime.lifecycle_live_clocks_are_armed()
     }
 
+    /// Switch a fully reconciled fixture to the observer dispatcher role.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn enter_observer_completion_mode_for_test(&mut self) {
+        self.local_validator = None;
+    }
+
     /// Borrow the complete pending-output census only for lifecycle registry
     /// attestation. No output service or ownership transfer is exposed.
     pub(in crate::sumeragi) fn pending_lifecycle_output_admission_census(
         &self,
     ) -> impl ExactSizeIterator<Item = &PendingLifecycleOutputAdmissionV1> {
         self.pending_lifecycle_output_admissions.values()
+    }
+
+    fn lifecycle_decision_apply_successor_census_is_exact(
+        &self,
+        attestation: &AttestedLifecycleDecisionApplySuccessorOutputsV1,
+    ) -> bool {
+        self.lifecycle_decision_apply_successor_outputs.is_none()
+            && self.exactly_owns_live_lifecycle_decision_apply(attestation.live_apply_authority())
+            && attestation.pending_count() == self.pending_lifecycle_output_admissions.len()
+            && attestation
+                .exactly_matches_pending_keys(self.pending_lifecycle_output_admissions.keys())
+            && self
+                .pending_lifecycle_output_admissions
+                .values()
+                .next()
+                .is_some_and(|pending| attestation.exactly_matches_pending_output(pending))
+    }
+
+    fn lifecycle_decision_apply_successor_batch_is_exact(
+        &self,
+        attestation: &AttestedLifecycleDecisionApplySuccessorOutputsV1,
+        batch: &RetainedEffectBatch,
+    ) -> bool {
+        attestation.mode() == LifecycleDecisionApplySuccessorOutputModeV1::SameBatchSuffix
+            && self
+                .pending_lifecycle_output_admissions
+                .values()
+                .next()
+                .is_some_and(|pending_output| {
+                    batch.effects.len() == 1
+                        && batch.effects.front().is_some_and(|owned| {
+                            attestation.exactly_matches_retransmit_apply(&owned.effect)
+                                && pending_output.exactly_precedes_periodic_retransmit_apply(
+                                    &owned.effect,
+                                    &owned.ownership,
+                                )
+                        })
+                })
     }
 
     /// Return whether one typed Decision Apply can enter its terminal worker barrier.
@@ -3638,28 +3679,21 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                     && self.retained_effect_batch.is_none()
             }
             Some(attestation) => {
-                self.lifecycle_decision_apply_successor_outputs.is_none()
-                    && attestation.pending_count() == self.pending_lifecycle_output_admissions.len()
-                    && attestation.exactly_matches_pending_keys(
-                        self.pending_lifecycle_output_admissions.keys(),
-                    )
-                    && self
-                        .pending_lifecycle_output_admissions
-                        .values()
-                        .next()
-                        .is_some_and(|pending_output| {
-                            self.retained_effect_batch.as_ref().is_some_and(|batch| {
-                                batch.effects.len() == 1
-                                    && batch.effects.front().is_some_and(|owned| {
-                                        attestation.exactly_matches_retransmit_apply(&owned.effect)
-                                            && pending_output
-                                                .exactly_precedes_periodic_retransmit_apply(
-                                                    &owned.effect,
-                                                    &owned.ownership,
-                                                )
-                                    })
-                            })
-                        })
+                self.lifecycle_decision_apply_successor_census_is_exact(attestation)
+                    && match attestation.mode() {
+                        LifecycleDecisionApplySuccessorOutputModeV1::SameBatchSuffix => self
+                            .retained_effect_batch
+                            .as_ref()
+                            .is_some_and(|batch| {
+                                self.lifecycle_decision_apply_successor_batch_is_exact(
+                                    attestation,
+                                    batch,
+                                )
+                            }),
+                        LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit { .. } => {
+                            self.retained_effect_batch.is_none()
+                        }
+                    }
             }
         };
         let pending_work_is_exact =
@@ -3671,36 +3705,90 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         let finality_is_empty = self.finality_completion.is_none();
         let runtime_queue_is_empty = self.runtime.queued_commands() == 0;
         let runtime_available = self.runtime.lifecycle_decision_apply_dispatch_available();
-        let available = pending_work_is_exact
+        Ok(pending_work_is_exact
             && successor_debt_is_exact
             && runner_cleanup_is_empty
             && recovered_fetch_is_empty
             && parked_batch_is_empty
             && finality_is_empty
             && runtime_queue_is_empty
-            && runtime_available;
-        static TEMP_APPLY_BLOCKER_LOGGED: std::sync::atomic::AtomicBool =
-            std::sync::atomic::AtomicBool::new(false);
-        if !available
-            && !TEMP_APPLY_BLOCKER_LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed)
-        {
-            iroha_logger::warn!(
-                pending_work = self.pending_work(),
-                pending_outputs = self.pending_lifecycle_output_admissions.len(),
-                pending_work_is_exact,
-                successor_debt_is_exact,
-                runner_cleanup_is_empty,
-                recovered_fetch_is_empty,
-                parked_batch_is_empty,
-                finality_is_empty,
-                queued_runtime_commands = self.runtime.queued_commands(),
-                runtime_queue_is_empty,
-                runtime_available,
-                retained_effect_batch = self.retained_effect_batch.is_some(),
-                "TEMP live lifecycle Apply executor admission blockers"
-            );
+            && runtime_available)
+    }
+
+    /// Return whether the exact post-Apply output cycle may drain one predecessor turn.
+    ///
+    /// The only admitted exception is the registry-attested live Apply paired
+    /// with its sole deferred CommitQC Broadcast. The Broadcast remains
+    /// pending. A parked Apply is accepted only as continuation evidence from
+    /// the sealed pacemaker or Completion-capacity relief path which parked it.
+    pub(in crate::sumeragi) fn lifecycle_decision_apply_runtime_predecessor_drain_available(
+        &self,
+        attestation: &AttestedLifecycleDecisionApplySuccessorOutputsV1,
+    ) -> Result<bool, EffectExecutorError> {
+        self.ensure_open()?;
+        if matches!(
+            attestation.mode(),
+            LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit { .. }
+        ) {
+            return Ok(false);
         }
-        Ok(available)
+        let remains_exact =
+            self.lifecycle_decision_apply_runtime_predecessor_remains_exact(attestation)?;
+        if self.parked_effect_batch.is_some() && !remains_exact {
+            return Err(EffectExecutorError::Contract(
+                "parked live Apply lost its complete pre-Apply runtime queue bound".to_owned(),
+            ));
+        }
+        let predecessor_turn_available = self.parked_effect_batch.is_some()
+            || self
+                .runtime
+                .lifecycle_decision_apply_runtime_predecessor_drain_available(
+                    attestation.dispatch_key().lifecycle_ordinal(),
+                );
+        Ok(remains_exact && predecessor_turn_available)
+    }
+
+    /// Recheck the exact live-Apply/output cycle after one predecessor turn.
+    pub(in crate::sumeragi) fn lifecycle_decision_apply_runtime_predecessor_remains_exact(
+        &self,
+        attestation: &AttestedLifecycleDecisionApplySuccessorOutputsV1,
+    ) -> Result<bool, EffectExecutorError> {
+        self.ensure_open()?;
+        if !matches!(
+            attestation.mode(),
+            LifecycleDecisionApplySuccessorOutputModeV1::SameBatchSuffix
+        ) {
+            return Ok(false);
+        }
+        let census_is_exact = self.lifecycle_decision_apply_successor_census_is_exact(attestation);
+        let retained_is_apply = self.retained_effect_batch.as_ref().is_some_and(|batch| {
+            self.lifecycle_decision_apply_successor_batch_is_exact(attestation, batch)
+        });
+        let parked_is_apply = self.parked_effect_batch.as_ref().is_some_and(|batch| {
+            self.lifecycle_decision_apply_successor_batch_is_exact(attestation, batch)
+        });
+        let apply_position_is_exact = if parked_is_apply {
+            self.retained_effect_batch.as_ref().is_none_or(|batch| {
+                !batch.effects.is_empty()
+                    && batch
+                        .effects
+                        .iter()
+                        .all(|owned| !attestation.exactly_matches_retransmit_apply(&owned.effect))
+            })
+        } else {
+            retained_is_apply && self.parked_effect_batch.is_none()
+        };
+        Ok(census_is_exact
+            && self.pending_work() == self.pending_lifecycle_output_admissions.len()
+            && self.pending_runner_decision_cleanup.is_none()
+            && self.recovered_decision_fetch_request_index_is_exact_and_empty()
+            && self.finality_completion.is_none()
+            && apply_position_is_exact
+            && self
+                .runtime
+                .lifecycle_decision_apply_runtime_predecessor_remains_exact(
+                    attestation.dispatch_key().lifecycle_ordinal(),
+                ))
     }
 
     /// Bind lifecycle Decision Apply queue publication to pending-Kura stage ownership.
@@ -4150,18 +4238,24 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                 self.live_lifecycle_decision_apply.is_none()
             }
         };
-        let successor_outputs_are_exact =
-            match self.lifecycle_decision_apply_successor_outputs.as_ref() {
-                None => self.pending_lifecycle_output_admissions.is_empty(),
-                Some(attestation) => {
-                    attestation.dispatch_key() == authority.dispatch_key()
-                        && attestation.pending_count()
-                            == self.pending_lifecycle_output_admissions.len()
-                        && attestation.exactly_matches_pending_keys(
-                            self.pending_lifecycle_output_admissions.keys(),
-                        )
-                }
-            };
+        let successor_outputs_are_exact = match self
+            .lifecycle_decision_apply_successor_outputs
+            .as_ref()
+        {
+            None => self.pending_lifecycle_output_admissions.is_empty(),
+            Some(attestation) => {
+                attestation.dispatch_key() == authority.dispatch_key()
+                    && attestation.pending_count() == self.pending_lifecycle_output_admissions.len()
+                    && attestation.exactly_matches_pending_keys(
+                        self.pending_lifecycle_output_admissions.keys(),
+                    )
+                    && self
+                        .pending_lifecycle_output_admissions
+                        .values()
+                        .next()
+                        .is_some_and(|pending| attestation.exactly_matches_pending_output(pending))
+            }
+        };
         if self.pending_work() != self.pending_lifecycle_output_admissions.len()
             || !successor_outputs_are_exact
             || self.pending_runner_decision_cleanup.is_some()
@@ -4219,18 +4313,24 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                 self.live_lifecycle_decision_apply.is_none()
             }
         };
-        let successor_outputs_are_exact =
-            match self.lifecycle_decision_apply_successor_outputs.as_ref() {
-                None => self.pending_lifecycle_output_admissions.is_empty(),
-                Some(attestation) => {
-                    attestation.dispatch_key() == dispatch_key
-                        && attestation.pending_count()
-                            == self.pending_lifecycle_output_admissions.len()
-                        && attestation.exactly_matches_pending_keys(
-                            self.pending_lifecycle_output_admissions.keys(),
-                        )
-                }
-            };
+        let successor_outputs_are_exact = match self
+            .lifecycle_decision_apply_successor_outputs
+            .as_ref()
+        {
+            None => self.pending_lifecycle_output_admissions.is_empty(),
+            Some(attestation) => {
+                attestation.dispatch_key() == dispatch_key
+                    && attestation.pending_count() == self.pending_lifecycle_output_admissions.len()
+                    && attestation.exactly_matches_pending_keys(
+                        self.pending_lifecycle_output_admissions.keys(),
+                    )
+                    && self
+                        .pending_lifecycle_output_admissions
+                        .values()
+                        .next()
+                        .is_some_and(|pending| attestation.exactly_matches_pending_output(pending))
+            }
+        };
         assert!(
             lineage_owner_is_exact
                 && self.finality_completion.is_none()
@@ -4755,6 +4855,287 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             .finality_completion
             .expect("ready executor has durable finality");
         Ok((self.runtime, finality.receipt, finality.artifact))
+    }
+
+    /// Drain one already-owed runtime FIFO predecessor without servicing the
+    /// deferred post-Apply output.
+    pub(in crate::sumeragi) fn step_lifecycle_decision_apply_runtime_predecessor_after_cut<
+        S: V2EffectServices,
+    >(
+        &mut self,
+        completion_cut: super::v2_worker::V2CompletionRuntimeCutV1,
+        attestation: &AttestedLifecycleDecisionApplySuccessorOutputsV1,
+        services: &mut S,
+    ) -> Result<EffectExecutorStep, EffectExecutorError> {
+        if !self.lifecycle_decision_apply_runtime_predecessor_drain_available(attestation)? {
+            return Err(self.close(
+                EffectExecutorError::Contract(
+                    "live Apply runtime-predecessor authority changed before dispatch".to_owned(),
+                ),
+                services,
+            ));
+        }
+        let now = self.consume_completion_runtime_cut(completion_cut, services)?;
+        if self.pending_runner_decision_cleanup.is_some() {
+            return Ok(EffectExecutorStep::Idle);
+        }
+        if self.parked_effect_batch.is_some() && self.retained_effect_batch.is_some() {
+            let count = self
+                .drain_retained_effect_batch(services, false)
+                .map_err(|error| {
+                    self.close_after_transferring_runtime_terminals(error, services)
+                })?;
+            if let Err(error) = self.consume_leader_wire_runtime_terminals(services) {
+                return Err(self.close(error, services));
+            }
+            let restored = match self.restore_parked_effect_batch_after_foreground_drain() {
+                Ok(true) => {
+                    if let Err(error) = self.publish_status(services) {
+                        return Err(self.close(error, services));
+                    }
+                    true
+                }
+                Ok(false) => false,
+                Err(error) => return Err(self.close(error, services)),
+            };
+            if !restored {
+                return Err(self.close(
+                    EffectExecutorError::Contract(
+                        "pre-Apply runtime foreground did not fully drain before restoring the parked Apply"
+                            .to_owned(),
+                    ),
+                    services,
+                ));
+            }
+            return Ok(if count == 0 {
+                EffectExecutorStep::Idle
+            } else {
+                EffectExecutorStep::Advanced { effects: count }
+            });
+        }
+        if self.parked_effect_batch.is_none() {
+            self.park_retained_effect_batch()
+                .map_err(|error| self.close(error, services))?;
+        }
+        if let Err(error) = self.publish_external_lifecycle_owners() {
+            return Err(self.close(error, services));
+        }
+        let decision_before_step = self
+            .runtime
+            .decided_body()
+            .map_err(EffectExecutorError::Runtime)
+            .map_err(|error| self.close(error, services))?;
+        let wal_step = self
+            .output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| {
+                EffectExecutorError::FailClosed(
+                    "process restart is required after a fatal consensus failure".to_owned(),
+                )
+            })?;
+        let step = match self
+            .runtime
+            .try_step_owed_fifo_predecessor(now, attestation.dispatch_key().lifecycle_ordinal())
+        {
+            Ok(step) => step,
+            Err(reason) => {
+                drop(wal_step);
+                return Err(self.close(EffectExecutorError::Runtime(reason.to_string()), services));
+            }
+        };
+        #[cfg(test)]
+        let selected = self.runtime.last_scheduler_selection_for_test();
+        if step.is_some()
+            && let Err(reason) = self
+                .runtime
+                .take_lifecycle_apply_predecessor_scheduler_ownership(
+                    attestation.dispatch_key().lifecycle_ordinal(),
+                )
+        {
+            drop(wal_step);
+            return Err(self.close(
+                EffectExecutorError::Runtime(format!(
+                    "Sumeragi v2 pre-Apply runtime scheduler ownership was invalid: {reason:?}"
+                )),
+                services,
+            ));
+        }
+        wal_step.complete();
+        if let Err(error) = self.finish_runtime_step_reconciliation(services) {
+            return Err(self.close(error, services));
+        }
+        let decision_after_step = self
+            .runtime
+            .decided_body()
+            .map_err(EffectExecutorError::Runtime)
+            .map_err(|error| self.close(error, services))?;
+        let pending_runner_decision_cleanup = self
+            .plan_runner_decision_cleanup(decision_before_step, decision_after_step)
+            .map_err(|error| self.close(error, services))?;
+        match step {
+            None => {
+                if pending_runner_decision_cleanup.is_some() {
+                    return Err(self.close(
+                        EffectExecutorError::Contract(
+                            "inert owed-FIFO preview changed the durable Decision".to_owned(),
+                        ),
+                        services,
+                    ));
+                }
+                match self.restore_parked_effect_batch_after_foreground_drain() {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        return Err(self.close(
+                            EffectExecutorError::Contract(
+                                "inert owed-FIFO preview lost its parked live Apply".to_owned(),
+                            ),
+                            services,
+                        ));
+                    }
+                    Err(error) => return Err(self.close(error, services)),
+                }
+                if let Err(error) = self.publish_external_lifecycle_owners() {
+                    return Err(self.close(error, services));
+                }
+                if let Err(error) = self.publish_status(services) {
+                    return Err(self.close(error, services));
+                }
+                Ok(EffectExecutorStep::Idle)
+            }
+            Some(RuntimeStep::Idle) => Err(self.close(
+                EffectExecutorError::Contract(
+                    "pre-Apply FIFO selection returned an impossible Idle step".to_owned(),
+                ),
+                services,
+            )),
+            Some(RuntimeStep::Advanced(effects)) => {
+                #[cfg(test)]
+                {
+                    self.last_runtime_step_observation = Some(RuntimeStepObservationV1 {
+                        selected,
+                        effect_count: effects.len(),
+                        validate_count: effects
+                            .iter()
+                            .filter(|effect| matches!(effect, AdapterEffect::ValidateBody { .. }))
+                            .count(),
+                        non_validate_class: observed_non_validate_class(&effects),
+                        broadcast_count: effects
+                            .iter()
+                            .filter(|effect| matches!(effect, AdapterEffect::Broadcast(_)))
+                            .count(),
+                        canonical_prepare_qc_digest: observed_canonical_prepare_qc_digest(&effects),
+                    });
+                }
+                let count = self.consume_effects_with_runner_decision_cleanup(
+                    effects,
+                    services,
+                    pending_runner_decision_cleanup,
+                    None,
+                )?;
+                match self.restore_parked_effect_batch_after_foreground_drain() {
+                    Ok(true) => {
+                        if let Err(error) = self.publish_external_lifecycle_owners() {
+                            return Err(self.close(error, services));
+                        }
+                        if let Err(error) = self.publish_status(services) {
+                            return Err(self.close(error, services));
+                        }
+                    }
+                    Ok(false) => {
+                        return Err(self.close(
+                            EffectExecutorError::Contract(
+                                "pre-Apply runtime turn retained foreground ahead of its parked Apply"
+                                    .to_owned(),
+                            ),
+                            services,
+                        ));
+                    }
+                    Err(error) => return Err(self.close(error, services)),
+                }
+                Ok(EffectExecutorStep::Advanced { effects: count })
+            }
+        }
+    }
+
+    /// Release one older Completion slot while an exact live Apply stays parked.
+    pub(in crate::sumeragi) fn step_lifecycle_decision_apply_completion_capacity_relief_after_cut<
+        S: V2EffectServices,
+    >(
+        &mut self,
+        completion_cut: super::v2_worker::V2CompletionCapacityReliefCutV1,
+        attestation: &AttestedLifecycleDecisionApplySuccessorOutputsV1,
+        services: &mut S,
+    ) -> Result<EffectExecutorStep, EffectExecutorError> {
+        if !self.lifecycle_decision_apply_runtime_predecessor_drain_available(attestation)? {
+            return Err(self.close(
+                EffectExecutorError::Contract(
+                    "live Apply capacity-relief authority changed before dispatch".to_owned(),
+                ),
+                services,
+            ));
+        }
+        let (now, blocked_ordinal) =
+            self.consume_completion_capacity_relief_cut(completion_cut, services)?;
+        if self.pending_runner_decision_cleanup.is_some() {
+            return Ok(EffectExecutorStep::Idle);
+        }
+        if self.parked_effect_batch.is_some() && self.retained_effect_batch.is_some() {
+            let count = self
+                .drain_retained_effect_batch(services, false)
+                .map_err(|error| {
+                    self.close_after_transferring_runtime_terminals(error, services)
+                })?;
+            if let Err(error) = self.consume_leader_wire_runtime_terminals(services) {
+                return Err(self.close(error, services));
+            }
+            let restored = match self.restore_parked_effect_batch_after_foreground_drain() {
+                Ok(true) => {
+                    if let Err(error) = self.publish_status(services) {
+                        return Err(self.close(error, services));
+                    }
+                    true
+                }
+                Ok(false) => false,
+                Err(error) => return Err(self.close(error, services)),
+            };
+            if !restored {
+                return Err(self.close(
+                    EffectExecutorError::Contract(
+                        "pre-Apply capacity-relief foreground did not fully drain before restoring the parked Apply"
+                            .to_owned(),
+                    ),
+                    services,
+                ));
+            }
+            return Ok(if count == 0 {
+                EffectExecutorStep::Idle
+            } else {
+                EffectExecutorStep::Advanced { effects: count }
+            });
+        }
+        if self.parked_effect_batch.is_none() {
+            self.park_retained_effect_batch()
+                .map_err(|error| self.close(error, services))?;
+        }
+        let step = self.step_completion_capacity_relief(now, blocked_ordinal, services)?;
+        match self.restore_parked_effect_batch_after_foreground_drain() {
+            Ok(true) => {
+                if let Err(error) = self.publish_status(services) {
+                    return Err(self.close(error, services));
+                }
+            }
+            Ok(false) => {
+                return Err(self.close(
+                    EffectExecutorError::Contract(
+                        "pre-Apply capacity-relief turn retained foreground ahead of its parked Apply"
+                            .to_owned(),
+                    ),
+                    services,
+                ));
+            }
+            Err(error) => return Err(self.close(error, services)),
+        }
+        Ok(step)
     }
 }
 impl<R: EffectRuntime> V2EffectExecutor<R> {
@@ -5395,6 +5776,18 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             && self.retained_effect_batch.is_none()
             && self.parked_effect_batch.is_none()
             && self.pending_work() < self.config.max_pending_work
+    }
+    /// Replace only the executor work bound in focused capacity regressions.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn set_max_pending_work_for_test(
+        &mut self,
+        max_pending_work: usize,
+    ) -> Result<(), EffectExecutorError> {
+        if max_pending_work == 0 || self.pending_work() > max_pending_work {
+            return Err(EffectExecutorError::InvalidQueueConfig);
+        }
+        self.config.max_pending_work = max_pending_work;
+        Ok(())
     }
     /// Exact runtime FIFO capacity currently available to trusted completions.
     pub(crate) fn remaining_completion_capacity(&self) -> usize {
@@ -7695,6 +8088,61 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.retained_effect_batch = self.parked_effect_batch.take();
         Ok(())
     }
+    fn restore_parked_effect_batch_after_foreground_drain(
+        &mut self,
+    ) -> Result<bool, EffectExecutorError> {
+        if self.retained_effect_batch.is_none()
+            && self.parked_effect_batch.is_some()
+            && self.pending_runner_decision_cleanup.is_none()
+        {
+            self.restore_parked_effect_batch()?;
+            return Ok(true);
+        }
+        // An effect-free predecessor leaves no foreground batch for the
+        // ordinary consumer. Its initial drain therefore restores the parked
+        // Apply itself. Accept that state only when the complete internal
+        // Apply/output edge remains exact; any other retained batch still
+        // means foreground work failed to drain.
+        if self.parked_effect_batch.is_none()
+            && self.pending_runner_decision_cleanup.is_none()
+            && self.pending_work() == self.pending_lifecycle_output_admissions.len()
+            && self.pending_lifecycle_output_admissions.len() == 1
+            && self
+                .retained_effect_batch
+                .as_ref()
+                .is_some_and(|batch| self.restored_lifecycle_decision_apply_batch_is_exact(batch))
+        {
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn restored_lifecycle_decision_apply_batch_is_exact(
+        &self,
+        batch: &RetainedEffectBatch,
+    ) -> bool {
+        let (Some(live_apply), Some(pending_output), Some(owned)) = (
+            self.live_lifecycle_decision_apply.as_ref(),
+            self.pending_lifecycle_output_admissions.values().next(),
+            batch.effects.front(),
+        ) else {
+            return false;
+        };
+        let AdapterEffect::Apply {
+            tag,
+            subject,
+            certificate,
+        } = &owned.effect
+        else {
+            return false;
+        };
+        batch.effects.len() == 1
+            && self.lifecycle_decision_apply_successor_outputs.is_none()
+            && live_apply.dispatch_key.lineage() == LifecycleDecisionApplyLineageV1::Live
+            && live_apply.exactly_matches_retransmit(*tag, *subject, certificate)
+            && pending_output
+                .exactly_precedes_periodic_retransmit_apply(&owned.effect, &owned.ownership)
+    }
     /// Drain the retained causal suffix in exact FIFO order.
     ///
     /// Pending-work and certified-request exhaustion are retryable for every
@@ -8128,6 +8576,15 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         {
             return Ok(EffectExecutorStep::Idle);
         }
+        self.step_pre_timeout_locked_prepare_qc_after_debt(now, cut, services)
+    }
+
+    fn step_pre_timeout_locked_prepare_qc_after_debt<S: V2EffectServices>(
+        &mut self,
+        now: Instant,
+        cut: &PreTimeoutLockedPrepareQcCutV1,
+        services: &mut S,
+    ) -> Result<EffectExecutorStep, EffectExecutorError> {
         if let Err(error) = self.publish_external_lifecycle_owners() {
             return Err(self.close(error, services));
         }
@@ -8197,8 +8654,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     /// authenticated Progress-root lifecycle.
     ///
     /// If ordinary adapter debt occupies the dispatch slot, its exact suffix
-    /// is parked first and restored after the control turn. A retained control
-    /// suffix is drained before another scheduler owner may be selected.
+    /// is parked first and restored once the control turn's retained effects
+    /// and any runner Decision cleanup have drained. A retained control suffix
+    /// is drained before another scheduler owner may be selected.
     pub(crate) fn step_pacemaker_once<S: V2EffectServices>(
         &mut self,
         now: Instant,
@@ -8357,23 +8815,41 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         services: &mut S,
     ) -> Result<EffectExecutorStep, EffectExecutorError> {
         self.ensure_open()?;
-        let Some((now, blocked_ordinal)) =
-            completion_cut.consume_for_executor(&self.output_guard, &self.context)
-        else {
-            return Err(self.close(
-                EffectExecutorError::Contract(
-                    "Completion capacity-relief cut belonged to another consensus executor"
-                        .to_owned(),
-                ),
-                services,
-            ));
-        };
+        let (now, blocked_ordinal) =
+            self.consume_completion_capacity_relief_cut(completion_cut, services)?;
         if self.pending_runner_decision_cleanup.is_some()
             || self.retained_effect_batch.is_some()
             || self.parked_effect_batch.is_some()
         {
             return Ok(EffectExecutorStep::Idle);
         }
+        self.step_completion_capacity_relief(now, blocked_ordinal, services)
+    }
+
+    fn consume_completion_capacity_relief_cut<S: V2EffectServices>(
+        &mut self,
+        completion_cut: super::v2_worker::V2CompletionCapacityReliefCutV1,
+        services: &mut S,
+    ) -> Result<(Instant, u128), EffectExecutorError> {
+        completion_cut
+            .consume_for_executor(&self.output_guard, &self.context)
+            .ok_or_else(|| {
+                self.close(
+                    EffectExecutorError::Contract(
+                        "Completion capacity-relief cut belonged to another consensus executor"
+                            .to_owned(),
+                    ),
+                    services,
+                )
+            })
+    }
+
+    fn step_completion_capacity_relief<S: V2EffectServices>(
+        &mut self,
+        now: Instant,
+        blocked_ordinal: u128,
+        services: &mut S,
+    ) -> Result<EffectExecutorStep, EffectExecutorError> {
         if let Err(error) = self.publish_external_lifecycle_owners() {
             return Err(self.close(error, services));
         }

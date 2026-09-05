@@ -315,10 +315,10 @@ mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, bls_normal_pop_prove};
     use iroha_data_model::{
-        block::consensus_v2::SumeragiV2GenesisContextParameters,
-        isi::offline_cash_v1::{
-            OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterTemplateV1,
-            OfflineCashMintFinalityGenesisParametersV1,
+        block::consensus_v2::{SumeragiV2GenesisContextParameters, is_valid_committee_size},
+        isi::kagemusha_v1::{
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
+            KagemushaMintFinalityGenesisParametersV1,
         },
         peer::PeerId,
     };
@@ -328,6 +328,59 @@ mod tests {
         "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E";
     const FIXTURE_GENESIS_PUBLIC_KEY: &str =
         "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4";
+    fn complete_test_builder_for_topology(
+        builder: GenesisBuilder,
+        mut topology: Vec<GenesisTopologyEntry>,
+    ) -> GenesisBuilder {
+        topology.sort_by(|left, right| left.peer.cmp(&right.peer));
+        assert!(
+            is_valid_committee_size(topology.len()),
+            "genesis-support fixtures require an exact supported 3f + 1 topology"
+        );
+        assert!(
+            !topology.windows(2).any(|pair| pair[0].peer == pair[1].peer),
+            "genesis-support fixture topology must not repeat validators"
+        );
+        for entry in &topology {
+            let pop = entry
+                .pop_bytes()
+                .expect("decode genesis-support validator proof of possession")
+                .expect("genesis-support validator must carry a proof of possession");
+            iroha_crypto::bls_normal_pop_verify(entry.peer.public_key(), &pop)
+                .expect("verify genesis-support validator proof of possession");
+        }
+        let validators = topology
+            .iter()
+            .map(|entry| entry.peer.clone())
+            .collect::<Vec<_>>();
+        let validators = validators
+            .into_iter()
+            .enumerate()
+            .map(|(index, validator)| {
+                iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                    &[0xA0_u8.wrapping_add(u8::try_from(index).expect("small test roster")); 32],
+                    0,
+                    validator,
+                )
+                .expect("derive deterministic test mint-finality keys")
+            })
+            .collect();
+        let parameters = KagemushaMintFinalityGenesisParametersV1 {
+            epoch_roster: KagemushaMintFinalityEpochRosterTemplateV1 {
+                version: KAGEMUSHA_CHAIN_VERSION_V1,
+                epoch: 0,
+                validators,
+            },
+            next_epoch_roster: None,
+        };
+        parameters
+            .validate()
+            .expect("genesis-support test authority must be canonical");
+        builder
+            .set_topology(topology)
+            .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+            .with_kagemusha_mint_finality_genesis_parameters(parameters)
+    }
     fn prepared_manifest(chain_id: ChainId) -> (RawGenesisTransaction, KeyPair) {
         let topology = (0..4)
             .map(|_| {
@@ -338,44 +391,13 @@ mod tests {
                 GenesisTopologyEntry::new(PeerId::new(validator.public_key().clone()), pop)
             })
             .collect::<Vec<_>>();
-        let mut validators = topology
-            .iter()
-            .map(|entry| entry.peer.clone())
-            .collect::<Vec<_>>();
-        validators.sort();
-        let validators = validators
-            .into_iter()
-            .enumerate()
-            .map(|(index, validator)| {
-                let seed_byte = 0xB0_u8.wrapping_add(
-                    u8::try_from(index).expect("genesis-support validator index fits in one byte"),
-                );
-                iroha_core::zk::offline_cash_v1_recursion::derive_offline_cash_mint_finality_validator_keys_v1(
-                    &[seed_byte; 32],
-                    0,
-                    validator,
-                )
-                .expect("derive independent genesis-support Pasta authority")
-            })
-            .collect();
-        let mint_finality = OfflineCashMintFinalityGenesisParametersV1 {
-            epoch_roster: OfflineCashMintFinalityEpochRosterTemplateV1 {
-                version: OFFLINE_CASH_CHAIN_VERSION_V1,
-                epoch: 0,
-                validators,
-            },
-            next_epoch_roster: None,
-        };
-        mint_finality
-            .validate()
-            .expect("genesis-support test authority must be canonical");
-        let manifest = GenesisBuilder::new_without_executor(chain_id, ".")
-            .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
-            .with_offline_cash_mint_finality_genesis_parameters(mint_finality)
-            .set_topology(topology)
-            .build_raw()
-            .expect("build complete genesis-support fixture")
-            .with_consensus_meta();
+        let manifest = complete_test_builder_for_topology(
+            GenesisBuilder::new_without_executor(chain_id, "."),
+            topology,
+        )
+        .build_raw()
+        .expect("complete prepared-manifest fixture")
+        .with_consensus_meta();
         let genesis_key = KeyPair::try_random().expect("generate genesis key");
         (manifest, genesis_key)
     }

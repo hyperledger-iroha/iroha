@@ -5,12 +5,12 @@ impl Error {
             | queue::Error::LatencySaturated
             | queue::Error::MaximumTransactionsPerUser => StatusCode::TOO_MANY_REQUESTS,
             queue::Error::Expired => StatusCode::BAD_REQUEST,
-            queue::Error::OfflineCashV1OperationCarrierRejected { .. } => StatusCode::BAD_REQUEST,
+            queue::Error::KagemushaV1OperationCarrierRejected { .. } => StatusCode::BAD_REQUEST,
             queue::Error::UnresolvedRoute { .. } => StatusCode::BAD_REQUEST,
             queue::Error::InBlockchain => StatusCode::CONFLICT,
             queue::Error::IsInQueue => StatusCode::CONFLICT,
-            queue::Error::OfflineCashV1OperationIdConflict { .. } => StatusCode::CONFLICT,
-            queue::Error::OfflineCashV1OperationIndexInconsistent { .. } => {
+            queue::Error::KagemushaV1OperationIdConflict { .. } => StatusCode::CONFLICT,
+            queue::Error::KagemushaV1OperationIndexInconsistent { .. } => {
                 StatusCode::SERVICE_UNAVAILABLE
             }
             queue::Error::UnregisteredAuthority { .. } => StatusCode::FORBIDDEN,
@@ -41,9 +41,9 @@ impl Error {
                 "transaction_expired",
                 "transaction expired before admission",
             ),
-            queue::Error::OfflineCashV1OperationCarrierRejected { .. } => (
-                "offline_cash_v1_operation_carrier_rejected",
-                "Offline Cash V1 operation carrier failed canonical admission",
+            queue::Error::KagemushaV1OperationCarrierRejected { .. } => (
+                "kagemusha_v1_operation_carrier_rejected",
+                "KAGEMUSHA V1 operation carrier failed canonical admission",
             ),
             queue::Error::UnresolvedRoute { .. } => (
                 "queue_unresolved_route",
@@ -57,13 +57,13 @@ impl Error {
                 "already_enqueued",
                 "transaction already present in the queue",
             ),
-            queue::Error::OfflineCashV1OperationIdConflict { .. } => (
-                "offline_cash_v1_operation_id_conflict",
-                "Offline Cash V1 operation identifier is already pending",
+            queue::Error::KagemushaV1OperationIdConflict { .. } => (
+                "kagemusha_v1_operation_id_conflict",
+                "KAGEMUSHA V1 operation identifier is already pending",
             ),
-            queue::Error::OfflineCashV1OperationIndexInconsistent { .. } => (
-                "offline_cash_v1_operation_index_inconsistent",
-                "Offline Cash V1 pending-operation index requires recovery",
+            queue::Error::KagemushaV1OperationIndexInconsistent { .. } => (
+                "kagemusha_v1_operation_index_inconsistent",
+                "KAGEMUSHA V1 pending-operation index requires recovery",
             ),
             queue::Error::UnregisteredAuthority { .. } => (
                 "unregistered_authority",
@@ -191,9 +191,9 @@ fn queue_rejection_metadata(err: &queue::Error) -> (&'static str, String) {
             "authority reached per-user queue capacity".to_owned(),
         ),
         queue::Error::Expired => ("ED07", "transaction expired before admission".to_owned()),
-        queue::Error::OfflineCashV1OperationCarrierRejected { reason } => (
-            "PRTRY:OFFLINE_CASH_V1_OPERATION_CARRIER_REJECTED",
-            format!("Offline Cash V1 operation carrier failed canonical admission: {reason}"),
+        queue::Error::KagemushaV1OperationCarrierRejected { reason } => (
+            "PRTRY:KAGEMUSHA_V1_OPERATION_CARRIER_REJECTED",
+            format!("KAGEMUSHA V1 operation carrier failed canonical admission: {reason}"),
         ),
         queue::Error::UnresolvedRoute { reason } => (
             "PRTRY:ROUTE_UNRESOLVED",
@@ -207,19 +207,19 @@ fn queue_rejection_metadata(err: &queue::Error) -> (&'static str, String) {
             "PRTRY:ALREADY_ENQUEUED",
             "transaction already present in the queue".to_owned(),
         ),
-        queue::Error::OfflineCashV1OperationIdConflict {
+        queue::Error::KagemushaV1OperationIdConflict {
             operation_id,
             existing_entrypoint_hash,
         } => (
-            "PRTRY:OFFLINE_CASH_V1_OPERATION_ID_CONFLICT",
+            "PRTRY:KAGEMUSHA_V1_OPERATION_ID_CONFLICT",
             format!(
-                "Offline Cash V1 operation {} is already pending as entrypoint {existing_entrypoint_hash}",
+                "KAGEMUSHA V1 operation {} is already pending as entrypoint {existing_entrypoint_hash}",
                 hex::encode(operation_id)
             ),
         ),
-        queue::Error::OfflineCashV1OperationIndexInconsistent { reason } => (
-            "PRTRY:OFFLINE_CASH_V1_OPERATION_INDEX_INCONSISTENT",
-            format!("Offline Cash V1 pending-operation index requires recovery: {reason}"),
+        queue::Error::KagemushaV1OperationIndexInconsistent { reason } => (
+            "PRTRY:KAGEMUSHA_V1_OPERATION_INDEX_INCONSISTENT",
+            format!("KAGEMUSHA V1 pending-operation index requires recovery: {reason}"),
         ),
         queue::Error::UnregisteredAuthority { authority } => (
             "PRTRY:UNREGISTERED_AUTHORITY",

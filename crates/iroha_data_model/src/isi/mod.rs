@@ -426,8 +426,8 @@ impl_musubi_instruction_box!(
     SetMusubiRegistryPolicyV1,
     AssertMusubiReleaseDigestV1,
 );
-impl_direct_instruction_box!(crate::isi::offline_cash_v1::TopUpOfflineCashV1);
-impl_direct_instruction_box!(crate::isi::offline_cash_v1::RedeemOfflineCashV1);
+impl_direct_instruction_box!(crate::isi::kagemusha_v1::TopUpKagemushaV1);
+impl_direct_instruction_box!(crate::isi::kagemusha_v1::RedeemKagemushaV1);
 // Allow direct boxing of oracle feed instructions.
 impl_direct_instruction_box!(crate::isi::oracle::RegisterOracleFeed);
 impl_direct_instruction_box!(crate::isi::oracle::SubmitOracleObservation);
@@ -1826,6 +1826,8 @@ pub mod defi;
 pub mod escrow;
 /// Hidden-function-backed identifier policy instructions.
 pub mod identifier;
+/// Clean-slate pooled-reserve KAGEMUSHA V1 instructions and operation records.
+pub mod kagemusha_v1;
 /// Kaigi collaboration instructions.
 pub mod kaigi;
 /// Mint and burn instruction variants and helpers.
@@ -1834,8 +1836,6 @@ pub mod mint_burn;
 pub mod musubi;
 /// Nexus lane governance instructions.
 pub mod nexus;
-/// Clean-slate pooled-reserve Offline Cash V1 instructions and operation records.
-pub mod offline_cash_v1;
 /// Oracle feed registration and aggregation instructions.
 pub mod oracle;
 /// First-release privacy governance and proof-admission instructions.
@@ -1886,11 +1886,11 @@ pub use confidential::*;
 pub use contract_alias::*;
 pub use defi::*;
 pub use identifier::*;
+pub use kagemusha_v1::*;
 pub use kaigi::*;
 pub use ministry::*;
 pub use mint_burn::*;
 pub use nexus::*;
-pub use offline_cash_v1::*;
 pub use oracle::*;
 pub use privacy::*;
 pub use ram_lfe::*;

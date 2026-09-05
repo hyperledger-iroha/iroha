@@ -487,8 +487,8 @@ state_test! { sync axt_slot_uses_authenticated_time_for_hash_only_snapshot_paren
 
     let mut anchored = hash_only_state();
     anchored.nexus.get_mut().axt.slot_length_ms = nonzero!(10_u64);
-    let parameters = crate::offline_cash_v1_test_fixtures::genesis_context_parameters();
-    let mut mint_finality_validators = (1_u8..=4)
+    let parameters = crate::kagemusha_v1_test_fixtures::genesis_context_parameters();
+    let mut mint_finality_voters = (1_u8..=4)
         .map(|seed| {
             let key_pair = iroha_crypto::KeyPair::try_from_seed(
                 vec![seed; 32],
@@ -501,12 +501,12 @@ state_test! { sync axt_slot_uses_authenticated_time_for_hash_only_snapshot_paren
             }
         })
         .collect::<Vec<_>>();
-    mint_finality_validators.sort();
-    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+    mint_finality_voters.sort_by(|left, right| left.validator.cmp(&right.validator));
+    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
             anchored.network_id,
             0,
-            &mint_finality_validators,
+            &mint_finality_voters,
         );
     let snapshot_block_hash = anchored
         .latest_block_hash_fast()
@@ -535,8 +535,8 @@ state_test! { sync axt_slot_uses_authenticated_time_for_hash_only_snapshot_paren
                 min_signers: 0,
                 total_power: 0,
             },
-            offline_cash_mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::prehashed(parameters.nexus_amx_context_hash),
             execution_policy_hash: Hash::prehashed(parameters.execution_policy_hash),
             da_layout: parameters.da_layout,

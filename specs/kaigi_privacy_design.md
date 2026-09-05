@@ -111,7 +111,7 @@ This helper does **not** replace the need for a running `iroha3d --sora` node: p
 For an even faster path there is a companion script: `scripts/kaigi_demo.sh`.
 It performs the following for you:
 
-1. Signs the bundled `defaults/nexus/genesis.json` into `target/kaigi-demo/genesis.nrt`.
+1. Requires `KAIGI_GENESIS_MANIFEST` to name an operator-materialized complete manifest, then signs it into `target/kaigi-demo/genesis.nrt`; the bundled `defaults/nexus/genesis.template.json` is intentionally non-signable.
 2. Launches `iroha3d --sora` with the signed block (logs under `target/kaigi-demo/iroha3d.log`) and waits for Torii to expose `http://127.0.0.1:8080/status`.
 3. Runs `iroha kaigi quickstart --summary-out target/kaigi-demo/kaigi_summary.json`.
 4. Prints the path to the JSON summary so you can share it with external testers. It does not create a SoraNet exit spool.

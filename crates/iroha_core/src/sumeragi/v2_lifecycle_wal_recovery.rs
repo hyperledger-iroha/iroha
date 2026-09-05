@@ -2592,8 +2592,11 @@ impl RecoveredDecisionFetchStoreProjectionV1 {
     ) -> bool {
         candidates.get(&self.candidate.key) == Some(&self.candidate)
     }
-    /// Compare the exact Ready Store coordinator record and its complete indexes.
-    pub(super) fn matches_current_ready_record(
+    /// Compare a Store coordinator record's state-independent shape and indexes.
+    ///
+    /// Callers must authenticate the row's Ready or exact reducer-fence-woken
+    /// state separately before relying on this predicate.
+    pub(super) fn matches_current_record_shape(
         &self,
         context: super::LifecycleContext,
         address: super::work_registry::ConcreteWorkAddress,
@@ -2619,7 +2622,6 @@ impl RecoveredDecisionFetchStoreProjectionV1 {
             && record.ordinal == address.ordinal
             && record.work_class == LifecycleWorkClass::Store
             && record.stage == self.candidate.stage
-            && record.state == super::LifecycleState::Ready
             && record.physical_slots == physical
             && record.episode.slot_universe == universe
             && record.episode.consumed_slots == consumed
@@ -2627,6 +2629,20 @@ impl RecoveredDecisionFetchStoreProjectionV1 {
             && metadata.matches_admission(&self.candidate)
             && coordinator.key_index.get(&self.candidate.key) == Some(&address.ordinal)
             && coordinator.owner_index.get(&self.candidate.causal_root) == Some(&address.owner)
+    }
+    /// Compare the exact Ready Store coordinator record and its complete indexes.
+    pub(super) fn matches_current_ready_record(
+        &self,
+        context: super::LifecycleContext,
+        address: super::work_registry::ConcreteWorkAddress,
+        digest: super::LifecycleDigest,
+        coordinator: &super::LifecycleCoordinator,
+    ) -> bool {
+        self.matches_current_record_shape(context, address, digest, coordinator)
+            && coordinator
+                .records
+                .get(&address.ordinal)
+                .is_some_and(|record| record.state == super::LifecycleState::Ready)
             && coordinator.ready_index.contains(&address.ordinal)
     }
 }

@@ -117,13 +117,13 @@ Kagami re-stages the final signed body under that final `NetworkId` and refuses 
 both context commitments reproduce exactly. A template is therefore not a deployable commitment
 by itself.
 
-Offline Cash mint-finality authority uses the same post-hash binding boundary, but remains a
-distinct signed genesis field. `ConsensusHandshakeMetadata.offline_cash_mint_finality` contains a
-mandatory networkless epoch-zero `OfflineCashMintFinalityEpochRosterTemplateV1` and an optional
+KAGEMUSHA mint-finality authority uses the same post-hash binding boundary, but remains a
+distinct signed genesis field. `ConsensusHandshakeMetadata.kagemusha_mint_finality` contains a
+mandatory networkless epoch-zero `KagemushaMintFinalityEpochRosterTemplateV1` and an optional
 networkless epoch-one template. The successor template is present only when height one is the
 epoch-zero boundary. Once the final signed genesis exists, its canonical block hash defines
 `NetworkId = hash(final signed genesis)`; only then does Core bind each signed template into an
-`OfflineCashMintFinalityEpochRosterV1` before constructing the first `HeightContext`. For the
+`KagemushaMintFinalityEpochRosterV1` before constructing the first `HeightContext`. For the
 closed four-validator genesis profile, Core requires the template's validator vector to match the
 frozen Sumeragi voter vector exactly in count, order, and `PeerId` at every position, and it rejects
 any Pasta key which is not a canonical non-identity Pallas or Vesta point.
@@ -229,7 +229,7 @@ Peer admission also checks a distinct, domain-separated genesis fingerprint. Its
 projection contains the protocol, genesis-selected mode, signed cadence and block bound,
 DA/Nexus/execution-policy context, and (for NPoS) the epoch seed, election and reconfiguration
 inputs. Network identity is authenticated separately and deliberately excluded from this
-genesis-embedded value. The Offline Cash mint-finality templates are also excluded from this
+genesis-embedded value. The KAGEMUSHA mint-finality templates are also excluded from this
 secondary fingerprint because the final genesis signature already authenticates their exact bytes
 beside the fingerprint. Snapshot reconstruction therefore retains only the stable three-field
 `SumeragiV2GenesisContextParameters` projection--`da_layout`, `nexus_amx_context_hash`, and
@@ -952,7 +952,7 @@ permits startup from the marker alone. Missing or substituted lineage, an unexpe
 or a later snapshot above the anchor without the complete lineage-bound first finality artifact
 stops startup before Kura writers, consensus, or network ingress open.
 
-Snapshot recovery does not recreate the networkless Offline Cash genesis templates. The
+Snapshot recovery does not recreate the networkless KAGEMUSHA genesis templates. The
 snapshot-reconstructible Sumeragi boot projection is exactly the stable three fields named above;
 the authenticated full `HeightContext` separately restores the already-bound mint-finality roster,
 its `finality_epoch_id`, and the final `NetworkId`. Neither path accepts a locally synthesized

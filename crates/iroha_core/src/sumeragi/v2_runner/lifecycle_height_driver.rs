@@ -260,7 +260,8 @@ impl LifecycleProducerClaimDispositionV1 {
         matches!(self, Self::AwaitingLiveApplyQueue { .. })
     }
 
-    const fn required_ready_ordinal(self) -> Option<u128> {
+    /// Return the exact Ready live-Apply child retained by this claim.
+    pub(in crate::sumeragi) const fn required_ready_ordinal(self) -> Option<u128> {
         match self {
             Self::AwaitingLiveApplyQueue { child_ordinal, .. } => Some(child_ordinal),
             Self::Eligible
@@ -1248,8 +1249,14 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                             .local_proposal_directive()?
                             .decided_subject()
                             .is_some();
-                        let executor_slice =
-                            advance_executor(receiver, owner, executor, services, 1)?;
+                        let executor_slice = advance_executor(
+                            receiver,
+                            owner,
+                            executor,
+                            services,
+                            producer_claim.required_ready_ordinal(),
+                            1,
+                        )?;
                         let is_terminal = executor
                             .local_proposal_directive()?
                             .decided_subject()

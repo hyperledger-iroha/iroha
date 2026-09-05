@@ -9,7 +9,7 @@ use super::{
     PROTOCOL_VERSION, QuorumCertificate, ValidationError, ValidatorPower, Vote,
 };
 use crate::block::BlockHeader;
-use crate::isi::offline_cash_v1::OfflineCashMintFinalityEpochRosterV1;
+use crate::isi::kagemusha_v1::KagemushaMintFinalityEpochRosterV1;
 use core::fmt;
 use iroha_crypto::{Algorithm, HashOf};
 use iroha_schema::IntoSchema;
@@ -35,9 +35,9 @@ pub struct FinalizedNextEpochSnapshot {
     /// Epoch immediately following the artifact's height context epoch.
     pub epoch: u64,
     /// Canonical identifier of the separately provisioned paired-Pasta roster for this epoch.
-    pub offline_cash_mint_finality_epoch_id: [u8; 32],
+    pub kagemusha_mint_finality_epoch_id: [u8; 32],
     /// Complete paired-Pasta public roster authenticated by the old epoch's boundary `CommitQC`.
-    pub offline_cash_mint_finality_epoch_roster: OfflineCashMintFinalityEpochRosterV1,
+    pub kagemusha_mint_finality_epoch_roster: KagemushaMintFinalityEpochRosterV1,
     /// Last height governed by the next epoch.
     pub epoch_end_height: Height,
     /// Genesis-selected consensus mode used to select the committee.
@@ -60,10 +60,10 @@ impl FinalizedNextEpochSnapshot {
         if self.epoch != expected_epoch {
             return Err(ValidationError::InvalidNextEpoch);
         }
-        if self.offline_cash_mint_finality_epoch_id == [0; 32] {
-            return Err(ValidationError::InvalidOfflineCashMintFinalityEpochId);
+        if self.kagemusha_mint_finality_epoch_id == [0; 32] {
+            return Err(ValidationError::InvalidKagemushaMintFinalityEpochId);
         }
-        let mint_roster = &self.offline_cash_mint_finality_epoch_roster;
+        let mint_roster = &self.kagemusha_mint_finality_epoch_roster;
         if mint_roster.validate().is_err()
             || mint_roster.network_id != context.network_id
             || mint_roster.epoch != self.epoch
@@ -73,10 +73,9 @@ impl FinalizedNextEpochSnapshot {
                 .iter()
                 .zip(&self.roster)
                 .any(|(mint, consensus)| mint.validator != consensus.validator)
-            || mint_roster.finality_epoch_id().ok()
-                != Some(self.offline_cash_mint_finality_epoch_id)
+            || mint_roster.finality_epoch_id().ok() != Some(self.kagemusha_mint_finality_epoch_id)
         {
-            return Err(ValidationError::InvalidOfflineCashMintFinalityEpochRoster);
+            return Err(ValidationError::InvalidKagemushaMintFinalityEpochRoster);
         }
         let successor_height = context
             .height
@@ -754,29 +753,25 @@ mod tests {
         network_id: NetworkId,
         epoch: u64,
         roster: &[ValidatorPower],
-    ) -> OfflineCashMintFinalityEpochRosterV1 {
-        use crate::isi::offline_cash_v1::{
-            OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityValidatorKeysV1,
+    ) -> KagemushaMintFinalityEpochRosterV1 {
+        use crate::isi::kagemusha_v1::{
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityValidatorKeysV1,
         };
 
-        OfflineCashMintFinalityEpochRosterV1 {
-            version: OFFLINE_CASH_CHAIN_VERSION_V1,
+        KagemushaMintFinalityEpochRosterV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
             network_id,
             epoch,
             validators: roster
                 .iter()
                 .enumerate()
-                .map(
-                    |(index, validator)| OfflineCashMintFinalityValidatorKeysV1 {
-                        validator: validator.validator.clone(),
-                        eq_proof_public_key: [u8::try_from(index + 1)
-                            .expect("small fixture roster");
-                            32],
-                        ep_proof_public_key: [u8::try_from(index + 17)
-                            .expect("small fixture roster");
-                            32],
-                    },
-                )
+                .map(|(index, validator)| KagemushaMintFinalityValidatorKeysV1 {
+                    validator: validator.validator.clone(),
+                    eq_proof_public_key: [u8::try_from(index + 1).expect("small fixture roster");
+                        32],
+                    ep_proof_public_key: [u8::try_from(index + 17).expect("small fixture roster");
+                        32],
+                })
                 .collect(),
         }
     }
@@ -793,8 +788,8 @@ mod tests {
             .expect("valid next-epoch fixture mint-finality roster");
         let next_epoch_snapshot = FinalizedNextEpochSnapshot {
             epoch: 8,
-            offline_cash_mint_finality_epoch_id: next_mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster: next_mint_finality_roster,
+            kagemusha_mint_finality_epoch_id: next_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster: next_mint_finality_roster,
             epoch_end_height: 9,
             mode: ConsensusMode::Permissioned,
             roster: roster.clone(),
@@ -807,8 +802,8 @@ mod tests {
             protocol_version: PROTOCOL_VERSION,
             height: 1,
             epoch: 7,
-            offline_cash_mint_finality_epoch_id: mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster: current_mint_finality_roster,
+            kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster: current_mint_finality_roster,
             epoch_end_height: 1,
             next_epoch_snapshot: Some(next_epoch_snapshot),
             mode: ConsensusMode::Permissioned,

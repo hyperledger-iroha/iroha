@@ -1695,6 +1695,14 @@ if (privacyProductionEnabledInput != "true" && privacyProductionEnabledInput != 
 }
 val privacyProductionEnabledValue = privacyProductionEnabledInput == "true"
 val nativeBuildMode = if (privacyProductionEnabledValue) "production" else "default"
+// JVM-only Debug tests do not need an Android native library. Device builds
+// can explicitly request the same sealed/stripped bridge used by Release.
+val includeDebugNativeBridgeInput =
+    providers.gradleProperty("irohaDebugNativeBridge").orNull ?: "false"
+require(includeDebugNativeBridgeInput == "true" || includeDebugNativeBridgeInput == "false") {
+    "irohaDebugNativeBridge must be exactly 'true' or 'false'"
+}
+val includeDebugNativeBridge = includeDebugNativeBridgeInput == "true"
 val mobileSdkAndroidArtifactDirectoryInput =
     providers.environmentVariable("MOBILE_SDK_ANDROID_ARTIFACT_DIR")
 val requireExternalAndroidArtifactDirectory =
@@ -2050,10 +2058,14 @@ val stripNativeLibs = tasks.register<StripNativeBridgeTask>("stripNativeLibs") {
     outputs.upToDateWhen { false }
 }
 
-// Only release packaging consumes the shipping bridge. Registering generated
-// JNI/assets on debug made ordinary JVM unit-test compilation run cargo-ndk,
-// even though those tests never load an Android shared object.
-androidComponents.onVariants(androidComponents.selector().withBuildType("release")) { variant ->
+// Release always consumes the shipping bridge. Debug device integration can
+// opt in without making ordinary JVM-only test compilation launch Cargo/NDK.
+// Both variants use the same authenticated build, stripping and provenance;
+// the opt-in neither changes privacyProductionEnabled nor admits a provider.
+androidComponents.onVariants { variant ->
+    if (variant.buildType != "release" &&
+        !(variant.buildType == "debug" && includeDebugNativeBridge)
+    ) return@onVariants
     requireNotNull(variant.sources.jniLibs) {
         "AGP did not expose jniLibs sources for ${variant.name}"
     }.addGeneratedSourceDirectory(stripNativeLibs, StripNativeBridgeTask::outputDirectory)

@@ -117,10 +117,10 @@ REQUIRED_SNIPPETS = {
     "crates/iroha_core/src/zk.rs": (
         "let pk = crate::panic_hook::catch_unwind_suppressed",
     ),
-    "crates/iroha_core/src/zk/offline_cash_v1_recursion/accumulation.rs": (
+    "crates/iroha_core/src/zk/kagemusha_v1_recursion/accumulation.rs": (
         "crate::panic_hook::catch_unwind_suppressed",
     ),
-    "crates/iroha_core/src/zk/offline_cash_v1_recursion/native_backend.rs": (
+    "crates/iroha_core/src/zk/kagemusha_v1_recursion/native_backend.rs": (
         "crate::panic_hook::catch_unwind_suppressed",
     ),
 }
@@ -129,10 +129,10 @@ FORBIDDEN_RECOVERY_SNIPPETS = {
     "crates/iroha_core/src/executor.rs": (
         "std::panic::catch_unwind",
     ),
-    "crates/iroha_core/src/zk/offline_cash_v1_recursion/accumulation.rs": (
+    "crates/iroha_core/src/zk/kagemusha_v1_recursion/accumulation.rs": (
         "std::panic::catch_unwind",
     ),
-    "crates/iroha_core/src/zk/offline_cash_v1_recursion/native_backend.rs": (
+    "crates/iroha_core/src/zk/kagemusha_v1_recursion/native_backend.rs": (
         "std::panic::catch_unwind",
     ),
     "crates/iroha_torii/src/privacy_issuance_api.rs": (
@@ -149,8 +149,8 @@ REVIEWED_TORII_BOUNDARY_INVENTORY = Path(
 CORE_RECOVERY_SOURCE_PATHS = (
     Path("crates/iroha_core/src/executor.rs"),
     Path("crates/iroha_core/src/zk.rs"),
-    Path("crates/iroha_core/src/zk/offline_cash_v1_recursion/accumulation.rs"),
-    Path("crates/iroha_core/src/zk/offline_cash_v1_recursion/native_backend.rs"),
+    Path("crates/iroha_core/src/zk/kagemusha_v1_recursion/accumulation.rs"),
+    Path("crates/iroha_core/src/zk/kagemusha_v1_recursion/native_backend.rs"),
 )
 CORE_RECOVERY_SUPPORT_PATHS = tuple(
     Path("crates/iroha_core/src") / name
@@ -1549,8 +1549,8 @@ def main() -> int:
     reviewed_raw_catch_counts = {
         "crates/iroha_core/src/executor.rs": 0,
         "crates/iroha_core/src/zk.rs": 1,
-        "crates/iroha_core/src/zk/offline_cash_v1_recursion/accumulation.rs": 0,
-        "crates/iroha_core/src/zk/offline_cash_v1_recursion/native_backend.rs": 0,
+        "crates/iroha_core/src/zk/kagemusha_v1_recursion/accumulation.rs": 0,
+        "crates/iroha_core/src/zk/kagemusha_v1_recursion/native_backend.rs": 0,
     }
     for relative, expected_count in reviewed_raw_catch_counts.items():
         source = (ROOT / relative).read_text(encoding="utf-8")

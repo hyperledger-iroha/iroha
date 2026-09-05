@@ -118,8 +118,8 @@ public final class SumeragiStatusModels {
     private final String parentStateRoot;
     private final String postStateRoot;
     private final String ordinaryWritesRoot;
-    private final String offlineCashTopUpRoot;
-    private final BigInteger offlineCashTopUpCount;
+    private final String kagemushaTopUpRoot;
+    private final BigInteger kagemushaTopUpCount;
     private final int nativeAmxApplicationManifestVersion;
     private final String nativeAmxApplicationManifestRoot;
     private final BigInteger nativeAmxApplicationManifestCount;
@@ -132,8 +132,8 @@ public final class SumeragiStatusModels {
         final String parentStateRoot,
         final String postStateRoot,
         final String ordinaryWritesRoot,
-        final String offlineCashTopUpRoot,
-        final BigInteger offlineCashTopUpCount,
+        final String kagemushaTopUpRoot,
+        final BigInteger kagemushaTopUpCount,
         final int nativeAmxApplicationManifestVersion,
         final String nativeAmxApplicationManifestRoot,
         final BigInteger nativeAmxApplicationManifestCount,
@@ -144,8 +144,8 @@ public final class SumeragiStatusModels {
       this.parentStateRoot = parentStateRoot;
       this.postStateRoot = postStateRoot;
       this.ordinaryWritesRoot = ordinaryWritesRoot;
-      this.offlineCashTopUpRoot = offlineCashTopUpRoot;
-      this.offlineCashTopUpCount = offlineCashTopUpCount;
+      this.kagemushaTopUpRoot = kagemushaTopUpRoot;
+      this.kagemushaTopUpCount = kagemushaTopUpCount;
       this.nativeAmxApplicationManifestVersion = nativeAmxApplicationManifestVersion;
       this.nativeAmxApplicationManifestRoot = nativeAmxApplicationManifestRoot;
       this.nativeAmxApplicationManifestCount = nativeAmxApplicationManifestCount;
@@ -158,8 +158,8 @@ public final class SumeragiStatusModels {
     public String parentStateRoot() { return parentStateRoot; }
     public String postStateRoot() { return postStateRoot; }
     public String ordinaryWritesRoot() { return ordinaryWritesRoot; }
-    public String offlineCashTopUpRoot() { return offlineCashTopUpRoot; }
-    public BigInteger offlineCashTopUpCount() { return offlineCashTopUpCount; }
+    public String kagemushaTopUpRoot() { return kagemushaTopUpRoot; }
+    public BigInteger kagemushaTopUpCount() { return kagemushaTopUpCount; }
     public int nativeAmxApplicationManifestVersion() {
       return nativeAmxApplicationManifestVersion;
     }
@@ -1084,27 +1084,27 @@ public final class SumeragiStatusModels {
         record,
         Set.of(
             "parent_state_root", "post_state_root", "ordinary_writes_root",
-            "offline_cash_top_up_count", "native_amx_application_manifest_version",
+            "kagemusha_top_up_count", "native_amx_application_manifest_version",
             "native_amx_application_manifest_root", "native_amx_application_manifest_count",
             "lane_finality_manifest", "merge_carrier", "executed_block_wire_len",
             "executed_block_wire_hash"),
-        Set.of("offline_cash_top_up_root"),
+        Set.of("kagemusha_top_up_root"),
         context);
-    final BigInteger offlineCashTopUpCount =
+    final BigInteger kagemushaTopUpCount =
         SumeragiJsonSupport.u32(
-            record.get("offline_cash_top_up_count"),
-            context + ".offline_cash_top_up_count");
-    final String offlineCashTopUpRoot =
-        record.get("offline_cash_top_up_root") == null
+            record.get("kagemusha_top_up_count"),
+            context + ".kagemusha_top_up_count");
+    final String kagemushaTopUpRoot =
+        record.get("kagemusha_top_up_root") == null
             ? null
             : SumeragiJsonSupport.hash(
-                record.get("offline_cash_top_up_root"),
-                context + ".offline_cash_top_up_root");
+                record.get("kagemusha_top_up_root"),
+                context + ".kagemusha_top_up_root");
     require(
-        (offlineCashTopUpCount.signum() == 0) == (offlineCashTopUpRoot == null),
+        (kagemushaTopUpCount.signum() == 0) == (kagemushaTopUpRoot == null),
         context
-            + ".offline_cash_top_up_root must be present exactly when "
-            + "offline_cash_top_up_count is positive");
+            + ".kagemusha_top_up_root must be present exactly when "
+            + "kagemusha_top_up_count is positive");
     final int manifestVersion =
         SumeragiJsonSupport.u16(
             record.get("native_amx_application_manifest_version"),
@@ -1167,8 +1167,8 @@ public final class SumeragiStatusModels {
         SumeragiJsonSupport.hash(record.get("post_state_root"), context + ".post_state_root"),
         SumeragiJsonSupport.hash(
             record.get("ordinary_writes_root"), context + ".ordinary_writes_root"),
-        offlineCashTopUpRoot,
-        offlineCashTopUpCount,
+        kagemushaTopUpRoot,
+        kagemushaTopUpCount,
         manifestVersion,
         manifestRoot,
         manifestCount,
@@ -1671,8 +1671,8 @@ public final class SumeragiStatusModels {
     return left.parentStateRoot().equals(right.parentStateRoot())
         && left.postStateRoot().equals(right.postStateRoot())
         && left.ordinaryWritesRoot().equals(right.ordinaryWritesRoot())
-        && Objects.equals(left.offlineCashTopUpRoot(), right.offlineCashTopUpRoot())
-        && left.offlineCashTopUpCount().equals(right.offlineCashTopUpCount())
+        && Objects.equals(left.kagemushaTopUpRoot(), right.kagemushaTopUpRoot())
+        && left.kagemushaTopUpCount().equals(right.kagemushaTopUpCount())
         && left.nativeAmxApplicationManifestVersion()
             == right.nativeAmxApplicationManifestVersion()
         && left.nativeAmxApplicationManifestRoot()

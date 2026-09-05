@@ -422,28 +422,6 @@ inputs = [
 check = "python3 scripts/regenerate_current_rust_contract_artifact.py --check --cache-root \"${IROHA_KOTODAMA_CACHE_ROOT:?set the absolute external task-cache root}\" --koto \"${CARGO_TARGET_DIR:-target}/debug/koto\" --git \"${IROHA_GIT:?set the exact non-symbolic Git executable}\""
 
 [[generated]]
-name = "cbsi-offline-interop-fixture"
-kind = "file"
-outputs = [
-  "fixtures/offline/cbsi_interop_contract.json",
-]
-generator = "cargo run --locked --offline --jobs 1 -p iroha_data_model --features dev-tools,test-fixtures,transparent_api --bin cbsi_offline_vectors -- --output \"${IROHA_CBSI_OFFLINE_FIXTURE_STAGE:?set the exact absolute external staging output path}\""
-generator_sources = [
-  "crates/iroha_data_model/src/bin/cbsi_offline_vectors.rs",
-]
-inputs = [
-  "Cargo.lock",
-  "Cargo.toml",
-  "crates/iroha_crypto/src/**/*.rs",
-  "crates/iroha_data_model/Cargo.toml",
-  "crates/iroha_data_model/src/**/*.rs",
-  "crates/iroha_primitives/src/**/*.rs",
-  "crates/norito/src/**/*.rs",
-  "rust-toolchain.toml",
-]
-check = "cargo run --locked --offline --jobs 1 -p iroha_data_model --features dev-tools,test-fixtures,transparent_api --bin cbsi_offline_vectors -- --check --output \"$PWD/fixtures/offline/cbsi_interop_contract.json\""
-
-[[generated]]
 name = "nexus-connect-transfer-v1-fixture"
 kind = "file"
 outputs = [
@@ -813,41 +791,6 @@ inputs = [
 ]
 check = "bash scripts/tests/consistency.sh docker-compose"
 
-# Kagami profile generation consumes the tracked root Cargo.lock at runtime.
-# The fail-closed wrapper authenticates its stable regular-file bytes
-# before and after every child: size=311234,
-# sha256=d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f.
-# Update both literal arguments only as a reviewed lock refresh, and keep the
-# tracked Cargo.lock listed in each owner's input closure.
-[[generated]]
-name = "kagami-iroha3-dev-profile-bundle"
-kind = "file"
-outputs = [
-  "defaults/kagami/iroha3-dev/README.md",
-  "defaults/kagami/iroha3-dev/docker-compose.yml",
-  "defaults/kagami/iroha3-dev/genesis.expected_hash",
-  "defaults/kagami/iroha3-dev/genesis.json",
-  "defaults/kagami/iroha3-dev/genesis.public_key",
-  "defaults/kagami/iroha3-dev/genesis.signed.nrt",
-  "defaults/kagami/iroha3-dev/peer0.toml",
-  "defaults/kagami/iroha3-dev/peer1.toml",
-  "defaults/kagami/iroha3-dev/peer2.toml",
-  "defaults/kagami/iroha3-dev/peer3.toml",
-  "defaults/kagami/iroha3-dev/verify.txt",
-]
-generator = "python3 scripts/kagami_profile_owner.py --write --profile iroha3-dev --output-root \"${IROHA_KAGAMI_DEV_STAGE:?set an absent absolute private external stage root}\" --cargo \"${IROHA_CARGO:?set the exact absolute non-symbolic Cargo executable}\" --cargo-target-dir \"${IROHA_KAGAMI_DEV_CARGO_TARGET_DIR:?set an existing absolute mode-0700 external Cargo target directory}\" --cargo-lock-size 311234 --cargo-lock-sha256 d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f"
-generator_sources = [
-  "scripts/kagami_profile_owner.py",
-  "xtask/src/kagami_profiles.rs",
-  "xtask/src/main.rs",
-]
-inputs = [
-  ".cargo/config.toml",
-  "Cargo.lock",
-  "Cargo.toml",
-  "crates/**",
-  "rust-toolchain.toml",
-  "vendor/**",
-  "xtask/Cargo.toml",
-]
-check = "python3 scripts/kagami_profile_owner.py --check --profile iroha3-dev --root \"$PWD\" --stage-a \"${IROHA_KAGAMI_DEV_CHECK_STAGE_A:?set an absent absolute private external first check stage}\" --stage-b \"${IROHA_KAGAMI_DEV_CHECK_STAGE_B:?set an absent absolute private external second check stage}\" --cargo \"${IROHA_CARGO:?set the exact absolute non-symbolic Cargo executable}\" --cargo-target-dir \"${IROHA_KAGAMI_DEV_CARGO_TARGET_DIR:?set an existing absolute mode-0700 external Cargo target directory}\" --cargo-lock-size 311234 --cargo-lock-sha256 d5b8bf5efbdc3ce2a8b1c0d2d75e1c5d1a343a072f836cfb76205bc6ea4cf15f"
+# Complete Kagami profile bundles are operator-generated release artifacts and are intentionally
+# untracked. Checked-in `.template.json` files are non-signable source references, not generated
+# outputs; production generation requires an externally provisioned public-authority directory.

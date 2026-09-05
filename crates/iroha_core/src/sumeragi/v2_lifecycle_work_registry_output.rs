@@ -141,18 +141,135 @@ pub(in crate::sumeragi) struct AttestedLifecycleDecisionApplySuccessorOutputsV1 
     output_address: ConcreteWorkAddress,
     output_digest: LifecycleDigest,
     pending_key: LifecycleOutputAdmissionKeyV1,
+    mode: LifecycleDecisionApplySuccessorOutputModeV1,
     _seal: LifecycleDecisionApplySuccessorOutputsSealV1,
 }
 
 #[derive(Debug)]
 struct LifecycleDecisionApplySuccessorOutputsSealV1;
 
-impl AttestedLifecycleDecisionApplySuccessorOutputsV1 {
-    /// Return the immutable Apply dispatch key governing this suffix.
-    pub(in crate::sumeragi) const fn dispatch_key(
+/// Exact executor ownership mode for one post-Apply CommitQC Broadcast.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum LifecycleDecisionApplySuccessorOutputModeV1 {
+    /// Broadcast and Apply are the two effects of one retained periodic batch.
+    SameBatchSuffix,
+    /// Broadcast predates Apply in the runtime but was admitted after it.
+    DelayedAdmissionPeriodicRetransmit { runtime_ordinal: u128 },
+}
+
+/// Proof that the sole executor-pending output is an exact CommitQC
+/// Broadcast ordered immediately before one Ready live Decision Apply.
+///
+/// This seal grants no Apply or output-service authority. It only permits the
+/// completion scheduler to classify the Apply as physically unavailable while
+/// ordinary generic settlement drains the globally earlier Broadcast.
+#[must_use = "the attested generic-settlement predecessor must remain passive"]
+pub(in crate::sumeragi) struct AttestedLifecycleDecisionApplyGenericSettlementPendingV1 {
+    apply_dispatch_key: LifecycleDecisionApplyDispatchKeyV1,
+    runtime_ordinal: u128,
+    _seal: LifecycleDecisionApplyGenericSettlementPendingSealV1,
+}
+
+#[derive(Debug)]
+struct LifecycleDecisionApplyGenericSettlementPendingSealV1;
+
+impl AttestedLifecycleDecisionApplyGenericSettlementPendingV1 {
+    /// Return the immutable Apply dispatch key governing this predecessor.
+    pub(in crate::sumeragi) const fn apply_dispatch_key(
         &self,
     ) -> LifecycleDecisionApplyDispatchKeyV1 {
+        self.apply_dispatch_key
+    }
+
+    /// Return the globally earlier runtime ordinal owned by generic settlement.
+    pub(in crate::sumeragi) const fn runtime_ordinal(&self) -> u128 {
+        self.runtime_ordinal
+    }
+}
+
+/// Exact ordering classification for one live Apply and its sole pending
+/// CommitQC Broadcast output.
+pub(in crate::sumeragi) enum LifecycleDecisionApplyPendingOutputCensusV1 {
+    /// The Broadcast is globally earlier and remains owned by generic settlement.
+    GenericSettlementPending(AttestedLifecycleDecisionApplyGenericSettlementPendingV1),
+    /// The Broadcast is the exact post-Apply suffix retained through Apply finality.
+    Successor(AttestedLifecycleDecisionApplySuccessorOutputsV1),
+}
+
+/// Privacy-safe reason why a pending output could not be joined to one live Apply.
+///
+/// The rejection deliberately records only structural lifecycle invariants. It
+/// never carries the consensus message, certificate, or application payload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum LifecycleDecisionApplyPendingOutputCensusErrorV1 {
+    /// The coordinator already owns a fault or an active lease.
+    CoordinatorUnavailable,
+    /// The supplied authority did not name a live Apply lineage.
+    ForeignApplyLineage,
+    /// The authority's Apply row was absent from the coordinator.
+    MissingApplyRecord,
+    /// The Apply row no longer admitted an exact Ready attestation.
+    InvalidApplyAttestation,
+    /// The re-attested Apply did not match the supplied authority.
+    ApplyAuthorityMismatch,
+    /// The re-attested Apply row was not Ready.
+    ApplyNotReady,
+    /// The executor did not retain exactly one pending output.
+    InvalidPendingOutputCardinality,
+    /// The sole pending effect was not a Broadcast.
+    PendingEffectNotBroadcast,
+    /// The sole pending Broadcast did not contain a quorum certificate.
+    PendingBroadcastNotQuorumCertificate,
+    /// The pending certificate did not match the Apply authority.
+    CertificateMismatch,
+    /// The pending certificate was not a Commit QC.
+    CertificateNotCommit,
+    /// More than one concrete row matched the pending output.
+    DuplicateInstalledOutput,
+    /// A recovered Broadcast row already owned the pending output.
+    RecoveredOutputAlias,
+    /// A terminal direct-output row already owned the pending output.
+    TerminalOutputAlias,
+    /// No concrete row existed and the runtime owner was not an earlier owner.
+    MissingOutputNotRuntimePredecessor,
+    /// No concrete row existed and its earlier runtime owner was not periodic retransmit.
+    MissingOutputNotPeriodicRetransmit,
+    /// An absent earlier periodic output did not precede the Ready census.
+    MissingOutputReadyOrder,
+    /// An absent earlier periodic output competed with another Ready row.
+    MissingOutputReadyCardinality,
+    /// The installed output row was absent from the coordinator.
+    MissingInstalledRecord,
+    /// The installed row was not the exact CommitQC Broadcast carrier.
+    InvalidInstalledOutputCarrier,
+    /// An installed earlier periodic output was not Ready or reducer-waiting.
+    InvalidPredecessorState,
+    /// A post-Apply output was not Ready.
+    SuccessorNotReady,
+    /// The output row was not ordered strictly after the Apply.
+    SuccessorOrdinalOrder,
+    /// The Apply/output pair was not the first adjacent Ready pair.
+    SuccessorReadyOrder,
+    /// Delayed admission exposed additional Ready work beside the exact pair.
+    DelayedSuccessorReadyCardinality,
+}
+
+impl AttestedLifecycleDecisionApplySuccessorOutputsV1 {
+    /// Borrow the immutable live-Apply authority sealed into this census.
+    pub(in crate::sumeragi) const fn live_apply_authority(
+        &self,
+    ) -> &LiveLifecycleDecisionApplyReconciliationAuthorityV1 {
+        &self.live_apply
+    }
+
+    /// Return the immutable Apply dispatch key governing this suffix.
+    pub(in crate::sumeragi) const fn dispatch_key(&self) -> LifecycleDecisionApplyDispatchKeyV1 {
         self.live_apply.dispatch_key()
+    }
+
+    /// Return how the executor must retain the Apply/output edge.
+    pub(in crate::sumeragi) const fn mode(&self) -> LifecycleDecisionApplySuccessorOutputModeV1 {
+        self.mode
     }
 
     /// Recheck the sole retained reducer suffix against the exact live Apply.
@@ -175,6 +292,39 @@ impl AttestedLifecycleDecisionApplySuccessorOutputsV1 {
         keys: impl Iterator<Item = &'a LifecycleOutputAdmissionKeyV1>,
     ) -> bool {
         keys.copied().eq(std::iter::once(self.pending_key))
+    }
+
+    /// Recheck the pending owner properties that distinguish delayed admission
+    /// from the retained two-effect periodic suffix.
+    pub(in crate::sumeragi) fn exactly_matches_pending_output(
+        &self,
+        pending: &PendingLifecycleOutputAdmissionV1,
+    ) -> bool {
+        if pending.key() != self.pending_key {
+            return false;
+        }
+        match self.mode {
+            LifecycleDecisionApplySuccessorOutputModeV1::SameBatchSuffix => true,
+            LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit {
+                runtime_ordinal,
+            } => {
+                let AdapterEffect::Broadcast(message) = &pending.effect else {
+                    return false;
+                };
+                let wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) =
+                    &message.payload
+                else {
+                    return false;
+                };
+                pending.lifecycle_owner().lifecycle_ordinal() == runtime_ordinal
+                    && runtime_ordinal < self.dispatch_key().lifecycle_ordinal()
+                    && pending
+                        .ownership
+                        .exactly_binds_periodic_retransmit_broadcast(&pending.effect)
+                    && certificate == self.live_apply.certificate()
+                    && certificate.phase == wire::GlobalPhase::Commit
+            }
+        }
     }
 
     /// Rejoin the terminal output preparation to the exact row and pending key
@@ -336,6 +486,231 @@ fn lifecycle_output_row_matches(
 }
 
 impl ConcreteLifecycleWorkRegistry {
+    /// Authenticate and classify the sole exact CommitQC output adjacent to
+    /// one exact Ready live Apply.
+    ///
+    /// An exact periodic output whose actor-global runtime ordinal precedes the
+    /// Apply may still be absent while generic settlement durably admits it.
+    /// An already-admitted predecessor remains generic-settlement debt. A
+    /// later output must be the adjacent typed post-Apply suffix; its mode
+    /// records whether it shares the retained periodic Apply batch or crossed
+    /// the delayed-admission cut. Duplicate, recovered, terminal, malformed,
+    /// non-adjacent successor, or foreign carriers fail closed.
+    #[allow(single_use_lifetimes)]
+    pub(super) fn try_classify_lifecycle_decision_apply_pending_output_census<'a>(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        authority: LiveLifecycleDecisionApplyReconciliationAuthorityV1,
+        mut pending_outputs: impl ExactSizeIterator<Item = &'a PendingLifecycleOutputAdmissionV1>,
+    ) -> Result<
+        LifecycleDecisionApplyPendingOutputCensusV1,
+        LifecycleDecisionApplyPendingOutputCensusErrorV1,
+    > {
+        if coordinator.fault.is_some() || coordinator.active_lease.is_some() {
+            return Err(LifecycleDecisionApplyPendingOutputCensusErrorV1::CoordinatorUnavailable);
+        }
+        let dispatch_key = authority.dispatch_key();
+        if dispatch_key.lineage() != LifecycleDecisionApplyLineageV1::Live {
+            return Err(LifecycleDecisionApplyPendingOutputCensusErrorV1::ForeignApplyLineage);
+        }
+        let apply_ordinal = dispatch_key.lifecycle_ordinal();
+        let apply_record = coordinator
+            .records
+            .get(&apply_ordinal)
+            .ok_or(LifecycleDecisionApplyPendingOutputCensusErrorV1::MissingApplyRecord)?;
+        let apply_attestation = self
+            .attest_ready_lifecycle_decision_apply(coordinator, apply_ordinal)
+            .map_err(|_| {
+                LifecycleDecisionApplyPendingOutputCensusErrorV1::InvalidApplyAttestation
+            })?;
+        if apply_attestation.dispatch_key() != dispatch_key {
+            return Err(LifecycleDecisionApplyPendingOutputCensusErrorV1::ApplyAuthorityMismatch);
+        }
+        if apply_record.state != super::LifecycleState::Ready {
+            return Err(LifecycleDecisionApplyPendingOutputCensusErrorV1::ApplyNotReady);
+        }
+
+        if pending_outputs.len() != 1 {
+            return Err(
+                LifecycleDecisionApplyPendingOutputCensusErrorV1::InvalidPendingOutputCardinality,
+            );
+        }
+        let pending_output = pending_outputs.next().ok_or(
+            LifecycleDecisionApplyPendingOutputCensusErrorV1::InvalidPendingOutputCardinality,
+        )?;
+        if pending_outputs.next().is_some() {
+            return Err(
+                LifecycleDecisionApplyPendingOutputCensusErrorV1::InvalidPendingOutputCardinality,
+            );
+        }
+        let effect = &pending_output.effect;
+        let pending = &pending_output.pending;
+        let AdapterEffect::Broadcast(message) = effect else {
+            return Err(
+                LifecycleDecisionApplyPendingOutputCensusErrorV1::PendingEffectNotBroadcast,
+            );
+        };
+        let wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) = &message.payload
+        else {
+            return Err(
+                LifecycleDecisionApplyPendingOutputCensusErrorV1::PendingBroadcastNotQuorumCertificate,
+            );
+        };
+        if certificate != authority.certificate() {
+            return Err(LifecycleDecisionApplyPendingOutputCensusErrorV1::CertificateMismatch);
+        }
+        if certificate.phase != wire::GlobalPhase::Commit {
+            return Err(LifecycleDecisionApplyPendingOutputCensusErrorV1::CertificateNotCommit);
+        }
+        let runtime_ordinal = pending_output.lifecycle_owner().lifecycle_ordinal();
+        let runtime_precedes_apply = runtime_ordinal < apply_ordinal;
+        let periodic_retransmit = pending_output
+            .ownership
+            .exactly_binds_periodic_retransmit_broadcast(effect);
+        let generic_predecessor = runtime_precedes_apply && periodic_retransmit;
+        let mut installed = self.entries.iter().filter(|(address, work)| {
+            pending_output_matches_work(effect, pending, work)
+                && address.owner.causal_root()
+                    == super::CausalRoot::new(digest_from_hash(pending.causal_lifecycle_key()))
+        });
+        let first_installed = installed.next();
+        if installed.next().is_some() {
+            return Err(LifecycleDecisionApplyPendingOutputCensusErrorV1::DuplicateInstalledOutput);
+        }
+        if self.entries.iter().any(|(candidate, candidate_work)| {
+            recovered_broadcast_output_matches_work(
+                coordinator,
+                *candidate,
+                candidate_work,
+                effect,
+                pending,
+            )
+        }) {
+            return Err(LifecycleDecisionApplyPendingOutputCensusErrorV1::RecoveredOutputAlias);
+        }
+        if coordinator.records.keys().copied().any(|ordinal| {
+            terminal_direct_output_matches_record(coordinator, ordinal, effect, pending)
+        }) {
+            return Err(LifecycleDecisionApplyPendingOutputCensusErrorV1::TerminalOutputAlias);
+        }
+        let Some((&address, work)) = first_installed else {
+            if !runtime_precedes_apply {
+                return Err(
+                    LifecycleDecisionApplyPendingOutputCensusErrorV1::MissingOutputNotRuntimePredecessor,
+                );
+            }
+            if !periodic_retransmit {
+                return Err(
+                    LifecycleDecisionApplyPendingOutputCensusErrorV1::MissingOutputNotPeriodicRetransmit,
+                );
+            }
+            if coordinator.ready_index.first().copied() != Some(apply_ordinal) {
+                return Err(
+                    LifecycleDecisionApplyPendingOutputCensusErrorV1::MissingOutputReadyOrder,
+                );
+            }
+            if coordinator.ready_index.len() != 1 {
+                return Err(
+                    LifecycleDecisionApplyPendingOutputCensusErrorV1::MissingOutputReadyCardinality,
+                );
+            }
+            return Ok(
+                LifecycleDecisionApplyPendingOutputCensusV1::GenericSettlementPending(
+                    AttestedLifecycleDecisionApplyGenericSettlementPendingV1 {
+                        apply_dispatch_key: dispatch_key,
+                        runtime_ordinal,
+                        _seal: LifecycleDecisionApplyGenericSettlementPendingSealV1,
+                    },
+                ),
+            );
+        };
+        let record = coordinator
+            .records
+            .get(&address.ordinal)
+            .ok_or(LifecycleDecisionApplyPendingOutputCensusErrorV1::MissingInstalledRecord)?;
+        if record.work_class != LifecycleWorkClass::Broadcast
+            || record.key.phase() != LifecyclePhase::BroadcastCommitQc
+            || record.stage.kind() != LifecycleStageKind::BroadcastCommitQc
+            || !lifecycle_output_row_matches(coordinator, address, work, effect, pending)
+        {
+            return Err(
+                LifecycleDecisionApplyPendingOutputCensusErrorV1::InvalidInstalledOutputCarrier,
+            );
+        }
+        if address.ordinal < apply_ordinal && generic_predecessor {
+            if !matches!(
+                record.state,
+                super::LifecycleState::Ready | super::LifecycleState::Waiting(_)
+            ) {
+                return Err(
+                    LifecycleDecisionApplyPendingOutputCensusErrorV1::InvalidPredecessorState,
+                );
+            }
+            return Ok(
+                LifecycleDecisionApplyPendingOutputCensusV1::GenericSettlementPending(
+                    AttestedLifecycleDecisionApplyGenericSettlementPendingV1 {
+                        apply_dispatch_key: dispatch_key,
+                        runtime_ordinal,
+                        _seal: LifecycleDecisionApplyGenericSettlementPendingSealV1,
+                    },
+                ),
+            );
+        }
+        if record.state != super::LifecycleState::Ready {
+            return Err(LifecycleDecisionApplyPendingOutputCensusErrorV1::SuccessorNotReady);
+        }
+        let first = coordinator.ready_index.first().copied();
+        let second = coordinator.ready_index.iter().copied().nth(1);
+        if address.ordinal <= apply_ordinal {
+            return Err(LifecycleDecisionApplyPendingOutputCensusErrorV1::SuccessorOrdinalOrder);
+        }
+        if first != Some(apply_ordinal) || second != Some(address.ordinal) {
+            return Err(LifecycleDecisionApplyPendingOutputCensusErrorV1::SuccessorReadyOrder);
+        }
+        let mode = if generic_predecessor {
+            if coordinator.ready_index.len() != 2 {
+                return Err(
+                    LifecycleDecisionApplyPendingOutputCensusErrorV1::DelayedSuccessorReadyCardinality,
+                );
+            }
+            LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit {
+                runtime_ordinal,
+            }
+        } else {
+            LifecycleDecisionApplySuccessorOutputModeV1::SameBatchSuffix
+        };
+        Ok(LifecycleDecisionApplyPendingOutputCensusV1::Successor(
+            AttestedLifecycleDecisionApplySuccessorOutputsV1 {
+                live_apply: authority,
+                output_address: address,
+                output_digest: work.digest,
+                pending_key: pending_output.key(),
+                mode,
+                _seal: LifecycleDecisionApplySuccessorOutputsSealV1,
+            },
+        ))
+    }
+
+    /// Authenticate and classify one live Apply/pending-output census.
+    ///
+    /// This compatibility projection intentionally erases the privacy-safe
+    /// rejection category. Production Completion dispatch uses the typed
+    /// `try_` form above so an operator can identify the violated invariant.
+    #[allow(single_use_lifetimes)]
+    pub(super) fn classify_lifecycle_decision_apply_pending_output_census<'a>(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        authority: LiveLifecycleDecisionApplyReconciliationAuthorityV1,
+        pending_outputs: impl ExactSizeIterator<Item = &'a PendingLifecycleOutputAdmissionV1>,
+    ) -> Option<LifecycleDecisionApplyPendingOutputCensusV1> {
+        self.try_classify_lifecycle_decision_apply_pending_output_census(
+            coordinator,
+            authority,
+            pending_outputs,
+        )
+        .ok()
+    }
+
     /// Authenticate the sole exact CommitQC output immediately behind one
     /// exact Ready live Apply.
     ///
@@ -347,88 +722,18 @@ impl ConcreteLifecycleWorkRegistry {
         &self,
         coordinator: &LifecycleCoordinator,
         authority: LiveLifecycleDecisionApplyReconciliationAuthorityV1,
-        mut pending_outputs: impl ExactSizeIterator<Item = &'a PendingLifecycleOutputAdmissionV1>,
+        pending_outputs: impl ExactSizeIterator<Item = &'a PendingLifecycleOutputAdmissionV1>,
     ) -> Option<AttestedLifecycleDecisionApplySuccessorOutputsV1> {
-        if coordinator.fault.is_some() || coordinator.active_lease.is_some() {
-            return None;
+        match self.classify_lifecycle_decision_apply_pending_output_census(
+            coordinator,
+            authority,
+            pending_outputs,
+        )? {
+            LifecycleDecisionApplyPendingOutputCensusV1::GenericSettlementPending(_) => None,
+            LifecycleDecisionApplyPendingOutputCensusV1::Successor(attestation) => {
+                Some(attestation)
+            }
         }
-        let dispatch_key = authority.dispatch_key();
-        if dispatch_key.lineage() != LifecycleDecisionApplyLineageV1::Live {
-            return None;
-        }
-        let apply_ordinal = dispatch_key.lifecycle_ordinal();
-        let apply_record = coordinator.records.get(&apply_ordinal)?;
-        let apply_attestation = self
-            .attest_ready_lifecycle_decision_apply(coordinator, apply_ordinal)
-            .ok()?;
-        if apply_attestation.dispatch_key() != dispatch_key
-            || apply_record.state != super::LifecycleState::Ready
-            || coordinator.ready_index.first().copied() != Some(apply_ordinal)
-        {
-            return None;
-        }
-
-        if pending_outputs.len() != 1 {
-            return None;
-        }
-        let pending_output = pending_outputs.next()?;
-        if pending_outputs.next().is_some() {
-            return None;
-        }
-        let effect = &pending_output.effect;
-        let pending = &pending_output.pending;
-        let AdapterEffect::Broadcast(message) = effect else {
-            return None;
-        };
-        let wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) = &message.payload
-        else {
-            return None;
-        };
-        if certificate != authority.certificate()
-            || certificate.phase != wire::GlobalPhase::Commit
-        {
-            return None;
-        }
-        let mut installed = self.entries.iter().filter(|(address, work)| {
-            pending_output_matches_work(effect, pending, work)
-                && address.owner.causal_root()
-                    == super::CausalRoot::new(digest_from_hash(pending.causal_lifecycle_key()))
-        });
-        let (&address, work) = installed.next()?;
-        if installed.next().is_some()
-            || self.entries.iter().any(|(candidate, candidate_work)| {
-                recovered_broadcast_output_matches_work(
-                    coordinator,
-                    *candidate,
-                    candidate_work,
-                    effect,
-                    pending,
-                )
-            })
-            || coordinator.records.keys().copied().any(|ordinal| {
-                terminal_direct_output_matches_record(coordinator, ordinal, effect, pending)
-            })
-        {
-            return None;
-        }
-        let record = coordinator.records.get(&address.ordinal)?;
-        if address.ordinal <= apply_ordinal
-            || coordinator.ready_index.iter().copied().nth(1) != Some(address.ordinal)
-            || record.state != super::LifecycleState::Ready
-            || record.work_class != LifecycleWorkClass::Broadcast
-            || record.key.phase() != LifecyclePhase::BroadcastCommitQc
-            || record.stage.kind() != LifecycleStageKind::BroadcastCommitQc
-            || !lifecycle_output_row_matches(coordinator, address, work, effect, pending)
-        {
-            return None;
-        }
-        Some(AttestedLifecycleDecisionApplySuccessorOutputsV1 {
-            live_apply: authority,
-            output_address: address,
-            output_digest: work.digest,
-            pending_key: pending_output.key(),
-            _seal: LifecycleDecisionApplySuccessorOutputsSealV1,
-        })
     }
 
     fn owner_held_output_ordinals(
@@ -630,8 +935,8 @@ impl ConcreteLifecycleWorkRegistry {
         coordinator: &LifecycleCoordinator,
         ordinal: u128,
     ) -> Result<PreparedApplyTerminalDirectBroadcastV1, RegistryError> {
-        let SchedulableLifecycleBroadcastCarrierV1::RetainedDirectOutput(attestation) = self
-            .attest_schedulable_lifecycle_broadcast_carrier(coordinator, ordinal, None)?
+        let SchedulableLifecycleBroadcastCarrierV1::RetainedDirectOutput(attestation) =
+            self.attest_schedulable_lifecycle_broadcast_carrier(coordinator, ordinal, None)?
         else {
             return Err(RegistryError::CorruptWork);
         };

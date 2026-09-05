@@ -26,9 +26,9 @@ type ExecutionCommitmentWitness struct {
 	ParentStateRoot                   [32]uints.U8
 	PostStateRoot                     [32]uints.U8
 	OrdinaryWritesRoot                [32]uints.U8
-	HasOfflineCashTopUpRoot           frontend.Variable
-	OfflineCashTopUpRoot              [32]uints.U8
-	OfflineCashTopUpCount             frontend.Variable
+	HasKagemushaTopUpRoot           frontend.Variable
+	KagemushaTopUpRoot              [32]uints.U8
+	KagemushaTopUpCount             frontend.Variable
 	NativeAMXApplicationManifestVer   frontend.Variable
 	NativeAMXApplicationManifestRoot  [32]uints.U8
 	NativeAMXApplicationManifestCount frontend.Variable
@@ -44,7 +44,7 @@ type ExecutionCommitmentWitness struct {
 
 func constrainExecutionCommitment(api frontend.API, execution *ExecutionCommitmentWitness) error {
 	for _, present := range []frontend.Variable{
-		execution.HasOfflineCashTopUpRoot,
+		execution.HasKagemushaTopUpRoot,
 		execution.HasLaneFinalityManifest,
 		execution.HasMergeCarrier,
 	} {
@@ -65,7 +65,7 @@ func constrainExecutionCommitment(api frontend.API, execution *ExecutionCommitme
 		present frontend.Variable
 		digest  []uints.U8
 	}{
-		{execution.HasOfflineCashTopUpRoot, execution.OfflineCashTopUpRoot[:]},
+		{execution.HasKagemushaTopUpRoot, execution.KagemushaTopUpRoot[:]},
 		{execution.HasLaneFinalityManifest, execution.LaneFinalityManifestRoot[:]},
 		{execution.HasMergeCarrier, execution.MergeCarrierEntryHash[:]},
 	} {
@@ -74,7 +74,7 @@ func constrainExecutionCommitment(api frontend.API, execution *ExecutionCommitme
 		}
 	}
 
-	if _, err := u32Bytes(api, execution.OfflineCashTopUpCount); err != nil {
+	if _, err := u32Bytes(api, execution.KagemushaTopUpCount); err != nil {
 		return err
 	}
 	if _, err := u32Bytes(api, execution.NativeAMXApplicationManifestCount); err != nil {
@@ -96,26 +96,26 @@ func constrainExecutionCommitment(api frontend.API, execution *ExecutionCommitme
 	comparison32 := cmp.NewBoundedComparator(api, new(big.Int).Lsh(big.NewInt(1), 32), false)
 	comparison64 := cmp.NewBoundedComparator(api, new(big.Int).Lsh(big.NewInt(1), 64), false)
 
-	offlineCashTopUpCountIsZero := api.IsZero(execution.OfflineCashTopUpCount)
-	api.AssertIsEqual(execution.HasOfflineCashTopUpRoot, api.Sub(1, offlineCashTopUpCountIsZero))
-	offlineCashTopUpCountBytes, err := u32Bytes(api, execution.OfflineCashTopUpCount)
+	kagemushaTopUpCountIsZero := api.IsZero(execution.KagemushaTopUpCount)
+	api.AssertIsEqual(execution.HasKagemushaTopUpRoot, api.Sub(1, kagemushaTopUpCountIsZero))
+	kagemushaTopUpCountBytes, err := u32Bytes(api, execution.KagemushaTopUpCount)
 	if err != nil {
 		return err
 	}
-	offlineCashTopUpPreimage := constants([]byte("iroha:offline-cash:v1:post-state-root"))
-	offlineCashTopUpPreimage = append(offlineCashTopUpPreimage, uints.NewU8(0))
-	offlineCashTopUpPreimage = append(offlineCashTopUpPreimage, offlineCashTopUpCountBytes...)
-	offlineCashTopUpPreimage = append(offlineCashTopUpPreimage, execution.OrdinaryWritesRoot[:]...)
-	offlineCashTopUpPreimage = append(offlineCashTopUpPreimage, execution.OfflineCashTopUpRoot[:]...)
-	offlineCashPostStateRoot, err := irohaBlake2bHash(api, offlineCashTopUpPreimage)
+	kagemushaTopUpPreimage := constants([]byte("iroha:kagemusha:v1:post-state-root"))
+	kagemushaTopUpPreimage = append(kagemushaTopUpPreimage, uints.NewU8(0))
+	kagemushaTopUpPreimage = append(kagemushaTopUpPreimage, kagemushaTopUpCountBytes...)
+	kagemushaTopUpPreimage = append(kagemushaTopUpPreimage, execution.OrdinaryWritesRoot[:]...)
+	kagemushaTopUpPreimage = append(kagemushaTopUpPreimage, execution.KagemushaTopUpRoot[:]...)
+	kagemushaPostStateRoot, err := irohaBlake2bHash(api, kagemushaTopUpPreimage)
 	if err != nil {
 		return err
 	}
 	if err := assertConditionalBytesEqual(
 		api,
-		execution.HasOfflineCashTopUpRoot,
+		execution.HasKagemushaTopUpRoot,
 		execution.PostStateRoot[:],
-		offlineCashPostStateRoot[:],
+		kagemushaPostStateRoot[:],
 	); err != nil {
 		return err
 	}
@@ -313,9 +313,9 @@ func initializeExecutionCommitment(execution *ExecutionCommitmentWitness) {
 	zeroU8s(execution.ParentStateRoot[:])
 	zeroU8s(execution.PostStateRoot[:])
 	zeroU8s(execution.OrdinaryWritesRoot[:])
-	execution.HasOfflineCashTopUpRoot = 0
-	zeroU8s(execution.OfflineCashTopUpRoot[:])
-	execution.OfflineCashTopUpCount = 0
+	execution.HasKagemushaTopUpRoot = 0
+	zeroU8s(execution.KagemushaTopUpRoot[:])
+	execution.KagemushaTopUpCount = 0
 	execution.NativeAMXApplicationManifestVer = 0
 	zeroU8s(execution.NativeAMXApplicationManifestRoot[:])
 	execution.NativeAMXApplicationManifestCount = 0
@@ -342,7 +342,7 @@ func assertExecutionCommitmentsEqual(
 		{left.ParentStateRoot[:], right.ParentStateRoot[:]},
 		{left.PostStateRoot[:], right.PostStateRoot[:]},
 		{left.OrdinaryWritesRoot[:], right.OrdinaryWritesRoot[:]},
-		{left.OfflineCashTopUpRoot[:], right.OfflineCashTopUpRoot[:]},
+		{left.KagemushaTopUpRoot[:], right.KagemushaTopUpRoot[:]},
 		{left.NativeAMXApplicationManifestRoot[:], right.NativeAMXApplicationManifestRoot[:]},
 		{left.LaneFinalityManifestRoot[:], right.LaneFinalityManifestRoot[:]},
 		{left.MergeCarrierEntryHash[:], right.MergeCarrierEntryHash[:]},
@@ -353,8 +353,8 @@ func assertExecutionCommitmentsEqual(
 		}
 	}
 	for _, pair := range [][2]frontend.Variable{
-		{left.HasOfflineCashTopUpRoot, right.HasOfflineCashTopUpRoot},
-		{left.OfflineCashTopUpCount, right.OfflineCashTopUpCount},
+		{left.HasKagemushaTopUpRoot, right.HasKagemushaTopUpRoot},
+		{left.KagemushaTopUpCount, right.KagemushaTopUpCount},
 		{left.NativeAMXApplicationManifestVer, right.NativeAMXApplicationManifestVer},
 		{left.NativeAMXApplicationManifestCount, right.NativeAMXApplicationManifestCount},
 		{left.HasLaneFinalityManifest, right.HasLaneFinalityManifest},

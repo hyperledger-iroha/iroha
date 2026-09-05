@@ -49,7 +49,7 @@ use iroha_data_model::{
     da::commitment::DaProofPolicyBundle,
     isi::{
         InstructionRegistry, Register, SetParameter,
-        offline_cash_v1::OfflineCashMintFinalityGenesisParametersV1, register::RegisterPeerWithPop,
+        kagemusha_v1::KagemushaMintFinalityGenesisParametersV1, register::RegisterPeerWithPop,
         set_instruction_registry, verifying_keys,
     },
     parameter::{
@@ -95,9 +95,9 @@ fn checked_genesis_fixture_keypair_with_algorithm(algorithm: Algorithm) -> KeyPa
 fn deterministic_test_genesis_topology_entries() -> Vec<GenesisTopologyEntry> {
     let mut topology = (0_u8..4)
         .map(|index| {
-            let validator_seed = 0x20_u8.wrapping_add(index);
-            let validator = KeyPair::try_from_seed(vec![validator_seed; 32], Algorithm::BlsNormal)
-                .expect("derive deterministic genesis fixture validator");
+            let validator =
+                KeyPair::try_from_seed(vec![0x20_u8.wrapping_add(index); 32], Algorithm::BlsNormal)
+                    .expect("derive deterministic genesis fixture validator");
             let pop = iroha_crypto::bls_normal_pop_prove(validator.private_key())
                 .expect("derive deterministic genesis fixture proof of possession");
             GenesisTopologyEntry::new(
@@ -110,41 +110,67 @@ fn deterministic_test_genesis_topology_entries() -> Vec<GenesisTopologyEntry> {
     topology
 }
 #[cfg(test)]
-fn deterministic_test_offline_cash_mint_finality_genesis_parameters()
--> OfflineCashMintFinalityGenesisParametersV1 {
+fn deterministic_test_kagemusha_mint_finality_genesis_parameters()
+-> KagemushaMintFinalityGenesisParametersV1 {
     let validators = deterministic_test_genesis_topology_entries()
         .into_iter()
         .map(|entry| entry.peer)
         .collect();
-    test_offline_cash_mint_finality_genesis_parameters_for_topology(validators)
+    deterministic_test_kagemusha_mint_finality_genesis_parameters_for(validators)
 }
 #[cfg(test)]
-fn test_offline_cash_mint_finality_genesis_parameters_for_topology(
-    mut topology: Vec<iroha_data_model::peer::PeerId>,
-) -> OfflineCashMintFinalityGenesisParametersV1 {
-    use iroha_data_model::isi::offline_cash_v1::{
-        OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterTemplateV1,
-        OfflineCashMintFinalityValidatorKeysV1,
+fn deterministic_test_kagemusha_mint_finality_genesis_parameters_for(
+    mut validator_ids: Vec<iroha_data_model::peer::PeerId>,
+) -> KagemushaMintFinalityGenesisParametersV1 {
+    use iroha_data_model::isi::kagemusha_v1::{
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
+        KagemushaMintFinalityValidatorKeysV1,
     };
 
-    topology.sort();
-    let validators = topology
+    const EQ_PROOF_PUBLIC_KEYS: [&str; 4] = [
+        "00000000ed302d991bf94c09fc98462200000000000000000000000000000040",
+        "030000b067c50313fcac1144eee2fe0e0000000000000000000000000000001c",
+        "63d232eb3b8af0b75cfcf55ade47f6ff4cdf4e47a7454cb8ed67a9ba6f56e788",
+        "fc86bc8efbbcb878f49427618b6940409b9157e3d777a4c4c0514a8e0d92db18",
+    ];
+    const EP_PROOF_PUBLIC_KEYS: [&str; 4] = [
+        "0000000021eb468cdda89409fc98462200000000000000000000000000000040",
+        "03000070de065fede0093144eee2fe0e0000000000000000000000000000001c",
+        "5fce556feb6fee5a15560ddabae10224b026a5d0281af4c613955c39a8797837",
+        "f79037a77e26a2c0794dc326d866c664616499c064073a8f8ebf3080297be5ab",
+    ];
+
+    validator_ids.sort();
+    let validators = validator_ids
         .into_iter()
         .enumerate()
         .map(|(index, validator)| {
-            let index = u8::try_from(index).expect("test validator index fits in u8");
-            let eq_key_seed = 0xA0_u8.wrapping_add(index);
-            let ep_key_seed = 0xC0_u8.wrapping_add(index);
-            OfflineCashMintFinalityValidatorKeysV1 {
+            let mut eq_proof_public_key = [0_u8; 32];
+            hex::decode_to_slice(
+                EQ_PROOF_PUBLIC_KEYS
+                    .get(index)
+                    .expect("test authority has exactly four validators"),
+                &mut eq_proof_public_key,
+            )
+            .expect("valid fixed Pallas public key");
+            let mut ep_proof_public_key = [0_u8; 32];
+            hex::decode_to_slice(
+                EP_PROOF_PUBLIC_KEYS
+                    .get(index)
+                    .expect("test authority has exactly four validators"),
+                &mut ep_proof_public_key,
+            )
+            .expect("valid fixed Vesta public key");
+            KagemushaMintFinalityValidatorKeysV1 {
                 validator,
-                eq_proof_public_key: [eq_key_seed; 32],
-                ep_proof_public_key: [ep_key_seed; 32],
+                eq_proof_public_key,
+                ep_proof_public_key,
             }
         })
         .collect::<Vec<_>>();
-    let parameters = OfflineCashMintFinalityGenesisParametersV1 {
-        epoch_roster: OfflineCashMintFinalityEpochRosterTemplateV1 {
-            version: OFFLINE_CASH_CHAIN_VERSION_V1,
+    let parameters = KagemushaMintFinalityGenesisParametersV1 {
+        epoch_roster: KagemushaMintFinalityEpochRosterTemplateV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
             epoch: 0,
             validators,
         },
@@ -152,7 +178,7 @@ fn test_offline_cash_mint_finality_genesis_parameters_for_topology(
     };
     parameters
         .validate()
-        .expect("valid deterministic Offline Cash genesis fixture");
+        .expect("valid deterministic KAGEMUSHA genesis fixture");
     parameters
 }
 /// Domain of the genesis account, technically required for the pre-genesis state
@@ -325,8 +351,8 @@ pub fn validate_prepared_genesis_bundle(
 /// # Errors
 ///
 /// Returns an error when the block omits the metadata, contains it more than
-/// once, cannot decode it canonically, or carries invalid consensus or Offline
-/// Cash mint-finality genesis parameters.
+/// once, cannot decode it canonically, or carries invalid consensus or KAGEMUSHA
+/// mint-finality genesis parameters.
 pub fn signed_genesis_consensus_metadata(
     block: &SignedBlock,
 ) -> Result<ConsensusHandshakeMetadata> {
@@ -393,11 +419,11 @@ fn validate_signed_manifest_binding(
             "genesis manifest Sumeragi v2 context differs from signed body"
         ));
     }
-    if manifest.offline_cash_mint_finality_genesis_parameters()
-        != &signed_metadata.offline_cash_mint_finality
+    if manifest.kagemusha_mint_finality_genesis_parameters()
+        != &signed_metadata.kagemusha_mint_finality
     {
         return Err(eyre!(
-            "genesis manifest Offline Cash mint-finality parameters differ from signed body"
+            "genesis manifest KAGEMUSHA mint-finality parameters differ from signed body"
         ));
     }
     let expected = manifest
@@ -536,7 +562,7 @@ pub struct RawGenesisTransaction {
     ///
     /// Core binds these templates to the final genesis-derived [`NetworkId`]
     /// only after the block hash exists, avoiding a hash fixed point.
-    offline_cash_mint_finality: OfflineCashMintFinalityGenesisParametersV1,
+    kagemusha_mint_finality: KagemushaMintFinalityGenesisParametersV1,
     /// Cryptography configuration snapshot advertised alongside the manifest.
     #[norito(default)]
     crypto: ManifestCrypto,
@@ -2823,7 +2849,7 @@ pub mod genesis_instructions_json {
                 "unexpected error: {error}"
             );
         }
-        fn assert_genesis_manifest_parses_structured_instructions(relative_path: &str) {
+        fn assert_genesis_source_template_parses_structured_instructions(relative_path: &str) {
             super::super::init_instruction_registry();
             let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative_path);
             let raw = std::fs::read_to_string(&path)
@@ -2863,17 +2889,22 @@ pub mod genesis_instructions_json {
                     }
                 }
             }
-            super::RawGenesisTransaction::from_path(&path)
-                .unwrap_or_else(|error| panic!("{} should deserialize: {error}", path.display()));
+            assert!(
+                super::RawGenesisTransaction::from_path(&path).is_err(),
+                "{} must remain an incomplete source template until an operator supplies mint-finality authority",
+                path.display()
+            );
         }
         #[test]
-        fn defaults_genesis_manifest_parses_structured_instructions() {
-            assert_genesis_manifest_parses_structured_instructions("../../defaults/genesis.json");
+        fn defaults_genesis_source_template_parses_structured_instructions() {
+            assert_genesis_source_template_parses_structured_instructions(
+                "../../defaults/genesis.template.json",
+            );
         }
         #[test]
-        fn taira_genesis_manifest_parses_structured_instructions() {
-            assert_genesis_manifest_parses_structured_instructions(
-                "../../configs/soranexus/taira/genesis.json",
+        fn taira_genesis_source_template_parses_structured_instructions() {
+            assert_genesis_source_template_parses_structured_instructions(
+                "../../configs/soranexus/taira/genesis.template.json",
             );
         }
         #[test]
@@ -3112,8 +3143,8 @@ pub struct NormalizedGenesis {
     pub consensus_fingerprint: ConsensusFingerprint,
     /// Signed Sumeragi v2 height-context transport parameters.
     pub sumeragi_v2: SumeragiV2GenesisContextParameters,
-    /// Signed networkless Offline Cash mint-finality roster templates.
-    pub offline_cash_mint_finality: OfflineCashMintFinalityGenesisParametersV1,
+    /// Signed networkless KAGEMUSHA mint-finality roster templates.
+    pub kagemusha_mint_finality: KagemushaMintFinalityGenesisParametersV1,
     /// Cryptography snapshot advertised alongside genesis.
     pub crypto: ManifestCrypto,
     /// Final transaction batches that will be signed into the genesis block.
@@ -3166,9 +3197,9 @@ impl NormalizedGenesis {
                 .expect("serialize Sumeragi v2 context parameters"),
         );
         map.insert(
-            "offline_cash_mint_finality".to_string(),
-            norito::json::value::to_value(&self.offline_cash_mint_finality)
-                .expect("serialize Offline Cash mint-finality genesis parameters"),
+            "kagemusha_mint_finality".to_string(),
+            norito::json::value::to_value(&self.kagemusha_mint_finality)
+                .expect("serialize KAGEMUSHA mint-finality genesis parameters"),
         );
         map.insert(
             "crypto".to_string(),
@@ -3274,22 +3305,152 @@ fn compute_consensus_parameters_fingerprint_v2(
     iroha_data_model::block::consensus_v2::fingerprint::compute(params)
         .map_err(|error| eyre!("invalid signed consensus parameters: {error}"))
 }
+/// Incomplete genesis source JSON that intentionally omits operator-owned mint-finality authority.
+///
+/// Source templates are not [`RawGenesisTransaction`] values and cannot be signed. They must be
+/// materialized with explicit public authority parameters before entering validation or signing.
+#[derive(Clone, Debug)]
+pub struct GenesisSourceTemplate {
+    json_path: PathBuf,
+    value: norito::json::Value,
+}
+
+impl GenesisSourceTemplate {
+    /// Read an explicitly named `.template.json` source under genesis JSON resource bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the path names a bounded JSON object which omits
+    /// `kagemusha_mint_finality` and carries no pre-materialization consensus fingerprint.
+    pub fn from_path(json_path: impl AsRef<Path>) -> Result<Self> {
+        let json_path = json_path.as_ref();
+        let is_template_name = json_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(".template.json"));
+        if !is_template_name {
+            return Err(eyre!(
+                "genesis source templates must use the `.template.json` suffix: {}",
+                json_path.display()
+            ));
+        }
+        let bytes =
+            bounded_manifest::read_genesis_manifest_bytes(json_path).wrap_err_with(|| {
+                eyre!(
+                    "failed to read bounded genesis source template at {}",
+                    json_path.display()
+                )
+            })?;
+        let value: norito::json::Value = norito::json::from_slice(&bytes).map_err(|error| {
+            eyre!(
+                "failed to decode genesis source template {}: {error}",
+                json_path.display()
+            )
+        })?;
+        let object = value.as_object().ok_or_else(|| {
+            eyre!(
+                "genesis source template {} must be a JSON object",
+                json_path.display()
+            )
+        })?;
+        if object.contains_key("kagemusha_mint_finality") {
+            return Err(eyre!(
+                "genesis source template {} already contains KAGEMUSHA mint-finality authority",
+                json_path.display()
+            ));
+        }
+        if object.get("consensus_fingerprint") != Some(&norito::json::Value::Null) {
+            return Err(eyre!(
+                "genesis source template {} must set consensus_fingerprint to null until authority materialization",
+                json_path.display()
+            ));
+        }
+        Ok(Self {
+            json_path: json_path.to_path_buf(),
+            value,
+        })
+    }
+
+    /// Insert explicit operator-provisioned public authority and produce a complete Raw manifest.
+    ///
+    /// The consensus fingerprint is recomputed after materialization. The deployment signer
+    /// (including Kagami) checks canonical Pasta points and exact final-topology matching before
+    /// signing; the signed handshake authenticates the authority, and Core rechecks the binding
+    /// during startup and admission.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the authority shape is invalid or the completed JSON is not a valid
+    /// [`RawGenesisTransaction`].
+    pub fn materialize(
+        mut self,
+        parameters: KagemushaMintFinalityGenesisParametersV1,
+    ) -> Result<RawGenesisTransaction> {
+        parameters
+            .validate()
+            .map_err(|error| eyre!("invalid KAGEMUSHA mint-finality parameters: {error}"))?;
+        self.value
+            .as_object_mut()
+            .expect("source template object was checked at construction")
+            .insert(
+                "kagemusha_mint_finality".to_owned(),
+                norito::json::value::to_value(&parameters).map_err(|error| {
+                    eyre!("serialize KAGEMUSHA mint-finality parameters: {error}")
+                })?,
+            );
+        let completed = norito::json::to_vec(&self.value)
+            .map_err(|error| eyre!("serialize materialized genesis manifest: {error}"))?;
+        let manifest = RawGenesisTransaction::from_json_slice_at_path(&completed, &self.json_path)?;
+        manifest.validate_mode_specific_consensus_parameters()?;
+        Ok(manifest.with_consensus_meta())
+    }
+}
+
 impl RawGenesisTransaction {
-    fn validate_mode_specific_consensus_parameters(&self) -> Result<()> {
-        let has_npos = self
-            .effective_parameters()?
+    /// Validate consensus-mode parameters and the signed mint-finality authority schedule.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when NPoS parameters disagree with the consensus mode, are malformed, or
+    /// the optional epoch-one mint-finality roster is not present exactly at an NPoS height-one
+    /// epoch boundary.
+    pub fn validate_mode_specific_consensus_parameters(&self) -> Result<()> {
+        let parameters = self.effective_parameters()?;
+        let npos_parameter = parameters
             .custom()
-            .contains_key(&SumeragiNposParameters::parameter_id());
-        match (self.consensus_mode, has_npos) {
-            (SumeragiConsensusMode::Permissioned, false) | (SumeragiConsensusMode::Npos, true) => {
-                Ok(())
-            }
-            (SumeragiConsensusMode::Permissioned, true) => Err(eyre!(
+            .get(&SumeragiNposParameters::parameter_id());
+        let npos_parameters = npos_parameter
+            .map(|parameter| {
+                SumeragiNposParameters::from_custom_parameter(parameter)
+                    .ok_or_else(|| eyre!("genesis carries malformed `sumeragi_npos_parameters`"))
+            })
+            .transpose()?;
+        let has_next_roster = self.kagemusha_mint_finality.next_epoch_roster.is_some();
+        match (self.consensus_mode, npos_parameters) {
+            (SumeragiConsensusMode::Permissioned, Some(_)) => Err(eyre!(
                 "permissioned genesis must omit `sumeragi_npos_parameters`"
             )),
-            (SumeragiConsensusMode::Npos, false) => Err(eyre!(
+            (SumeragiConsensusMode::Permissioned, None) if has_next_roster => Err(eyre!(
+                "`kagemusha_mint_finality.next_epoch_roster` must be null for permissioned genesis"
+            )),
+            (SumeragiConsensusMode::Permissioned, None) => Ok(()),
+            (SumeragiConsensusMode::Npos, None) => Err(eyre!(
                 "NPoS genesis requires `sumeragi_npos_parameters`; node-local election defaults are not signed inputs"
             )),
+            (SumeragiConsensusMode::Npos, Some(parameters)) => {
+                let height_one_is_epoch_boundary = parameters.epoch_length_blocks().get() == 1;
+                if height_one_is_epoch_boundary != has_next_roster {
+                    let requirement = if height_one_is_epoch_boundary {
+                        "must be present when NPoS `epoch_length_blocks` is 1"
+                    } else {
+                        "must be null unless NPoS `epoch_length_blocks` is 1"
+                    };
+                    return Err(eyre!(
+                        "`kagemusha_mint_finality.next_epoch_roster` {requirement}"
+                    ));
+                }
+                Ok(())
+            }
         }
     }
     fn validate_structured_parameter_blocks(&self) -> Result<()> {
@@ -3435,9 +3596,9 @@ impl RawGenesisTransaction {
             &mut map,
             "sumeragi_v2",
         )?;
-        let offline_cash_mint_finality = Self::take_required_field::<
-            OfflineCashMintFinalityGenesisParametersV1,
-        >(&mut map, "offline_cash_mint_finality")?;
+        let kagemusha_mint_finality = Self::take_required_field::<
+            KagemushaMintFinalityGenesisParametersV1,
+        >(&mut map, "kagemusha_mint_finality")?;
         let crypto = map
             .remove("crypto")
             .map(|value| Self::decode_value::<ManifestCrypto>(value, "crypto"))
@@ -3456,7 +3617,7 @@ impl RawGenesisTransaction {
             wire_protocol_version,
             consensus_fingerprint,
             sumeragi_v2,
-            offline_cash_mint_finality,
+            kagemusha_mint_finality,
             crypto,
         })
     }
@@ -3578,9 +3739,9 @@ impl RawGenesisTransaction {
         sumeragi_v2
             .validate()
             .map_err(|error| eyre!("invalid signed Sumeragi v2 context parameters: {error}"))?;
-        let offline_cash_mint_finality = manifest.offline_cash_mint_finality.clone();
-        offline_cash_mint_finality.validate().map_err(|error| {
-            eyre!("invalid signed Offline Cash mint-finality genesis parameters: {error}")
+        let kagemusha_mint_finality = manifest.kagemusha_mint_finality.clone();
+        kagemusha_mint_finality.validate().map_err(|error| {
+            eyre!("invalid signed KAGEMUSHA mint-finality genesis parameters: {error}")
         })?;
         let chain = manifest.chain.clone();
         let chain_discriminant = manifest.chain_discriminant;
@@ -3598,7 +3759,7 @@ impl RawGenesisTransaction {
             wire_protocol_version,
             consensus_fingerprint,
             sumeragi_v2,
-            offline_cash_mint_finality,
+            kagemusha_mint_finality,
             crypto,
             transactions,
         })
@@ -3624,13 +3785,13 @@ impl RawGenesisTransaction {
     pub fn transactions(&self) -> &[RawGenesisTx] {
         &self.transactions
     }
-    /// Validate that the signed epoch-zero Offline Cash authority names the
+    /// Validate that the signed epoch-zero KAGEMUSHA authority names the
     /// exact canonical validator topology which will enter genesis.
     ///
     /// The Pasta proof keys are separately provisioned and must never be
     /// inferred from consensus keys while signing. Consequently, changing a
     /// topology requires replacing the manifest's
-    /// `offline_cash_mint_finality` authority before the manifest can be
+    /// `kagemusha_mint_finality` authority before the manifest can be
     /// signed.
     ///
     /// # Errors
@@ -3638,12 +3799,10 @@ impl RawGenesisTransaction {
     /// Returns an error when the topology is not an exact supported `3f + 1`
     /// committee, repeats a peer, or differs from the ordered validator
     /// identities in the epoch-zero authority template.
-    pub fn validate_offline_cash_mint_finality_topology(&self) -> Result<()> {
-        self.offline_cash_mint_finality
-            .validate()
-            .map_err(|error| {
-                eyre!("invalid signed Offline Cash mint-finality genesis parameters: {error}")
-            })?;
+    pub fn validate_kagemusha_mint_finality_topology(&self) -> Result<()> {
+        self.kagemusha_mint_finality.validate().map_err(|error| {
+            eyre!("invalid signed KAGEMUSHA mint-finality genesis parameters: {error}")
+        })?;
         let mut topology = self
             .transactions
             .iter()
@@ -3652,7 +3811,7 @@ impl RawGenesisTransaction {
             .collect::<Vec<_>>();
         if !is_valid_committee_size(topology.len()) {
             return Err(eyre!(
-                "genesis signing requires an exact Sumeragi v2 `3f + 1` topology in the supported range 4..={MAX_VALIDATORS_PER_HEIGHT} before the Offline Cash mint-finality authority can be bound (saw {})",
+                "genesis signing requires an exact Sumeragi v2 `3f + 1` topology in the supported range 4..={MAX_VALIDATORS_PER_HEIGHT} before the KAGEMUSHA mint-finality authority can be bound (saw {})",
                 topology.len()
             ));
         }
@@ -3662,7 +3821,7 @@ impl RawGenesisTransaction {
                 "genesis topology repeats a validator identity; provision one canonical entry per validator"
             ));
         }
-        let authority = &self.offline_cash_mint_finality.epoch_roster.validators;
+        let authority = &self.kagemusha_mint_finality.epoch_roster.validators;
         if authority.len() != topology.len()
             || authority
                 .iter()
@@ -3670,7 +3829,7 @@ impl RawGenesisTransaction {
                 .any(|(keys, peer)| &keys.validator != peer)
         {
             return Err(eyre!(
-                "genesis Offline Cash mint-finality epoch-zero authority differs from the canonical validator topology; provision `offline_cash_mint_finality` with independently generated Pasta keys for this exact topology before signing"
+                "genesis KAGEMUSHA mint-finality epoch-zero authority differs from the canonical validator topology; provision `kagemusha_mint_finality` with independently generated Pasta keys for this exact topology before signing"
             ));
         }
         Ok(())
@@ -3846,22 +4005,22 @@ impl RawGenesisTransaction {
         self.sumeragi_v2 = parameters;
         self
     }
-    /// Return the exact networkless Offline Cash mint-finality templates
+    /// Return the exact networkless KAGEMUSHA mint-finality templates
     /// selected by this manifest.
     #[must_use]
-    pub const fn offline_cash_mint_finality_genesis_parameters(
+    pub const fn kagemusha_mint_finality_genesis_parameters(
         &self,
-    ) -> &OfflineCashMintFinalityGenesisParametersV1 {
-        &self.offline_cash_mint_finality
+    ) -> &KagemushaMintFinalityGenesisParametersV1 {
+        &self.kagemusha_mint_finality
     }
-    /// Replace the networkless Offline Cash mint-finality templates which will
+    /// Replace the networkless KAGEMUSHA mint-finality templates which will
     /// be authenticated by signed genesis.
     #[must_use]
-    pub fn with_offline_cash_mint_finality_genesis_parameters(
+    pub fn with_kagemusha_mint_finality_genesis_parameters(
         mut self,
-        parameters: OfflineCashMintFinalityGenesisParametersV1,
+        parameters: KagemushaMintFinalityGenesisParametersV1,
     ) -> Self {
-        self.offline_cash_mint_finality = parameters;
+        self.kagemusha_mint_finality = parameters;
         self
     }
     /// Construct [`RawGenesisTransaction`] from a json file at `json_path`,
@@ -3918,7 +4077,7 @@ impl RawGenesisTransaction {
             wire_protocol_version: self.wire_protocol_version,
             consensus_fingerprint: self.consensus_fingerprint,
             sumeragi_v2: Some(self.sumeragi_v2),
-            offline_cash_mint_finality: Some(self.offline_cash_mint_finality),
+            kagemusha_mint_finality: Some(self.kagemusha_mint_finality),
         }
     }
     /// Build and sign a resultless genesis proposal.
@@ -3938,7 +4097,7 @@ impl RawGenesisTransaction {
     ///
     /// # Errors
     ///
-    /// Fails if the system clock is invalid, the signed Offline Cash authority
+    /// Fails if the system clock is invalid, the signed KAGEMUSHA authority
     /// does not match the canonical genesis topology, or
     /// [`RawGenesisTransaction::parse`] fails.
     pub fn build_and_sign_with_confidential_policy_hash(
@@ -3999,7 +4158,7 @@ impl RawGenesisTransaction {
     ///
     /// # Errors
     ///
-    /// Fails if the signed Offline Cash authority does not match the canonical
+    /// Fails if the signed KAGEMUSHA authority does not match the canonical
     /// genesis topology, [`RawGenesisTransaction::parse`] fails, or the
     /// transaction and block timestamps cannot be represented in `u64`
     /// milliseconds.
@@ -4010,7 +4169,7 @@ impl RawGenesisTransaction {
         confidential_policy_hash: Option<[u8; 32]>,
         creation_time_base_ms: u64,
     ) -> Result<GenesisBlock> {
-        self.validate_offline_cash_mint_finality_topology()?;
+        self.validate_kagemusha_mint_finality_topology()?;
         let genesis_account = AccountId::new(genesis_key_pair.public_key().clone());
         let instruction_batches = self.parse()?;
         let timestamp_span = u64::try_from(instruction_batches.len())
@@ -4096,7 +4255,7 @@ impl RawGenesisTransaction {
             wire_protocol_version,
             consensus_fingerprint,
             sumeragi_v2,
-            offline_cash_mint_finality,
+            kagemusha_mint_finality,
             crypto: _,
         } = manifest;
         for tx in &mut transactions {
@@ -4122,7 +4281,7 @@ impl RawGenesisTransaction {
             wire_protocol_version,
             consensus_fingerprint,
             sumeragi_v2,
-            offline_cash_mint_finality,
+            kagemusha_mint_finality,
         )?;
         let mut pending_meta = if meta_vec.is_empty() {
             None
@@ -4295,7 +4454,7 @@ impl RawGenesisTransaction {
         wire_protocol_version: u32,
         consensus_fingerprint: Option<ConsensusFingerprint>,
         sumeragi_v2: SumeragiV2GenesisContextParameters,
-        offline_cash_mint_finality: OfflineCashMintFinalityGenesisParametersV1,
+        kagemusha_mint_finality: KagemushaMintFinalityGenesisParametersV1,
     ) -> Result<Vec<InstructionBox>> {
         let mut instructions = Vec::new();
         let fingerprint = consensus_fingerprint.ok_or_else(|| {
@@ -4309,7 +4468,7 @@ impl RawGenesisTransaction {
             wire_protocol_version,
             consensus_fingerprint: fingerprint,
             sumeragi_v2,
-            offline_cash_mint_finality,
+            kagemusha_mint_finality,
         };
         metadata
             .validate()
@@ -4349,7 +4508,7 @@ pub struct GenesisBuilder {
     wire_protocol_version: u32,
     consensus_fingerprint: Option<ConsensusFingerprint>,
     sumeragi_v2: Option<SumeragiV2GenesisContextParameters>,
-    offline_cash_mint_finality: Option<OfflineCashMintFinalityGenesisParametersV1>,
+    kagemusha_mint_finality: Option<KagemushaMintFinalityGenesisParametersV1>,
 }
 /// Domain editing mode of the [`GenesisBuilder`] to register accounts and assets under the domain.
 #[must_use]
@@ -4366,7 +4525,7 @@ pub struct GenesisDomainBuilder {
     wire_protocol_version: u32,
     consensus_fingerprint: Option<ConsensusFingerprint>,
     sumeragi_v2: Option<SumeragiV2GenesisContextParameters>,
-    offline_cash_mint_finality: Option<OfflineCashMintFinalityGenesisParametersV1>,
+    kagemusha_mint_finality: Option<KagemushaMintFinalityGenesisParametersV1>,
 }
 #[derive(Default)]
 struct GenesisTxBuilder {
@@ -4379,7 +4538,7 @@ impl GenesisBuilder {
     /// Construct [`GenesisBuilder`] with an executor upgrade.
     ///
     /// Before building, callers must provide the Sumeragi context and the
-    /// separately provisioned Offline Cash V1 Pasta templates through their
+    /// separately provisioned KAGEMUSHA V1 Pasta templates through their
     /// dedicated setters.
     pub fn new(chain: ChainId, executor: impl Into<PathBuf>, ivm_dir: impl Into<PathBuf>) -> Self {
         Self {
@@ -4394,13 +4553,13 @@ impl GenesisBuilder {
             wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
             consensus_fingerprint: None,
             sumeragi_v2: None,
-            offline_cash_mint_finality: None,
+            kagemusha_mint_finality: None,
         }
     }
     /// Construct [`GenesisBuilder`] without an executor upgrade.
     ///
     /// Before building, callers must provide the Sumeragi context and the
-    /// separately provisioned Offline Cash V1 Pasta templates through their
+    /// separately provisioned KAGEMUSHA V1 Pasta templates through their
     /// dedicated setters.
     pub fn new_without_executor(chain: ChainId, ivm_dir: impl Into<PathBuf>) -> Self {
         Self {
@@ -4415,7 +4574,7 @@ impl GenesisBuilder {
             wire_protocol_version: CONSENSUS_PROTOCOL_VERSION,
             consensus_fingerprint: None,
             sumeragi_v2: None,
-            offline_cash_mint_finality: None,
+            kagemusha_mint_finality: None,
         }
     }
     /// Override the cryptography snapshot advertised alongside the manifest.
@@ -4441,11 +4600,11 @@ impl GenesisBuilder {
     /// Select the separately provisioned networkless Pasta roster templates
     /// which signed genesis will authenticate.
     #[must_use]
-    pub fn with_offline_cash_mint_finality_genesis_parameters(
+    pub fn with_kagemusha_mint_finality_genesis_parameters(
         mut self,
-        parameters: OfflineCashMintFinalityGenesisParametersV1,
+        parameters: KagemushaMintFinalityGenesisParametersV1,
     ) -> Self {
-        self.offline_cash_mint_finality = Some(parameters);
+        self.kagemusha_mint_finality = Some(parameters);
         self
     }
     /// Select the signed immutable block cadence stored by genesis.
@@ -4486,7 +4645,7 @@ impl GenesisBuilder {
             wire_protocol_version: self.wire_protocol_version,
             consensus_fingerprint: self.consensus_fingerprint,
             sumeragi_v2: self.sumeragi_v2,
-            offline_cash_mint_finality: self.offline_cash_mint_finality,
+            kagemusha_mint_finality: self.kagemusha_mint_finality,
         }
     }
     /// Append a parameter to the authoritative snapshot in the first transaction.
@@ -4597,8 +4756,8 @@ impl GenesisBuilder {
     ///
     /// # Errors
     ///
-    /// Fails unless both the signed Sumeragi v2 context and the separately
-    /// provisioned Offline Cash V1 Pasta roster templates have been supplied.
+    /// Fails unless the signed Sumeragi v2 context parameters and separately
+    /// provisioned KAGEMUSHA V1 Pasta roster have both been supplied.
     pub fn build_raw(self) -> Result<RawGenesisTransaction> {
         let mut parameter_snapshot = Parameters::default();
         let mut source_transactions = self.transactions;
@@ -4624,9 +4783,9 @@ impl GenesisBuilder {
         let sumeragi_v2 = self.sumeragi_v2.ok_or_else(|| {
             eyre!("genesis builder requires explicit signed Sumeragi v2 context parameters")
         })?;
-        let offline_cash_mint_finality = self.offline_cash_mint_finality.ok_or_else(|| {
+        let kagemusha_mint_finality = self.kagemusha_mint_finality.ok_or_else(|| {
             eyre!(
-                "genesis builder requires explicitly provisioned Offline Cash V1 Pasta \
+                "genesis builder requires explicitly provisioned KAGEMUSHA V1 Pasta \
                  mint-finality genesis parameters"
             )
         })?;
@@ -4640,7 +4799,7 @@ impl GenesisBuilder {
             wire_protocol_version: self.wire_protocol_version,
             consensus_fingerprint: self.consensus_fingerprint,
             sumeragi_v2,
-            offline_cash_mint_finality,
+            kagemusha_mint_finality,
             crypto: self.crypto,
         })
     }
@@ -4660,7 +4819,7 @@ impl GenesisDomainBuilder {
             wire_protocol_version: self.wire_protocol_version,
             consensus_fingerprint: self.consensus_fingerprint,
             sumeragi_v2: self.sumeragi_v2,
-            offline_cash_mint_finality: self.offline_cash_mint_finality,
+            kagemusha_mint_finality: self.kagemusha_mint_finality,
         }
     }
     /// Add an account to this domain.
@@ -4899,17 +5058,17 @@ mod tests {
                 .collect::<Vec<_>>();
             let mut canonical_topology = topology.clone();
             canonical_topology.sort();
-            let exact_unique_committee = is_valid_committee_size(canonical_topology.len())
+            let exact_unique_committee = canonical_topology.len() == 4
                 && !canonical_topology.windows(2).any(|pair| pair[0] == pair[1]);
-            let offline_cash_mint_finality = if exact_unique_committee {
-                test_offline_cash_mint_finality_genesis_parameters_for_topology(topology)
+            let kagemusha_mint_finality = if exact_unique_committee {
+                deterministic_test_kagemusha_mint_finality_genesis_parameters_for(topology)
             } else {
-                deterministic_test_offline_cash_mint_finality_genesis_parameters()
+                deterministic_test_kagemusha_mint_finality_genesis_parameters()
             };
             self.with_sumeragi_v2_context_parameters(
                 SumeragiV2GenesisContextParameters::recommended(),
             )
-            .with_offline_cash_mint_finality_genesis_parameters(offline_cash_mint_finality)
+            .with_kagemusha_mint_finality_genesis_parameters(kagemusha_mint_finality)
             .build_raw()
             .expect("complete deterministic test genesis builder")
         }
@@ -4921,6 +5080,65 @@ mod tests {
             .expect("test genesis manifest has one transaction")
             .topology = deterministic_test_genesis_topology_entries();
         manifest
+    }
+
+    fn load_genesis_source_template_for_test(relative_path: &str) -> Result<RawGenesisTransaction> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path);
+        GenesisSourceTemplate::from_path(path)?
+            .materialize(deterministic_test_kagemusha_mint_finality_genesis_parameters())
+    }
+
+    #[test]
+    fn source_template_materialization_requires_explicit_authority() -> Result<()> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../defaults/genesis.template.json");
+        assert!(RawGenesisTransaction::from_path(&path).is_err());
+        let parameters = deterministic_test_kagemusha_mint_finality_genesis_parameters();
+        let materialized =
+            GenesisSourceTemplate::from_path(&path)?.materialize(parameters.clone())?;
+        assert_eq!(
+            materialized.kagemusha_mint_finality_genesis_parameters(),
+            &parameters
+        );
+        assert!(materialized.consensus_fingerprint().is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn direct_signing_rejects_mint_finality_schedule_mismatches() {
+        let genesis_key_pair = checked_genesis_fixture_keypair();
+        let mut authority = deterministic_test_kagemusha_mint_finality_genesis_parameters();
+        let mut next_epoch_roster = authority.epoch_roster.clone();
+        next_epoch_roster.epoch = 1;
+        authority.next_epoch_roster = Some(next_epoch_roster);
+        let permissioned = GenesisBuilder::new_without_executor(
+            ChainId::from("permissioned-successor-authority"),
+            PathBuf::from("."),
+        )
+        .set_topology(deterministic_test_genesis_topology_entries())
+        .build_raw_for_test()
+        .with_kagemusha_mint_finality_genesis_parameters(authority);
+        let error = permissioned
+            .build_and_sign(&genesis_key_pair)
+            .expect_err("permissioned direct signing must reject an epoch-one authority");
+        assert!(error.to_string().contains("must be null for permissioned"));
+
+        let mut npos_parameters = SumeragiNposParameters::default();
+        npos_parameters.epoch_length_blocks = NonZeroU64::new(1).expect("non-zero epoch length");
+        npos_parameters.evidence_horizon_blocks = 1;
+        npos_parameters.slashing_delay_blocks = 1;
+        let npos = GenesisBuilder::new_without_executor(
+            ChainId::from("npos-missing-successor-authority"),
+            PathBuf::from("."),
+        )
+        .append_parameter(Parameter::Custom(npos_parameters.into_custom_parameter()))
+        .set_topology(deterministic_test_genesis_topology_entries())
+        .build_raw_for_test()
+        .with_consensus_mode(SumeragiConsensusMode::Npos);
+        let error = npos
+            .build_and_sign(&genesis_key_pair)
+            .expect_err("height-one NPoS boundary must reject a missing epoch-one authority");
+        assert!(error.to_string().contains("must be present"));
     }
 
     #[test]
@@ -4943,8 +5161,8 @@ mod tests {
         let ivm_dir = tmp_dir.path().join("ivm/");
         let builder = GenesisBuilder::new(chain, executor_path, ivm_dir)
             .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
-            .with_offline_cash_mint_finality_genesis_parameters(
-                deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+            .with_kagemusha_mint_finality_genesis_parameters(
+                deterministic_test_kagemusha_mint_finality_genesis_parameters(),
             );
         (tmp_dir, builder)
     }
@@ -4956,16 +5174,16 @@ mod tests {
         std::fs::write(&executor_path, dummy_bytecode).unwrap();
         let sumeragi_v2 =
             norito::json::to_json(&SumeragiV2GenesisContextParameters::recommended())?;
-        let offline_cash_mint_finality = norito::json::to_json(
-            &deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+        let kagemusha_mint_finality = norito::json::to_json(
+            &deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         )?;
         let genesis = format!(
-            r#"{{"chain":"00000000-0000-0000-0000-000000000000","chain_discriminant":{},"executor":"{}","consensus_mode":"Permissioned","wire_protocol_version":{},"sumeragi_v2":{},"offline_cash_mint_finality":{},"transactions":[{{}}]}}"#,
+            r#"{{"chain":"00000000-0000-0000-0000-000000000000","chain_discriminant":{},"executor":"{}","consensus_mode":"Permissioned","wire_protocol_version":{},"sumeragi_v2":{},"kagemusha_mint_finality":{},"transactions":[{{}}]}}"#,
             iroha_data_model::account::address::chain_discriminant(),
             executor_path.file_name().unwrap().to_str().unwrap(),
             iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
             sumeragi_v2,
-            offline_cash_mint_finality,
+            kagemusha_mint_finality,
         );
         let genesis_path = tmp_dir.path().join("genesis.json");
         std::fs::write(&genesis_path, genesis).unwrap();
@@ -5012,8 +5230,8 @@ mod tests {
         let public_key_literal = ALICE_KEYPAIR.public_key().to_string();
         let sumeragi_v2 =
             norito::json::to_json(&SumeragiV2GenesisContextParameters::recommended())?;
-        let offline_cash_mint_finality = norito::json::to_json(
-            &deterministic_test_offline_cash_mint_finality_genesis_parameters(),
+        let kagemusha_mint_finality = norito::json::to_json(
+            &deterministic_test_kagemusha_mint_finality_genesis_parameters(),
         )?;
         let genesis = format!(
             r#"{{
@@ -5023,14 +5241,14 @@ mod tests {
                 "ivm_dir":".",
                 "consensus_mode":"Permissioned",
                 "sumeragi_v2":{},
-                "offline_cash_mint_finality":{},
+                "kagemusha_mint_finality":{},
                 "transactions":[{{
                     "instructions":[{{"Register":{{"Account":{{"id":"{public_key_literal}","metadata":{{}},"label":null,"uaid":null}}}}}}]
                 }}]
             }}"#,
             iroha_data_model::account::address::chain_discriminant(),
             sumeragi_v2,
-            offline_cash_mint_finality,
+            kagemusha_mint_finality,
         );
         let error = norito::json::from_str::<RawGenesisTransaction>(&genesis)
             .expect_err("raw public-key account literals are not part of first-release genesis");
@@ -5100,10 +5318,9 @@ mod tests {
     }
     #[test]
     fn default_genesis_omits_set_parameter_instructions() -> Result<()> {
-        let genesis_path =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../defaults/genesis.json");
         init_instruction_registry();
-        let genesis = RawGenesisTransaction::from_path(&genesis_path)?;
+        let genesis =
+            load_genesis_source_template_for_test("../../defaults/genesis.template.json")?;
         assert!(!genesis.transactions.is_empty());
         assert!(
             genesis
@@ -5127,12 +5344,12 @@ mod tests {
         use iroha_data_model::asset::definition::validate_asset_name;
         let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let manifests = [
-            repo_root.join("defaults/genesis.json"),
-            repo_root.join("defaults/nexus/genesis.json"),
-            repo_root.join("defaults/kagami/iroha3-dev/genesis.json"),
-            repo_root.join("defaults/kagami/iroha3-nexus/genesis.json"),
-            repo_root.join("configs/soranexus/nexus/genesis.json"),
-            repo_root.join("configs/soranexus/taira/genesis.json"),
+            repo_root.join("defaults/genesis.template.json"),
+            repo_root.join("defaults/nexus/genesis.template.json"),
+            repo_root.join("defaults/kagami/iroha3-dev/genesis.template.json"),
+            repo_root.join("defaults/kagami/iroha3-nexus/genesis.template.json"),
+            repo_root.join("configs/soranexus/nexus/genesis.template.json"),
+            repo_root.join("configs/soranexus/taira/genesis.template.json"),
         ];
         for manifest_path in manifests {
             let raw = std::fs::read_to_string(&manifest_path)?;
@@ -5180,10 +5397,16 @@ mod tests {
         const PUBLIC_XOR_ALIAS: &str = "xor#universal";
         let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let manifests = [
-            (repo_root.join("configs/soranexus/taira/genesis.json"), true),
-            (repo_root.join("defaults/nexus/genesis.json"), false),
             (
-                repo_root.join("configs/soranexus/nexus/genesis.json"),
+                repo_root.join("configs/soranexus/taira/genesis.template.json"),
+                true,
+            ),
+            (
+                repo_root.join("defaults/nexus/genesis.template.json"),
+                false,
+            ),
+            (
+                repo_root.join("configs/soranexus/nexus/genesis.template.json"),
                 false,
             ),
         ];
@@ -5268,7 +5491,7 @@ mod tests {
         const SORA_XOR_ALIAS: &str = "xor#sora.universal";
         const SORA_XOR_SCALE: u64 = 9;
         let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let manifest_path = repo_root.join("configs/soranexus/taira/genesis.json");
+        let manifest_path = repo_root.join("configs/soranexus/taira/genesis.template.json");
         let raw = std::fs::read_to_string(&manifest_path)?;
         let value = norito::json::parse_value(&raw)?;
         let transactions = value
@@ -5338,12 +5561,12 @@ mod tests {
     fn shipped_genesis_manifests_advertise_current_npos_crypto_caps() -> Result<()> {
         let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let manifests = [
-            repo_root.join("defaults/genesis.json"),
-            repo_root.join("defaults/nexus/genesis.json"),
-            repo_root.join("defaults/kagami/iroha3-dev/genesis.json"),
-            repo_root.join("defaults/kagami/iroha3-nexus/genesis.json"),
-            repo_root.join("configs/soranexus/nexus/genesis.json"),
-            repo_root.join("configs/soranexus/taira/genesis.json"),
+            repo_root.join("defaults/genesis.template.json"),
+            repo_root.join("defaults/nexus/genesis.template.json"),
+            repo_root.join("defaults/kagami/iroha3-dev/genesis.template.json"),
+            repo_root.join("defaults/kagami/iroha3-nexus/genesis.template.json"),
+            repo_root.join("configs/soranexus/nexus/genesis.template.json"),
+            repo_root.join("configs/soranexus/taira/genesis.template.json"),
         ];
         let bls_curve = iroha_data_model::account::curve::CurveId::try_from_algorithm(
             iroha_crypto::Algorithm::BlsNormal,

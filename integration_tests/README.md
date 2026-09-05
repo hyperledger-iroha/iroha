@@ -42,6 +42,38 @@ This crate hosts cross-component tests for Iroha.
   `cargo run -p integration_tests --features dev-tools --bin refresh_nexus_streaming_fixtures`.
 
 ## Notes
+- Native BPNG alias bootstrap retained-Kura coverage lives in
+  `tests/alias_registry_bootstrap_network.rs` in `network_functional`. It requires
+  four real NPoS validators, native paid SNS quotes/leases, future-height routing
+  activation and an exact-owner bootstrap grant, then restarts the same peers
+  with snapshots disabled, Strict Kura and only an additive BPNG dataspace
+  catalog entry. It checks exact leases, domains, parameters, balances and
+  transaction results, plus original stored SignedBlock execution plans and
+  genuine three-of-four CommitQCs before/after replay. Every peer must also
+  demonstrate the live static-catalog addition through the SNS account-alias
+  parser and retain its exact validated lane catalog and incarnation roots.
+  After the second Strict restart it commits a new BPNG successor, proves the
+  predecessor hash/height and lane-incarnation link on all four peers, and
+  checks the stopped Kura/CommitQC evidence for exactly one appended certified
+  BPNG lane block. Missing binaries, networking or persisted evidence fail; no
+  success-by-skip is accepted.
+  Its pre-activation universal-domain alias is a historical control, **not**
+  qualification of a private-to-universal routing transition; genuine historical
+  private-lane replay remains a separate release prerequisite. Ordinary
+  transaction fees are zero from the original test genesis to isolate real SNS
+  lease charges, so this is not production-fee qualification. Existing-file-only
+  Fast Kura inspection verifies finality without starting a writer; only the
+  actual Strict daemon restart qualifies replay.
+  This scenario is release-only: the authenticated release bootstrap launches
+  the sealed child in `scripts/run_sumeragi_v2_release_gates.sh --release`, which
+  publishes the source/lock/toolchain-bound prebuilt bundle before re-discovering
+  the exact non-ignored test and running its cooperative gate with one network at
+  a time and one startup attempt. Do not substitute a standalone Cargo command
+  or hand-supplied executable paths; they do not provide the required sealed
+  identity, invocation root, source manifest or prebuilt-binary attestation.
+  Source wiring is not runtime qualification: a clean signed release candidate
+  still has to complete that gate. The scenario neither builds child binaries
+  nor substitutes a fresh chain/store for retained replay.
 - Pipeline block rejection scaffold lives at `tests/pipeline_block_rejected.rs` inside the `core_api` harness and is `#[ignore]` until a deterministic trigger is available.
 - Canonical Jindo activation, pre-activation rejection, exact replay, and
   restarted-peer catch-up coverage lives in
@@ -95,7 +127,7 @@ This crate hosts cross-component tests for Iroha.
   duplicate rejection, exact replay rejection, and final restart/catch-up.
   Run it with
   `TEST_NETWORK_IROHAD_FEATURES=zk-stark IROHA_TEST_REQUIRE_NETWORK=1 IROHA_TEST_SERIALIZE_NETWORKS=1 cargo test --locked -p integration_tests --test network_functional --features zk-stark privacy_exact12_activation_network::canonical_exact12_governance_survives_four_peer_activation_replay_and_restart -- --exact --nocapture --test-threads=1`.
-- Offline Cash V1 lifecycle coverage exercises pooled-reserve top-up,
+- KAGEMUSHA V1 lifecycle coverage exercises pooled-reserve top-up,
   aggregate-balance receipt folding, restart recovery, unrestricted subsequent
   payment, and full or partial redemption under paired-Pasta verification.
 - SoraNet web deploy + public DNS ALIAS/CNAME + NS/DS delegation placeholders coverage lives at `tests/soranet_web_deploy.rs`.

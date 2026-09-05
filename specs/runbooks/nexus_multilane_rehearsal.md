@@ -27,9 +27,10 @@ routing, and rollback drills.
    GOV-2026-03-19 approval (signed manifests + reviewer initials).
 2. `defaults/nexus/config.toml` (sha256
    `afc7cafc0d3d7db5e06d807a0648f03a83da474a5b2260c2137b5793c4b26f7f`, blake2b
-   `bb4d4dac082b0605bee65d70bbc6d096f64bbb539bb778bdc91519b6a8ab15d3465067ef210646f0f69e556216d49a126991ded85fa54a15bd3880ae41427565`) and `defaults/nexus/genesis.json` match the
-   approved hashes; `kagami genesis bootstrap --profile nexus` reports the same
-   digest recorded in the tracker.
+   `bb4d4dac082b0605bee65d70bbc6d096f64bbb539bb778bdc91519b6a8ab15d3465067ef210646f0f69e556216d49a126991ded85fa54a15bd3880ae41427565`) matches the
+   approved hash. The operator materializes `defaults/nexus/genesis.template.json`
+   with the approved public mint-finality authority, injects the final topology,
+   and records the resulting signed bundle digest in the rehearsal evidence.
 3. The lane catalog matches the approved three-lane layout; `iroha3d --sora
    --config defaults/nexus/config.toml` should emit the Nexus router banner.
 4. Multi-lane CI is green: `ci/check_nexus_multilane_pipeline.sh` (runs

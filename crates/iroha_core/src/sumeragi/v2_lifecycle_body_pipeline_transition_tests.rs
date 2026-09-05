@@ -116,8 +116,8 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let network_id = crate::sumeragi::synthetic_network_id("fetch-store-transition-test");
-        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
                 network_id, 1, &roster,
             );
         let context = wire::HeightContext {
@@ -132,8 +132,8 @@ mod tests {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
             roster,
-            offline_cash_mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"fetch-store nexus context"),
             execution_policy_hash: Hash::new(b"fetch-store execution policy"),
             da_layout: wire::DataAvailabilityLayout {
@@ -151,7 +151,7 @@ mod tests {
         (verified, context)
     }
     fn fixture_execution_commitment() -> wire::ExecutionCommitment {
-        wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
             Hash::new(b"fetch-store state root"),
             Hash::new(b"fetch-store events root"),
             Hash::new(b"fetch-store trace root"),
@@ -2218,7 +2218,7 @@ mod tests {
             unreachable!("fixture Apply effect")
         };
         certificate.execution_commitment =
-            wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                 Hash::new(b"foreign Validate-Apply state root"),
                 Hash::new(b"foreign Validate-Apply events root"),
                 Hash::new(b"foreign Validate-Apply trace root"),
@@ -2269,7 +2269,7 @@ mod tests {
             unreachable!("fixture Apply effect")
         };
         certificate.execution_commitment =
-            wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                 Hash::new(b"ordinary forged state root"),
                 Hash::new(b"ordinary forged events root"),
                 Hash::new(b"ordinary forged trace root"),
@@ -2346,7 +2346,7 @@ mod tests {
             unreachable!("fixture Apply effect")
         };
         certificate.execution_commitment =
-            wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                 Hash::new(b"changed retained Commit state root"),
                 Hash::new(b"changed retained Commit events root"),
                 Hash::new(b"changed retained Commit trace root"),

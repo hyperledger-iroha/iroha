@@ -1403,8 +1403,8 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             let network_id = test_network_id(b"sumeragi-v2-evidence-genesis");
-            let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-                crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+            let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+                crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
                     network_id, 7, &roster,
                 );
             let context = wire_v2::HeightContext {
@@ -1419,8 +1419,8 @@ mod tests {
                 parent_commit_qc: None,
                 quorum: wire_v2::DualQuorum::from_roster(&roster).expect("equal-vote quorum"),
                 roster,
-                offline_cash_mint_finality_epoch_id,
-                offline_cash_mint_finality_epoch_roster,
+                kagemusha_mint_finality_epoch_id,
+                kagemusha_mint_finality_epoch_roster,
                 nexus_amx_context_hash: Hash::new(b"v2-evidence-context"),
                 execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
                 da_layout: wire_v2::DataAvailabilityLayout {
@@ -1500,7 +1500,7 @@ mod tests {
             .to_vec()
         }
         fn execution_commitment(&self) -> wire_v2::ExecutionCommitment {
-            wire_v2::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            wire_v2::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                 Hash::new(b"v2 evidence parent state"),
                 Hash::new(b"v2 evidence post state"),
                 Hash::new(b"v2 evidence ordinary writes"),
@@ -1635,7 +1635,7 @@ mod tests {
                 .expect("canonical proposal wire"),
         };
         let execution_commitment =
-            wire_v2::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            wire_v2::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                 Hash::new(b"v2 evidence finality parent state"),
                 Hash::new(b"v2 evidence finality post state"),
                 Hash::new(b"v2 evidence finality ordinary writes"),

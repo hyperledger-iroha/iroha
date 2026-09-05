@@ -675,7 +675,6 @@ fn canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custo
     )
     .expect("decode replica Pending outcome");
     assert_eq!(pending.outcome_hash, source_outcome_hash);
-    assert_eq!(pending.wire_layout_for_test(), "v2");
     assert!(matches!(
         pending.basis(),
         AutonomousLifecycleTerminalOutcomeBasisV1::CanonicalReplica { .. }
@@ -685,113 +684,51 @@ fn canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custo
         pending.binding().producer_index,
         "replica binding uses only the producer as its logical witness",
     );
-    let transitional_pending = pending
-        .to_basis_v1_for_test()
-        .expect("construct the basis-bearing V1 compatibility fixture");
-    let transitional_bytes = transitional_pending
+    let pending_bytes = pending
         .encode_framed()
-        .expect("encode basis-bearing V1 compatibility fixture");
-    let decoded_transitional =
-        AutonomousLifecycleTerminalOutcomeV1::decode_framed(&transitional_bytes)
-            .expect("decode basis-bearing V1 compatibility fixture");
-    decoded_transitional
+        .expect("encode canonical basis-bearing V1 outcome");
+    let decoded_pending = AutonomousLifecycleTerminalOutcomeV1::decode_framed(&pending_bytes)
+        .expect("decode canonical basis-bearing V1 outcome");
+    decoded_pending
         .validate_structure()
-        .expect("validate basis-bearing V1 compatibility fixture");
-    assert_eq!(decoded_transitional.wire_layout_for_test(), "basis_v1");
-    assert_eq!(decoded_transitional.basis(), pending.basis());
-    assert_eq!(
-        decoded_transitional
-            .encode_framed()
-            .expect("re-encode basis-bearing V1 compatibility fixture"),
-        transitional_bytes,
-        "transitional V1 evidence must remain byte-exact",
-    );
-    let v2_body = AutonomousLifecycleTerminalOutcomeBodyV2 {
-        version: AutonomousLifecycleTerminalOutcomeV1::VERSION,
-        binding: pending.binding().clone(),
-        basis: pending.basis(),
-        source: pending.source(),
-        stage: pending.stage(),
-    };
-    let v2_body_bytes = norito::encode_canonical(&v2_body).expect("encode V2 body fixture");
-    let valid_v2_hash = Hash::new_from_chunks(&[
-        AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN_V2,
-        &v2_body_bytes,
-    ]);
-    assert_eq!(valid_v2_hash, pending.outcome_hash);
-    let basis_v1_body = BasisAutonomousLifecycleTerminalOutcomeBodyV1 {
-        version: AutonomousLifecycleTerminalOutcomeV1::LEGACY_VERSION,
-        binding: pending.binding().clone(),
-        basis: pending.basis(),
-        source: pending.source(),
-        stage: pending.stage(),
-    };
-    let basis_v1_body_bytes =
-        norito::encode_canonical(&basis_v1_body).expect("encode basis-bearing V1 body fixture");
-    let valid_basis_v1_hash = Hash::new_from_chunks(&[
-        AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN_V1,
-        &basis_v1_body_bytes,
-    ]);
-    assert_eq!(valid_basis_v1_hash, transitional_pending.outcome_hash);
+        .expect("validate canonical basis-bearing V1 outcome");
+    assert_eq!(decoded_pending, pending);
 
-    let relabeled_v2_as_v1 =
-        norito::encode_canonical(&BasisAutonomousLifecycleTerminalOutcomeWireV1 {
-            body: BasisAutonomousLifecycleTerminalOutcomeBodyV1 {
-                version: AutonomousLifecycleTerminalOutcomeV1::VERSION,
-                binding: pending.binding().clone(),
-                basis: pending.basis(),
-                source: pending.source(),
-                stage: pending.stage(),
-            },
-            outcome_hash: valid_v2_hash,
-        })
-        .expect("encode V2 payload under the V1 schema");
-    assert!(
-        AutonomousLifecycleTerminalOutcomeV1::decode_framed(&relabeled_v2_as_v1).is_err(),
-        "a V2-shaped payload advertised as V1 must fail closed",
-    );
-    let relabeled_v1_as_v2 = norito::encode_canonical(&AutonomousLifecycleTerminalOutcomeWireV2 {
-        body: AutonomousLifecycleTerminalOutcomeBodyV2 {
-            version: AutonomousLifecycleTerminalOutcomeV1::LEGACY_VERSION,
-            binding: pending.binding().clone(),
-            basis: pending.basis(),
-            source: pending.source(),
-            stage: pending.stage(),
-        },
-        outcome_hash: valid_basis_v1_hash,
+    let wrong_version_body = AutonomousLifecycleTerminalOutcomeBodyV1 {
+        version: AutonomousLifecycleTerminalOutcomeV1::VERSION + 1,
+        binding: pending.binding().clone(),
+        basis: pending.basis(),
+        source: pending.source(),
+        stage: pending.stage(),
+    };
+    let wrong_version_body_bytes = norito::encode_canonical(&wrong_version_body)
+        .expect("encode wrong-version terminal outcome body");
+    let wrong_version_bytes = norito::encode_canonical(&AutonomousLifecycleTerminalOutcomeV1 {
+        body: wrong_version_body,
+        outcome_hash: Hash::new_from_chunks(&[
+            AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN,
+            &wrong_version_body_bytes,
+        ]),
     })
-    .expect("encode V1 payload under the V2 schema");
+    .expect("encode wrong-version terminal outcome");
     assert!(
-        AutonomousLifecycleTerminalOutcomeV1::decode_framed(&relabeled_v1_as_v2).is_err(),
-        "a basis-bearing V1 payload advertised as V2 must fail closed",
+        AutonomousLifecycleTerminalOutcomeV1::decode_framed(&wrong_version_bytes).is_err(),
+        "a terminal outcome outside canonical version one must fail closed",
     );
-    let wrong_v2_hash = Hash::new_from_chunks(&[
-        AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN_V1,
-        &v2_body_bytes,
-    ]);
-    let v2_with_substituted_hash =
-        norito::encode_canonical(&AutonomousLifecycleTerminalOutcomeWireV2 {
-            body: v2_body,
-            outcome_hash: wrong_v2_hash,
-        })
-        .expect("encode V2 fixture with a substituted hash domain");
+
+    let mut hash_substitution =
+        norito::decode_canonical::<AutonomousLifecycleTerminalOutcomeV1>(&pending_bytes)
+            .expect("decode canonical terminal outcome for hash substitution");
+    hash_substitution.outcome_hash = Hash::new(b"substituted terminal outcome hash");
+    let hash_substitution_bytes = norito::encode_canonical(&hash_substitution)
+        .expect("encode terminal outcome hash substitution");
     assert!(
-        AutonomousLifecycleTerminalOutcomeV1::decode_framed(&v2_with_substituted_hash).is_err(),
-        "a recomputed body hash from the wrong version domain must fail closed",
+        AutonomousLifecycleTerminalOutcomeV1::decode_framed(&hash_substitution_bytes).is_err(),
+        "an unrecomputed terminal outcome hash substitution must fail closed",
     );
-    let basis_v1_with_unrecomputed_hash =
-        norito::encode_canonical(&BasisAutonomousLifecycleTerminalOutcomeWireV1 {
-            body: basis_v1_body,
-            outcome_hash: Hash::new(b"substituted terminal outcome hash"),
-        })
-        .expect("encode basis-bearing V1 fixture with an unrecomputed hash");
-    assert!(
-        AutonomousLifecycleTerminalOutcomeV1::decode_framed(&basis_v1_with_unrecomputed_hash)
-            .is_err(),
-        "an unrecomputed basis-bearing V1 hash substitution must fail closed",
-    );
-    let malformed_basis_v1_body = BasisAutonomousLifecycleTerminalOutcomeBodyV1 {
-        version: AutonomousLifecycleTerminalOutcomeV1::LEGACY_VERSION,
+
+    let malformed_body = AutonomousLifecycleTerminalOutcomeBodyV1 {
+        version: AutonomousLifecycleTerminalOutcomeV1::VERSION,
         binding: pending.binding().clone(),
         basis: pending.basis(),
         source: AutonomousLifecycleTerminalOutcomeSourceV1::RetiredRelease {
@@ -799,27 +736,23 @@ fn canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custo
         },
         stage: pending.stage(),
     };
-    let malformed_basis_v1_body_bytes = norito::encode_canonical(&malformed_basis_v1_body)
-        .expect("encode malformed basis-bearing V1 body");
-    let malformed_basis_v1_bytes =
-        norito::encode_canonical(&BasisAutonomousLifecycleTerminalOutcomeWireV1 {
-            body: malformed_basis_v1_body,
-            outcome_hash: Hash::new_from_chunks(&[
-                AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN_V1,
-                &malformed_basis_v1_body_bytes,
-            ]),
-        })
-        .expect("encode malformed basis-bearing V1 fixture");
+    let malformed_body_bytes =
+        norito::encode_canonical(&malformed_body).expect("encode malformed terminal outcome body");
+    let malformed_bytes = norito::encode_canonical(&AutonomousLifecycleTerminalOutcomeV1 {
+        body: malformed_body,
+        outcome_hash: Hash::new_from_chunks(&[
+            AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN,
+            &malformed_body_bytes,
+        ]),
+    })
+    .expect("encode malformed canonical V1 fixture");
     assert!(
-        norito::decode_canonical::<BasisAutonomousLifecycleTerminalOutcomeWireV1>(
-            &malformed_basis_v1_bytes,
-        )
-        .is_ok(),
-        "the adversarial fixture must be wire-valid basis-bearing V1",
+        norito::decode_canonical::<AutonomousLifecycleTerminalOutcomeV1>(&malformed_bytes).is_ok(),
+        "the adversarial fixture must be wire-valid canonical V1",
     );
     assert!(
-        AutonomousLifecycleTerminalOutcomeV1::decode_framed(&malformed_basis_v1_bytes).is_err(),
-        "a semantically invalid basis-bearing V1 must not fall back to legacy V1",
+        AutonomousLifecycleTerminalOutcomeV1::decode_framed(&malformed_bytes).is_err(),
+        "a semantically invalid canonical V1 terminal outcome must fail closed",
     );
     #[derive(Encode)]
     enum UnknownTerminalOutcomeBasisV1 {
@@ -827,7 +760,7 @@ fn canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custo
         FutureReplica,
     }
     #[derive(Encode)]
-    #[norito(schema_name = "iroha_core::kura::AutonomousLifecycleTerminalOutcomeBodyV2")]
+    #[norito(schema_name = "iroha_core::kura::AutonomousLifecycleTerminalOutcomeBodyV1")]
     struct UnknownTerminalOutcomeBodyV1 {
         version: u16,
         binding: AutonomousLifecycleAttemptBindingV1,
@@ -836,7 +769,7 @@ fn canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custo
         stage: AutonomousLifecycleTerminalOutcomeStageV1,
     }
     #[derive(Encode)]
-    #[norito(schema_name = "iroha_core::kura::AutonomousLifecycleTerminalOutcomeV2")]
+    #[norito(schema_name = "iroha_core::kura::AutonomousLifecycleTerminalOutcomeV1")]
     struct UnknownTerminalOutcomeV1 {
         body: UnknownTerminalOutcomeBodyV1,
         outcome_hash: Hash,
@@ -948,28 +881,6 @@ fn canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custo
     );
     let terminal_projection =
         canonical_terminal_projection_for_binding_test(group, pending.binding());
-    let transitional_complete = decoded_transitional
-        .complete(terminal_projection)
-        .expect("complete basis-bearing V1 compatibility fixture");
-    let transitional_complete_bytes = transitional_complete
-        .encode_framed()
-        .expect("encode basis-bearing V1 Complete compatibility fixture");
-    assert_eq!(
-        transitional_complete_bytes.len(),
-        transitional_bytes.len(),
-        "basis-bearing V1 Pending-to-Complete CAS must remain fixed-width",
-    );
-    let decoded_transitional_complete =
-        AutonomousLifecycleTerminalOutcomeV1::decode_framed(&transitional_complete_bytes)
-            .expect("decode basis-bearing V1 Complete compatibility fixture");
-    decoded_transitional_complete
-        .validate_structure()
-        .expect("validate basis-bearing V1 Complete compatibility fixture");
-    assert_eq!(
-        decoded_transitional_complete.wire_layout_for_test(),
-        "basis_v1",
-    );
-    assert!(decoded_transitional_complete.is_complete());
     fixture
         .kura
         .complete_autonomous_lifecycle_terminal_outcome(
@@ -979,11 +890,15 @@ fn canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custo
             source_outcome_hash,
         )
         .expect("complete canonical replica terminal outcome");
-    let complete = Kura::decode_autonomous_lifecycle_terminal_outcome(
-        &outcome_path,
-        &fs::read(&outcome_path).expect("read replica Complete outcome"),
-    )
-    .expect("decode replica Complete outcome");
+    let complete_bytes = fs::read(&outcome_path).expect("read replica Complete outcome");
+    assert_eq!(
+        complete_bytes.len(),
+        pending_bytes.len(),
+        "canonical V1 Pending-to-Complete CAS must remain fixed-width",
+    );
+    let complete =
+        Kura::decode_autonomous_lifecycle_terminal_outcome(&outcome_path, &complete_bytes)
+            .expect("decode replica Complete outcome");
     assert!(complete.is_complete());
     assert_eq!(complete.basis(), pending.basis());
     assert!(!cursor_path.exists());

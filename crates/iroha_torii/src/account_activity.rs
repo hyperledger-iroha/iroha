@@ -5,7 +5,7 @@ use iroha_data_model::{
         AddSignatory, BurnBox, CustomInstruction, GrantBox, MintBox, RegisterBox,
         RemoveAssetKeyValue, RemoveKeyValueBox, RemoveSignatory, RevokeBox, SetAccountQuorum,
         SetAssetKeyValue, SetKeyValueBox, TransferAssetBatch, TransferBox, UnregisterBox,
-        offline_cash_v1::{RedeemOfflineCashV1, TopUpOfflineCashV1},
+        kagemusha_v1::{RedeemKagemushaV1, TopUpKagemushaV1},
         staking::RecordPublicLaneRewards,
     },
     prelude::InstructionBox,
@@ -206,7 +206,7 @@ fn collect_instruction_account_activities(
         );
         return;
     }
-    if let Some(top_up) = any.downcast_ref::<TopUpOfflineCashV1>() {
+    if let Some(top_up) = any.downcast_ref::<TopUpKagemushaV1>() {
         push_unique(out, &top_up.request.payer, AccountActivityRole::Outgoing);
         push_unique(
             out,
@@ -215,7 +215,7 @@ fn collect_instruction_account_activities(
         );
         return;
     }
-    if let Some(redeem) = any.downcast_ref::<RedeemOfflineCashV1>() {
+    if let Some(redeem) = any.downcast_ref::<RedeemKagemushaV1>() {
         push_unique(
             out,
             &redeem.request.voucher.statement.beneficiary,

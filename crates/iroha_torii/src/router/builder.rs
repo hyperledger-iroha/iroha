@@ -1107,51 +1107,51 @@ mod tests {
     const ROUTES: &[RouteDescriptor] = &[READ, WRITE, FEATURED];
     #[cfg(feature = "app_api")]
     #[tokio::test]
-    async fn offline_routes_are_part_of_every_app_api_router() {
-        use iroha_torii_shared::route_catalog::offline;
+    async fn kagemusha_routes_are_part_of_every_app_api_router() {
+        use iroha_torii_shared::route_catalog::kagemusha;
         let mut builder = RouterBuilder::new(
             (),
-            RouteCatalog::new(offline::ROUTES),
+            RouteCatalog::new(kagemusha::ROUTES),
             compiled_route_features(),
         )
-        .expect("offline catalog is valid");
+        .expect("KAGEMUSHA catalog is valid");
         builder.route(
-            &offline::READINESS,
+            &kagemusha::READINESS,
             catalog_get(|| async { StatusCode::NO_CONTENT }),
         );
         builder.route(
-            &offline::TOP_UP,
+            &kagemusha::TOP_UP,
             catalog_post(|| async { StatusCode::NO_CONTENT })
                 .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
-            &offline::REDEEM,
+            &kagemusha::REDEEM,
             catalog_post(|| async { StatusCode::NO_CONTENT })
                 .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
         builder.route(
-            &offline::OPERATION,
+            &kagemusha::OPERATION,
             catalog_get(|| async { StatusCode::NO_CONTENT }),
         );
         let (router, manifest) = builder
             .finish()
-            .expect("app-api routes require and accept the complete offline family");
-        assert_eq!(manifest.explicit_routes(), offline::ROUTES);
+            .expect("app-api routes require and accept the complete KAGEMUSHA family");
+        assert_eq!(manifest.explicit_routes(), kagemusha::ROUTES);
         let response = router
             .oneshot(
                 Request::builder()
-                    .uri(offline::READINESS_PATH)
+                    .uri(kagemusha::READINESS_PATH)
                     .body(Body::empty())
                     .expect("request"),
             )
             .await
-            .expect("offline route response");
+            .expect("KAGEMUSHA route response");
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
         assert_eq!(
-            RouteCatalog::new(offline::ROUTES)
+            RouteCatalog::new(kagemusha::ROUTES)
                 .project(CatalogProjection::Mounted, compiled_route_features())
                 .len(),
-            offline::ROUTES.len()
+            kagemusha::ROUTES.len()
         );
     }
     #[cfg(feature = "app_api")]

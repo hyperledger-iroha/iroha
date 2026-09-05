@@ -1409,6 +1409,35 @@ fn pending_queue_plan_admission_store_rejects_empty_and_oversized_bytes() {
     );
 }
 #[test]
+fn pending_queue_plan_admission_exact_height_rejects_frontier_drift_before_write() {
+    let kura = Kura::blank_kura_for_testing();
+    let bytes = b"queue-plan-admission-v1:exact-height".to_vec();
+    assert!(
+        kura.persist_pending_queue_plan_admission_certificate_at_exact_durable_height(1, &bytes)
+            .is_err(),
+        "a caller snapshot ahead of durable Kura must fail closed"
+    );
+    assert!(
+        !kura.pending_queue_plan_admission_dir().exists(),
+        "height mismatch must not create a sidecar directory or certificate"
+    );
+    let hash = kura
+        .persist_pending_queue_plan_admission_certificate_at_exact_durable_height(0, &bytes)
+        .expect("the exact empty-chain frontier permits durable publication");
+    kura.verify_pending_queue_plan_admission_durable_height(0)
+        .expect("an idempotent retry observes the exact durable frontier without rescanning");
+    assert!(
+        kura.verify_pending_queue_plan_admission_durable_height(1)
+            .is_err(),
+        "the retry-only height check must reject frontier drift"
+    );
+    assert_eq!(
+        kura.pending_queue_plan_admission_certificate(hash)
+            .expect("read exact-height sidecar"),
+        Some(bytes)
+    );
+}
+#[test]
 fn pending_queue_plan_admission_bytes_participate_in_exact_disk_accounting() {
     let kura = Kura::blank_kura_for_testing();
     let baseline_enforced = kura

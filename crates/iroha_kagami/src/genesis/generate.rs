@@ -16,10 +16,7 @@ use iroha_data_model::{
     asset::AssetDefinitionAlias,
     block::consensus_v2::SumeragiV2GenesisContextParameters,
     hijiri::HijiriParametersV1,
-    isi::offline_cash_v1::{
-        OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterTemplateV1,
-        OfflineCashMintFinalityGenesisParametersV1,
-    },
+    isi::kagemusha_v1::KagemushaMintFinalityGenesisParametersV1,
     parameter::{
         Parameter, Parameters,
         custom::{CustomParameter, CustomParameterId},
@@ -38,9 +35,44 @@ use iroha_genesis::{
 use iroha_primitives::json::Json;
 use iroha_test_samples::{ALICE_ID, CARPENTER_ID, gen_account_in};
 use std::{
+    fs,
     io::{BufWriter, Write},
     path::PathBuf,
 };
+
+const KAGEMUSHA_MINT_FINALITY_PARAMETERS_MAX_BYTES: u64 = 1024 * 1024;
+
+pub(super) fn load_kagemusha_mint_finality_parameters(
+    path: &std::path::Path,
+) -> color_eyre::Result<KagemushaMintFinalityGenesisParametersV1> {
+    let metadata = fs::metadata(path).wrap_err_with(|| {
+        format!(
+            "read KAGEMUSHA mint-finality parameter metadata from {}",
+            path.display()
+        )
+    })?;
+    if !metadata.is_file() || metadata.len() > KAGEMUSHA_MINT_FINALITY_PARAMETERS_MAX_BYTES {
+        return Err(color_eyre::eyre::eyre!(
+            "KAGEMUSHA mint-finality parameters must be a regular file no larger than {} bytes",
+            KAGEMUSHA_MINT_FINALITY_PARAMETERS_MAX_BYTES
+        ));
+    }
+    let bytes = fs::read(path).wrap_err_with(|| {
+        format!(
+            "read KAGEMUSHA mint-finality parameters from {}",
+            path.display()
+        )
+    })?;
+    let parameters: KagemushaMintFinalityGenesisParametersV1 =
+        norito::json::from_slice(&bytes).wrap_err("decode KAGEMUSHA mint-finality parameters")?;
+    iroha_core::zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_genesis_parameter_keys_v1(
+        &parameters,
+    )
+    .map_err(|error| {
+        color_eyre::eyre::eyre!("invalid KAGEMUSHA mint-finality public parameters: {error}")
+    })?;
+    Ok(parameters)
+}
 /// Generate a genesis configuration and standard-output in JSON format
 #[derive(Parser, Debug, Clone)]
 pub struct Args {
@@ -67,6 +99,9 @@ pub struct Args {
     ivm_dir: PathBuf,
     #[clap(long, value_name = "MULTI_HASH")]
     genesis_public_key: PublicKey,
+    /// Path to the explicitly provisioned public KAGEMUSHA mint-finality genesis parameters.
+    #[clap(long, value_name = "PATH")]
+    kagemusha_mint_finality_parameters: PathBuf,
     #[clap(subcommand)]
     mode: Option<Mode>,
     /// Optional: set the custom parameter `ivm_gas_limit_per_block` (u64) in genesis so all peers agree on the block gas budget.
@@ -194,67 +229,6 @@ struct ResolvedGenesisSettings {
     consensus_mode: SumeragiConsensusMode,
     profile_vrf_seed: Option<[u8; 32]>,
     public_xor_asset_definition_id: Option<AssetDefinitionId>,
-}
-/// Build the deterministic authority template emitted by the standalone development generator.
-///
-/// This is public, reproducible fixture material rather than production key custody. The signing
-/// path refuses to sign it against any other canonical topology; production operators must replace
-/// the template with their independently provisioned validator identities and Pasta public keys.
-fn development_only_genesis_authority_template()
--> color_eyre::Result<OfflineCashMintFinalityGenesisParametersV1> {
-    let mut topology = (0_u8..4)
-        .map(|index| {
-            iroha_crypto::KeyPair::try_from_seed(
-                vec![0x40_u8.wrapping_add(index); 32],
-                Algorithm::BlsNormal,
-            )
-            .map(|key_pair| PeerId::new(key_pair.public_key().clone()))
-            .map_err(|error| {
-                color_eyre::eyre::eyre!(
-                    "derive deterministic Kagami genesis validator {index}: {error}"
-                )
-            })
-        })
-        .collect::<color_eyre::Result<Vec<_>>>()?;
-    topology.sort();
-    let validators = topology
-        .into_iter()
-        .enumerate()
-        .map(|(index, validator)| {
-            let seed_byte = 0xA0_u8.wrapping_add(
-                u8::try_from(index).expect("four-validator Kagami roster index fits in u8"),
-            );
-            iroha_core::zk::offline_cash_v1_recursion::derive_offline_cash_mint_finality_validator_keys_v1(
-                &[seed_byte; 32],
-                0,
-                validator,
-            )
-            .map_err(|error| {
-                color_eyre::eyre::eyre!(
-                    "derive deterministic Kagami Offline Cash validator keys: {error}"
-                )
-            })
-        })
-        .collect::<color_eyre::Result<Vec<_>>>()?;
-    let parameters = OfflineCashMintFinalityGenesisParametersV1 {
-        epoch_roster: OfflineCashMintFinalityEpochRosterTemplateV1 {
-            version: OFFLINE_CASH_CHAIN_VERSION_V1,
-            epoch: 0,
-            validators,
-        },
-        next_epoch_roster: None,
-    };
-    parameters.validate().map_err(|error| {
-        color_eyre::eyre::eyre!("invalid deterministic Kagami genesis authority: {error}")
-    })?;
-    Ok(parameters)
-}
-fn configure_fresh_genesis_builder(builder: GenesisBuilder) -> color_eyre::Result<GenesisBuilder> {
-    Ok(builder
-        .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
-        .with_offline_cash_mint_finality_genesis_parameters(
-            development_only_genesis_authority_template()?,
-        ))
 }
 fn apply_profile_overrides(
     profile: GenesisProfile,
@@ -589,6 +563,7 @@ impl<T: Write> RunArgs<T> for Args {
             executor,
             ivm_dir,
             genesis_public_key,
+            kagemusha_mint_finality_parameters,
             mode,
             ivm_gas_limit_per_block,
             consensus_mode,
@@ -629,10 +604,14 @@ impl<T: Write> RunArgs<T> for Args {
             _ => ConsensusPolicy::Any,
         };
         validate_consensus_mode(consensus_mode, consensus_policy)?;
-        let builder = configure_fresh_genesis_builder(match executor {
+        let kagemusha_mint_finality =
+            load_kagemusha_mint_finality_parameters(&kagemusha_mint_finality_parameters)?;
+        let builder = match executor {
             Some(path) => GenesisBuilder::new(chain, path, ivm_dir),
             None => GenesisBuilder::new_without_executor(chain, ivm_dir),
-        })?
+        }
+        .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+        .with_kagemusha_mint_finality_genesis_parameters(kagemusha_mint_finality)
         .with_crypto(crypto);
         let mut genesis = build_genesis_for_mode(
             mode,
@@ -788,20 +767,37 @@ pub fn generate_default(
         .append_instruction(grant_permission_to_read_all_ledger_data)
         .append_instruction(grant_permission_to_manage_soracloud)
         .append_instruction(grant_permission_to_register_accounts);
-    let manifest = builder.build_raw()?.with_consensus_mode(consensus_mode);
     // Enrich with consensus metadata and fingerprint for operator visibility.
-    Ok(manifest.with_consensus_meta())
+    let manifest = builder
+        .build_raw()?
+        .with_consensus_mode(consensus_mode)
+        .with_consensus_meta();
+    super::ensure_kagemusha_mint_finality_schedule_matches_consensus(&manifest)?;
+    Ok(manifest)
 }
 #[cfg(test)]
 mod consensus_manifest_tests {
     use super::*;
+    use crate::genesis::CompleteTestGenesisBuilder as _;
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
-    fn test_genesis_builder(chain: ChainId) -> GenesisBuilder {
-        configure_fresh_genesis_builder(GenesisBuilder::new_without_executor(
-            chain,
+
+    fn load_genesis_source_template_for_test(
+        repository_root: &std::path::Path,
+        relative_path: &str,
+    ) -> RawGenesisTransaction {
+        let path = repository_root.join(relative_path);
+        let parameters = GenesisBuilder::new_without_executor(
+            ChainId::from("source-template-test"),
             PathBuf::from("."),
-        ))
-        .expect("configure deterministic Kagami genesis fixture authority")
+        )
+        .complete_for_test()
+        .build_raw()
+        .expect("build source-template test authority")
+        .kagemusha_mint_finality_genesis_parameters()
+        .clone();
+        iroha_genesis::GenesisSourceTemplate::from_path(&path)
+            .and_then(|template| template.materialize(parameters))
+            .unwrap_or_else(|error| panic!("complete {} for test: {error}", path.display()))
     }
     fn account_permission_grants(manifest: &RawGenesisTransaction) -> Vec<(AccountId, Permission)> {
         manifest
@@ -864,6 +860,44 @@ mod consensus_manifest_tests {
     }
 
     #[test]
+    fn operator_parameters_loader_rejects_a_noncanonical_pasta_point() {
+        let manifest = GenesisBuilder::new_without_executor(
+            ChainId::from("invalid-operator-pasta-point"),
+            PathBuf::from("."),
+        )
+        .complete_for_test()
+        .build_raw()
+        .expect("build complete test genesis");
+        let mut parameters = manifest
+            .kagemusha_mint_finality_genesis_parameters()
+            .clone();
+        let directory = tempfile::tempdir().expect("create operator parameter tempdir");
+        let path = directory.path().join("mint-finality.json");
+        std::fs::write(
+            &path,
+            norito::json::to_vec_pretty(&parameters).expect("serialize valid parameters"),
+        )
+        .expect("write valid parameters");
+        load_kagemusha_mint_finality_parameters(&path)
+            .expect("canonical operator parameters must load");
+
+        parameters.epoch_roster.validators[0].eq_proof_public_key = [0xFF; 32];
+        std::fs::write(
+            &path,
+            norito::json::to_vec_pretty(&parameters).expect("serialize invalid parameters"),
+        )
+        .expect("write invalid parameters");
+
+        let error = load_kagemusha_mint_finality_parameters(&path)
+            .expect_err("non-canonical Pasta point must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("canonical non-identity Pallas point")
+        );
+    }
+
+    #[test]
     fn taira_profile_rejects_every_noncanonical_chain_override() {
         let profile = GenesisProfile::Iroha3Taira;
         let defaults = profile_defaults(profile);
@@ -896,7 +930,11 @@ mod consensus_manifest_tests {
     #[test]
     fn synthetic_npos_genesis_has_canonical_metadata() {
         let manifest = generate_synthetic(
-            test_genesis_builder(ChainId::from("synthetic-meta")),
+            GenesisBuilder::new_without_executor(
+                ChainId::from("synthetic-meta"),
+                PathBuf::from("."),
+            )
+            .complete_for_test(),
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
             None,
             SumeragiConsensusMode::Npos,
@@ -919,7 +957,8 @@ mod consensus_manifest_tests {
         let defaults = profile_defaults(GenesisProfile::Iroha3Dev);
         let seed = [9; 32];
         let manifest = generate_default(
-            test_genesis_builder(defaults.chain_id.clone()),
+            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from("."))
+                .complete_for_test(),
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
             None,
             SumeragiConsensusMode::Npos,
@@ -944,7 +983,11 @@ mod consensus_manifest_tests {
     #[test]
     fn npos_genesis_rejects_missing_seed() {
         let error = generate_default(
-            test_genesis_builder(ChainId::from("missing-npos-seed")),
+            GenesisBuilder::new_without_executor(
+                ChainId::from("missing-npos-seed"),
+                PathBuf::from("."),
+            )
+            .complete_for_test(),
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
             None,
             SumeragiConsensusMode::Npos,
@@ -957,7 +1000,11 @@ mod consensus_manifest_tests {
     #[test]
     fn generated_genesis_does_not_reregister_its_preseeded_authority() {
         let manifest = generate_default(
-            test_genesis_builder(ChainId::from("authority-is-alice")),
+            GenesisBuilder::new_without_executor(
+                ChainId::from("authority-is-alice"),
+                PathBuf::from("."),
+            )
+            .complete_for_test(),
             iroha_test_samples::ALICE_KEYPAIR.public_key(),
             None,
             SumeragiConsensusMode::Permissioned,
@@ -988,7 +1035,11 @@ mod consensus_manifest_tests {
     #[test]
     fn generated_default_grants_global_reader_to_bootstrap_alice() {
         let manifest = generate_default(
-            test_genesis_builder(ChainId::from("default-global-reader")),
+            GenesisBuilder::new_without_executor(
+                ChainId::from("default-global-reader"),
+                PathBuf::from("."),
+            )
+            .complete_for_test(),
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
             None,
             SumeragiConsensusMode::Permissioned,
@@ -1003,35 +1054,37 @@ mod consensus_manifest_tests {
         assert_first_release_hijiri_bootstrap(&manifest, "generated default genesis");
     }
     #[test]
-    fn checked_in_first_release_manifests_seed_neutral_hijiri() {
+    fn checked_in_first_release_source_templates_seed_neutral_hijiri() {
         let repository_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         for relative_path in [
-            "defaults/genesis.json",
-            "defaults/kagami/iroha3-dev/genesis.json",
-            "defaults/kagami/iroha3-nexus/genesis.json",
-            "defaults/nexus/genesis.json",
-            "configs/soranexus/nexus/genesis.json",
-            "configs/soranexus/taira/genesis.json",
-            "crates/iroha_kagami/tests/fixtures/taira_nevo_v2/unsigned-genesis.json",
+            "defaults/genesis.template.json",
+            "defaults/kagami/iroha3-dev/genesis.template.json",
+            "defaults/kagami/iroha3-nexus/genesis.template.json",
+            "defaults/nexus/genesis.template.json",
+            "configs/soranexus/nexus/genesis.template.json",
+            "configs/soranexus/taira/genesis.template.json",
+            "crates/iroha_kagami/tests/fixtures/taira_nevo_v2/unsigned-genesis.template.json",
         ] {
-            let manifest = RawGenesisTransaction::from_path(repository_root.join(relative_path))
-                .unwrap_or_else(|error| panic!("parse {relative_path}: {error}"));
+            assert!(
+                RawGenesisTransaction::from_path(repository_root.join(relative_path)).is_err(),
+                "{relative_path} must not deserialize as complete RawGenesisTransaction"
+            );
+            let manifest = load_genesis_source_template_for_test(&repository_root, relative_path);
             assert_first_release_hijiri_bootstrap(&manifest, relative_path);
         }
     }
     #[test]
-    fn shipped_first_release_manifests_name_an_intentional_global_reader() {
+    fn shipped_first_release_source_templates_name_an_intentional_global_reader() {
         let repository_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         for relative_path in [
-            "defaults/genesis.json",
-            "defaults/kagami/iroha3-dev/genesis.json",
-            "defaults/kagami/iroha3-nexus/genesis.json",
-            "defaults/nexus/genesis.json",
-            "configs/soranexus/nexus/genesis.json",
-            "configs/soranexus/taira/genesis.json",
+            "defaults/genesis.template.json",
+            "defaults/kagami/iroha3-dev/genesis.template.json",
+            "defaults/kagami/iroha3-nexus/genesis.template.json",
+            "defaults/nexus/genesis.template.json",
+            "configs/soranexus/nexus/genesis.template.json",
+            "configs/soranexus/taira/genesis.template.json",
         ] {
-            let manifest = RawGenesisTransaction::from_path(repository_root.join(relative_path))
-                .unwrap_or_else(|error| panic!("parse {relative_path}: {error}"));
+            let manifest = load_genesis_source_template_for_test(&repository_root, relative_path);
             let grants = account_permission_grants(&manifest);
             let set_parameters: Vec<_> = grants
                 .iter()
@@ -1078,10 +1131,10 @@ mod consensus_manifest_tests {
     #[test]
     fn shipped_taira_xor_uses_the_pinned_decimal_scale() {
         let repository_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let manifest = RawGenesisTransaction::from_path(
-            repository_root.join("configs/soranexus/taira/genesis.json"),
-        )
-        .expect("parse shipped Taira genesis");
+        let manifest = load_genesis_source_template_for_test(
+            &repository_root,
+            "configs/soranexus/taira/genesis.template.json",
+        );
         let asset_definition_id =
             AssetDefinitionId::parse_address_literal(TAIRA_XOR_ASSET_DEFINITION_ID)
                 .expect("parse pinned Taira XOR id");

@@ -236,7 +236,7 @@ def _borrow_bound_outer_ingress_order_errors(
         "match current_turn.target()",
         "LifecycleRunnerRankTarget::Completion =>",
         "LifecycleRunnerRankTarget::Runtime =>",
-        "advance_executor(receiver, owner, executor, services, 1)?",
+        "advance_executor(receiver, owner, executor, services, producer_claim.required_ready_ordinal(), 1)?",
         "LifecycleRunnerRankTarget::Ingress =>",
         "activated.drive_ingress_turn(current_turn)",
     )

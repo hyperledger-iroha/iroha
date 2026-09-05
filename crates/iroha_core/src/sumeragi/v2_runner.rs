@@ -943,7 +943,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         provider_ingest_finalized_archive,
         reputation_finalized_archive,
         global_beacon_partial_signer,
-        offline_cash_mint_finality_authority,
+        kagemusha_mint_finality_authority,
         startup_replay_plan,
         mut startup_replay_inventory_guard,
         network,
@@ -1128,7 +1128,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             provider_ingest_finalized_archive,
             reputation_finalized_archive,
             global_beacon_partial_signer,
-            offline_cash_mint_finality_authority,
+            kagemusha_mint_finality_authority,
             network,
             block_rx,
             lane_relay_rx,
@@ -1171,7 +1171,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             provider_ingest_finalized_archive,
             reputation_finalized_archive,
             global_beacon_partial_signer,
-            offline_cash_mint_finality_authority,
+            kagemusha_mint_finality_authority,
             network,
             block_rx,
             lane_relay_rx,
@@ -2063,6 +2063,7 @@ pub(in crate::sumeragi) enum AdvanceExecutorYieldCheckpointV1 {
 pub(in crate::sumeragi) enum AdvanceExecutorYieldCauseV1 {
     CompletionPendingAtRuntimeCut,
     CompletionCapacityReliefStepped,
+    LiveApplyRuntimePredecessorStepped,
     RecoveredLifecycleOutputCompleted,
     RecoveredLifecycleOutputSourceRetained,
     SettledLiveWalSign,
@@ -2070,6 +2071,7 @@ pub(in crate::sumeragi) enum AdvanceExecutorYieldCauseV1 {
     SettledReleasedValidateApply,
     PendingReleasedValidateApply,
     SettledLifecycleOutput,
+    DelayedLifecycleOutputAdmitted,
     PendingLifecycleOutput,
     SettledDurableValidate,
     PendingDurableValidate,
@@ -2096,6 +2098,8 @@ impl AdvanceExecutorYieldV1 {
             self.cause,
             AdvanceExecutorYieldCauseV1::CompletionPendingAtRuntimeCut
                 | AdvanceExecutorYieldCauseV1::CompletionCapacityReliefStepped
+                | AdvanceExecutorYieldCauseV1::LiveApplyRuntimePredecessorStepped
+                | AdvanceExecutorYieldCauseV1::DelayedLifecycleOutputAdmitted
         )
     }
 }
@@ -2112,11 +2116,12 @@ pub(in crate::sumeragi) enum AdvanceExecutorSliceOutcomeV1 {
     Yielded(AdvanceExecutorYieldV1),
 }
 
-fn advance_executor(
+pub(in crate::sumeragi) fn advance_executor(
     receiver: &FairV2Ingress,
     lifecycle_owner: &mut super::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1,
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
+    protected_live_apply_ordinal: Option<u128>,
     limit: usize,
 ) -> Result<AdvanceExecutorSliceOutcomeV1, V2RunnerError> {
     for _ in 0..limit.max(1) {
@@ -2175,11 +2180,52 @@ fn advance_executor(
                 ),
             ));
         }
-        if executor.has_pending_lifecycle_output_admissions() {
+        let (live_apply_runtime_predecessor, delayed_apply_successor) = if executor
+            .has_pending_lifecycle_output_admissions()
+            && let Some(ordinal) = protected_live_apply_ordinal
+        {
+            let attestation = lifecycle_owner
+                .attest_ready_live_decision_apply_runtime_predecessor(
+                    ordinal,
+                    executor.pending_lifecycle_output_admission_census(),
+                )
+                .map_err(|error| {
+                    V2RunnerError::Service(format!(
+                        "failed to authenticate the Ready live Apply runtime predecessor: {error:?}"
+                    ))
+                })?;
+            match attestation {
+                Some(attestation)
+                    if matches!(
+                        attestation.mode(),
+                        super::v2_lifecycle_coordinator::LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit { .. }
+                    ) =>
+                {
+                    (None, true)
+                }
+                Some(attestation)
+                    if executor.lifecycle_decision_apply_runtime_predecessor_drain_available(
+                        &attestation,
+                    )? =>
+                {
+                    (Some(attestation), false)
+                }
+                Some(_) | None => (None, false),
+            }
+        } else {
+            (None, false)
+        };
+        if executor.has_pending_lifecycle_output_admissions()
+            && live_apply_runtime_predecessor.is_none()
+        {
             return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
                 AdvanceExecutorYieldV1::new(
                     AdvanceExecutorYieldCheckpointV1::BeforeStep,
-                    AdvanceExecutorYieldCauseV1::PendingLifecycleOutput,
+                    if delayed_apply_successor {
+                        AdvanceExecutorYieldCauseV1::DelayedLifecycleOutputAdmitted
+                    } else {
+                        AdvanceExecutorYieldCauseV1::PendingLifecycleOutput
+                    },
                 ),
             ));
         }
@@ -2212,21 +2258,41 @@ fn advance_executor(
                     ),
                 ));
             }
-            V2CompletionRuntimeCutDecisionV1::Runtime(completion_cut) => (
-                executor.step_after_completion_runtime_cut(completion_cut, services)?,
-                false,
-            ),
-            V2CompletionRuntimeCutDecisionV1::CapacityRelief(completion_cut) => (
-                executor.step_completion_capacity_relief_after_cut(completion_cut, services)?,
-                true,
-            ),
+            V2CompletionRuntimeCutDecisionV1::Runtime(completion_cut) => {
+                let step = match live_apply_runtime_predecessor.as_ref() {
+                    Some(attestation) => executor
+                        .step_lifecycle_decision_apply_runtime_predecessor_after_cut(
+                            completion_cut,
+                            attestation,
+                            services,
+                        )?,
+                    None => executor.step_after_completion_runtime_cut(completion_cut, services)?,
+                };
+                (step, false)
+            }
+            V2CompletionRuntimeCutDecisionV1::CapacityRelief(completion_cut) => {
+                let step = match live_apply_runtime_predecessor.as_ref() {
+                    Some(attestation) => executor
+                        .step_lifecycle_decision_apply_completion_capacity_relief_after_cut(
+                            completion_cut,
+                            attestation,
+                            services,
+                        )?,
+                    None => executor
+                        .step_completion_capacity_relief_after_cut(completion_cut, services)?,
+                };
+                (step, true)
+            }
         };
+        let live_apply_predecessor_advanced = live_apply_runtime_predecessor.is_some()
+            && matches!(step, EffectExecutorStep::Advanced { .. });
         match step {
+            EffectExecutorStep::Idle if live_apply_runtime_predecessor.is_some() => {}
             EffectExecutorStep::Idle if retry_completion_after_step => {
                 return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
                     AdvanceExecutorYieldV1::new(
                         AdvanceExecutorYieldCheckpointV1::AfterStep,
-                        AdvanceExecutorYieldCauseV1::CompletionCapacityReliefStepped,
+                        AdvanceExecutorYieldCauseV1::CompletionPendingAtRuntimeCut,
                     ),
                 ));
             }
@@ -2238,6 +2304,43 @@ fn advance_executor(
                 // reclaim service ownership for the superseded subject.
                 let _ = reconcile_executor_locked_body(executor, services)?;
             }
+        }
+        if let (Some(ordinal), Some(_)) = (
+            protected_live_apply_ordinal,
+            live_apply_runtime_predecessor.as_ref(),
+        ) {
+            let post_step = lifecycle_owner
+                .attest_ready_live_decision_apply_runtime_predecessor(
+                    ordinal,
+                    executor.pending_lifecycle_output_admission_census(),
+                )
+                .map_err(|error| {
+                    V2RunnerError::Service(format!(
+                        "failed to reauthenticate the Ready live Apply runtime predecessor: {error:?}"
+                    ))
+                })?
+                .ok_or_else(|| {
+                    V2RunnerError::Service(
+                        "Ready live Apply runtime predecessor changed after its sealed step"
+                            .to_owned(),
+                    )
+                })?;
+            if !executor.lifecycle_decision_apply_runtime_predecessor_remains_exact(&post_step)? {
+                return Err(V2RunnerError::Service(
+                    "Ready live Apply runtime predecessor lost its exact post-step owner"
+                        .to_owned(),
+                ));
+            }
+            return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(
+                AdvanceExecutorYieldV1::new(
+                    AdvanceExecutorYieldCheckpointV1::AfterStep,
+                    if live_apply_predecessor_advanced {
+                        AdvanceExecutorYieldCauseV1::LiveApplyRuntimePredecessorStepped
+                    } else {
+                        AdvanceExecutorYieldCauseV1::CompletionPendingAtRuntimeCut
+                    },
+                ),
+            ));
         }
         if retry_completion_after_step {
             return Ok(AdvanceExecutorSliceOutcomeV1::Yielded(

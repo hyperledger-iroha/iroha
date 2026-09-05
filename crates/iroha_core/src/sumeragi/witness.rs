@@ -14,7 +14,7 @@ use iroha_data_model::{
     block::consensus::{ExecKv, ExecWitness},
     domain::DomainId,
     fastpq::{TransferTranscript, TransferTranscriptBundle},
-    isi::{OFFLINE_CASH_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1, OfflineCashReserveReceiptV1},
+    isi::{KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1, KagemushaReserveReceiptV1},
     name::Name,
     nft::NftId,
 };
@@ -482,29 +482,29 @@ pub fn record_write_asset_def_total(id: &AssetDefinitionId, val: &Quantity) {
         g.writes.insert(k, v);
     });
 }
-/// Return the exact execution-witness key for one pooled Offline Cash V1 receipt.
-pub(crate) fn offline_cash_reserve_receipt_witness_key_v1(operation_id: [u8; 32]) -> Vec<u8> {
+/// Return the exact execution-witness key for one pooled Kagemusha V1 receipt.
+pub(crate) fn kagemusha_reserve_receipt_witness_key_v1(operation_id: [u8; 32]) -> Vec<u8> {
     let mut key = Vec::with_capacity(33);
-    key.push(OFFLINE_CASH_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1);
+    key.push(KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1);
     key.extend_from_slice(&operation_id);
     key
 }
 /// Record the pre-state receipt bytes, or canonical absence, for one V1 operation.
-pub(crate) fn record_read_offline_cash_reserve_receipt_v1(
+pub(crate) fn record_read_kagemusha_reserve_receipt_v1(
     operation_id: [u8; 32],
     canonical_receipt: Option<&[u8]>,
 ) {
-    let key = offline_cash_reserve_receipt_witness_key_v1(operation_id);
+    let key = kagemusha_reserve_receipt_witness_key_v1(operation_id);
     let value = canonical_receipt.map_or_else(Vec::new, ToOwned::to_owned);
     with_active_slot(|witness| {
         witness.reads.entry(key).or_insert(value);
     });
 }
 /// Record the canonical post-state receipt bytes for one committed V1 operation.
-pub(crate) fn record_write_offline_cash_reserve_receipt_v1(
-    receipt: &OfflineCashReserveReceiptV1,
+pub(crate) fn record_write_kagemusha_reserve_receipt_v1(
+    receipt: &KagemushaReserveReceiptV1,
 ) -> Result<(), norito::Error> {
-    let key = offline_cash_reserve_receipt_witness_key_v1(receipt.operation_id);
+    let key = kagemusha_reserve_receipt_witness_key_v1(receipt.operation_id);
     let value = norito::encode_canonical(receipt)?;
     with_active_slot(|witness| {
         witness.writes.insert(key, value);
@@ -1385,31 +1385,31 @@ mod tests {
         assert_eq!(r1, r2);
     }
     #[test]
-    fn offline_cash_v1_receipt_uses_exact_canonical_witness_leaf() {
+    fn kagemusha_v1_receipt_uses_exact_canonical_witness_leaf() {
         let _guard = exec_witness_guard();
         start_block();
         let operation_id = [0x66; 32];
         let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
             BlockHeader,
         >::from_untyped_unchecked(
-            iroha_crypto::Hash::new(b"offline-cash-v1-witness"),
+            iroha_crypto::Hash::new(b"kagemusha-v1-witness"),
         ));
         let asset = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),
             "xor".parse().expect("asset name"),
         );
         let asset_incarnation = iroha_data_model::nexus::AxtAssetIncarnationV1::try_from_bytes(
-            iroha_crypto::Hash::new(b"offline-cash-v1-witness-incarnation").into(),
+            iroha_crypto::Hash::new(b"kagemusha-v1-witness-incarnation").into(),
         )
         .expect("asset incarnation");
-        let receipt = OfflineCashReserveReceiptV1 {
-            version: iroha_data_model::isi::OFFLINE_CASH_CHAIN_VERSION_V1,
+        let receipt = KagemushaReserveReceiptV1 {
+            version: iroha_data_model::isi::KAGEMUSHA_CHAIN_VERSION_V1,
             operation_id,
-            kind: iroha_data_model::isi::OfflineCashOperationKindV1::TopUp,
+            kind: iroha_data_model::isi::KagemushaOperationKindV1::TopUp,
             request_digest: [0x67; 32],
             mint_statement_digest: [0x69; 32],
             network_id,
-            liability_pool_id: iroha_data_model::offline::offline_cash_liability_pool_id_v1(
+            liability_pool_id: iroha_data_model::kagemusha::kagemusha_liability_pool_id_v1(
                 &network_id,
                 &asset,
                 asset_incarnation,
@@ -1425,12 +1425,12 @@ mod tests {
             transaction_hash: [0x68; 32],
             committed_at_ms: 1,
         };
-        let key = offline_cash_reserve_receipt_witness_key_v1(operation_id);
+        let key = kagemusha_reserve_receipt_witness_key_v1(operation_id);
         assert_eq!(key.len(), 33);
-        assert_eq!(key[0], OFFLINE_CASH_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1);
+        assert_eq!(key[0], KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1);
         assert_eq!(&key[1..], operation_id.as_slice());
-        record_read_offline_cash_reserve_receipt_v1(operation_id, None);
-        record_write_offline_cash_reserve_receipt_v1(&receipt).expect("encode receipt");
+        record_read_kagemusha_reserve_receipt_v1(operation_id, None);
+        record_write_kagemusha_reserve_receipt_v1(&receipt).expect("encode receipt");
         let witness = drain_exec_witness();
         assert_eq!(witness.reads[0].key, key);
         assert!(witness.reads[0].value.is_empty());

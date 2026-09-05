@@ -670,50 +670,49 @@ fn execution_commitment_from_projection(
     let (ordinary_post_state_root, ordinary_writes_root) =
         ordinary_execution_roots(&reads, &writes);
     let (receipt_witnesses, receipt_writes_root) =
-        crate::receiver_snapshot::offline_cash_reserve_receipt_witnesses_v1(witness)
-            .map_err(|_| "Offline Cash V1 reserve receipts are not canonical")?;
+        crate::receiver_snapshot::kagemusha_reserve_receipt_witnesses_v1(witness)
+            .map_err(|_| "Kagemusha V1 reserve receipts are not canonical")?;
     if receipt_writes_root != ordinary_writes_root {
-        return Err("Offline Cash V1 reserve receipts bind another ordinary-write root");
+        return Err("Kagemusha V1 reserve receipts bind another ordinary-write root");
     }
     let top_up_leaves = receipt_witnesses
         .iter()
         .filter(|witness| {
             witness.receipt.kind
-                == iroha_data_model::isi::offline_cash_v1::OfflineCashOperationKindV1::TopUp
+                == iroha_data_model::isi::kagemusha_v1::KagemushaOperationKindV1::TopUp
         })
         .map(|witness| {
-            crate::zk::offline_cash_v1_recursion::offline_cash_top_up_leaf_from_receipt_v1(
+            crate::zk::kagemusha_v1_recursion::kagemusha_top_up_leaf_from_receipt_v1(
                 &witness.receipt,
             )
         })
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| "Offline Cash V1 top-up commitment is not canonical")?;
-    let (post_state_root, offline_cash_top_up_root, offline_cash_top_up_count) = if top_up_leaves
-        .is_empty()
-    {
-        (ordinary_post_state_root, None, 0)
-    } else {
-        let tree =
-            crate::zk::offline_cash_v1_recursion::OfflineCashMintFinalityTreeV1::new(top_up_leaves)
-                .map_err(|_| "Offline Cash V1 top-up commitment is not canonical")?;
-        let root = tree.execution_root();
-        let count = tree.leaf_count();
-        (
-            wire::ExecutionCommitment::offline_cash_post_state_root_v1(
+        .map_err(|_| "Kagemusha V1 top-up commitment is not canonical")?;
+    let (post_state_root, kagemusha_top_up_root, kagemusha_top_up_count) =
+        if top_up_leaves.is_empty() {
+            (ordinary_post_state_root, None, 0)
+        } else {
+            let tree =
+                crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityTreeV1::new(top_up_leaves)
+                    .map_err(|_| "Kagemusha V1 top-up commitment is not canonical")?;
+            let root = tree.execution_root();
+            let count = tree.leaf_count();
+            (
+                wire::ExecutionCommitment::kagemusha_post_state_root_v1(
+                    count,
+                    ordinary_writes_root,
+                    root,
+                ),
+                Some(root),
                 count,
-                ordinary_writes_root,
-                root,
-            ),
-            Some(root),
-            count,
-        )
-    };
+            )
+        };
     wire::ExecutionCommitment::new_with_manifests(
         parent_state_root,
         post_state_root,
         ordinary_writes_root,
-        offline_cash_top_up_root,
-        offline_cash_top_up_count,
+        kagemusha_top_up_root,
+        kagemusha_top_up_count,
         wire::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
         native_amx_manifest.root(),
         native_amx_manifest.count(),
@@ -773,9 +772,9 @@ mod tests {
             },
         },
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        isi::offline_cash_v1::{
-            OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashOperationKindV1, OfflineCashReserveReceiptV1,
-            OfflineCashReserveReceiptWitnessV1,
+        isi::kagemusha_v1::{
+            KAGEMUSHA_CHAIN_VERSION_V1, KagemushaOperationKindV1, KagemushaReserveReceiptV1,
+            KagemushaReserveReceiptWitnessV1,
         },
         peer::PeerId,
         transaction::{
@@ -1291,32 +1290,32 @@ mod tests {
         assert_ne!(read_only_root, empty_writes_root);
     }
     #[test]
-    fn execution_commitment_binds_the_canonical_offline_cash_top_up_tree() {
+    fn execution_commitment_binds_the_canonical_kagemusha_top_up_tree() {
         let operation_id = [0x31; 32];
         let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
             iroha_data_model::block::BlockHeader,
         >::from_untyped_unchecked(
-            Hash::new(b"offline-cash-execution-commitment"),
+            Hash::new(b"kagemusha-execution-commitment"),
         ));
         let asset = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             iroha_data_model::DomainId::try_new("wonderland", "universal").expect("domain"),
             "xor".parse().expect("asset name"),
         );
         let asset_incarnation = iroha_data_model::nexus::AxtAssetIncarnationV1::try_from_bytes(
-            iroha_crypto::Hash::new(b"offline-cash-execution-incarnation").into(),
+            iroha_crypto::Hash::new(b"kagemusha-execution-incarnation").into(),
         )
         .expect("asset incarnation");
-        let receipt = OfflineCashReserveReceiptV1 {
-            version: OFFLINE_CASH_CHAIN_VERSION_V1,
+        let receipt = KagemushaReserveReceiptV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
             operation_id,
-            kind: OfflineCashOperationKindV1::TopUp,
+            kind: KagemushaOperationKindV1::TopUp,
             request_digest: [0x32; 32],
             mint_statement_digest: [0x33; 32],
             network_id,
             asset: asset.clone(),
             asset_incarnation,
             scale: 0,
-            liability_pool_id: iroha_data_model::offline::offline_cash_liability_pool_id_v1(
+            liability_pool_id: iroha_data_model::kagemusha::kagemusha_liability_pool_id_v1(
                 &network_id,
                 &asset,
                 asset_incarnation,
@@ -1334,35 +1333,33 @@ mod tests {
             vec![
                 kv("ordinary", "value"),
                 ExecKv {
-                    key: OfflineCashReserveReceiptWitnessV1::expected_key(operation_id),
+                    key: KagemushaReserveReceiptWitnessV1::expected_key(operation_id),
                     value: norito::encode_canonical(&receipt).expect("canonical receipt"),
                 },
             ],
         );
         let manifest = NativeAmxApplicationManifestV1::empty(
             1,
-            Hash::new(b"Offline Cash V1 executed block placeholder"),
+            Hash::new(b"Kagemusha V1 executed block placeholder"),
         );
         let commitment = execution_commitment_from_witness_for_tests(&witness, &manifest)
             .expect("canonical execution commitment");
-        let leaf = crate::zk::offline_cash_v1_recursion::offline_cash_top_up_leaf_from_receipt_v1(
-            &receipt,
-        )
-        .expect("top-up leaf");
-        let tree =
-            crate::zk::offline_cash_v1_recursion::OfflineCashMintFinalityTreeV1::new(vec![leaf])
-                .expect("top-up tree");
+        let leaf =
+            crate::zk::kagemusha_v1_recursion::kagemusha_top_up_leaf_from_receipt_v1(&receipt)
+                .expect("top-up leaf");
+        let tree = crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityTreeV1::new(vec![leaf])
+            .expect("top-up tree");
         let ordinary_writes_root = compute_post_state_root(&[], &witness_pairs(&witness).1);
 
         assert_eq!(commitment.ordinary_writes_root, ordinary_writes_root);
         assert_eq!(
-            commitment.offline_cash_top_up_root,
+            commitment.kagemusha_top_up_root,
             Some(tree.execution_root())
         );
-        assert_eq!(commitment.offline_cash_top_up_count, 1);
+        assert_eq!(commitment.kagemusha_top_up_count, 1);
         assert_eq!(
             commitment.post_state_root,
-            wire::ExecutionCommitment::offline_cash_post_state_root_v1(
+            wire::ExecutionCommitment::kagemusha_post_state_root_v1(
                 1,
                 ordinary_writes_root,
                 tree.execution_root(),

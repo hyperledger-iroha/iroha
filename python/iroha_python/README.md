@@ -165,22 +165,53 @@ mantissa plus an explicit scale. Higher-level ledger helpers additionally
 accept `Decimal` because it is a lossless host value and normalize it before
 calling the codec.
 
-## Offline Cash V1
+## KAGEMUSHA
 
-`OfflineCashV1` is the sole typed Python codec/orchestration namespace for the
-five-message request, proof-bearing acceptance authorization, one-use ticket,
-unlinkable payment, and acknowledgement exchange. It also covers mint
-authorization/credit binding and typed encrypted-credit opening, AAD, and
-envelope values. Governed sender recovery uses the fully cross-bound,
-16,384-byte `NoCommitClosure` canonical wire; its proof remains native-verified.
-Requests support `single_exact`, `partial_until_total`,
-`bounded_multi_payment`, and `open_receive`; `open_receive` has no cumulative
-payment-count ceiling. Canonical Norito and unpadded `oc1:` parsers enforce
-per-message and composed-exchange bounds before decoding.
+`Kagemusha` is the sole typed Python codec/orchestration namespace for the
+KAGEMUSHA wire-version-1 request, committed payment, and acknowledgement
+exchange. A request binds one positive exact amount and the recipient's
+hardware-backed encryption key. A committed payment binds the request, sender
+before/after commitments, unique credit ID, trusted commit time, encrypted
+credit, hardware commit certificate, and constant-size recursive
+`PaymentProof`. The acknowledgement binds the request and payment to a durable
+inbox receipt. Payment and redemption values expose nullifiers and hiding
+commitments, never private balance openings or replay paths. The namespace also
+covers mint authorization/credit binding, terminal redemption vouchers, and
+typed encrypted-credit opening, AAD, and envelope values.
+
+IPM1 uses only the frozen one-byte tags `1..=3` exposed by
+`Kagemusha.ipm1_payload_kinds`; `decode_ipm1_payload` is the single generic
+peer-message decoder. Canonical Norito and unpadded `kgm1:` parsers enforce
+per-message bounds before decoding. `validate_complete_exchange` enforces the
+sole complete three-message bound of 9,211 raw / 12,288 `kgm1:` text bytes.
+There is no intent/ticket decoder, compatibility alias, or alternate text
+prefix.
 
 Monetary proving, signing, encryption, decryption, and secure-device state
 changes remain native-only. Python exposes no public predecessor/successor
 state links and no software money-crypto fallback.
+
+`DeviceMintStageCommand` and `DeviceMintStageResult` describe operation 16 at
+the host/native boundary. `encode_device_mint_stage_command_shape` and
+`decode_device_mint_stage_command_shape_exact` validate the exact nested
+authorization and mint-credit archives, their derived credit ID, and their
+public bindings. The command is bounded to 65,536 bytes, each nested archive
+to 7,936 bytes, and the result to 128 bytes. Result codecs optionally bind the
+credit ID to a supplied command. They do not execute a device transition or
+authenticate a result; the qualified native response authenticator remains
+mandatory, and private openings and complete Guard certificates stay native.
+
+`Kagemusha.build_top_up_instruction(request)` builds the sole
+`iroha.kagemusha.v1.top_up` instruction. Its `to_instruction()` method crosses
+the standard native `Instruction` boundary so the payer can include exactly
+that instruction in a normal signed transaction; `encode_top_up_instruction`
+and `decode_top_up_instruction` provide the exact framed `InstructionBox`
+codec. The embedded request ceiling is 16 KiB, which accommodates the complete
+paired mint-authorization proof. No unsigned or server-signed top-up envelope
+exists. `Kagemusha.top_up_instruction_wire_id` is the exact
+`iroha.kagemusha.v1.top_up` registry ID. The standard `TransactionBuilder`
+signature-binds `QueuePlanSynced`; KAGEMUSHA top-ups must not use ordinary
+queue admission.
 
 
 ## Native Privacy Bridge
@@ -452,7 +483,7 @@ signing_client.register_zk_asset_and_wait(
 ```
 
 Asset registration binds the optional confidential shield and unshield
-verifier roles. Offline Cash V1 uses its own reserve-backed mint-fold and
+verifier roles. KAGEMUSHA V1 uses its own reserve-backed mint-fold and
 redemption-voucher protocol rather than those confidential-asset instructions.
 
 ## Dataspace lifecycle helpers

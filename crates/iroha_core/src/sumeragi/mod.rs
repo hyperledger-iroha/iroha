@@ -65,7 +65,7 @@ const MAX_VALID_TIMEOUT_VOTE_WIRE_BYTES: usize = 4 * 1024;
 const MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES: usize = MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES;
 const MAX_LANE_COMPLETION_MESSAGE_WIRE_BYTES: usize = MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES;
 const _: () = assert!(TIMEOUT_VOTE_RESERVE_BYTES >= MAX_VALID_TIMEOUT_VOTE_WIRE_BYTES);
-// A maximal Offline Cash V1 CommitQC carries the ordinary BLS aggregate plus
+// A maximal Kagemusha V1 CommitQC carries the ordinary BLS aggregate plus
 // the exact 2f + 1 paired-Pasta seal bundle for the bounded 31-validator roster.
 const _: () =
     assert!(iroha_data_model::block::consensus_v2::MAX_CONSENSUS_SIGNATURE_BYTES == 16 * 1024);
@@ -7049,11 +7049,11 @@ pub struct SumeragiStartArgs {
     /// serialized into configuration or World state.
     pub global_beacon_partial_signer:
         Option<Arc<dyn crate::beacon::GlobalThresholdBeaconPartialSignerV1>>,
-    /// Runtime-only separately provisioned Pasta authority for Offline Cash
+    /// Runtime-only separately provisioned Pasta authority for Kagemusha
     /// V1 mint-finality Commit votes. Absence leaves ordinary consensus live
     /// but makes every top-up-bearing vote fail closed.
-    pub offline_cash_mint_finality_authority:
-        Option<Arc<crate::zk::offline_cash_v1_recursion::OfflineCashMintFinalityLocalAuthorityV1>>,
+    pub kagemusha_mint_finality_authority:
+        Option<Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>>,
     /// Exact startup replay boundary authenticated before Kura replay and
     /// moved into active-height recovery without a historical rescan.
     pub startup_replay_plan: V2StartupReplayPlan,
@@ -7136,7 +7136,7 @@ impl SumeragiStartArgs {
             provider_ingest_finalized_archive,
             reputation_finalized_archive,
             global_beacon_partial_signer,
-            offline_cash_mint_finality_authority,
+            kagemusha_mint_finality_authority,
             startup_replay_plan,
             startup_replay_inventory_guard,
             network,
@@ -7238,7 +7238,7 @@ impl SumeragiStartArgs {
             provider_ingest_finalized_archive,
             reputation_finalized_archive,
             global_beacon_partial_signer,
-            offline_cash_mint_finality_authority,
+            kagemusha_mint_finality_authority,
             startup_replay_plan,
             startup_replay_inventory_guard,
             network,
@@ -7459,8 +7459,8 @@ struct SumeragiWorker {
         Option<Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>>,
     global_beacon_partial_signer:
         Option<Arc<dyn crate::beacon::GlobalThresholdBeaconPartialSignerV1>>,
-    offline_cash_mint_finality_authority:
-        Option<Arc<crate::zk::offline_cash_v1_recursion::OfflineCashMintFinalityLocalAuthorityV1>>,
+    kagemusha_mint_finality_authority:
+        Option<Arc<crate::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1>>,
     startup_replay_plan: V2StartupReplayPlan,
     startup_replay_inventory_guard: V2StartupReplayInventoryGuard,
     network: IrohaNetwork,

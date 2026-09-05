@@ -7,7 +7,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
     func testAuthenticationSignatureFitsCommonRadioRecordCeiling() throws {
         let maximum = IrohaPeerNearbyV1.maximumAuthenticationSignatureBytes
         let authentication = try IrohaPeerNearbyAuthenticationV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             role: .sender,
             sessionID: Data(repeating: 1, count: 16),
             transcriptHash: Data(repeating: 2, count: 32),
@@ -19,7 +19,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
             authentication
         )
         XCTAssertThrowsError(try IrohaPeerNearbyAuthenticationV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             role: .sender,
             sessionID: Data(repeating: 1, count: 16),
             transcriptHash: Data(repeating: 2, count: 32),
@@ -65,7 +65,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
     func testSessionRejectsOversizedInputsBeforeRetainingCopies() throws {
         let privateKey = P256.KeyAgreement.PrivateKey()
         XCTAssertThrowsError(try IrohaPeerNearbySessionV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             localRole: .sender,
             sessionID: Data(repeating: 1, count: 17),
             requestCanonicalHash: Data(repeating: 2, count: 32),
@@ -76,7 +76,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
             XCTAssertEqual($0 as? IrohaPeerNearbyErrorV1, .invalidSession)
         }
         XCTAssertThrowsError(try IrohaPeerNearbySessionV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             localRole: .sender,
             sessionID: Data(repeating: 1, count: 16),
             requestCanonicalHash: Data(repeating: 2, count: 33),
@@ -87,7 +87,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
             XCTAssertEqual($0 as? IrohaPeerNearbyErrorV1, .invalidRequest)
         }
         XCTAssertThrowsError(try IrohaPeerNearbySessionV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             localRole: .sender,
             sessionID: Data(repeating: 1, count: 16),
             requestCanonicalHash: Data(repeating: 2, count: 32),
@@ -104,7 +104,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
 
     func testDiscoveryContextRoundTripsAndRejectsWrongVersion() throws {
         let context = try IrohaPeerNearbyDiscoveryContextV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             role: .receiver,
             sessionID: Data(repeating: 0x11, count: 16),
             requestCanonicalHash: Data(repeating: 0x22, count: 32)
@@ -121,7 +121,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
 
     func testZeroContextIsRejectedExceptForExplicitDiscoveryBootstrap() throws {
         XCTAssertThrowsError(try IrohaPeerNearbyDiscoveryContextV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             role: .sender,
             sessionID: Data(repeating: 0, count: 16),
             requestCanonicalHash: Data(repeating: 0x22, count: 32)
@@ -129,7 +129,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
             XCTAssertEqual($0 as? IrohaPeerNearbyErrorV1, .invalidSession)
         }
         XCTAssertThrowsError(try IrohaPeerNearbyDiscoveryContextV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             role: .sender,
             sessionID: Data(repeating: 0x11, count: 16),
             requestCanonicalHash: Data(repeating: 0, count: 32)
@@ -138,7 +138,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
         }
 
         let bootstrap = try IrohaPeerNearbyDiscoveryContextV1.senderBootstrap(
-            profile: .offlineCashV1
+            profile: .kagemushaV1
         )
         XCTAssertEqual(
             try IrohaPeerNearbyDiscoveryContextV1.decode(bootstrap.encode()),
@@ -146,7 +146,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
         )
 
         var halfZero = try IrohaPeerNearbyDiscoveryContextV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             role: .sender,
             sessionID: Data(repeating: 0x11, count: 16),
             requestCanonicalHash: Data(repeating: 0x22, count: 32)
@@ -167,7 +167,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
 
     func testRadioDiscoveryEncodingIsStrictCanonicalBase64URLWithoutPadding() throws {
         let discovery = try IrohaPeerNearbyDiscoveryContextV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             role: .receiver,
             sessionID: Data((1...16).map(UInt8.init)),
             requestCanonicalHash: Data((2...33).map(UInt8.init))
@@ -201,10 +201,10 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
 
     func testBootstrapSenderAdoptsAdvertisedReceiverContextBeforeConnecting() throws {
         let sender = try IrohaPeerNearbyDiscoveryContextV1.senderBootstrap(
-            profile: .offlineCashV1
+            profile: .kagemushaV1
         )
         let receiver = try IrohaPeerNearbyDiscoveryContextV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             role: .receiver,
             sessionID: Data(repeating: 0x31, count: 16),
             requestCanonicalHash: Data(repeating: 0x32, count: 32)
@@ -223,7 +223,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
         XCTAssertNil(IrohaPeerNearbyDiscoveryMatcherV1.selectLocalContext(
             local: sender,
             remote: try IrohaPeerNearbyDiscoveryContextV1(
-                profile: .offlineCashV1,
+                profile: .kagemushaV1,
                 role: .sender,
                 sessionID: receiver.sessionID,
                 requestCanonicalHash: receiver.requestCanonicalHash
@@ -252,7 +252,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
         let nonce = Data(repeating: 0x43, count: 32)
 
         XCTAssertThrowsError(try IrohaPeerNearbyHelloV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             role: .sender,
             sessionID: Data(repeating: 0, count: 16),
             nonce: nonce,
@@ -263,7 +263,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
             XCTAssertEqual($0 as? IrohaPeerNearbyErrorV1, .invalidSession)
         }
         XCTAssertThrowsError(try IrohaPeerNearbyHelloV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             role: .sender,
             sessionID: sessionID,
             nonce: Data(repeating: 0, count: 32),
@@ -274,7 +274,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
             XCTAssertEqual($0 as? IrohaPeerNearbyErrorV1, .invalidLength)
         }
         XCTAssertThrowsError(try IrohaPeerNearbyHelloV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             role: .sender,
             sessionID: sessionID,
             nonce: nonce,
@@ -285,7 +285,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
             XCTAssertEqual($0 as? IrohaPeerNearbyErrorV1, .invalidRequest)
         }
         XCTAssertThrowsError(try IrohaPeerNearbyAuthenticationV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             role: .sender,
             sessionID: sessionID,
             transcriptHash: Data(repeating: 0, count: 32),
@@ -294,7 +294,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
             XCTAssertEqual($0 as? IrohaPeerNearbyErrorV1, .transcriptMismatch)
         }
         XCTAssertThrowsError(try IrohaPeerNearbyEncryptedRecordV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             senderRole: .sender,
             sessionID: Data(repeating: 0, count: 16),
             sequence: 0,
@@ -319,7 +319,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
         XCTAssertEqual(IrohaPeerNearbyV1.maximumMessageBytes, 32 * 1_024 - 64)
         XCTAssertEqual(
             IrohaPeerNfcV1.maximumMessageBytes,
-            IrohaPeerWireMessageV1.headerBytes + OfflineCashWireV1.maximumPaymentBytes
+            IrohaPeerWireMessageV1.headerBytes + KagemushaWireV1.maximumPaymentBytes
         )
         XCTAssertLessThanOrEqual(
             IrohaPeerNfcV1.maximumMessageBytes,
@@ -345,7 +345,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
             XCTAssertEqual($0 as? IrohaPeerNearbyErrorV1, .messageTooLarge)
         }
         XCTAssertThrowsError(try IrohaPeerNearbyEncryptedRecordV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             senderRole: .sender,
             sessionID: Data(repeating: 0xA6, count: 16),
             sequence: 0,
@@ -382,7 +382,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
         let sessionID = Data(repeating: 0x33, count: 16)
         let requestHash = Data(repeating: 0x44, count: 32)
         let sender = try IrohaPeerNearbySessionV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             localRole: .sender,
             sessionID: sessionID,
             requestCanonicalHash: requestHash,
@@ -390,7 +390,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
             nonce: Data(repeating: 0x51, count: 32)
         )
         let wrongRequestReceiver = try IrohaPeerNearbySessionV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             localRole: .receiver,
             sessionID: sessionID,
             requestCanonicalHash: Data(repeating: 0x45, count: 32),
@@ -402,7 +402,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
         }
 
         let validReceiver = try IrohaPeerNearbySessionV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             localRole: .receiver,
             sessionID: sessionID,
             requestCanonicalHash: requestHash,
@@ -426,7 +426,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
     func testHandshakeCannotEncryptBeforePeerCertificateAuthentication() throws {
         let signingKey = Curve25519.Signing.PrivateKey()
         let sender = try IrohaPeerNearbySessionV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             localRole: .sender,
             sessionID: Data(repeating: 0x61, count: 16),
             requestCanonicalHash: Data(repeating: 0x62, count: 32),
@@ -507,7 +507,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
         let sessionID = Data(repeating: 0x75, count: 16)
         let requestHash = Data(repeating: 0x76, count: 32)
         let sender = try IrohaPeerNearbySessionV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             localRole: .sender,
             sessionID: sessionID,
             requestCanonicalHash: requestHash,
@@ -515,7 +515,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
             nonce: Data(repeating: 0x78, count: 32)
         )
         let receiver = try IrohaPeerNearbySessionV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             localRole: .receiver,
             sessionID: sessionID,
             requestCanonicalHash: requestHash,
@@ -556,7 +556,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
         let sessionID = Data(repeating: 0x81, count: 16)
         let requestHash = Data(repeating: 0x82, count: 32)
         let hello = try IrohaPeerNearbyHelloV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             role: .sender,
             sessionID: sessionID,
             nonce: Data(repeating: 0x83, count: 32),
@@ -565,21 +565,21 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
             deviceCertificate: Data(repeating: 0x84, count: 32)
         ).encode()
         let authentication = try IrohaPeerNearbyAuthenticationV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             role: .sender,
             sessionID: sessionID,
             transcriptHash: Data(repeating: 0x85, count: 32),
             signature: Data(repeating: 0x86, count: 64)
         ).encode()
         let encrypted = try IrohaPeerNearbyEncryptedRecordV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             senderRole: .sender,
             sessionID: sessionID,
             sequence: UInt64.max,
             ciphertextAndTag: Data(repeating: 0x87, count: 48)
         ).encode()
         let discovery = try IrohaPeerNearbyDiscoveryContextV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             role: .receiver,
             sessionID: sessionID,
             requestCanonicalHash: requestHash
@@ -650,7 +650,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
     func testSequenceExtremesRoundTripAndRejectedRecordsDoNotAdvanceState() throws {
         for sequence in [UInt64(0), UInt64.max / 2, UInt64.max / 2 + 1, UInt64.max] {
             let record = try IrohaPeerNearbyEncryptedRecordV1(
-                profile: .offlineCashV1,
+                profile: .kagemushaV1,
                 senderRole: .sender,
                 sessionID: Data(repeating: 0x91, count: 16),
                 sequence: sequence,
@@ -690,7 +690,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
         let sessionID = Data(repeating: 0x71, count: 16)
         let requestHash = Data(repeating: 0x72, count: 32)
         let sender = try IrohaPeerNearbySessionV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             localRole: .sender,
             sessionID: sessionID,
             requestCanonicalHash: requestHash,
@@ -699,7 +699,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
             ephemeralPrivateKey: P256.KeyAgreement.PrivateKey()
         )
         let receiver = try IrohaPeerNearbySessionV1(
-            profile: .offlineCashV1,
+            profile: .kagemushaV1,
             localRole: .receiver,
             sessionID: sessionID,
             requestCanonicalHash: requestHash,

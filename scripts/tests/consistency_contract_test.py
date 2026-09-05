@@ -8,6 +8,8 @@ import shutil
 import stat
 import subprocess
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONSISTENCY_SCRIPT = REPO_ROOT / "scripts" / "tests" / "consistency.sh"
@@ -58,6 +60,30 @@ def test_schema_uses_active_advanced_command() -> None:
     assert "cargo run --bin kagami -- schema" not in hook
     assert "> ./specs/references/schema.json" not in hook
     assert "genesis_schema.json" not in hook
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_ok"),
+    (
+        ('{"consensus_fingerprint":null,"transactions":[]}\n', True),
+        (
+            '{"consensus_fingerprint":null,"kagemusha_mint_finality":{},"transactions":[]}\n',
+            False,
+        ),
+    ),
+)
+def test_genesis_template_check_preserves_the_incomplete_boundary(
+    tmp_path: Path, payload: str, expected_ok: bool
+) -> None:
+    _, fake = _fixture(tmp_path, "#!/bin/sh\nexit 99\n")
+    template = tmp_path / "defaults" / "genesis.template.json"
+    template.parent.mkdir()
+    template.write_text(payload, encoding="utf-8")
+
+    result = _run(tmp_path, fake, "genesis-template")
+
+    assert (result.returncode == 0) is expected_ok
+    assert template.read_text(encoding="utf-8") == payload
 
 
 def test_failed_generator_cannot_truncate_checked_in_schema(tmp_path: Path) -> None:

@@ -19,9 +19,9 @@ use iroha_data_model::{
         TimeoutVote, TimeoutVoteGroup, ValidatorPower, Vote, encode_payload_chunks,
         native_amx_application_manifest_empty_root,
     },
-    isi::offline_cash_v1::{
-        OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterV1,
-        OfflineCashMintFinalityValidatorKeysV1,
+    isi::kagemusha_v1::{
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterV1,
+        KagemushaMintFinalityValidatorKeysV1,
     },
     merge::MergeLedgerEntry,
     peer::PeerId,
@@ -45,23 +45,19 @@ fn mint_finality_roster(
     network_id: NetworkId,
     epoch: u64,
     roster: &[ValidatorPower],
-) -> OfflineCashMintFinalityEpochRosterV1 {
-    OfflineCashMintFinalityEpochRosterV1 {
-        version: OFFLINE_CASH_CHAIN_VERSION_V1,
+) -> KagemushaMintFinalityEpochRosterV1 {
+    KagemushaMintFinalityEpochRosterV1 {
+        version: KAGEMUSHA_CHAIN_VERSION_V1,
         network_id,
         epoch,
         validators: roster
             .iter()
             .enumerate()
-            .map(
-                |(index, validator)| OfflineCashMintFinalityValidatorKeysV1 {
-                    validator: validator.validator.clone(),
-                    eq_proof_public_key: [u8::try_from(index + 1).expect("small fixture roster");
-                        32],
-                    ep_proof_public_key: [u8::try_from(index + 17).expect("small fixture roster");
-                        32],
-                },
-            )
+            .map(|(index, validator)| KagemushaMintFinalityValidatorKeysV1 {
+                validator: validator.validator.clone(),
+                eq_proof_public_key: [u8::try_from(index + 1).expect("small fixture roster"); 32],
+                ep_proof_public_key: [u8::try_from(index + 17).expect("small fixture roster"); 32],
+            })
             .collect(),
     }
 }
@@ -85,8 +81,8 @@ fn context() -> HeightContext {
         protocol_version: PROTOCOL_VERSION,
         height: 1,
         epoch: 2,
-        offline_cash_mint_finality_epoch_id: mint_finality_epoch_id,
-        offline_cash_mint_finality_epoch_roster: mint_finality_roster,
+        kagemusha_mint_finality_epoch_id: mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster: mint_finality_roster,
         epoch_end_height: 100,
         next_epoch_snapshot: None,
         mode: ConsensusMode::Npos,

@@ -2868,18 +2868,58 @@ def _successor_recovery_pending_kura_tail_source_fidelity_errors(
             "stage != PendingKuraApplyRecoveryStage::Apply",
         ),
     )
-    apply_runtime_readiness = item(
-        "runtime", "lifecycle_decision_apply_dispatch_available"
-    )
+    apply_runtime_gate = item("runtime", "lifecycle_decision_apply_runtime_gate_is_open")
     require_order(
         "runtime",
-        apply_runtime_readiness,
+        apply_runtime_gate,
         "lifecycle Apply runtime mutation-frontier readiness",
         (
             "!self.fail_closed",
             "self.pending_effect_ownership.is_none()",
             "self.last_scheduler_ownership.is_none()",
             "self.pending_leader_wire_terminals.is_empty()",
+        ),
+    )
+    apply_runtime_readiness = item(
+        "runtime", "lifecycle_decision_apply_dispatch_available"
+    )
+    require_order(
+        "runtime",
+        apply_runtime_readiness,
+        "lifecycle Apply empty-runtime-queue readiness",
+        (
+            "self.lifecycle_decision_apply_runtime_gate_is_open()",
+            "self.ingress.len() == 0",
+        ),
+    )
+    apply_successor_census = item(
+        "effects", "lifecycle_decision_apply_successor_census_is_exact"
+    )
+    require_order(
+        "effects",
+        apply_successor_census,
+        "lifecycle Apply successor-output census",
+        (
+            "self.lifecycle_decision_apply_successor_outputs.is_none()",
+            "self.exactly_owns_live_lifecycle_decision_apply(attestation.live_apply_authority())",
+            "attestation.pending_count() == self.pending_lifecycle_output_admissions.len()",
+            "attestation.exactly_matches_pending_keys(",
+        ),
+    )
+    apply_successor_batch = item(
+        "effects", "lifecycle_decision_apply_successor_batch_is_exact"
+    )
+    require_order(
+        "effects",
+        apply_successor_batch,
+        "lifecycle Apply successor retained batch",
+        (
+            "self.pending_lifecycle_output_admissions",
+            ".values()",
+            ".next()",
+            "batch.effects.len() == 1",
+            "attestation.exactly_matches_retransmit_apply(&owned.effect)",
+            "pending_output.exactly_precedes_periodic_retransmit_apply(",
         ),
     )
     apply_dispatch_readiness = item(
@@ -2893,17 +2933,17 @@ def _successor_recovery_pending_kura_tail_source_fidelity_errors(
             "self.ensure_open()?",
             "let successor_debt_is_exact = match successor_outputs",
             "self.pending_lifecycle_output_admissions.is_empty()",
-            "attestation.pending_count() == self.pending_lifecycle_output_admissions.len()",
-            "attestation.exactly_matches_pending_keys(",
-            "attestation.exactly_matches_retransmit_apply(&owned.effect)",
-            "pending_output.exactly_precedes_periodic_retransmit_apply(",
+            "self.lifecycle_decision_apply_successor_census_is_exact(attestation)",
+            "self.lifecycle_decision_apply_successor_batch_is_exact(attestation, batch)",
+            "let pending_work_is_exact =",
             "self.pending_work() == self.pending_lifecycle_output_admissions.len()",
             "successor_debt_is_exact",
-            "self.recovered_decision_fetch_request_index_is_exact_and_empty()",
-            "self.parked_effect_batch.is_none()",
-            "self.finality_completion.is_none()",
-            "self.runtime.queued_commands() == 0",
-            "self.runtime.lifecycle_decision_apply_dispatch_available()",
+            "runner_cleanup_is_empty",
+            "recovered_fetch_is_empty",
+            "parked_batch_is_empty",
+            "finality_is_empty",
+            "runtime_queue_is_empty",
+            "runtime_available",
         ),
     )
     pending_apply_registry_projection = item(

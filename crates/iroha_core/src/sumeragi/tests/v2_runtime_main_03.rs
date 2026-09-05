@@ -696,7 +696,7 @@ fn exact_authenticated_progress_retransmission_is_queue_coalesced() {
         block_hash: HashOf::from_untyped_unchecked(Hash::new(b"coalesced-progress-block")),
         payload_hash: Hash::new(b"coalesced-progress-payload"),
     };
-    let execution_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+    let execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"coalesced parent state"),
         Hash::new(b"coalesced post state"),
         Hash::new(b"coalesced ordinary writes"),

@@ -31,7 +31,7 @@ SPDX-License-Identifier: Apache-2.0
 Confidential memo envelopes now ship with a canonical fixture at `fixtures/confidential/encrypted_payload_v1.json`. The dataset captures a positive v1 envelope plus negative malformed samples so SDKs can assert parsing parity. The Rust data-model tests (`crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs`) and Swift suite (`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift`) both load the fixture directly, guaranteeing that Norito encoding, error surfaces, and regression coverage stay aligned as the codec evolves.
 
 The generic proofless `zk::Shield` instruction is not part of the first-release
-wire surface. Offline Cash V1 is a separate aggregate-balance protocol: its
+wire surface. KAGEMUSHA V1 is a separate aggregate-balance protocol: its
 top-up operation atomically debits the payer, credits the per-asset reserve, and
 emits a hardware-bound mint credit after circuit-verifiable block finality. It
 does not append a caller-supplied confidential note. The encrypted memo-envelope
@@ -74,7 +74,7 @@ fixture remains a local wallet codec fixture and grants no monetary authority.
 - `vk_shield` is not part of the first-release confidential-asset model and is
   rejected. An optional `vk_unshield` binding may activate the confidential
   policy and, after the first commitment exists, cannot be cleared or changed
-  to a different verifier commitment. Offline Cash V1 does not use either
+  to a different verifier commitment. KAGEMUSHA V1 does not use either
   asset-bound role; its paired artifact set is authenticated by its release
   manifest. No generic commitment-ingress or confidential-transfer instruction
   exists.
@@ -174,11 +174,11 @@ deterministic and wallets have time to adjust.
   - `WITHDRAW { vk_id, withdraw_height }` for emergency shutdown; affected assets freeze confidential spending after the withdraw height until new entries activate.
 - Genesis manifests auto-emit a `confidential_registry_root` custom parameter whose `vk_set_hash` matches the active entries; validation cross-checks this digest against local registry state before a node can join consensus.
 - Registering or updating a verifier requires a `gas_schedule_id`; verification enforces that the registry entry is `Active`, present in the `(circuit_id, version)` index, and that Halo2 proofs provide an `OpenVerifyEnvelope` whose `circuit_id`, `vk_hash`, and `public_inputs_schema_hash` match the registry record. Registry, proof-attachment admission, checked verifier guardrails, and IVM host verifier snapshots reject explicit trusted-setup labels such as Groth16, Halo2/BN254, Halo2/BLS12, and Halo2/KZG; the admitted production verifier families are transparent Halo2 IPA over Pasta and STARK/FRI.
-- Offline Cash V1 proof admission is not selected through a caller-controlled
+- KAGEMUSHA V1 proof admission is not selected through a caller-controlled
   registry role. It authenticates the complete paired-Pasta release manifest,
   verifies the exact state, history, mint-finality, platform-credential, and
   GuardBundle roles, and terminally decides both recursive accumulators. The
-  generic proof preverification path grants no Offline Cash authority.
+  generic proof preverification path grants no KAGEMUSHA authority.
 - Production Halo2/IPA metadata has one strict `ZK1\0` TLV layout: verifier keys encode `IPAK` → `CID1` → `H2VK`, while proofs encode `PROF` followed by optional `I10P`. The retired binary inner envelope and its standalone parser were removed; production dispatch never guesses or accepts that legacy shape.
 
 ### Proving Keys
@@ -215,8 +215,8 @@ deterministic and wallets have time to adjust.
 
 ### V1 public-amount proof scalars
 
-The generic `Shield`, `ZkTransfer`, and `Unshield` wires are retired. Offline
-Cash V1 public-to-offline and offline-to-public amounts are carried inside its
+The generic `Shield`, `ZkTransfer`, and `Unshield` wires are retired. KAGEMUSHA
+V1 public-to-offline and offline-to-public amounts are carried inside its
 scale-bound top-up request and proof-authenticated redemption voucher.
 The direct `SubmitZkAceAuthorizedTransfer` instruction is retired. ZK-ACE callers instead
 select an active governed `PrivacyZkAcePolicyRecordV1`; the canonical native
@@ -234,12 +234,16 @@ plan.
 
 ### Protocol-private transfer and redemption proofs
 
-Offline Cash V1 uses one hidden aggregate balance per device lane and asset.
+KAGEMUSHA V1 uses one hidden aggregate balance per device lane and asset.
 Its fixed-shape paired-Pasta recursion proves `Bootstrap`, `MintFold`,
-`SendSplit`, `ReceiveFold`, `RedeemSplit`, and `Rotate`; proof envelopes are not
-standalone executable instructions. Redemption couples a hardware-bound terminal
-voucher to a unique nullifier and an equal debit from the pooled reserve before
-public credit.
+`SendSplit`, `ReceiveFold`, `RedeemSplit`, and `Rotate`; proof envelopes are
+not standalone executable instructions. The sole peer-payment paired proof is
+carried directly by `KagemushaPaymentV1` together with its compact output,
+encrypted receiver credit, and recursively verified hardware commit certificate.
+Redemption vouchers instead carry `KagemushaRedemptionProofV1`, never public
+predecessor/successor state heads. Redemption couples the hardware-bound
+terminal voucher to a unique nullifier and an equal debit from the pooled
+reserve before public credit.
 
 This separation is a consensus invariant. A proof that is sound for the note
 tree does not by itself authorize settlement against a particular backing
@@ -247,13 +251,13 @@ pool, so no generic dispatch, InstructionBox discriminant, IVM bridge, relay,
 CLI command, or SDK transaction builder may expose either circuit directly.
 
 ## Ledger Flow
-1. **`TopUpOfflineCashV1 { request }`**
+1. **`TopUpKagemushaV1 { request }`**
    - Runtime validates the payer, recipient hardware lane, active release,
      exact scale and amount, idempotency identifiers, and reserve binding.
    - It atomically debits online funds and credits the sole reserve for the
      asset. Finality later attaches the exact circuit-verifiable mint credit;
      recovery cannot mint a different output.
-2. **`RedeemOfflineCashV1 { request }`**
+2. **`RedeemKagemushaV1 { request }`**
    - Runtime verifies the recursive balance proof, hardware-bound voucher, and
      unique terminal nullifier.
    - It atomically debits the reserve and credits the requested account. Proof
@@ -271,7 +275,7 @@ CLI command, or SDK transaction builder may expose either circuit directly.
   `RegisterZkAsset` is the only confidential activation path.
 - `ZkAssetState` persists the sole first-release tree profile, an exact
   fixed-size incremental frontier, its current root, and any generic
-  confidential verifier bindings. Offline Cash V1 release artifacts and pooled
+  confidential verifier bindings. KAGEMUSHA V1 release artifacts and pooled
   reserves are stored in their dedicated state and are not asset-bound verifier
   roles.
   The frontier and root are required first-release snapshot fields; there is no
@@ -312,7 +316,7 @@ replay governance-driven audits. The default policy, enforced by
   Operators may extend the window via `confidential.retention.nullifier_days`.
   Nullifiers younger than the retention window MUST remain queryable via Torii so
   auditors can prove double-spend absence.
-- **Public redemption:** Offline Cash V1 redemption consumes an authenticated
+- **Public redemption:** KAGEMUSHA V1 redemption consumes an authenticated
   terminal nullifier and transfers the exact amount from the per-asset reserve.
   Generic confidential redemption follows its own verifier policy. The
   commitment log remains append-only; there is no generic reveal instruction
@@ -491,7 +495,7 @@ Each phase updates roadmap milestones and associated tests to maintain determini
 ### SDK & Fixture Coverage (Phase M1)
 
 Encrypted payload v1 ships with canonical fixtures so every SDK produces the
-same Norito memo envelope. Offline Cash transaction parity is exercised by its
+same Norito memo envelope. KAGEMUSHA transaction parity is exercised by its
 dedicated V1 suite; there is deliberately no generic confidential wallet-flow
 fixture or encoder:
 
@@ -504,21 +508,21 @@ cd IrohaSwift && swift test --filter ConfidentialEncryptedPayloadTests
 ```
 
 The release-surface guards reject the retired generic and anonymous-escrow type
-names and wire fingerprints while retaining only the Offline Cash V1
+names and wire fingerprints while retaining only the KAGEMUSHA V1
 instructions. Updating the encrypted-payload fixture without bumping its format
 version fails parity suites, keeping the SDKs and Rust codec in lock-step.
 
 #### Wallet and SDK builders
 
-SDKs expose authenticated Offline Cash V1 top-up/redemption. They do not expose
+SDKs expose authenticated KAGEMUSHA V1 top-up/redemption. They do not expose
 generic `Shield`, `ZkTransfer`, `Unshield`, or native anonymous-escrow requests
 or encoders. SDK manifests and generated
 instruction catalogs must omit all three retired data-model types and their
 wire fingerprints.
 
 `vk_shield` is rejected in the first release; `vk_unshield` is an optional
-generic confidential-asset binding. Neither grants Offline Cash authority.
-Wallet implementations must build and sign the complete Offline Cash V1 object;
+generic confidential-asset binding. Neither grants KAGEMUSHA authority.
+Wallet implementations must build and sign the complete KAGEMUSHA V1 object;
 a proof envelope, amount, nullifier list, or opaque commitment is never
 sufficient authority on its own.
 

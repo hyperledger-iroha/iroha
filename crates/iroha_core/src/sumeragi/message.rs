@@ -790,7 +790,7 @@ mod tests {
                         b"first-release historical executed finality tag",
                     )),
                     execution_commitment:
-                        ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                        ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                             Hash::new(b"first-release historical parent state"),
                             Hash::new(b"first-release historical post state"),
                             Hash::new(b"first-release historical writes"),

@@ -18,7 +18,7 @@ usage() {
 Usage: deploy_localnet.sh [OPTIONS]
 
 Builds `kagami`, `iroha3d`, and `iroha`, generates a fresh localnet, starts peers,
-waits for readiness, and verifies the built-in Offline Cash V1 asset alias.
+waits for readiness, and verifies the built-in KAGEMUSHA V1 asset alias.
 
 Options:
   --iroha-dir <DIR>          Workspace root (default: repo root)
@@ -46,10 +46,10 @@ Options:
   --release                  Build and run release binaries
   --no-build                 Skip cargo build and require prebuilt binaries
   --no-sample-asset          Do not include kagami's extra sample asset
-  --asset-id <ID>            Built-in Offline Cash V1 asset id to verify (default: 7EAD8EFYUx1aVKZPUU1fyKvr8dF1)
-  --asset-name <NAME>        Built-in Offline Cash V1 asset name to verify (default: usd)
-  --asset-alias <ALIAS>      Built-in Offline Cash V1 alias to verify (default: usd#wonderland.universal)
-  --skip-asset-check         Skip built-in Offline Cash V1 asset verification
+  --asset-id <ID>            Built-in KAGEMUSHA V1 asset id to verify (default: 7EAD8EFYUx1aVKZPUU1fyKvr8dF1)
+  --asset-name <NAME>        Built-in KAGEMUSHA V1 asset name to verify (default: usd)
+  --asset-alias <ALIAS>      Built-in KAGEMUSHA V1 alias to verify (default: usd#wonderland.universal)
+  --skip-asset-check         Skip built-in KAGEMUSHA V1 asset verification
   --telemetry-profile <NAME> Set telemetry_profile in generated peer configs (e.g., extended)
   --timeout <SECS>           Seconds to wait for readiness (default: 30)
   --force                    Remove existing out-dir before regenerating
@@ -930,7 +930,7 @@ echo "Consensus readiness was established through bounded public /status; inspec
 CFG="$OUT_DIR/client.toml"
 if [[ "$SKIP_ASSET_CHECK" != true ]]; then
   echo ""
-  echo "Verifying built-in Offline Cash V1 alias $ASSET_ALIAS..."
+  echo "Verifying built-in KAGEMUSHA V1 alias $ASSET_ALIAS..."
   asset_alias_request="$(printf '{\"alias\":\"%s\"}' "$ASSET_ALIAS")"
   asset_alias_response="$(
     curl -sf --connect-timeout "$CURL_TIMEOUT_SECS" --max-time "$CURL_TIMEOUT_SECS" \
@@ -938,7 +938,7 @@ if [[ "$SKIP_ASSET_CHECK" != true ]]; then
       -d "$asset_alias_request" \
       "http://$PUBLIC_HOST_URL:$BASE_API_PORT/v1/assets/aliases/resolve"
   )" || {
-    echo "Failed to resolve built-in Offline Cash V1 alias $ASSET_ALIAS." >&2
+    echo "Failed to resolve built-in KAGEMUSHA V1 alias $ASSET_ALIAS." >&2
     exit 1
   }
   ASSET_ALIAS_RESPONSE="$asset_alias_response" \
@@ -965,5 +965,5 @@ echo ""
 echo "Iroha localnet is running in $OUT_DIR."
 echo "CLI binary: $CLI_BIN"
 echo "Client config: $CFG"
-echo "Built-in Offline Cash V1 asset: $ASSET_NAME ($ASSET_ID) alias $ASSET_ALIAS"
+echo "Built-in KAGEMUSHA V1 asset: $ASSET_NAME ($ASSET_ID) alias $ASSET_ALIAS"
 echo "To stop: cd $OUT_DIR && ./stop.sh"

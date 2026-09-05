@@ -3223,7 +3223,7 @@
           "persist_post_apply_metadata",
           "repair_native_amx_participant_application_evidence",
           "publish_committed_block_merge_entry",
-          "promote_offline_cash_finality_sidecar",
+          "promote_kagemusha_finality_sidecar",
           "finalize_committed_block_merge_reservations"
         ]
       },
@@ -4406,7 +4406,7 @@
           "persist_post_apply_metadata",
           "repair_native_amx_participant_application_evidence",
           "publish_committed_block_merge_entry",
-          "promote_offline_cash_finality_sidecar",
+          "promote_kagemusha_finality_sidecar",
           "finalize_committed_block_merge_reservations"
         ]
       },
@@ -7531,6 +7531,15 @@
           "kind": "method",
           "symbol": "SerializedV2Runtime<SumeragiV2Adapter>::lifecycle_decision_apply_dispatch_available",
           "required_tokens": [
+            "self.lifecycle_decision_apply_runtime_gate_is_open()",
+            "self.ingress.len() == 0"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+          "kind": "method",
+          "symbol": "SerializedV2Runtime<SumeragiV2Adapter>::lifecycle_decision_apply_runtime_gate_is_open",
+          "required_tokens": [
             "!self.fail_closed",
             "self.pending_effect_ownership.is_none()",
             "self.last_scheduler_ownership.is_none()",
@@ -7545,19 +7554,85 @@
             "self.ensure_open()?",
             "let successor_debt_is_exact = match successor_outputs",
             "self.pending_lifecycle_output_admissions.is_empty()",
-            "attestation.pending_count() == self.pending_lifecycle_output_admissions.len()",
-            "attestation.exactly_matches_pending_keys(",
-            "attestation.exactly_matches_retransmit_apply(&owned.effect)",
-            "exactly_precedes_periodic_retransmit_apply",
+            "self.lifecycle_decision_apply_successor_census_is_exact(attestation)",
+            "match attestation.mode()",
+            "LifecycleDecisionApplySuccessorOutputModeV1::SameBatchSuffix",
+            "LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit { .. }",
+            "self.lifecycle_decision_apply_successor_batch_is_exact(",
+            "self.retained_effect_batch.is_none()",
             "self.pending_work() == self.pending_lifecycle_output_admissions.len()",
-            "successor_debt_is_exact",
             "self.pending_runner_decision_cleanup.is_none()",
             "self.recovered_decision_fetch_request_index_is_exact_and_empty()",
-            "self.retained_effect_batch.is_none()",
             "self.parked_effect_batch.is_none()",
             "self.finality_completion.is_none()",
             "self.runtime.queued_commands() == 0",
-            "self.runtime.lifecycle_decision_apply_dispatch_available()"
+            "self.runtime.lifecycle_decision_apply_dispatch_available()",
+            "&& successor_debt_is_exact"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_effects.rs",
+          "kind": "method",
+          "symbol": "V2EffectExecutor<SerializedV2Runtime>::lifecycle_decision_apply_successor_census_is_exact",
+          "required_tokens": [
+            "self.lifecycle_decision_apply_successor_outputs.is_none()",
+            "self.exactly_owns_live_lifecycle_decision_apply(attestation.live_apply_authority())",
+            "attestation.pending_count() == self.pending_lifecycle_output_admissions.len()",
+            ".exactly_matches_pending_keys(self.pending_lifecycle_output_admissions.keys())",
+            ".is_some_and(|pending| attestation.exactly_matches_pending_output(pending))"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_output.rs",
+          "kind": "method",
+          "symbol": "AttestedLifecycleDecisionApplySuccessorOutputsV1::exactly_matches_pending_output",
+          "required_tokens": [
+            "pending.key() != self.pending_key",
+            "LifecycleDecisionApplySuccessorOutputModeV1::SameBatchSuffix => true",
+            "LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit {",
+            "pending.lifecycle_owner().lifecycle_ordinal() == runtime_ordinal",
+            "runtime_ordinal < self.dispatch_key().lifecycle_ordinal()",
+            ".exactly_binds_periodic_retransmit_broadcast(&pending.effect)",
+            "certificate == self.live_apply.certificate()",
+            "certificate.phase == wire::GlobalPhase::Commit"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_output.rs",
+          "kind": "method",
+          "symbol": "ConcreteLifecycleWorkRegistry::try_classify_lifecycle_decision_apply_pending_output_census",
+          "required_tokens": [
+            "pending_outputs.len() != 1",
+            "certificate != authority.certificate()",
+            "certificate.phase != wire::GlobalPhase::Commit",
+            "runtime_ordinal < apply_ordinal",
+            ".exactly_binds_periodic_retransmit_broadcast(effect)",
+            "pending_output_matches_work(effect, pending, work)",
+            "recovered_broadcast_output_matches_work(",
+            "terminal_direct_output_matches_record(coordinator, ordinal, effect, pending)",
+            "coordinator.ready_index.first().copied() != Some(apply_ordinal)",
+            "coordinator.ready_index.len() != 1",
+            "address.ordinal < apply_ordinal && generic_predecessor",
+            "first != Some(apply_ordinal)",
+            "second != Some(address.ordinal)",
+            "coordinator.ready_index.len() != 2",
+            "LifecycleDecisionApplyPendingOutputCensusV1::GenericSettlementPending(",
+            "LifecycleDecisionApplyPendingOutputCensusV1::Successor(",
+            "LifecycleDecisionApplySuccessorOutputModeV1::SameBatchSuffix",
+            "LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit {"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_effects.rs",
+          "kind": "method",
+          "symbol": "V2EffectExecutor<SerializedV2Runtime>::lifecycle_decision_apply_successor_batch_is_exact",
+          "required_tokens": [
+            ".pending_lifecycle_output_admissions",
+            ".values()",
+            ".next()",
+            "batch.effects.len() == 1",
+            "attestation.exactly_matches_retransmit_apply(&owned.effect)",
+            "pending_output.exactly_precedes_periodic_retransmit_apply("
           ]
         },
         {
@@ -7684,7 +7759,8 @@
             "completion_selection_stops_batch(&selected)",
             "LifecycleV2IngressDrainDispositionV1::after_terminal_settlement",
             "producer_claim.blocks_runtime()",
-            "advance_executor(receiver, owner, executor, services, 1)?"
+            "advance_executor(",
+            "producer_claim.required_ready_ordinal()"
           ]
         },
         {
@@ -9171,7 +9247,7 @@
             "persist_post_apply_metadata",
             "repair_native_amx_participant_application_evidence",
             "publish_committed_block_merge_entry",
-            "promote_offline_cash_finality_sidecar",
+            "promote_kagemusha_finality_sidecar",
             "finalize_committed_block_merge_reservations"
           ]
         },
@@ -9516,7 +9592,7 @@
             "stage: AutonomousLifecycleTerminalOutcomeStageV1::Pending {",
             "reserved_terminal:",
             "AutonomousLifecycleStableStateV1::terminal_outcome_pending_reservation()",
-            "Self::from_v2_body(body)"
+            "Self::from_body(body)"
           ]
         },
         {
@@ -9537,46 +9613,22 @@
           "kind": "method",
           "symbol": "AutonomousLifecycleTerminalOutcomeV1::complete",
           "required_tokens": [
-            "match &self.body",
-            "AutonomousLifecycleTerminalOutcomeBodyWire::LegacyV1(body)",
-            "Self::from_legacy_v1_body(",
-            "AutonomousLifecycleTerminalOutcomeBodyWire::BasisV1(body)",
-            "Self::from_basis_v1_body(",
-            "AutonomousLifecycleTerminalOutcomeBodyWire::V2(body)",
-            "Self::from_v2_body("
+            "Self::from_body(AutonomousLifecycleTerminalOutcomeBodyV1 {",
+            "version: Self::VERSION",
+            "binding: self.body.binding.clone()",
+            "basis: self.body.basis",
+            "source: self.body.source"
           ]
         },
         {
           "path": "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs",
           "kind": "method",
-          "symbol": "AutonomousLifecycleTerminalOutcomeV1::from_legacy_v1_body",
-          "required_tokens": [
-            "body.version != Self::LEGACY_VERSION",
-            "AutonomousLifecycleTerminalOutcomeBasisV1::OwnedLifecycle",
-            "AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN_V1",
-            "AutonomousLifecycleTerminalOutcomeBodyWire::LegacyV1(body)"
-          ]
-        },
-        {
-          "path": "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs",
-          "kind": "method",
-          "symbol": "AutonomousLifecycleTerminalOutcomeV1::from_basis_v1_body",
-          "required_tokens": [
-            "body.version != Self::LEGACY_VERSION",
-            "Self::validate_body_parts(&body.binding, body.basis, body.source, body.stage)?",
-            "AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN_V1",
-            "AutonomousLifecycleTerminalOutcomeBodyWire::BasisV1(body)"
-          ]
-        },
-        {
-          "path": "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs",
-          "kind": "method",
-          "symbol": "AutonomousLifecycleTerminalOutcomeV1::from_v2_body",
+          "symbol": "AutonomousLifecycleTerminalOutcomeV1::from_body",
           "required_tokens": [
             "body.version != Self::VERSION",
             "Self::validate_body_parts(&body.binding, body.basis, body.source, body.stage)?",
-            "AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN_V2",
-            "AutonomousLifecycleTerminalOutcomeBodyWire::V2(body)"
+            "AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN",
+            "Ok(Self { body, outcome_hash })"
           ]
         },
         {
@@ -9584,14 +9636,12 @@
           "kind": "method",
           "symbol": "AutonomousLifecycleTerminalOutcomeV1::validate_structure",
           "required_tokens": [
-            "AutonomousLifecycleTerminalOutcomeBodyWire::LegacyV1(body)",
-            "body.version != Self::LEGACY_VERSION",
-            "AutonomousLifecycleTerminalOutcomeBasisV1::OwnedLifecycle",
-            "AutonomousLifecycleTerminalOutcomeBodyWire::BasisV1(body)",
-            "AutonomousLifecycleTerminalOutcomeBodyWire::V2(body)",
-            "body.version != Self::VERSION",
-            "AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN_V1",
-            "AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN_V2",
+            "self.body.version != Self::VERSION",
+            "&self.body.binding",
+            "self.body.basis",
+            "self.body.source",
+            "self.body.stage",
+            "AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_HASH_DOMAIN",
             "self.outcome_hash != expected"
           ]
         },
@@ -9600,14 +9650,7 @@
           "kind": "method",
           "symbol": "AutonomousLifecycleTerminalOutcomeV1::decode_framed_unvalidated",
           "required_tokens": [
-            "AutonomousLifecycleTerminalOutcomeWireV2 as norito::NoritoSerialize",
-            "AutonomousLifecycleTerminalOutcomeBodyWire::V2(wire.body)",
-            "LegacyAutonomousLifecycleTerminalOutcomeWireV1 as norito::NoritoSerialize",
-            "BasisAutonomousLifecycleTerminalOutcomeWireV1>(bytes)",
-            "LegacyAutonomousLifecycleTerminalOutcomeWireV1>(bytes)",
-            "ambiguous autonomous lifecycle terminal outcome V1 layout",
-            "AutonomousLifecycleTerminalOutcomeBodyWire::BasisV1(wire.body)",
-            "AutonomousLifecycleTerminalOutcomeBodyWire::LegacyV1(wire.body)"
+            "norito::decode_canonical(bytes)"
           ]
         },
         {
@@ -9625,9 +9668,7 @@
           "kind": "method",
           "symbol": "AutonomousLifecycleTerminalOutcomeV1::encode_framed",
           "required_tokens": [
-            "LegacyAutonomousLifecycleTerminalOutcomeWireV1",
-            "BasisAutonomousLifecycleTerminalOutcomeWireV1",
-            "AutonomousLifecycleTerminalOutcomeWireV2",
+            "norito::encode_canonical(self)?",
             "AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES"
           ]
         },
@@ -10976,24 +11017,11 @@
           "symbol": "preexecute_merge_execution_sources_into",
           "required_tokens": [
             "decode_autonomous_lane_merge_bundle",
-            "validate_lane_block_execution_input_with_routing_and_kagemusha_context",
+            "validate_lane_block_execution_input_with_routing_context",
             "stage_merge_carrier_entrypoints",
             "drain_merge_lane_settlement_commitment",
             "seen_entrypoints",
             "seen_reservations"
-          ]
-        },
-        {
-          "path": "crates/iroha_core/src/tx.rs",
-          "kind": "fn",
-          "symbol": "validate_lane_block_execution_input_with_routing_and_kagemusha_context",
-          "required_tokens": [
-            "Self::validate_lane_block_execution_input_unique_entrypoints(artifact)?",
-            "Kura::validate_lane_block_execution_input_artifact(artifact)?",
-            "RoutingDecision::new(descriptor.lane_id, descriptor.dataspace_id)",
-            "kagemusha_phase_index_base",
-            "KagemushaOperationExecutionPhaseV4::Merge",
-            "validate_transaction_at_entrypoint_index_and_routing("
           ]
         },
         {

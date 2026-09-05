@@ -606,7 +606,7 @@ fn validated_completion_atomically_publishes_exact_ready_carrier() {
 #[cfg(feature = "bls")]
 #[test]
 fn validated_completion_rejects_conflicting_inherited_commitment_intact() {
-    let inherited_commitment = wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+    let inherited_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
         Hash::new(b"inherited commitment parent"),
         Hash::new(b"inherited commitment post"),
         Hash::new(b"inherited commitment writes"),

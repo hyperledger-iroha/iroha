@@ -3,20 +3,16 @@ use iroha_crypto::Hash;
 use iroha_data_model::{
     account::Account,
     asset::{AssetBalancePolicy, AssetDefinition},
-    block::consensus_v2::is_valid_committee_size,
     domain::Domain,
-    isi::{
-        Grant, GrantBox, Mint, MintBox, Register, RegisterBox,
-        offline_cash_v1::{
-            OFFLINE_CASH_CHAIN_VERSION_V1, OfflineCashMintFinalityEpochRosterTemplateV1,
-            OfflineCashMintFinalityGenesisParametersV1,
-        },
+    isi::kagemusha_v1::{
+        KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityEpochRosterTemplateV1,
+        KagemushaMintFinalityGenesisParametersV1,
     },
+    isi::{Grant, GrantBox, Mint, MintBox, Register, RegisterBox},
     metadata::Metadata,
     nexus::DataSpaceId,
-    peer::PeerId,
     permission::Permission,
-    prelude::{AccountId, AssetDefinitionId, AssetId, DomainId, NumericSpec},
+    prelude::{AccountId, AssetDefinitionId, AssetId, DomainId, NumericSpec, PeerId},
 };
 use iroha_executor_data_model::permission::{
     account::{AccountAliasPermissionScope, CanManageAccountAlias, CanRegisterAccount},
@@ -43,6 +39,71 @@ const LOCAL_ONBOARDING_FEE_ASSET_DOMAIN: &str = "universal.universal";
 const LOCAL_ONBOARDING_FEE_ASSET_NAME: &str = "xor";
 const LOCAL_ONBOARDING_FEE_ASSET_SCALE: u32 = 9;
 const LOCAL_ONBOARDING_FEE_BALANCE: u64 = 10;
+
+/// Derive the public mint-finality authority for a disposable Mochi developer sandbox.
+///
+/// Mochi intentionally derives throwaway, per-generation seed material from public sandbox
+/// identifiers. This keeps generated manifests reproducible within a generation while remaining
+/// separate from consensus BLS key material. It is not a deployment-key provisioning fallback.
+///
+/// # Errors
+///
+/// Returns an error if paired-Pasta key derivation fails or the exact validator roster is not a
+/// canonical `3f + 1` committee.
+pub(crate) fn dev_sandbox_kagemusha_mint_finality_parameters(
+    chain_id: &str,
+    generation_id: &str,
+    validators: impl IntoIterator<Item = PeerId>,
+) -> color_eyre::Result<KagemushaMintFinalityGenesisParametersV1> {
+    let mut validators = validators.into_iter().collect::<Vec<_>>();
+    validators.sort();
+    let validators = validators
+        .into_iter()
+        .enumerate()
+        .map(|(index, validator)| {
+            let validator_text = validator.to_string();
+            let mut seed_material = b"iroha:mochi:dev-sandbox:kagemusha-mint-finality:v1"
+                .as_slice()
+                .to_vec();
+            for component in [chain_id.as_bytes(), generation_id.as_bytes(), validator_text.as_bytes()] {
+                seed_material.extend_from_slice(
+                    &u64::try_from(component.len())
+                        .expect("Mochi sandbox seed component length fits u64")
+                        .to_le_bytes(),
+                );
+                seed_material.extend_from_slice(component);
+            }
+            seed_material.extend_from_slice(
+                &u64::try_from(index)
+                    .expect("Mochi sandbox validator index fits u64")
+                    .to_le_bytes(),
+            );
+            let seed = Hash::new(seed_material);
+            iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
+                seed.as_ref(),
+                0,
+                validator,
+            )
+            .map_err(|error| {
+                color_eyre::eyre::eyre!(
+                    "derive Mochi sandbox KAGEMUSHA mint-finality keys: {error}"
+                )
+            })
+        })
+        .collect::<color_eyre::Result<Vec<_>>>()?;
+    let parameters = KagemushaMintFinalityGenesisParametersV1 {
+        epoch_roster: KagemushaMintFinalityEpochRosterTemplateV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            epoch: 0,
+            validators,
+        },
+        next_epoch_roster: None,
+    };
+    parameters.validate().map_err(|error| {
+        color_eyre::eyre::eyre!("invalid Mochi sandbox KAGEMUSHA mint-finality roster: {error}")
+    })?;
+    Ok(parameters)
+}
 /// Canonical asset definition id for the bundled `rose` sample asset.
 #[must_use]
 pub fn sample_rose_definition_id() -> AssetDefinitionId {
@@ -164,77 +225,18 @@ pub fn with_local_account_onboarding_bootstrap(
     }
     builder.build_raw()
 }
-
-/// Derive development-only mint-finality authority for one exact Mochi committee.
-pub(crate) fn localnet_mint_finality_genesis_parameters(
-    topology: &[GenesisTopologyEntry],
-) -> color_eyre::Result<OfflineCashMintFinalityGenesisParametersV1> {
-    let mut validators = topology
-        .iter()
-        .map(|entry| entry.peer.clone())
-        .collect::<Vec<PeerId>>();
-    validators.sort();
-    if !is_valid_committee_size(validators.len()) {
-        return Err(color_eyre::eyre::eyre!(
-            "Mochi Offline Cash mint-finality authority requires an exact Sumeragi v2 3f+1 committee"
-        ));
-    }
-    if validators.windows(2).any(|pair| pair[0] == pair[1]) {
-        return Err(color_eyre::eyre::eyre!(
-            "Mochi Offline Cash mint-finality authority contains duplicate validators"
-        ));
-    }
-    let validators = validators
-        .into_iter()
-        .enumerate()
-        .map(|(index, validator)| {
-            // Mochi localnets are disposable development deployments. Keep this
-            // seed independent from every consensus secret while binding the
-            // public authority to the exact canonical validator identity.
-            let seed: [u8; 32] = Hash::new(format!(
-                "iroha:mochi:localnet:offline-cash-mint-finality:v1:epoch-0:{index}:{validator}"
-            ))
-            .into();
-            iroha_core::zk::offline_cash_v1_recursion::derive_offline_cash_mint_finality_validator_keys_v1(
-                &seed,
-                0,
-                validator,
-            )
-            .map_err(|error| {
-                color_eyre::eyre::eyre!(
-                    "derive Mochi Offline Cash mint-finality validator keys: {error}"
-                )
-            })
-        })
-        .collect::<color_eyre::Result<Vec<_>>>()?;
-    let parameters = OfflineCashMintFinalityGenesisParametersV1 {
-        epoch_roster: OfflineCashMintFinalityEpochRosterTemplateV1 {
-            version: OFFLINE_CASH_CHAIN_VERSION_V1,
-            epoch: 0,
-            validators,
-        },
-        next_epoch_roster: None,
-    };
-    parameters.validate().map_err(|error| {
-        color_eyre::eyre::eyre!("invalid Mochi Offline Cash genesis authority: {error}")
-    })?;
-    Ok(parameters)
-}
-
-/// Attach topology information and its matching private-finality authority to a genesis manifest.
+/// Attach topology information to a genesis manifest inside a dedicated transaction.
 ///
 /// # Errors
 ///
-/// Returns an error unless `topology` is a unique exact `3f + 1` committee or
-/// its independent paired-Pasta public keys can be derived and validated.
+/// Returns an error if the existing manifest no longer carries all required signed genesis
+/// authority while it is rebuilt.
 pub fn with_topology(
     manifest: RawGenesisTransaction,
     topology: Vec<GenesisTopologyEntry>,
 ) -> color_eyre::Result<RawGenesisTransaction> {
-    let mint_finality = localnet_mint_finality_genesis_parameters(&topology)?;
     manifest
         .into_builder()
-        .with_offline_cash_mint_finality_genesis_parameters(mint_finality)
         .next_transaction()
         .set_topology(topology)
         .build_raw()
@@ -242,7 +244,7 @@ pub fn with_topology(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_crypto::{Algorithm, KeyPair, bls_normal_pop_prove};
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         block::consensus_v2::SumeragiV2GenesisContextParameters,
         isi::{GrantBox, MintBox, RegisterBox},
@@ -252,34 +254,64 @@ mod tests {
     use iroha_genesis::GenesisBuilder;
     use iroha_test_samples::ALICE_ID;
 
-    fn deterministic_topology(seed_base: u8) -> Vec<GenesisTopologyEntry> {
-        (0_u8..4)
-            .map(|index| {
-                let validator = KeyPair::try_from_seed(
-                    vec![seed_base.wrapping_add(index); 32],
-                    Algorithm::BlsNormal,
+    fn deterministic_test_validators() -> Vec<PeerId> {
+        (0x20_u8..0x24)
+            .map(|seed| {
+                PeerId::new(
+                    KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                        .expect("derive deterministic test validator")
+                        .public_key()
+                        .clone(),
                 )
-                .expect("derive deterministic Mochi test validator");
-                let pop = bls_normal_pop_prove(validator.private_key())
-                    .expect("derive deterministic Mochi test validator PoP");
-                GenesisTopologyEntry::new(PeerId::new(validator.public_key().clone()), pop)
             })
             .collect()
+    }
+
+    #[test]
+    fn dev_sandbox_mint_finality_authority_is_exact_and_generation_scoped() {
+        let validators = deterministic_test_validators();
+        let mut expected_validators = validators.clone();
+        expected_validators.sort();
+        let first = dev_sandbox_kagemusha_mint_finality_parameters(
+            "sandbox-chain",
+            "generation-a",
+            validators.clone(),
+        )
+        .expect("derive first sandbox roster");
+        let second = dev_sandbox_kagemusha_mint_finality_parameters(
+            "sandbox-chain",
+            "generation-b",
+            validators,
+        )
+        .expect("derive second sandbox roster");
+        assert_eq!(
+            first
+                .epoch_roster
+                .validators
+                .iter()
+                .map(|keys| keys.validator.clone())
+                .collect::<Vec<_>>(),
+            expected_validators
+        );
+        assert_ne!(first, second);
     }
 
     #[test]
     fn local_onboarding_bootstrap_is_exact_funded_and_idempotent() {
         const EXPECTED_CANONICAL_XOR_ID: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
         let chain_id: ChainId = "local-onboarding".parse().expect("infallible chain id");
-        let topology = deterministic_topology(0xD0);
-        let mint_finality = localnet_mint_finality_genesis_parameters(&topology)
-            .expect("derive deterministic Mochi test Offline Cash authority");
+        let validators = deterministic_test_validators();
+        let kagemusha_mint_finality = dev_sandbox_kagemusha_mint_finality_parameters(
+            chain_id.as_ref(),
+            "onboarding-test-generation",
+            validators,
+        )
+        .expect("derive test mint-finality parameters");
         let manifest = GenesisBuilder::new_without_executor(chain_id, ".")
             .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
-            .with_offline_cash_mint_finality_genesis_parameters(mint_finality)
-            .set_topology(topology)
+            .with_kagemusha_mint_finality_genesis_parameters(kagemusha_mint_finality)
             .build_raw()
-            .expect("build complete Mochi onboarding test genesis");
+            .expect("build complete test genesis");
         let manifest = with_local_account_onboarding_bootstrap(manifest, &ALICE_ID)
             .expect("append local onboarding bootstrap");
         let transaction_count = manifest.transactions().len();
@@ -375,35 +407,6 @@ mod tests {
                 .count();
             assert_eq!(count, 1, "permission must be granted exactly once");
         }
-    }
-
-    #[test]
-    fn topology_replacement_rebinds_the_private_finality_authority() {
-        let original_topology = deterministic_topology(0xB0);
-        let original_authority = localnet_mint_finality_genesis_parameters(&original_topology)
-            .expect("derive original test authority");
-        let manifest = GenesisBuilder::new_without_executor(ChainId::from("topology-rebind"), ".")
-            .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
-            .with_offline_cash_mint_finality_genesis_parameters(original_authority)
-            .build_raw()
-            .expect("build original complete test manifest");
-        let replacement_topology = deterministic_topology(0xC0);
-        let expected_authority = localnet_mint_finality_genesis_parameters(&replacement_topology)
-            .expect("derive replacement test authority");
-        let patched = with_topology(manifest, replacement_topology.clone())
-            .expect("replace topology and private-finality authority");
-        assert_eq!(
-            patched.offline_cash_mint_finality_genesis_parameters(),
-            &expected_authority
-        );
-        assert_eq!(
-            patched
-                .transactions()
-                .last()
-                .expect("topology transaction")
-                .topology(),
-            replacement_topology
-        );
     }
 
     #[test]

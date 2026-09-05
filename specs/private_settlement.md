@@ -537,36 +537,10 @@ protocol limits are configuration errors.
 - Every global leg is validated before the first overlay write.
 - Replay markers and terminal receipts survive snapshots, Kura replay, and
   restart; ambiguous local state fails closed and reconciles from immutable WSV.
-- Snapshot restore accepts exactly the current 188-field `World` schema or the
-  frozen 180-field schema emitted by revision
-  `1bdec3b88c348a84776241839fb0e8ad71738b3e`. That upgrade boundary adds 13
-  serialized fields: the eight private-settlement maps,
-  `sccp_ton_breaker_observations`, `sccp_replay_forests`,
-  `privacy_exact12_qualification`, `consensus_evidence`, and
-  `tle_key_session_lifecycles`. It retires five historical stores:
-  `sccp_outbound_proofs`, `sccp_inbound_messages`,
-  `direct_lane_block_application_markers`, `council`, and
-  `parliament_bodies`. Restore decodes every retired store with its exact
-  historical key/value types, accepts only canonical empty `revert` and
-  `blocks` maps, and synthesizes only canonical empty/default values for all 13
-  successors. The same exact predecessor `State` boundary carries the retired
-  `SumeragiParameters.key_require_hsm = false` and ordered
-  `key_allowed_hsm_providers = ["pkcs11", "softkey", "yubihsm"]` fields.
-  Restore accepts only those canonical predecessor defaults before removing the
-  fields from the current typed state. Canonical hashing makes one root-level
-  compatibility decision and reinstates both HSM defaults together with the
-  complete 13/5 `World` bridge; neither half may normalize independently.
-  Retained governed parameters, including any canonical valid predecessor
-  `sumeragi_npos_parameters.slashing_delay_blocks`, are preserved byte-for-byte
-  and are not mistaken for migration markers. Literal field order, checked-in
-  full-State and `World` bytes,
-  artifact SHA-256 values, and schema-order SHA-256 are frozen to that exact
-  revision. Partial omission, reordering, renaming, extra fields, hybrid
-  predecessor/current schemas, or any retired state is rejected. Canonical WSV
-  hashing normalizes only this complete 13-empty/5-absent boundary, preserving
-  the complete predecessor State commitment and its exact Kura
-  block/checkpoint/manifest binding; no selected-field projection or APS-only
-  hybrid is accepted.
+- Snapshot restore accepts exactly the current 188-field `World` schema,
+  including all eight private-settlement maps. Missing, reordered, renamed,
+  additional, or retired fields are rejected; V1 has no predecessor-schema
+  migration path.
 - Governed pool projections retain exact policy-revision lineage so historical
   finalized receipts remain restart-valid after a rotation while exact replay
   is rejected byte-silently and old-policy in-flight bundles remain inadmissible.

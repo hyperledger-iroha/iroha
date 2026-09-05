@@ -14,10 +14,11 @@ use super::{
     work_registry::{
         AttestedLifecycleDecisionApplySuccessorOutputsV1, ClaimedCertifiedServeDispatchErrorV1,
         ClaimedCertifiedServeDispatchV1, ClaimedProducerTurnErrorV1, ClaimedProducerTurnV1,
-        ConcreteLifecycleWorkRegistry, ReadyCertifiedServeAttestationV1,
-        ReadyLifecycleDecisionApplyDemandV1, ReadyProducerTurnCensusAttestationErrorV1,
-        RegistryError, SchedulableLifecycleBroadcastCarrierV1,
-        SchedulableRetainedDirectBroadcastAttestationV1,
+        ConcreteLifecycleWorkRegistry, LifecycleDecisionApplyPendingOutputCensusErrorV1,
+        LifecycleDecisionApplyPendingOutputCensusV1, ReadyCertifiedBodyPipelineAttestationErrorV1,
+        ReadyCertifiedServeAttestationV1, ReadyLifecycleDecisionApplyDemandV1,
+        ReadyProducerTurnCensusAttestationErrorV1, RegistryError,
+        SchedulableLifecycleBroadcastCarrierV1, SchedulableRetainedDirectBroadcastAttestationV1,
     },
 };
 #[cfg(test)]
@@ -706,6 +707,55 @@ pub(in crate::sumeragi) enum ReadyValidateSuccessorDispatchV1 {
     },
 }
 
+/// Privacy-safe stage at which a Completion carrier failed authentication.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum ProductionCompletionCarrierStageV1 {
+    /// A caller supplied a physical Validate completion for another ordinal.
+    RequiredValidateOrdinal,
+    /// The Ready live Apply could not recreate its exact reconciliation authority.
+    LiveApplyReconciliation,
+    /// The executor did not own the exact Ready live Apply authority.
+    LiveApplyExecutorOwner,
+    /// An earlier generic output did not remain ordered before its Apply.
+    LiveApplyGenericPredecessorOrder,
+    /// More than one output attestation was installed for the same live Apply.
+    LiveApplyDuplicateSuccessor,
+    /// A Ready Validate row failed closed attestation.
+    ReadyValidateAttestation,
+    /// A Ready Apply row failed closed attestation.
+    ReadyApplyAttestation,
+    /// A Ready Apply attestation had the wrong demand or context.
+    ReadyApplyShape,
+    /// A Ready recovered Sign row failed closed attestation.
+    ReadySignAttestation,
+    /// A Ready recovered Sign attestation had the wrong demand or context.
+    ReadySignShape,
+    /// A Ready recovered Fetch row failed closed attestation.
+    ReadyFetchAttestation,
+    /// A Ready recovered Fetch attestation had the wrong demand or context.
+    ReadyFetchShape,
+    /// A recovered Fetch service owner did not match its dispatch key.
+    ReadyFetchServiceOwner,
+    /// A Ready Broadcast row failed closed carrier attestation.
+    ReadyBroadcastAttestation,
+    /// Completion observed a recovered refanout in the wrong dispatch corridor.
+    ReadyBroadcastRecoveredRefanout,
+    /// The physical capacity census omitted an authenticated Ready row.
+    MissingPhysicalCapacity,
+    /// An authenticated Ready row could not project into scheduler inputs.
+    ReadyRowProjection,
+    /// A selected Validate I/O row had no frozen physical-capacity census.
+    MissingValidateCapacityCensus,
+    /// A selected Apply row had no frozen physical-capacity census.
+    MissingApplyCapacityCensus,
+    /// A selected recovered Sign row had no frozen physical-capacity census.
+    MissingSignCapacityCensus,
+    /// A selected recovered Fetch row had no frozen physical-capacity census.
+    MissingFetchCapacityCensus,
+    /// A selected Store row was not authenticated as ordinary certified-body work.
+    StoreNotOrdinaryBody,
+}
+
 /// Closed failure while one mixed lifecycle Completion census is authenticated.
 #[derive(Debug, PartialEq, Eq)]
 pub(in crate::sumeragi) enum ProductionCompletionDispatchErrorV1 {
@@ -719,6 +769,12 @@ pub(in crate::sumeragi) enum ProductionCompletionDispatchErrorV1 {
     InvalidReadyCensus,
     /// One Ready row failed its exact closed registry attestation.
     InvalidCarrier,
+    /// One Ready row failed at an identified privacy-safe structural stage.
+    InvalidCarrierAt(ProductionCompletionCarrierStageV1),
+    /// A live Apply's pending output failed one privacy-safe structural join.
+    InvalidLiveApplyPendingOutputCensus(LifecycleDecisionApplyPendingOutputCensusErrorV1),
+    /// A Ready Store row failed its exact privacy-safe certified-body attestation.
+    ReadyStoreAttestation(ReadyCertifiedBodyPipelineAttestationErrorV1),
     /// Service signing or the joint physical-corridor census failed.
     Service(String),
     /// A Fetch executor owner conflicted with the exact request catalogs.
@@ -2292,7 +2348,9 @@ impl ProductionLifecycleOwnerV1 {
         if required_ready_validate_completion
             .is_some_and(|(ordinal, _)| Some(ordinal) != required_ordinal)
         {
-            return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
+            return Err(ProductionCompletionDispatchErrorV1::InvalidCarrierAt(
+                ProductionCompletionCarrierStageV1::RequiredValidateOrdinal,
+            ));
         }
         if let Some(fault) = self.coordinator.fault {
             return Err(ProductionCompletionDispatchErrorV1::CoordinatorFaulted(
@@ -2352,7 +2410,11 @@ impl ProductionLifecycleOwnerV1 {
             let authority = self
                 .registry
                 .prepare_ready_live_decision_apply_reconciliation(&self.coordinator, ordinal)
-                .map_err(|_| ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
+                .map_err(|_| {
+                    ProductionCompletionDispatchErrorV1::InvalidCarrierAt(
+                        ProductionCompletionCarrierStageV1::LiveApplyReconciliation,
+                    )
+                })?;
             if let Some(authority) = authority {
                 let protected_ordinal = authority.dispatch_key().lifecycle_ordinal();
                 if protected_ordinal != ordinal
@@ -2361,20 +2423,42 @@ impl ProductionLifecycleOwnerV1 {
                         .is_some()
                     || !executor.exactly_owns_live_lifecycle_decision_apply(&authority)
                 {
-                    return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
+                    return Err(ProductionCompletionDispatchErrorV1::InvalidCarrierAt(
+                        ProductionCompletionCarrierStageV1::LiveApplyExecutorOwner,
+                    ));
                 }
                 if executor.has_pending_lifecycle_output_admissions() {
-                    let attestation = self
-                        .attest_lifecycle_decision_apply_successor_outputs(
+                    let pending_output_census = self
+                        .try_classify_lifecycle_decision_apply_pending_output_census(
                             authority,
                             executor.pending_lifecycle_output_admission_census(),
                         )
-                        .ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
-                    if live_apply_successor_outputs
-                        .insert(protected_ordinal, attestation)
-                        .is_some()
-                    {
-                        return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
+                        .map_err(
+                            ProductionCompletionDispatchErrorV1::InvalidLiveApplyPendingOutputCensus,
+                        )?;
+                    match pending_output_census {
+                        LifecycleDecisionApplyPendingOutputCensusV1::GenericSettlementPending(
+                            predecessor,
+                        ) => {
+                            if predecessor.apply_dispatch_key().lifecycle_ordinal()
+                                != protected_ordinal
+                                || predecessor.runtime_ordinal() >= protected_ordinal
+                            {
+                                return Err(ProductionCompletionDispatchErrorV1::InvalidCarrierAt(
+                                    ProductionCompletionCarrierStageV1::LiveApplyGenericPredecessorOrder,
+                                ));
+                            }
+                        }
+                        LifecycleDecisionApplyPendingOutputCensusV1::Successor(attestation) => {
+                            if live_apply_successor_outputs
+                                .insert(protected_ordinal, attestation)
+                                .is_some()
+                            {
+                                return Err(ProductionCompletionDispatchErrorV1::InvalidCarrierAt(
+                                    ProductionCompletionCarrierStageV1::LiveApplyDuplicateSuccessor,
+                                ));
+                            }
+                        }
                     }
                 }
             }
@@ -2414,7 +2498,11 @@ impl ProductionLifecycleOwnerV1 {
                     let attestation = self
                         .coordinator
                         .attest_ready_validate_demand(&self.registry, *ordinal)
-                        .map_err(|_| ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
+                        .map_err(|_| {
+                            ProductionCompletionDispatchErrorV1::InvalidCarrierAt(
+                                ProductionCompletionCarrierStageV1::ReadyValidateAttestation,
+                            )
+                        })?;
                     let probe = attestation.requires_io_dispatch().then_some(
                         LifecycleCompletionCapacityProbeV1::Validate {
                             ordinal: *ordinal,
@@ -2433,11 +2521,17 @@ impl ProductionLifecycleOwnerV1 {
                     let attestation = self
                         .registry
                         .attest_ready_lifecycle_decision_apply(&self.coordinator, *ordinal)
-                        .map_err(|_| ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
+                        .map_err(|_| {
+                            ProductionCompletionDispatchErrorV1::InvalidCarrierAt(
+                                ProductionCompletionCarrierStageV1::ReadyApplyAttestation,
+                            )
+                        })?;
                     if attestation.demand() != ReadyLifecycleDecisionApplyDemandV1::BoundedIo
                         || !attestation.dispatch_key().matches_height_context(context)
                     {
-                        return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
+                        return Err(ProductionCompletionDispatchErrorV1::InvalidCarrierAt(
+                            ProductionCompletionCarrierStageV1::ReadyApplyShape,
+                        ));
                     }
                     let key = attestation.dispatch_key();
                     let executor_available = executor
@@ -2460,12 +2554,18 @@ impl ProductionLifecycleOwnerV1 {
                     let attestation = self
                         .registry
                         .attest_ready_recovered_lifecycle_sign(&self.coordinator, *ordinal)
-                        .map_err(|_| ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
+                        .map_err(|_| {
+                            ProductionCompletionDispatchErrorV1::InvalidCarrierAt(
+                                ProductionCompletionCarrierStageV1::ReadySignAttestation,
+                            )
+                        })?;
                     if attestation.demand()
                         != super::work_registry::ReadyRecoveredLifecycleSignDemandV1::BoundedIo
                         || !attestation.dispatch_key().matches_height_context(context)
                     {
-                        return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
+                        return Err(ProductionCompletionDispatchErrorV1::InvalidCarrierAt(
+                            ProductionCompletionCarrierStageV1::ReadySignShape,
+                        ));
                     }
                     let key = attestation.dispatch_key();
                     (
@@ -2495,14 +2595,18 @@ impl ProductionLifecycleOwnerV1 {
                             .registry
                             .registry_mut()
                             .attest_ready_recovered_decision_fetch(&self.coordinator, *ordinal)
-                            .map_err(|_| ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
+                            .map_err(|_| {
+                                ProductionCompletionDispatchErrorV1::InvalidCarrierAt(
+                                    ProductionCompletionCarrierStageV1::ReadyFetchAttestation,
+                                )
+                            })?;
                         if attestation.demand()
                             != super::work_registry::ReadyRecoveredDecisionFetchDemandV1::ExactOutputAndExecutor
                             || !attestation.dispatch_key().matches_height_context(context)
                         {
-                            return Err(
-                                ProductionCompletionDispatchErrorV1::InvalidCarrier,
-                            );
+                            return Err(ProductionCompletionDispatchErrorV1::InvalidCarrierAt(
+                                ProductionCompletionCarrierStageV1::ReadyFetchShape,
+                            ));
                         }
                         let dispatch_key = attestation.dispatch_key();
                         let owner = services
@@ -2511,7 +2615,9 @@ impl ProductionLifecycleOwnerV1 {
                             )
                             .map_err(ProductionCompletionDispatchErrorV1::Service)?;
                         if owner.dispatch_key() != dispatch_key {
-                            return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
+                            return Err(ProductionCompletionDispatchErrorV1::InvalidCarrierAt(
+                                ProductionCompletionCarrierStageV1::ReadyFetchServiceOwner,
+                            ));
                         }
                         let executor_available = executor
                             .recovered_decision_fetch_registration_available(&owner)
@@ -2535,7 +2641,7 @@ impl ProductionLifecycleOwnerV1 {
                             *ordinal,
                             Some(fence),
                         )
-                        .map_err(|_| ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
+                        .map_err(ProductionCompletionDispatchErrorV1::ReadyStoreAttestation)?;
                     (
                         AuthenticatedLifecycleCompletionReadyV1::CertifiedBody(attestation),
                         None,
@@ -2544,8 +2650,11 @@ impl ProductionLifecycleOwnerV1 {
                 LifecycleWorkClass::Broadcast => {
                     let ready = match self
                         .attest_schedulable_completion_broadcast_carrier(*ordinal, Some(fence))
-                        .map_err(|_| ProductionCompletionDispatchErrorV1::InvalidCarrier)?
-                    {
+                        .map_err(|_| {
+                            ProductionCompletionDispatchErrorV1::InvalidCarrierAt(
+                                ProductionCompletionCarrierStageV1::ReadyBroadcastAttestation,
+                            )
+                        })? {
                         SchedulableCompletionBroadcastCarrierV1::RetainedDirectOutput(
                             attestation,
                         ) => AuthenticatedLifecycleCompletionReadyV1::RetainedDirectBroadcast(
@@ -2557,7 +2666,9 @@ impl ProductionLifecycleOwnerV1 {
                             attestation,
                         ),
                         SchedulableCompletionBroadcastCarrierV1::RecoveredRefanout => {
-                            return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
+                            return Err(ProductionCompletionDispatchErrorV1::InvalidCarrierAt(
+                                ProductionCompletionCarrierStageV1::ReadyBroadcastRecoveredRefanout,
+                            ));
                         }
                     };
                     (ready, None)
@@ -2622,7 +2733,9 @@ impl ProductionLifecycleOwnerV1 {
                 census
                     .as_ref()
                     .and_then(|census| census.authenticated_capacity(ordinal, &factory))
-                    .ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?
+                    .ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrierAt(
+                        ProductionCompletionCarrierStageV1::MissingPhysicalCapacity,
+                    ))?
             };
             let live_debts = [mode.debt(), predecessor_debt, 0, 0, 0, runner_debt];
             let row = match ready {
@@ -2699,7 +2812,9 @@ impl ProductionLifecycleOwnerV1 {
                     live_debts,
                 ),
             }
-            .ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
+            .ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrierAt(
+                ProductionCompletionCarrierStageV1::ReadyRowProjection,
+            ))?;
             if ready_rows.insert(ordinal, row).is_some() {
                 return Err(ProductionCompletionDispatchErrorV1::InvalidReadyCensus);
             }
@@ -2759,7 +2874,10 @@ impl ProductionLifecycleOwnerV1 {
                         physical_completion,
                     );
                 }
-                let census = census.ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
+                let census =
+                    census.ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrierAt(
+                        ProductionCompletionCarrierStageV1::MissingValidateCapacityCensus,
+                    ))?;
                 let reservation = census
                     .select_validate(ordinal)
                     .map_err(|_| ProductionCompletionDispatchErrorV1::ReservedOwnerMismatch)?;
@@ -2774,7 +2892,10 @@ impl ProductionLifecycleOwnerV1 {
                 Ok(ProductionCompletionDispatchV1::ValidateQueued { ordinal })
             }
             LifecycleWorkClass::Apply => {
-                let census = census.ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
+                let census =
+                    census.ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrierAt(
+                        ProductionCompletionCarrierStageV1::MissingApplyCapacityCensus,
+                    ))?;
                 let reservation = census
                     .select_apply(ordinal)
                     .map_err(|_| ProductionCompletionDispatchErrorV1::ReservedOwnerMismatch)?;
@@ -2798,7 +2919,10 @@ impl ProductionLifecycleOwnerV1 {
             LifecycleWorkClass::SignVote
             | LifecycleWorkClass::SignProposal
             | LifecycleWorkClass::SignTimeout => {
-                let census = census.ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
+                let census =
+                    census.ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrierAt(
+                        ProductionCompletionCarrierStageV1::MissingSignCapacityCensus,
+                    ))?;
                 if !lease
                     .output_reservation()
                     .is_some_and(|reservation| reservation.class() == CapacityClass::Consensus)
@@ -2825,7 +2949,10 @@ impl ProductionLifecycleOwnerV1 {
                     }
                     return self.publish_certified_fetch_store(services, executor, lease);
                 }
-                let census = census.ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
+                let census =
+                    census.ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrierAt(
+                        ProductionCompletionCarrierStageV1::MissingFetchCapacityCensus,
+                    ))?;
                 let (owner, output) = census
                     .select_fetch(ordinal)
                     .map_err(|_| ProductionCompletionDispatchErrorV1::ReservedOwnerMismatch)?;
@@ -2911,7 +3038,9 @@ impl ProductionLifecycleOwnerV1 {
             }
             LifecycleWorkClass::Store => {
                 if !ordinary_body.contains(&ordinal) {
-                    return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
+                    return Err(ProductionCompletionDispatchErrorV1::InvalidCarrierAt(
+                        ProductionCompletionCarrierStageV1::StoreNotOrdinaryBody,
+                    ));
                 }
                 if let Some(census) = census {
                     census.complete_without_selection();

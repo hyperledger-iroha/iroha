@@ -2107,8 +2107,8 @@ fn native_amx_prepublication_token_rejects_every_state_frontier_drift_and_order_
         })
         .collect::<Vec<_>>();
     let network_id = crate::sumeragi::synthetic_network_id("native-frontier-token-test");
-    let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-        crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
+    let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+        crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
     let context = HeightContext {
         network_id,
         protocol_version: PROTOCOL_VERSION,
@@ -2121,8 +2121,8 @@ fn native_amx_prepublication_token_rejects_every_state_frontier_drift_and_order_
         snapshot_bootstrap: None,
         quorum: DualQuorum::from_roster(&roster).expect("Native frontier token quorum"),
         roster,
-        offline_cash_mint_finality_epoch_id,
-        offline_cash_mint_finality_epoch_roster,
+        kagemusha_mint_finality_epoch_id,
+        kagemusha_mint_finality_epoch_roster,
         nexus_amx_context_hash: Hash::new(b"Native frontier token AMX context"),
         execution_policy_hash: Hash::new(b"Native frontier token execution policy"),
         da_layout: DataAvailabilityLayout {

@@ -7,7 +7,7 @@ Usage:
   scripts/check_mobile_sdk_artifacts.sh [--root <repo-root>] [--apple-only|--android-only] [--require-built-android] [--allow-dirty-source]
 
 Validate the sole first-release mobile SDK surface:
-  - exact Offline Cash V1 C/header exports;
+  - exact KAGEMUSHA V1 C/header exports;
   - source-complete Swift, Kotlin, and mirrored Java V1 codecs/transports;
   - source-authenticated NoritoBridge XCFramework manifest and slices; and
   - optional built Android jars/AARs with both qualified native ABIs.
@@ -378,36 +378,42 @@ require_literal() {
   fi
 }
 
-OFFLINE_CASH_C_SYMBOLS=(
-  connect_norito_offline_cash_v1_payment_request_validate
-  connect_norito_offline_cash_v1_acceptance_intent_authorization_validate
-  connect_norito_offline_cash_v1_acceptance_ticket_validate
-  connect_norito_offline_cash_v1_no_commit_closure_validate
-  connect_norito_offline_cash_v1_payment_validate
-  connect_norito_offline_cash_v1_acknowledgement_validate
-  connect_norito_offline_cash_v1_complete_exchange_validate
-  connect_norito_offline_cash_v1_mint_authorization_validate
-  connect_norito_offline_cash_v1_mint_credit_validate
-  connect_norito_offline_cash_v1_mint_credit_against_authorization_validate
-  connect_norito_offline_cash_v1_redemption_voucher_validate
-  connect_norito_offline_cash_v1_payment_request_text_validate
-  connect_norito_offline_cash_v1_acceptance_intent_authorization_text_validate
-  connect_norito_offline_cash_v1_acceptance_ticket_text_validate
-  connect_norito_offline_cash_v1_no_commit_closure_text_validate
-  connect_norito_offline_cash_v1_payment_text_validate
-  connect_norito_offline_cash_v1_acknowledgement_text_validate
-  connect_norito_offline_cash_v1_complete_exchange_text_validate
-  connect_norito_offline_cash_v1_mint_authorization_text_validate
-  connect_norito_offline_cash_v1_mint_credit_text_validate
-  connect_norito_offline_cash_v1_mint_credit_against_authorization_text_validate
-  connect_norito_offline_cash_v1_redemption_voucher_text_validate
-  connect_norito_offline_cash_device_capabilities_v1
-  connect_norito_offline_cash_device_execute_v1
+KAGEMUSHA_C_SYMBOLS=(
+  connect_norito_kagemusha_v1_payment_request_validate
+  connect_norito_kagemusha_v1_payment_validate
+  connect_norito_kagemusha_v1_acknowledgement_validate
+  connect_norito_kagemusha_v1_complete_exchange_validate
+  connect_norito_kagemusha_v1_mint_authorization_validate
+  connect_norito_kagemusha_v1_mint_credit_validate
+  connect_norito_kagemusha_v1_mint_credit_against_authorization_validate
+  connect_norito_kagemusha_v1_redemption_voucher_validate
+  connect_norito_kagemusha_v1_payment_request_text_validate
+  connect_norito_kagemusha_v1_payment_text_validate
+  connect_norito_kagemusha_v1_acknowledgement_text_validate
+  connect_norito_kagemusha_v1_complete_exchange_text_validate
+  connect_norito_kagemusha_v1_mint_authorization_text_validate
+  connect_norito_kagemusha_v1_mint_credit_text_validate
+  connect_norito_kagemusha_v1_mint_credit_against_authorization_text_validate
+  connect_norito_kagemusha_v1_redemption_voucher_text_validate
+  connect_norito_kagemusha_device_mint_stage_command_v1_validate
+  connect_norito_kagemusha_device_mint_stage_result_v1_validate
+  connect_norito_kagemusha_device_capabilities_v1
+  connect_norito_kagemusha_device_execute_v1
 )
 
-RETIRED_PROTOCOL_C_SYMBOLS=(
-  connect_norito_private_settlement_auditor_capsule_response_verify_v1
+REQUIRED_PROTOCOL_C_SYMBOLS=(
+  connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1
 )
+RETIRED_AUDITOR_CAPSULE_VERIFY_PARTS=(
+  connect_norito_private_settlement_auditor_capsule_response
+  verify
+  v1
+)
+RETIRED_PROTOCOL_C_SYMBOLS=(
+  "${RETIRED_AUDITOR_CAPSULE_VERIFY_PARTS[0]}_${RETIRED_AUDITOR_CAPSULE_VERIFY_PARTS[1]}_${RETIRED_AUDITOR_CAPSULE_VERIFY_PARTS[2]}"
+)
+RETIRED_KAGEMUSHA_PARTS=(cash offline)
+RETIRED_KAGEMUSHA_C_PREFIX="connect_norito_${RETIRED_KAGEMUSHA_PARTS[1]}_${RETIRED_KAGEMUSHA_PARTS[0]}_"
 
 check_source_contract() {
   local gate="$ROOT_DIR/ci/check_connect_norito_bridge_header.sh"
@@ -416,12 +422,12 @@ check_source_contract() {
     fail "NoritoBridge C/Rust export parity failed"
   fi
 
-  require_file "$ROOT_DIR/fixtures/offline/offline_cash_v1.json" "shared Offline Cash V1 fixture"
-  require_file "$ROOT_DIR/IrohaSwift/Sources/IrohaSwift/OfflineCashWireV1.swift" "Swift Offline Cash V1 codec"
-  require_file "$ROOT_DIR/IrohaSwift/Sources/IrohaSwift/OfflineCashDeviceLifecycleBridgeV1.swift" "Swift hardware lifecycle bridge"
-  require_file "$ROOT_DIR/kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashWireV1.kt" "Kotlin Offline Cash V1 codec"
-  require_file "$ROOT_DIR/kotlin/client-android/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineCashDeviceLifecycleBridgeV1.kt" "Kotlin hardware lifecycle bridge"
-  require_file "$ROOT_DIR/java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineCashWireV1.java" "Java Offline Cash V1 codec"
+  require_file "$ROOT_DIR/fixtures/offline/kagemusha_v1.json" "shared KAGEMUSHA V1 fixture"
+  require_file "$ROOT_DIR/IrohaSwift/Sources/IrohaSwift/KagemushaWireV1.swift" "Swift KAGEMUSHA V1 codec"
+  require_file "$ROOT_DIR/IrohaSwift/Sources/IrohaSwift/KagemushaDeviceLifecycleBridgeV1.swift" "Swift hardware lifecycle bridge"
+  require_file "$ROOT_DIR/kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaWireV1.kt" "Kotlin KAGEMUSHA V1 codec"
+  require_file "$ROOT_DIR/kotlin/client-android/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaDeviceLifecycleBridgeV1.kt" "Kotlin hardware lifecycle bridge"
+  require_file "$ROOT_DIR/java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaWireV1.java" "Java KAGEMUSHA V1 codec"
 }
 
 check_binary_symbols() {
@@ -440,7 +446,12 @@ check_binary_symbols() {
   fi
   [[ -n "$symbols" ]] || { fail "$label has no inspectable exported symbols"; return; }
   local symbol
-  for symbol in "${OFFLINE_CASH_C_SYMBOLS[@]}"; do
+  for symbol in "${KAGEMUSHA_C_SYMBOLS[@]}"; do
+    if ! grep -Eq "^_?${symbol}$" <<<"$symbols"; then
+      fail "$label is missing $symbol"
+    fi
+  done
+  for symbol in "${REQUIRED_PROTOCOL_C_SYMBOLS[@]}"; do
     if ! grep -Eq "^_?${symbol}$" <<<"$symbols"; then
       fail "$label is missing $symbol"
     fi
@@ -450,8 +461,14 @@ check_binary_symbols() {
       fail "$label exposes retired protocol symbol $symbol"
     fi
   done
-  if grep -Eq '^_?connect_norito_kagemusha_' <<<"$symbols"; then
-    fail "$label exposes retired Kagemusha protocol symbols"
+  if grep -Eq "^_?${RETIRED_KAGEMUSHA_C_PREFIX}" <<<"$symbols"; then
+    fail "$label exposes a retired KAGEMUSHA C namespace"
+  fi
+  local observed_kagemusha expected_kagemusha
+  observed_kagemusha="$(grep -E '^_?connect_norito_kagemusha_' <<<"$symbols" | sed 's/^_//' | sort -u || true)"
+  expected_kagemusha="$(printf '%s\n' "${KAGEMUSHA_C_SYMBOLS[@]}" | sort -u)"
+  if [[ "$observed_kagemusha" != "$expected_kagemusha" ]]; then
+    fail "$label KAGEMUSHA export inventory is not exact"
   fi
 }
 

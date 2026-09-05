@@ -211,8 +211,8 @@ const VERIFYING_KEY_CLIENT_URL = new URL(
   import.meta.url,
 ).href;
 const PRIVACY_EXACT12_CAPABILITY_MANIFEST_MAX_BYTES = 256 * 1024;
-const OFFLINE_CASH_READINESS_JSON_MAX_BYTES_V1 = 4 * 1024;
-const OFFLINE_CASH_OPERATION_STATUS_JSON_MAX_BYTES_V1 = 16 * 1024 * 1024;
+const KAGEMUSHA_READINESS_JSON_MAX_BYTES_V1 = 4 * 1024;
+const KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1 = 16 * 1024 * 1024;
 const FEE_QUOTE_JSON_MAX_BYTES = 64 * 1024;
 const FEE_SPONSOR_PROGRAM_JSON_MAX_BYTES = 64 * 1024;
 const PIPELINE_RECEIPT_MAX_BYTES = 1024 * 1024;
@@ -1763,81 +1763,125 @@ export class ToriiClient {
     }
   }
 
-  /** Fetch the universally compiled, asset-neutral OfflineStatus projection. */
-  async getOfflineCapability(options = {}) {
+  /** Fetch the universally compiled, asset-neutral KagemushaReadinessV1 projection. */
+  async getKagemushaReadiness(options = {}) {
     const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
       options,
-      "getOfflineCapability",
+      "getKagemushaReadiness",
     );
-    assertSupportedOptionKeys(rest, new Set([]), "getOfflineCapability options");
+    assertSupportedOptionKeys(rest, new Set([]), "getKagemushaReadiness options");
     const optionalModulePromise = loadToriiOptionalModule();
-    const response = await this._request("GET", "/v1/offline/readiness", {
+    const response = await this._request("GET", "/v1/kagemusha/readiness", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
       redirect: "error",
     });
     await this._expectStatus(response, [200]);
     const {
-      normalizeOfflineCashReadinessV1,
-      requireOfflineCashJsonContentTypeV1,
+      normalizeKagemushaReadinessV1,
+      requireKagemushaJsonContentTypeV1,
     } = await optionalModulePromise;
-    requireOfflineCashJsonContentTypeV1(
+    requireKagemushaJsonContentTypeV1(
       this._getHeader(response, "content-type"),
-      "Offline capability response",
+      "KAGEMUSHA readiness response",
     );
     const payload = await this._readBoundedLosslessIntegerJson(
       response,
-      OFFLINE_CASH_READINESS_JSON_MAX_BYTES_V1,
-      "Offline capability response",
+      KAGEMUSHA_READINESS_JSON_MAX_BYTES_V1,
+      "KAGEMUSHA readiness response",
       { signal },
     );
-    return normalizeOfflineCashReadinessV1(payload);
+    return normalizeKagemushaReadinessV1(payload);
   }
 
-  /** Submit one canonical Offline Cash V1 top-up intent. */
-  async submitOfflineCashTopUp(request, options = {}) {
-    return this._submitOfflineCashOperationV1("/v1/offline/top-up", "top_up", request, options);
-  }
-
-  /** Submit one canonical Offline Cash V1 full or partial redemption intent. */
-  async submitOfflineCashRedemption(request, options = {}) {
-    return this._submitOfflineCashOperationV1("/v1/offline/redeem", "redemption", request, options);
-  }
-
-  /** Read one Offline Cash V1 operation without exposing an unverified monetary result. */
-  async getOfflineCashOperation(operationId, options = {}) {
-    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(options, "getOfflineCashOperation");
-    assertSupportedOptionKeys(rest, new Set([]), "getOfflineCashOperation options");
+  /** Submit one payer-signed canonical KAGEMUSHA V1 top-up transaction. */
+  async submitKagemushaTopUp(signedTransaction, operationId, options = {}) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "submitKagemushaTopUp",
+    );
+    assertSupportedOptionKeys(rest, new Set([]), "submitKagemushaTopUp options");
+    if (typeof operationId === "string") {
+      throw new TypeError(
+        "submitKagemushaTopUp operationId must be exact nonzero 32-byte binary data",
+      );
+    }
     const optional = await loadToriiOptionalModule();
-    const operationIdHex = optional.offlineCashOperationIdHexV1(operationId);
-    const response = await this._request("GET", `/v1/offline/operations/${operationIdHex}`, {
+    const operationIdHex = optional.kagemushaOperationIdHexV1(operationId);
+    if (
+      !ArrayBuffer.isView(signedTransaction) &&
+      !(signedTransaction instanceof ArrayBuffer)
+    ) {
+      throw new TypeError(
+        "submitKagemushaTopUp signedTransaction must be exact binary data",
+      );
+    }
+    const body = encodeCanonicalVersionedSignedTransactionV1(
+      toBuffer(signedTransaction),
+      this._nativeRuntime,
+    );
+    return this._submitKagemushaOperationBodyV1(
+      "/v1/kagemusha/top-up",
+      "top_up",
+      body,
+      operationIdHex,
+      signal,
+      optional,
+    );
+  }
+
+  /** Submit one canonical KAGEMUSHA V1 full or partial redemption intent. */
+  async submitKagemushaRedemption(request, options = {}) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "submitKagemushaRedemption",
+    );
+    assertSupportedOptionKeys(rest, new Set([]), "submitKagemushaRedemption options");
+    const optional = await loadToriiOptionalModule();
+    return this._submitKagemushaOperationBodyV1(
+      "/v1/kagemusha/redeem",
+      "redemption",
+      optional.Kagemusha.encodeRedemptionRequest(request),
+      optional.kagemushaOperationIdHexV1(request.operationId),
+      signal,
+      optional,
+    );
+  }
+
+  /** Read one KAGEMUSHA V1 operation without exposing an unverified monetary result. */
+  async getKagemushaOperation(operationId, options = {}) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(options, "getKagemushaOperation");
+    assertSupportedOptionKeys(rest, new Set([]), "getKagemushaOperation options");
+    const optional = await loadToriiOptionalModule();
+    const operationIdHex = optional.kagemushaOperationIdHexV1(operationId);
+    const response = await this._request("GET", `/v1/kagemusha/operations/${operationIdHex}`, {
       headers: JSON_ACCEPT_HEADERS,
       signal,
       redirect: "error",
     });
     await this._expectStatus(response, [200]);
-    optional.requireOfflineCashJsonContentTypeV1(this._getHeader(response, "content-type"), "Offline Cash operation response");
+    optional.requireKagemushaJsonContentTypeV1(this._getHeader(response, "content-type"), "KAGEMUSHA operation response");
     const payload = await this._readBoundedLosslessIntegerJson(
       response,
-      OFFLINE_CASH_OPERATION_STATUS_JSON_MAX_BYTES_V1,
-      "Offline Cash operation response",
+      KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
+      "KAGEMUSHA operation response",
       { signal },
     );
-    const status = optional.normalizeUnverifiedOfflineCashOperationStatusV1(payload);
-    if (optional.offlineCashOperationIdHexV1(status.operationId) !== operationIdHex) {
-      throw new TypeError("Offline Cash operation response ID does not match the requested resource");
+    const status = optional.normalizeUnverifiedKagemushaOperationStatusV1(payload);
+    if (optional.kagemushaOperationIdHexV1(status.operationId) !== operationIdHex) {
+      throw new TypeError("KAGEMUSHA operation response ID does not match the requested resource");
     }
     return status;
   }
 
-  async _submitOfflineCashOperationV1(path, kind, request, options) {
-    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(options, "submitOfflineCashOperation");
-    assertSupportedOptionKeys(rest, new Set([]), "submitOfflineCashOperation options");
-    const optional = await loadToriiOptionalModule();
-    const requestBody = kind === "top_up"
-      ? optional.OfflineCashV1.encodeTopUpRequest(request)
-      : optional.OfflineCashV1.encodeRedemptionRequest(request);
-    const operationIdHex = optional.offlineCashOperationIdHexV1(request.operationId);
+  async _submitKagemushaOperationBodyV1(
+    path,
+    kind,
+    requestBody,
+    operationIdHex,
+    signal,
+    optional,
+  ) {
     const response = await this._request("POST", path, {
       headers: {
         "Content-Type": APPLICATION_NORITO,
@@ -1850,17 +1894,24 @@ export class ToriiClient {
       disableRetries: true,
     });
     await this._expectStatus(response, [200, 202]);
-    optional.requireOfflineCashJsonContentTypeV1(this._getHeader(response, "content-type"), "Offline Cash operation response");
+    optional.requireKagemushaJsonContentTypeV1(this._getHeader(response, "content-type"), "KAGEMUSHA operation response");
     const payload = await this._readBoundedLosslessIntegerJson(
       response,
-      OFFLINE_CASH_OPERATION_STATUS_JSON_MAX_BYTES_V1,
-      "Offline Cash operation response",
+      KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1,
+      "KAGEMUSHA operation response",
       { signal },
     );
-    const status = optional.normalizeUnverifiedOfflineCashOperationStatusV1(payload);
-    if (optional.offlineCashOperationIdHexV1(status.operationId) !== operationIdHex || status.kind !== kind) {
-      throw new TypeError("Offline Cash operation response does not match the submitted request");
+    const status = optional.normalizeUnverifiedKagemushaOperationStatusV1(payload);
+    if (optional.kagemushaOperationIdHexV1(status.operationId) !== operationIdHex || status.kind !== kind) {
+      throw new TypeError("KAGEMUSHA operation response does not match the submitted request");
     }
+    optional.requireKagemushaSubmissionResponseV1({
+      statusCode: responseStatusWithoutUserGetter(response),
+      location: this._getHeader(response, "location"),
+      retryAfter: this._getHeader(response, "retry-after"),
+      operationIdHex,
+      operationState: status.state,
+    });
     return status;
   }
   /**
@@ -32655,7 +32706,7 @@ const PRODUCTION_VERIFY_BACKEND_LABELS_V1 = new Set([
   "halo2/pasta/kaigi-roster-v1",
   "halo2/pasta/kaigi-usage-v1",
   "halo2/pasta/ivm-execution-v1",
-  "halo2/pasta/offline-cash-v1-mint-fold-merkle16-axiom-poseidon-v1",
+  "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1",
   "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
   "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
   "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",

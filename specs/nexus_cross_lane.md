@@ -72,7 +72,41 @@ and durable journal record. Before returning public `202 Accepted`, the ingress
 node validates that certificate against the exact request and persists its
 canonical bytes in local Kura. That durable certificate is the public
 acceptance boundary; it does not assert that the binding is already in WSV.
-There is no deferred, metadata-marker, or legacy proxy admission branch.
+There is no unauthenticated deferred metadata marker or legacy proxy admission
+branch. An authenticated quorum certificate received ahead of the local
+canonical frontier is instead retained in the bounded Kura pending-certificate
+set only when its embedded roster and lane incarnation equal the receiver's
+exact current authority source, then reclassified after catch-up. Future
+evidence cannot create queue ownership or become carrier-eligible before its
+bound history arrives. Authority-source drift while it is still future makes
+the certificate stale and releases its Kura slot rather than blocking the
+intervening proposal needed for catch-up.
+
+Ingress classifies the supplied context against one coherent state view. An
+exact current context is admitted normally. A historical context is reusable
+only when the authority already owns and revalidates the same durable local
+claim; an honest authority signs only while the context is current or while
+replaying that exact claim, never for a first-time unowned old-height request.
+A previously assembled quorum certificate may,
+however, become carrier-eligible after a height-only race when its original
+predecessor remains in canonical history and every embedded route, roster, and
+incarnation exactly matches the receiver's current authority source. This
+exception is enforced independently at certificate persistence and carrier
+validation, and does not create a historical request-signing path. An
+ahead-of-frontier request whose authority source matches locally returns
+retryable `queue_plan_admission_context_future` without mutating queue
+ownership. A noncanonical predecessor, self-declared or currently different
+roster, retired incarnation, or inactive routing plan fails closed as
+`queue_plan_admission_context_mismatch`.
+
+The delayed-certificate argument assumes the protocol's static bound of at
+most `f` Byzantine identities in each `3f+1` authority: an `f+1` durable quorum
+that exactly matches the current roster includes at least one current honest
+signer who signed while the context was current. It does not prove continuous
+roster equality across intervening heights and does not claim safety under a
+mobile-adversary/key-accumulation model exceeding `f`; deployments requiring
+that model need immutable historical authority records or proactive key
+evolution before enabling this exception.
 
 The proposal-native certificate is control work, not ordinary transaction
 execution. The `QueuePlanSynced` transaction's physical FIFO position and then

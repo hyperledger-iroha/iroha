@@ -20,10 +20,10 @@
       "import": "./dist/browser.js",
       "types": "./browser.d.ts"
     },
-    "./offline-cash-v1": {
-      "browser": "./dist/offlineCashV1.js",
-      "import": "./dist/offlineCashV1.js",
-      "types": "./offline-cash-v1.d.ts"
+    "./kagemusha": {
+      "browser": "./dist/kagemusha.js",
+      "import": "./dist/kagemusha.js",
+      "types": "./kagemusha.d.ts"
     },
     "./privacy-capabilities": {
       "browser": "./dist/privacyCapabilities.js",
@@ -133,8 +133,8 @@
       "browser": [
         "./browser.d.ts"
       ],
-      "offline-cash-v1": [
-        "./offline-cash-v1.d.ts"
+      "kagemusha": [
+        "./kagemusha.d.ts"
       ],
       "privacy-capabilities": [
         "./privacy-capabilities.d.ts"
@@ -247,6 +247,7 @@
     "README.md",
     "LICENSE",
     "browser.d.ts",
+    "kagemusha.d.ts",
     "address.d.ts",
     "normalizers.d.ts",
     "blake2b.d.ts",

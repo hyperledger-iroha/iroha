@@ -4529,6 +4529,7 @@ struct RuntimeQueueOwnershipSnapshot {
     occurrence_owners: Vec<RuntimeQueueOccurrenceOwner>,
     occurrence_index: BTreeMap<u128, usize>,
     minimum_lifecycle_ordinal: Option<u128>,
+    maximum_lifecycle_ordinal: Option<u128>,
     completion_minimum_lifecycle_ordinal: Option<u128>,
     progress_minimum_lifecycle_ordinal: Option<u128>,
     normal_minimum_lifecycle_ordinal: Option<u128>,
@@ -4545,6 +4546,7 @@ impl PartialEq for RuntimeQueueOwnershipSnapshot {
             && self.occurrence_owners == other.occurrence_owners
             && self.occurrence_index == other.occurrence_index
             && self.minimum_lifecycle_ordinal == other.minimum_lifecycle_ordinal
+            && self.maximum_lifecycle_ordinal == other.maximum_lifecycle_ordinal
             && self.completion_minimum_lifecycle_ordinal
                 == other.completion_minimum_lifecycle_ordinal
             && self.progress_minimum_lifecycle_ordinal == other.progress_minimum_lifecycle_ordinal
@@ -4559,6 +4561,7 @@ impl Eq for RuntimeQueueOwnershipSnapshot {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RuntimeQueueSelectionKind {
     Ordinary,
+    LifecycleApplyPredecessor,
     OrdinaryViewProgress,
     FenceCompletion,
     FencePredecessor,
@@ -4572,6 +4575,7 @@ impl RuntimeQueueSelectionKind {
     const fn code(self) -> u8 {
         match self {
             Self::Ordinary => 1,
+            Self::LifecycleApplyPredecessor => 10,
             Self::OrdinaryViewProgress => 7,
             Self::FenceCompletion => 2,
             Self::PacemakerProgress => 3,
@@ -4597,6 +4601,7 @@ struct RuntimeQueueSelectionSeal {
     queue_before: RuntimeQueueOwnershipProjection,
     queue_before_snapshot_hash: iroha_crypto::Hash,
     oldest_lifecycle_ordinal: u128,
+    lifecycle_upper_bound: Option<u128>,
     completion_minimum_lifecycle_ordinal: Option<u128>,
     progress_minimum_lifecycle_ordinal: Option<u128>,
     normal_minimum_lifecycle_ordinal: Option<u128>,
@@ -4631,6 +4636,7 @@ impl PartialEq for RuntimeQueueSelectionSeal {
             && self.queue_before == other.queue_before
             && self.queue_before_snapshot_hash == other.queue_before_snapshot_hash
             && self.oldest_lifecycle_ordinal == other.oldest_lifecycle_ordinal
+            && self.lifecycle_upper_bound == other.lifecycle_upper_bound
             && self.completion_minimum_lifecycle_ordinal
                 == other.completion_minimum_lifecycle_ordinal
             && self.progress_minimum_lifecycle_ordinal == other.progress_minimum_lifecycle_ordinal
@@ -4687,7 +4693,7 @@ fn runtime_queue_ownership_snapshot_projection_hash(
     snapshot: &RuntimeQueueOwnershipSnapshot,
 ) -> iroha_crypto::Hash {
     let mut projection = Vec::new();
-    projection.extend_from_slice(b"iroha:sumeragi:v2:runtime-queue-snapshot:v3");
+    projection.extend_from_slice(b"iroha:sumeragi:v2:runtime-queue-snapshot:v4");
     append_runtime_identity_field(
         &mut projection,
         &(Arc::as_ptr(&snapshot.source_identity) as usize).to_le_bytes(),
@@ -4703,6 +4709,7 @@ fn runtime_queue_ownership_snapshot_projection_hash(
         append_runtime_identity_field(&mut projection, owner.projection_hash.as_ref());
     }
     append_runtime_optional_ordinal(&mut projection, snapshot.minimum_lifecycle_ordinal);
+    append_runtime_optional_ordinal(&mut projection, snapshot.maximum_lifecycle_ordinal);
     append_runtime_optional_ordinal(
         &mut projection,
         snapshot.completion_minimum_lifecycle_ordinal,
@@ -4752,9 +4759,15 @@ impl RuntimeQueueOwnershipSnapshot {
             && (self.projection.len != 0 || self.projection.max_service_debt == 0)
             && class_minima_are_exact
             && occurrences_are_exact
-            && match (self.minimum_lifecycle_ordinal, total_count) {
-                (None, Some(0)) => self.projection.len == 0,
-                (Some(ordinal), Some(count)) => ordinal != 0 && count == self.projection.len,
+            && match (
+                self.minimum_lifecycle_ordinal,
+                self.maximum_lifecycle_ordinal,
+                total_count,
+            ) {
+                (None, None, Some(0)) => self.projection.len == 0,
+                (Some(minimum), Some(maximum), Some(count)) => {
+                    minimum != 0 && minimum <= maximum && count == self.projection.len
+                }
                 _ => false,
             }
     }
@@ -4869,7 +4882,7 @@ fn runtime_queue_selection_seal_projection_hash(
     seal: &RuntimeQueueSelectionSeal,
 ) -> iroha_crypto::Hash {
     let mut projection = Vec::new();
-    projection.extend_from_slice(b"iroha:sumeragi:v2:runtime-queue-selection:v5");
+    projection.extend_from_slice(b"iroha:sumeragi:v2:runtime-queue-selection:v6");
     append_runtime_identity_field(
         &mut projection,
         &(Arc::as_ptr(&seal.source_identity) as usize).to_le_bytes(),
@@ -4885,6 +4898,7 @@ fn runtime_queue_selection_seal_projection_hash(
         &mut projection,
         &seal.oldest_lifecycle_ordinal.to_le_bytes(),
     );
+    append_runtime_optional_ordinal(&mut projection, seal.lifecycle_upper_bound);
     append_runtime_optional_ordinal(&mut projection, seal.completion_minimum_lifecycle_ordinal);
     append_runtime_optional_ordinal(&mut projection, seal.progress_minimum_lifecycle_ordinal);
     append_runtime_optional_ordinal(&mut projection, seal.normal_minimum_lifecycle_ordinal);
@@ -4960,6 +4974,7 @@ impl RuntimeQueueSelectionSeal {
                 self.ordinary_remaining_capacity_before == Some(0)
             }
             RuntimeQueueSelectionKind::Ordinary
+            | RuntimeQueueSelectionKind::LifecycleApplyPredecessor
             | RuntimeQueueSelectionKind::OrdinaryViewProgress
             | RuntimeQueueSelectionKind::FenceCompletion
             | RuntimeQueueSelectionKind::FencePredecessor
@@ -4969,6 +4984,16 @@ impl RuntimeQueueSelectionSeal {
             | RuntimeQueueSelectionKind::PreTimeoutLocalProposalReady => {
                 self.ordinary_remaining_capacity_before.is_none()
             }
+        };
+        let lifecycle_bound_is_exact = match (self.kind, self.lifecycle_upper_bound) {
+            (RuntimeQueueSelectionKind::LifecycleApplyPredecessor, Some(upper_bound)) => {
+                upper_bound != 0
+                    && self.oldest_lifecycle_ordinal < upper_bound
+                    && self.selected_lifecycle_ordinal < upper_bound
+            }
+            (RuntimeQueueSelectionKind::LifecycleApplyPredecessor, None) => false,
+            (_, None) => true,
+            (_, Some(_)) => false,
         };
         self.projection_hash == runtime_queue_selection_seal_projection_hash(self)
             && self.queue_before.len != 0
@@ -4985,11 +5010,13 @@ impl RuntimeQueueSelectionSeal {
             && self.selected_eligible_skips <= self.queue_before.max_service_debt
             && self.selected_identity.validate_exact()
             && remaining_capacity_is_exact
+            && lifecycle_bound_is_exact
             && (!self.selected_local_proposal_worker_completed_before_deadline
                 || (self.selected_class == SERVICE_CLASS_COMPLETION
                     && self.selected_identity.kind == RuntimeCommandKind::LocalProposalReady))
             && match self.kind {
-                RuntimeQueueSelectionKind::Ordinary => {
+                RuntimeQueueSelectionKind::Ordinary
+                | RuntimeQueueSelectionKind::LifecycleApplyPredecessor => {
                     selected_class_minimum == Some(self.selected_lifecycle_ordinal)
                         && selected_by_ordinary_cursor.selected == self.selected_class
                         && selected_by_ordinary_cursor.next == self.cursor_after_removal
@@ -5076,6 +5103,15 @@ impl RuntimeQueueSelectionSeal {
             && self.queue_before == before.projection
             && self.queue_before_snapshot_hash == before.projection_hash
             && self.oldest_lifecycle_ordinal == before.minimum_lifecycle_ordinal.unwrap_or(0)
+            && match self.lifecycle_upper_bound {
+                Some(upper_bound) => {
+                    self.kind == RuntimeQueueSelectionKind::LifecycleApplyPredecessor
+                        && before
+                            .maximum_lifecycle_ordinal
+                            .is_some_and(|maximum| maximum < upper_bound)
+                }
+                None => self.kind != RuntimeQueueSelectionKind::LifecycleApplyPredecessor,
+            }
             && self.completion_minimum_lifecycle_ordinal
                 == before.completion_minimum_lifecycle_ordinal
             && self.progress_minimum_lifecycle_ordinal == before.progress_minimum_lifecycle_ordinal
@@ -5189,6 +5225,12 @@ pub(crate) enum RuntimeSelectedOwnerKind {
     /// A FIFO command encountered retryable adapter backpressure and was
     /// restored with its immutable admission and lifecycle owner intact.
     FifoRetryRetained,
+    /// One fair FIFO command selected while an attested lifecycle Apply keeps
+    /// its post-Apply output fenced behind the complete pre-Apply queue.
+    LifecycleApplyPredecessor,
+    /// The lifecycle-Apply predecessor encountered retryable adapter pressure
+    /// and retained its immutable queue owner for the next bounded turn.
+    LifecycleApplyPredecessorRetryRetained,
     /// No serialized owner was ready.
     Idle,
 }
@@ -5334,6 +5376,8 @@ impl RuntimeSelectedOwnerKind {
             Self::PreTimeoutLocalProposalReady => 13,
             Self::CompletionCapacityRelief => 14,
             Self::CompletionCapacityReliefRetryRetained => 15,
+            Self::LifecycleApplyPredecessor => 16,
+            Self::LifecycleApplyPredecessorRetryRetained => 17,
         }
     }
 }
@@ -6136,6 +6180,7 @@ impl RuntimeSchedulerOwnershipEvidence {
                     Some(CommandClass::Completion | CommandClass::Progress)
                 ),
                 RuntimeQueueSelectionKind::Ordinary
+                | RuntimeQueueSelectionKind::LifecycleApplyPredecessor
                 | RuntimeQueueSelectionKind::FenceCompletion
                 | RuntimeQueueSelectionKind::FencePredecessor
                 | RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc
@@ -6221,6 +6266,68 @@ impl RuntimeSchedulerOwnershipEvidence {
                     &self.queue_before_snapshot,
                     &self.queue_after_snapshot,
                     selection_kind,
+                    retry_retained,
+                );
+            return exact
+                .then_some(())
+                .ok_or(RuntimeSchedulerEvidenceError::InvalidProjection);
+        }
+        if let (
+            RuntimeSelectedOwnerKind::LifecycleApplyPredecessor
+            | RuntimeSelectedOwnerKind::LifecycleApplyPredecessorRetryRetained,
+            RuntimeSelectedCandidateOwnership::Exact(candidate),
+        ) = (&self.selected, &self.candidate)
+        {
+            let retry_retained =
+                self.selected == RuntimeSelectedOwnerKind::LifecycleApplyPredecessorRetryRetained;
+            let service = select_bounded_service_class(
+                self.queue_before.service_cursor,
+                self.completion_ready,
+                self.progress_ready,
+                self.normal_ready,
+            );
+            let exact = self.clocks_armed
+                && !self.timeout_due
+                && self.fifo_ready
+                && !self.fence_completion_bypass
+                && candidate.identity.validate_exact()
+                && candidate.kind == candidate.identity.kind
+                && candidate.admission_ordinal != 0
+                && candidate.lifecycle_ordinal != 0
+                && candidate.lifecycle_ordinal <= candidate.admission_ordinal
+                && runtime_fifo_candidate_ingress_is_exact(candidate)
+                && candidate.projection_hash == runtime_fifo_candidate_projection_hash(candidate)
+                && candidate.causal_origin.validate_exact()
+                && candidate.causal_origin.root_lifecycle_ordinal
+                    == Some(candidate.lifecycle_ordinal)
+                && candidate.class != SERVICE_CLASS_NONE
+                && service.selected == candidate.class
+                && service.next == self.queue_after.service_cursor
+                && candidate.fifo_position < self.queue_before.len
+                && candidate.eligible_skips_before <= self.queue_before.max_service_debt
+                && candidate.eligible_skips_after == 0
+                && self.queue_after.max_service_debt
+                    <= self.queue_before.max_service_debt.saturating_add(1)
+                && ScheduleState {
+                    fifo_owed: self.fifo_owed_before,
+                }
+                .select(false, false, self.fifo_ready)
+                    == (
+                        ScheduledWork::Fifo,
+                        ScheduleState {
+                            fifo_owed: self.fifo_owed_after,
+                        },
+                    )
+                && if retry_retained {
+                    self.queue_after.len == self.queue_before.len
+                } else {
+                    self.queue_after.len.checked_add(1) == Some(self.queue_before.len)
+                }
+                && candidate.selection_seal.matches_scheduler_occurrence(
+                    candidate,
+                    &self.queue_before_snapshot,
+                    &self.queue_after_snapshot,
+                    RuntimeQueueSelectionKind::LifecycleApplyPredecessor,
                     retry_retained,
                 );
             return exact
@@ -7171,12 +7278,17 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             .collect::<BTreeMap<_, _>>();
         let occurrence_scan_complete =
             occurrence_scan_complete && occurrence_index.len() == occurrence_owners.len();
-        let minimum_lifecycle_ordinal = self
+        let lifecycle_ordinals = self
             .commands
             .iter()
             .map(|queued| queued.lifecycle_ordinal)
-            .min()
-            .unwrap_or(None);
+            .collect::<Option<Vec<_>>>();
+        let minimum_lifecycle_ordinal = lifecycle_ordinals
+            .as_ref()
+            .and_then(|ordinals| ordinals.iter().copied().min());
+        let maximum_lifecycle_ordinal = lifecycle_ordinals
+            .as_ref()
+            .and_then(|ordinals| ordinals.iter().copied().max());
         let (completion_minimum_lifecycle_ordinal, completion_count) =
             self.class_lifecycle_stats(CommandClass::Completion);
         let (progress_minimum_lifecycle_ordinal, progress_count) =
@@ -7190,6 +7302,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             occurrence_owners,
             occurrence_index,
             minimum_lifecycle_ordinal,
+            maximum_lifecycle_ordinal,
             completion_minimum_lifecycle_ordinal,
             progress_minimum_lifecycle_ordinal,
             normal_minimum_lifecycle_ordinal,
@@ -7205,6 +7318,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
     fn mint_selection_seal(
         &self,
         kind: RuntimeQueueSelectionKind,
+        lifecycle_upper_bound: Option<u128>,
         queue_before: &RuntimeQueueOwnershipSnapshot,
         selected_class: u8,
         selected_position: u64,
@@ -7226,11 +7340,27 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         {
             return Err(EnqueueError::FailClosed);
         }
+        let lifecycle_bound_is_exact = match (kind, lifecycle_upper_bound) {
+            (RuntimeQueueSelectionKind::LifecycleApplyPredecessor, Some(upper_bound)) => {
+                upper_bound != 0
+                    && queue_before
+                        .maximum_lifecycle_ordinal
+                        .is_some_and(|maximum| maximum < upper_bound)
+                    && selected_lifecycle_ordinal < upper_bound
+            }
+            (RuntimeQueueSelectionKind::LifecycleApplyPredecessor, None) => false,
+            (_, None) => true,
+            (_, Some(_)) => false,
+        };
+        if !lifecycle_bound_is_exact {
+            return Err(EnqueueError::FailClosed);
+        }
         let oldest_lifecycle_ordinal = queue_before
             .minimum_lifecycle_ordinal
             .ok_or(EnqueueError::FailClosed)?;
         let max_debt_after_upper_bound = match kind {
             RuntimeQueueSelectionKind::Ordinary
+            | RuntimeQueueSelectionKind::LifecycleApplyPredecessor
             | RuntimeQueueSelectionKind::OrdinaryViewProgress => {
                 queue_before.projection.max_service_debt.saturating_add(1)
             }
@@ -7250,6 +7380,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
                     .map_err(|_| EnqueueError::FailClosed)?,
             ),
             RuntimeQueueSelectionKind::Ordinary
+            | RuntimeQueueSelectionKind::LifecycleApplyPredecessor
             | RuntimeQueueSelectionKind::OrdinaryViewProgress
             | RuntimeQueueSelectionKind::FenceCompletion
             | RuntimeQueueSelectionKind::FencePredecessor
@@ -7265,6 +7396,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             queue_before: queue_before.projection,
             queue_before_snapshot_hash: queue_before.projection_hash,
             oldest_lifecycle_ordinal,
+            lifecycle_upper_bound,
             completion_minimum_lifecycle_ordinal: queue_before.completion_minimum_lifecycle_ordinal,
             progress_minimum_lifecycle_ordinal: queue_before.progress_minimum_lifecycle_ordinal,
             normal_minimum_lifecycle_ordinal: queue_before.normal_minimum_lifecycle_ordinal,
@@ -7581,6 +7713,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             } else {
                 RuntimeQueueSelectionKind::FencePredecessor
             },
+            None,
             &queue_before,
             selected.class.service_code(),
             fifo_position,
@@ -7705,6 +7838,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             u64::try_from(index).expect("bounded runtime FIFO position is representable as u64");
         let selection_seal = self.mint_selection_seal(
             RuntimeQueueSelectionKind::PreTimeoutLocalProposalReady,
+            None,
             &queue_before,
             selected.class.service_code(),
             fifo_position,
@@ -7887,6 +8021,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             });
         let selection_seal = self.mint_selection_seal(
             selection_kind,
+            None,
             &queue_before,
             selected.class.service_code(),
             fifo_position,
@@ -8213,6 +8348,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         let selected_eligible_skips = selected.eligible_skips;
         let selection_seal = self.mint_selection_seal(
             RuntimeQueueSelectionKind::CompletionCapacityRelief,
+            None,
             &prepared.queue_before,
             SERVICE_CLASS_COMPLETION,
             prepared.selected_position,
@@ -8263,6 +8399,27 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
     where
         C: ExactRuntimeCommandIdentity,
     {
+        self.pop_next_with_selection_kind(RuntimeQueueSelectionKind::Ordinary, None)
+    }
+
+    fn pop_next_with_selection_kind(
+        &mut self,
+        selection_kind: RuntimeQueueSelectionKind,
+        lifecycle_upper_bound: Option<u128>,
+    ) -> Result<Option<(TaggedCommand<C>, RuntimeFifoCandidateOwnership)>, EnqueueError>
+    where
+        C: ExactRuntimeCommandIdentity,
+    {
+        let selection_bound_is_exact = match (selection_kind, lifecycle_upper_bound) {
+            (RuntimeQueueSelectionKind::Ordinary, None) => true,
+            (RuntimeQueueSelectionKind::LifecycleApplyPredecessor, Some(upper_bound)) => {
+                self.all_lifecycle_ordinals_before(upper_bound)
+            }
+            _ => false,
+        };
+        if !selection_bound_is_exact {
+            return Err(EnqueueError::FailClosed);
+        }
         let queue_before = self.ownership_snapshot();
         let cursor_before = self.next_class.service_code();
         if self.oldest_lifecycle_ordinal()?.is_none() {
@@ -8349,7 +8506,8 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         let fifo_position =
             u64::try_from(index).expect("bounded runtime FIFO position is representable as u64");
         let selection_seal = self.mint_selection_seal(
-            RuntimeQueueSelectionKind::Ordinary,
+            selection_kind,
+            lifecycle_upper_bound,
             &queue_before,
             selected.class.service_code(),
             fifo_position,
@@ -8542,6 +8700,15 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
     }
     fn len(&self) -> usize {
         self.commands.len()
+    }
+    fn all_lifecycle_ordinals_before(&self, upper_bound: u128) -> bool {
+        upper_bound != 0
+            && !self.commands.is_empty()
+            && self.commands.iter().all(|command| {
+                command
+                    .lifecycle_ordinal
+                    .is_some_and(|ordinal| ordinal < upper_bound)
+            })
     }
     fn exact_remaining_capacity(&self) -> Result<usize, EnqueueError> {
         let ordinary_occupied = self
@@ -14573,6 +14740,224 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             retained_deferred_ingress,
         )
     }
+
+    /// Dispatch one pre-Apply FIFO predecessor while suppressing only retransmission.
+    ///
+    /// This sealed corridor never freezes a new clock owner: the caller has
+    /// already authenticated an earlier live Apply and its exact deferred
+    /// output. A previously frozen absolute timeout is an impossible ownership
+    /// conflict and fails closed, while a merely elapsed periodic deadline is
+    /// masked for this one bounded FIFO turn. This can service an authenticated
+    /// pre-Apply FIFO prefix even when ordinary arbitration did not previously
+    /// mark FIFO debt as owed; a selected predecessor still discharges the same
+    /// ordinary FIFO debt that its service satisfies.
+    pub(in crate::sumeragi) fn try_step_owed_fifo_predecessor(
+        &mut self,
+        now: Instant,
+        apply_ordinal: u128,
+    ) -> Result<Option<RuntimeStep<D::Effect>>, RuntimeError<D::Error>> {
+        if self.fail_closed {
+            return Err(RuntimeError::FailClosed);
+        }
+        if self.last_scheduler_ownership.is_some() {
+            self.latch_fail_closed(
+                "owed-FIFO predecessor dispatch began with an unconsumed scheduler owner",
+            );
+            return Err(RuntimeError::FailClosed);
+        }
+        if self.pending_effect_ownership.is_some() {
+            self.latch_fail_closed(
+                "owed-FIFO predecessor dispatch overtook an unconsumed effect owner",
+            );
+            return Err(RuntimeError::FailClosed);
+        }
+        if !self.pending_leader_wire_terminals.is_empty() {
+            self.latch_fail_closed(
+                "owed-FIFO predecessor dispatch overtook a leader-wire terminal owner",
+            );
+            return Err(RuntimeError::FailClosed);
+        }
+        if !self.clocks_armed {
+            return Err(RuntimeError::ClocksNotArmed);
+        }
+        if self.timeout_owner.is_some() || self.timeout_owner_physical_cut.is_some() {
+            self.latch_fail_closed(
+                "pre-Apply FIFO corridor encountered a previously frozen timeout owner",
+            );
+            return Err(RuntimeError::FailClosed);
+        }
+        if self.ingress.len() == 0 {
+            return Ok(None);
+        }
+        if !self.ingress.all_lifecycle_ordinals_before(apply_ordinal) {
+            self.latch_fail_closed(
+                "pre-Apply FIFO corridor encountered ingress at or after the Apply owner",
+            );
+            return Err(RuntimeError::FailClosed);
+        }
+        if !self.deferred_lifecycle_ownership.is_empty()
+            || !self.deferred_ingress_ownership.is_empty()
+            || !self.driver.all_deferred_admission_ordinals().is_empty()
+            || self.driver.deferred_work_is_serviceable()
+        {
+            self.latch_fail_closed(
+                "pre-Apply FIFO corridor encountered active adapter-deferred ownership",
+            );
+            return Err(RuntimeError::FailClosed);
+        }
+        if self.reconcile_fence_retry_blocked_fifo_owners().is_err() {
+            self.latch_fail_closed("owed-FIFO predecessor retry ownership was invalid");
+            return Err(RuntimeError::FailClosed);
+        }
+        let selected_round_tag = self.round_tag;
+        let schedule_before = self.schedule;
+        let queue_before = self.ingress.ownership_snapshot();
+        let arbitration = self.scheduler_arbitration_inputs(now).map_err(|_| {
+            self.latch_fail_closed("owed-FIFO predecessor arbitration was invalid");
+            RuntimeError::FailClosed
+        })?;
+        if arbitration.timeout_due {
+            self.latch_fail_closed(
+                "pre-Apply FIFO corridor observed timeout due without a frozen owner",
+            );
+            return Err(RuntimeError::FailClosed);
+        }
+        if !arbitration.fifo_ready {
+            self.latch_fail_closed(
+                "pre-Apply FIFO corridor found its complete older queue blocked",
+            );
+            return Err(RuntimeError::FailClosed);
+        }
+        let (scheduled, next_schedule) = schedule_before.select(false, false, true);
+        if scheduled != ScheduledWork::Fifo {
+            self.latch_fail_closed(
+                "pre-Apply FIFO corridor could not discharge ordinary FIFO ownership",
+            );
+            return Err(RuntimeError::FailClosed);
+        }
+        self.schedule = next_schedule;
+        self.dispatch_selected_fifo(
+            now,
+            selected_round_tag,
+            schedule_before,
+            queue_before,
+            arbitration,
+            next_schedule,
+            RuntimeQueueSelectionKind::LifecycleApplyPredecessor,
+            RuntimeSelectedOwnerKind::LifecycleApplyPredecessor,
+            RuntimeSelectedOwnerKind::LifecycleApplyPredecessorRetryRetained,
+            Some(apply_ordinal),
+        )
+        .map(Some)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch_selected_fifo(
+        &mut self,
+        now: Instant,
+        selected_round_tag: EventTag,
+        schedule_before: ScheduleState,
+        queue_before: RuntimeQueueOwnershipSnapshot,
+        arbitration: RuntimeSchedulerArbitrationInputs,
+        next_schedule: ScheduleState,
+        queue_selection_kind: RuntimeQueueSelectionKind,
+        selected_kind: RuntimeSelectedOwnerKind,
+        retry_selected_kind: RuntimeSelectedOwnerKind,
+        lifecycle_upper_bound: Option<u128>,
+    ) -> Result<RuntimeStep<D::Effect>, RuntimeError<D::Error>> {
+        let (command, candidate) = match self
+            .ingress
+            .pop_next_with_selection_kind(queue_selection_kind, lifecycle_upper_bound)
+        {
+            Ok(Some(selected)) => selected,
+            Ok(None) | Err(_) => {
+                self.latch_fail_closed("FIFO arbitration selected no exact ingress candidate");
+                return Err(RuntimeError::FailClosed);
+            }
+        };
+        let owner = match command.lifecycle_owner() {
+            Ok(owner)
+                if owner.lifecycle_ordinal() == candidate.lifecycle_ordinal
+                    && owner.causal_origin() == &candidate.causal_origin =>
+            {
+                owner
+            }
+            Ok(_) | Err(_) => {
+                self.latch_fail_closed("selected FIFO lifecycle owner was inconsistent");
+                return Err(RuntimeError::FailClosed);
+            }
+        };
+        let current_ingress = if command.ingress_ownership.is_some() {
+            RuntimeDispatchIngress::DirectAuthenticated
+        } else {
+            RuntimeDispatchIngress::LocalOrCausal
+        };
+        let parent_statement = command.candidate_semantic_statement;
+        let retry_command = command.clone();
+        let (effects, retry_unadmitted, producer_handoff, retained_deferred_ingress) = match self
+            .driver
+            .dispatch(command)
+        {
+            Ok(dispatch) => {
+                self.accept_driver_dispatch(dispatch, &owner, parent_statement, current_ingress)?
+            }
+            Err(error) => return Err(self.close(error)),
+        };
+        if queue_selection_kind == RuntimeQueueSelectionKind::LifecycleApplyPredecessor
+            && (retained_deferred_ingress
+                || !self.deferred_lifecycle_ownership.is_empty()
+                || !self.deferred_ingress_ownership.is_empty()
+                || !self.driver.all_deferred_admission_ordinals().is_empty())
+        {
+            self.latch_fail_closed("pre-Apply FIFO predecessor created adapter-deferred ownership");
+            return Err(RuntimeError::FailClosed);
+        }
+        if retry_unadmitted {
+            if self
+                .ingress
+                .restore_selected_command(retry_command, &candidate)
+                .is_err()
+            {
+                self.latch_fail_closed(
+                    "retryable FIFO backpressure could not restore its exact owner",
+                );
+                return Err(RuntimeError::FailClosed);
+            }
+            let queue_after = self.ingress.ownership_snapshot();
+            self.retain_scheduler_ownership(
+                retry_selected_kind,
+                selected_round_tag,
+                RuntimeSelectedCandidateOwnership::Exact(candidate),
+                queue_before,
+                queue_after,
+                arbitration,
+                schedule_before,
+                next_schedule,
+            )?;
+            return Ok(RuntimeStep::Advanced(Vec::new()));
+        }
+        let queue_after = self.ingress.ownership_snapshot();
+        self.retain_scheduler_ownership(
+            selected_kind,
+            selected_round_tag,
+            RuntimeSelectedCandidateOwnership::Exact(candidate),
+            queue_before,
+            queue_after,
+            arbitration,
+            schedule_before,
+            next_schedule,
+        )?;
+        self.finish_dispatched_step(
+            now,
+            effects,
+            RuntimeEffectSource::Fifo,
+            owner,
+            parent_statement,
+            producer_handoff,
+            retained_deferred_ingress,
+        )
+    }
+
     /// Run at most one adapter-deferred transition, timer, or admitted command.
     ///
     /// Serviceable adapter debt is filtered first by each target's immutable
@@ -14841,87 +15226,18 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 )
             }
             ScheduledWork::Fifo => {
-                let (command, candidate) = match self.ingress.pop_next_with_ownership() {
-                    Ok(Some(selected)) => selected,
-                    Ok(None) | Err(_) => {
-                        self.latch_fail_closed(
-                            "FIFO arbitration selected no exact ingress candidate",
-                        );
-                        return Err(RuntimeError::FailClosed);
-                    }
-                };
-                let owner = match command.lifecycle_owner() {
-                    Ok(owner)
-                        if owner.lifecycle_ordinal() == candidate.lifecycle_ordinal
-                            && owner.causal_origin() == &candidate.causal_origin =>
-                    {
-                        owner
-                    }
-                    Ok(_) | Err(_) => {
-                        self.latch_fail_closed("selected FIFO lifecycle owner was inconsistent");
-                        return Err(RuntimeError::FailClosed);
-                    }
-                };
-                let current_ingress = if command.ingress_ownership.is_some() {
-                    RuntimeDispatchIngress::DirectAuthenticated
-                } else {
-                    RuntimeDispatchIngress::LocalOrCausal
-                };
-                let parent_statement = command.candidate_semantic_statement;
-                let retry_command = command.clone();
-                let (effects, retry_unadmitted, producer_handoff, retained_deferred_ingress) =
-                    match self.driver.dispatch(command) {
-                        Ok(dispatch) => self.accept_driver_dispatch(
-                            dispatch,
-                            &owner,
-                            parent_statement,
-                            current_ingress,
-                        )?,
-                        Err(error) => return Err(self.close(error)),
-                    };
-                if retry_unadmitted {
-                    if self
-                        .ingress
-                        .restore_selected_command(retry_command, &candidate)
-                        .is_err()
-                    {
-                        self.latch_fail_closed(
-                            "retryable FIFO backpressure could not restore its exact owner",
-                        );
-                        return Err(RuntimeError::FailClosed);
-                    }
-                    let queue_after = self.ingress.ownership_snapshot();
-                    self.retain_scheduler_ownership(
-                        RuntimeSelectedOwnerKind::FifoRetryRetained,
-                        selected_round_tag,
-                        RuntimeSelectedCandidateOwnership::Exact(candidate),
-                        queue_before,
-                        queue_after,
-                        arbitration,
-                        schedule_before,
-                        next_schedule,
-                    )?;
-                    return Ok(RuntimeStep::Advanced(Vec::new()));
-                }
-                let queue_after = self.ingress.ownership_snapshot();
-                self.retain_scheduler_ownership(
-                    RuntimeSelectedOwnerKind::Fifo,
+                return self.dispatch_selected_fifo(
+                    now,
                     selected_round_tag,
-                    RuntimeSelectedCandidateOwnership::Exact(candidate),
-                    queue_before,
-                    queue_after,
-                    arbitration,
                     schedule_before,
+                    queue_before,
+                    arbitration,
                     next_schedule,
-                )?;
-                (
-                    effects,
-                    RuntimeEffectSource::Fifo,
-                    owner,
-                    parent_statement,
-                    producer_handoff,
-                    retained_deferred_ingress,
-                )
+                    RuntimeQueueSelectionKind::Ordinary,
+                    RuntimeSelectedOwnerKind::Fifo,
+                    RuntimeSelectedOwnerKind::FifoRetryRetained,
+                    None,
+                );
             }
             ScheduledWork::Idle => {
                 let queue_after = self.ingress.ownership_snapshot();
@@ -16478,6 +16794,30 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     ) -> Option<RuntimeSchedulerOwnershipEvidence> {
         self.last_scheduler_ownership.take()
     }
+    /// Consume the exact pre-Apply FIFO scheduler carrier and bind its sealed
+    /// queue upper bound to the attested live Apply ordinal.
+    pub(in crate::sumeragi) fn take_lifecycle_apply_predecessor_scheduler_ownership(
+        &mut self,
+        expected_apply_ordinal: u128,
+    ) -> Result<(), RuntimeSchedulerEvidenceError> {
+        let evidence = self
+            .take_last_scheduler_ownership()
+            .ok_or(RuntimeSchedulerEvidenceError::InvalidProjection)?;
+        evidence.validate_exact()?;
+        let bound_matches = expected_apply_ordinal != 0
+            && matches!(
+                (&evidence.selected, &evidence.candidate),
+                (
+                    RuntimeSelectedOwnerKind::LifecycleApplyPredecessor
+                        | RuntimeSelectedOwnerKind::LifecycleApplyPredecessorRetryRetained,
+                    RuntimeSelectedCandidateOwnership::Exact(candidate),
+                ) if candidate.selection_seal.lifecycle_upper_bound
+                    == Some(expected_apply_ordinal)
+            );
+        bound_matches
+            .then_some(())
+            .ok_or(RuntimeSchedulerEvidenceError::InvalidProjection)
+    }
     /// Advance one live scheduler turn and model the production runner taking
     /// its exact ownership carrier before another turn can enter.
     #[cfg(test)]
@@ -16893,29 +17233,40 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         self.driver
             .prepare_recovered_decision_fetch_store(authority)
     }
-    /// Return whether a typed lifecycle Decision Apply may freeze reducer mutation.
-    pub(in crate::sumeragi) fn lifecycle_decision_apply_dispatch_available(&self) -> bool {
-        let available = !self.fail_closed
-            && self.ingress.len() == 0
+    fn lifecycle_decision_apply_runtime_gate_is_open(&self) -> bool {
+        !self.fail_closed
             && self.pending_effect_ownership.is_none()
             && self.last_scheduler_ownership.is_none()
-            && self.pending_leader_wire_terminals.is_empty();
-        static TEMP_RUNTIME_APPLY_BLOCKER_LOGGED: std::sync::atomic::AtomicBool =
-            std::sync::atomic::AtomicBool::new(false);
-        if !available
-            && !TEMP_RUNTIME_APPLY_BLOCKER_LOGGED
-                .swap(true, std::sync::atomic::Ordering::Relaxed)
-        {
-            iroha_logger::warn!(
-                fail_closed = self.fail_closed,
-                ingress_len = self.ingress.len(),
-                pending_effect_ownership = self.pending_effect_ownership.is_some(),
-                last_scheduler_ownership = self.last_scheduler_ownership.is_some(),
-                pending_leader_wire_terminals = self.pending_leader_wire_terminals.len(),
-                "TEMP live lifecycle Apply runtime admission blockers"
-            );
-        }
-        available
+            && self.pending_leader_wire_terminals.is_empty()
+    }
+
+    /// Return whether a typed lifecycle Decision Apply may freeze reducer mutation.
+    pub(in crate::sumeragi) fn lifecycle_decision_apply_dispatch_available(&self) -> bool {
+        self.lifecycle_decision_apply_runtime_gate_is_open() && self.ingress.len() == 0
+    }
+
+    /// Return whether only queued runtime ingress prevents live Apply dispatch.
+    ///
+    /// The executor separately authenticates the exact Ready Apply and its
+    /// deferred CommitQC output before using this read-only predicate.
+    pub(in crate::sumeragi) fn lifecycle_decision_apply_runtime_predecessor_drain_available(
+        &self,
+        apply_ordinal: u128,
+    ) -> bool {
+        self.lifecycle_decision_apply_runtime_gate_is_open()
+            && self.ingress.len() != 0
+            && self.ingress.all_lifecycle_ordinals_before(apply_ordinal)
+    }
+
+    /// Return whether runtime mutation ownership and the complete queued prefix
+    /// still permit the attested live-Apply suffix.
+    pub(in crate::sumeragi) fn lifecycle_decision_apply_runtime_predecessor_remains_exact(
+        &self,
+        apply_ordinal: u128,
+    ) -> bool {
+        self.lifecycle_decision_apply_runtime_gate_is_open()
+            && (self.ingress.len() == 0
+                || self.ingress.all_lifecycle_ordinals_before(apply_ordinal))
     }
     /// Freeze the serialized shell around one registry-owned Apply completion.
     pub(in crate::sumeragi) fn prepare_lifecycle_decision_apply_completion(

@@ -63,7 +63,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('actual/torii_tx_history.rs'),
         Path('actual/torii_http_transport.rs'),
         Path('actual/torii_mcp_profile.rs'),
-        Path('actual/offline.rs'),
+        Path('actual/kagemusha.rs'),
         Path('actual/tests.rs'),
     ),
     Path('crates/iroha_config/src/parameters/actual/tests.rs'): (
@@ -202,6 +202,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('queue/transaction_guard_return_tests.rs'),
         Path('queue/queue_metadata_and_admission_tests.rs'),
         Path('queue/instruction_and_state_routing_tests.rs'),
+        Path('queue/kagemusha_top_up_admission_tests.rs'),
         Path('queue/routing_batch_admission_tests.rs'),
         Path('queue/config_factory_test_support.rs'),
         Path('queue/teu_limit_and_backlog_tests.rs'),
@@ -264,9 +265,6 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('snapshot/support_policy_tests.rs'),
         Path('snapshot/write_roundtrip_tests.rs'),
         Path('snapshot/reconciliation_generation_tests.rs'),
-    ),
-    Path('crates/iroha_core/src/snapshot/support_policy_tests.rs'): (
-        Path('pre_private_settlement_v1_generator.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/evidence.rs'): (Path('evidence/missing_signer_pop_test.rs'),),
     Path('crates/iroha_core/src/sumeragi/serviced_candidate_store.rs'): (Path('serviced_candidate_store_cases.rs'),),

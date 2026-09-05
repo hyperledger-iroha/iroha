@@ -998,14 +998,13 @@ mod tests {
             height: context.height,
             view,
         };
-        let execution_commitment =
-            ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
-                Hash::new(b"penalty evidence parent state"),
-                Hash::new(b"penalty evidence post state"),
-                Hash::new(b"penalty evidence ordinary writes"),
-                1,
-                Hash::new(b"penalty evidence executed block"),
-            );
+        let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"penalty evidence parent state"),
+            Hash::new(b"penalty evidence post state"),
+            Hash::new(b"penalty evidence ordinary writes"),
+            1,
+            Hash::new(b"penalty evidence executed block"),
+        );
         let keys = roster_keys();
         let vote = |seed: u8| {
             let mut vote = iroha_data_model::block::consensus_v2::Vote {
@@ -1058,10 +1057,8 @@ mod tests {
                 power: 1,
             })
             .collect::<Vec<_>>();
-        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
-                network_id, 0, &roster,
-            );
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 0, &roster);
         HeightContext {
             network_id,
             protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
@@ -1074,8 +1071,8 @@ mod tests {
             snapshot_bootstrap: None,
             quorum: DualQuorum::from_roster(&roster).expect("valid fixture quorum"),
             roster,
-            offline_cash_mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: Hash::new(b"penalties v2 test context"),
             execution_policy_hash: iroha_crypto::Hash::new(b"test execution policy"),
             da_layout: DataAvailabilityLayout {
@@ -1132,17 +1129,16 @@ mod tests {
                 .canonical_proposal_wire_hash()
                 .expect("canonical proposal wire"),
         };
-        let execution_commitment =
-            ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
-                Hash::new(b"penalties fixture parent state"),
-                Hash::new(b"penalties fixture post state"),
-                Hash::new(b"penalties fixture ordinary writes"),
-                u64::try_from(block.encode_wire().expect("penalties block wire").len())
-                    .expect("penalties block wire length fits u64"),
-                block
-                    .executed_block_wire_hash()
-                    .expect("canonical executed block wire"),
-            );
+        let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"penalties fixture parent state"),
+            Hash::new(b"penalties fixture post state"),
+            Hash::new(b"penalties fixture ordinary writes"),
+            u64::try_from(block.encode_wire().expect("penalties block wire").len())
+                .expect("penalties block wire length fits u64"),
+            block
+                .executed_block_wire_hash()
+                .expect("canonical executed block wire"),
+        );
         let round = ConsensusRound {
             context_id: context.id(),
             height: 1,

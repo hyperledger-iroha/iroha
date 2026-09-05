@@ -1,6 +1,6 @@
 //! Explicit wire identifiers for the built-in instruction registry.
 use super::*;
-use crate::isi::offline_cash_v1;
+use crate::isi::kagemusha_v1;
 #[cfg(test)]
 type TypeName = fn() -> &'static str;
 /// One built-in instruction's Rust type and path-independent wire identity.
@@ -83,8 +83,8 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(RemoveAssetKeyValue => "iroha.instruction.v1::transparent::RemoveAssetKeyValue"),
     built_in_wire_id!(GrantBox => "iroha.grant"),
     built_in_wire_id!(RevokeBox => "iroha.revoke"),
-    built_in_wire_id!(offline_cash_v1::TopUpOfflineCashV1 => "iroha.offline_cash.v1.top_up", register),
-    built_in_wire_id!(offline_cash_v1::RedeemOfflineCashV1 => "iroha.offline_cash.v1.redeem", register),
+    built_in_wire_id!(kagemusha_v1::TopUpKagemushaV1 => "iroha.kagemusha.v1.top_up", register),
+    built_in_wire_id!(kagemusha_v1::RedeemKagemushaV1 => "iroha.kagemusha.v1.redeem", register),
     built_in_wire_id!(crate::isi::staking::RegisterPublicLaneValidator => "iroha.instruction.v1::staking::RegisterPublicLaneValidator"),
     built_in_wire_id!(crate::isi::staking::RebindPublicLaneValidatorPeer => "iroha.staking.rebind_public_lane_validator_peer"),
     built_in_wire_id!(crate::isi::staking::ActivatePublicLaneValidator => "iroha.staking.activate_public_lane_validator"),

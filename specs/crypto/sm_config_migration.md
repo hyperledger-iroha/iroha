@@ -41,12 +41,13 @@ snapshots diverge.
 
 ## 3. Regenerate Genesis Manifests
 
-- Run `kagami genesis generate --consensus-mode <mode>` for every
-  environment and commit the updated JSON alongside the TOML overrides.
+- Run `kagami genesis generate --consensus-mode <mode>
+  --kagemusha-mint-finality-parameters <PUBLIC_PARAMETERS.json>` for every
+  environment, using operator-provisioned public authority that exactly matches
+  the final topology.
 - Sign the manifest (`kagami genesis sign …`) and distribute the `.nrt` payload.
-  Nodes that bootstrap from an unsigned JSON manifest derive the runtime crypto
-  configuration directly from the file—still subject to the same consistency
-  checks.
+  Distribute its exact bound JSON alongside it; a `.template.json` source is
+  incomplete and cannot be selected by a node.
 
 ## 4. Validate Before Traffic
 

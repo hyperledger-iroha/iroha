@@ -17,15 +17,18 @@ use crate::{
         },
         consensus_v2::finality::V2FinalityArtifact,
     },
+    consensus::{MAX_LANE_CONSENSUS_VALIDATORS, VALIDATOR_SET_HASH_VERSION_V1},
     fastpq::TransferTranscriptBundle,
-    nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
+    nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, MAX_ACTIVE_EXECUTION_LANES},
     peer::PeerId,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
 use iroha_crypto::{Hash, HashOf, MerkleTree, PublicKey};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-const MERGE_LEDGER_ENTRY_HASH_DOMAIN: &[u8] = b"iroha:merge:ledger-entry:v2\0";
+use std::collections::BTreeSet;
+use thiserror::Error;
+const MERGE_LEDGER_ENTRY_HASH_DOMAIN: &[u8] = b"iroha:merge:ledger-entry:v3\0";
 const LANE_DRAIN_INTENT_HASH_DOMAIN: &[u8] = b"iroha:nexus:lane-drain-intent:v1\0";
 const LANE_DRAIN_CERTIFICATE_HASH_DOMAIN: &[u8] = b"iroha:nexus:lane-drain-certificate:v1\0";
 const LANE_DRAIN_CERTIFICATE_SIGNATURE_DOMAIN: &[u8] =
@@ -36,7 +39,7 @@ const LANE_DRAIN_EMPTY_UNRESOLVED_EVIDENCE_ROOT_DOMAIN: &[u8] =
 ///
 /// Earlier development layouts have no compatibility path and are
 /// intentionally rejected by live consensus.
-pub const MERGE_LEDGER_ENTRY_VERSION_V2: u8 = 2;
+pub const MERGE_LEDGER_ENTRY_VERSION_V3: u8 = 3;
 /// Maximum canonical framed size of one full merge-ledger entry.
 ///
 /// This is the protocol-wide limit used by pending sidecars, compact block
@@ -386,6 +389,284 @@ pub struct MergeLaneBinding {
     /// First global proposal height eligible to use this incarnation.
     pub activation_height: u64,
 }
+/// Route-free exact lane committee retained once in a merge authority catalog.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct MergeLaneCommitteeRosterV1 {
+    /// Version of the canonical validator-set hashing scheme.
+    pub validator_set_hash_version: u16,
+    /// Hash of the exact ordered validator identities.
+    pub validator_set_hash: HashOf<Vec<PeerId>>,
+    /// Exact ordered lane committee.
+    pub validators: Vec<PeerId>,
+}
+
+impl MergeLaneCommitteeRosterV1 {
+    /// Construct a roster using the current validator-set hash version.
+    #[must_use]
+    pub fn new(validators: Vec<PeerId>) -> Self {
+        let validator_set_hash = HashOf::new(&validators);
+        Self {
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash,
+            validators,
+        }
+    }
+
+    /// Validate the bounded canonical lane-committee representation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error for an unsupported hash version, invalid
+    /// committee geometry or ordering, or a mismatched validator-set hash.
+    pub fn validate(&self) -> Result<(), MergeLaneAuthorityCatalogError> {
+        if self.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1 {
+            return Err(
+                MergeLaneAuthorityCatalogError::UnsupportedValidatorSetHashVersion(
+                    self.validator_set_hash_version,
+                ),
+            );
+        }
+        if self.validators.is_empty()
+            || self.validators.len() > MAX_LANE_CONSENSUS_VALIDATORS
+            || (self.validators.len() - 1) % 3 != 0
+        {
+            return Err(MergeLaneAuthorityCatalogError::InvalidValidatorCount {
+                actual: self.validators.len(),
+            });
+        }
+        if self.validators.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err(MergeLaneAuthorityCatalogError::NonCanonicalValidatorOrder);
+        }
+        if self.validator_set_hash != HashOf::new(&self.validators) {
+            return Err(MergeLaneAuthorityCatalogError::ValidatorSetHashMismatch);
+        }
+        Ok(())
+    }
+}
+
+/// Structural failure in a compact historical lane authority catalog.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum MergeLaneAuthorityCatalogError {
+    /// The catalog advertises a layout other than version one.
+    #[error("unsupported merge lane authority catalog version {0}")]
+    UnsupportedVersion(u8),
+    /// The catalog and active-lane vector have an invalid or mismatched length.
+    #[error("merge lane authority catalog has invalid lane count {actual}")]
+    InvalidLaneCount {
+        /// Observed number of active lane slots.
+        actual: usize,
+    },
+    /// The catalog carries no usable roster or more rosters than lane slots.
+    #[error("merge lane authority catalog has invalid roster count {actual}")]
+    InvalidRosterCount {
+        /// Observed number of unique rosters.
+        actual: usize,
+    },
+    /// A roster uses an unsupported validator-set hash version.
+    #[error("unsupported merge lane validator-set hash version {0}")]
+    UnsupportedValidatorSetHashVersion(u16),
+    /// A roster is empty, oversized, or not an exact `3f+1` committee.
+    #[error("merge lane authority roster has invalid validator count {actual}")]
+    InvalidValidatorCount {
+        /// Observed validator count.
+        actual: usize,
+    },
+    /// A roster is not strictly ordered and duplicate-free.
+    #[error("merge lane authority roster is not strictly ordered")]
+    NonCanonicalValidatorOrder,
+    /// A roster hash does not match its exact validator vector.
+    #[error("merge lane authority roster hash mismatch")]
+    ValidatorSetHashMismatch,
+    /// Two catalog records reuse one validator-set hash.
+    #[error("merge lane authority catalog contains a duplicate roster hash")]
+    DuplicateRosterHash,
+    /// A lane references a roster outside the catalog.
+    #[error("merge lane authority catalog contains an out-of-range roster index")]
+    RosterIndexOutOfBounds,
+    /// New rosters do not appear in canonical first-use order.
+    #[error("merge lane authority catalog roster indices are not in first-use order")]
+    NonCanonicalFirstUse,
+    /// A roster is not referenced by any active lane.
+    #[error("merge lane authority catalog contains an unused roster")]
+    UnusedRoster,
+    /// The number of unique rosters cannot be represented by the wire index.
+    #[error("merge lane authority catalog roster index exceeds u16")]
+    RosterIndexOverflow,
+}
+
+/// Compact historical committee catalog aligned with every active merge lane.
+///
+/// `rosters` is deduplicated in first-use order. Each position in
+/// `lane_roster_indices` corresponds to the same position in a merge entry's
+/// canonical `active_lanes` vector.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct MergeLaneAuthorityCatalogV1 {
+    /// Exact catalog layout. Only version one is supported.
+    pub version: u8,
+    /// Unique route-free committee rosters in canonical first-use order.
+    pub rosters: Vec<MergeLaneCommitteeRosterV1>,
+    /// Roster index aligned one-for-one with the ordered active lane bindings.
+    pub lane_roster_indices: Vec<u16>,
+}
+
+impl Default for MergeLaneAuthorityCatalogV1 {
+    fn default() -> Self {
+        Self {
+            version: Self::VERSION,
+            rosters: Vec::new(),
+            lane_roster_indices: Vec::new(),
+        }
+    }
+}
+
+impl MergeLaneAuthorityCatalogV1 {
+    /// Current exact catalog layout version.
+    pub const VERSION: u8 = 1;
+
+    /// Build a canonical, first-use-deduplicated catalog from ordered lane committees.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed structural error when a committee is malformed, the
+    /// lane count exceeds protocol bounds, or a roster index cannot fit `u16`.
+    pub fn from_lane_committees(
+        lane_committees: &[Vec<PeerId>],
+    ) -> Result<Self, MergeLaneAuthorityCatalogError> {
+        if lane_committees.is_empty() || lane_committees.len() > MAX_ACTIVE_EXECUTION_LANES {
+            return Err(MergeLaneAuthorityCatalogError::InvalidLaneCount {
+                actual: lane_committees.len(),
+            });
+        }
+        let mut catalog = Self::default();
+        for validators in lane_committees {
+            let roster = MergeLaneCommitteeRosterV1::new(validators.clone());
+            roster.validate()?;
+            let roster_index = if let Some(index) = catalog
+                .rosters
+                .iter()
+                .position(|candidate| candidate.validator_set_hash == roster.validator_set_hash)
+            {
+                if catalog.rosters[index] != roster {
+                    return Err(MergeLaneAuthorityCatalogError::DuplicateRosterHash);
+                }
+                index
+            } else {
+                let index = catalog.rosters.len();
+                catalog.rosters.push(roster);
+                index
+            };
+            catalog.lane_roster_indices.push(
+                u16::try_from(roster_index)
+                    .map_err(|_| MergeLaneAuthorityCatalogError::RosterIndexOverflow)?,
+            );
+        }
+        catalog.validate_for_active_lanes(lane_committees.len())?;
+        Ok(catalog)
+    }
+
+    /// Validate bounds, roster uniqueness, references, and canonical first-use order.
+    ///
+    /// The canonical empty catalog is accepted only for an empty active-lane
+    /// vector so codec and non-authorizing diagnostic values remain representable.
+    /// Production merge admission independently requires at least one active lane.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed structural error for any malformed catalog.
+    pub fn validate_for_active_lanes(
+        &self,
+        active_lane_count: usize,
+    ) -> Result<(), MergeLaneAuthorityCatalogError> {
+        if self.version != Self::VERSION {
+            return Err(MergeLaneAuthorityCatalogError::UnsupportedVersion(
+                self.version,
+            ));
+        }
+        if active_lane_count > MAX_ACTIVE_EXECUTION_LANES
+            || self.lane_roster_indices.len() != active_lane_count
+        {
+            return Err(MergeLaneAuthorityCatalogError::InvalidLaneCount {
+                actual: active_lane_count,
+            });
+        }
+        if active_lane_count == 0 {
+            return if self.rosters.is_empty() {
+                Ok(())
+            } else {
+                Err(MergeLaneAuthorityCatalogError::InvalidRosterCount {
+                    actual: self.rosters.len(),
+                })
+            };
+        }
+        if self.rosters.is_empty()
+            || self.rosters.len() > active_lane_count
+            || self.rosters.len() > usize::from(u16::MAX) + 1
+        {
+            return Err(MergeLaneAuthorityCatalogError::InvalidRosterCount {
+                actual: self.rosters.len(),
+            });
+        }
+        let mut roster_hashes = BTreeSet::new();
+        for roster in &self.rosters {
+            roster.validate()?;
+            if !roster_hashes.insert(roster.validator_set_hash) {
+                return Err(MergeLaneAuthorityCatalogError::DuplicateRosterHash);
+            }
+        }
+        let mut seen = vec![false; self.rosters.len()];
+        let mut next_first_use = 0_usize;
+        for &roster_index in &self.lane_roster_indices {
+            let roster_index = usize::from(roster_index);
+            let Some(was_seen) = seen.get_mut(roster_index) else {
+                return Err(MergeLaneAuthorityCatalogError::RosterIndexOutOfBounds);
+            };
+            if !*was_seen {
+                if roster_index != next_first_use {
+                    return Err(MergeLaneAuthorityCatalogError::NonCanonicalFirstUse);
+                }
+                *was_seen = true;
+                next_first_use += 1;
+            }
+        }
+        if next_first_use != self.rosters.len() {
+            return Err(MergeLaneAuthorityCatalogError::UnusedRoster);
+        }
+        Ok(())
+    }
+
+    /// Resolve the exact roster aligned with one active-lane position.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when the lane or roster index is out of range.
+    pub fn roster_for_lane(
+        &self,
+        lane_index: usize,
+    ) -> Result<&MergeLaneCommitteeRosterV1, MergeLaneAuthorityCatalogError> {
+        let roster_index = self
+            .lane_roster_indices
+            .get(lane_index)
+            .copied()
+            .map(usize::from)
+            .ok_or(MergeLaneAuthorityCatalogError::RosterIndexOutOfBounds)?;
+        self.rosters
+            .get(roster_index)
+            .ok_or(MergeLaneAuthorityCatalogError::RosterIndexOutOfBounds)
+    }
+
+    /// Return whether any active lane was governed by `validator`.
+    ///
+    /// Malformed catalogs fail closed.
+    #[must_use]
+    pub fn contains_validator(&self, active_lane_count: usize, validator: &PeerId) -> bool {
+        self.validate_for_active_lanes(active_lane_count).is_ok()
+            && self.rosters.iter().any(|roster| roster.validators.contains(validator))
+    }
+}
 /// BFT quorum certificate produced by the merge committee for a merge-ledger entry.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -655,7 +936,7 @@ pub struct MergeExecutionBatch {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize))]
 #[norito(deny_unknown_fields)]
 pub struct MergeLedgerEntry {
-    /// Exact first-release entry layout. Only version two is supported.
+    /// Exact first-release entry layout. Only version three is supported.
     pub version: u8,
     /// Epoch in which the entry was committed.
     pub epoch_id: u64,
@@ -663,6 +944,8 @@ pub struct MergeLedgerEntry {
     pub lane_catalog_hash: Hash,
     /// Canonical exact active lane bindings used for historical verification.
     pub active_lanes: Vec<MergeLaneBinding>,
+    /// Exact historical lane committees aligned with `active_lanes`.
+    pub lane_authority_catalog: MergeLaneAuthorityCatalogV1,
     /// Root of the canonical `(lane_id, incarnation)` set.
     pub incarnation_root: Hash,
     /// Root of the canonical `(lane_id, incarnation, activation_height)` set.
@@ -693,6 +976,7 @@ struct MergeLedgerEntryWire {
     epoch_id: u64,
     lane_catalog_hash: Hash,
     active_lanes: Vec<MergeLaneBinding>,
+    lane_authority_catalog: MergeLaneAuthorityCatalogV1,
     incarnation_root: Hash,
     activation_root: Hash,
     lane_snapshots: Vec<MergeLaneSnapshot>,
@@ -714,6 +998,7 @@ impl TryFrom<MergeLedgerEntryWire> for MergeLedgerEntry {
             epoch_id: wire.epoch_id,
             lane_catalog_hash: wire.lane_catalog_hash,
             active_lanes: wire.active_lanes,
+            lane_authority_catalog: wire.lane_authority_catalog,
             incarnation_root: wire.incarnation_root,
             activation_root: wire.activation_root,
             lane_snapshots: wire.lane_snapshots,
@@ -767,7 +1052,7 @@ impl norito::json::JsonDeserialize for MergeLedgerEntry {
 
 impl MergeLedgerEntry {
     /// Current supported entry layout.
-    pub const VERSION: u8 = MERGE_LEDGER_ENTRY_VERSION_V2;
+    pub const VERSION: u8 = MERGE_LEDGER_ENTRY_VERSION_V3;
     /// Return whether this entry advertises the current first-release layout.
     #[must_use]
     pub const fn has_current_version(&self) -> bool {

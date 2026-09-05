@@ -1173,23 +1173,23 @@ fn validate_feature_name(
         });
     }
 }
-/// Universal offline-wallet protocol route descriptors.
-pub mod offline {
+/// Universal KAGEMUSHA protocol route descriptors.
+pub mod kagemusha {
     use super::{
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
         RouteDescriptor, RouteEffect, RouteProjections,
     };
-    /// Fetch the node's universal offline-wallet interface capability.
-    pub const READINESS_PATH: &str = "/v1/offline/readiness";
-    /// Submit a signed online-to-offline top-up operation.
-    pub const TOP_UP_PATH: &str = "/v1/offline/top-up";
-    /// Submit a signed offline redemption operation.
-    pub const REDEEM_PATH: &str = "/v1/offline/redeem";
-    /// Fetch one offline operation by its canonical operation ID.
-    pub const OPERATION_PATH: &str = "/v1/offline/operations/{operation_id}";
-    /// Descriptor for universal offline-wallet capability discovery.
+    /// Fetch the node's universal KAGEMUSHA readiness contract.
+    pub const READINESS_PATH: &str = "/v1/kagemusha/readiness";
+    /// Submit a signed KAGEMUSHA top-up operation.
+    pub const TOP_UP_PATH: &str = "/v1/kagemusha/top-up";
+    /// Submit a signed KAGEMUSHA redemption operation.
+    pub const REDEEM_PATH: &str = "/v1/kagemusha/redeem";
+    /// Fetch one KAGEMUSHA operation by its canonical operation ID.
+    pub const OPERATION_PATH: &str = "/v1/kagemusha/operations/{operation_id}";
+    /// Descriptor for universal KAGEMUSHA readiness discovery.
     pub const READINESS: RouteDescriptor = RouteDescriptor::new(
-        "offline.readiness",
+        "kagemusha.readiness",
         HttpMethod::Get,
         READINESS_PATH,
         ApiSurface::Public,
@@ -1200,9 +1200,9 @@ pub mod offline {
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
-    /// Descriptor for online-to-offline top-up submission.
+    /// Descriptor for KAGEMUSHA top-up submission.
     pub const TOP_UP: RouteDescriptor = RouteDescriptor::new(
-        "offline.top_up",
+        "kagemusha.top_up",
         HttpMethod::Post,
         TOP_UP_PATH,
         ApiSurface::Public,
@@ -1214,9 +1214,9 @@ pub mod offline {
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
-    /// Descriptor for offline redemption submission.
+    /// Descriptor for KAGEMUSHA redemption submission.
     pub const REDEEM: RouteDescriptor = RouteDescriptor::new(
-        "offline.redeem",
+        "kagemusha.redeem",
         HttpMethod::Post,
         REDEEM_PATH,
         ApiSurface::Public,
@@ -1228,9 +1228,9 @@ pub mod offline {
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
-    /// Descriptor for reading one offline operation.
+    /// Descriptor for reading one KAGEMUSHA operation.
     pub const OPERATION: RouteDescriptor = RouteDescriptor::new(
-        "offline.operation",
+        "kagemusha.operation",
         HttpMethod::Get,
         OPERATION_PATH,
         ApiSurface::Public,
@@ -1241,7 +1241,7 @@ pub mod offline {
     .with_feature_gate(FeatureGate::Feature("app_api"))
     .with_projections(RouteProjections::ALL)
     .with_cors_options(true);
-    /// Canonical first-release offline API catalog.
+    /// Canonical first-release KAGEMUSHA API catalog.
     pub const ROUTES: &[RouteDescriptor] = &[READINESS, TOP_UP, REDEEM, OPERATION];
 }
 /// Alias lookup, private evaluation, and recipient-resolution descriptors.
@@ -4408,7 +4408,7 @@ const CATALOGED_ROUTE_FAMILIES: &[&[RouteDescriptor]] = &[
     contracts_and_verification_keys::ROUTES,
     soracloud_gateway::ROUTES,
     content_directory::ROUTES,
-    offline::ROUTES,
+    kagemusha::ROUTES,
 ];
 const fn cataloged_route_count(families: &[&[RouteDescriptor]]) -> usize {
     let mut count = 0;

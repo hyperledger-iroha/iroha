@@ -2242,6 +2242,18 @@ impl DurableRecoveredDecisionStoreWork {
                 .store
                 .matches_current_ready_record(self.context, address, digest, coordinator)
     }
+    /// Match the recovered Store's complete row shape after state authentication.
+    fn matches_current_schedulable_record_shape(
+        &self,
+        address: ConcreteWorkAddress,
+        digest: LifecycleDigest,
+        coordinator: &LifecycleCoordinator,
+    ) -> bool {
+        self.validates_at(address, digest)
+            && self
+                .store
+                .matches_current_record_shape(self.context, address, digest, coordinator)
+    }
     fn owns_recovery(&self, recovery: &AuthenticatedLifecycleRecoveryCut) -> bool {
         self.fetch.owns_store_recovery(&self.store, recovery)
     }
@@ -2779,16 +2791,65 @@ impl ReadyCertifiedBodyPipelineAttestationV1 {
     }
 }
 /// Closed failure while authenticating one ordinary Fetch or Store scheduler row.
+///
+/// Every rejection carries only a structural invariant; body bytes, replay
+/// evidence, effects, receipts, and pending bindings remain sealed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ReadyCertifiedBodyPipelineAttestationErrorV1 {
-    /// Coordinator indexes, durable metadata, or the reducer-fence wait are not exact.
-    InvalidCoordinatorIndex,
+pub(in crate::sumeragi) enum ReadyCertifiedBodyPipelineAttestationErrorV1 {
+    /// The coordinator is faulted or still owns a prior lease.
+    CoordinatorUnavailable,
+    /// The requested logical row is absent.
+    MissingRecord,
+    /// Durable metadata for the requested row is absent.
+    MissingDurableMetadata,
+    /// The row is neither Ready nor woken by the exact reducer fence.
+    RowNotSchedulable,
+    /// The stored row ordinal does not match its coordinator key.
+    OrdinalMismatch,
+    /// The row is not ordinary Fetch or Store work.
+    InvalidWorkClass,
+    /// The lifecycle key phase does not match the ordinary body class.
+    PhaseMismatch,
+    /// The lifecycle stage kind does not match the ordinary body class.
+    StageMismatch,
+    /// The ordinary body row does not have independent predecessor scope.
+    PredecessorScopeMismatch,
+    /// The ordinary body row unexpectedly retains frozen predecessors.
+    FrozenPredecessors,
+    /// The reverse lifecycle-key index does not name this row.
+    KeyIndexMismatch,
+    /// The reverse causal-owner index does not name this row.
+    OwnerIndexMismatch,
+    /// Durable metadata declares a continuation for terminal body processing.
+    ContinuationMismatch,
+    /// Durable metadata does not bind the row's causal reconstruction source.
+    ReconstructionSourceMismatch,
+    /// The logical row has no installed physical slot.
+    MissingPhysicalSlot,
+    /// The logical row does not own exactly one physical slot.
+    PhysicalSlotCardinalityMismatch,
+    /// The installed slot is not the sole Effect slot.
+    PhysicalSlotMismatch,
+    /// The episode slot universe does not equal the installed slot.
+    SlotUniverseMismatch,
+    /// The episode consumed-slot set does not equal the installed slot.
+    ConsumedSlotsMismatch,
+    /// The logical owner, ordinal, and slot cannot form a concrete address.
+    InvalidAddress,
+    /// The concrete registry does not contain exactly one row for the logical owner.
+    RegistryOwnerCardinalityMismatch,
     /// The physical registry address is absent or corrupt.
     Registry(RegistryError),
     /// The address contains another concrete carrier class.
     WrongWorkKind,
-    /// The durable carrier does not reproduce the exact logical row.
-    InvalidCarrier,
+    /// A recognized certified-body carrier is paired with the wrong logical class.
+    CarrierWorkClassMismatch,
+    /// The certified Fetch completion does not reproduce its exact logical row.
+    CertifiedFetchCarrierMismatch,
+    /// The ordinary durable Store carrier does not reproduce its exact logical row.
+    DurableStoreCarrierMismatch,
+    /// The recovered-decision Store carrier does not reproduce its exact logical row.
+    RecoveredDecisionStoreCarrierMismatch,
 }
 /// Opaque proof and move-only request authority for one Ready recovered Decision Fetch.
 ///
@@ -2905,7 +2966,7 @@ impl PreparedRecoveredDecisionFetchDispatchV1<'_> {
 }
 /// Closed failure while attesting one Ready lifecycle Decision Apply carrier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ReadyLifecycleDecisionApplyAttestationErrorV1 {
+pub(in crate::sumeragi) enum ReadyLifecycleDecisionApplyAttestationErrorV1 {
     /// The logical row, durable metadata, or reverse index is not exact and Ready.
     InvalidCoordinatorIndex,
     /// The process-local address or installed digest is absent or corrupt.

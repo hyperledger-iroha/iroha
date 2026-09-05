@@ -128,7 +128,10 @@ use crate::{
         RoutingPlan, canonical_lane_queue_reservation_group_identity_projection,
         lane_queue_reservation_group_binding_from_ordered_keys,
     },
-    state::{PendingQueuePlanAdmissionDisposition, State, WorldReadOnly},
+    state::{
+        PendingQueuePlanAdmissionDisposition, PendingQueuePlanAdmissionPersistenceOutcome, State,
+        WorldReadOnly,
+    },
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature};
 #[cfg(test)]
@@ -774,12 +777,14 @@ fn native_amx_signing_guard_capacity(
 ) -> Result<NonZeroUsize, V2LaneWorkError> {
     Ok(limits.native_amx_signing_guard_limits.max_records)
 }
-/// Reserve every current-roster responder identity plus one complete
-/// predecessor committee.
+/// Reserve every current-roster responder identity plus one bounded recovery
+/// corridor.
 ///
 /// Height-context admission already proves `roster_len <=
-/// MAX_VALIDATORS_PER_HEIGHT`, so the sum is bounded by the transport's
-/// protocol-wide two-committee ceiling.
+/// MAX_VALIDATORS_PER_HEIGHT`. Historical global-roster and governed
+/// participant-committee requesters share the second committee-sized corridor,
+/// so the sum is bounded by the transport's protocol-wide ceiling even when a
+/// carrier names many dataspaces.
 const fn merge_sidecar_server_stream_capacity(roster_len: usize) -> usize {
     roster_len + wire::MAX_VALIDATORS_PER_HEIGHT
 }
@@ -9949,15 +9954,43 @@ impl V2LaneWorkAdapter {
         }
         // The requester need not belong to the historical lane committee: a
         // current global validator which missed the original lane fanout must
-        // still be able to apply the already-committed global block. Limit the
-        // idempotent response to an authenticated member of either the frozen
-        // current global roster or the canonical historical lane committee.
+        // still be able to apply the already-committed global block. A
+        // validator from a disjoint dataspace committee has the same recovery
+        // need after observing an autonomous payload in public global
+        // finality. Because the certificate and participant route are public,
+        // the same exact response is safe for any authenticated peer with a
+        // live reply route. The latter exception is deliberately
+        // proposal-specific:
+        // the complete State/Kura/finality verifier below must recover this
+        // exact proposal from the canonical public carrier. It never exposes
+        // an ordinary proposal or an unfinalized autonomous sidecar.
         let requester_is_current_validator = self
             .context
             .roster
             .iter()
             .any(|entry| &entry.validator == sender);
-        if !requester_is_current_validator && !artifact.commit_qc.validator_set.contains(sender) {
+        let requester_is_historical_lane_validator =
+            artifact.commit_qc.validator_set.contains(sender);
+        let requester_observes_finalized_public_autonomous_carrier =
+            !requester_is_current_validator
+                && !requester_is_historical_lane_validator
+                && self
+                    .canonical_finalized_autonomous_payload_for_proposal(proposal)
+                    .map_err(|error| {
+                        iroha_logger::error!(
+                            %error,
+                            height = proposal.descriptor.proposal_height,
+                            lane = proposal.descriptor.lane_id.as_u32(),
+                            lane_block_height = proposal.descriptor.lane_block_height,
+                            "failed to validate finalized public carrier for cross-roster certificate recovery"
+                        );
+                        self.output_guard.close_admission_for_restart();
+                    })?
+                    .is_some();
+        if !requester_is_current_validator
+            && !requester_is_historical_lane_validator
+            && !requester_observes_finalized_public_autonomous_carrier
+        {
             return Err(());
         }
         Ok(Some(LaneBlockCertificateV1 {
@@ -12099,14 +12132,70 @@ impl V2LaneWorkAdapter {
                 server_roster,
             )
     }
+    /// Return whether a finalized entry names a route whose exact historical
+    /// committee contains `requester`.
+    ///
+    /// The catalog is part of the merge candidate signed by the merge QC and
+    /// the complete entry hash carried by global finality. It therefore remains
+    /// exact across later manifest, peer, configuration, and incarnation churn.
+    /// The caller still owns canonical Kura finality and compact-reference
+    /// authentication before this predicate may authorize bytes.
+    fn finalized_merge_active_lane_committee_contains(
+        &self,
+        entry: &MergeLedgerEntry,
+        requester: &PeerId,
+    ) -> bool {
+        let carrier_height = entry.merge_qc.carrier_height;
+        !entry.active_lanes.is_empty()
+            && entry.active_lanes.len()
+                <= iroha_data_model::nexus::MAX_ACTIVE_EXECUTION_LANES
+            && entry
+                .active_lanes
+                .windows(2)
+                .all(|pair| pair[0].lane_id < pair[1].lane_id)
+            && entry.active_lanes.iter().all(|binding| {
+                binding.activation_height != 0 && binding.activation_height <= carrier_height
+            })
+            && entry
+                .lane_authority_catalog
+                .contains_validator(entry.active_lanes.len(), requester)
+    }
+    /// Resolve one outsider request to its exact globally finalized entry and
+    /// historical lane authority before allocating responder state.
+    fn exact_historical_lane_sidecar_requester(
+        &self,
+        request: &crate::merge_sidecar::CertifiedMergeSidecarRequestV1,
+        requester: &PeerId,
+    ) -> bool {
+        let Ok(Some(entry)) = self
+            .kura
+            .merge_entry_by_hash_without_append_repair(request.entry_hash)
+        else {
+            return false;
+        };
+        let reference = CertifiedMergeLedgerReference::new(&entry);
+        request.encoded_len == reference.encoded_len
+            && request.epoch_id == reference.epoch_id
+            && request.reference_digest == certified_merge_reference_digest(&reference)
+            && self.finalized_merge_active_lane_committee_contains(&entry, requester)
+            && self.authenticates_certified_merge_sidecar_service_for_requester(
+                &entry,
+                &reference,
+                Some(requester),
+            )
+    }
     /// Authenticate one local serving decision against the QC-selected carrier.
     ///
     /// A current-height entry is still speculative and therefore uses the live
     /// frozen context. Once this adapter has advanced, only Kura's verified
     /// finality and immutable retained carrier witness may select the
     /// historical context and compact reference. The requester contributes no
-    /// height or carrier authority, but must belong to either the live serving
-    /// roster or that exact historical context.
+    /// height or carrier authority. A speculative current-height sidecar is
+    /// restricted to the live global roster. A finalized historical sidecar
+    /// may additionally be served to a validator in an exact governed lane
+    /// committee bound to that historical carrier, because those validators
+    /// must apply the same public global history even when their roster is
+    /// disjoint.
     fn authenticates_certified_merge_sidecar_service_for_requester(
         &self,
         entry: &MergeLedgerEntry,
@@ -12143,8 +12232,7 @@ impl V2LaneWorkAdapter {
         // The requester independently checks the same reference and QC against
         // its own canonical carrier before accepting any bytes.
         let historical_context = &finality.height_context;
-        (requester_belongs_to(&self.context) || requester_belongs_to(historical_context))
-            && finality.height == historical_context.height
+        finality.height == historical_context.height
             && finality.height == header.height().get()
             && historical_context.network_id == self.context.network_id
             && historical_context.protocol_version == self.context.protocol_version
@@ -12157,6 +12245,11 @@ impl V2LaneWorkAdapter {
             && entry.merge_qc.view == header.view_change_index()
             && merge_entry_has_exact_carrier_binding(historical_context, entry)
             && authenticate_merge_entry_for_height_context(historical_context, entry).is_ok()
+            && (requester_belongs_to(&self.context)
+                || requester_belongs_to(historical_context)
+                || requester.is_some_and(|requester| {
+                    self.finalized_merge_active_lane_committee_contains(entry, requester)
+                }))
     }
     /// Load the exact durable predecessor roster which owns the rollover corridor.
     fn immediate_predecessor_sidecar_requesters(&mut self) -> Option<&BTreeSet<PeerId>> {
@@ -12253,7 +12346,10 @@ impl V2LaneWorkAdapter {
                 .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
             return Ok(false);
         }
+        let requester_is_lane_validator =
+            self.finalized_merge_active_lane_committee_contains(&entry, &requester);
         let requester_has_corridor = self.frozen_roster_contains(&requester)
+            || requester_is_lane_validator
             || self
                 .immediate_predecessor_sidecar_requesters()
                 .is_some_and(|requesters| requesters.contains(&requester));
@@ -12329,17 +12425,20 @@ impl V2LaneWorkAdapter {
             return Ok(V2LaneIngressOutcome::Rejected);
         }
         // Admission is owned by the semantic requester, not by an
-        // authenticated relay/hub carrying its reply route. A peer removed
-        // from the live roster receives only the exact predecessor corridor;
-        // reject every other outsider before the transport can allocate a
-        // stream, gate, route attempt, or materialization slot. The fair
-        // materialization scheduler verifies the exact historical carrier
-        // authority before emitting bytes.
+        // authenticated relay/hub carrying its reply route. A peer outside the
+        // live global roster receives only the bounded recovery corridor when
+        // it belongs to either the exact predecessor roster or the exact
+        // historical lane authority retained by the requested entry. Reject every outsider before
+        // the transport can allocate a stream, gate, route attempt, or
+        // materialization slot. The fair materialization scheduler verifies
+        // exact historical global finality before emitting bytes, so lane
+        // validators can never fetch a speculative current-height sidecar.
         let sender_is_current = self.frozen_roster_contains(&sender);
         if !sender_is_current {
-            // Perform only bounded structural and predecessor-membership work
+            // Perform only bounded structural work before the single exact,
+            // passive Kura lookup used for historical lane membership.
             // before the transport's durable per-source rate gate. Exact
-            // carrier/reference Kura authentication runs only after its fair
+            // carrier/reference authentication is repeated after its fair
             // scheduler selects this occurrence for materialization.
             if request.version != CERTIFIED_MERGE_SIDECAR_VERSION_V1
                 || request.requester != sender
@@ -12349,14 +12448,20 @@ impl V2LaneWorkAdapter {
                 || request.encoded_len == 0
                 || request.encoded_len
                     > u64::try_from(MAX_MERGE_LEDGER_ENTRY_BYTES).unwrap_or(u64::MAX)
-                || !self
-                    .immediate_predecessor_sidecar_requesters()
-                    .is_some_and(|requesters| requesters.contains(&sender))
             {
                 return Ok(V2LaneIngressOutcome::Rejected);
             }
-            // A complete predecessor committee has a dedicated corridor.
-            // It may never consume the slots reserved for the live frozen
+            let sender_is_predecessor = self
+                .immediate_predecessor_sidecar_requesters()
+                .is_some_and(|requesters| requesters.contains(&sender));
+            let sender_is_lane_validator = !sender_is_predecessor
+                && self.exact_historical_lane_sidecar_requester(&request, &sender);
+            if !sender_is_predecessor && !sender_is_lane_validator {
+                return Ok(V2LaneIngressOutcome::Rejected);
+            }
+            // Historical global requesters and current governed lane
+            // validators share a complete committee-sized recovery corridor.
+            // They may never consume the slots reserved for the live frozen
             // roster. Lower-generation retries remain stateless generation
             // probes and existing historical streams retain their exact
             // durable ownership.
@@ -19588,8 +19693,8 @@ pub(super) mod tests {
                 power,
             })
             .collect::<Vec<_>>();
-        let (offline_cash_mint_finality_epoch_id, offline_cash_mint_finality_epoch_roster) =
-            crate::offline_cash_v1_test_fixtures::mint_finality_roster_and_id(
+        let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
                 network_id,
                 context_epoch,
                 &roster,
@@ -19628,7 +19733,7 @@ pub(super) mod tests {
                     ),
                 },
                 execution_commitment:
-                    wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                    wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                         Hash::new(b"lane-work parent state"),
                         Hash::new(b"lane-work post state"),
                         Hash::new(b"lane-work ordinary writes"),
@@ -19641,8 +19746,8 @@ pub(super) mod tests {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("dual quorum"),
             roster,
-            offline_cash_mint_finality_epoch_id,
-            offline_cash_mint_finality_epoch_roster,
+            kagemusha_mint_finality_epoch_id,
+            kagemusha_mint_finality_epoch_roster,
             nexus_amx_context_hash: super::super::v2_recovery::committed_nexus_amx_context_hash(
                 state.as_ref(),
             ),
@@ -19729,6 +19834,41 @@ pub(super) mod tests {
         }
         adapter.state.reseed_static_lane_incarnations_for_tests();
         let mut world_block = adapter.state.world.block();
+        for (index, key) in keys.iter().enumerate() {
+            let public_key = key.public_key().clone();
+            if world_block
+                .consensus_keys_by_pk
+                .get(&public_key.to_string())
+                .is_none()
+            {
+                let id = ConsensusKeyId::new(
+                    ConsensusKeyRole::Validator,
+                    format!(
+                        "multilane-{}-{}-{index}",
+                        lane_id.as_u32(),
+                        dataspace_id.as_u64()
+                    ),
+                );
+                let record = ConsensusKeyRecord {
+                    id: id.clone(),
+                    public_key,
+                    pop: Some(
+                        iroha_crypto::bls_normal_pop_prove(key.private_key())
+                            .expect("multi-lane validator proof of possession"),
+                    ),
+                    activation_height: 0,
+                    expiry_height: None,
+                    replaces: None,
+                    status: ConsensusKeyStatus::Active,
+                };
+                world_block
+                    .consensus_keys
+                    .insert(id.clone(), record.clone());
+                world_block
+                    .consensus_keys_by_pk
+                    .insert(record.public_key.to_string(), vec![id]);
+            }
+        }
         {
             let mut peers = world_block.peers_mut_for_testing().transaction();
             for key in keys {
@@ -26179,7 +26319,7 @@ pub(super) mod tests {
                 phase: wire::GlobalPhase::Commit,
                 subject,
                 execution_commitment:
-                    wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                    wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                         Hash::new(b"lane rollover parent state"),
                         Hash::new(b"lane rollover post state"),
                         Hash::new(b"lane rollover writes"),
@@ -26210,7 +26350,7 @@ pub(super) mod tests {
             adapter,
             keys,
             block,
-            wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+            wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                 Hash::new(b"historical request parent state"),
                 Hash::new(b"historical request post state"),
                 Hash::new(b"historical request writes"),
@@ -26339,7 +26479,7 @@ pub(super) mod tests {
                 payload_hash: Hash::new(&parent_wire),
             },
             execution_commitment:
-                wire::ExecutionCommitment::without_offline_cash_top_ups_or_merge_carrier(
+                wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
                     Hash::new(b"lane-certificate parent state"),
                     Hash::new(b"lane-certificate parent post-state"),
                     Hash::new(b"lane-certificate parent writes"),
